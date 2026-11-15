@@ -1,5 +1,4 @@
 import {
-  lazy,
   Suspense,
   useLayoutEffect,
   useRef,
@@ -12,10 +11,12 @@ import {
   ParameterDefinitionProvider,
   type ParameterDefinition
 } from './forms/parameterDefinition';
+import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
 
 // Off the entry chunk, which has no room left; it mounts long before anyone
-// could have started dragging a file toward the window.
-const LazyFileDropTarget = lazy(() =>
+// could have started dragging a file toward the window. Offline, its load
+// waits for the connection rather than failing the whole workspace.
+const LazyFileDropTarget = lazyWithStaleChunkNotice(() =>
   import('./FileDropTarget').then((module) => ({
     default: module.FileDropTarget
   }))

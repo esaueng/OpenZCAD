@@ -94,15 +94,14 @@ describe('storage formats on the shelf', () => {
     expect(projectNeedsUpdate(encrypted, [1])).toBe(true);
   });
 
-  it('opens an encrypted card, marked encrypted and with copies (4-8)', () => {
+  it('opens an encrypted card, unmarked and with copies (4-8)', () => {
     const shelf = props();
     render(<StartScreen {...shelf} />);
     const card = screen
       .getByText('Encrypted project')
       .closest('.start-tile-project') as HTMLElement;
-    expect(
-      within(card).getByRole('img', { name: 'End-to-end encrypted' })
-    ).toBeTruthy();
+    // Encrypted is the norm in this account, so its card carries no mark.
+    expect(within(card).queryByRole('img', { name: /encrypted/i })).toBeNull();
     fireEvent.click(within(card).getByText('Encrypted project'));
     expect(shelf.onOpen).toHaveBeenCalledWith(encrypted.projectId);
     fireEvent.click(
@@ -117,6 +116,43 @@ describe('storage formats on the shelf', () => {
     expect(shelf.onDuplicate).toHaveBeenCalledWith(encrypted);
   });
 
+  it('marks only the account project that is not encrypted', () => {
+    // 14 Nov 2026: a lock on every encrypted card marked the norm.
+    render(<StartScreen {...props()} />);
+    const marks = screen.getAllByRole('img', { name: /encrypted/i });
+    expect(marks).toHaveLength(1);
+    expect(marks[0]).toHaveAccessibleName('Not end-to-end encrypted');
+    // In the warning hue, so it shows among the quiet date-line marks.
+    expect(marks[0]).toHaveClass('start-tile-mark', 'is-plaintext');
+    expect(marks[0]!.closest('.start-tile-project')).toHaveTextContent(
+      'Plain bracket'
+    );
+    expect(
+      screen.getByRole('button', {
+        name: /^Plain bracket, .*not end-to-end encrypted/
+      })
+    ).toBeTruthy();
+  });
+
+  it('marks no card where nothing in the account is encrypted', () => {
+    // Encryption is opt-in in the beta: without it, the mark would be on
+    // every card.
+    render(<StartScreen {...props({ projects: [plaintext] })} />);
+    expect(screen.queryByRole('img', { name: /encrypted/i })).toBeNull();
+  });
+
+  it('marks no device-only or signed-out card as not encrypted', () => {
+    const { unmount } = render(
+      <StartScreen
+        {...props({ cloudProjectIds: new Set([encrypted.projectId]) })}
+      />
+    );
+    expect(screen.queryByRole('img', { name: /encrypted/i })).toBeNull();
+    unmount();
+    render(<StartScreen {...props({ signedIn: false })} />);
+    expect(screen.queryByRole('img', { name: /encrypted/i })).toBeNull();
+  });
+
   it('shows a locked card that says to update and opens nothing', () => {
     const shelf = props();
     render(<StartScreen {...shelf} />);
@@ -124,9 +160,9 @@ describe('storage formats on the shelf', () => {
       .getByText(PROJECT_UPDATE_REQUIRED_LABEL)
       .closest('.start-tile-project') as HTMLElement;
     expect(card).toBeTruthy();
-    expect(
-      within(card).getByRole('img', { name: 'End-to-end encrypted' })
-    ).toBeTruthy();
+    // Its preview and the line under its name say why; no mark repeats it.
+    expect(within(card).queryByRole('img', { name: /encrypted/i })).toBeNull();
+    expect(card).toHaveTextContent('End-to-end encrypted');
     // No preview is fetched for it.
     expect(shelf.loadThumbnail).not.toHaveBeenCalledWith(future);
     expect(card.querySelector('button.start-tile-open')).toBeNull();

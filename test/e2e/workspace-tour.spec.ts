@@ -60,11 +60,21 @@ test('first-model tour rides the real workflow and never returns', async ({
     contentType: 'image/png'
   });
 
-  // Opening History is what the step asks for, so it moved the tour on as
-  // the first two steps do; Finish on the last step is the same dismissal
-  // as skipping.
-  await expect(tour).toContainText('Take it with you');
+  // Opening History is what the step asks for, but its tips are about the
+  // panel that opened: the step holds over the panel until Next (I16).
+  await expect(tour).toContainText('The history is the model');
+  await expect(tour).toContainText('Drag the grip to reorder');
+  await expect(page.locator('.model-panel-history')).toHaveClass(/tour-target/);
   await expect(history).not.toHaveClass(/tour-target/);
+  await tour.getByRole('button', { name: 'Next' }).click();
+  // The last step shows where Export lives; Finish on it is the same
+  // dismissal as skipping.
+  await expect(tour).toContainText('Take it with you');
+  await expect(tour).toContainText('File › Export');
+  await expect(page.locator('.file-menu > summary')).toHaveClass(/tour-target/);
+  await expect(page.locator('.model-panel-history')).not.toHaveClass(
+    /tour-target/
+  );
   await tour.getByRole('button', { name: 'Finish' }).click();
   await expect(tour).toHaveCount(0);
 
@@ -79,6 +89,33 @@ test('first-model tour rides the real workflow and never returns', async ({
   await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
   await expect(tour).toHaveCount(0);
+});
+
+test('a second empty project picks the tour up where the first left it', async ({
+  page
+}) => {
+  await stubApi(page, {
+    workspaceTour: true,
+    panelLayout: null,
+    commandFoldClosed: true
+  });
+  await createProject(page, 'Tour First Part');
+  const tour = page.locator('.workspace-tour');
+  await expect(tour).toContainText('Create your first feature');
+  // The rail's foot is named and outlined, not an unlabelled ⋯ (I16).
+  await expect(tour).toContainText('More tools (⋯) at its foot');
+  await expect(page.locator('.command-more-toggle')).toHaveClass(/tour-target/);
+  await createPrimitiveInPlace(page, 'box');
+  await expect(tour).toContainText('Select to edit');
+  await expect(tour.locator('.workspace-tour-count')).toHaveText('2/4');
+
+  // It began again at 1/4 in every new empty project (I16).
+  await page.getByTitle('Back to projects').click();
+  await page.getByLabel('Project name').fill('Tour Second Part');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
+  await expect(tour).toContainText('Select to edit');
+  await expect(tour.locator('.workspace-tour-count')).toHaveText('2/4');
 });
 
 test('manual tour advance reveals the History control without moving keyboard focus', async ({

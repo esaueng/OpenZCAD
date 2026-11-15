@@ -22,8 +22,10 @@ import {
   type AssemblyKeyframe,
   type AssemblyMotionStudy,
   type AssemblySet,
-  type AssemblyTrack
+  type AssemblyTrack,
+  type UnitSystem
 } from '@openzcad/shared';
+import { unitSymbol } from './assemblyUi';
 
 /**
  * AS07 motion study editing. Pure: every helper takes a study and returns a
@@ -76,10 +78,15 @@ export function roundTime(t: number): number {
   return Math.round(t * 1e6) / 1e6;
 }
 
-/** "Motion 1", "Motion 2"…: the next unused default study name. */
+/**
+ * "Animation 1", "Animation 2"…: the next unused default study name. A study
+ * is an "animation" on screen, so "Motion" no longer names three things
+ * (review I57).
+ */
 export function nextStudyName(set: AssemblySet | undefined): string {
   const names = new Set((set?.studies ?? []).map((s) => s.name));
-  for (let n = 1; ; n += 1) if (!names.has(`Motion ${n}`)) return `Motion ${n}`;
+  for (let n = 1; ; n += 1)
+    if (!names.has(`Animation ${n}`)) return `Animation ${n}`;
 }
 
 /**
@@ -650,10 +657,16 @@ export function formatStudyTime(t: number): string {
   return (Math.round(t * 100) / 100).toFixed(2);
 }
 
-export function formatDofValue(value: number, unit: AssemblyDofUnit): string {
+export function formatDofValue(
+  value: number,
+  unit: AssemblyDofUnit,
+  lengthUnit: UnitSystem = 'mm'
+): string {
   const rounded = Math.round(value * 100) / 100;
   const text = Object.is(rounded, -0) ? '0' : String(rounded);
-  return unit === 'deg' ? `${text}°` : `${text} mm`;
+  return unit === 'deg'
+    ? `${text}°`
+    : `${text} ${unitSymbol(unit, lengthUnit)}`;
 }
 
 const DOF_NAMES: Readonly<Record<AssemblyJointKind, readonly string[]>> = {

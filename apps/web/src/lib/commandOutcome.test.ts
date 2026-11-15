@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { commandOutcomeMessage } from './commandOutcome';
+import { commandOutcomeMessage, historyStepMessage } from './commandOutcome';
 
 describe('command outcome messages', () => {
   it('turns an imperative command label into the sentence that happened', () => {
@@ -56,5 +56,17 @@ describe('command outcome messages', () => {
       'Filleted 1 edge at 1 mm.'
     );
     expect(commandOutcomeMessage('')).toBe('');
+  });
+});
+
+describe('history step messages', () => {
+  it('says what Undo and Redo did rather than naming the command', () => {
+    // 13 November review I22: the toast read "Undo Add box" after Ctrl+Z.
+    expect(historyStepMessage('undo', 'Add box')).toBe('Undid Add box.');
+    expect(historyStepMessage('redo', 'Delete Boss.')).toBe(
+      'Redid Delete Boss.'
+    );
+    expect(historyStepMessage('undo', null)).toBe('Undid the last change.');
+    expect(historyStepMessage('redo', ' ')).toBe('Redid the last change.');
   });
 });

@@ -26,6 +26,7 @@ import {
   sourceUploadMessage
 } from './accountImportSources';
 import { listLocalOnlyImportSources } from './importArchival';
+import { withSavedVersion } from './projectShelf';
 import { ApiError, api } from './api';
 import { archiveArtifact as archiveArtifactBody } from './archiveArtifact';
 import {
@@ -493,10 +494,9 @@ export async function restoreAccountProjectFromDevice(
   return {
     document: restored,
     project: {
-      ...summary,
+      ...withSavedVersion(summary, restored),
       name: restored.name,
-      updatedAt: saved.updatedAt,
-      documentVersion: saved.version
+      updatedAt: saved.updatedAt
     }
   };
 }
@@ -569,10 +569,11 @@ async function finishAccountSourceSave(
     });
     saved = { ...prepared.document, version: stored.version };
   }
-  await app.acceptAccountDocument(saved, localForAcceptance, {
-    ...summary,
-    documentVersion: saved.version
-  });
+  await app.acceptAccountDocument(
+    saved,
+    localForAcceptance,
+    withSavedVersion(summary, saved)
+  );
   return sourceUploadMessage(prepared.result) ?? undefined;
 }
 

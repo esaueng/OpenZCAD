@@ -411,10 +411,13 @@ export async function stubApi(
     route.fulfill({
       json: {
         projectCount: 0,
+        trashedProjectCount: 0,
         documentBytes: 0,
         revisionBytes: 0,
         revisionCount: 0,
         projectStorageBytes: 0,
+        storageBytes: 0,
+        storageLimitBytes: 1024 ** 3,
         documentLimitBytes: 1_500_000,
         maxRevisionsPerProject: 50,
         artifactBytes: 0,

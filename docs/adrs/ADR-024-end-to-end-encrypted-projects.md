@@ -577,6 +577,42 @@ comparison, which is safe only because of its commitment step.
   one comparison per person, not one per project. The comparison is mutual:
   the invitee verifies the owner's fingerprint in the same step, which anchors
   the project's roster for them. Sharing remains owner-only (ADR-019).
+  The owner's statement also names a hash of the emailed link's token, which
+  the owner's browser makes, so the invitee's browser accepts by link only
+  the invitation that names the link it opened. The invitee's device then
+  signs an acceptance of that exact statement, and the owner adds only an
+  account whose device signed one. An invitation the server merely lists,
+  or one whose statement names no link, is joined only on the invitee's
+  explicit confirmation of the verified statement. The server delivers the
+  email and labels contacts with their addresses, so the address alone
+  never decides who is added. An invitation is email-only by default. When
+  the typed address matches a verified contact, the owner's browser offers
+  that contact as an explicit choice, shown by the contact code Contacts
+  shows; only when the owner picks it does the statement (version 3) name
+  that contact's identity key, and the owner's browser then adds
+  automatically only an acceptance by that identity. Every other acceptance
+  waits for the owner to confirm the accepting contact, shown by the same
+  contact code, or to decline it. Migrating a shared project works the same
+  way: before anything is staged, the owner approves each member to be
+  added back by contact code and signed role, and the cutover adds exactly
+  those identities, stopping to ask again if the roster, an identity or a
+  role changed. Every re-add must name the migrating project, in the
+  server's record and in the owner-signed statement alike. A staging
+  resumed after a reload, or one an older app version left, reaches the
+  cutover only with the owner's approval of the whole staged roster,
+  members already re-added included, given again or recorded on that
+  owner's browser for that same staging; a member re-added without an
+  acceptance the owner can review drops the staging, which starts again.
+  The roster checked is the staged MLS group's own, not the server's
+  listing: before a resumed staging is written to, and again just before
+  the cutover, every account in the group besides the owner's must be an
+  approved identity (a verified contact certifying each of its leaves)
+  with the approved role in the group's roles, or the staging is dropped
+  and starts again. An approval is spent once: recorded for the staging it
+  went ahead with, or dropped with that staging or a cancel.
+  Automatic adds also require that the owner's browser saw every removal
+  from the project since its group began (it created the group); a device
+  that joined from the project's history asks the owner for every Add.
 - **Invitation emails** name the sender, not the project.
 - **Share links** become `#share=<token>.<key>.<owner>`, where `<owner>` is
   the full hash of the owner's identity key; the fragment never reaches the
@@ -612,17 +648,22 @@ comparison, which is safe only because of its commitment step.
   - The visitor's browser checks, in order: the owner hash in the link, the
     identity-signed share delegation and its expiry, that the statement's
     signing device is named in it, the statement's signature and expiry,
-    then that the snapshot's signing credential is one the statement names.
-    The author's own device list is not trusted here, because a visitor has
+    then that the snapshot's signing credential is one the statement names,
+    and that the snapshot was signed no earlier than the statement was
+    issued (ten minutes of clock skew allowed), so a newer statement does
+    not vouch for an older snapshot. The owner's browser republishes a
+    link's snapshot with each new statement, and again on its next upkeep
+    if that publication failed. The author's own device list is not trusted here, because a visitor has
     no pin for it and could be shown a stale one. It accepts the snapshot only if every
     step holds.
   - Any of the owner's devices renews the statement while it is online, and
     issues a new one at once when an editor is removed or the link revoked.
-  - Two bounds follow. A former editor can publish snapshots that visitors
-    accept only until the statement they were listed in expires (seven days
-    by default). A stolen, removed owner device can sign statements that
-    visitors accept only until the last delegation naming it expires (at most
-    30 days). After either expiry, visitors see that the owner has not
+  - Two bounds follow. A former editor, or an editor's revoked device, can
+    publish snapshots that visitors accept only until the statement they were
+    listed in expires (seven days by default). A stolen, removed owner device
+    keeps its signing key, so with a server replaying an earlier delegation
+    that names it, it can keep signing new statements that visitors accept
+    until that delegation expires (at most 30 days after it was issued). After either expiry, visitors see that the owner has not
     recently confirmed the link. These limits are inherent to anonymous
     access. "Make a copy" decrypts in the visitor's browser and saves under
     the visitor's keys, or locally.
@@ -1384,3 +1425,26 @@ changes.
   refuses a plaintext project (decision D2).
 - **Review.** This is a new account-key derivation and record format, so the
   Phase 8 outside review covers it with the other account records.
+
+## Amendment 2026-11-14: the account library rule
+
+Encrypting existing projects and accepting an encrypted invitation need no
+"Encrypt new projects" opt-in. Keying the library on the opt-in alone let
+such an account keep storing plaintext beside its encrypted projects:
+folder records that name them, and device projects saved to the account
+that may be "Keep both" or recovery copies of them.
+
+- **Rule.** An account's library is encrypted when it opted in, or owns or
+  is a member of a project stored encrypted (format 2). New blank projects
+  still follow the opt-in alone.
+- **What it covers.** Library folder records are stored sealed only, and a
+  device project saved to the account is adopted encrypted. The Worker
+  refuses a plaintext folder record (`LIBRARY_FOLDERS_ENCRYPTION_REQUIRED`)
+  and a plaintext adoption (`ENCRYPTED_PROJECTS_REQUIRED`) for such an
+  account, and reports `libraryEncrypted` with the stored preference.
+- **The browser decides before sending.** It asks the opt-in exactly as
+  before, with every guarantee of decision D2, then the Worker's
+  `libraryEncrypted`, which can only add encryption. An answer it cannot
+  read while encrypted projects are open refuses
+  (`E2EE_PREFERENCE_UNVERIFIED`) rather than reading as no. A folder sync
+  that meets the refusal mid-visit seals from its next round.

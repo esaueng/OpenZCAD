@@ -23,6 +23,42 @@ describe('library layout reservation', () => {
     vi.restoreAllMocks();
   });
 
+  it('keeps the pinned and unpinned groups, reading the old label as Others', () => {
+    // The unpinned group was "Projects" under a "Projects" heading; a tab
+    // opened before the rename still holds that label for this session.
+    const groups = [
+      { label: 'Pinned', count: 2 },
+      { label: 'Projects', count: 4 }
+    ];
+    sessionStorage.setItem(
+      'openzcad.library.layout.v1',
+      JSON.stringify({
+        all: 6,
+        pinned: 2,
+        attention: 0,
+        local: 0,
+        footers: [],
+        groups
+      })
+    );
+    expect(readLibraryLayout()?.groups).toEqual([
+      { label: 'Pinned', count: 2 },
+      { label: 'Others', count: 4 }
+    ]);
+    saveLibraryLayout({
+      all: 6,
+      pinned: 2,
+      attention: 0,
+      local: 0,
+      footers: [],
+      groups: [
+        { label: 'Pinned', count: 2 },
+        { label: 'Others', count: 4 }
+      ]
+    });
+    expect(readLibraryLayout()?.groups?.[1]?.label).toBe('Others');
+  });
+
   it('remembers only counts and footer positions for a reload', () => {
     const layout = {
       all: 12,

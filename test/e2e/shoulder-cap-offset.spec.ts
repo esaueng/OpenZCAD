@@ -11,7 +11,8 @@ import {
   stubApi,
   MODEL_ONLY,
   clickWorldPoint,
-  setSelectionFilter
+  setSelectionFilter,
+  waitForStillViewport
 } from './openzcad-fixtures';
 
 async function importShoulder(
@@ -151,11 +152,32 @@ test(
       for (const point of [
         [6, 0, 13],
         [18, 0, 26],
-        [0, 6, 13],
         [0, 13, 26]
       ] as [number, number, number][]) {
         await clickWorldPoint(page, point);
       }
+    } finally {
+      await page.keyboard.up('Shift');
+    }
+    await expect(page.getByRole('contentinfo')).toContainText(
+      '4 edges selected'
+    );
+    // The boss's joint with the block's x = 0 face stands behind the boss
+    // from the opening front-right view. Both joints lie in the vertical
+    // plane x + y = 6, and the opening frame can put the camera in it, which
+    // hides that joint exactly behind the y = 0 joint already selected. Take
+    // it from the back left, where it faces the camera. The cube shows only
+    // the corners facing the camera, so it turns there by the front left.
+    for (const name of [
+      'Top front left isometric view',
+      'Top back left isometric view'
+    ]) {
+      await page.getByRole('button', { name, exact: true }).click();
+      await waitForStillViewport(page);
+    }
+    await page.keyboard.down('Shift');
+    try {
+      await clickWorldPoint(page, [0, 6, 13]);
     } finally {
       await page.keyboard.up('Shift');
     }

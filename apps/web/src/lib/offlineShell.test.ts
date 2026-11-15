@@ -80,8 +80,11 @@ function load(network: (request: Request) => Promise<Response>) {
   return { cache, fetchEvent };
 }
 
-const ok = (body: string) => {
-  const response = new Response(body, { status: 200 });
+const ok = (body: string, contentType = 'text/html; charset=utf-8') => {
+  const response = new Response(body, {
+    status: 200,
+    headers: { 'content-type': contentType }
+  });
   Object.defineProperty(response, 'type', { value: 'basic' });
   return response;
 };
@@ -124,6 +127,35 @@ describe('the offline shell worker', () => {
     expect(
       await fetchEvent('/assets/a.js', { method: 'POST', body: 'x' })
     ).toBeUndefined();
+  });
+
+  it('keeps only the app shell for offline launches', async () => {
+    let online = true;
+    const { cache, fetchEvent } = load(async (request) => {
+      if (!online) throw new TypeError('offline');
+      const path = new URL(request.url).pathname;
+      if (path === '/privacy.html') return ok('<html>privacy</html>');
+      if (path.startsWith('/api/') || path === '/healthz')
+        return ok('{"user":"someone"}', 'application/json');
+      if (path === '/manifest.webmanifest')
+        return ok('{}', 'application/manifest+json');
+      if (path === '/projects/json') return ok('{}', 'application/json');
+      return ok('<html>shell</html>');
+    });
+    await fetchEvent('/projects/abc', { mode: 'navigate' });
+    for (const path of [
+      '/privacy.html',
+      '/api/session',
+      '/healthz',
+      '/manifest.webmanifest',
+      '/projects/json'
+    ])
+      await fetchEvent(path, { mode: 'navigate' });
+    expect([...cache.entries.keys()]).toEqual([`${ORIGIN}/`]);
+    online = false;
+    expect(await (await fetchEvent('/', { mode: 'navigate' }))!.text()).toBe(
+      '<html>shell</html>'
+    );
   });
 
   it('keeps no failed response', async () => {

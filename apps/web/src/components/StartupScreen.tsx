@@ -1,19 +1,6 @@
 import prismFold from '../assets/prism-fold.json';
-import {
-  useEffect,
-  useState,
-  useSyncExternalStore,
-  type CSSProperties
-} from 'react';
-
-function subscribeOnline(changed: () => void) {
-  window.addEventListener('online', changed);
-  window.addEventListener('offline', changed);
-  return () => {
-    window.removeEventListener('online', changed);
-    window.removeEventListener('offline', changed);
-  };
-}
+import { useEffect, useState, type CSSProperties } from 'react';
+import { useOnline } from '../hooks/useOnline';
 
 /**
  * The real handoffs a part goes through before the workspace appears: App
@@ -102,10 +89,7 @@ export function StartupScreen({
   stage?: StartupStage;
   backLabel?: string;
 }) {
-  const online = useSyncExternalStore(
-    subscribeOnline,
-    () => navigator.onLine !== false
-  );
+  const online = useOnline();
   const [slowStage, setSlowStage] = useState<StartupStage | null>(null);
   useEffect(() => {
     if (stage !== 'model') return;
@@ -158,7 +142,14 @@ export function StartupScreen({
         {slow && !offline && (
           <p className="startup-hint">Complex models take longer to rebuild.</p>
         )}
-        <button type="button" onClick={onBack} disabled={!onBack}>
+        {/* A secondary button, not grey text: it is the only way out of an
+            open that is taking too long. */}
+        <button
+          type="button"
+          className="secondary startup-back"
+          onClick={onBack}
+          disabled={!onBack}
+        >
           {backLabel}
         </button>
       </div>

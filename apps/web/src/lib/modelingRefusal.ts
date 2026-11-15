@@ -10,7 +10,7 @@ export function modelingRefusalSummary(
     return 'Intersect would leave no solid. Move the bodies so they overlap, then try again.';
   }
   if (
-    /empty result:.*(?:cut|subtract).*target fully contained in tool/i.test(
+    /empty result:.*(?:cut|subtract).*(?:target fully contained in tool|identical solids)/i.test(
       reason
     )
   ) {

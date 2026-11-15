@@ -27,7 +27,7 @@ test('a failed replacement preserves the previous workspace and its pending assi
   page.on('request', (request) => {
     if (request.url().endsWith('/api/assistant/proposals')) requested = true;
   });
-  await page.route('**/api/share/*', (route) =>
+  await page.route('**/api/share', (route) =>
     route.fulfill({ status: 404, json: { error: 'Unavailable' } })
   );
   await page.goto('/');
@@ -84,7 +84,7 @@ for (const pending of [false, true]) {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    await page.route('**/api/share/*', async (route) => {
+    await page.route('**/api/share', async (route) => {
       requested = true;
       if (pending) await gate;
       await route.fulfill(
@@ -176,7 +176,7 @@ for (const link of [
     await stubAnonymousApi(page);
     const shareReads: string[] = [];
     page.on('request', (request) => {
-      if (/\/api\/(e2ee\/)?share\//.test(request.url()))
+      if (/\/api\/(e2ee\/)?share(\/|$)/.test(new URL(request.url()).pathname))
         shareReads.push(request.url());
     });
     await page.goto(`/#share=${link}`);
@@ -210,7 +210,7 @@ for (const link of [token, encrypted]) {
     await page.route('**/api/**/share/*', (route) =>
       route.fulfill({ status: 404, json: { error: 'Unavailable' } })
     );
-    await page.route('**/api/share/*', (route) =>
+    await page.route('**/api/share', (route) =>
       route.fulfill({ status: 404, json: { error: 'Unavailable' } })
     );
     await page.goto(`/#share=${link}`);
@@ -236,7 +236,7 @@ test('a network failure can be retried into the shared model without going home'
     toUserId('owner')
   );
   let reads = 0;
-  await page.route('**/api/share/*', (route) => {
+  await page.route('**/api/share', (route) => {
     reads++;
     return reads === 1
       ? route.abort('internetdisconnected')
@@ -271,7 +271,7 @@ test('a server failure does not blame the connection', async ({ page }) => {
   // 13 November review I3: a 500 read "Internal error." over "Check your
   // connection and try again".
   await stubAnonymousApi(page);
-  await page.route('**/api/share/*', (route) =>
+  await page.route('**/api/share', (route) =>
     route.fulfill({ status: 500, json: { error: 'Internal error' } })
   );
   await page.goto(`/#share=${token}`);
@@ -300,7 +300,7 @@ test('loading a share hides the shelf and Back cancels a late completion', async
     release = resolve;
   });
   let requested = false;
-  await page.route('**/api/share/*', async (route) => {
+  await page.route('**/api/share', async (route) => {
     requested = true;
     await gate;
     await route.fulfill({
@@ -346,8 +346,8 @@ test('a newer share replaces an error and ignores an older delayed failure', asy
     release = resolve;
   });
   let requested = false;
-  await page.route('**/api/share/*', async (route) => {
-    if (route.request().url().endsWith(token)) {
+  await page.route('**/api/share', async (route) => {
+    if (route.request().headers()['x-openzcad-share-token'] === token) {
       requested = true;
       await gate;
       await route.fulfill({ status: 503, json: { error: 'Old failure' } });

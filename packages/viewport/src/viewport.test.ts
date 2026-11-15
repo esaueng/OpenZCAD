@@ -581,6 +581,49 @@ describe('normal-to-face camera framing', () => {
     }
   });
 
+  it('fits a face into the clear stage when given one', () => {
+    // I6: a 34 x 24 sketch re-entered with panels docked filled the whole
+    // window's height, with both side edges under the panels.
+    const camera = new THREE.PerspectiveCamera(45, 1.6, 0.1, 4000);
+    const center = new THREE.Vector3(17, 12, 0);
+    const points = [
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(34, 0, 0),
+      new THREE.Vector3(34, 24, 0),
+      new THREE.Vector3(0, 24, 0)
+    ];
+    const normal = new THREE.Vector3(0, 0, 1);
+    // The left half of the canvas, below a top band.
+    const frame = { minX: -0.85, maxX: 0.1, minY: -1, maxY: 0.7 };
+    for (const up of [null, new THREE.Vector3(0, 1, 0)]) {
+      const pose = computeNormalToFacePose(
+        camera,
+        points,
+        center,
+        normal,
+        up,
+        frame
+      )!;
+      const direction = pose.position.clone().sub(pose.target).normalize();
+      expect(direction.dot(normal)).toBeGreaterThan(0.999999);
+      camera.position.copy(pose.position);
+      camera.up.copy(pose.up ?? new THREE.Vector3(0, 0, 1));
+      camera.quaternion.copy(tweenOrientationFor(direction, pose.up));
+      camera.updateMatrixWorld(true);
+      camera.updateProjectionMatrix();
+      const projected = points.map((point) => point.clone().project(camera));
+      for (const point of projected) {
+        expect(point.x).toBeGreaterThan(frame.minX);
+        expect(point.x).toBeLessThan(frame.maxX);
+        expect(point.y).toBeGreaterThan(frame.minY);
+        expect(point.y).toBeLessThan(frame.maxY);
+      }
+      const centre = center.clone().project(camera);
+      expect(centre.x).toBeCloseTo((frame.minX + frame.maxX) / 2, 3);
+      expect(centre.y).toBeCloseTo((frame.minY + frame.maxY) / 2, 3);
+    }
+  });
+
   it('rolls a face sketch so its u axis reads rightward and v upward', () => {
     const camera = new THREE.PerspectiveCamera(45, 1.6, 0.1, 4000);
     // The top face of a 62 x 50 x 10 box, with its stored sketch frame: the

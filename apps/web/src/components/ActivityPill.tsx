@@ -22,8 +22,11 @@ interface ActivityPillProps {
    * never was, and the host must not tidy up after a notice nobody saw.
    */
   onDismiss(shown: boolean): void;
-  /** Retries the upload of a source that only reached this device. */
-  onArchiveNow(): void;
+  /**
+   * Retries the upload of a source that only reached this device. Absent
+   * while it can only fail (signed out), so the pill offers no Archive now.
+   */
+  onArchiveNow?: (() => void) | undefined;
   /** Stops the run at the next point it can stop. */
   onCancel(): void;
 }
@@ -219,7 +222,7 @@ export function ActivityPill({
           )}
         </span>
       </span>
-      {outcome?.action === 'archive' && (
+      {outcome?.action === 'archive' && onArchiveNow && (
         <>
           <span className="activity-pill-sep" aria-hidden="true" />
           <button

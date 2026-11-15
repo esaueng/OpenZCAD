@@ -167,8 +167,9 @@ describe('the Escape line matches the ladder it describes', () => {
     expect(commandPrompt(sketchState('select', false, 'a'))?.escape).toBe(
       'deselects'
     );
+    // I43: the last rung needs a second press.
     expect(commandPrompt(sketchState('select'))?.escape).toBe(
-      'leaves the sketch'
+      'twice leaves the sketch'
     );
   });
 
@@ -179,6 +180,14 @@ describe('the Escape line matches the ladder it describes', () => {
     expect(commandPrompt(sketchState('line', true))?.step).toBe(
       'Click the next point · Enter finishes'
     );
+  });
+
+  it('lets a value prompt open in a sketch own Escape (I43)', () => {
+    expect(
+      commandPromptText(sketchState('select'), 'diameter', {
+        editor: { state: 'ready', explaining: false }
+      })
+    ).toBe('Enter apply · Esc cancel');
   });
 
   it('stays silent about Escape while a value is being validated', () => {
@@ -261,9 +270,27 @@ describe('the step describes the operation actually armed', () => {
     );
   });
 
+  // QA 2026-11-14 finding #9: the hint promised "an exact distance" while
+  // the field took the Total size the face leaves, so typing 5 on a 24 mm
+  // body moved the top face by -19.
+  it('names the two readings a typed face value can have', () => {
+    const armed = faceState('armed');
+    expect(commandPrompt(armed)?.step).not.toMatch(/exact distance/);
+    expect(commandPrompt(armed)?.step).toContain('type its Total or Offset');
+    const resize = faceState('armed');
+    if (resize.mode !== 'face') throw new Error('face state');
+    const resizing: InteractionState = {
+      ...resize,
+      target: { ...resize.target, resizeBodyFeatureId: 'feature-box' }
+    };
+    expect(commandPrompt(resizing)?.step).toBe(
+      'Drag the arrow to resize the body, or type its Total or Offset · The opposite side stays fixed'
+    );
+  });
+
   it('reads as one line for the status bar', () => {
     expect(commandPromptText(faceState('armed'))).toBe(
-      'Drag to push or pull the face, or type an exact distance · Space views it head-on · Esc clears the selection'
+      'Drag to push or pull the face, or type its Total or Offset · Space views it head-on · Esc clears the selection'
     );
   });
 });

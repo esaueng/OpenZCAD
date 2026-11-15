@@ -1,0 +1,5 @@
+---
+row: L13
+---
+
+Browser slice: a pure HID report decoder with preference-aware axis shaping (`packages/viewport/src/input/spaceMouse.ts`); a continuous 6-axis camera step in `CameraController` that turns rigidly about the selection's or visible model's centre (free orbit with roll held, or an upright turntable that stops at the poles), zooms toward that centre, and rolls a quarter turn on the roll key; a WebHID connection hub (`apps/web/src/lib/spaceMouse.ts`) with a rotation lock; every SpaceMouse Pro key mapped (`apps/web/src/lib/spaceMouseActions.ts`); synced `viewport.spaceMouse` settings (speeds, dead zone, one motion at a time, rotation centre, roll, reversed directions) in Settings › Controls under Navigation, with a key reference; and `hid=(self)` in the Permissions-Policy. Coverage: `spaceMouse.test.ts` (viewport and web), `spaceMouseActions.test.ts`, `CameraController.test.ts` (3D mouse motion), `SpaceMouseSettings.test.tsx`, `app-settings.test.ts`, `api-routes.test.ts` and `test/e2e/space-mouse.spec.ts`, driving a simulated device; the owner's SpaceMouse Pro connected and moved the view on a local build, with no recorded run yet.

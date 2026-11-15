@@ -1,6 +1,7 @@
 import { findFeature, listFeaturesInOrder } from '@openzcad/document-core';
 import { geometryTolerance } from '@openzcad/geometry';
 import { supportsBlendGroupEdits } from '../kernelBuild';
+import { ownEntry } from '@openzcad/shared';
 import type {
   BodyRepresentation,
   BodyId,
@@ -33,9 +34,10 @@ export function revisableBlendResize(
   operation: Extract<DirectEditOperation, { kind: 'resize-blend' }>;
 } | null {
   const feature = listFeaturesInOrder(document).at(-1);
-  const bands = document.derived.bodyRepresentations[
+  const bands = ownEntry(
+    document.derived.bodyRepresentations,
     bodyId as BodyId
-  ]?.topology?.faces.filter((f) => f.geometry?.featureType === 'blend');
+  )?.topology?.faces.filter((f) => f.geometry?.featureType === 'blend');
   return (bands?.length ?? 0) > 1 &&
     reference?.lineageName === 'direct-edit.resize-blend.band' &&
     reference.producingFeatureId === featureId &&
@@ -88,7 +90,8 @@ function dot(left: Vector3, right: Vector3): number {
   return left.x * right.x + left.y * right.y + left.z * right.z;
 }
 
-function distanceToAxis(
+/** A point's distance from the line through `axisPoint` along `axisDirection`. */
+export function distanceToAxis(
   point: Vector3,
   axisPoint: Vector3,
   axisDirection: Vector3

@@ -39,7 +39,12 @@ const PRESETS: Readonly<
     detail: 'Objects over a taller History left, Parameters right'
   },
   review: { label: 'Review', detail: 'History over Revisions, right' },
-  'model-only': { label: 'Model only', detail: 'No panels open' }
+  // A layout with no panels in it, which differs from Hide all panels
+  // below: that hides whatever layout is open and gives it back (I24).
+  'model-only': {
+    label: 'Model only',
+    detail: 'Closes every panel; open one from the rail'
+  }
 };
 
 const WIDTHS: ReadonlyArray<{ id: PanelWidth; label: string }> = [
@@ -236,8 +241,10 @@ function ViewOptionsList({
         Panel layout
       </div>
       <div role="group" aria-labelledby={`${id}-layouts`}>
+        {/* "Presets", not a second "Layout" under the "Panel layout"
+            heading (I24). */}
         <div id={`${id}-layouts`} className="view-options-group-label">
-          Layout
+          Presets
         </div>
         {PANEL_PRESET_IDS.map((name) => (
           <ViewOptionsItem
@@ -262,6 +269,7 @@ function ViewOptionsList({
         <ViewOptionsItem
           role="menuitemcheckbox"
           label="Hide all panels"
+          detail="For now; turn off to bring this layout back"
           checked={options.hidden}
           shortcut={hideShortcut && platformShortcutLabel(hideShortcut)}
           onSelect={() => onToggle('hidden')}

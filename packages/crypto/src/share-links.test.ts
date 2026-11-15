@@ -625,6 +625,36 @@ describe('a link visitor checks a snapshot', () => {
     }
   });
 
+  it('refuses a snapshot signed before the statement that vouches for it', async () => {
+    const w = await world();
+    const { envelope } = await snapshotEnvelope();
+    const signedAt = async (at: number) =>
+      input(w, {
+        snapshot: envelope,
+        snapshotSignature: await signProjectEnvelope(
+          w.editorDevice.pair.privateKey,
+          envelope,
+          at
+        )
+      });
+    const issuedAt = w.authority.issuedAt;
+    await refusedWith(
+      verifySharedSnapshot(await signedAt(issuedAt - SHARE_CLOCK_SKEW_MS - 1)),
+      'snapshot-predates-authority'
+    );
+    await refusedWith(
+      verifySharedSnapshot(await signedAt(T0)),
+      'snapshot-predates-authority'
+    );
+    // Author and owner clocks may differ by the skew.
+    await expect(
+      verifySharedSnapshot(await signedAt(issuedAt - SHARE_CLOCK_SKEW_MS))
+    ).resolves.toMatchObject({ signedAt: issuedAt - SHARE_CLOCK_SKEW_MS });
+    await expect(
+      verifySharedSnapshot(await signedAt(issuedAt))
+    ).resolves.toMatchObject({ signedAt: issuedAt });
+  });
+
   it('checks the copy it was given, not a caller array edited meanwhile', async () => {
     const w = await world();
     const value = await input(w);

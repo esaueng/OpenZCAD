@@ -17,6 +17,9 @@ use tokio::sync::{
 use tokio::time::Instant;
 
 const API_ORIGIN: &str = "https://zcad.app";
+// `SHARE_LINK_TOKEN_HEADER` (packages/shared/src/share-link-token.ts): a share
+// link's token travels here, not in the URL that request logs record.
+const SHARE_TOKEN_HEADER: &str = "x-openzcad-share-token";
 const DESKTOP_CLIENT_ID: &str = "openzcad-macos";
 #[cfg(target_os = "macos")]
 const KEYCHAIN_SERVICE: &str = "app.esau.openzcad";
@@ -168,6 +171,9 @@ pub struct NativeApiRequest {
     path: String,
     content_type: Option<String>,
     body: Option<Vec<u8>>,
+    /// A share link's capability token for a token-free share read, sent as
+    /// `SHARE_TOKEN_HEADER` rather than in the URL (`share_link_destination`).
+    share_token: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -291,10 +297,82 @@ fn renderer_api_destination(path: &str) -> Result<RendererApiDestination, String
     })
 }
 
+/// The token-free share-link reads (packages/shared/src/share-link-token.ts):
+/// `/api/share`, `/api/share/assets/{id}`, `/api/share/sources/{id}`,
+/// `/api/e2ee/share` and `/api/e2ee/share/blobs/{id}`, whose token is the
+/// request's `SHARE_TOKEN_HEADER`.
+fn token_free_share_read(path: &str) -> bool {
+    match path.split('/').collect::<Vec<_>>().as_slice() {
+        ["", "api", "share"] | ["", "api", "e2ee", "share"] => true,
+        // Ids come from the shared document as `encodeURIComponent` leaves
+        // them; the parsed-form check in `share_link_destination` already
+        // refuses separators, dot segments and anything the parser rewrote.
+        ["", "api", "share", "assets" | "sources", id] => !id.is_empty() && id.len() <= 256,
+        ["", "api", "e2ee", "share", "blobs", blob_id] => plain_route_segment(blob_id),
+        _ => false,
+    }
+}
+
+/// A request carrying a share-link token: only a GET of a token-free share
+/// read, in its parsed form (no query, fragment, escape rewrite or dot
+/// segment), with a token that is one plain route segment (the Worker's
+/// `^[A-Za-z0-9_-]{1,256}$`, so never CR, LF or another header). It is
+/// anonymous: the token is its whole authorization, and the account's
+/// credentials are never sent with it.
+fn share_link_destination(
+    method: &str,
+    path: &str,
+    token: &str,
+) -> Result<RendererApiDestination, String> {
+    let refused = || "The desktop share-link request is not allowed.".to_string();
+    if method != "GET" || !plain_route_segment(token) {
+        return Err(refused());
+    }
+    let url = api_url(path)?;
+    if url.path() != path || !token_free_share_read(path) {
+        return Err(refused());
+    }
+    Ok(RendererApiDestination {
+        url,
+        public: true,
+        logout: false,
+    })
+}
+
+/// The destination of a renderer request: a share-link read when it carries a
+/// token, otherwise `renderer_api_destination`.
+fn request_destination(request: &NativeApiRequest) -> Result<RendererApiDestination, String> {
+    match request.share_token.as_deref() {
+        Some(token) => share_link_destination(&request.method, &request.path, token),
+        None => renderer_api_destination(&request.path),
+    }
+}
+
 struct BlobStreamDestination {
     url: Url,
     public: bool,
     max_bytes: u64,
+}
+
+/// An encrypted share blob streamed with its link's token in
+/// `SHARE_TOKEN_HEADER` (`/api/e2ee/share/blobs/{blob_id}`); every other
+/// share-token stream is refused.
+fn share_link_blob_stream_destination(
+    path: &str,
+    token: &str,
+) -> Result<BlobStreamDestination, String> {
+    let refused = || "The desktop download path is not allowed.".to_string();
+    let destination = share_link_destination("GET", path, token).map_err(|_| refused())?;
+    match path.split('/').collect::<Vec<_>>().as_slice() {
+        ["", "api", "e2ee", "share", "blobs", blob_id] if blob_id_segment(blob_id) => {
+            Ok(BlobStreamDestination {
+                url: destination.url,
+                public: true,
+                max_bytes: MAX_NATIVE_BLOB_STREAM_BYTES,
+            })
+        }
+        _ => Err(refused()),
+    }
 }
 
 fn blob_id_segment(segment: &str) -> bool {
@@ -699,12 +777,40 @@ async fn buffer_api_response(mut response: reqwest::Response) -> Result<NativeAp
     })
 }
 
+/// Adds a share link's token as `SHARE_TOKEN_HEADER`, the one request header
+/// the renderer can name besides the content type, refusing any value that is
+/// not a plain route segment.
+fn with_share_token(
+    builder: reqwest::RequestBuilder,
+    share_token: Option<&str>,
+) -> Result<reqwest::RequestBuilder, String> {
+    let Some(token) = share_token else {
+        return Ok(builder);
+    };
+    if !plain_route_segment(token) {
+        return Err("The desktop share-link request is not allowed.".to_string());
+    }
+    Ok(builder.header(SHARE_TOKEN_HEADER, token))
+}
+
 async fn send_api_request(
     state: &DesktopAuthState,
     request: &NativeApiRequest,
     url: &Url,
     access_token: Option<&str>,
 ) -> Result<reqwest::Response, String> {
+    api_request_builder(&state.client, request, url, access_token)?
+        .send()
+        .await
+        .map_err(|_| "The OpenZCAD cloud service could not be reached.".to_string())
+}
+
+fn api_request_builder(
+    client: &Client,
+    request: &NativeApiRequest,
+    url: &Url,
+    access_token: Option<&str>,
+) -> Result<reqwest::RequestBuilder, String> {
     let method = Method::from_bytes(request.method.as_bytes())
         .map_err(|_| "The desktop API method is not allowed.".to_string())?;
     if !matches!(
@@ -713,10 +819,11 @@ async fn send_api_request(
     ) {
         return Err("The desktop API method is not allowed.".to_string());
     }
-    let mut builder = state.client.request(method, url.clone());
+    let mut builder = client.request(method, url.clone());
     if let Some(token) = access_token {
         builder = builder.bearer_auth(token);
     }
+    builder = with_share_token(builder, request.share_token.as_deref())?;
     if let Some(content_type) = request.content_type.as_deref() {
         if content_type.len() > 128 || content_type.contains(['\r', '\n']) {
             return Err("The desktop API content type is invalid.".to_string());
@@ -729,10 +836,7 @@ async fn send_api_request(
         }
         builder = builder.body(body.clone());
     }
-    builder
-        .send()
-        .await
-        .map_err(|_| "The OpenZCAD cloud service could not be reached.".to_string())
+    Ok(builder)
 }
 
 fn request_deletes_cloud_profile(request: &NativeApiRequest) -> bool {
@@ -765,7 +869,7 @@ async fn renderer_api_request(
     state: &DesktopAuthState,
     request: NativeApiRequest,
 ) -> Result<NativeApiResponse, String> {
-    let destination = renderer_api_destination(&request.path)?;
+    let destination = request_destination(&request)?;
     let url = &destination.url;
     if destination.logout {
         let response = match current_access(state).await {
@@ -978,15 +1082,25 @@ async fn send_blob_request(
     state: &DesktopAuthState,
     url: &Url,
     access_token: Option<&str>,
+    share_token: Option<&str>,
 ) -> Result<reqwest::Response, String> {
-    let mut builder = state.blob_client.get(url.clone());
-    if let Some(token) = access_token {
-        builder = builder.bearer_auth(token);
-    }
-    builder
+    blob_request_builder(&state.blob_client, url, access_token, share_token)?
         .send()
         .await
         .map_err(|_| "The OpenZCAD cloud service could not be reached.".to_string())
+}
+
+fn blob_request_builder(
+    client: &Client,
+    url: &Url,
+    access_token: Option<&str>,
+    share_token: Option<&str>,
+) -> Result<reqwest::RequestBuilder, String> {
+    let mut builder = client.get(url.clone());
+    if let Some(token) = access_token {
+        builder = builder.bearer_auth(token);
+    }
+    with_share_token(builder, share_token)
 }
 
 /// Starts an encrypted content blob download (`blob_stream_destination`): a
@@ -998,15 +1112,22 @@ async fn send_blob_request(
 pub async fn desktop_blob_stream_open(
     state: State<'_, DesktopAuthState>,
     path: String,
+    share_token: Option<String>,
 ) -> Result<NativeBlobStreamStart, String> {
-    open_blob_stream(&state, &path).await
+    open_blob_stream(&state, &path, share_token.as_deref()).await
 }
 
+/// `share_token`, when given, is an encrypted share link's token for its
+/// token-free blob read (`share_link_blob_stream_destination`).
 async fn open_blob_stream(
     state: &DesktopAuthState,
     path: &str,
+    share_token: Option<&str>,
 ) -> Result<NativeBlobStreamStart, String> {
-    let destination = blob_stream_destination(path)?;
+    let destination = match share_token {
+        Some(token) => share_link_blob_stream_destination(path, token)?,
+        None => blob_stream_destination(path)?,
+    };
     let url = &destination.url;
     let public = destination.public;
     let mut access = if public {
@@ -1019,7 +1140,7 @@ async fn open_blob_stream(
             local_unauthorized_response(),
         ));
     }
-    let mut response = send_blob_request(state, url, access.as_deref()).await?;
+    let mut response = send_blob_request(state, url, access.as_deref(), share_token).await?;
     if !public && response.status() == StatusCode::UNAUTHORIZED {
         *state
             .access
@@ -1027,7 +1148,7 @@ async fn open_blob_stream(
             .map_err(|_| "Desktop auth state is unavailable.")? = None;
         access = refresh_access(state).await?;
         if let Some(token) = access.as_deref() {
-            response = send_blob_request(state, url, Some(token)).await?;
+            response = send_blob_request(state, url, Some(token), share_token).await?;
         }
     }
     if response.status() != StatusCode::OK {
@@ -1137,6 +1258,7 @@ pub async fn desktop_collaboration_url(
         path: ticket_path.path().to_string(),
         content_type: None,
         body: None,
+        share_token: None,
     };
     let mut access = current_access(&state)
         .await?
@@ -1171,13 +1293,14 @@ pub async fn desktop_collaboration_url(
 #[cfg(test)]
 mod tests {
     use super::{
-        admit_blob_stream, api_url, approved_browser_url, blob_stream_destination,
-        cancel_blob_stream, collaboration_api_url, collaboration_socket_url, pkce_challenge,
-        pump_blob_stream, read_blob_stream, renderer_api_destination, renderer_api_request,
-        request_deletes_cloud_profile, BlobChunkSource, BlobStream, BlobStreamEvent,
-        BlobStreamReader, DesktopAuthState, NativeApiRequest, BLOB_STREAM_STOPPED,
+        admit_blob_stream, api_request_builder, api_url, approved_browser_url,
+        blob_request_builder, blob_stream_destination, cancel_blob_stream, collaboration_api_url,
+        collaboration_socket_url, pkce_challenge, pump_blob_stream, read_blob_stream,
+        renderer_api_destination, renderer_api_request, request_deletes_cloud_profile,
+        request_destination, share_link_blob_stream_destination, BlobChunkSource, BlobStream,
+        BlobStreamEvent, BlobStreamReader, DesktopAuthState, NativeApiRequest, BLOB_STREAM_STOPPED,
         BLOB_STREAM_TOO_LARGE, MAX_NATIVE_BLOB_STREAMS, NATIVE_BLOB_BUFFERED_CHUNKS,
-        NATIVE_BLOB_READ_BYTES, NATIVE_BLOB_STREAM_UNREAD,
+        NATIVE_BLOB_READ_BYTES, NATIVE_BLOB_STREAM_UNREAD, SHARE_TOKEN_HEADER,
     };
     use std::{
         collections::{HashMap, VecDeque},
@@ -1233,6 +1356,7 @@ mod tests {
                     path: path.to_string(),
                     content_type: None,
                     body: None,
+                    share_token: None,
                 },
             ));
             assert_eq!(
@@ -1253,6 +1377,7 @@ mod tests {
                 path: "/api/session".to_string(),
                 content_type: None,
                 body: None,
+                share_token: None,
             },
         ));
         assert_eq!(
@@ -1409,6 +1534,7 @@ mod tests {
             path: "/api/account/delete-data".to_string(),
             content_type: Some("application/json".to_string()),
             body: Some(format!(r#"{{"scope":"{scope}"}}"#).into_bytes()),
+            share_token: None,
         };
         assert!(request_deletes_cloud_profile(&request("profile")));
         assert!(request_deletes_cloud_profile(&request("all")));
@@ -1485,6 +1611,166 @@ mod tests {
         }
     }
 
+    fn share_request(method: &str, path: &str, token: &str) -> NativeApiRequest {
+        NativeApiRequest {
+            method: method.to_string(),
+            path: path.to_string(),
+            content_type: None,
+            body: None,
+            share_token: Some(token.to_string()),
+        }
+    }
+
+    #[test]
+    fn sends_a_share_token_only_to_token_free_share_reads() {
+        for path in [
+            "/api/share",
+            "/api/share/assets/asset_1",
+            "/api/share/sources/artifact_source-1",
+            "/api/e2ee/share",
+            "/api/e2ee/share/blobs/blob_1",
+        ] {
+            let destination = request_destination(&share_request("GET", path, "AbC-12_x")).unwrap();
+            assert!(destination.public, "{path}");
+            assert!(!destination.logout);
+            assert_eq!(destination.url.as_str(), format!("https://zcad.app{path}"));
+        }
+        let long_token = "a".repeat(256);
+        assert!(request_destination(&share_request("GET", "/api/share", &long_token)).is_ok());
+        for token in [
+            "",
+            &"a".repeat(257),
+            "AbC\r\nx-other: 1",
+            "AbC\n",
+            "Ab C",
+            "Ab/C",
+            "Ab%43",
+            "Ab.C",
+            "Ab=",
+        ] {
+            assert_eq!(
+                request_destination(&share_request("GET", "/api/share", token))
+                    .err()
+                    .as_deref(),
+                Some("The desktop share-link request is not allowed."),
+                "{token:?}"
+            );
+        }
+        for path in [
+            "/api/share/AbC-12_x",
+            "/api/share/AbC-12_x/sources/artifact_1",
+            "/api/e2ee/share/AbC-12_x",
+            "/api/e2ee/share/AbC-12_x/blobs/blob_1",
+            "/api/share/",
+            "/api/share?next=1",
+            "/api/share#fragment",
+            "/api/share/assets/",
+            "/api/share/assets/a/b",
+            "/api/share/sources/../../session",
+            "/api/share/sources/%2E%2E",
+            "/api/e2ee/share/blobs/",
+            "/api/e2ee/share/blobs/blob_1/extra",
+            "/api/e2ee/share/blobs/blob%5F1",
+            "/api/e2ee/share/keys",
+            "/api/session",
+            "/api/projects/proj_1",
+            "/api/auth/desktop/exchange",
+            "//attacker.example/api/share",
+            "https://attacker.example/api/share",
+        ] {
+            assert!(
+                request_destination(&share_request("GET", path, "AbC-12_x")).is_err(),
+                "{path:?}"
+            );
+        }
+        for method in ["POST", "PUT", "PATCH", "DELETE", "get"] {
+            assert!(
+                request_destination(&share_request(method, "/api/share", "AbC-12_x")).is_err(),
+                "{method}"
+            );
+        }
+        // Without a token, the token-free routes stay ordinary requests.
+        let plain = request_destination(&NativeApiRequest {
+            share_token: None,
+            ..share_request("GET", "/api/share", "unused")
+        })
+        .unwrap();
+        assert!(!plain.public);
+    }
+
+    #[test]
+    fn forwards_the_share_token_as_its_one_extra_header() {
+        let client = reqwest::Client::new();
+        let request = share_request("GET", "/api/share/sources/artifact_1", "AbC-12_x");
+        let destination = request_destination(&request).unwrap();
+        let built = api_request_builder(&client, &request, &destination.url, None)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(
+            built.url().as_str(),
+            "https://zcad.app/api/share/sources/artifact_1"
+        );
+        let headers = built.headers();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers.get(SHARE_TOKEN_HEADER).unwrap(), "AbC-12_x");
+        assert!(headers.get("authorization").is_none());
+        assert!(!built.url().as_str().contains("AbC-12_x"));
+        // The transport refuses a token that slipped past the destination.
+        let forged = share_request("GET", "/api/share", "AbC\r\nx-other: 1");
+        assert!(api_request_builder(&client, &forged, &destination.url, None).is_err());
+        let blob = blob_request_builder(&client, &destination.url, None, Some("AbC-12_x"))
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(blob.headers().len(), 1);
+        assert_eq!(blob.headers().get(SHARE_TOKEN_HEADER).unwrap(), "AbC-12_x");
+        assert!(blob_request_builder(&client, &destination.url, None, Some("a b")).is_err());
+        let without = blob_request_builder(&client, &destination.url, None, None)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert!(without.headers().is_empty());
+    }
+
+    #[test]
+    fn streams_a_share_token_only_for_token_free_encrypted_blobs() {
+        let share = share_link_blob_stream_destination(
+            &format!("/api/e2ee/share/blobs/{BLOB}"),
+            "AbC-12_x",
+        )
+        .unwrap();
+        assert!(share.public);
+        assert_eq!(share.max_bytes, super::MAX_NATIVE_BLOB_STREAM_BYTES);
+        assert_eq!(
+            share.url.as_str(),
+            format!("https://zcad.app/api/e2ee/share/blobs/{BLOB}")
+        );
+        for (path, token) in [
+            (format!("/api/e2ee/share/blobs/{BLOB}"), "Ab\nC"),
+            (format!("/api/e2ee/share/blobs/{BLOB}"), ""),
+            (format!("/api/e2ee/share/blobs/{BLOB}?download=1"), "AbC"),
+            (
+                format!("/api/e2ee/share/blobs/{}", BLOB.to_uppercase()),
+                "AbC",
+            ),
+            (format!("/api/e2ee/share/blobs/{}", &BLOB[1..]), "AbC"),
+            ("/api/e2ee/share/blobs/blob_1".to_string(), "AbC"),
+            (format!("/api/e2ee/share/AbC/blobs/{BLOB}"), "AbC"),
+            (format!("/api/e2ee/projects/proj_1/blobs/{BLOB}"), "AbC"),
+            ("/api/share/sources/artifact_1".to_string(), "AbC"),
+            ("/api/e2ee/share".to_string(), "AbC"),
+            ("/api/account/export".to_string(), "AbC"),
+        ] {
+            assert!(
+                share_link_blob_stream_destination(&path, token).is_err(),
+                "{path:?} {token:?}"
+            );
+        }
+        // Without a token the token-free blob route is not streamed at all.
+        assert!(blob_stream_destination(&format!("/api/e2ee/share/blobs/{BLOB}")).is_err());
+    }
+
     #[test]
     fn refuses_other_streams_before_reading_native_credentials() {
         let state = DesktopAuthState::new();
@@ -1494,7 +1780,20 @@ mod tests {
         }));
         let runtime = runtime();
         for path in ["/api/session", "/api/auth/desktop/refresh", "/api/projects"] {
-            let result = runtime.block_on(super::open_blob_stream(&state, path));
+            let result = runtime.block_on(super::open_blob_stream(&state, path, None));
+            assert_eq!(
+                result.err().as_deref(),
+                Some("The desktop download path is not allowed."),
+                "{path:?}"
+            );
+        }
+        // A share token never turns another stream into an anonymous one.
+        for path in [
+            format!("/api/e2ee/projects/proj_1/blobs/{BLOB}"),
+            format!("/api/e2ee/share/AbC-12_x/blobs/{BLOB}"),
+            "/api/account/export".to_string(),
+        ] {
+            let result = runtime.block_on(super::open_blob_stream(&state, &path, Some("AbC-12_x")));
             assert_eq!(
                 result.err().as_deref(),
                 Some("The desktop download path is not allowed."),
@@ -1505,6 +1804,7 @@ mod tests {
         let result = runtime.block_on(super::open_blob_stream(
             &state,
             &format!("/api/e2ee/projects/proj_1/blobs/{BLOB}"),
+            None,
         ));
         assert_eq!(
             result.err().as_deref(),

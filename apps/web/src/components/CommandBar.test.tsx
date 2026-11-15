@@ -412,7 +412,10 @@ describe('CommandBar', () => {
     await userEvent.type(search, '{Enter}');
     expect(onAsk).toHaveBeenCalledWith('fillet the top edges 2 mm');
     expect(search).toHaveValue('');
-    expect(search).not.toHaveFocus();
+    // 13 November review I9: focus stays in the prompt for the follow-up
+    // instead of falling to <body> while the answer is on its way.
+    expect(search).toHaveFocus();
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
   });
 
   it('says what Enter does with plain words, and where commands are', async () => {

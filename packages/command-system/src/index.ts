@@ -46,6 +46,8 @@ export {
   type OpeningAxis
 } from './growing-holder';
 import {
+  PIPE_THREAD_SIZES,
+  isPipeThreadSize,
   createId,
   createSketchReferenceAnnotationId,
   createSketchCompositeId,
@@ -86,7 +88,11 @@ import {
   type SketchProfileReference,
   type UnitSystem,
   isDatumPlaneRef,
-  isFeatureRollbackSuppressed
+  isFeatureRollbackSuppressed,
+  ownEntry,
+  reservedIdentifierError,
+  COMMAND_FEATURE_KINDS,
+  type FeatureKind
 } from '@openzcad/shared';
 import {
   assertFeatureProfileProvenance,
@@ -289,7 +295,8 @@ import {
   validateDatumAxisDefinition,
   validateDatumAxisRef,
   validateDatumPlaneDefinition,
-  validateModelingPlane
+  validateModelingPlane,
+  documentIdentifierError
 } from '@openzcad/document-core';
 import { drawingCommandInputs } from './drawing-annotations';
 import {
@@ -400,6 +407,34 @@ export type CommandKind =
   | 'reference-image.add'
   | 'reference-image.update'
   | 'reference-image.delete';
+
+/**
+ * The feature kind each feature-creating command creates: every
+ * `feature.<kind>` command a `<kind>` feature, and the few named otherwise.
+ */
+type CommandFeatureKinds = {
+  readonly [
+    K in Extract<CommandKind, `feature.${FeatureKind}`>
+  ]: K extends `feature.${infer F}` ? F : never;
+} & {
+  readonly 'primitive.add': 'primitive';
+  readonly 'sketch.add': 'sketch';
+  readonly 'import.mesh': 'imported-mesh';
+  readonly 'import.step': 'imported-step';
+};
+
+/**
+ * Stored-command validation reads a creation command's payload by the
+ * feature it creates, from `@openzcad/shared`'s `COMMAND_FEATURE_KINDS`
+ * (shared cannot depend on this package). This typing holds that table to
+ * {@link CommandKind} both ways: it must name every feature-creating command
+ * with the kind it creates, and nothing else.
+ */
+export const COMMAND_CREATED_FEATURE_KINDS: CommandFeatureKinds &
+  Record<
+    Exclude<keyof typeof COMMAND_FEATURE_KINDS, keyof CommandFeatureKinds>,
+    never
+  > = COMMAND_FEATURE_KINDS;
 
 export interface CommandDefinition<TPayload> {
   kind: CommandKind;
@@ -548,6 +583,22 @@ function serializedLeaves(command: AnyCommand): SerializedCommand[] {
     : [command.serialize()];
 }
 
+/**
+ * Refuses commands whose payload uses a reserved name as an id, a key or a
+ * parameter name, or an enum value outside the union of the feature it
+ * creates or changes (see `reservedIdentifierError`), before any of them
+ * runs: the ids a creation command supplies become keys of `nodes` and other
+ * maps, and its enums the feature data a save then refuses. A
+ * `feature.update` is judged by its feature's kind in `document`.
+ */
+function assertCommandIdentifiers(
+  commands: readonly SerializedCommand[],
+  document: ProjectDocument
+): void {
+  const error = reservedIdentifierError(commands, 'commandLog', document);
+  if (error) throw new Error(`The command cannot run: ${error}`);
+}
+
 /** Every string primitive nested anywhere in a feature's data payload. */
 function collectDataStrings(value: unknown, into: Set<string>): void {
   if (typeof value === 'string') {
@@ -612,7 +663,7 @@ function sketchReadDependencies(
     if (sketch) {
       collectDataStrings(sketch, references);
       for (const id of sketch.objectIds) {
-        const object = document.nodes[id];
+        const object = ownEntry(document.nodes, id);
         if (object?.kind === 'sketch-object')
           collectDataStrings(object.data, references);
       }
@@ -916,17 +967,22 @@ function validateExtrudeInput(
 }
 
 function validateDirectEditReference(input: DirectEditInput): void {
-  const reference = input.operation.faceReference;
-  if (!reference) {
-    return;
-  }
-  if (
-    reference.kind !== 'face' ||
-    reference.currentHash !== input.operation.faceHash
-  ) {
-    throw new Error(
-      'The direct-edit face reference does not match its legacy face hash.'
-    );
+  const faces: {
+    faceHash: number;
+    faceReference?: { kind: string; currentHash: number };
+  }[] = [
+    input.operation,
+    ...(input.operation.kind === 'remove-faces'
+      ? input.operation.additionalFaces
+      : [])
+  ];
+  for (const { faceHash, faceReference: reference } of faces) {
+    if (!reference) continue;
+    if (reference.kind !== 'face' || reference.currentHash !== faceHash) {
+      throw new Error(
+        'The direct-edit face reference does not match its legacy face hash.'
+      );
+    }
   }
 }
 
@@ -1201,6 +1257,49 @@ function validateThreadInput(
       'Thread chamfer angle must be strictly between 0 and 90 degrees.'
     );
   }
+  // Schema v57: an end takes a chamfer or a runout, not both.
+  for (const [end, chamfered, runout] of [
+    ['start', input.chamferStart, input.runoutStart],
+    ['end', input.chamferEnd, input.runoutEnd]
+  ] as const) {
+    if (chamfered && runout) {
+      throw new Error(
+        `A thread's ${end} takes a chamfer or a runout, not both.`
+      );
+    }
+  }
+  const pipe = input.profile === 'npt' || input.profile === 'bspt';
+  if (
+    !pipe &&
+    input.profile !== 'iso-metric' &&
+    input.profile !== 'printable' &&
+    input.profile !== 'custom'
+  ) {
+    throw new Error(`Unknown thread profile ${String(input.profile)}.`);
+  }
+  if (input.pipeSize !== undefined) {
+    if (!pipe) {
+      throw new Error('Only an NPT or BSPT pipe thread takes a pipe size.');
+    }
+    if (!isPipeThreadSize(input.pipeSize)) {
+      throw new Error(
+        `Pipe thread sizes are ${PIPE_THREAD_SIZES.join(', ')}; ${String(input.pipeSize)} is not one.`
+      );
+    }
+  }
+  if (pipe) {
+    // The pipe size sets the diameter and pitch, and the standard its form.
+    for (const [label, present] of [
+      ['diameter', input.majorDiameter],
+      ['pitch', input.pitch]
+    ] as const) {
+      if (present !== undefined) {
+        throw new Error(
+          `A pipe thread takes its ${label} from its pipe size; set the size instead.`
+        );
+      }
+    }
+  }
   const starts = value('starts', input.starts);
   if (
     starts !== undefined &&
@@ -1220,7 +1319,9 @@ function validateThreadInput(
     for (const [label, present] of custom) {
       if (present !== undefined) {
         throw new Error(
-          `Only a custom thread profile sets its ${label}; this one derives it from the pitch.`
+          pipe
+            ? `Only a custom thread profile sets its ${label}; a pipe thread takes its standard's.`
+            : `Only a custom thread profile sets its ${label}; this one derives it from the pitch.`
         );
       }
     }
@@ -2916,7 +3017,7 @@ export const commandFactories = {
   },
   setAssemblyStudy(
     payload: AssemblyStudySetInput,
-    label = 'Edit motion study'
+    label = 'Edit animation'
   ): CommandDefinition<AssemblyStudySetInput> {
     return makeCommand('assembly.study.set', label, payload, (document) =>
       setAssemblyStudy(document, payload)
@@ -2927,7 +3028,7 @@ export const commandFactories = {
   ): CommandDefinition<AssemblyStudyDeleteInput> {
     return makeCommand(
       'assembly.study.delete',
-      'Delete motion study',
+      'Delete animation',
       payload,
       (document) => deleteAssemblyStudy(document, payload)
     );
@@ -3105,12 +3206,12 @@ function projectedParameterScope(
         pending.delete(operation.name);
         pending.set(operation.newName, pendingExpression);
       }
-      const renamedValue = scope[operation.name];
+      const renamedValue = ownEntry(scope, operation.name);
       if (renamedValue !== undefined) {
         scope[operation.newName] = renamedValue;
         delete scope[operation.name];
       }
-      const renamedKind = kinds[operation.name];
+      const renamedKind = ownEntry(kinds, operation.name);
       if (renamedKind !== undefined) {
         kinds[operation.newName] = renamedKind;
         delete kinds[operation.name];
@@ -3859,7 +3960,9 @@ export function commandsForCadPatch(
       readDocument === projectedDocument &&
       originalSketchView !== document &&
       sketch.objectIds.some(
-        (id) => originalSketchView.nodes[id] !== document.nodes[id]
+        (id) =>
+          ownEntry(originalSketchView.nodes, id) !==
+          ownEntry(document.nodes, id)
       )
     ) {
       if (invalidatedSketchReads.has(sketch.sketchId)) {
@@ -3872,7 +3975,7 @@ export function commandsForCadPatch(
       readDocument = originalSketchView;
     }
     for (const objectId of sketch.objectIds) {
-      const node = readDocument.nodes[objectId];
+      const node = ownEntry(readDocument.nodes, objectId);
       if (node?.kind === 'sketch-object') {
         objects.push(node.data);
         objectIds.push(objectId);
@@ -4012,8 +4115,10 @@ export function commandsForCadPatch(
     if (retained.some((previous) => sameSource(previous, source)))
       return source.bodyId as BodyId;
     const bodyId = resolveBody(source.bodyId);
-    const topology =
-      projectedDocument.derived.bodyRepresentations[bodyId]?.topology;
+    const topology = ownEntry(
+      projectedDocument.derived.bodyRepresentations,
+      bodyId
+    )?.topology;
     const entries =
       reference.kind === 'face' ? topology?.faces : topology?.edges;
     if (
@@ -4222,9 +4327,10 @@ export function commandsForCadPatch(
           throw new Error(
             'Raised-feature separation requires an unmodified imported source.'
           );
-        const measured =
-          projectedDocument.derived.bodyRepresentations[bodyId]?.topology
-            ?.recognizedPlanarEmboss;
+        const measured = ownEntry(
+          projectedDocument.derived.bodyRepresentations,
+          bodyId
+        )?.topology?.recognizedPlanarEmboss;
         if (
           !measured ||
           JSON.stringify(measured) !== JSON.stringify(operation.selection)
@@ -4280,7 +4386,7 @@ export function commandsForCadPatch(
         const sketch = findSketch(projectedDocument, operation.sketchId);
         const objectId = toEntityId(operation.objectId);
         const object = sketch?.objectIds.includes(objectId)
-          ? projectedDocument.nodes[objectId]
+          ? ownEntry(projectedDocument.nodes, objectId)
           : undefined;
         if (!sketch || !object || object.kind !== 'sketch-object') {
           throw new Error(
@@ -5354,6 +5460,7 @@ export class CommandManager {
   }
 
   execute(command: AnyCommand): ProjectDocument {
+    assertCommandIdentifiers(serializedLeaves(command), this.document);
     command.validate(this.document);
     const previous = this.document;
     let next = command.apply(this.document);
@@ -5401,6 +5508,7 @@ export class CommandManager {
    * undo/redo still matches the document.
    */
   normalize(command: AnyCommand): ProjectDocument {
+    assertCommandIdentifiers(serializedLeaves(command), this.document);
     command.validate(this.document);
     let next = command.apply(this.document);
     assertDocumentTextBudget(next);
@@ -5445,6 +5553,14 @@ export class CommandManager {
     const next = applyDocumentChanges(this.document, entry.changes, direction);
     // Validate before advancing the cursor or publishing a restored state.
     assertDocumentTextBudget(next);
+    const identifiers = documentIdentifierError({
+      ...next,
+      editHistory: undefined
+    });
+    if (identifiers)
+      throw new Error(
+        `${direction === 'undo' ? 'Undo' : 'Redo'} refused: ${identifiers}`
+      );
     this.document = appendRevision(
       {
         ...next,
@@ -5462,6 +5578,7 @@ export class CommandManager {
     const previous = this.document;
     let next = this.document;
     const serialized: SerializedCommand[] = [];
+    assertCommandIdentifiers(commands.flatMap(serializedLeaves), this.document);
     for (const command of commands) {
       command.validate(next);
       next = command.apply(next);
@@ -5547,6 +5664,7 @@ export function replayCommands(
     commandLog: serializedCommands,
     editHistory: undefined
   });
+  assertCommandIdentifiers(serializedCommands, initialDocument);
   const commandCarrier = {
     schemaVersion: initialDocument.schemaVersion,
     commandLog: serializedCommands

@@ -59,6 +59,15 @@ disabled. Show a body in the viewport to include it in the file.
 STEP body names and colours are in the file for other CAD to read; OpenZCAD's
 own STEP import does not yet apply them to the bodies it creates (I02).
 
+**Insert project…** (File menu) copies another project's shown bodies into
+the open one as one undoable step: each keeps its name, chosen colour and
+opacity, its exact faces and its size in the open project's unit, and the
+set is filed in an Objects folder named after the project. It travels as a
+STEP, so it drops the same things a STEP does — history, parameters,
+sketches, assembly and drawings — and keeps no link to the other project.
+Mesh references and bodies whose history step failed are left out and named.
+**Import project…** still opens the backup as a separate project.
+
 "Within the chord tolerance" means each bound lies within the chord
 deviation of the exact value. Volume never exceeds the exact value, and it
 falls short by at most the curved area times the chord deviation. A mesh

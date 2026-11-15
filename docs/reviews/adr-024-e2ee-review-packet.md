@@ -423,14 +423,31 @@ the browser side first, then the Worker's defense in depth.
 ### 3.10 Invitations
 
 - Crypto: `signProjectInvitation`, `verifyProjectInvitation`,
-  `invitationEmailHash` ("OZI", seven days) in
+  `invitationEmailHash` ("OZI", seven days; version 2 adds
+  `invitationLinkTokenHash` of the emailed link's token, which the owner's
+  browser makes; version 3 adds `inviteeIdentityKeyHash`, the identity of
+  the verified contact invited, with an optional link), and the invitee's
+  signed acceptance
+  (`signInvitationAcceptance`, `verifyInvitationAcceptance`, "OZJ") in
   `packages/crypto/src/invitations.ts`.
-- Browser: `inviteToEncryptedProject`, `acceptEncryptedInvitation`,
-  `publishInvitationKeyPackages`, `addInvitedMember`,
-  `completeReadyInvitations`, `joinWelcomedProjects` in
-  `apps/web/src/lib/e2ee/invitations.ts`; `addInvitee` and
-  `joinProjectByWelcome` (full-history verification, issue #817) in
-  `projectGroups.ts`; link capture in `encryptedInvitationLink.ts`.
+- Browser: `inviteToEncryptedProject` (email-only unless the owner
+  explicitly picks a verified contact, which `invitableContacts` offers by
+  contact code for the typed address; then binds that identity),
+  `acceptEncryptedInvitation` (records intent only when the returned
+  statement names the opened link's token, and keeps that token's hash: a
+  link intent without it counts for nothing), `confirmEncryptedInvitation`
+  (the explicit Join, from the verified statement, naming the inviter by
+  their contact code), `publishInvitationKeyPackages`, `addInvitedMember`
+  (automatic only for a statement bound to the accepting identity in a
+  project whose removal history this browser saw; otherwise only with the
+  owner's `confirmedIdentity`), `declineInvitation`,
+  `completeReadyInvitations`, `joinWelcomedProjects` and the removal checks
+  and removal-history marks that gate automatic adds across tabs
+  (`invitationRemovalChecks`, `recordRemovedMembers`) in
+  `apps/web/src/lib/e2ee/invitations.ts`; the owner's confirmation in
+  `ProjectSharingDialog.tsx` and `EncryptedInvitations.tsx`;
+  `addInvitee` and `joinProjectByWelcome` (full-history verification, issue
+  #817) in `projectGroups.ts`; link capture in `encryptedInvitationLink.ts`.
 - Worker: `apps/web/worker/e2eeInvitations.ts` (`prepareAddCommit` gates an
   Add Commit on a claimed KeyPackage of an accepted invitation). Emails name
   the sender, not the project.
@@ -456,7 +473,24 @@ the browser side first, then the Worker's defense in depth.
   `projectMigrations.ts` (Web Lock per account), reads through
   `migrationPlaintextSource.ts`; shared projects re-add members first
   (`prepareMigrationMembers`, `readdMigrationMembers` in
-  `migrationMembers.ts`). UI `ExistingProjectEncryption.tsx`.
+  `migrationMembers.ts`) only as the owner approved them: each ready
+  member's contact code and signed role are shown, and
+  `requireMembersApproved` stops before staging and again before the
+  re-add unless the approval names exactly the current roster, identities
+  and roles. The roster includes members a resumed staging already
+  re-added; `MigrationApprovalReceipt` (local storage, bound to the
+  project, the staging's `startedAt`, and each approved identity and role)
+  spares asking again after a reload, and `unconfirmedReadds` restarts a
+  staging whose re-adds carry no reviewable acceptance.
+  `stagedGroupMembers` reads the caught-up staged group's leaves and roles
+  extension, and `stagedGroupApproved` restarts the staging before a
+  resumed write and again before the cutover when the group holds anyone
+  not approved by identity and role (a member the server's listing leaves
+  out included), or at the cutover lacks an approved member. The
+  controller drops an approval once the engine records it in a receipt
+  (`onApprovalSpent`), on a restart, and on cancel. A record or
+  statement naming another project is never ready, and `addInvitedMember`
+  refuses it (`projectId`). UI `ExistingProjectEncryption.tsx`.
 - Worker: `apps/web/worker/e2eeProjectMigrations.ts` (`start`, `renew`,
   `cutover`, `abandon`, `purge` and `purgeStep` are internal;
   `purgeMigratedProject` and `sweepProjectMigrations` are exported), lease
@@ -670,6 +704,20 @@ class and SQLite with Node devices and the in-process MLS engine. Rust
 and on the scenario and archive tests.
 
 ## 6. Known limitations and deferrals
+
+- **Which contact an address belongs to.** Contacts' addresses are the
+  server's labels (the signed contacts list names identities, not
+  addresses), so an address match is never bound by itself: it is only
+  offered to the owner as an explicit choice, shown by that contact's code,
+  and the default is an email-only invitation. Every unbound acceptance
+  needs the owner's confirmation by contact code. A migration's member
+  roster is likewise approved by contact code and signed role before
+  cutover.
+- **Removal history on other owner devices.** Only an owner device that
+  created a project's group (with this version) adds automatically there;
+  a device that joined
+  from the history asks the owner for every Add. Rebuilding removals from
+  the authenticated membership history would let it vouch too (follow-up).
 
 - **Fork consistency only.** A server can keep members on separate
   branches forever. An independently accepted account state now rejects a

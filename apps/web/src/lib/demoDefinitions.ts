@@ -76,3 +76,21 @@ export const VISUAL_SELECTION_ACCEPTANCE_DEMO: DemoDefinition = {
   tagline: 'Boss with through-bore and a finished rim',
   revisions: ['A — Boss blank', 'B — Through-bore', 'C — Lower rim fillet']
 };
+
+const DEMO_NAME_PREFIX = 'Demo · ';
+const DEMO_PROJECT_IDS: ReadonlySet<string> = new Set(
+  [...DEMO_DEFINITIONS, VISUAL_SELECTION_ACCEPTANCE_DEMO].map(
+    (definition) => definition.projectId
+  )
+);
+
+/**
+ * The name a copy of a project starts from. A copy of a sample is the
+ * user's own project, so it drops the "Demo · " the sample wears on the
+ * shelf: "Mounting Bracket (copy)", not "Demo · Mounting Bracket (copy)".
+ */
+export function copyBaseName(projectId: string, name: string): string {
+  return DEMO_PROJECT_IDS.has(projectId) && name.startsWith(DEMO_NAME_PREFIX)
+    ? name.slice(DEMO_NAME_PREFIX.length)
+    : name;
+}

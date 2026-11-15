@@ -1,5 +1,6 @@
 import { findSketch, listFeaturesInOrder } from '@openzcad/document-core';
 import {
+  ownEntry,
   datumAxisPlaneSources,
   datumAxisPointSources,
   datumPlaneSources,
@@ -463,7 +464,7 @@ export function reorderRefusal(
         ? { featureWarnings: derived.featureWarnings }
         : {}),
       bodyPresent: (bodies.get(feature.featureId) ?? []).every((bodyId) =>
-        Boolean(derived.bodyRepresentations[bodyId])
+        Boolean(ownEntry(derived.bodyRepresentations, bodyId))
       ),
       documentMoved: false
     });

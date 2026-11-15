@@ -10,7 +10,10 @@ import type {
 
 import { encryptedBlobSource } from './e2ee/blobReferences';
 import { loadSourceBlob, putSourceBlob, sha256Hex } from './localProjectStore';
-import { sharedImportSourceUrl } from './projectShareClient';
+import {
+  sharedImportSourcePath,
+  shareTokenHeaders
+} from './projectShareClient';
 import { readSharedSourceBytes } from './sharedSourceDownload';
 
 /**
@@ -115,11 +118,12 @@ export async function preloadSharedImportSources(
       );
     }
     const bytes = await readSharedSourceBytes(
-      sharedImportSourceUrl(token, artifactId),
+      sharedImportSourcePath(artifactId),
       sourceName,
       fetcher,
       MAX_ARTIFACT_DOWNLOAD_BYTES,
-      SOURCE_DOWNLOAD_IDLE_MS
+      SOURCE_DOWNLOAD_IDLE_MS,
+      shareTokenHeaders(token)
     );
     if (
       !bytes ||

@@ -15,6 +15,7 @@ import {
 } from '@openzcad/shared';
 import type { FeatureId, FeatureNode } from '@openzcad/shared';
 import {
+  featureIcon,
   findRollbackMarkerIndex,
   HistoryTimeline,
   placeTimeline
@@ -1453,4 +1454,41 @@ it('flags a sketch whose linked projection lost its source edge (I01)', () => {
   // Pending geometry has no verdict yet; nothing is called broken.
   rerender(<HistoryTimeline {...props} geometryPending />);
   expect(screen.queryByText('broken projection')).not.toBeInTheDocument();
+});
+
+describe('featureIcon with a forged selector', () => {
+  const RESERVED = ['__proto__', 'constructor', 'toString', 'valueOf'];
+  const forged = (name: string) => [
+    feature(1, { featureKind: 'primitive', primitiveKind: name }),
+    feature(2, { featureKind: 'pattern', patternKind: name }),
+    feature(3, { featureKind: 'boolean', operation: name }),
+    feature(4, { featureKind: 'direct-edit', operation: { kind: name } }),
+    { ...feature(5), featureKind: name } as unknown as FeatureNode
+  ];
+
+  it.each(RESERVED)('never draws an inherited member for "%s"', (name) => {
+    const fallback = forged('unknown-kind').map(featureIcon);
+    const icons = forged(name).map(featureIcon);
+    expect(icons).toEqual(fallback);
+    for (const icon of icons) expect(icon).not.toBe(Object.prototype);
+    // The two rows a forged project document reaches with a complete shape.
+    const rows = [
+      feature(1, {
+        featureKind: 'primitive',
+        primitiveKind: name,
+        dimensions: { width: 1, height: 1, depth: 1 }
+      }),
+      feature(2, {
+        featureKind: 'pattern',
+        patternKind: name,
+        targetBodyId: 'body-1',
+        count: 2,
+        axis: 'x',
+        spacing: 10
+      })
+    ];
+    expect(() => renderTimeline({ features: rows })).not.toThrow();
+    expect(row('Feature 1')).toBeTruthy();
+    expect(row('Feature 2')).toBeTruthy();
+  });
 });

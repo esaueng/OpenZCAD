@@ -1295,8 +1295,8 @@
 
 /* View's bar stands on the right at the stage's middle, a vertical rail
    like Build's instruments (View and Tweak have no instrument rail of their
-   own): Measure, then fit, views, grid, display, projection and orbit mode, icons only
-   with their names as tooltips. The views panel opens beside it, leftward. */
+   own): Measure, then fit, grid, projection, orbit mode, section, display
+   and views, Build's order (I52), icons only with their names as tooltips. The views panel opens beside it, leftward. */
 .workspace.column-layout .palette-float:has(.view-mode-bar) {
   top: var(--stage-middle);
   right: var(--island-gap);
@@ -1316,9 +1316,9 @@
 }
 
 /* Keep the lazy fallback in the same right-hand slot as the loaded rail.
-   Its seven 30px controls, divider, gaps and padding occupy 241px. */
+   Its eight 30px controls, divider, gaps and padding occupy 273px. */
 .workspace.column-layout .view-tools-loading {
-  min-height: 241px;
+  min-height: 273px;
   justify-content: center;
 }
 
@@ -2901,6 +2901,15 @@ button.command-rail.is-suggested {
     transform: none;
   }
 
+  /* Above the open sheet the bar has room for seven controls, not eight:
+     Section waits for View and Build here, as it waits behind More on
+     Build's short phone rail. The order of the rest is unchanged (I52). */
+  .workspace.column-layout:has(.tweak-flyouts.is-open)
+    .view-mode-bar
+    .view-mode-section-toggle {
+    display: none;
+  }
+
   .tweak-flyouts {
     top: auto;
     bottom: 0;
@@ -3279,6 +3288,15 @@ button.command-rail.is-suggested {
    float would, and stands over the inspector it covers until it closes. */
 .panel-dock-layer.slot-over-lane .panel-unpinned {
   z-index: calc(var(--z-inspector-float) + 1);
+}
+
+/* A card in the right lane (a command's card, or the feature card a click
+   in a floating History opens) stands over the floating windows: the edit
+   card opened BEHIND the History it was opened from, its labels cut to
+   "e center Y" and its Apply half covered (I7). Under the Tools drawer
+   (+9) and the rail's own flyouts (+10), which are more temporary still. */
+.stage-right:has(> :is(.command-float, .inspector-float)) {
+  z-index: calc(var(--z-panel-float) + 8);
 }
 
 /* A floating window: its panels stacked as in a column, the corner that
@@ -3912,7 +3930,10 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 
 /* The sketch's state as a chip under Solve, coloured like the edges it
-   describes: free (blue), fully constrained (green), in conflict (red). */
+   describes: free (blue), fully constrained (green), in conflict (red).
+   "4 DOF" just fits the rail's 30px on one line; a count of 10 or more
+   wraps "DOF" under it, two 10px lines in the same 22px, rather than
+   running "12 DOF" out past the chip's right border. */
 .workspace-column .sketch-rail button.sketch-dof-chip {
   width: 30px;
   height: 22px;
@@ -3925,7 +3946,8 @@ button.model-panel-grip[aria-expanded='true'] {
   font-weight: var(--fw-medium);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
-  white-space: nowrap;
+  line-height: 10px;
+  white-space: normal;
 }
 
 .workspace-column .sketch-rail button.sketch-dof-chip[data-state='defined'] {

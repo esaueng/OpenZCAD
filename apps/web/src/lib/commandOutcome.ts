@@ -1,6 +1,6 @@
 /**
  * The status line after a command lands. Command labels are imperative
- * because they name what Undo will undo ("Undo Add box"); shown alone as the
+ * because they name what Undo will undo (the menu's "Undo Add box"); shown alone as the
  * outcome they read as a menu item — "Add box", "Drill hole", "Transform
  * body" — next to sentences like "Created Cozy Gecko." This turns the label
  * into the sentence the user would expect, leaving the label itself alone.
@@ -63,4 +63,18 @@ export function commandOutcomeMessage(label: string): string {
   }
   // "Union", "Linear pattern": a feature named by what it is, not a verb.
   return `${trimmed} added.`;
+}
+
+/**
+ * The status after Undo or Redo: what happened, not the command to do it.
+ * "Undo Add box" in the toast read as an instruction (13 November review
+ * I22); it says "Undid Add box." instead.
+ */
+export function historyStepMessage(
+  step: 'undo' | 'redo',
+  label: string | null | undefined
+): string {
+  const verb = step === 'undo' ? 'Undid' : 'Redid';
+  const trimmed = label?.trim().replace(/[.!?]+$/, '') ?? '';
+  return trimmed ? `${verb} ${trimmed}.` : `${verb} the last change.`;
 }

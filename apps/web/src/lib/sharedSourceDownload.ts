@@ -4,7 +4,8 @@ export async function readSharedSourceBytes(
   sourceName: string,
   fetcher: typeof fetch,
   maxBytes: number,
-  idleMs: number
+  idleMs: number,
+  headers?: Record<string, string>
 ): Promise<Uint8Array<ArrayBuffer> | null> {
   const controller = new AbortController();
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -29,6 +30,7 @@ export async function readSharedSourceBytes(
   const download = (async () => {
     const response = await fetcher(url, {
       credentials: 'omit',
+      ...(headers ? { headers } : {}),
       signal: controller.signal
     });
     if (controller.signal.aborted) {

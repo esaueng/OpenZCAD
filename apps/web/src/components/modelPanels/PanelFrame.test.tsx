@@ -71,6 +71,46 @@ describe('PanelFrame in a dock', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
+  it('opens the panel’s own actions on a header right-click (I19)', async () => {
+    const user = userEvent.setup();
+    const dock = dockControls();
+    const controls = frame(dock);
+    const region = renderFrame(controls);
+    const heading = region.getByRole('heading', { name: 'History 2' });
+    const event = fireEvent.contextMenu(heading);
+    // false: the browser's own menu was prevented.
+    expect(event).toBe(false);
+    const menu = screen.getByRole('menu', { name: 'History' });
+    expect(
+      within(menu)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent)
+    ).toEqual([
+      'Unpin History',
+      'Pop out History',
+      'Dock left',
+      'FloatNot here',
+      'Move upAlt+↑',
+      'Close History'
+    ]);
+    // The grip's Move menu is not the one open.
+    expect(
+      region.getByRole('button', { name: 'Move History' })
+    ).not.toHaveAttribute('aria-expanded');
+    await user.click(
+      within(menu).getByRole('menuitem', { name: 'Unpin History' })
+    );
+    expect(controls.onUnpin).toHaveBeenCalledTimes(1);
+
+    fireEvent.contextMenu(heading);
+    await user.click(screen.getByRole('menuitem', { name: /^Dock left/ }));
+    expect(dock.onMove).toHaveBeenCalledWith('dock-left');
+
+    fireEvent.contextMenu(heading);
+    await user.click(screen.getByRole('menuitem', { name: 'Close History' }));
+    expect(controls.onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('hands header presses and grip keys to the dock', () => {
     const dock = dockControls();
     const region = renderFrame(frame(dock));

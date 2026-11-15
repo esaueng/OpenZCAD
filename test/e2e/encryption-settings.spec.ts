@@ -178,6 +178,14 @@ test('sets up encryption only after the recovery key is confirmed', async ({
     .getByLabel('Recovery key', { exact: true })
     .textContent())!;
   expect(recoveryKey).toMatch(/^([0-9A-Z]{4}-){13}[0-9A-Z]{4}$/);
+  // Step 1 says plainly what losing the keys costs (design review I80).
+  await expect(settings).toContainText(
+    'your encrypted cloud projects cannot be recovered, by you or by us'
+  );
+  // A passkey added later is a way back too, so the warning names it.
+  await expect(settings).toContainText(
+    'every device, any passkey you add, and this recovery key'
+  );
   const proceed = settings.getByRole('button', { name: 'Continue' });
   await expect(proceed).toBeDisabled();
   await settings
@@ -202,6 +210,10 @@ test('sets up encryption only after the recovery key is confirmed', async ({
   await expect(settings.getByLabel('Your fingerprint')).toHaveText(
     /^(\d{5} ){7}\d{5}$/
   );
+  // Replacing keys makes a new identity, so the hint must not call it fixed.
+  await expect(settings).toContainText(
+    'Your identity. It changes only when you replace your keys.'
+  );
   await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
   // The server holds wrapped keys only.
   const wraps = server.db
@@ -219,6 +231,49 @@ test('sets up encryption only after the recovery key is confirmed', async ({
   await page.reload();
   const again = await openEncryptionSettings(page);
   await expect(again.getByText('Unlocked', { exact: true })).toBeVisible();
+});
+
+// Design review I75: setup said "Encryption is on" while new projects were
+// still created unencrypted. It now ends with "Encrypt new projects?", ticked.
+test('ends setup by asking to encrypt new projects, ticked by default', async ({
+  page,
+  context
+}) => {
+  const server = createE2eeServer({ projectsEnabled: true });
+  await stubApi(page);
+  await installE2eeServer(context, server);
+  await page.goto('/');
+  const settings = await openEncryptionSettings(page);
+  await settings.getByRole('button', { name: 'Set up encryption' }).click();
+  const recoveryKey = (await settings
+    .getByLabel('Recovery key', { exact: true })
+    .textContent())!;
+  await settings
+    .getByRole('checkbox', { name: 'I saved my recovery key' })
+    .check();
+  await settings.getByRole('button', { name: 'Continue' }).click();
+  await settings.getByLabel('Confirm recovery key').fill(recoveryKey);
+  await settings.getByRole('button', { name: 'Finish setup' }).click();
+  await expect(settings.getByText('Encrypt new projects?')).toBeVisible({
+    timeout: 30_000
+  });
+  const choice = settings.getByRole('checkbox', {
+    name: 'Encrypt new projects'
+  });
+  await expect(choice).toBeChecked();
+  await expect(settings).toContainText(
+    'Projects you already have stay as they are until you encrypt them below.'
+  );
+  await settings.getByRole('button', { name: 'Done', exact: true }).click();
+  await expect(settings.getByText('Encrypt new projects?')).toHaveCount(0);
+  await expect(choice).toBeChecked();
+  expect(
+    server.db
+      .prepare(
+        'SELECT encrypt_new_projects AS on_ FROM e2ee_project_preferences'
+      )
+      .get()
+  ).toEqual({ on_: 1 });
 });
 
 test('removes another device with the recovery key and rotates the keys', async ({

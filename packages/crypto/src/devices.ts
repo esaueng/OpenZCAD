@@ -529,8 +529,10 @@ export type StatementKind =
   | 'share link forget'
   | 'share link registration'
   | 'project invitation'
+  | 'invitation acceptance'
   | 'MLS authority manifest'
-  | 'MLS authority trust';
+  | 'MLS authority trust'
+  | 'MLS commit submission';
 
 /** @internal `u8 1 | r || s` over `label "v1 <kind> signature" | statement`. */
 export async function signStatement(
@@ -631,6 +633,12 @@ export interface RevokedRecord {
 
 export interface VerifiedDeviceList {
   readonly userId: string;
+  /**
+   * The identity generation the list belongs to, when its caller knows it
+   * (the account view, or the lookup that served the list): the chain does
+   * not say. Unset by `verifyDeviceList`.
+   */
+  readonly generation?: number;
   /** The raw identity public key the list was verified against. */
   readonly identityKey: Bytes;
   /** `publicKeyHash` of the identity key: the user's fingerprint. */

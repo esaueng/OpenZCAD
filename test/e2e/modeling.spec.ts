@@ -820,8 +820,25 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
         edge.renderOrder === idleBodyEdges[0]!.renderOrder
     )
   ).toBe(true);
+  // Curved-surface outlines (#1290) are idle ink drawn with the crisp edges:
+  // the same layer and depth contract, not a hover or selection overlay.
+  const silhouetteEdges = renderPolicy.bodyEdges.filter(
+    (edge) => edge.name === 'body-edge-silhouette'
+  );
+  expect(silhouetteEdges.length).toBeGreaterThan(0);
+  expect(
+    silhouetteEdges.every(
+      (edge) =>
+        edge.depthTest &&
+        !edge.depthWrite &&
+        edge.renderOrder === idleBodyEdges[0]!.renderOrder
+    )
+  ).toBe(true);
   const overlayEdges = renderPolicy.bodyEdges.filter(
-    (edge) => edge.name !== 'body-edge' && edge.name !== 'body-edge-tangent'
+    (edge) =>
+      edge.name !== 'body-edge' &&
+      edge.name !== 'body-edge-tangent' &&
+      edge.name !== 'body-edge-silhouette'
   );
   expect(
     overlayEdges.every(
@@ -989,7 +1006,7 @@ test('extrudes and edits one of multiple closed sketch regions', { tag: '@ci-smo
   // Exercise the same history commands through their supported shortcuts.
   await page.keyboard.press('Control+z');
   await page.keyboard.press('Control+Shift+z');
-  await expect(page.getByRole('contentinfo')).toContainText('Redo');
+  await expect(page.getByRole('contentinfo')).toContainText('Redid');
   const reopened = await editExtrudeFromHistory(
     page,
     page.locator('.feature-row-main', { hasText: 'Extrude' })
@@ -1651,7 +1668,10 @@ test('preflights and splits a box into two live half bodies', async ({
   const splitBar = page.getByRole('group', { name: 'Split command' });
   await expect(splitBar).toContainText('Pick a plane or flat face');
   await clickGhostPlane(page, 'YZ');
-  await expect(splitBar).toContainText('the cutting plane contains edge');
+  // Plain words lead; the kernel's sentence stays behind Technical details.
+  await expect(splitBar).toContainText(
+    'The cutting plane lies exactly along an existing edge'
+  );
   await expect(
     splitBar.getByRole('button', { name: 'Done', exact: true })
   ).toBeDisabled();
@@ -4728,6 +4748,8 @@ test('sketches on the wall of a drag-style extrusion and on a hash-only face', a
   await expect(
     page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
+  // Line, then the exit's confirmation (I43), then out.
+  await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('contentinfo')).toContainText('Sketch closed');

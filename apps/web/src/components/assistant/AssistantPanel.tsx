@@ -1056,6 +1056,15 @@ export function AssistantPanel({
         setNotice(
           'The assistant is still answering the last ask. Press Enter again when it finishes.'
         );
+      } else {
+        // Said where the question was asked: the status line alone left a
+        // signed-out ask looking like a search that found nothing (I8).
+        const reason =
+          statusNotice ??
+          (status || statusError
+            ? "The assistant can't answer questions right now."
+            : 'The assistant is still starting. Press Enter again in a moment.');
+        setNotice(`${reason} Your question is back in the prompt line.`);
       }
       return;
     }

@@ -791,48 +791,61 @@ export function refineAcceptedEdgeModifierSize(
     return accepted;
   }
   const angle = featureKind === 'chamfer' ? chamferAngleRadians : undefined;
-  const step = refineStep(accepted, refused);
-  let low = Math.floor(accepted / step);
-  let high = Math.ceil(refused / step);
   let best = accepted;
+  // The smallest size proved to refuse: the next, finer pass searches the
+  // gap between it and `best` rather than the whole original gap.
+  let ceiling = refused;
   let calls = 0;
-  while (high - low > 1 && calls < steps) {
-    const middle = Math.floor((low + high) / 2);
-    const size = Number((middle * step).toPrecision(12));
-    if (size <= accepted + GEOMETRY_EPSILON) {
-      low = middle;
-      continue;
+  let step = refineStep(accepted, refused);
+  // One pass per scale. A single pass at the gap's own scale stopped when two
+  // round sizes bracketed the limit, with calls to spare: a 40 mm cube that
+  // refused r20 was told "radius 15 builds here" while 19.6 built (QA
+  // 2026-11-14). The finer pass spends the rest of the same budget.
+  while (calls < steps) {
+    let low = Math.floor(best / step);
+    let high = Math.ceil(ceiling / step);
+    while (high - low > 1 && calls < steps) {
+      const middle = Math.floor((low + high) / 2);
+      const size = Number((middle * step).toPrecision(12));
+      if (size <= best + GEOMETRY_EPSILON) {
+        low = middle;
+        continue;
+      }
+      if (size >= ceiling - GEOMETRY_EPSILON) {
+        high = middle;
+        continue;
+      }
+      calls += 1;
+      let builds = false;
+      try {
+        builds =
+          applyEdgeModifier(
+            kernel,
+            target,
+            selected,
+            featureKind,
+            size,
+            undefined,
+            undefined,
+            angle,
+            undefined,
+            undefined,
+            true
+          ) !== null;
+      } catch {
+        // A throw is a refusal like any other.
+      }
+      if (builds) {
+        low = middle;
+        best = size;
+      } else {
+        high = middle;
+        ceiling = size;
+      }
     }
-    if (size >= refused - GEOMETRY_EPSILON) {
-      high = middle;
-      continue;
-    }
-    calls += 1;
-    let builds = false;
-    try {
-      builds =
-        applyEdgeModifier(
-          kernel,
-          target,
-          selected,
-          featureKind,
-          size,
-          undefined,
-          undefined,
-          angle,
-          undefined,
-          undefined,
-          true
-        ) !== null;
-    } catch {
-      // A throw is a refusal like any other.
-    }
-    if (builds) {
-      low = middle;
-      best = size;
-    } else {
-      high = middle;
-    }
+    const finer = refineStep(best, ceiling);
+    if (!(finer < step)) break;
+    step = finer;
   }
   return best;
 }

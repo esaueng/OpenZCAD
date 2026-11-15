@@ -19,7 +19,8 @@ import {
   type AssemblySolution,
   type AssemblyUnsolvedReason,
   type BodyId,
-  type ProjectDocument
+  type ProjectDocument,
+  type UnitSystem
 } from '@openzcad/shared';
 import type {
   AssemblyJointToolState,
@@ -56,6 +57,8 @@ export interface AssemblyViewModel {
   /** Live bodies that are not components: drawn dimmed in Assemble. */
   otherBodyIds: BodyId[];
   glyphs: AssemblyJointGlyph[];
+  /** The document's unit: a slide's values are in it. Absent reads as mm. */
+  lengthUnit?: UnitSystem;
 }
 
 type ViewRuntime = Pick<
@@ -227,6 +230,7 @@ export function buildAssemblyView(
     componentByBody,
     bodyByComponent,
     otherBodyIds,
+    lengthUnit: document.units,
     glyphs
   };
 }

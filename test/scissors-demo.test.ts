@@ -64,6 +64,8 @@ describe('shared scissors sample', () => {
     ]);
     expect(document.assembly?.joints).toHaveLength(1);
     expect(document.assembly?.joints[0]).toMatchObject({
+      // Named for what it is, not "Revolute 1" (review I61).
+      name: 'Pivot',
       kind: 'revolute',
       values: [30],
       limits: [{ min: 0, max: 55 }]

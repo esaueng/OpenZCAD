@@ -36,6 +36,11 @@ import {
 } from './wheelZoom';
 import { cameraScreenFrame, installFreeOrbit, orbitUpFor } from './freeOrbit';
 import {
+  SIX_DOF_IDLE,
+  sixDofIsIdle,
+  type SixDofAxes
+} from '../input/spaceMouse';
+import {
   ORBIT_GLIDE_MAX_MS,
   orbitGlideElapsedMs,
   orbitGlideStepFraction
@@ -149,6 +154,34 @@ function releaseOrbitKeyInterceptors(
   }
 }
 
+/**
+ * How fast a fully deflected 3D mouse cap moves the view, per second. The
+ * axes arrive already shaped (dead zone and response curve), so these are
+ * top speeds: a turn of about 140°, a pan of one viewport height, and a zoom
+ * by e^1.6 ≈ 5×.
+ */
+export const SIX_DOF_RATES = Object.freeze({
+  rotationRadPerSecond: 2.4,
+  panViewportHeightsPerSecond: 1,
+  zoomLogScalePerSecond: 1.6
+});
+
+/**
+ * The longest frame a 3D mouse step integrates over. A stalled or hidden tab
+ * resumes with one ordinary step instead of a leap across the gap.
+ */
+const SIX_DOF_MAX_STEP_MS = 50;
+/** The step a first frame assumes, with no previous frame to measure from. */
+const SIX_DOF_FIRST_STEP_MS = 1000 / 60;
+/**
+ * How close to straight up or down a turntable's 3D mouse tilt may bring the
+ * view, in radians: about 0.08°, short of the pole where world Z stops
+ * fixing the roll.
+ */
+const TURNTABLE_POLE_MARGIN = Math.acos(1 - 1e-6);
+/** How long the 3D mouse's quarter-turn roll key glides. */
+const SIX_DOF_ROLL_MS = 260;
+
 /** Orbit radius of the home pose on a fresh document, before any fit runs. */
 const DEFAULT_ORBIT_RADIUS = 150;
 
@@ -232,6 +265,12 @@ export interface CameraControllerOptions {
   };
   /** Called once each time auto-detection proves a different device. */
   onWheelDeviceLearned?(device: WheelDevice): void;
+  /**
+   * The point a 3D mouse turns the model about, read as each motion starts:
+   * the selection's or the model's centre. Null, or absent, turns about the
+   * orbit target as a drag does.
+   */
+  sixDofPivot?(): THREE.Vector3 | null;
 }
 
 /**
@@ -267,6 +306,16 @@ export class CameraController {
   private readonly wheelElement: HTMLElement;
   private readonly wheelGesture: WheelGestureClassifier;
   private controlKeyActive = false;
+  /** The 3D mouse's latest shaped axes; idle when nothing is held. */
+  private sixDof: SixDofAxes = { ...SIX_DOF_IDLE };
+  /** A 3D mouse motion owns the camera, as a drag does. */
+  private sixDofActive = false;
+  /** That motion has turned the view, so a held roll was released. */
+  private sixDofRotated = false;
+  private sixDofLastStepAt: number | null = null;
+  private readonly sixDofZoomNdc = new THREE.Vector2(0, 0);
+  /** What the current 3D mouse motion turns about; null is the target. */
+  private sixDofPivot: THREE.Vector3 | null = null;
 
   constructor(options: CameraControllerOptions) {
     this.options = options;
@@ -566,6 +615,7 @@ export class CameraController {
       this.settleTimeout = null;
       if (
         this.gestureActive ||
+        this.sixDofActive ||
         this.tween ||
         this.pendingZoomLogScale !== 0 ||
         this.disposed
@@ -1117,6 +1167,326 @@ export class CameraController {
   }
 
   /**
+   * Takes the 3D mouse's latest shaped axes (see `input/spaceMouse.ts`). The
+   * device reports only when a reading changes, so the camera keeps moving at
+   * the held rate frame by frame in `stepSixDof` until idle axes arrive.
+   */
+  setSixDofInput(axes: SixDofAxes) {
+    if (this.disposed) {
+      return;
+    }
+    const finite = (value: number) => (Number.isFinite(value) ? value : 0);
+    this.sixDof = {
+      tx: finite(axes.tx),
+      ty: finite(axes.ty),
+      tz: finite(axes.tz),
+      rx: finite(axes.rx),
+      ry: finite(axes.ry),
+      rz: finite(axes.rz)
+    };
+    // Wake the loop either way: a motion starts on its first frame, and an
+    // idle reading ends one on the next.
+    this.options.requestRender();
+  }
+
+  /** Whether a 3D mouse motion is moving the camera. */
+  get sixDofMoving(): boolean {
+    return this.sixDofActive;
+  }
+
+  /**
+   * Advances a held 3D mouse motion by one rendered frame, ahead of
+   * `stepOrbit`, which applies the queued rotation and pan. Returns true
+   * while the motion continues, so the render loop keeps drawing.
+   *
+   * The motion is a gesture like a drag: it cancels a glide, tracks tightly
+   * while held and hands off to the release glide when the cap comes back to
+   * rest. With free orbiting (the default) all six axes act together, roll
+   * included, as a 3D mouse does in any CAD tool; a turntable keeps the
+   * model upright instead. Rotation stops wherever the controls forbid it
+   * (a sketch); pan and zoom keep a held roll.
+   */
+  stepSixDof(now: number): boolean {
+    if (this.disposed) {
+      return false;
+    }
+    // Only the axes the controls allow count: with rotation off (a sketch) a
+    // tilt is no input at all, so it neither starts a gesture nor cancels a
+    // glide such as the sketch-entry one.
+    const axes = this.allowedSixDof();
+    if (sixDofIsIdle(axes)) {
+      if (this.sixDofActive) {
+        this.endSixDof();
+      }
+      return false;
+    }
+    if (this.tween) {
+      // A view glide (a view key, Fit, the roll key, entering a sketch) runs
+      // to its end before a held cap takes over: its completion may switch
+      // projection or land a roll, which cancelling would skip.
+      return true;
+    }
+    if (!this.sixDofActive) {
+      this.sixDofActive = true;
+      this.sixDofRotated = false;
+      this.sixDofLastStepAt = null;
+      this.cancelTween();
+      this.beginGesture();
+      // Chosen once per motion, so the model turns in place even as the
+      // selection or the visible bodies change under a held cap.
+      const pivot = this.options.sixDofPivot?.() ?? null;
+      this.sixDofPivot =
+        pivot && Number.isFinite(pivot.x + pivot.y + pivot.z)
+          ? pivot.clone()
+          : null;
+    }
+    const elapsed =
+      this.sixDofLastStepAt === null
+        ? SIX_DOF_FIRST_STEP_MS
+        : Math.min(
+            Math.max(now - this.sixDofLastStepAt, 0),
+            SIX_DOF_MAX_STEP_MS
+          );
+    this.sixDofLastStepAt = now;
+    const seconds = elapsed / 1000;
+    if (seconds === 0) {
+      return true;
+    }
+    let moved = false;
+    const turning = axes.rx !== 0 || axes.ry !== 0 || axes.rz !== 0;
+    if (turning) {
+      const free = this.orbitsFreely();
+      if (!free && !this.sixDofRotated) {
+        // A turntable keeps world Z up, so a held roll is let go first.
+        this.releaseRoll();
+        this.sixDofRotated = true;
+      }
+      moved =
+        this.turnSixDof(
+          axes,
+          SIX_DOF_RATES.rotationRadPerSecond * seconds,
+          free
+        ) || moved;
+    }
+    if (axes.tx !== 0 || axes.ty !== 0) {
+      const pixels =
+        Math.max(this.options.domElement.clientHeight, 1) *
+        SIX_DOF_RATES.panViewportHeightsPerSecond *
+        seconds;
+      // OrbitControls pans along the camera matrix's axes; a pose set since
+      // the last frame (a snapped view) has not refreshed it yet.
+      this.active.updateMatrixWorld();
+      // Content follows the cap: screen pixels grow downward.
+      this.orbit.pan(axes.tx * pixels, -axes.ty * pixels);
+      moved = true;
+    }
+    if (axes.tz !== 0) {
+      // Pulling the cap toward you brings the model closer: a negative log
+      // scale shortens the distance. Toward the pivot while it is on screen,
+      // so the model stays put as it grows; else toward the view's centre.
+      const towardPivot = this.sixDofPivotNdc(this.sixDofZoomNdc);
+      moved =
+        applyAnchoredZoom(
+          this.active,
+          this.orbit.target,
+          this.sixDofZoomNdc,
+          -axes.tz * SIX_DOF_RATES.zoomLogScalePerSecond * seconds,
+          towardPivot,
+          this.zoomScratch
+        ) || moved;
+    }
+    if (moved) {
+      this.options.requestRender();
+    }
+    return true;
+  }
+
+  /**
+   * Turns the model about the pivot by one frame of the cap's rotation.
+   *
+   * Free orbiting turns about the screen's own axes at once: tilt about
+   * screen right, spin about screen up, roll about the view axis. A
+   * turntable spins about world Z instead, gives no roll, and stops a tilt
+   * short of the top and bottom views. Either way the camera and its orbit
+   * target take the inverse turn rigidly about the pivot, so the target stays
+   * on the view axis wherever the pivot is, and the camera's up is held at
+   * the turned screen up for OrbitControls' `lookAt` to rebuild exactly this
+   * orientation. Returns whether anything turned.
+   */
+  private turnSixDof(axes: SixDofAxes, angle: number, free: boolean): boolean {
+    const camera = this.active;
+    const turn = free
+      ? this.freeTurn(axes, angle)
+      : this.turntableTurn(axes, angle);
+    if (!turn) {
+      return false;
+    }
+    const pivot = (this.sixDofPivot ?? this.orbit.target).clone();
+    camera.position.sub(pivot).applyQuaternion(turn).add(pivot);
+    this.orbit.target.sub(pivot).applyQuaternion(turn).add(pivot);
+    camera.quaternion.premultiply(turn).normalize();
+    if (free) {
+      this.holdUp(
+        new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion)
+      );
+    } else {
+      this.restoreWorldUp();
+    }
+    return true;
+  }
+
+  /** The camera's share of a free turn: the inverse of the model's. */
+  private freeTurn(axes: SixDofAxes, angle: number): THREE.Quaternion | null {
+    const axis = new THREE.Vector3(axes.rx, axes.ry, axes.rz).applyQuaternion(
+      this.active.quaternion
+    );
+    const magnitude = axis.length();
+    if (!(magnitude > 0)) {
+      return null;
+    }
+    return new THREE.Quaternion().setFromAxisAngle(
+      axis.divideScalar(magnitude),
+      -magnitude * angle
+    );
+  }
+
+  /**
+   * The camera's share of a turntable turn: the tilt about the screen's
+   * right, then the spin about world Z. Each on its own leaves the view
+   * roll-free, so world up rebuilds it exactly; one combined axis would not.
+   * A tilt that would pass the top or bottom view is dropped.
+   */
+  private turntableTurn(
+    axes: SixDofAxes,
+    angle: number
+  ): THREE.Quaternion | null {
+    const camera = this.active;
+    let turned = false;
+    const turn = new THREE.Quaternion();
+    if (axes.rx !== 0) {
+      // A roll-free view's right is level, so a tilt about it swings the view
+      // direction within its vertical plane: the polar angle changes by
+      // exactly the tilt. Clamp the tilt to the room left before the pole, so
+      // one step can never land past it — an endpoint check alone lets a
+      // step cross, and world up then flips the view a half turn.
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(
+        camera.quaternion
+      );
+      const back = new THREE.Vector3(0, 0, 1).applyQuaternion(
+        camera.quaternion
+      );
+      const polar = Math.acos(THREE.MathUtils.clamp(back.z, -1, 1));
+      const tiltAngle = -axes.rx * angle;
+      const towardTop =
+        back.clone().applyAxisAngle(right, Math.sign(tiltAngle) * 1e-3).z >
+        back.z;
+      const room =
+        (towardTop ? polar : Math.PI - polar) - TURNTABLE_POLE_MARGIN;
+      const allowed = Math.min(Math.abs(tiltAngle), Math.max(room, 0));
+      if (allowed > 0) {
+        turn.setFromAxisAngle(right, Math.sign(tiltAngle) * allowed);
+        turned = true;
+      }
+    }
+    if (axes.ry !== 0) {
+      // The sense that keeps the model moving with the cap upside down too.
+      const screenUpZ = new THREE.Vector3(0, 1, 0).applyQuaternion(
+        camera.quaternion
+      ).z;
+      turn.premultiply(
+        new THREE.Quaternion().setFromAxisAngle(
+          new THREE.Vector3(0, 0, screenUpZ < 0 ? -1 : 1),
+          -axes.ry * angle
+        )
+      );
+      turned = true;
+    }
+    return turned ? turn : null;
+  }
+
+  /**
+   * Writes the pivot's place on screen into `ndc` and returns true while it
+   * is in view; otherwise leaves the view's centre there and returns false.
+   */
+  private sixDofPivotNdc(ndc: THREE.Vector2): boolean {
+    ndc.set(0, 0);
+    const pivot = this.sixDofPivot;
+    if (!pivot) {
+      return false;
+    }
+    this.active.updateMatrixWorld();
+    const projected = pivot.clone().project(this.active);
+    if (
+      !Number.isFinite(projected.x) ||
+      !Number.isFinite(projected.y) ||
+      Math.abs(projected.x) > 1 ||
+      Math.abs(projected.y) > 1 ||
+      projected.z <= -1 ||
+      projected.z >= 1
+    ) {
+      return false;
+    }
+    ndc.set(projected.x, projected.y);
+    return true;
+  }
+
+  /**
+   * Rolls the view a quarter turn about its own axis, the 3D mouse's roll
+   * key: `1` turns the model clockwise on screen, `-1` anticlockwise. The
+   * glide keeps the camera where it is and lands holding the new roll.
+   */
+  rollView(direction: 1 | -1) {
+    if (this.disposed || !this.orbit.enabled || !this.orbit.enableRotate) {
+      return;
+    }
+    // Land any in-flight glide's pose first, so the turn starts from what
+    // is on screen.
+    const camera = this.perspective;
+    this.followOrthographic();
+    const back = new THREE.Vector3(0, 0, 1).applyQuaternion(camera.quaternion);
+    // The screen up swings toward the old left: what was left is now on top,
+    // so the picture turns clockwise.
+    const up = new THREE.Vector3(0, 1, 0)
+      .applyQuaternion(camera.quaternion)
+      .applyAxisAngle(back, (direction * Math.PI) / 2);
+    this.startTween(
+      {
+        position: camera.position.clone(),
+        target: this.orbit.target.clone(),
+        near: camera.near,
+        far: camera.far,
+        up
+      },
+      undefined,
+      { durationMs: SIX_DOF_ROLL_MS }
+    );
+  }
+
+  /** The held axes the controls allow; all idle while they are off. */
+  private allowedSixDof(): SixDofAxes {
+    const axes = this.sixDof;
+    const { enabled, enableRotate, enablePan, enableZoom } = this.orbit;
+    const rotate = enabled && enableRotate;
+    const pan = enabled && enablePan;
+    return {
+      tx: pan ? axes.tx : 0,
+      ty: pan ? axes.ty : 0,
+      tz: enabled && enableZoom ? axes.tz : 0,
+      rx: rotate ? axes.rx : 0,
+      ry: rotate ? axes.ry : 0,
+      rz: rotate ? axes.rz : 0
+    };
+  }
+
+  private endSixDof() {
+    this.sixDofActive = false;
+    this.sixDofPivot = null;
+    this.sixDofRotated = false;
+    this.sixDofLastStepAt = null;
+    this.settleDamping();
+  }
+
+  /**
    * Re-pivots the orbit onto a picked point's depth. The camera does not
    * move and does not turn, so nothing on screen shifts; only the centre of
    * the next rotation changes.
@@ -1428,6 +1798,8 @@ export class CameraController {
     this.cancelZoom();
     this.gestureActive = false;
     this.externalOrbitActive = false;
+    this.sixDof = { ...SIX_DOF_IDLE };
+    this.sixDofActive = false;
     this.orbitGlide = null;
     if (this.settleTimeout !== null) {
       window.clearTimeout(this.settleTimeout);

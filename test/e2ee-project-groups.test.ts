@@ -12,13 +12,16 @@ import {
   accountKeyCommitment,
   deviceListEntryHash,
   exportPublicKey,
+  fromBase64Url,
   generateEncryptionKeyPair,
   generateSigningKeyPair,
   generateSymmetricKey,
   signDeviceListEntry,
+  signMlsCommitSubmission,
   toBase64Url,
   toHex,
   verifyDeviceList,
+  verifyMlsCommitSubmission,
   type DeviceListEntry,
   type ListedDevice,
   type VerifiedDeviceList
@@ -915,13 +918,169 @@ describe('solo MLS groups', () => {
     const refused = await joinProjectGroup(joiner.ctx, late).catch(
       (error: unknown) => error as Error
     );
-    expect(refused).toMatchObject({ name: 'ProjectGroupError', code: 'archive-invalid' });
+    expect(refused).toMatchObject({
+      name: 'ProjectGroupError',
+      code: 'archive-invalid'
+    });
     expect((refused as Error).message).toContain('GroupInfo differs');
     expect(
       await joiner.sessions.leaf(ref(owner, 'owner_desktop', late))
     ).toBeNull();
     expect(groupEpoch(srv, late)).toBe(1);
     expect(count(srv, 'e2ee_mls_commits', late)).toBe(1);
+  });
+
+  it('sequences only a Commit the device it names signed, for its group and epoch', async () => {
+    const srv = newServer();
+    const projectId = seedProject(srv);
+    const laptop = device(srv, owner, 'owner_laptop');
+    const desktop = device(srv, owner, 'owner_desktop');
+    await createProjectGroup(laptop.ctx, projectId);
+    await joinProjectGroup(desktop.ctx, projectId);
+    await catchUpProjectGroup(laptop.ctx, projectId);
+    const start = groupEpoch(srv, projectId);
+    type Body = Record<string, unknown> & {
+      epoch: number;
+      kind: 'commit' | 'external';
+      deviceId: string;
+      message: string;
+      groupInfo: string;
+    };
+    const keyOf = (id: string) => owner.devices.get(id)!.signing.privateKey;
+    // Signs the body as it now reads, with `signer`'s key.
+    const sign = async (body: Body, signer: string) => {
+      body.signature = toBase64Url(
+        await signMlsCommitSubmission(keyOf(signer), {
+          userId: OWNER,
+          projectId,
+          deviceId: body.deviceId,
+          kind: body.kind,
+          epoch: body.epoch,
+          keyEpoch: body.epoch + 1,
+          message: fromBase64Url(body.message),
+          groupInfo: fromBase64Url(body.groupInfo)
+        })
+      );
+    };
+    const cases: [string, (body: Body) => unknown, string][] = [
+      // A page older than the signatures.
+      [
+        'unsigned',
+        (body) => delete body.signature,
+        'E2EE_COMMIT_SIGNATURE_REQUIRED'
+      ],
+      [
+        'mis-signed',
+        (body) => {
+          const bytes = fromBase64Url(body.signature as string);
+          bytes[10] = bytes[10]! ^ 1;
+          body.signature = toBase64Url(bytes);
+        },
+        'E2EE_COMMIT_SIGNATURE_INVALID'
+      ],
+      // Another certified device of the account, named but not signing.
+      [
+        'naming another device',
+        (body) => {
+          body.deviceId = 'owner_desktop';
+        },
+        'E2EE_COMMIT_SIGNATURE_INVALID'
+      ],
+      // A device the list does not certify (one removed, say) cannot
+      // speak for a listed one, whatever session it holds.
+      [
+        'signed by an uncertified device',
+        (body) => sign(body, 'owner_tablet'),
+        'E2EE_COMMIT_SIGNATURE_INVALID'
+      ],
+      [
+        'with another GroupInfo',
+        (body) => {
+          body.groupInfo = toBase64Url(new Uint8Array([0, 1, 0, 4, 9]));
+        },
+        'E2EE_COMMIT_SIGNATURE_INVALID'
+      ],
+      // Signed by its device, but not a Commit of this group's epoch.
+      [
+        'framed for another epoch',
+        async (body) => {
+          const bytes = fromBase64Url(body.message);
+          // MLSMessage header: version, wire format, group id vector, epoch.
+          const idLength = bytes[4]!;
+          const last = 5 + idLength + 7;
+          bytes[last] = bytes[last]! ^ 1;
+          body.message = toBase64Url(bytes);
+          await sign(body, 'owner_laptop');
+        },
+        'E2EE_REQUEST_INVALID'
+      ],
+      [
+        'with a GroupInfo of another epoch',
+        async (body) => {
+          const { group_info } = srv.db
+            .prepare(
+              'SELECT group_info FROM e2ee_project_groups WHERE project_id = ?'
+            )
+            .get(projectId) as { group_info: string };
+          body.groupInfo = group_info;
+          await sign(body, 'owner_laptop');
+        },
+        'E2EE_REQUEST_INVALID'
+      ]
+    ];
+    for (const [name, edit, code] of cases) {
+      laptop.before = async (path, init) => {
+        if (!isCommitPost(path, init)) return;
+        const body = JSON.parse(init.body as string) as Body;
+        await edit(body);
+        init.body = JSON.stringify(body);
+      };
+      await expect(
+        commitProjectGroup(laptop.ctx, projectId),
+        name
+      ).rejects.toMatchObject({ code });
+      expect(groupEpoch(srv, projectId), name).toBe(start);
+    }
+
+    // Unaltered, the same device's signed Commit lands, with its signature.
+    laptop.before = undefined;
+    await commitProjectGroup(laptop.ctx, projectId);
+    const end = groupEpoch(srv, projectId);
+    expect(end).toBeGreaterThan(start);
+    const row = srv.db
+      .prepare(
+        `SELECT c.kind, c.sender_device_id, c.message, c.sender_signature,
+                g.group_info
+         FROM e2ee_mls_commits c JOIN e2ee_project_groups g USING (project_id)
+         WHERE c.project_id = ? AND c.epoch = ?`
+      )
+      .get(projectId, end - 1) as Record<string, string>;
+    expect(row.sender_device_id).toBe('owner_laptop');
+    expect(
+      await verifyMlsCommitSubmission(
+        owner.list.devices.find((d) => d.deviceId === 'owner_laptop')!
+          .signingKey,
+        {
+          userId: OWNER,
+          projectId,
+          deviceId: 'owner_laptop',
+          kind: 'commit',
+          epoch: end - 1,
+          keyEpoch: end,
+          message: fromBase64Url(row.message!),
+          groupInfo: fromBase64Url(row.group_info!)
+        },
+        fromBase64Url(row.sender_signature!)
+      )
+    ).toBe(true);
+    // The External Commit that joined the desktop was signed as well.
+    expect(
+      srv.db
+        .prepare(
+          'SELECT COUNT(*) AS n FROM e2ee_mls_commits WHERE project_id = ? AND sender_signature IS NULL'
+        )
+        .get(projectId)
+    ).toEqual({ n: 0 });
   });
 
   it('lets a read-only approved device read keys but refuses its leaf', async () => {

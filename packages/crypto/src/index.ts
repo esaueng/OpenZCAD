@@ -376,6 +376,7 @@ export {
   openShareKey,
   sameShareLinkSet,
   shareKeyHash,
+  shareSnapshotPredatesAuthority,
   signShareAuthority,
   signShareDelegation,
   signShareKeyWrap,
@@ -409,17 +410,29 @@ export {
   type VerifyShareLinkSetOptions
 } from './share-links';
 export {
+  INVITATION_ACCEPTANCE_VERSION_1,
   INVITATION_CLOCK_SKEW_MS,
   INVITATION_ROLES,
+  MAX_INVITATION_ACCEPTANCE_BYTES,
   MAX_PROJECT_INVITATION_BYTES,
   MAX_PROJECT_INVITATION_LIFETIME_MS,
   PROJECT_INVITATION_VERSION_1,
+  PROJECT_INVITATION_VERSION_2,
+  PROJECT_INVITATION_VERSION_3,
   ProjectInvitationError,
+  decodeInvitationAcceptance,
   decodeProjectInvitation,
+  encodeInvitationAcceptance,
   encodeProjectInvitation,
   invitationEmailHash,
+  invitationLinkTokenHash,
+  invitationStatementHash,
+  signInvitationAcceptance,
   signProjectInvitation,
+  verifyInvitationAcceptance,
   verifyProjectInvitation,
+  type AcceptanceExpectations,
+  type InvitationAcceptance,
   type InvitationExpectations,
   type InvitationFailure,
   type InvitationRole,
@@ -445,3 +458,10 @@ export {
   type MlsAuthorityTrust,
   type SignedMlsAuthorityTrust
 } from './mls-authority';
+export {
+  MLS_COMMIT_SIGNATURE_BYTES,
+  signMlsCommitSubmission,
+  verifyMlsCommitSubmission,
+  type MlsCommitSubmission,
+  type MlsCommitSubmissionKind
+} from './mls-commit';

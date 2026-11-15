@@ -428,14 +428,20 @@ describe('copies', () => {
     const laptop = device(srv, owner, 'owner_laptop');
     const { projectId } = await projectWithImport(srv, laptop);
     const request = await buildCopy(laptop, projectId, 'Bracket');
-    // The copy's ciphertext does not fit the owner's artifact storage.
-    const used = rows<{ finalized_bytes: number }>(
+    // The copy's ciphertext does not fit the owner's one storage allowance
+    // (files and projects together, migration 0049).
+    const used = rows<{ bytes: number }>(
       srv,
-      'SELECT finalized_bytes FROM artifact_account_usage WHERE owner_user_id = ?',
+      `SELECT COALESCE((SELECT bytes FROM account_project_storage
+                        WHERE user_id = ?1), 0)
+            + (SELECT finalized_bytes FROM artifact_account_usage
+               WHERE owner_user_id = ?1) AS bytes`,
       OWNER
-    )[0]!.finalized_bytes;
+    )[0]!.bytes;
     srv.db
-      .prepare('UPDATE users SET artifact_limit_bytes = ? WHERE id = ?')
+      .prepare(
+        'UPDATE users SET artifact_limit_bytes = ?1, project_storage_limit_bytes = ?1 WHERE id = ?2'
+      )
       .run(used + 1, OWNER);
     const before = projectIds(srv);
     await refusedWith(
@@ -444,7 +450,8 @@ describe('copies', () => {
         document: request.document!
       }),
       413,
-      'ARTIFACT_QUOTA_EXCEEDED'
+      // One allowance: the copy's envelopes reach it before its files.
+      'PROJECT_STORAGE_QUOTA'
     );
     expect(projectIds(srv)).toEqual(before);
     expect(objectKeys(srv, request.document!.projectId)).toEqual([]);
@@ -1042,7 +1049,12 @@ describe('plaintext projects', () => {
           /e2ee_/.test(sql) &&
           !/sqlite_master|pragma_table_info/.test(sql) &&
           // Decision D2's check of the opt-in, as before this slice.
-          !/FROM e2ee_project_preferences/.test(sql)
+          !/FROM e2ee_project_preferences/.test(sql) &&
+          // The one storage allowance (migration 0049) measures encrypted
+          // envelopes and excludes staged plaintext: reads, no writes.
+          !/^\s*SELECT[\s\S]*(e2ee_decrypt_staged_projects|SUM\(v\.envelope_bytes\))/.test(
+            sql
+          )
       )
     ).toEqual([]);
     expect(rows(srv, 'SELECT * FROM e2ee_content_blobs')).toEqual([]);

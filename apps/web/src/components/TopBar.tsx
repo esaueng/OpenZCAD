@@ -4,6 +4,7 @@ import { labelWithKey, useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import {
   type ChangeEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
   useId,
   useLayoutEffect,
@@ -15,9 +16,11 @@ import {
   Check,
   CircleUserRound,
   CloudOff,
+  Copy,
   Download,
   Files,
   FolderOpen,
+  Link2,
   LoaderCircle,
   Pencil,
   RotateCw,
@@ -121,6 +124,12 @@ interface TopBarProps {
   readOnlySeat?: boolean;
   collaboratorCount: number;
   projectSharingEnabled: boolean;
+  /**
+   * A share-link visitor's session (design review I73): the top bar says
+   * "Shared model · Tweak only" instead of "Local only", "Signed out" and
+   * "Offline", none of which describe it, and offers a labelled Make a copy.
+   */
+  shareSession?: { mode: 'view' | 'tweak'; onMakeCopy(): void } | null;
   workspaceMode: WorkspaceMode;
   canRenameProject: boolean;
   /**
@@ -155,6 +164,8 @@ interface TopBarProps {
   onImportFiles(files: File[]): void;
   projectTransferBusy?: boolean;
   onImportProject?(file: File): void;
+  /** Brings another project's bodies into this one: File › Insert project…. */
+  onInsertProject?(file: File): void;
   onExportProject?(): void;
   onDownloadArtifact?(artifact: ArtifactRecord): void;
   onExportStep(): void;
@@ -292,7 +303,8 @@ export function TopBar({
   collaborationFailure,
   readOnlySeat = false,
   collaboratorCount,
-  projectSharingEnabled,
+  projectSharingEnabled: sharingAvailable,
+  shareSession = null,
   workspaceMode,
   canRenameProject,
   buildModeDisabledReason,
@@ -308,6 +320,7 @@ export function TopBar({
   onImportFiles,
   projectTransferBusy,
   onImportProject,
+  onInsertProject,
   onExportProject,
   onDownloadArtifact,
   onExportStep,
@@ -321,6 +334,8 @@ export function TopBar({
   onOpenSettings,
   encryption = null
 }: TopBarProps) {
+  // A share-link session has nothing to share into (design review I73).
+  const projectSharingEnabled = sharingAvailable && !shareSession;
   const keymap = useKeymap();
   const modeLockedReason = (mode: WorkspaceMode): string | null =>
     mode === 'build'
@@ -352,6 +367,7 @@ export function TopBar({
   const fileMenuRef = useRef<HTMLDetailsElement>(null);
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const insertProjectInputRef = useRef<HTMLInputElement>(null);
   const topbarRef = useRef<HTMLElement>(null);
   // A saved document can still be preparing its model. Keep the storage
   // label and show preparation separately, rather than relying on a spinner.
@@ -424,6 +440,44 @@ export function TopBar({
       document.removeEventListener('keydown', closeFileMenuOnEscape, true);
     };
   }, []);
+
+  /**
+   * ArrowDown/ArrowUp on the File button open the menu at its first or last
+   * item; inside, the arrows, Home and End move between the enabled items,
+   * wrapping round. Tab still leaves, as before.
+   */
+  function moveInFileMenu(event: ReactKeyboardEvent<HTMLDetailsElement>) {
+    const key = event.key;
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(key)) return;
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const menu = event.currentTarget;
+    const items = Array.from(
+      menu.querySelectorAll<HTMLElement>(
+        '.topbar-menu-panel :is(button, a[href]):not([disabled])'
+      )
+    );
+    if (items.length === 0) return;
+    if ((event.target as Element).matches('summary')) {
+      if (key !== 'ArrowDown' && key !== 'ArrowUp') return;
+      event.preventDefault();
+      menu.open = true;
+      (key === 'ArrowDown' ? items[0] : items.at(-1))?.focus();
+      return;
+    }
+    const current = items.indexOf(document.activeElement as HTMLElement);
+    const next =
+      key === 'Home'
+        ? 0
+        : key === 'End'
+          ? items.length - 1
+          : key === 'ArrowDown'
+            ? (current + 1) % items.length
+            : current <= 0
+              ? items.length - 1
+              : current - 1;
+    event.preventDefault();
+    items[next]?.focus();
+  }
 
   /**
    * Closes the menu for an item that opens a dialog. The dialog hands focus
@@ -597,6 +651,8 @@ export function TopBar({
       : collaborationStatus === 'live'
         ? `${collaboratorCount} live`
         : COLLABORATION_LABELS[collaborationStatus];
+  // Signed out, archiving can only fail: no amber dot calls for it (I8).
+  const archiveAttention = localOnlySourceCount > 0 && Boolean(session);
   const accountLabel =
     accountState === 'checking'
       ? 'Checking'
@@ -604,7 +660,12 @@ export function TopBar({
         ? 'Signed in'
         : accountState === 'signed-out'
           ? 'Signed out'
-          : 'Unavailable';
+          : // The start screen and Settings name this state the same way.
+            'Cloud unavailable';
+  const accountDescription =
+    accountState === 'unavailable'
+      ? 'Cloud unavailable: sign-in could not be reached. Projects keep saving on this device.'
+      : `Cloud account: ${accountLabel.toLowerCase()}`;
 
   const breadcrumb = (
     <div className="breadcrumb">
@@ -733,7 +794,32 @@ export function TopBar({
             This island is anchored at its left edge with open stage beyond
             it, so a label change moves nothing; the actions island keeps a
             fixed width with no status slot to reserve. */}
-        {saveChipActs ? (
+        {shareSession ? (
+          // Nothing here is saved or synced until a copy is made, so the
+          // save chip's "Local only" (saved on this device) was false.
+          <Tooltip
+            label="Shared model"
+            description={
+              shareSession.mode === 'view'
+                ? 'Someone shared this model with you to look at. Make a copy to keep or change it.'
+                : 'Someone shared this model with you. You can try parameter changes here; they stay in this tab. Make a copy to keep them.'
+            }
+            multiline
+          >
+            <span
+              className="topbar-share-state topbar-action"
+              role="status"
+              aria-label={`Shared model · ${shareSession.mode === 'view' ? 'View only' : 'Tweak only'}`}
+              tabIndex={0}
+            >
+              {/* The glyph stays when a phone's bar drops every chip's
+                  words (responsive.css), so the chip is never an empty box. */}
+              <Link2 size={14} aria-hidden="true" />
+              Shared model ·{' '}
+              {shareSession.mode === 'view' ? 'View only' : 'Tweak only'}
+            </span>
+          </Tooltip>
+        ) : saveChipActs ? (
           <button
             className={`save-state topbar-action is-${saveState}`}
             type="button"
@@ -870,12 +956,22 @@ export function TopBar({
           {/* Signed in is the happy default and the save status already shows
             cloud state, so the account chip appears only when something
             needs attention. */}
-          {accountState !== 'signed-in' && (
+          {shareSession ? (
+            <button
+              type="button"
+              className="primary topbar-share-copy"
+              onClick={shareSession.onMakeCopy}
+            >
+              <Copy size={14} aria-hidden="true" />
+              Make a copy
+            </button>
+          ) : null}
+          {accountState !== 'signed-in' && !shareSession && (
             <span
               className={`account-state is-${accountState}`}
               role="status"
-              title={`Cloud account: ${accountLabel.toLowerCase()}`}
-              aria-label={`Cloud account: ${accountLabel.toLowerCase()}`}
+              title={accountDescription}
+              aria-label={accountDescription}
             >
               {accountState === 'checking' ? (
                 <LoaderCircle className="spin" size={13} aria-hidden="true" />
@@ -909,7 +1005,9 @@ export function TopBar({
             >
               <button
                 type="button"
-                className={`collaboration-state ${collaborationStatus}${readOnlySeat ? ' is-read-only' : ''}`}
+                // `is-read-only` keeps "Read-only" in words where the wide
+                // bar shows only the glyph (topbar.css, design review I77).
+                className={`collaboration-state ${collaborationStatus}${namesReadOnlySeat ? ' is-read-only' : ''}`}
                 // Each name carries the label the chip shows (WCAG 2.5.3).
                 aria-label={
                   session
@@ -951,6 +1049,9 @@ export function TopBar({
                 event.currentTarget.open = false;
               }
             }}
+            // Arrow keys move through the items as they do in Panel layout
+            // and every other menu here; File took only Tab (I24).
+            onKeyDown={(event) => moveInFileMenu(event)}
           >
             <summary
               className="secondary topbar-action"
@@ -960,14 +1061,14 @@ export function TopBar({
                   ? ` · ${artifacts.length} stored ${artifacts.length === 1 ? 'file' : 'files'}`
                   : ''
               }${
-                localOnlySourceCount > 0
+                archiveAttention
                   ? ` · ${localOnlySourceCount} import ${localOnlySourceCount === 1 ? 'source needs' : 'sources need'} archiving`
                   : ''
               }`}
             >
               <FolderOpen size={14} aria-hidden="true" />
               File
-              {localOnlySourceCount > 0 ? (
+              {archiveAttention ? (
                 <i className="file-menu-attention" aria-hidden="true" />
               ) : null}
               {artifacts.length > 0 ? (
@@ -988,7 +1089,11 @@ export function TopBar({
               >
                 <Save size={13} aria-hidden="true" />
                 <span>Save revision</span>
-                {saveKey && <small>{platformShortcutLabel(saveKey)}</small>}
+                {saveKey && (
+                  <small className="topbar-menu-key">
+                    {platformShortcutLabel(saveKey)}
+                  </small>
+                )}
               </button>
               <button
                 type="button"
@@ -1000,7 +1105,9 @@ export function TopBar({
                 <Save size={13} aria-hidden="true" />
                 <span>Save revision as…</span>
                 {saveNamedKey && (
-                  <small>{platformShortcutLabel(saveNamedKey)}</small>
+                  <small className="topbar-menu-key">
+                    {platformShortcutLabel(saveNamedKey)}
+                  </small>
                 )}
               </button>
               <div className="topbar-menu-sep" />
@@ -1045,6 +1152,33 @@ export function TopBar({
                   shortLabel="Import project…"
                   hint=".openzcad backup"
                 />
+              )}
+              {onInsertProject && (
+                <>
+                  <button
+                    type="button"
+                    className="topbar-menu-item"
+                    title="Copy another project's bodies into this one, with their names and colours. Its history stays behind."
+                    disabled={projectTransferBusy}
+                    onClick={() => insertProjectInputRef.current?.click()}
+                  >
+                    <Upload size={13} aria-hidden="true" />
+                    <span>Insert project…</span>
+                    <small>.openzcad into this project</small>
+                  </button>
+                  <input
+                    ref={insertProjectInputRef}
+                    type="file"
+                    aria-label="Insert a project backup into this project"
+                    accept={fileAccept('.openzcad')}
+                    hidden
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                      const file = event.target.files?.[0];
+                      event.target.value = '';
+                      if (file) onInsertProject(file);
+                    }}
+                  />
+                </>
               )}
               <div className="topbar-menu-sep" />
               <strong className="topbar-menu-label">Export</strong>
@@ -1106,7 +1240,14 @@ export function TopBar({
                   <button
                     type="button"
                     className="topbar-menu-item"
-                    title="Upload import sources that exist only on this device so other devices can rebuild this project"
+                    title={
+                      session
+                        ? 'Upload import sources that exist only on this device so other devices can rebuild this project'
+                        : 'Sign in to archive imports to your account'
+                    }
+                    // Signed out the upload can only fail, so it says what
+                    // it needs instead (I8).
+                    disabled={!session}
                     onClick={onArchiveLocalSources}
                   >
                     <Upload size={13} aria-hidden="true" />
@@ -1118,9 +1259,11 @@ export function TopBar({
                       </span>
                     </span>
                     <small>
-                      {localOnlySourceCount === 1
-                        ? 'one import exists only on this device'
-                        : 'these imports exist only on this device'}
+                      {!session
+                        ? 'Sign in to archive imports'
+                        : localOnlySourceCount === 1
+                          ? 'one import exists only on this device'
+                          : 'these imports exist only on this device'}
                     </small>
                   </button>
                 </>

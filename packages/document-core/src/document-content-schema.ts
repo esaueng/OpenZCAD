@@ -32,6 +32,26 @@ export function assertAssemblyCouplingSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 56, 'Joint couplings');
 }
 
+/**
+ * M15 thread runouts and pipe threads (schema v57): a thread carrying either
+ * needs a document that declares it, or an older reader would build a plain
+ * end or a cylindrical thread in its place.
+ */
+export function assertThreadContentSchema(
+  data: unknown,
+  version: unknown
+): void {
+  if (!record(data)) return;
+  if (
+    data.runoutStart !== undefined ||
+    data.runoutEnd !== undefined ||
+    data.pipeSize !== undefined ||
+    data.profile === 'npt' ||
+    data.profile === 'bspt'
+  )
+    assertMinimumProjectSchema(version, 57, 'Thread runouts and pipe threads');
+}
+
 function hasCouplings(assembly: unknown): boolean {
   return record(assembly) && assembly.couplings !== undefined;
 }
@@ -99,6 +119,18 @@ export function assertDocumentContentCommandSchema(
     )
       assertAssemblyCouplingSchema(document.schemaVersion);
     if (!record(command.payload)) continue;
+    if (command.kind === 'feature.thread')
+      assertThreadContentSchema(command.payload, document.schemaVersion);
+    // A feature patch (`feature.update`) need not name its kind, so a
+    // partial `{ runoutEnd: true }` is gated by its fields: they are
+    // thread-only, so any patch that is not another kind's carries them
+    // only as a thread.
+    if (
+      record(command.payload.data) &&
+      (command.payload.data.featureKind === undefined ||
+        command.payload.data.featureKind === 'thread')
+    )
+      assertThreadContentSchema(command.payload.data, document.schemaVersion);
     switch (command.kind) {
       case 'sketch.add':
       case 'sketch.object.add':
@@ -139,12 +171,15 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         if (hasCouplings(change.before) || hasCouplings(change.after))
           assertAssemblyCouplingSchema(document.schemaVersion);
       }
-  for (const node of documentNodesWithHistory(document))
+  for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch-object')
       assertSketchObjectContentSchema(
         node.data,
         document.schemaVersion,
         node.id
       );
+    if (node.kind === 'feature' && node.data.featureKind === 'thread')
+      assertThreadContentSchema(node.data, document.schemaVersion);
+  }
   assertDocumentContentCommandSchema(document);
 }

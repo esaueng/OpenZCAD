@@ -329,7 +329,6 @@ html select:not([multiple]):not(.start-field *):not(.object-filter *):focus {
 .keypad-units button:not(.active):not(:hover):not(:focus-visible),
 .command-flyout-more:not(:hover):not(:focus-visible) > span,
 .demo-action:not(:hover):not(:focus-visible),
-.startup-card button:not(:hover):not(:focus-visible),
 .start-shelf-action:not(:hover):not(:focus-visible),
 .start-tile-footer button:not(:hover):not(:focus-visible) {
   background: transparent;
@@ -350,24 +349,14 @@ html select:not([multiple]):not(.start-field *):not(.object-filter *):focus {
 .keypad-units button:not(.active):is(:hover, :focus-visible),
 .command-flyout-more:is(:hover, :focus-visible) > span,
 .demo-action:is(:hover, :focus-visible):not(:disabled),
-.startup-card button:is(:hover, :focus-visible),
 .start-shelf-action:is(:hover, :focus-visible):not(:disabled),
 .start-tile-footer button:is(:hover, :focus-visible):not(:disabled) {
   background: var(--color-surface-hover);
   border-color: var(--color-border-strong);
 }
 
-/* The new-project units picker rests bare like every other dropdown; its
-   drawn chevron still marks it. */
-.start-field-units select:not(:hover):not(:focus) {
-  background: transparent;
-  border-color: transparent;
-}
-
-.start-field-units select:hover:not(:focus) {
-  background: var(--color-surface-hover);
-  border-color: var(--color-border-strong);
-}
+/* The new-project units picker is the name field's suffix, bare inside
+   that box (start-screen.css); its drawn chevron marks it. */
 
 /*
  * Choice chips: an unchosen chip rests bare and becomes a whole button under

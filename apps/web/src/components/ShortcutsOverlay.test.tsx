@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ShortcutsOverlay } from './ShortcutsOverlay';
+import { WORKSPACE_TOUR_STEPS } from '../lib/workspaceTour';
 
 describe('ShortcutsOverlay', () => {
   it('offers a modeling workflow and returns to the workspace tour', () => {
@@ -9,6 +10,11 @@ describe('ShortcutsOverlay', () => {
     expect(
       screen.getByRole('heading', { name: 'Modeling guide' })
     ).toBeVisible();
+    // The steps the button opens, not a separate list of its own (I17).
+    const steps = Array.from(
+      document.querySelectorAll('.shortcuts-guide > li strong')
+    ).map((title) => title.textContent);
+    expect(steps).toEqual(WORKSPACE_TOUR_STEPS.map((step) => `${step.title}:`));
     fireEvent.click(
       screen.getByRole('button', { name: 'Open modeling guide' })
     );

@@ -1,4 +1,5 @@
 import { geometryTolerance } from '@openzcad/geometry';
+import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   FaceTopology,
@@ -55,7 +56,7 @@ export function offsetPreviewRejection(
           ? { featureWarnings: input.derived.featureWarnings }
           : {}),
         bodyPresent: Boolean(
-          input.derived.bodyRepresentations[target.resultBodyId]
+          ownEntry(input.derived.bodyRepresentations, target.resultBodyId)
         ),
         documentMoved: input.documentMoved
       });
@@ -79,7 +80,9 @@ export function offsetPreviewRejection(
       ? { featureWarnings: input.derived.featureWarnings }
       : {}),
     ...(featureId ? { featureId } : {}),
-    bodyPresent: Boolean(input.derived.bodyRepresentations[input.bodyId]),
+    bodyPresent: Boolean(
+      ownEntry(input.derived.bodyRepresentations, input.bodyId)
+    ),
     documentMoved: input.documentMoved
   });
   const warning = refusingWarningDetail(

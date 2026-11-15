@@ -50,7 +50,11 @@ import {
   AssemblyFirstRunCard,
   assemblyCandidateBodies
 } from './AssemblyFirstRunCard';
-import { ComponentDetails, JointDetails } from './AssemblyDetails';
+import {
+  AssemblyPositions,
+  ComponentDetails,
+  JointDetails
+} from './AssemblyDetails';
 import { AssemblyNameField } from './AssemblyNameField';
 import {
   AddStudyButton,
@@ -64,7 +68,10 @@ import {
   selectedGearMesh
 } from './gearMeshEntry';
 import { MotionSetupCard, openMotionSetup } from './MotionSetupCard';
-import type { MotionSetupBounds } from '../../lib/assembly/motionSetup';
+import {
+  motionSetupUnavailableReason,
+  type MotionSetupBounds
+} from '../../lib/assembly/motionSetup';
 import { useAssemblyModel } from './useAssemblyModel';
 
 // Mesh gears and its pair math load when the card first opens; the entry
@@ -77,9 +84,12 @@ export interface AssemblyPanelProps {
   document: ProjectDocument;
   execute: AssemblyExecute;
   onStatus(message: string): void;
-  /** A notice after parts are first made (the toast). */
-  onAnnounce?(message: string): void;
-  /** Replaces the Motion section (tests). */
+  /**
+   * A toast: after parts are first made, and after a delete, which offers
+   * Undo when `undo` is set.
+   */
+  onAnnounce?(message: string, options?: { undo?: boolean }): void;
+  /** Replaces the Animations section (tests). */
   studies?: ReactNode;
   /** Body boxes in modelled coordinates, for Set up motion's axis and range. */
   bodyBounds?: MotionSetupBounds;
@@ -130,7 +140,9 @@ export function AssemblyPanel(props: AssemblyPanelProps) {
         <AssemblyFirstRunCard
           document={document}
           execute={execute}
-          onAnnounce={onAnnounce ?? onStatus}
+          onAnnounce={(message) =>
+            onAnnounce ? onAnnounce(message) : onStatus(message)
+          }
         />
       )}
     </aside>
@@ -168,6 +180,7 @@ function AssemblyLists({
   document,
   execute,
   onStatus,
+  onAnnounce,
   studies,
   bodyBounds,
   reducedMotion,
@@ -197,6 +210,9 @@ function AssemblyLists({
   const { set, solution, bodyByComponent } = model;
   const app = { document, execute, onStatus };
   const chip = assemblyStatusChip(set, solution);
+  // Set up motion only adds a joint: with every part fixed or already
+  // moving there is nothing for it to do, so say so instead of opening it.
+  const motionUnavailable = motionSetupUnavailableReason(model);
   const firstComponent = set.components[0];
   const playingJointId = playback?.kind === 'joint' ? playback.jointId : null;
   const used = new Set<BodyId>([
@@ -315,11 +331,19 @@ function AssemblyLists({
       }
       return;
     }
-    if (itemId === 'delete') {
-      if (playingJointId === target.id) assemblyRuntime.stop();
-      if (removeAssemblyJoint(app, target.id) && selectedJointId === target.id)
-        assemblyRuntime.selectJoint(null);
-    }
+    if (itemId === 'delete') deleteJoint(target.id);
+  };
+
+  /** Deletes a joint and says so, with Undo: one undo brings it back. */
+  const deleteJoint = (jointId: string) => {
+    const joint = set.joints.find((j) => j.id === jointId);
+    if (!joint) return;
+    if (playingJointId === jointId) assemblyRuntime.stop();
+    if (!removeAssemblyJoint(app, jointId)) return;
+    if (selectedJointId === jointId) assemblyRuntime.selectJoint(null);
+    const message = `Deleted ${joint.name}.`;
+    if (onAnnounce) onAnnounce(message, { undo: true });
+    else onStatus(message);
   };
 
   const isRenaming = (kind: MenuTarget['kind'], id: string) =>
@@ -342,11 +366,16 @@ function AssemblyLists({
           <button
             type="button"
             className="assembly-tool-button"
-            title="Make another part slide or turn"
-            onClick={startMotionSetup}
+            title={motionUnavailable ?? 'Make another part slide or turn'}
+            aria-disabled={motionUnavailable !== null}
+            onClick={() =>
+              motionUnavailable
+                ? onStatus(motionUnavailable)
+                : startMotionSetup()
+            }
           >
             <MoveVertical size={13} aria-hidden="true" />
-            Motion
+            Make it move
           </button>
         ) : null}
         <button
@@ -650,6 +679,15 @@ function AssemblyLists({
                           onDoubleClick={() =>
                             setRenaming({ kind: 'joint', id: joint.id })
                           }
+                          onKeyDown={(event) => {
+                            if (
+                              event.key === 'Delete' ||
+                              event.key === 'Backspace'
+                            ) {
+                              event.preventDefault();
+                              deleteJoint(joint.id);
+                            }
+                          }}
                         >
                           <JointKindIcon kind={joint.kind} />
                           <span className="assembly-row-name">
@@ -665,7 +703,11 @@ function AssemblyLists({
                             </span>
                           ) : (
                             <span className="assembly-row-value">
-                              {jointValueSummary(joint.kind, values)}
+                              {jointValueSummary(
+                                joint.kind,
+                                values,
+                                document.units
+                              )}
                             </span>
                           )}
                         </button>
@@ -688,7 +730,11 @@ function AssemblyLists({
                       </button>
                     </div>
                     {selected ? (
-                      <JointDetails {...detailProps} joint={joint} />
+                      <JointDetails
+                        {...detailProps}
+                        joint={joint}
+                        onDelete={() => deleteJoint(joint.id)}
+                      />
                     ) : null}
                   </li>
                 );
@@ -697,13 +743,21 @@ function AssemblyLists({
           )}
         </Section>
 
+        {set.joints.some(
+          (joint) => ASSEMBLY_JOINT_DOFS[joint.kind].length > 0
+        ) || set.positions.length > 0 ? (
+          <Section title="Positions" count={set.positions.length}>
+            <AssemblyPositions execute={execute} model={model} />
+          </Section>
+        ) : null}
+
         {studies ??
           ((set.studies.length > 0 ||
             set.joints.some(
               (joint) => ASSEMBLY_JOINT_DOFS[joint.kind].length > 0
             )) && (
             <Section
-              title="Motion"
+              title="Animations"
               count={set.studies.length}
               action={
                 <AddStudyButton
@@ -744,7 +798,7 @@ function AssemblyLists({
               {bom.rows.map((row) => (
                 <li
                   key={`${row.status}:${row.bodyId}`}
-                  className="assembly-row"
+                  className="assembly-row is-static"
                 >
                   <div
                     className="assembly-row-line"

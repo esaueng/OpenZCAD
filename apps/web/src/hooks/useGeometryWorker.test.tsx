@@ -453,6 +453,53 @@ describe('useGeometryWorker', () => {
     ).rejects.toMatchObject({ name: 'AbortError' });
     expect(worker.postMessage).toHaveBeenCalledTimes(posts);
   });
+  it('cancels an abandoned one-off rebuild in the worker and discards its late reply', async () => {
+    // QA 2026-11-14 #16: a large pattern's in-place preview kept the worker
+    // building for its whole minute after Cancel closed the card.
+    installWorker();
+    const document = createProjectDocument('Pattern preview', toUserId('user'));
+    const host = { manager: () => null, onDerived: vi.fn(), onError: vi.fn() };
+    const { result } = renderHook(() => useGeometryWorker(host));
+    const worker = FakeWorker.instances[0]!;
+    const controller = new AbortController();
+    const settled = vi.fn();
+    const pending = result.current.syncOnce(document, undefined, undefined, {
+      proposeCarry: true,
+      signal: controller.signal
+    });
+    pending.then(settled, () => undefined);
+    const request = worker.postMessage.mock.calls.at(-1)![0] as {
+      requestId: string;
+    };
+    expect(request).toMatchObject({ type: 'sync', proposeCarry: true });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(worker.postMessage).toHaveBeenLastCalledWith({
+      type: 'cancel',
+      requestId: request.requestId
+    });
+    // The worker was mid-job: its result arrives later and lands nowhere.
+    act(() => {
+      worker.emit({
+        type: 'sync',
+        ok: true,
+        projectId: document.projectId,
+        version: document.version,
+        requestId: request.requestId,
+        derived: document.derived
+      });
+    });
+    expect(settled).not.toHaveBeenCalled();
+    expect(host.onDerived).not.toHaveBeenCalled();
+    // Already aborted: nothing is posted at all.
+    const posts = worker.postMessage.mock.calls.length;
+    await expect(
+      result.current.syncOnce(document, undefined, undefined, {
+        signal: controller.signal
+      })
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(worker.postMessage).toHaveBeenCalledTimes(posts);
+  });
   it('preserves selected analysis on one-off sync requests', async () => {
     installWorker();
     const document = createProjectDocument('Analysis', toUserId('user'));
@@ -808,6 +855,42 @@ describe('useGeometryWorker', () => {
     });
 
     expect(result.current.isReadyFor(document)).toBe(true);
+  });
+
+  it('waits for the connection instead of spending respawns offline', async () => {
+    // 13 November review I5: offline, the worker could not download, three
+    // immediate respawns all failed, and the startup screen stayed at
+    // "Building the model" after the connection came back.
+    installWorker();
+    vi.stubEnv('OZ_BUILD_COMMIT', '');
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    try {
+      const onError = vi.fn();
+      const { result } = renderHook(() =>
+        useGeometryWorker({
+          manager: () => null,
+          onDerived: vi.fn(),
+          onError
+        })
+      );
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await act(async () => {
+          FakeWorker.instances.at(-1)!.onerror?.({} as ErrorEvent);
+        });
+      }
+      expect(FakeWorker.instances).toHaveLength(1);
+      expect(result.current.state.phase).toBe('starting');
+      expect(onError).not.toHaveBeenCalled();
+
+      onLine.mockReturnValue(true);
+      act(() => {
+        window.dispatchEvent(new Event('online'));
+      });
+      expect(FakeWorker.instances).toHaveLength(2);
+      expect(result.current.state.phase).toBe('starting');
+    } finally {
+      onLine.mockRestore();
+    }
   });
 
   it('respawns a crashed worker so later requests still settle', async () => {

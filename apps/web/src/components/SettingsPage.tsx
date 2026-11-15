@@ -61,6 +61,7 @@ import {
 } from '@openzcad/shared';
 import { countLabel } from '../lib/toasts';
 import { formatBytes } from '../lib/formatBytes';
+import { storageLimitOf, storageParts, storedBytes } from '../lib/storageUsage';
 import { fetchEncryptionAvailability } from '../lib/e2ee/availability';
 import {
   loadAccountShapeHint,
@@ -109,38 +110,48 @@ import {
   Toggle,
   type SegmentOption
 } from './settingsControls';
+import {
+  SpaceMousePreferenceRows,
+  SpaceMouseSettings
+} from './SpaceMouseSettings';
+import { SPACE_MOUSE_KEY_REFERENCE } from '../lib/spaceMouseActions';
 import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
 import { describeFailure } from '../lib/plainFailure';
 import { DataDownload } from './DataDownload';
 import { ActivityLogSettings } from './ActivityLogSettings';
 import {
-  PersonalInfoToggle,
   PrivateEmailInput,
+  PrivateText,
   setPersonalInfoVisible,
   usePersonalInfoVisible
-} from './PersonalInfoToggle';
+} from './PersonalInfo';
 
-/**
- * Names the ceiling even before anyone is near it. A limit discovered only at
- * the moment a save is refused reads as a bug; a limit stated up front reads as
- * a limit.
- */
+/** What the one storage allowance is made of, and what it holds. */
 function storageHint(usage: AccountStorageUsage | null): string {
   if (!usage) {
-    return 'Projects and revisions saved to your account.';
+    return 'Projects, save states, imports and exports saved to your account.';
   }
-  return `${countLabel(usage.projectCount, 'project', 'projects')} · ${countLabel(usage.revisionCount, 'revision', 'revisions')}. Up to ${formatBytes(usage.documentLimitBytes)} and ${usage.maxRevisionsPerProject.toLocaleString()} revisions per project.`;
+  const { projects, files: finalized, uploading } = storageParts(usage);
+  // Uploads in flight hold their room, so they read as files.
+  const files = finalized + uploading;
+  const trashed = usage.trashedProjectCount ?? 0;
+  const counts = [
+    countLabel(usage.projectCount, 'project', 'projects'),
+    ...(trashed > 0 ? [`${trashed.toLocaleString()} in trash`] : []),
+    countLabel(usage.revisionCount, 'save state', 'save states')
+  ].join(' · ');
+  return `Projects ${formatBytes(projects)} · Imports and exports ${formatBytes(files)}. ${counts}.`;
 }
 
-/** Usage against an allowance, naming an overage outright. */
+/**
+ * Usage against an allowance, naming an overage outright. The meter names the
+ * ceiling even before anyone is near it: a limit discovered only at the
+ * moment a save is refused reads as a bug; one stated up front reads as a
+ * limit.
+ */
 function allowanceFigure(usedBytes: number, limitBytes: number): string {
   const figure = `${formatBytes(usedBytes)} of ${formatBytes(limitBytes)}`;
   return usedBytes > limitBytes ? `${figure} · over allowance` : figure;
-}
-
-/** Cloud file usage against the allowance, naming an overage outright. */
-function fileStorageFigure(usage: AccountStorageUsage): string {
-  return allowanceFigure(usage.artifactBytes, usage.artifactLimitBytes);
 }
 
 type SectionId = SettingsSectionId;
@@ -222,6 +233,18 @@ const EncryptionSettings = lazyWithStaleChunkNotice(() =>
     default: module.EncryptionSettings
   }))
 );
+
+/**
+ * Where a section's name may break in the phone rail, which is narrower
+ * than "Appearance" at 12px. A soft hyphen shows only when the name breaks,
+ * and every engine honours it; `hyphens: auto` needs a dictionary that
+ * Chromium on Linux and Windows may not have, which broke the name as
+ * "Appearanc" over "e". Display only: search and the button's accessible
+ * name use the plain label.
+ */
+const SECTION_NAV_LABELS: Partial<Record<SectionId, string>> = {
+  appearance: 'Appear\u00adance'
+};
 
 const SECTION_ICONS: Record<SectionId, ReactNode> = {
   general: <Settings2 size={15} aria-hidden="true" />,
@@ -862,10 +885,8 @@ export function SettingsPage({
     };
   }, [active, cloudFunctionsEnabled, session]);
 
-  /** The owner's project-storage allowance; older servers omit it. */
-  const projectStorageLimit = (
-    storageUsage?.entitlements ?? session?.entitlements
-  )?.projectStorageLimitBytes;
+  /** The owner's one storage allowance; older servers name it otherwise. */
+  const storageLimit = storageLimitOf(storageUsage, session?.entitlements);
 
   // The Encryption section exists only for an account the server opened the
   // beta to; asked once per signed-in account while Settings is open.
@@ -1131,7 +1152,7 @@ export function SettingsPage({
                   onClick={() => setActive(section.id)}
                 >
                   {SECTION_ICONS[section.id]}
-                  <span>{section.label}</span>
+                  <span>{SECTION_NAV_LABELS[section.id] ?? section.label}</span>
                 </button>
               </Fragment>
             ))}
@@ -1160,7 +1181,7 @@ export function SettingsPage({
                 {!cloudFunctionsEnabled
                   ? 'Offline mode'
                   : authConfigStatus === 'unavailable'
-                    ? 'Cloud unreachable'
+                    ? 'Cloud unavailable'
                     : accountResolving && !accountState
                       ? 'Checking account…'
                       : session
@@ -1180,7 +1201,13 @@ export function SettingsPage({
           <h1 ref={headingRef} className="settings-head-title" tabIndex={-1}>
             Settings
           </h1>
-          <span className="settings-save-message" aria-live="polite">
+          <span
+            className="settings-save-message"
+            aria-live="polite"
+            // Two lines of the head hold most messages; a longer one (an
+            // outage, offline mode) is cut there, and reads whole on hover.
+            title={message || undefined}
+          >
             {message}
           </span>
           <label className="settings-search">
@@ -1601,6 +1628,22 @@ export function SettingsPage({
                   />
                 </SettingRow>
               </Group>
+              {/* A 3D mouse is navigation too, so its settings sit right
+                  under it rather than past the keyboard reference. */}
+              <Group title="3D mouse" note="Chrome and Edge">
+                <SpaceMouseSettings />
+                <SpaceMousePreferenceRows
+                  value={settings.viewport.spaceMouse}
+                  onChange={(spaceMouse) =>
+                    patch({
+                      viewport: { ...settings.viewport, spaceMouse }
+                    })
+                  }
+                />
+              </Group>
+              <Group title="SpaceMouse keys">
+                <ControlReferenceGroups groups={[SPACE_MOUSE_KEY_REFERENCE]} />
+              </Group>
               {/* Every remappable command with its live keys. A key can mean
                   one thing per context (C is Cylinder in the workspace and
                   Circle in a sketch); the editor's groups are those contexts.
@@ -1773,9 +1816,17 @@ export function SettingsPage({
               {/* Until the account is known these hold their saved values
                   but stay disabled: a live switch beside a footer that
                   still says "Device only" claimed a sync nothing runs. */}
+              {/* Signed out, these are settings for later: they say so
+                  rather than read as running (I8). */}
               <Group
                 title="Cloud"
-                note={cloudPending ? 'Checking account…' : undefined}
+                note={
+                  cloudPending
+                    ? 'Checking account…'
+                    : cloudFunctionsEnabled && !session
+                      ? 'Applies after sign-in. Until then everything saves on this device only.'
+                      : undefined
+                }
               >
                 <SettingRow
                   title="Cloud autosave"
@@ -2202,14 +2253,18 @@ export function SettingsPage({
                       <>
                         <SettingRow
                           title={
-                            personalInfoVisible
-                              ? session.displayName
-                              : 'Name hidden'
+                            <PrivateText
+                              value={session.displayName}
+                              visible={personalInfoVisible}
+                              onChange={setPersonalInfoVisible}
+                            />
                           }
                           hint={
-                            personalInfoVisible
-                              ? (session.email ?? session.userId)
-                              : 'Email hidden'
+                            <PrivateText
+                              value={session.email ?? session.userId}
+                              visible={personalInfoVisible}
+                              onChange={setPersonalInfoVisible}
+                            />
                           }
                         >
                           <button
@@ -2273,7 +2328,7 @@ export function SettingsPage({
                           title="Membership"
                           hint={
                             session.entitlements
-                              ? `${countLabel(session.entitlements.projectLimit, 'cloud project', 'cloud projects')} · ${formatBytes(session.entitlements.projectStorageLimitBytes)} project storage · ${formatBytes(session.entitlements.artifactLimitBytes)} cloud file storage · ${session.entitlements.ai.requestLimit.toLocaleString()} hosted AI requests per ${(session.entitlements.ai.windowSeconds / 60).toLocaleString()} minutes`
+                              ? `${countLabel(session.entitlements.projectLimit, 'cloud project', 'cloud projects')} · ${formatBytes(session.entitlements.storageLimitBytes ?? session.entitlements.projectStorageLimitBytes)} storage · ${session.entitlements.ai.requestLimit.toLocaleString()} hosted AI requests per ${(session.entitlements.ai.windowSeconds / 60).toLocaleString()} minutes`
                               : 'Limits appear after your account reconnects.'
                           }
                           details={
@@ -2370,8 +2425,8 @@ export function SettingsPage({
                           </button>
                         }
                       >
-                        Sign-in could not be reached. Local projects are
-                        unaffected.
+                        Cloud unavailable: sign-in could not be reached.
+                        Projects keep saving on this device.
                       </Notice>
                     ) : desktopApp ? (
                       authConfig?.desktopAuthEnabled ? (
@@ -2434,9 +2489,11 @@ export function SettingsPage({
                             <strong>Enter the email code</strong>
                             <small>
                               Sent to{' '}
-                              {personalInfoVisible
-                                ? loginEmail
-                                : 'your email address'}
+                              <PrivateText
+                                value={loginEmail}
+                                visible={personalInfoVisible}
+                                onChange={setPersonalInfoVisible}
+                              />
                               . It expires in 10 minutes.
                             </small>
                           </span>
@@ -2604,17 +2661,12 @@ export function SettingsPage({
                       </Notice>
                     )}
                     <SettingRow
-                      title="Personal information"
-                      hint="Names and emails stay hidden for screenshots until you reload."
-                    >
-                      <PersonalInfoToggle
-                        visible={personalInfoVisible}
-                        onChange={setPersonalInfoVisible}
-                      />
-                    </SettingRow>
-                    <SettingRow
                       title="Preference synchronization"
-                      hint="Preferences follow your account."
+                      hint={
+                        session
+                          ? 'Preferences follow your account.'
+                          : 'After sign-in, preferences follow your account. Until then they stay on this device.'
+                      }
                     >
                       {cloudPending ? (
                         <Status>Checking…</Status>
@@ -2648,51 +2700,41 @@ export function SettingsPage({
                   {session || restoringSignedIn ? (
                     <Group title="Storage">
                       <SettingRow
-                        title="Account storage"
+                        title="Storage"
                         hint={storageHint(storageUsage)}
+                        details={
+                          (storageUsage?.trashedProjectCount ?? 0) > 0
+                            ? {
+                                summary: 'Trash counts toward storage',
+                                body: 'Projects in the trash are still stored, so they count until they are deleted.'
+                              }
+                            : undefined
+                        }
                       >
-                        {storageUsage && projectStorageLimit ? (
+                        {storageUsage && storageLimit ? (
                           <span className="settings-meter-figure">
                             <Meter
-                              used={storageUsage.projectStorageBytes}
-                              limit={projectStorageLimit}
-                              label="Account storage used"
+                              used={storedBytes(storageUsage)}
+                              limit={storageLimit}
+                              label="Storage used"
                               valueText={allowanceFigure(
-                                storageUsage.projectStorageBytes,
-                                projectStorageLimit
+                                storedBytes(storageUsage),
+                                storageLimit
                               )}
                             />
                             <span>
                               {allowanceFigure(
-                                storageUsage.projectStorageBytes,
-                                projectStorageLimit
+                                storedBytes(storageUsage),
+                                storageLimit
                               )}
                             </span>
                           </span>
                         ) : (
                           <Status>
                             {storageUsage
-                              ? formatBytes(storageUsage.projectStorageBytes)
+                              ? formatBytes(storedBytes(storageUsage))
                               : '—'}
                           </Status>
-                        )}
-                      </SettingRow>
-                      <SettingRow
-                        title="Cloud file storage"
-                        hint="Imports and exports. Existing files stay if you go over."
-                      >
-                        {storageUsage ? (
-                          <span className="settings-meter-figure">
-                            <Meter
-                              used={storageUsage.artifactBytes}
-                              limit={storageUsage.artifactLimitBytes}
-                              label="Cloud file storage used"
-                              valueText={fileStorageFigure(storageUsage)}
-                            />
-                            <span>{fileStorageFigure(storageUsage)}</span>
-                          </span>
-                        ) : (
-                          <Status>—</Status>
                         )}
                       </SettingRow>
                     </Group>

@@ -86,10 +86,11 @@ describe('anonymous shared STEP source preload', () => {
       })
     );
     await preloadSharedImportSources(document, 'share_token', fetcher);
-    expect(fetcher).toHaveBeenCalledWith(
-      '/api/share/share_token/sources/artifact_source',
-      { credentials: 'omit', signal: fetcher.mock.calls[0]?.[1]?.signal }
-    );
+    expect(fetcher).toHaveBeenCalledWith('/api/share/sources/artifact_source', {
+      credentials: 'omit',
+      headers: { 'x-openzcad-share-token': 'share_token' },
+      signal: fetcher.mock.calls[0]?.[1]?.signal
+    });
     expect(fetcher.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
     expect(await loadSourceBlob(checksumSha256)).toEqual(source);
     await preloadSharedImportSources(document, 'share_token', fetcher);
@@ -273,8 +274,12 @@ describe('anonymous shared mesh payload preload', () => {
       .mockResolvedValue(new Response(payload));
     await preloadSharedImportSources(document, 'share_token', fetcher);
     expect(fetcher).toHaveBeenCalledWith(
-      '/api/share/share_token/sources/artifact_payload',
-      { credentials: 'omit', signal: fetcher.mock.calls[0]?.[1]?.signal }
+      '/api/share/sources/artifact_payload',
+      {
+        credentials: 'omit',
+        headers: { 'x-openzcad-share-token': 'share_token' },
+        signal: fetcher.mock.calls[0]?.[1]?.signal
+      }
     );
     expect(fetcher.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
     expect(await loadSourceBlob(checksumSha256)).toEqual(payload);

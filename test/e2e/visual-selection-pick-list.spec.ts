@@ -93,8 +93,19 @@ test('lists stacked faces without disturbing selection or click cycling', async 
 
   await page.mouse.move(probe!.x, probe!.y);
   await page.mouse.click(probe!.x, probe!.y, { button: 'right' });
+  // I18: a right-click over stacked targets opens the top target's actions,
+  // led by Select other, instead of only the list.
+  const actions = page.locator('.context-menu');
+  await expect(actions).toBeVisible();
+  const selectOther = actions.getByRole('menuitem').first();
+  await expect(selectOther).toHaveAccessibleName(/^Select other/);
+  await expect(selectOther).toHaveAttribute('aria-haspopup', 'menu');
+  await selectOther.click();
   const menu = page.getByRole('menu', { name: 'Select other' });
   await expect(menu).toBeVisible();
+  await expect(actions).toHaveCount(0);
+  // The right-click took the top target, as it does wherever it lands.
+  const selectedAtMenu = await canvas.getAttribute('data-e2e-selected-face');
   const rows = menu.getByRole('menuitem');
   await expect(rows).toHaveCount(probe!.labels.length);
   await expect
@@ -118,17 +129,50 @@ test('lists stacked faces without disturbing selection or click cycling', async 
   const targetId = probe!.topologyIds[targetIndex]!;
   await rows.nth(targetIndex).hover();
   await expect(canvas).toHaveAttribute('data-e2e-pick-list-hover', targetId);
-  await expect(canvas).toHaveAttribute(
-    'data-e2e-selected-face',
-    selectedBefore!
-  );
+  // A hovered row pre-highlights; it does not select.
+  if (selectedAtMenu) {
+    await expect(canvas).toHaveAttribute(
+      'data-e2e-selected-face',
+      selectedAtMenu
+    );
+  } else {
+    await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
+  }
 
+  // The chosen target is selected and its own menu opens where the first
+  // one stood, still led by Select other.
   await rows.nth(targetIndex).click();
   await expect(menu).toBeHidden();
   await expect(canvas).toHaveAttribute('data-e2e-selected-face', targetId);
+  await expect(actions).toBeVisible();
+  await expect(actions.locator('.context-menu-heading')).toHaveText(
+    probe!.labels[targetIndex]!
+  );
+  await expect(actions.getByRole('menuitem').first()).toHaveAccessibleName(
+    /^Select other/
+  );
+  // I19: a face's menu carries the face's own verbs, not only the body's.
+  await expect(
+    actions.getByRole('menuitem', { name: /^Look at face/ })
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(actions).toHaveCount(0);
+
+  // Shift+F10 opens the selection's menu from the keyboard, and picks
+  // nothing on the way.
+  await page.keyboard.press('Shift+F10');
+  await expect(actions).toBeVisible();
+  await expect(actions).toBeFocused();
+  await expect(actions.locator('.context-menu-heading')).toHaveText(
+    probe!.labels[targetIndex]!
+  );
+  await page.keyboard.press('Escape');
+  await expect(actions).toHaveCount(0);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-face', targetId);
 
   // Browsers expose touch/pen long-press as a contextmenu PointerEvent. That
-  // route opens the same ordered stack instead of relying on mouse buttons.
+  // route opens the same menu, Select other first, instead of relying on
+  // mouse buttons. Like a right-click it takes the top target.
   await canvas.evaluate(
     (element, point) => {
       element.dispatchEvent(
@@ -143,10 +187,13 @@ test('lists stacked faces without disturbing selection or click cycling', async 
     },
     { x: probe!.x, y: probe!.y }
   );
-  await expect(menu).toBeVisible();
-  await expect(rows.first()).toBeFocused();
+  await expect(actions).toBeVisible();
+  await expect(actions).toBeFocused();
+  await expect(actions.getByRole('menuitem').first()).toHaveAccessibleName(
+    /^Select other/
+  );
   await page.keyboard.press('Escape');
-  await expect(menu).toBeHidden();
+  await expect(actions).toHaveCount(0);
 
   // The keyboard trigger uses the last canvas pointer and the same stack. It
   // remains additive to repeated-click depth cycling, whose state is owned by
@@ -158,12 +205,23 @@ test('lists stacked faces without disturbing selection or click cycling', async 
     })
     .toBeGreaterThanOrEqual(2);
   await page.mouse.move(probe!.x, probe!.y);
+  const selectedBeforeList = await canvas.getAttribute(
+    'data-e2e-selected-face'
+  );
   await page.keyboard.press('Alt+ArrowDown');
   await expect(menu).toBeVisible();
   await expect(rows.first()).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(menu).toBeHidden();
-  await expect(canvas).toHaveAttribute('data-e2e-selected-face', targetId);
+  // The list alone selects nothing.
+  if (selectedBeforeList) {
+    await expect(canvas).toHaveAttribute(
+      'data-e2e-selected-face',
+      selectedBeforeList
+    );
+  } else {
+    await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
+  }
 
   // A click establishes the cycle at the front candidate. Opening and
   // dismissing the list must leave that state alone, so the next click still
@@ -178,8 +236,9 @@ test('lists stacked faces without disturbing selection or click cycling', async 
   await page.mouse.click(probe!.x, probe!.y);
   await expectCandidate(0);
   await page.mouse.click(probe!.x, probe!.y, { button: 'right' });
-  await expect(menu).toBeVisible();
+  await expect(actions).toBeVisible();
   await page.keyboard.press('Escape');
+  await expect(actions).toHaveCount(0);
   await page.mouse.click(probe!.x, probe!.y);
   await expectCandidate(1);
   expect(consoleErrors).toEqual([]);

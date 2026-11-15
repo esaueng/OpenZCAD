@@ -1166,6 +1166,8 @@ for (const colorScheme of ['light', 'dark'] as const) {
         await checkDialogStack();
         await toggle.press('Escape');
         await expect(flyout).toHaveCount(0);
+        // The tool, then the exit's confirmation (I43), then out.
+        await page.keyboard.press('Escape');
         await page.keyboard.press('Escape');
         await page.keyboard.press('Escape');
         await expect(rail).toHaveCount(0);

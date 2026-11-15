@@ -382,7 +382,14 @@ export async function acceptProjectAuthorityManifest(
         'The reset history needs the independently verified owner identity.'
       );
     for (let generation = 1; generation < value.roots.length; generation++)
-      await verifyMlsAuthorityReset(value, generation, owner);
+      await verifyMlsAuthorityReset(
+        value,
+        generation,
+        owner,
+        owner.userId === ctx.account.userId
+          ? (ctx.account.generation ?? 1)
+          : owner.generation
+      );
   }
   if (!signer) {
     if (

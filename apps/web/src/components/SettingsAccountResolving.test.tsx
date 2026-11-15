@@ -158,8 +158,11 @@ describe('Settings while a saved session is restoring', () => {
     expect(screen.getByText('Membership')).toBeVisible();
     // Storage reserves its rows rather than appearing once the session does.
     expect(screen.getByRole('heading', { name: 'Storage' })).toBeVisible();
-    expect(screen.getByText('Account storage')).toBeVisible();
-    expect(screen.getByText('Cloud file storage')).toBeVisible();
+    expect(
+      screen.getByText(
+        'Projects, save states, imports and exports saved to your account.'
+      )
+    ).toBeVisible();
 
     view.rerender(
       settingsElement({
@@ -174,7 +177,7 @@ describe('Settings while a saved session is restoring', () => {
     expect(screen.getByText('Cloud profile connected')).toBeVisible();
     expect(screen.getByText('Available')).toBeVisible();
     expect(
-      await screen.findByRole('meter', { name: 'Cloud file storage used' })
+      await screen.findByRole('meter', { name: 'Storage used' })
     ).toBeVisible();
   });
 
@@ -232,7 +235,7 @@ describe('Settings while a saved session is restoring', () => {
       })
     );
     expect(screen.getByRole('button', { name: 'Retry' })).toBeVisible();
-    expect(screen.getByText('Cloud unreachable')).toBeVisible();
+    expect(screen.getByText('Cloud unavailable')).toBeVisible();
   });
 
   it('does not offer the cloud saving controls before the account is known', () => {

@@ -10,6 +10,8 @@ it('keeps key/randomness injectors out of the public crypto entry', () => {
   ).toEqual([]);
   expect(crypto.signMlsAuthorityManifest).toBeTypeOf('function');
   expect(crypto.verifyMlsAuthorityManifest).toBeTypeOf('function');
+  expect(crypto.signMlsCommitSubmission).toBeTypeOf('function');
+  expect(crypto.verifyMlsCommitSubmission).toBeTypeOf('function');
   // New module exports must be consciously added to the public contract.
   expect(
     readFileSync(new URL('./index.ts', import.meta.url), 'utf8')

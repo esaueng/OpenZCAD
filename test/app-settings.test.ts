@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
   DEFAULT_APP_SETTINGS,
+  DEFAULT_SPACE_MOUSE_SETTINGS,
   deepClone,
   PANEL_WIDTH_LIMITS,
+  SPACE_MOUSE_DEAD_ZONE_BOUNDS,
+  SPACE_MOUSE_SPEED_BOUNDS,
   VIEWPORT_FIELD_OF_VIEW_BOUNDS,
   XRAY_OPACITY_BOUNDS,
   toUserId
@@ -831,6 +834,46 @@ describe('application settings', () => {
         'development'
       ).settings.viewport.orbitMode
     ).toBe('turntable');
+  });
+
+  it('reads 3D mouse settings leniently, defaulting what is missing', () => {
+    expect(normalizeAppSettings({}).viewport.spaceMouse).toEqual(
+      DEFAULT_SPACE_MOUSE_SETTINGS
+    );
+    expect(
+      normalizeAppSettings({
+        viewport: {
+          spaceMouse: {
+            panZoomSpeed: 9999,
+            rotationSpeed: 55.4,
+            deadZone: -3,
+            dominantAxis: true,
+            rotateAbout: 'somewhere',
+            roll: false,
+            reversed: ['roll', 'warp', 'pan-x', 'roll']
+          }
+        }
+      }).viewport.spaceMouse
+    ).toEqual({
+      panZoomSpeed: SPACE_MOUSE_SPEED_BOUNDS.max,
+      rotationSpeed: 55,
+      deadZone: SPACE_MOUSE_DEAD_ZONE_BOUNDS.min,
+      dominantAxis: true,
+      rotateAbout: 'model',
+      roll: false,
+      // Unknown axes drop out; the rest come back once, in axis order.
+      reversed: ['pan-x', 'roll']
+    });
+    const legacy = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      viewport: Record<string, unknown>;
+    };
+    delete legacy.viewport.spaceMouse;
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 1, settings: legacy },
+        'development'
+      ).settings.viewport.spaceMouse
+    ).toEqual(DEFAULT_SPACE_MOUSE_SETTINGS);
   });
 
   it('reads Pencil-only drawing as on unless switched off', () => {

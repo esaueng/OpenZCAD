@@ -187,7 +187,7 @@ export function EncryptionContacts({
         ) : null}
         <SettingRow
           title="Your contact code"
-          hint="Read it to people who verify you. Changes with your devices."
+          hint="The code people compare with you to verify you: read it to them, or let them scan it. It covers your devices, so it changes when they do."
         >
           {own ? (
             <ContactCode

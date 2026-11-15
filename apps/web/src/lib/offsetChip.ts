@@ -58,6 +58,21 @@ export function regionChipState(): OffsetChipState {
   return { mode: 'offset', extent: null };
 }
 
+/**
+ * The span a Total chip reads for an offset, to the hundredth; null when the
+ * chip reads the change instead (Offset mode, or no span to add to).
+ */
+export function offsetTotalReading(input: {
+  rawValue: number;
+  mode: OffsetChipMode;
+  span: number | null | undefined;
+  sense: number;
+}): number | null {
+  const { rawValue, mode, span, sense } = input;
+  if (mode !== 'total' || span === null || span === undefined) return null;
+  return Math.round((span + sense * rawValue) * 100) / 100;
+}
+
 /** The offset chip's value text, before any warning marker. */
 export function offsetChipText(input: {
   rawValue: number;
@@ -68,14 +83,34 @@ export function offsetChipText(input: {
   sense: number;
   units: string;
 }): string {
-  const { rawValue, mode, span, sense, units } = input;
+  const { rawValue, units } = input;
   // Both readings round to hundredths, so flipping the tag changes the number
   // it shows, never how precisely it shows it.
-  if (mode === 'total' && span !== null) {
-    return `${formatNumber(Math.round((span + sense * rawValue) * 100) / 100)} ${units}`;
-  }
-  const value = Math.round(rawValue * 100) / 100;
-  return `${value >= 0 ? '+' : ''}${value} ${units}`;
+  const total = offsetTotalReading(input);
+  if (total !== null) return `${formatNumber(total)} ${units}`;
+  return `${signedHundredths(rawValue)} ${units}`;
+}
+
+function signedHundredths(value: number): string {
+  const rounded = Math.round(value * 100) / 100;
+  return `${rounded >= 0 ? '+' : ''}${rounded}`;
+}
+
+/**
+ * What a committed face offset reports. History records the change (the
+ * edit's own parameter, "+10.25 mm"), while the chip defaults to the Total
+ * the face leaves ("15.65 mm"): released from a Total reading, the message
+ * names both, so the two numbers are seen to be one edit.
+ */
+export function offsetFaceCommitMessage(
+  offset: number,
+  units: string,
+  total?: number | null
+): string {
+  const change = `Offset face by ${signedHundredths(offset)} ${units}`;
+  return total === null || total === undefined
+    ? `${change}.`
+    : `${change} · Total ${formatNumber(total)} ${units}.`;
 }
 
 /**

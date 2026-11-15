@@ -1,57 +1,48 @@
-import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
-const pins = new Set(
-  [
-    ...readFileSync('pnpm-lock.yaml', 'utf8').matchAll(
-      /codeload\.github\.com\/esaueng\/remus\/tar\.gz\/([a-f0-9]{40})/g
-    )
-  ].map((match) => match[1])
+/**
+ * Checks every installed file of the paired Remus packages against
+ * `remus-checksums.json` (see `scripts/remus-artifacts.mjs` for the format).
+ * Every Vite build runs the same check (`apps/web/vite.config.ts`), so the
+ * root build, filtered web builds and desktop builds all fail on a changed,
+ * missing or unlisted file, or a manifest for another Remus commit.
+ *
+ * Regenerating after a Remus bump: `.github/workflows/update-remus.yml` runs
+ * `node scripts/verify-remus-artifacts.mjs --record` after its frozen install,
+ * and commits the result with the manifest and lockfile. By hand, after
+ * `pnpm install --frozen-lockfile` on the bumped lockfile, run the same
+ * command with an authenticated `gh` (requests always go to github.com).
+ * Recording takes the expected file list from the pinned commit's upstream
+ * tree and the package's `files` list, refuses any installed file that is
+ * missing, extra or differs from its upstream blob, and refuses a manifest
+ * that drops a previously pinned file unless `--allow-shrink` is passed.
+ */
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  MANIFEST,
+  installedPackageDirs,
+  recordRemusManifest,
+  remusPin,
+  verifyRemusArtifacts
+} from './remus-artifacts.mjs';
+
+const args = process.argv.slice(2);
+const unknown = args.filter(
+  (arg) => arg !== '--record' && arg !== '--allow-shrink'
 );
-if (pins.size !== 1) throw new Error('Expected exactly one paired Remus pin.');
-const commit = [...pins][0];
-const artifacts = [
-  ['remus-wasm', 'crates/wasm/pkg', 'remus_wasm_bg.wasm'],
-  ['remus-wasm-io', 'crates/wasm-io/pkg', 'remus_wasm_io_bg.wasm']
-];
-const blobId = (bytes) =>
-  createHash('sha1')
-    .update(`blob ${bytes.length}\0`)
-    .update(bytes)
-    .digest('hex');
-const record = process.argv.includes('--record');
-const manifest = record
-  ? { commit, files: {} }
-  : JSON.parse(readFileSync('remus-checksums.json', 'utf8'));
-if (manifest.commit !== commit)
-  throw new Error('Remus checksum manifest does not match the kernel pin.');
-for (const [pkg, upstreamPath, file] of artifacts) {
-  const key = `${pkg}/${file}`;
-  const bytes = readFileSync(
-    `packages/kernel-adapter/node_modules/${pkg}/${file}`
-  );
-  const expected = record
-    ? JSON.parse(
-        execFileSync(
-          'gh',
-          [
-            'api',
-            `repos/esaueng/remus/contents/${upstreamPath}/${file}?ref=${commit}`
-          ],
-          { encoding: 'utf8' }
-        )
-      ).sha
-    : manifest.files[key];
-  if (!/^[a-f0-9]{40}$/.test(expected ?? '') || blobId(bytes) !== expected) {
-    throw new Error(
-      `Installed ${key} does not match the immutable upstream blob.`
-    );
-  }
-  manifest.files[key] = expected;
+if (unknown.length > 0) throw new Error(`Unknown option ${unknown.join(' ')}.`);
+if (args.includes('--allow-shrink') && !args.includes('--record'))
+  throw new Error('--allow-shrink only applies to --record.');
+
+if (args.includes('--record')) {
+  const commit = remusPin(readFileSync('pnpm-lock.yaml', 'utf8'));
+  const manifest = recordRemusManifest({
+    commit,
+    packageDirs: installedPackageDirs('.'),
+    previous: existsSync(MANIFEST)
+      ? JSON.parse(readFileSync(MANIFEST, 'utf8'))
+      : null,
+    allowShrink: args.includes('--allow-shrink')
+  });
+  writeFileSync(MANIFEST, JSON.stringify(manifest, null, 2) + '\n');
 }
-if (record)
-  writeFileSync(
-    'remus-checksums.json',
-    JSON.stringify(manifest, null, 2) + '\n'
-  );
-console.log(`Paired Remus WASM bytes verified at ${commit}.`);
+const { commit, files } = verifyRemusArtifacts({ repoRoot: '.' });
+console.log(`Paired Remus package files (${files}) verified at ${commit}.`);

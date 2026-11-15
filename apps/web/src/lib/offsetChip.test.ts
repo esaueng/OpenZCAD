@@ -5,7 +5,9 @@ import {
   faceOffsetChipState,
   keptOffsetValue,
   offsetChipText,
+  offsetFaceCommitMessage,
   offsetLimitChipText,
+  offsetTotalReading,
   rearmedChipMode,
   regionChipState,
   valueInsideLimit
@@ -95,6 +97,43 @@ describe('offset chip', () => {
       });
     expect(reading('offset')).toBe('+2 in');
     expect(reading('total')).toBe('12 in');
+  });
+
+  it('names the Total read at release beside the change history records', () => {
+    // The defect: the chip read "Total 15.65 mm" through the drag, and the
+    // history row then said "+10.25 mm" with nothing tying the two together.
+    const total = offsetTotalReading({
+      rawValue: 10.25,
+      mode: 'total',
+      span: 5.4,
+      sense: 1
+    });
+    expect(total).toBe(15.65);
+    expect(offsetFaceCommitMessage(10.25, 'mm', total)).toBe(
+      'Offset face by +10.25 mm · Total 15.65 mm.'
+    );
+    // Released from the Offset reading, or with no span, only the change.
+    expect(
+      offsetTotalReading({
+        rawValue: 10.25,
+        mode: 'offset',
+        span: 5.4,
+        sense: 1
+      })
+    ).toBeNull();
+    expect(
+      offsetTotalReading({
+        rawValue: 10.25,
+        mode: 'total',
+        span: undefined,
+        sense: 1
+      })
+    ).toBeNull();
+    expect(offsetFaceCommitMessage(-2.004, 'in')).toBe('Offset face by -2 in.');
+    // A shrinking sense subtracts: the Total the chip shows, not span + 2.
+    expect(
+      offsetTotalReading({ rawValue: 2, mode: 'total', span: 10, sense: -1 })
+    ).toBe(8);
   });
 
   it('never reads Total without a span to add to', () => {

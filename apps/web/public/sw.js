@@ -4,8 +4,10 @@
  * Registered only by an installed (Home Screen) app in a production build
  * (src/lib/offlineShell.ts), so a tab in a browser never runs it.
  *
- * - Page loads go to the network first; the last good page is kept and served
- *   only when the network fails, so an online load is exactly what it was.
+ * - Page loads go to the network first; the last good app shell is kept and
+ *   served only when the network fails, so an online load is exactly what it
+ *   was. Only the shell is kept: an app route answered with HTML, never a
+ *   static page such as /privacy.html or a Worker route such as /api/.
  * - /assets/ files are content-hashed and immutable (public/_headers), so they
  *   are served from the cache once fetched, the kernel's WASM included.
  * - Everything else (the API, sharing, analytics) passes through untouched.
@@ -49,11 +51,40 @@ self.addEventListener('fetch', (event) => {
   }
 });
 
+/**
+ * Whether a navigation answered the app shell: `/` or an app route (a path
+ * whose last segment has no file extension, which the Worker answers with the
+ * shell), never the API, liveness, hashed assets or a static file.
+ */
+function isAppShellPath(pathname) {
+  if (
+    pathname.startsWith('/api/') ||
+    pathname === '/api' ||
+    pathname === '/healthz' ||
+    pathname.startsWith('/assets/')
+  ) {
+    return false;
+  }
+  const last = pathname.slice(pathname.lastIndexOf('/') + 1);
+  return !last.includes('.');
+}
+
+function isAppShellResponse(request, response) {
+  if (!response.ok || response.type !== 'basic' || response.redirected) {
+    return false;
+  }
+  const type = (response.headers.get('content-type') || '').toLowerCase();
+  return (
+    type.split(';')[0].trim() === 'text/html' &&
+    isAppShellPath(new URL(request.url).pathname)
+  );
+}
+
 async function networkFirstPage(request) {
   const cache = await caches.open(CACHE);
   try {
     const response = await fetch(request);
-    if (response.ok && response.type === 'basic') {
+    if (isAppShellResponse(request, response)) {
       await cache.put('/', response.clone());
     }
     return response;

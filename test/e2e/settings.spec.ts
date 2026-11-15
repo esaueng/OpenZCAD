@@ -99,22 +99,30 @@ test('hides profile details by default, keeps disclosure across reopen and reset
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Account', exact: true }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
-  await expect(
-    settings.getByText('Name hidden', { exact: true })
-  ).toBeVisible();
+  const profile = settings.locator('.setting-row', {
+    has: page.getByRole('button', { name: 'Sign out' })
+  });
+  const hidden = profile.getByRole('button', { name: 'Show personal info' });
+  // The name and the email, each blurred and each its own switch.
+  await expect(hidden).toHaveCount(2);
   await expect(settings).not.toContainText('Screenshot Person');
   await expect(settings).not.toContainText('screenshot@example.com');
-  await settings.getByRole('button', { name: 'Show personal info' }).click();
+  await hidden.last().click();
   await expect(
-    settings.getByText('Screenshot Person', { exact: true })
+    profile.getByRole('button', { name: 'Screenshot Person', exact: true })
   ).toBeVisible();
   await expect(
-    settings.getByText('screenshot@example.com', { exact: true })
+    profile.getByRole('button', {
+      name: 'screenshot@example.com',
+      exact: true
+    })
   ).toBeVisible();
-  await settings.getByRole('button', { name: 'Hide personal info' }).click();
+  await profile
+    .getByRole('button', { name: 'screenshot@example.com', exact: true })
+    .click();
   await expect(settings).not.toContainText('Screenshot Person');
   await expect(settings).not.toContainText('screenshot@example.com');
-  await settings.getByRole('button', { name: 'Show personal info' }).click();
+  await hidden.first().click();
   await page
     .getByRole('button', {
       name: 'Close settings and go back to projects',
@@ -128,8 +136,9 @@ test('hides profile details by default, keeps disclosure across reopen and reset
   ).toBeVisible();
   await page.reload();
   await expect(
-    settings.getByText('Name hidden', { exact: true })
-  ).toBeVisible();
+    profile.getByRole('button', { name: 'Show personal info' })
+  ).toHaveCount(2);
+  await expect(settings).not.toContainText('Screenshot Person');
 });
 
 test('suggests a part name without focusing it and retains its draft on reload', async ({
@@ -610,8 +619,9 @@ const DARK_GROUND = 'rgb(16, 18, 21)';
 const LIGHT_GROUND = 'rgb(242, 242, 242)';
 const DARK_SURFACE = 'rgb(24, 27, 31)';
 const LIGHT_SURFACE = 'rgb(250, 250, 250)';
-// The 3D stage behind the canvas turns with the chrome.
-const DARK_STAGE = 'rgb(16, 18, 21)';
+// The 3D stage behind the canvas turns with the chrome. The dark stage is
+// the neutral graphite `--color-viewport-bg` (#18191c, #1293), not the ground.
+const DARK_STAGE = 'rgb(24, 25, 28)';
 const LIGHT_STAGE = 'rgb(238, 238, 238)';
 
 function pageGround(page: Page) {
@@ -1190,8 +1200,9 @@ for (const tier of ['free', 'premium'] as const) {
           entitlements: {
             tier,
             projectLimit: premium ? 10_000 : 100,
-            projectStorageLimitBytes: (premium ? 25 : 1) * 1024 ** 3,
-            artifactLimitBytes: (premium ? 25 : 1) * 1024 ** 3,
+            storageLimitBytes: premium ? 1024 ** 3 : 100 * 1024 ** 2,
+            projectStorageLimitBytes: premium ? 1024 ** 3 : 100 * 1024 ** 2,
+            artifactLimitBytes: premium ? 1024 ** 3 : 100 * 1024 ** 2,
             ai: {
               requestLimit: premium ? 600 : 6,
               costLimitUnits: premium ? 2400 : 24,
@@ -1211,9 +1222,11 @@ for (const tier of ['free', 'premium'] as const) {
       .filter({ hasText: 'Membership' });
     await expect(membership).toContainText(premium ? 'Premium' : 'Free');
     await expect(membership).toContainText(
-      `${premium ? '10,000' : '100'} cloud projects · ${premium ? '25' : '1'} GB project storage · ${premium ? '25' : '1'} GB cloud file storage · ${premium ? 600 : 6} hosted AI requests per 10 minutes`
+      `${premium ? '10,000' : '100'} cloud projects · ${premium ? '1 GB' : '100 MB'} storage · ${premium ? 600 : 6} hosted AI requests per 10 minutes`
     );
-    await expect(membership).toContainText('cloud file storage');
+    // One allowance for everything the account stores, not two.
+    await expect(membership).not.toContainText('cloud file storage');
+    await expect(membership).not.toContainText('project storage');
   });
 }
 

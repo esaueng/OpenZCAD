@@ -24,10 +24,13 @@ function renderTopBar(
     exportUnavailableReason?: string | null;
     projectName?: string;
     encryption?: EncryptionIndicatorProps | null;
+    shareSession?: { mode: 'view' | 'tweak'; onMakeCopy(): void } | null;
     buildModeDisabledReason?: string;
     warningCount?: number;
     reloadPrompt?: 'update' | 'interrupted' | null;
     conflictDeferred?: boolean;
+    localOnlySourceCount?: number;
+    accountState?: 'checking' | 'signed-in' | 'signed-out' | 'unavailable';
   } = {}
 ) {
   const handlers = {
@@ -63,18 +66,21 @@ function renderTopBar(
       reloadPrompt={options.reloadPrompt ?? null}
       saveToAccount={options.saveToAccount ?? false}
       knownDeviceOnly={options.knownDeviceOnly ?? false}
-      localOnlySourceCount={0}
+      localOnlySourceCount={options.localOnlySourceCount ?? 0}
       artifacts={[]}
       session={
         options.signedIn
           ? ({ userId: 'user-1', email: 'a@example.com' } as AuthSession)
           : null
       }
-      accountState={options.signedIn ? 'signed-in' : 'signed-out'}
+      accountState={
+        options.accountState ?? (options.signedIn ? 'signed-in' : 'signed-out')
+      }
       collaborationStatus={options.collaborationStatus ?? 'offline'}
       collaborationFailure={options.collaborationFailure}
       readOnlySeat={options.readOnlySeat}
       collaboratorCount={0}
+      shareSession={options.shareSession ?? null}
       projectSharingEnabled
       workspaceMode="build"
       canRenameProject
@@ -501,6 +507,8 @@ describe('TopBar sharing chip', () => {
       name: 'Open project sharing · Read-only'
     });
     expect(chip).toHaveTextContent('Read-only');
+    // The class the wide bar keys its visible label on (topbar.css).
+    expect(chip).toHaveClass('is-read-only');
     expect(tooltipFor(chip)).toHaveTextContent('not edit it');
   });
   it('lets a conflict or a lost connection outrank a read-only seat', () => {
@@ -518,6 +526,8 @@ describe('TopBar sharing chip', () => {
       const chip = screen.getByRole('button', { name: /Open project sharing/ });
       expect(chip).toHaveTextContent(label);
       expect(chip).not.toHaveTextContent('Read-only');
+      // Its label stays a glyph on the wide bar, like any other room state.
+      expect(chip).not.toHaveClass('is-read-only');
       cleanup();
     }
   });
@@ -579,6 +589,33 @@ describe('TopBar File menu', () => {
     const summary = fileMenu().querySelector('summary')!;
     expect(summary).toHaveAccessibleName('File');
     expect(summary).toHaveAttribute('title', 'File: save, import and export');
+  });
+
+  it('moves through its items with the arrow keys (I24)', () => {
+    renderTopBar({ canExport: true });
+    const menu = fileMenu();
+    const summary = menu.querySelector('summary')!;
+    summary.focus();
+    fireEvent.keyDown(summary, { key: 'ArrowDown' });
+    expect(menu.open).toBe(true);
+    const items = Array.from(
+      menu.querySelectorAll<HTMLElement>(
+        '.topbar-menu-panel :is(button, a[href]):not([disabled])'
+      )
+    );
+    expect(items.length).toBeGreaterThan(2);
+    expect(document.activeElement).toBe(items[0]);
+    fireEvent.keyDown(items[0]!, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(items[1]);
+    fireEvent.keyDown(items[1]!, { key: 'End' });
+    expect(document.activeElement).toBe(items.at(-1));
+    // Wraps round, both ways.
+    fireEvent.keyDown(items.at(-1)!, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(items[0]);
+    fireEvent.keyDown(items[0]!, { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(items.at(-1));
+    fireEvent.keyDown(items.at(-1)!, { key: 'Home' });
+    expect(document.activeElement).toBe(items[0]);
   });
 
   it('reaches Import CAD files from the keyboard', () => {
@@ -958,5 +995,62 @@ describe('TopBar encryption indicator', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(lock.closest('details')).not.toHaveAttribute('open');
     expect(lock).toHaveFocus();
+  });
+});
+
+// Design review I73: a share-link visitor saw "Local only", "Signed out" and
+// "Offline", none of them true of the session, and an unlabelled Make a copy.
+describe('TopBar share-link session', () => {
+  it.each([
+    ['tweak', 'Shared model · Tweak only'],
+    ['view', 'Shared model · View only']
+  ] as const)(
+    'names a %s session and offers a labelled Make a copy',
+    (mode, label) => {
+      const onMakeCopy = vi.fn();
+      renderTopBar({ saveState: 'local', shareSession: { mode, onMakeCopy } });
+      expect(screen.getByRole('status', { name: label })).toBeVisible();
+      expect(screen.queryByText('Local only')).toBeNull();
+      expect(screen.queryByText('Signed out')).toBeNull();
+      expect(
+        screen.queryByRole('button', { name: /Sign in to share/ })
+      ).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Make a copy' }));
+      expect(onMakeCopy).toHaveBeenCalledOnce();
+    }
+  );
+});
+
+// Design review I8: one name for the unreachable cloud, and no call to an
+// archive that can only fail while signed out.
+describe('TopBar signed out', () => {
+  it('names an unreachable cloud as the start screen and Settings do', () => {
+    renderTopBar({ accountState: 'unavailable' });
+    const chip = screen.getByRole('status', {
+      name: /^Cloud unavailable: sign-in could not be reached/
+    });
+    expect(chip).toHaveTextContent('Cloud unavailable');
+  });
+
+  it('disables Archive local sources with its reason and raises no dot', () => {
+    renderTopBar({ localOnlySourceCount: 1 });
+    expect(document.querySelector('.file-menu-attention')).toBeNull();
+    const archive = screen.getByRole('button', {
+      name: /Archive local sources/,
+      hidden: true
+    });
+    expect(archive).toBeDisabled();
+    expect(archive).toHaveTextContent('Sign in to archive imports');
+  });
+
+  it('keeps the archive and its dot for a signed-in project', () => {
+    renderTopBar({ localOnlySourceCount: 1, signedIn: true });
+    expect(document.querySelector('.file-menu-attention')).not.toBeNull();
+    expect(
+      screen.getByRole('button', {
+        name: /Archive local sources/,
+        hidden: true
+      })
+    ).toBeEnabled();
   });
 });

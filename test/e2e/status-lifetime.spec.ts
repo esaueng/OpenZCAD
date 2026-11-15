@@ -90,12 +90,10 @@ test('status messages are retired by the next selection and expire on their own'
   await expect(statusButton).toHaveClass(/quiet/, {
     timeout: STATUS_LIFETIME_MS + 5_000
   });
-  await expect(statusButton).toHaveAttribute(
-    'aria-label',
-    'Open activity log.'
-  );
+  await expect(statusButton).toHaveAttribute('aria-label', 'Open activity log');
   // Quiet, the toast is out of the way; the dock's log button still opens it.
   await page
+    .locator('.instrument-rail')
     .getByRole('button', { name: 'Open activity log', exact: true })
     .click();
   await expect(

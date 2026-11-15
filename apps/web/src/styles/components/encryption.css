@@ -12,6 +12,14 @@
   color: var(--color-text-muted);
 }
 
+/* "I saved my recovery key": an acknowledgement, so a checkbox (I80). */
+.encryption-acknowledge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
 /* Codes people read or compare: never truncated, wrapped in groups. */
 .encryption-code {
   display: block;
@@ -164,4 +172,20 @@
   padding-left: var(--sp-4);
   display: grid;
   gap: var(--sp-1);
+}
+
+/* Setup's last step, "Encrypt new projects?" (design review I75): the
+   choice, ticked by default, and the button that keeps it. */
+.encryption-setup-choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.encryption-setup-choice label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
 }

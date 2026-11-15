@@ -4,6 +4,7 @@ import {
   type GrowingHolderPiece
 } from '@openzcad/command-system';
 import { evaluateExpression, getParameterScope } from '@openzcad/document-core';
+import { ownEntry } from '@openzcad/shared';
 import type {
   BodyRepresentation,
   ParamValue,
@@ -95,12 +96,18 @@ export function growingHolderPreview(
       if (oldValue !== newValue) changed = true;
     }
     if (!changed) return null;
-    const result = base.derived.bodyRepresentations[history.resultBodyId];
+    const result = ownEntry(
+      base.derived.bodyRepresentations,
+      history.resultBodyId
+    );
     const parts = plan.unionOrder.map((key) => ({
       key,
       piece: plan.pieces.find((p) => p.key === key),
       bridge: plan.bridges.find((b) => b.key === key),
-      representation: base.derived.bodyRepresentations[history.bodies[key]!]
+      representation: ownEntry(
+        base.derived.bodyRepresentations,
+        history.bodies[key]!
+      )
     }));
     if (
       !result ||
@@ -203,7 +210,10 @@ export function growingHolderPreview(
       mesh: { kind: 'mesh', vertices, indices }
     });
     if (history.text) {
-      const text = base.derived.bodyRepresentations[history.text.bodyId];
+      const text = ownEntry(
+        base.derived.bodyRepresentations,
+        history.text.bodyId
+      );
       if (!text || text.consumed) return null;
       const delta = AXES.map(
         (axis) =>

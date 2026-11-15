@@ -49,8 +49,8 @@ to it. Restoring the project restores existing memberships. Archiving does not
 withdraw member access.
 
 An account can hold at most 100 projects, including projects in the trash.
-Stored project snapshots and externalized assets share an account limit (1 GiB
-Free, 25 GiB Premium; see `account-tiers.md`)
+Stored project snapshots and externalized assets share an account limit (100 MiB
+Free, 1 GiB Premium; see `account-tiers.md`)
 in R2-backed storage; D1-backed documents and revisions have the same limit.
 Existing accounts above a limit remain readable and can remove data, but
 cannot increase usage. The R2 path needs space for a replacement snapshot

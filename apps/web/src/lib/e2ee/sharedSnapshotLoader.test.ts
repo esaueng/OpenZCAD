@@ -26,8 +26,11 @@ describe('the encrypted share-link loader’s transport (#923 review)', () => {
 
     expect(await loadEncryptedSharedProject(link)).toBeNull();
     expect(desktopFetch).toHaveBeenCalledWith(
-      `/api/e2ee/share/${encodeURIComponent(token)}`,
-      expect.objectContaining({ method: 'GET' })
+      '/api/e2ee/share',
+      expect.objectContaining({
+        method: 'GET',
+        headers: { 'x-openzcad-share-token': token }
+      })
     );
   });
 

@@ -3,13 +3,15 @@
    in app.css, so this file is not free to move. ── */
 
 /* Cards are the demos' full form: on the first run they take the stage under
-   the empty shelf, and on a narrow screen they follow it. Column flow keeps
-   them on one line for any number of demos; the revision walk stacks inside
-   each card. Their list form, for the start screen's column, is at the end. */
+   the empty shelf, and on a narrow screen they follow it. One line while
+   they fit at 260px each; below that two to a row. One forced line at
+   1024px squeezed four cards to 175px, wrapped "Mounting Bracket" and ran
+   each tagline to four lines over empty space a 2×2 would have filled. The
+   revision walk stacks inside each card. Their list form, for the start
+   screen's column, is at the end. */
 .demo-list {
   display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
   gap: var(--sp-3);
 }
 

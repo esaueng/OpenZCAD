@@ -106,27 +106,64 @@ describe('WorkspaceTour', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it('moves on from the history step when History is opened', () => {
-    // It stayed on "Open History…" after the user had opened it.
-    const { rerender } = render(
-      <WorkspaceTour
-        {...idle}
-        featureCount={1}
-        hasSelection
-        onDismiss={vi.fn()}
-      />
+  it('holds the history step over the panel History opens, until Next (I16)', async () => {
+    // It moved on the moment History opened, so the grip, row and rollback
+    // tips vanished while the panel was still arriving.
+    const rail = document.createElement('div');
+    rail.className = 'rail-panels';
+    const button = document.createElement('button');
+    button.setAttribute('aria-label', 'History panel');
+    rail.appendChild(button);
+    const panel = document.createElement('section');
+    panel.className = 'model-panel model-panel-history';
+    const file = document.createElement('details');
+    file.className = 'file-menu';
+    const summary = document.createElement('summary');
+    file.appendChild(summary);
+    document.body.append(rail, panel, file);
+    const props = { ...idle, featureCount: 1, hasSelection: true };
+    const { rerender, unmount } = render(
+      <WorkspaceTour {...props} onDismiss={vi.fn()} />
     );
-    expect(screen.getByText('The history is the model')).toBeTruthy();
-    rerender(
-      <WorkspaceTour
-        {...idle}
-        featureCount={1}
-        hasSelection
-        historyOpen
-        onDismiss={vi.fn()}
-      />
-    );
-    expect(screen.getByText('Take it with you')).toBeTruthy();
+    try {
+      expect(button).toHaveClass('tour-target');
+      rerender(<WorkspaceTour {...props} historyOpen onDismiss={vi.fn()} />);
+      expect(screen.getByText('The history is the model')).toBeTruthy();
+      expect(screen.getByText(/Drag the grip to reorder/)).toBeTruthy();
+      await waitFor(() => expect(panel).toHaveClass('tour-target'));
+      expect(button).not.toHaveClass('tour-target');
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      expect(screen.getByText('Take it with you')).toBeTruthy();
+      expect(panel).not.toHaveClass('tour-target');
+      // The last step shows where Export is.
+      await waitFor(() => expect(summary).toHaveClass('tour-target'));
+    } finally {
+      unmount();
+      rail.remove();
+      panel.remove();
+      file.remove();
+    }
+  });
+
+  it('outlines the rail and the More tools button at its foot (I16)', async () => {
+    const palette = document.createElement('nav');
+    palette.className = 'tool-palette';
+    const more = document.createElement('button');
+    more.className = 'command-more-toggle';
+    palette.appendChild(more);
+    document.body.appendChild(palette);
+    try {
+      const { unmount } = render(
+        <WorkspaceTour {...idle} onDismiss={vi.fn()} />
+      );
+      expect(palette).toHaveClass('tour-target');
+      expect(more).toHaveClass('tour-target');
+      unmount();
+      expect(palette).not.toHaveClass('tour-target');
+      expect(more).not.toHaveClass('tour-target');
+    } finally {
+      palette.remove();
+    }
   });
 
   it('still teaches the history step when History was already open', () => {

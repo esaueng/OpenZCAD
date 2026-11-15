@@ -694,6 +694,82 @@ describe('removing a device', () => {
     expect(ready(await loadEncryption(tablet.ctx)).unlocked).toBe(true);
   });
 
+  it.each(['browser', 'desktop'] as const)(
+    'ends the account’s other sessions once a removal lands, keeping the remover’s (%s)',
+    async (backend) => {
+      const srv = server();
+      const hash = async (token: string) =>
+        Buffer.from(
+          await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))
+        ).toString('hex');
+      const token = 'r'.repeat(43);
+      srv.credential = { token, desktop: backend === 'desktop' };
+      const browser = (tokenHash: string) =>
+        srv.db
+          .prepare('INSERT INTO auth_sessions VALUES (?, ?, ?, ?)')
+          .run(tokenHash, USER, 0, 9_999_999_999);
+      const desktop = (tokenHash: string, session: string) => {
+        srv.db
+          .prepare(
+            'INSERT INTO desktop_access_tokens VALUES (?, ?, ?, ?, ?, ?, NULL)'
+          )
+          .run(tokenHash, session, USER, 'openzcad-macos', 0, 9_999_999_999);
+        srv.db
+          .prepare(
+            'INSERT INTO desktop_refresh_tokens VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)'
+          )
+          .run(
+            `refresh-${session}`,
+            session,
+            USER,
+            'openzcad-macos',
+            0,
+            9_999_999_999
+          );
+      };
+      if (backend === 'browser') browser(await hash(token));
+      else desktop(await hash(token), 'remover-session');
+      // Another browser's session and another desktop's, any of which may
+      // be the device about to be removed.
+      browser(await hash('o'.repeat(43)));
+      desktop(await hash('d'.repeat(43)), 'other-desktop');
+      const sessions = () =>
+        srv.db
+          .prepare('SELECT token_hash FROM auth_sessions ORDER BY token_hash')
+          .all()
+          .map((row) => (row as { token_hash: string }).token_hash);
+      const live = (table: string) =>
+        srv.db
+          .prepare(
+            `SELECT DISTINCT session_id FROM ${table} WHERE revoked_at IS NULL ORDER BY session_id`
+          )
+          .all()
+          .map((row) => (row as { session_id: string }).session_id);
+
+      const { recovery, laptop } = await setUp(srv);
+      const phone = await enrolled(srv, recovery.secret, 'Phone');
+      // Certifying devices ends nothing.
+      expect(sessions()).toHaveLength(backend === 'browser' ? 2 : 1);
+      expect(live('desktop_access_tokens')).toHaveLength(
+        backend === 'browser' ? 1 : 2
+      );
+
+      await removeDevice(
+        laptop,
+        ready(await loadEncryption(laptop)),
+        phone.account.device!.deviceId,
+        recovery.secret
+      );
+      expect(sessions()).toEqual(
+        backend === 'browser' ? [await hash(token)] : []
+      );
+      for (const table of ['desktop_access_tokens', 'desktop_refresh_tokens'])
+        expect(live(table)).toEqual(
+          backend === 'browser' ? [] : ['remover-session']
+        );
+    }
+  );
+
   /**
    * A plaintext project staged for encryption (slice 7-1) by `deviceId`:
    * still format 1, so no revocation cutoff names it. `stageInfo` has that

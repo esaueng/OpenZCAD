@@ -82,6 +82,26 @@ test(
   }
 );
 
+test('tabbing from the name to the units moves the focus mark', async ({
+  page
+}) => {
+  // 14 Nov 2026 review: both sit in one ringed box, and the units showed no
+  // focus of their own.
+  await openLibrary(page, 1440);
+  const units = page.getByRole('combobox', { name: 'Units' });
+  const wash = () =>
+    units.evaluate((element) => getComputedStyle(element).backgroundColor);
+  await page.getByLabel('Project name').focus();
+  const resting = await wash();
+  await page.keyboard.press('Tab');
+  await expect(units).toBeFocused();
+  // The wash fades in and out with the fields' background transition.
+  await expect.poll(wash).not.toBe(resting);
+  await page.keyboard.press('Shift+Tab');
+  await expect(page.getByLabel('Project name')).toBeFocused();
+  await expect.poll(wash).toBe(resting);
+});
+
 for (const width of [1200, 1000, 901, 700, 561]) {
   test(`the shelf toolbar stays on one line at ${width}px`, async ({
     page
@@ -111,6 +131,30 @@ for (const width of [1200, 1000, 901, 700, 561]) {
         .evaluate((element) => element.getBoundingClientRect().width)
     ).toBeGreaterThan(120);
   });
+}
+
+for (const width of [390, 700, 1440]) {
+  test(
+    'storage details stay reachable at ' + width + 'px',
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      await openLibrary(page, width);
+      await page.getByRole('button', { name: /^Storage details/ }).click();
+      const panel = page.getByRole('dialog', { name: 'Storage', exact: true });
+      const box = await panel.boundingBox();
+      if (!box) throw new Error('Storage panel is missing');
+      expect(box.y).toBeGreaterThanOrEqual(0);
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(width);
+      await panel
+        .getByRole('button', { name: 'Close storage details' })
+        .click();
+      await expect(panel).toHaveCount(0);
+      await expect(
+        page.getByRole('button', { name: /^Storage details/ })
+      ).toBeFocused();
+    }
+  );
 }
 
 test('a phone wraps the shelf tools under the filters', async ({ page }) => {

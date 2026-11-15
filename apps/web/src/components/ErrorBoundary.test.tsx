@@ -154,6 +154,48 @@ describe('ErrorBoundary', () => {
     ).toHaveAttribute('title', expect.stringMatching(/check your connection/i));
   });
 
+  it('offers no Reload for a failed chunk while offline', () => {
+    vi.useFakeTimers();
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    try {
+      renderFailing(
+        new TypeError('Failed to fetch dynamically imported module: /a.js')
+      );
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'You’re offline; reload once you reconnect.'
+      );
+      expect(
+        screen.queryByRole('button', { name: 'Reload workspace' })
+      ).toBeNull();
+      onLine.mockReturnValue(true);
+      act(() => {
+        window.dispatchEvent(new Event('online'));
+      });
+      expect(
+        screen.getByRole('button', { name: 'Reload workspace' })
+      ).toBeTruthy();
+    } finally {
+      onLine.mockRestore();
+    }
+  });
+
+  it('keeps the page card from suggesting a reload while offline', () => {
+    vi.useFakeTimers();
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    try {
+      renderFailing(
+        new TypeError('Failed to fetch dynamically imported module: /a.js'),
+        'page'
+      );
+      expect(screen.getByRole('alert')).toHaveTextContent(/^You’re offline\./);
+      expect(
+        screen.getByRole('button', { name: 'Waiting for a connection…' })
+      ).toBeDisabled();
+    } finally {
+      onLine.mockRestore();
+    }
+  });
+
   it('keeps the whole-app fallback on a reload', () => {
     vi.useFakeTimers();
     renderFailing(new Error('boom'), 'page');

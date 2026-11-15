@@ -64,7 +64,8 @@ export function SettingRow({
   compact = false,
   children
 }: {
-  title: string;
+  /** Text, or a value that hides itself, such as a profile name. */
+  title: ReactNode;
   hint?: ReactNode;
   /** Longer copy kept one click away instead of on the page. */
   details?: { summary: string; body: ReactNode };

@@ -38,5 +38,5 @@ AI_DEPLOYMENT_FREE_ENABLED=true
 
 # Manual Premium grants (server only; use example addresses here).
 # PREMIUM_USER_EMAILS=member@example.com
-# Premium grants hosted AI eligibility and 100 GiB artifact storage by default.
+# Premium grants hosted AI eligibility and one 25 GiB storage allowance by default.
 # See docs/plans/account-tiers.md for Free and Premium account limits.

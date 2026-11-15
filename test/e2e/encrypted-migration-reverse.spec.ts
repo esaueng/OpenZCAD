@@ -315,14 +315,17 @@ test('stops encrypting a project through the UI, and it opens as plaintext', asy
     hasText: 'Secret reversed'
   });
   await expect(card).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await expect(
-    card.getByRole('img', { name: 'End-to-end encrypted' })
-  ).toHaveCount(0);
+  // Nothing in the account is encrypted any more, so no card is marked
+  // either way.
+  await expect(card.getByRole('img', { name: /encrypted/i })).toHaveCount(0);
   await card.locator('.start-tile-open').click();
   await expectBodyCount(page, 1);
   await expect(
     page.getByRole('status', { name: 'Saved', exact: true })
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  await expect(
+    page.locator('.topbar-identity').getByLabel(/End-to-end encrypted/)
+  ).toHaveCount(0);
   await expect(page.getByText(/could not be fetched/)).toHaveCount(0);
   expect(errors).toEqual([]);
 });

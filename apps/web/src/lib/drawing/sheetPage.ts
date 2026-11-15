@@ -1,7 +1,7 @@
 import {
-  DRAWING_PAPER_LABELS,
   DRAWING_SCALE_PRESETS,
   DRAWING_VIEW_FRAMES,
+  DRAWING_VIEW_ORIENTATIONS,
   drawingPaperMm,
   drawingPaperPerModelUnit,
   drawingSectionLine,
@@ -355,9 +355,35 @@ function rect(x: number, y: number, width: number, height: number): number[] {
   return [x, y, x + width, y, x + width, y + height, x, y + height];
 }
 
+/** What a page needs beyond its sheet: the project and the sheet's place. */
+export interface SheetPageContext {
+  projectName: string;
+  units: UnitSystem;
+  /**
+   * Where the sheet sits in the set, 1-based, for the SHEET cell ("2 / 3").
+   * Absent reads as a set of one.
+   */
+  sheetNumber?: { index: number; count: number };
+}
+
+/**
+ * The SHEET cell: "2 / 3 · Details", the sheet's place in the set and its
+ * name. It printed the paper size ("A3"), which the border already shows,
+ * while neither the name nor the count appeared anywhere (review I63).
+ */
+export function titleBlockSheetText(
+  sheet: Pick<DrawingSheet, 'name'>,
+  sheetNumber: SheetPageContext['sheetNumber']
+): string {
+  const count = Math.max(1, sheetNumber?.count ?? 1);
+  const index = Math.min(count, Math.max(1, sheetNumber?.index ?? 1));
+  const name = sheet.name.trim();
+  return name ? `${index} / ${count} · ${name}` : `${index} / ${count}`;
+}
+
 function titleBlock(
   sheet: DrawingSheet,
-  context: { projectName: string; units: UnitSystem }
+  context: SheetPageContext
 ): { strokes: SheetStroke[]; texts: SheetText[] } {
   const box = titleBlockBox(sheet);
   const strokes: SheetStroke[] = [
@@ -401,7 +427,7 @@ function titleBlock(
       ['DWG NO.', block.drawingNumber ?? ''],
       ['REV', block.revision ?? ''],
       ['SCALE', formatDrawingScale(sheet.scale)],
-      ['SHEET', DRAWING_PAPER_LABELS[sheet.paper.size]]
+      ['SHEET', titleBlockSheetText(sheet, context.sheetNumber)]
     ],
     [
       ['DRAWN', block.author ?? ''],
@@ -537,7 +563,7 @@ function clipStroke(stroke: SheetStroke, rect: PaperRect): SheetStroke[] {
 export function composeSheetPage(
   sheet: DrawingSheet,
   views: readonly ComposedView[],
-  context: { projectName: string; units: UnitSystem },
+  context: SheetPageContext,
   /** D02 dimensions and notes, already laid out on this page. */
   annotations?: { strokes: SheetStroke[]; texts: SheetText[] }
 ): SheetPage {
@@ -974,6 +1000,78 @@ export function fitViewsToSheet(
       }
     }))
   };
+}
+
+/**
+ * The orientation "Add view" offers first: the first standard view the sheet
+ * does not show yet, so the default never adds a second Front to a sheet
+ * that has one (review I65). Section views do not count; with every
+ * orientation shown it falls back to the first.
+ */
+export function nextViewOrientation(
+  sheet: Pick<DrawingSheet, 'views'>
+): DrawingViewOrientation {
+  const shown = new Set(
+    sheet.views
+      .filter((view) => view.section === undefined)
+      .map((view) => view.orientation)
+  );
+  return (
+    DRAWING_VIEW_ORIENTATIONS.find((orientation) => !shown.has(orientation)) ??
+    DRAWING_VIEW_ORIENTATIONS[0]!
+  );
+}
+
+/** Paper kept clear around a view placed in free space. */
+const FREE_PLACEMENT_GAP_MM = 10;
+/** Spacing of the candidate centres a free placement tries. */
+const FREE_PLACEMENT_STEP_MM = 5;
+
+/**
+ * Where a view of `size` mm goes when nothing aligns it to a base: the free
+ * spot above the title block nearest the middle of the view area, clear of
+ * every view already on the sheet by a gap. It was always the middle, on top
+ * of the starter's layout (review I65). The middle when the view is larger
+ * than the area or no spot is free.
+ */
+export function freeViewCenter(
+  sheet: DrawingSheet,
+  extents: ReadonlyMap<string, ViewExtent>,
+  units: UnitSystem,
+  size: { width: number; height: number }
+): { x: number; y: number } {
+  const area = sheetViewArea(sheet);
+  const centre = { x: area.x + area.width / 2, y: area.y + area.height / 2 };
+  const taken = sheet.views.flatMap((view) => {
+    const extent = extents.get(view.viewId);
+    return extent ? [viewPageBox(view, extent, sheet, units)] : [];
+  });
+  const halfW = size.width / 2 + FIT_INSET_MM;
+  const halfH = size.height / 2 + FIT_INSET_MM;
+  const reachX = Math.floor((area.width / 2 - halfW) / FREE_PLACEMENT_STEP_MM);
+  const reachY = Math.floor(
+    (area.height / 2 - halfH) / FREE_PLACEMENT_STEP_MM
+  );
+  if (reachX < 0 || reachY < 0) return centre;
+  const clear = (x: number, y: number) =>
+    taken.every(
+      (box) =>
+        x + size.width / 2 + FREE_PLACEMENT_GAP_MM <= box.x ||
+        x - size.width / 2 - FREE_PLACEMENT_GAP_MM >= box.x + box.width ||
+        y + size.height / 2 + FREE_PLACEMENT_GAP_MM <= box.y ||
+        y - size.height / 2 - FREE_PLACEMENT_GAP_MM >= box.y + box.height
+    );
+  let best: { x: number; y: number; distance: number } | null = null;
+  for (let i = -reachX; i <= reachX; i += 1)
+    for (let j = -reachY; j <= reachY; j += 1) {
+      const x = centre.x + i * FREE_PLACEMENT_STEP_MM;
+      const y = centre.y + j * FREE_PLACEMENT_STEP_MM;
+      const distance = Math.hypot(x - centre.x, y - centre.y);
+      if (best && distance >= best.distance) continue;
+      if (clear(x, y)) best = { x, y, distance };
+    }
+  const round = (value: number) => Math.round(value * 10) / 10;
+  return best ? { x: round(best.x), y: round(best.y) } : centre;
 }
 
 /** Paper kept between "Auto scale" grid cells and around them. */

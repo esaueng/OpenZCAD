@@ -51,6 +51,11 @@ export interface PanelDockControls {
   onNaturalHeight?: (height: number) => void;
 }
 
+/** The header menu's own items, kept apart from the Move menu's targets. */
+const HEADER_PIN = 'panel-header:pin';
+const HEADER_POP_OUT = 'panel-header:pop-out';
+const HEADER_CLOSE = 'panel-header:close';
+
 /** What the Pin button's tooltip says of a panel in each state. */
 export const TEMPORARY_HINT = 'Temporary: the next panel you open replaces it';
 export const PINNED_HINT = 'Pinned: it stays open beside your other panels';
@@ -204,6 +209,35 @@ export function PanelFrame({
       <header
         className={`model-panel-header${dock ? ' is-draggable' : ''}`}
         onPointerDown={dock?.onHeaderPointerDown}
+        // A right-click on the header reaches the panel's own actions, as
+        // its buttons and Move menu offer them, instead of the browser's
+        // menu (design review I19).
+        onContextMenu={(event) => {
+          event.preventDefault();
+          const moveItems = dock?.moveItems() ?? [];
+          setMenu({
+            x: event.clientX,
+            y: event.clientY,
+            heading: title,
+            items: [
+              ...(controls.placement !== 'phone'
+                ? [
+                    {
+                      id: HEADER_PIN,
+                      label: pinned ? `Unpin ${title}` : `Pin ${title}`
+                    }
+                  ]
+                : []),
+              ...(dock?.onPopOut
+                ? [{ id: HEADER_POP_OUT, label: `Pop out ${title}` }]
+                : []),
+              ...moveItems.map((item, index) =>
+                index === 0 ? { ...item, section: true } : item
+              ),
+              { id: HEADER_CLOSE, label: `Close ${title}`, section: true }
+            ]
+          });
+        }}
       >
         {dock ? (
           <button
@@ -213,7 +247,7 @@ export function PanelFrame({
             aria-haspopup="menu"
             // Only while open: a closed panel header carries no
             // `aria-expanded` at all, since nothing in it folds.
-            aria-expanded={menu ? true : undefined}
+            aria-expanded={menu?.heading === `Move ${title}` ? true : undefined}
             title={`Drag to move ${title} · press for the Move menu`}
             onClick={(event) => {
               const bounds = event.currentTarget.getBoundingClientRect();
@@ -328,11 +362,21 @@ export function PanelFrame({
       {/* In the body, so the menu stands over every island rather than
           inside the dock's layer. */}
       {menu &&
-        dock &&
         createPortal(
           <ContextMenu
             menu={menu}
-            onSelect={(itemId) => dock.onMove(itemId)}
+            onSelect={(itemId) => {
+              if (itemId === HEADER_PIN) {
+                if (pinned) controls.onUnpin();
+                else controls.onPin();
+              } else if (itemId === HEADER_POP_OUT) {
+                dock?.onPopOut?.();
+              } else if (itemId === HEADER_CLOSE) {
+                controls.onClose();
+              } else {
+                dock?.onMove(itemId);
+              }
+            }}
             onClose={() => setMenu(null)}
           />,
           document.body

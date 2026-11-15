@@ -5,12 +5,14 @@ import {
   createSavedRevision
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
+import { ApiError } from './api';
 import {
   CheckpointSaveError,
   failedCheckpointSaveState
 } from './collaborationCheckpointFallback';
 import {
   WORKSPACE_SAVE_STATE_PRESENTATION,
+  autosaveReportedSaveState,
   presentedWorkspaceSaveState
 } from './workspaceSaveStatePresentation';
 
@@ -130,4 +132,36 @@ it('retains exact positive room proof during a retry and after a no-authority re
   expect(presentedWorkspaceSaveState(headState, 0, null, room)).toBe(
     'device-failed'
   );
+});
+
+// Design review I8: a server that answered with an error is not "Offline".
+describe('autosave reports as save states', () => {
+  it('tells a server error apart from being offline', () => {
+    expect(
+      autosaveReportedSaveState('offline', new ApiError(500, 'Internal error.'))
+    ).toBe('server-error');
+    expect(
+      autosaveReportedSaveState('offline', new ApiError(503, 'Unavailable'))
+    ).toBe('server-error');
+    // A failed fetch, or no error at all, is a connection problem.
+    expect(
+      autosaveReportedSaveState('offline', new TypeError('Failed to fetch'))
+    ).toBe('offline');
+    expect(autosaveReportedSaveState('offline')).toBe('offline');
+    // A client-side refusal keeps its own state.
+    expect(
+      autosaveReportedSaveState('refused', new ApiError(413, 'Too large'))
+    ).toBe('refused');
+  });
+
+  it('names one state one way in the top bar and the status bar', () => {
+    const server = WORKSPACE_SAVE_STATE_PRESENTATION['server-error'];
+    expect([server.topBarLabel, server.statusBarLabel]).toEqual([
+      'Not synced',
+      'Not synced'
+    ]);
+    expect(server.title).not.toMatch(/unreachable|offline/i);
+    const synced = WORKSPACE_SAVE_STATE_PRESENTATION.synced;
+    expect(synced.statusBarLabel).toBe(synced.topBarLabel);
+  });
 });

@@ -67,7 +67,8 @@ const SPLICED = new Map([
   ...componentTitles('AnalyticsConsent.tsx'),
   ...componentTitles('AssistantConnectionSettings.tsx'),
   ...componentTitles('DataDownload.tsx'),
-  ...componentTitles('EncryptionSettings.tsx')
+  ...componentTitles('EncryptionSettings.tsx'),
+  ...componentTitles('SpaceMouseSettings.tsx')
 ]);
 
 function renderedSettingsBySection(): Map<string, string[]> {

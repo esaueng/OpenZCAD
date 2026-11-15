@@ -12,6 +12,7 @@
 @import './components/topbar.css';
 @import './components/tool-palette.css';
 @import './components/buttons.css';
+@import './components/private-text.css';
 @import './components/tooltip.css';
 @import './components/stable-label.css';
 @import './components/sidebar.css';
@@ -57,5 +58,8 @@
 /* A touch phone held upright: one-column rails and a short instrument set.
    It undoes target-size.css's touch grids there, so it follows them. */
 @import './components/phone-stage.css';
+/* Every control at 44 px under a coarse pointer, after every rule that
+   sizes one for the desktop (I1). */
+@import './components/touch-targets.css';
 /* Touch-only browser behaviour; it sizes nothing. */
 @import './components/touch.css';

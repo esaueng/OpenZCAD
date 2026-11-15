@@ -747,7 +747,7 @@ async function quotaRefusal(ctx: Context, error: unknown): Promise<never> {
     refuse(
       413,
       'PROJECT_STORAGE_QUOTA',
-      'This account has no project storage left for this save.',
+      'This account has no storage left for this save.',
       { limitBytes: row?.project_storage_limit_bytes ?? 2147483648 }
     );
   }
@@ -758,20 +758,16 @@ async function quotaRefusal(ctx: Context, error: unknown): Promise<never> {
       'This version names files the account does not hold for this project. Upload them again.'
     );
   }
-  // A copy's blobs count against the owner's artifact storage (0034).
+  // A copy's blobs count against the owner's one storage allowance (0034,
+  // 0049).
   if (message.includes('artifact_account_quota')) {
     const row = await ctx.db
-      .prepare('SELECT artifact_limit_bytes FROM users WHERE id = ?')
+      .prepare('SELECT project_storage_limit_bytes FROM users WHERE id = ?')
       .bind(ctx.userId)
-      .first<{ artifact_limit_bytes: number | null }>();
-    refuse(
-      413,
-      'ARTIFACT_QUOTA_EXCEEDED',
-      'Account artifact storage limit reached.',
-      {
-        limitBytes: row?.artifact_limit_bytes ?? 2147483648
-      }
-    );
+      .first<{ project_storage_limit_bytes: number | null }>();
+    refuse(413, 'ARTIFACT_QUOTA_EXCEEDED', 'Account storage limit reached.', {
+      limitBytes: row?.project_storage_limit_bytes ?? 2147483648
+    });
   }
   throw error;
 }

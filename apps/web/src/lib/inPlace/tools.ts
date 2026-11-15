@@ -30,6 +30,7 @@ import {
   type UnitSystem,
   type VariableFilletLaw,
   UNIT_TO_MM,
+  millimetresPerUnit,
   type Vector3
 } from '@openzcad/shared';
 import {
@@ -142,6 +143,15 @@ export function isInPlaceTool(tool: string): tool is InPlaceToolId {
   return (IN_PLACE_TOOLS as readonly string[]).includes(tool);
 }
 
+/** The commands whose Done runs through the cancellable pattern rebuild. */
+export function isInPlacePatternTool(tool: InPlaceToolId | null): boolean {
+  return (
+    tool === 'linear-pattern' ||
+    tool === 'circular-pattern' ||
+    tool === 'grid-pattern'
+  );
+}
+
 /** A picked region: its sketch, its stored reference, and which cell. */
 export interface ProfilePick {
   sketchId: SketchId;
@@ -176,7 +186,23 @@ export interface FacePick {
    * where a thread on it starts, how long it may run, and what it is sized
    * from. `axisStart` is the face's start (its lower end along the axis).
    */
-  cylinder?: { axisStart: Vector3; axisEnd: Vector3; radius: number };
+  cylinder?: {
+    axisStart: Vector3;
+    axisEnd: Vector3;
+    radius: number;
+    /**
+     * Schema v57 pipe threads: whether the body's material lies inside the
+     * face (a boss) or outside it (a bore), read from the body's mesh; absent
+     * where the mesh cannot say. A thread's build reads the solid itself.
+     */
+    boss?: boolean;
+    /**
+     * The face's length along its axis as the kernel measured it, which the
+     * thread build reads: a thread's ends are settled from this, not from
+     * the axis ends, which a transformed face can carry a few bits apart.
+     */
+    axialLength?: number;
+  };
   /**
    * `point` is where an edited hole already stands, not a click: its stored
    * position is kept, expressions and all, until the face is clicked again.
@@ -306,6 +332,10 @@ export interface InPlaceValueContext {
   raws?: Readonly<Record<string, string>>;
   /** The edited feature's stored data; absent when creating. */
   saved?: FeatureData;
+  /** Each option's value, for a check that reads one (a thread's profile). */
+  options?: Readonly<Record<string, string>>;
+  /** The document's length unit. */
+  units?: UnitSystem;
 }
 
 export type ValueUnit = 'angle' | 'length' | 'count';
@@ -795,7 +825,9 @@ export interface InPlaceToolSpec {
   defaults?(
     slots: InPlaceSlots,
     ctx: InPlaceContext,
-    numbers: Record<string, number>
+    numbers: Record<string, number>,
+    /** Each option's value (a thread's profile sets its length). */
+    options?: Readonly<Record<string, string>>
   ): Record<string, number>;
   /**
    * Other values a value's change carries with it (a box hung under a face
@@ -2229,7 +2261,7 @@ export function gearModuleOf(
   const pitch = numbers[id] ?? GEAR_PITCH_INITIALS[id];
   if (id === 'circularPitch') return pitch / Math.PI;
   if (id === 'diametralPitch') {
-    return UNIT_TO_MM.inch / UNIT_TO_MM[units] / pitch;
+    return UNIT_TO_MM.inch / millimetresPerUnit(units) / pitch;
   }
   return pitch;
 }
@@ -2242,7 +2274,7 @@ function gearPitchFor(
 ): number {
   if (id === 'circularPitch') return module * Math.PI;
   if (id === 'diametralPitch') {
-    return UNIT_TO_MM.inch / UNIT_TO_MM[units] / module;
+    return UNIT_TO_MM.inch / millimetresPerUnit(units) / module;
   }
   return module;
 }

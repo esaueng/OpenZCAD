@@ -84,14 +84,17 @@ describe('MotionStudyTimeline', () => {
   it('shows the selected study with its transport, ruler and tracks', () => {
     mount();
     const timeline = screen.getByRole('region', {
-      name: 'Motion study Motion 1'
+      name: 'Animation Motion 1'
     });
     expect(timeline).toBeTruthy();
     expect(screen.getByLabelText('Playhead').textContent).toBe('0.00');
     expect(
       screen.getByLabelText<HTMLInputElement>('Duration in seconds').value
     ).toBe('2');
-    expect(screen.getByRole('button', { name: 'Playback: Loop' })).toBeTruthy();
+    expect(
+      screen.getByRole<HTMLSelectElement>('combobox', { name: 'Playback' })
+        .value
+    ).toBe('loop');
     expect(screen.getByRole('group', { name: 'Track Pivot' })).toBeTruthy();
     expect(
       screen.getAllByRole('button', { name: /^Key at [0-9]/ })
@@ -218,12 +221,11 @@ describe('MotionStudyTimeline', () => {
     fireEvent.blur(duration);
     expect(lastStudy(executed).durationS).toBe(1);
     expect(lastStudy(executed).tracks[0]?.keys.map((k) => k.t)).toEqual([0, 1]);
-    // The playback button steps once → loop → back and forth.
-    fireEvent.click(screen.getByRole('button', { name: 'Playback: Loop' }));
+    // The same Playback select a joint and Set up motion use (I57).
+    const playback = screen.getByRole('combobox', { name: 'Playback' });
+    fireEvent.change(playback, { target: { value: 'ping-pong' } });
     expect(lastStudy(executed).playback).toBe('ping-pong');
-    fireEvent.click(
-      screen.getByRole('button', { name: 'Playback: Back and forth' })
-    );
+    fireEvent.change(playback, { target: { value: 'once' } });
     expect(lastStudy(executed).playback).toBe('once');
     expect(executed).toHaveLength(3);
   });
@@ -359,7 +361,7 @@ describe('MotionStudyTimeline', () => {
     expect(commitPose).toHaveBeenCalledTimes(1);
     view.unmount();
     const { executed } = mount();
-    fireEvent.click(screen.getByRole('button', { name: 'Close motion study' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close animation' }));
     act(() => {
       assemblyRuntime.setOverride('j_pivot', [20]);
       assemblyRuntime.commitOverrides();
@@ -369,7 +371,7 @@ describe('MotionStudyTimeline', () => {
     registerAssemblyCommitHandlers(null);
   });
 
-  it('hints until the study moves and plays from the start at the end', () => {
+  it('says it is recording keys, hints until the study moves, and plays from the start at the end', () => {
     const start = vi.spyOn(assemblyRuntime, 'startStudy');
     const manager = pivotProject();
     const study = manager.document.assembly!.studies[0]!;
@@ -383,12 +385,18 @@ describe('MotionStudyTimeline', () => {
     );
     act(() => assemblyRuntime.setStudyTime(2));
     mount(manager);
-    expect(screen.getByText('Move a part to key it here')).toBeTruthy();
+    // Recording is never silent (review I59): before the first move it also
+    // says what to do; after it, it still says where keys land.
+    const recording = () =>
+      document.querySelector('.motion-timeline-recording')?.textContent;
+    expect(recording()).toBe(
+      'Recording keys at 2.00 s · move a part to set it, then Play'
+    );
     act(() => {
       assemblyRuntime.setOverride('j_pivot', [40]);
       assemblyRuntime.commitOverrides();
     });
-    expect(screen.queryByText('Move a part to key it here')).toBeNull();
+    expect(recording()).toBe('Recording keys at 2.00 s');
     fireEvent.click(screen.getByRole('button', { name: 'Play' }));
     expect(start).toHaveBeenCalledWith('study_1', 1, 0);
   });
@@ -396,7 +404,7 @@ describe('MotionStudyTimeline', () => {
   it('closes: stops playback, deselects the study and reports it', () => {
     const { onClose } = mount();
     fireEvent.click(screen.getByRole('button', { name: 'Play' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Close motion study' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close animation' }));
     expect(getAssemblyRuntime().playback).toBeNull();
     expect(getAssemblyRuntime().selectedStudyId).toBeNull();
     expect(onClose).toHaveBeenCalled();

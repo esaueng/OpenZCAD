@@ -118,3 +118,71 @@ test('a sketch re-opened from History starts in Select', async ({ page }) => {
     'false'
   );
 });
+
+test('a value prompt in a sketch says Esc cancels it, and its Escape stays in the sketch (I43)', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await newSketch(page);
+  const edges = await drawRectangle(page);
+  const status = page.getByRole('contentinfo');
+  const finish = page.getByRole('button', {
+    name: 'Finish Sketch',
+    exact: true
+  });
+
+  await page.mouse.click(edges.top.x, edges.top.y);
+  await page.keyboard.press('d');
+  const keypad = page.getByRole('dialog', { name: 'Distance value' });
+  await expect(keypad).toBeVisible();
+  // The hint is the open prompt's keys, not the sketch ladder's last rung.
+  await expect(status).toContainText('Enter apply · Esc cancel');
+  await expect(status).not.toContainText('leaves the sketch');
+
+  // Escape cancels the value only: the sketch stays open.
+  await keypad.getByRole('textbox').press('Escape');
+  await expect(keypad).toBeHidden();
+  await expect(finish).toBeVisible();
+  await expect(status).not.toContainText('Press Esc again');
+
+  // Finish leaves in one click.
+  await finish.click();
+  await expect(finish).toBeHidden();
+});
+
+test('a two-digit DOF count stays inside the state chip (I38)', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await newSketch(page);
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = (await canvas.boundingBox())!;
+  const at = (fx: number, fy: number) => ({
+    x: bounds.x + bounds.width * fx,
+    y: bounds.y + bounds.height * fy
+  });
+  // Three free rectangles: 4 DOF each.
+  for (const [x, y] of [
+    [0.45, 0.3],
+    [0.6, 0.3],
+    [0.45, 0.55]
+  ] as const) {
+    await page.keyboard.press('v');
+    await page.keyboard.press('r');
+    const a = at(x, y);
+    const b = at(x + 0.08, y + 0.1);
+    for (const point of [a, b]) {
+      await page.mouse.move(point.x, point.y, { steps: 2 });
+      await page.mouse.click(point.x, point.y);
+      await page.waitForTimeout(250);
+    }
+  }
+  await page.keyboard.press('v');
+  const chip = page.getByRole('button', { name: /^Sketch state:/ });
+  await expect(chip).toHaveText(/^\d{2,} DOF$/, { timeout: 30_000 });
+  const fit = await chip.evaluate((element) => ({
+    overflowX: element.scrollWidth - element.clientWidth,
+    overflowY: element.scrollHeight - element.clientHeight
+  }));
+  expect(fit).toEqual({ overflowX: 0, overflowY: 0 });
+});

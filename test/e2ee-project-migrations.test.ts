@@ -9,14 +9,15 @@
  * staged group, first version and project info routes.
  */
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   E2EE_FRAME_CONTENT_TYPE,
   E2EE_MIGRATION_LEASE_HEADER,
   decodeE2eeFrame,
   encodeE2eeFrame,
-  MAX_ACCOUNT_ARTIFACT_BYTES,
   toRevisionId,
+  type E2eeMigrationAttemptExpectation,
   type E2eeMigrationLeaseResponse,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -683,6 +684,428 @@ describe('the migration lease', () => {
         })
       )
     ).toMatchObject({ status: 409, code: 'E2EE_MIGRATION_STATE' });
+    expect(migrationRow(srv, plain.projectId)).toBeUndefined();
+  });
+});
+
+// --- The attempt a start expects ---------------------------------------------------
+
+describe('the attempt a start expects (#1465 review)', () => {
+  const NONE: E2eeMigrationAttemptExpectation = {
+    state: 'none',
+    attempt: null,
+    startedAt: null
+  };
+  /** The project's migration as a browser that read it now expects it. */
+  const asRead = (
+    srv: Server,
+    projectId: string
+  ): E2eeMigrationAttemptExpectation => {
+    const row = migrationRow(srv, projectId)!;
+    return {
+      state: row.state as E2eeMigrationAttemptExpectation['state'],
+      attempt: (row.attempt as number | undefined) ?? null,
+      startedAt: row.started_at as string
+    };
+  };
+  const startAs = (
+    api: ProjectMigrationsApi,
+    projectId: string,
+    expectedAttempt?: E2eeMigrationAttemptExpectation,
+    lease?: string
+  ) =>
+    api.start(
+      projectId,
+      {
+        direction: 'encrypt',
+        deviceId: 'owner_laptop',
+        ...(expectedAttempt ? { expectedAttempt } : {})
+      },
+      lease
+    );
+  /**
+   * Runs `between` once, just before the start's own write to the
+   * migration row: what another device does after the start read it.
+   */
+  function beforeStartWrite(srv: Server, between: () => void) {
+    const db = srv.env.DB as D1Database;
+    const batch = db.batch.bind(db);
+    let pending: (() => void) | null = between;
+    db.batch = async (statements: D1PreparedStatement[]) => {
+      const writes = statements.some((statement) => {
+        const sql = (statement as { sql?: string }).sql ?? '';
+        return (
+          sql.includes('INSERT INTO e2ee_project_migrations') ||
+          (sql.includes('UPDATE e2ee_project_migrations') &&
+            sql.includes('SET device_id = ?, lease_id = ?'))
+        );
+      });
+      const run = writes ? pending : null;
+      if (run) {
+        pending = null;
+        run();
+      }
+      return batch(statements);
+    };
+  }
+
+  it('starts a new attempt only from the one it read, and counts every new staging', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const d = device(srv, owner, 'owner_laptop');
+    const api = createProjectMigrationsApi(d.fetcher);
+
+    const first = await startAs(api, plain.projectId, NONE);
+    expect(first.migration).toMatchObject({ state: 'staging', attempt: 1 });
+    await abandonAll(api, plain.projectId, first.leaseId);
+    const abandoned = migrationRow(srv, plain.projectId);
+    expect(abandoned).toMatchObject({ state: 'abandoned', attempt: 1 });
+
+    // Read before that start, or as the staging it was: nothing written.
+    for (const stale of [
+      NONE,
+      { state: 'staging', attempt: 1, startedAt: first.migration.startedAt },
+      { state: 'abandoned', attempt: 1, startedAt: 'another start' }
+    ] satisfies E2eeMigrationAttemptExpectation[]) {
+      expect(await errorOf(startAs(api, plain.projectId, stale))).toMatchObject(
+        { status: 409, code: 'E2EE_MIGRATION_ATTEMPT_CHANGED' }
+      );
+      expect(migrationRow(srv, plain.projectId)).toEqual(abandoned);
+    }
+
+    // As it stands: a new attempt, counted on.
+    const second = await startAs(
+      api,
+      plain.projectId,
+      asRead(srv, plain.projectId)
+    );
+    expect(second.migration).toMatchObject({ state: 'staging', attempt: 2 });
+    // Its own resume, as read, is the same attempt.
+    const resumed = await startAs(
+      api,
+      plain.projectId,
+      asRead(srv, plain.projectId),
+      second.leaseId
+    );
+    expect(resumed.migration).toMatchObject({
+      state: 'staging',
+      attempt: 2,
+      startedAt: second.migration.startedAt,
+      leaseHeld: true
+    });
+    await abandonAll(api, plain.projectId, resumed.leaseId);
+
+    // Two attempts that began in the same millisecond still differ.
+    srv.db
+      .prepare(
+        'UPDATE e2ee_project_migrations SET started_at = ? WHERE project_id = ?'
+      )
+      .run(first.migration.startedAt, plain.projectId);
+    const collided = migrationRow(srv, plain.projectId);
+    expect(collided).toMatchObject({
+      state: 'abandoned',
+      attempt: 2,
+      started_at: first.migration.startedAt
+    });
+    expect(
+      await errorOf(
+        startAs(api, plain.projectId, {
+          state: 'abandoned',
+          attempt: 1,
+          startedAt: first.migration.startedAt
+        })
+      )
+    ).toMatchObject({ code: 'E2EE_MIGRATION_ATTEMPT_CHANGED' });
+    expect(migrationRow(srv, plain.projectId)).toEqual(collided);
+
+    // An older app names no attempt: started as before.
+    const older = await startAs(api, plain.projectId);
+    expect(older.migration).toMatchObject({ state: 'staging', attempt: 3 });
+  });
+
+  it('fences the write itself: a start and cancel elsewhere after the read writes nothing', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const api = createProjectMigrationsApi(
+      device(srv, owner, 'owner_laptop').fetcher
+    );
+    // Another device starts and cancels between this start's read (none)
+    // and its write.
+    beforeStartWrite(srv, () => {
+      srv.db
+        .prepare(
+          `INSERT INTO e2ee_project_migrations
+             (project_id, direction, state, owner_user_id, source_version,
+              started_at, updated_at, finished_at)
+           VALUES (?, 'encrypt', 'abandoned', ?, ?, ?, ?, ?)`
+        )
+        .run(
+          plain.projectId,
+          OWNER,
+          plain.version,
+          '2026-11-14T00:00:00.000Z',
+          '2026-11-14T00:00:01.000Z',
+          '2026-11-14T00:00:01.000Z'
+        );
+    });
+    expect(await errorOf(startAs(api, plain.projectId, NONE))).toMatchObject({
+      status: 409,
+      code: 'E2EE_MIGRATION_ATTEMPT_CHANGED'
+    });
+    expect(migrationRow(srv, plain.projectId)).toMatchObject({
+      state: 'abandoned',
+      attempt: 1,
+      lease_id: null
+    });
+    expect(stagedRows(srv, plain.projectId)).toEqual(nothingStaged);
+  });
+
+  it('fences a resume on the attempt too: a restart elsewhere in the same millisecond writes nothing', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const api = createProjectMigrationsApi(
+      device(srv, owner, 'owner_laptop').fetcher
+    );
+    const first = await startAs(api, plain.projectId, NONE);
+    // The lease lapsed; this device reads the staging to resume it.
+    srv.db
+      .prepare('UPDATE e2ee_project_migrations SET lease_expires_at = 1')
+      .run();
+    const read = asRead(srv, plain.projectId);
+    expect(read).toEqual({
+      state: 'staging',
+      attempt: 1,
+      startedAt: first.migration.startedAt
+    });
+    // Before it writes, another device cancels that staging and starts a
+    // new one with the same start time.
+    beforeStartWrite(srv, () => {
+      srv.db
+        .prepare(
+          `UPDATE e2ee_project_migrations
+           SET state = 'abandoned', device_id = NULL, lease_id = NULL,
+               lease_expires_at = NULL
+           WHERE project_id = ?`
+        )
+        .run(plain.projectId);
+      srv.db
+        .prepare(
+          `UPDATE e2ee_project_migrations
+           SET state = 'staging', device_id = 'owner_desktop',
+               lease_id = ?, lease_expires_at = 1
+           WHERE project_id = ?`
+        )
+        .run('d'.repeat(43), plain.projectId);
+    });
+    expect(await errorOf(startAs(api, plain.projectId, read))).toMatchObject({
+      status: 409,
+      code: 'E2EE_MIGRATION_ATTEMPT_CHANGED'
+    });
+    expect(migrationRow(srv, plain.projectId)).toMatchObject({
+      state: 'staging',
+      attempt: 2,
+      started_at: first.migration.startedAt,
+      device_id: 'owner_desktop',
+      lease_id: 'd'.repeat(43)
+    });
+  });
+
+  it('checks the state and start time until migration 0053 is applied', async () => {
+    const srv = newServer(
+      [owner, other],
+      databaseBefore(53, { authority: true }),
+      MIGRATION_ON
+    );
+    const plain = await plaintextProject(srv);
+    const api = createProjectMigrationsApi(
+      device(srv, owner, 'owner_laptop').fetcher
+    );
+    const first = await startAs(api, plain.projectId, NONE);
+    expect(first.migration.state).toBe('staging');
+    expect(first.migration).not.toHaveProperty('attempt');
+    await abandonAll(api, plain.projectId, first.leaseId);
+    const abandoned = migrationRow(srv, plain.projectId);
+    expect(await errorOf(startAs(api, plain.projectId, NONE))).toMatchObject({
+      code: 'E2EE_MIGRATION_ATTEMPT_CHANGED'
+    });
+    expect(
+      await errorOf(
+        startAs(api, plain.projectId, {
+          state: 'abandoned',
+          attempt: null,
+          startedAt: 'another start'
+        })
+      )
+    ).toMatchObject({ code: 'E2EE_MIGRATION_ATTEMPT_CHANGED' });
+    expect(migrationRow(srv, plain.projectId)).toEqual(abandoned);
+    const second = await startAs(
+      api,
+      plain.projectId,
+      asRead(srv, plain.projectId)
+    );
+    expect(second.migration.state).toBe('staging');
+  });
+
+  it('restarts an abandoned migration although D1 counts the counter’s trigger write as a change', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const api = createProjectMigrationsApi(
+      device(srv, owner, 'owner_laptop').fetcher
+    );
+    const first = await startAs(api, plain.projectId, NONE);
+    await abandonAll(api, plain.projectId, first.leaseId);
+    // As on D1, a restart's write reports the row and the trigger's
+    // counter update (#1465 review): two changes for one row started.
+    const db = srv.env.DB as D1Database;
+    const probe = await db.batch([
+      db
+        .prepare(
+          `UPDATE e2ee_project_migrations SET state = 'staging'
+           WHERE project_id = ?`
+        )
+        .bind(plain.projectId),
+      db
+        .prepare(
+          `UPDATE e2ee_project_migrations SET state = 'abandoned',
+             attempt = attempt - 1
+           WHERE project_id = ?`
+        )
+        .bind(plain.projectId)
+    ]);
+    expect(probe.map((result) => result.meta?.changes)).toEqual([2, 1]);
+    expect(migrationRow(srv, plain.projectId)).toMatchObject({
+      state: 'abandoned',
+      attempt: 1
+    });
+
+    // The restart still goes ahead, holds its lease and locks the room.
+    const second = await startAs(
+      api,
+      plain.projectId,
+      asRead(srv, plain.projectId)
+    );
+    expect(second.migration).toMatchObject({
+      state: 'staging',
+      attempt: 2,
+      leaseHeld: true
+    });
+    expect(migrationRow(srv, plain.projectId)).toMatchObject({
+      state: 'staging',
+      attempt: 2,
+      lease_id: second.leaseId
+    });
+  });
+
+  it('never drops a counter the browser read for a schema probe cached before migration 0053', async () => {
+    const db = databaseBefore(53, { authority: true });
+    const srv = newServer([owner, other], db, MIGRATION_ON);
+    const plain = await plaintextProject(srv);
+    const api = createProjectMigrationsApi(
+      device(srv, owner, 'owner_laptop').fetcher
+    );
+    // A start before 0053 (any schema probe now remembers it missing),
+    // then 0053 lands while this isolate stays warm.
+    const first = await startAs(api, plain.projectId, NONE);
+    expect(first.migration).not.toHaveProperty('attempt');
+    await abandonAll(api, plain.projectId, first.leaseId);
+    db.exec(
+      readFileSync(
+        new URL(
+          '../apps/web/migrations/0053_e2ee_migration_attempts.sql',
+          import.meta.url
+        ),
+        'utf8'
+      )
+    );
+    const second = await startAs(
+      api,
+      plain.projectId,
+      asRead(srv, plain.projectId)
+    );
+    expect(second.migration).toMatchObject({ state: 'staging', attempt: 2 });
+    await abandonAll(api, plain.projectId, second.leaseId);
+    // Attempt 3, in the same millisecond as attempt 2 began: an approval
+    // read for attempt 2 must not start it.
+    srv.db
+      .prepare(
+        `UPDATE e2ee_project_migrations SET state = 'staging'
+         WHERE project_id = ?`
+      )
+      .run(plain.projectId);
+    srv.db
+      .prepare(
+        `UPDATE e2ee_project_migrations SET state = 'abandoned', started_at = ?
+         WHERE project_id = ?`
+      )
+      .run(second.migration.startedAt, plain.projectId);
+    const third = migrationRow(srv, plain.projectId);
+    expect(third).toMatchObject({
+      state: 'abandoned',
+      attempt: 3,
+      started_at: second.migration.startedAt
+    });
+    expect(
+      await errorOf(
+        startAs(api, plain.projectId, {
+          state: 'abandoned',
+          attempt: 2,
+          startedAt: second.migration.startedAt
+        })
+      )
+    ).toMatchObject({ code: 'E2EE_MIGRATION_ATTEMPT_CHANGED' });
+    expect(migrationRow(srv, plain.projectId)).toEqual(third);
+  });
+
+  it('refuses a counted expectation for a row that has no counter', async () => {
+    const srv = newServer(
+      [owner, other],
+      databaseBefore(53, { authority: true }),
+      MIGRATION_ON
+    );
+    const plain = await plaintextProject(srv);
+    const api = createProjectMigrationsApi(
+      device(srv, owner, 'owner_laptop').fetcher
+    );
+    const first = await startAs(api, plain.projectId, NONE);
+    await abandonAll(api, plain.projectId, first.leaseId);
+    const abandoned = migrationRow(srv, plain.projectId);
+    expect(
+      await errorOf(
+        startAs(api, plain.projectId, {
+          state: 'abandoned',
+          attempt: 1,
+          startedAt: first.migration.startedAt
+        })
+      )
+    ).toMatchObject({ code: 'E2EE_MIGRATION_ATTEMPT_CHANGED' });
+    expect(migrationRow(srv, plain.projectId)).toEqual(abandoned);
+  });
+
+  it('refuses an expectation that is not one', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    for (const expectedAttempt of [
+      'none',
+      { state: 'started', attempt: null, startedAt: null },
+      { state: 'none', attempt: 1, startedAt: null },
+      { state: 'none', attempt: null, startedAt: '2026-11-14T00:00:00.000Z' },
+      { state: 'abandoned', attempt: null, startedAt: null },
+      { state: 'abandoned', attempt: 0, startedAt: '2026-11-14T00:00:00.000Z' }
+    ]) {
+      const response = await srv.call(
+        'POST',
+        `/api/e2ee/projects/${plain.projectId}/migration`,
+        {
+          body: {
+            direction: 'encrypt',
+            deviceId: 'owner_laptop',
+            expectedAttempt
+          }
+        }
+      );
+      expect(response.status, JSON.stringify(expectedAttempt)).toBe(400);
+      expect(await codeOf(response)).toBe('E2EE_REQUEST_INVALID');
+    }
     expect(migrationRow(srv, plain.projectId)).toBeUndefined();
   });
 });
@@ -1972,8 +2395,109 @@ describe('purging the plaintext', () => {
 
 // --- Quota ------------------------------------------------------------------------------
 
-describe('quota (decision M10)', () => {
-  it('counts staged ciphertext toward nothing until the cutover', async () => {
+/** Sets the owner's one storage allowance (both columns, migration 0049). */
+function setLimit(srv: Server, bytes: number) {
+  srv.db
+    .prepare(
+      'UPDATE users SET artifact_limit_bytes = ?1, project_storage_limit_bytes = ?1 WHERE id = ?2'
+    )
+    .run(bytes, OWNER);
+}
+
+/** Everything the owner stores, as migration 0049's triggers measure it. */
+function storedNow(srv: Server): number {
+  return (
+    srv.db
+      .prepare(
+        `SELECT COALESCE((SELECT bytes FROM account_project_storage
+                          WHERE user_id = ?1), 0)
+              + COALESCE((SELECT finalized_bytes + reserved_bytes
+                          FROM artifact_account_usage
+                          WHERE owner_user_id = ?1), 0) AS bytes`
+      )
+      .get(OWNER) as { bytes: number }
+  ).bytes;
+}
+
+/**
+ * What an encrypt cutover adds to {@link storedNow} once the purge has run:
+ * the retained envelopes and the blobs, less the plaintext they replace.
+ */
+function encryptGrowth(srv: Server, projectId: string): number {
+  return (
+    srv.db
+      .prepare(
+        `SELECT
+           (SELECT COALESCE(SUM(envelope_bytes), 0) FROM e2ee_project_versions
+            WHERE project_id = ?1
+              AND (envelope_key IS NOT NULL OR envelope_inline IS NOT NULL))
+         + (SELECT COALESCE(SUM(ciphertext_bytes), 0) FROM e2ee_content_blobs
+            WHERE project_id = ?1)
+         - (SELECT document_bytes * (document_object_id IS NULL) FROM projects
+            WHERE id = ?1)
+         - (SELECT COALESCE(SUM(document_bytes), 0) FROM revisions
+            WHERE project_id = ?1 AND document_object_id IS NULL)
+         - (SELECT COALESCE(SUM(stored_bytes), 0)
+            FROM project_document_objects WHERE project_id = ?1)
+         - (SELECT COALESCE(SUM(stored_bytes), 0)
+            FROM project_storage_assets WHERE project_id = ?1)
+         - (SELECT COALESCE(SUM(bytes), 0) FROM artifacts WHERE project_id = ?1)
+         - (SELECT COALESCE(SUM(reserved_bytes), 0) FROM upload_sessions
+            WHERE project_id = ?1 AND e2ee_blob_kind IS NULL)
+           AS bytes`
+      )
+      .get(projectId) as { bytes: number }
+  ).bytes;
+}
+
+/** {@link storedNow} plus what the owner's live stagings would add. */
+function projectedNow(srv: Server): number {
+  return (
+    storedNow(srv) +
+    (
+      srv.db
+        .prepare(
+          'SELECT COALESCE(SUM(bytes), 0) AS bytes FROM migration_staging_growth WHERE user_id = ?'
+        )
+        .get(OWNER) as { bytes: number }
+    ).bytes
+  );
+}
+
+/**
+ * Fills the account with another project's file: to exactly its allowance
+ * of counted storage, or to `projectedRoom` short of it in projected terms.
+ * Returns the allowance (the tier's, which every account write refreshes).
+ */
+async function fillAccount(
+  srv: Server,
+  { projectedRoom }: { projectedRoom?: number } = {}
+): Promise<number> {
+  const filler = await plaintextProject(srv, 'Filler');
+  const limit = (
+    srv.db
+      .prepare(
+        'SELECT project_storage_limit_bytes AS bytes FROM users WHERE id = ?'
+      )
+      .get(OWNER) as { bytes: number }
+  ).bytes;
+  const bytes =
+    projectedRoom === undefined
+      ? limit - storedNow(srv)
+      : limit - projectedRoom - projectedNow(srv);
+  srv.db
+    .prepare(
+      `INSERT INTO artifacts (id, project_id, kind, name, object_key,
+         content_type, metadata_json, created_at, bytes)
+       VALUES ('artifact_filler', ?, 'step-import', 'filler.step',
+               'filler-key', 'model/step', '{}', 'now', ?)`
+    )
+    .run(filler.projectId, bytes);
+  return limit;
+}
+
+describe('quota (decision M10, one allowance)', () => {
+  it('counts staged ciphertext toward nothing until the cutover, which refuses to grow the account past its allowance', async () => {
     const srv = server();
     const plain = await namedSave(srv, await plaintextProject(srv), 'Named');
     await plaintextUpload(srv, plain.projectId, 'Plain artifact');
@@ -1993,48 +2517,15 @@ describe('quota (decision M10)', () => {
         .artifactBytes;
     };
     const plaintextArtifacts = usage();
-    const documents = (
-      srv.db
-        .prepare(
-          'SELECT COALESCE(SUM(stored_bytes), 0) AS bytes FROM project_document_objects'
-        )
-        .get() as { bytes: number }
-    ).bytes;
     const s = await startStaging(srv, plain.projectId);
-    // No project storage left beyond the plaintext: had staged versions
-    // counted, none would fit.
-    srv.db
-      .prepare('UPDATE users SET project_storage_limit_bytes = ? WHERE id = ?')
-      .run(documents + 100, OWNER);
-    const head = await stage(s, plain);
-    const first = await s.d.blobs.archive(plain.projectId, noiseInput(1));
-    const blobBytes = (
-      srv.db
-        .prepare(
-          'SELECT ciphertext_bytes AS bytes FROM e2ee_content_blobs WHERE blob_id = ?'
-        )
-        .get(first) as { bytes: number }
-    ).bytes;
-    expect(usage()).toBe(plaintextArtifacts);
-    // Fill the artifact storage to leave room for one more blob only, had
-    // the first counted: it does not, so the second fits too.
-    srv.db
-      .prepare(
-        `INSERT INTO artifacts (id, project_id, kind, name, object_key,
-           content_type, metadata_json, created_at, bytes)
-         VALUES ('artifact_big', ?, 'step-import', 'big.step', 'big',
-                 'model/step', '{}', 'now', ?)`
-      )
-      .run(
-        (await plaintextProject(srv, 'Filler')).projectId,
-        MAX_ACCOUNT_ARTIFACT_BYTES -
-          plaintextArtifacts -
-          Math.floor(blobBytes * 1.5)
-      );
-    const filled = usage();
+    const before = storedNow(srv);
+    // Staged versions and blobs count toward nothing counted.
+    await stage(s, plain);
+    await s.d.blobs.archive(plain.projectId, noiseInput(1));
     await s.d.blobs.archive(plain.projectId, noiseInput(2));
-    expect(usage()).toBe(filled);
-    expect(await reported()).toBe(filled);
+    expect(usage()).toBe(plaintextArtifacts);
+    expect(storedNow(srv)).toBe(before);
+    expect(await reported()).toBe(plaintextArtifacts);
     const stagedBlobBytes = (
       srv.db
         .prepare(
@@ -2042,31 +2533,130 @@ describe('quota (decision M10)', () => {
         )
         .get(plain.projectId) as { bytes: number }
     ).bytes;
-    expect(stagedBlobBytes).toBeGreaterThan(Math.floor(blobBytes * 1.5));
+    // The noise blobs replace no plaintext: encrypting grows the account.
+    const growth = encryptGrowth(srv, plain.projectId);
+    expect(growth).toBeGreaterThan(0);
 
-    // From the cutover on they count (the account may sit over its limits
-    // until the purge removes the plaintext): the next save is refused.
-    await s.api.cutover(plain.projectId, s.lease);
-    // (Every account write refreshes the limits from the tier; set it again.)
-    srv.db
-      .prepare('UPDATE users SET project_storage_limit_bytes = ? WHERE id = ?')
-      .run(documents + 100, OWNER);
-    expect(usage()).toBe(filled + stagedBlobBytes);
-    expect(await reported()).toBe(filled + stagedBlobBytes);
-    expect(
-      await errorOf(
-        s.d.store.saveProjectDocument({
-          projectId: plain.projectId,
-          expectedVersion: head.version,
-          document: { ...head, version: head.version + 1 }
-        })
-      )
-    ).toMatchObject({ status: 413, code: 'PROJECT_STORAGE_QUOTA' });
-    await purgeAll(s.api, plain.projectId);
-    expect(usage()).toBe(filled - plaintextArtifacts + stagedBlobBytes);
-    expect(await reported()).toBe(
-      filled - plaintextArtifacts + stagedBlobBytes
+    // One byte short of what the cutover would leave after its purge: it
+    // is refused, and nothing changes.
+    setLimit(srv, before + growth - 1);
+    const refused = await errorOf(s.api.cutover(plain.projectId, s.lease));
+    expect(refused.status).toBe(413);
+    expect(refused.code).toMatch(
+      /^(ARTIFACT_QUOTA_EXCEEDED|PROJECT_STORAGE_QUOTA)$/
     );
+    expect(formatOf(srv, plain.projectId).storage_format).toBe(1);
+    expect(migrationRow(srv, plain.projectId)).toMatchObject({
+      state: 'staging'
+    });
+    expect(usage()).toBe(plaintextArtifacts);
+    expect(storedNow(srv)).toBe(before);
+
+    // With exactly that room it cuts over; once the purge removes the
+    // plaintext, the account holds exactly its allowance.
+    setLimit(srv, before + growth);
+    await s.api.cutover(plain.projectId, s.lease);
+    expect(formatOf(srv, plain.projectId).storage_format).toBe(2);
+    expect(usage()).toBe(plaintextArtifacts + stagedBlobBytes);
+    await purgeAll(s.api, plain.projectId);
+    expect(usage()).toBe(stagedBlobBytes);
+    expect(await reported()).toBe(stagedBlobBytes);
+    expect(storedNow(srv)).toBe(before + growth);
+  });
+
+  it('stages and cuts over an encryption that shrinks a full account, even over its allowance', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    // A large plaintext file the encrypted project does not carry over.
+    srv.db
+      .prepare(
+        `INSERT INTO artifacts (id, project_id, kind, name, object_key,
+           content_type, metadata_json, created_at, bytes)
+         VALUES ('artifact_large', ?, 'step-import', 'large.step',
+                 'large-key', 'model/step', '{}', 'now', 200000)`
+      )
+      .run(plain.projectId);
+    const s = await startStaging(srv, plain.projectId);
+    // Full: the purge's credit leaves the staging its room.
+    const limit = await fillAccount(srv);
+    expect(storedNow(srv)).toBe(limit);
+    await stage(s, plain);
+    expect(encryptGrowth(srv, plain.projectId)).toBeLessThan(0);
+    // Far over its allowance: only growth is refused.
+    setLimit(srv, 1);
+    await s.api.cutover(plain.projectId, s.lease);
+    expect(formatOf(srv, plain.projectId).storage_format).toBe(2);
+    expect(migrationRow(srv, plain.projectId)).toMatchObject({
+      state: 'cutover'
+    });
+  });
+
+  it('credits the plaintext upload reservations the purge discards', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    // A 1,000,000-byte plaintext upload, reserved and never finalized.
+    srv.db
+      .prepare(
+        `INSERT INTO upload_sessions
+           (id, artifact_id, project_id, object_key, file_name, content_type,
+            kind, metadata_json, expires_at, owner_user_id, reserved_bytes,
+            reservation_state, upload_protocol_version)
+         VALUES ('session_big', 'artifact_session_big', ?, 'uploads/big',
+                 'big.step', 'model/step', 'snapshot', '{}',
+                 '2099-01-01T00:00:00.000Z', ?, 0, 'open', 1)`
+      )
+      .run(plain.projectId, OWNER);
+    srv.db
+      .prepare(
+        `UPDATE upload_sessions SET reservation_state = 'uploading',
+           multipart_upload_id = 'mp_big' WHERE id = 'session_big'`
+      )
+      .run();
+    srv.db
+      .prepare(
+        `INSERT INTO artifact_upload_parts
+           (upload_session_id, part_number, bytes, reservation_token)
+         VALUES ('session_big', 1, 1000000, 'token')`
+      )
+      .run();
+    const s = await startStaging(srv, plain.projectId);
+    await stage(s, plain);
+    // Usage equals the allowance, the reservation included.
+    const limit = await fillAccount(srv);
+    expect(storedNow(srv)).toBe(limit);
+    // The cutover's purge discards the reservation: encrypting shrinks the
+    // account by nearly all of it, so the cutover is accepted.
+    expect(encryptGrowth(srv, plain.projectId)).toBeLessThan(-900000);
+    await s.api.cutover(plain.projectId, s.lease);
+    expect(formatOf(srv, plain.projectId).storage_format).toBe(2);
+  });
+
+  it('bounds what an encrypt staging may stage, however many uploads it makes', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const s = await startStaging(srv, plain.projectId);
+    await stage(s, plain);
+    // Room for about three 6,000-byte blobs in projected storage.
+    const limit = await fillAccount(srv, { projectedRoom: 20000 });
+    const counted = storedNow(srv);
+    let accepted = 0;
+    let refusal: ApiError | undefined;
+    for (let seed = 1; seed <= 12 && !refusal; seed++) {
+      try {
+        await s.d.blobs.archive(plain.projectId, noiseInput(seed));
+        accepted += 1;
+      } catch (error) {
+        refusal = error as ApiError;
+      }
+    }
+    // Each finalize released its reservation, yet the staged blobs stay
+    // bounded: the projected storage never passes the allowance.
+    expect(accepted).toBeGreaterThan(0);
+    expect(accepted).toBeLessThan(4);
+    expect(refusal).toBeInstanceOf(ApiError);
+    expect(refusal!.status).toBe(413);
+    expect(projectedNow(srv)).toBeLessThanOrEqual(limit);
+    expect(storedNow(srv)).toBe(counted);
   });
 });
 

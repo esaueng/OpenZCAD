@@ -4,6 +4,12 @@ import {
   persistStorageForInstalledApp
 } from './lib/appleTouch';
 import { registerOfflineShell } from './lib/offlineShell';
+import { spaceMouse } from './lib/spaceMouse';
+import {
+  dispatchEmulatedKey,
+  spaceMouseAction,
+  type SpaceMouseAction
+} from './lib/spaceMouseActions';
 import {
   localHistoryAppend,
   retainLocalHistoryAppend,
@@ -36,6 +42,7 @@ import {
 import type { RefusalCapture } from './lib/refusalHarvest';
 import { useRefusalHarvest } from './hooks/useRefusalHarvest';
 import {
+  ownEntry,
   PROJECT_MIGRATING_CODE,
   type DrawingAnnotation,
   type DrawingSheetId,
@@ -88,7 +95,9 @@ import { LatestTask } from './lib/latestTask';
 import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import {
-  activeIsolatedBodyId,
+  bodyIsolationState,
+  persistedHiddenBodyIds,
+  releaseIsolationToParameter,
   toggleBodyIsolation,
   type BodyIsolation
 } from './lib/bodyIsolation';
@@ -175,7 +184,7 @@ import {
   ScanEye,
   Settings as SettingsIcon,
   Scissors,
-  Slice,
+  SquareSplitVertical,
   SlidersHorizontal,
   ListOrdered,
   Spline,
@@ -223,6 +232,7 @@ import {
   listParameters,
   suggestParameterQuantities,
   normalizeDocument,
+  reservedDocumentIdentifierError,
   numberedBodyName,
   numberedFeatureName,
   extrudeToFaceUnresolved,
@@ -270,6 +280,7 @@ import type {
   ProjectOrganization,
   ProjectStatus,
   ProjectSummary,
+  SaveProjectDocumentRequest,
   SketchConstraintData,
   SketchId,
   SketchNode,
@@ -366,9 +377,12 @@ import {
 import { textPlacementBudgetError } from './lib/sketch/textPlacement';
 import { prefersSavingData } from './lib/saveData';
 import { useSurfaceReady } from './hooks/useSurfaceReady';
+import { useOnline } from './hooks/useOnline';
 import {
   lazyWithStaleChunkNotice,
+  isOffline,
   loadWhenOnline,
+  OFFLINE_CHUNK_MESSAGE,
   preloadableLazy,
   onStaleChunk,
   watchPreloadErrors,
@@ -398,7 +412,10 @@ import {
 } from './lib/e2ee/encryptedInvitationLink';
 import { requestContactVerification } from './lib/e2ee/contactFocus';
 import { watchBuildVersion } from './lib/buildVersionWatch';
-import { commandOutcomeMessage } from './lib/commandOutcome';
+import {
+  commandOutcomeMessage,
+  historyStepMessage
+} from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
 import { cancelCommandChipEntry } from './lib/inPlace/chipCancel';
@@ -427,6 +444,8 @@ import {
   encryptsNewProjects,
   isEncryptedProject,
   isProjectDocumentUnavailableError,
+  isProjectStorageCleanupPendingError,
+  retryWhileStorageCleanupPending,
   isProjectFormatUnsupportedError
 } from './lib/api';
 import type { ProjectListingProgress } from './lib/api';
@@ -450,6 +469,7 @@ import {
   sourceUploadMessage
 } from './lib/accountImportSources';
 import type { ArchiveArtifactInput } from './lib/archiveArtifact';
+import { cloudArchivable } from './lib/cloudArchivable';
 import {
   archiveLocalOnlyImportSources,
   createInFlightImportChecksums,
@@ -467,13 +487,13 @@ import {
   sameLocalProjectContent,
   type LocalProjectAutosaveOptions
 } from './lib/localProjectAutosave';
+// Shapr3D migration loads on the gesture that picks a .shapr + STEP pair.
+import type { ShaprPairInspection } from './lib/shaprImportWorkerClient';
+import type { shaprMigrationDraft as ShaprMigrationDraftFn } from './lib/shaprMigration';
 import {
-  inspectShaprPair,
-  type ShaprPairInspection
-} from './lib/shaprImportWorkerClient';
-import { rebuildImportInDisposableWorker } from './lib/importRebuildWorkerClient';
-import { shaprMigrationDraft } from './lib/shaprMigration';
-import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
+  autosaveReportedSaveState,
+  presentedWorkspaceSaveState
+} from './lib/workspaceSaveStatePresentation';
 import { showsWorkspaceEmptyState } from './lib/workspaceEmptyState';
 import {
   CheckpointSaveError,
@@ -584,6 +604,9 @@ import { recordActivity } from './lib/activityLog';
 import { WORKSPACE_MODE_OPTIONS } from './lib/topBarPresentation';
 import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { PatternProgressSlot } from './components/PatternProgressSlot';
+import { rebuildInDisposableWorker } from './lib/disposableRebuild';
+import { MotionStudyTimelineSlot } from './components/assembly/MotionStudyTimelineSlot';
 import { createLazyPanel } from './components/LazyPanel';
 import type { ModelPanel as ModelPanelComponent } from './components/modelPanels/ModelPanel';
 import type * as ModelPanelModule from './components/modelPanels/ModelPanel';
@@ -627,6 +650,7 @@ import {
 } from './components/WorkspaceLoading';
 import type { AuthConfigStatus } from './components/SettingsPage';
 import {
+  copyBaseName,
   DEMO_DEFINITIONS,
   VISUAL_SELECTION_ACCEPTANCE_DEMO
 } from './lib/demoDefinitions';
@@ -746,7 +770,9 @@ import {
   isRemovableDetail,
   selectedFeatureFaces
 } from './lib/selectionFeature';
+import { heldFaceSetBody, toggleFaceInSet } from './lib/faceSetSelection';
 import { cylinderResizeFold } from './lib/interaction/cylinderResizeFold';
+import { facePickCylinder, facePickKey } from './lib/inPlace/cylinderSide';
 import {
   cylinderRadialFrame,
   type CylinderRadiusEdit,
@@ -871,7 +897,11 @@ import {
   type SelectionCalloutOperation,
   type SelectionCalloutVerbId
 } from './lib/selectionCallout';
-import { ghostBodiesFor, historyFeatureFocus } from './lib/historyFocus';
+import {
+  ghostBodiesFor,
+  historyFeatureFocus,
+  isCutFace
+} from './lib/historyFocus';
 import { useLocalAutoFrame } from './hooks/useLocalAutoFrame';
 import type { AutoFrameRequest } from './lib/autoFrame';
 import { useOffsetFaceHandle } from './hooks/useOffsetFaceHandle';
@@ -901,6 +931,10 @@ import {
 import { useLineageDemand } from './lib/lineageDemand';
 import { persistsKernelSession } from './lib/kernelSessionPolicy';
 import {
+  folderClickSelection,
+  folderCommandPicks
+} from './lib/objectFolderView';
+import {
   objectPolylines,
   displayObjectsWithTextBudget
 } from './lib/objectPolyline';
@@ -910,8 +944,15 @@ import { useBuildToolNavigation } from './hooks/useBuildToolNavigation';
 import { useResponsiveFraming } from './hooks/useResponsiveFraming';
 import { parameterDisplayName } from './lib/parameterDisplayName';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
-import { DISPLAY_MODE_LABELS } from './lib/displayMode';
+import { DISPLAY_MODE_LABELS, DISPLAY_MODE_ORDER } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
+import {
+  FACE_VERB_PREFIX,
+  LOOK_AT_FACE_ITEM_ID,
+  selectOtherMenuItem,
+  withFaceVerbs,
+  type ViewportMenuState
+} from './lib/viewportMenu';
 import type {
   ResolveExtrudeOptions,
   ResolvedExtrude
@@ -959,7 +1000,8 @@ import type {
   BodyAppearancePreview,
   FaceResizeCommit,
   OffsetCommitOutcome,
-  NormalToFaceRequest
+  NormalToFaceRequest,
+  ViewportContextMenuOptions
 } from './components/ModelViewer';
 import type { OrientationLink } from './components/viewer/orientationCube';
 import type {
@@ -1070,6 +1112,7 @@ function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
  * BEFORE it (unsupported extension, a lone `.shapr`) stay synchronous.
  */
 const stepImportRun = () => import('./lib/stepImportRun');
+const projectInsertRun = () => import('./lib/projectInsertRun');
 
 /**
  * Extrude classification runs only once a region extrude is previewed or
@@ -1093,6 +1136,7 @@ const preflightCadPatch: typeof AiPatchPreflight.preflightCadPatch = (
  * read only for its Settings export, neither of which waits on the result.
  */
 const interactionDiagnostics = () => import('./lib/interactionDiagnostics');
+const closedOpenings = () => import('./lib/closedOpenings');
 /** A refused rebuild saved as a corpus fixture, on its Save reproduction. */
 const refusalReproduction = () => import('./lib/refusalReproduction');
 
@@ -1614,9 +1658,15 @@ import {
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   projectNeedsUpdate,
   resolveShelfThumbnail,
-  cachedThumbnailSource
+  cachedThumbnailSource,
+  measuredDocumentBytes,
+  summarizeLocalDocument,
+  withSavedVersion
 } from './lib/projectShelf';
-import { preparePartThumbnails } from './components/PartThumbnail';
+import {
+  preparePartThumbnails,
+  rememberCapturedThumbnail
+} from './components/PartThumbnail';
 import { folderStorageKey, readLibraryFolders } from './lib/libraryFolders';
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import {
@@ -1641,6 +1691,7 @@ import {
   isInPlaceTool,
   keypadText,
   profileRegionLoops,
+  isInPlacePatternTool,
   requestNewAxis,
   resolveNewAxis,
   valueInRange,
@@ -1709,7 +1760,6 @@ import {
   type ValidatedFeatureOutcome,
   type ValidatedFeatureRunOptions
 } from './hooks/useValidatedFeatureCommit';
-import { PatternProgress } from './components/PatternProgress';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from './hooks/useDelayedUnmount';
 import {
   affectedFeatureTargets,
@@ -1783,7 +1833,7 @@ import {
   type ToastModel
 } from './lib/toasts';
 import { PreviewRefusalError, splitRefusal } from './lib/featureValidation';
-import { keptOffsetValue } from './lib/offsetChip';
+import { keptOffsetValue, offsetFaceCommitMessage } from './lib/offsetChip';
 import { useCollaboration } from './lib/useCollaboration';
 import type * as AiPatchPreflight from './lib/aiPatchPreflight';
 import type {
@@ -1830,6 +1880,7 @@ import {
   shouldAdoptAccountSettings
 } from './lib/appSettings';
 import { useCommandFold } from './hooks/useCommandFold';
+import { sketchExitEscape } from './lib/interaction/sketchExitConfirm';
 import {
   sketchObjectLabels,
   sketchPointNamer
@@ -1906,7 +1957,6 @@ function preloadWorkspaceMode(mode: WorkspaceMode) {
 }
 import { AssemblyPanelPending } from './components/assembly/AssemblyPanelPending';
 import { meshBoundsLookup } from './lib/assembly/motionSetup';
-import { MotionStudyTimeline } from './components/assembly/MotionStudyTimeline';
 // The View-mode playback bar draws only for an assembly with something to
 // play, so a part-only session never downloads it. Its slot keeps a failure
 // local and retries on the next project.
@@ -2040,11 +2090,6 @@ const DISABLED_COLLABORATION_ROLLOUT: ProjectCollaborationCapabilitiesResponse =
   };
 const projectSharingClient = createProjectSharingClient();
 const localUserId = toUserId('user_local_browser');
-const DISPLAY_MODE_ORDER: DisplayMode[] = [
-  'shaded-edges',
-  'shaded',
-  'wireframe'
-];
 
 interface OffsetEditPlan {
   command: AnyCommand;
@@ -2137,21 +2182,6 @@ function desktopAuthorizationAttemptFromLocation(): string | null {
     'desktopAuth'
   );
   return attempt && /^[A-Za-z0-9-]{16,64}$/.test(attempt) ? attempt : null;
-}
-
-/** Start-screen summary of a document held on this device. */
-function summarizeLocalDocument(
-  document: ProjectDocument,
-  organization?: ProjectOrganization
-): ProjectSummary {
-  return {
-    projectId: document.projectId,
-    name: document.name,
-    lastRevisionId: document.revisions.at(-1)?.revisionId,
-    updatedAt: document.derived.updatedAt,
-    revisionCount: document.checkpoints.length,
-    ...(organization ? { organization } : {})
-  };
 }
 
 interface HydrateOptions {
@@ -2863,11 +2893,6 @@ export function App() {
    * features are added but never appears over someone's existing model.
    */
   const [tourProjectId, setTourProjectId] = useState<string | null>(null);
-  /**
-   * The step that project's tour has reached. The card unmounts while a
-   * command or a sketch runs, so the step is kept here, by project.
-   */
-  const tourStepRef = useRef<{ projectId: string; index: number } | null>(null);
   /** The export dialog has been opened this session — the tour's last signal. */
   const [tourExportSeen, setTourExportSeen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
@@ -3099,6 +3124,10 @@ export function App() {
     selectedEdges.length === 0
       ? boxFaces.faces
       : null;
+  /** The faces a Shift pick adds to: a swept or Shift-built set, or one face. */
+  const heldFaces =
+    boxSelectedFaces ??
+    (selectedTopology?.kind === 'face' ? [selectedTopology] : null);
   const [selectedSketchProfileId, setSelectedSketchProfileId] =
     useState<SketchId | null>(null);
   const [selectedProfiles, setSelectedProfiles] = useState<RegionPickData[]>(
@@ -3154,8 +3183,12 @@ export function App() {
   const pendingBlendRearmRef = useRef<{
     bodyId: BodyId;
     before: BodyTopology['faces'] | undefined;
+    /** The new Fillet, so a band an earlier one owns is never re-armed. */
+    featureId: string | undefined;
   } | null>(null);
   const [sketchConstruction, setSketchConstruction] = useState(false);
+  /** When a first Escape armed leaving the sketch (I43), or null. */
+  const sketchExitArmedAtRef = useRef<number | null>(null);
   /**
    * Offset for the next canonical-plane sketch, as typed. Kept as text so a
    * half-entered value ("-", "1.") survives a keystroke; the ghost planes and
@@ -3209,6 +3242,8 @@ export function App() {
    * status is set, not when the toast is raised.
    */
   const lastStatusAtRef = useRef(statusEntry.at);
+  /** The status stamp of a commit's outcome, which offers Undo while shown. */
+  const [undoableStatusAt, setUndoableStatusAt] = useState<number | null>(null);
   /**
    * Informational messages expire (lib/statusLifetime); `sticky` is for text
    * that describes a mode the user is still in, such as sketching on a plane.
@@ -3297,6 +3332,14 @@ export function App() {
   useEffect(() => {
     onStartScreenRef.current = doc === null;
   }, [doc]);
+  /**
+   * CAD files dropped on the start screen, waiting for the project made for
+   * them; `projectId` is that project's once it is on screen.
+   */
+  const pendingStartImportRef = useRef<{
+    files: File[];
+    projectId: string | null;
+  } | null>(null);
   useEffect(() => {
     let stopped = false;
     const watch = watchBuildVersion({
@@ -3312,7 +3355,35 @@ export function App() {
     });
     let interruptionRecorded = false;
     let libraryAnswered = false;
+    let offlineAnswered = false;
+    // 13 November review I5: a download that failed offline used to raise
+    // "Load failed · Reload", and it stayed after the connection returned.
+    // Offline, a reload could lose the app shell itself, so none is offered;
+    // the lazy surfaces retry their own download on reconnect, and anything
+    // that fails again once online reports through the ordinary path below.
+    // Reconnecting only asks the version watch whether an update explains it.
+    let failedOffline = false;
+    const onOnline = () => {
+      if (!failedOffline) return;
+      failedOffline = false;
+      offlineAnswered = false;
+      watch.checkNow();
+    };
+    window.addEventListener('online', onOnline);
     const stopStale = onStaleChunk(() => {
+      if (isOffline()) {
+        failedOffline = true;
+        if (offlineAnswered) return;
+        offlineAnswered = true;
+        if (onStartScreenRef.current) announce(OFFLINE_CHUNK_MESSAGE);
+        else
+          recordActivity({
+            level: 'warning',
+            source: 'notice',
+            message: OFFLINE_CHUNK_MESSAGE
+          });
+        return;
+      }
       // A failed download alone also occurs offline; only the version watch
       // can prove that an update exists, so ask it rather than assume.
       setDownloadInterrupted(true);
@@ -3335,14 +3406,18 @@ export function App() {
     const stopPreload = watchPreloadErrors();
     return () => {
       stopped = true;
+      window.removeEventListener('online', onOnline);
       watch();
       stopStale();
       stopPreload();
     };
   }, [announce]);
+  // Never suggest a reload while offline: it could lose the app shell.
+  const browserOnline = useOnline();
+  const loadFailureShown = downloadInterrupted && browserOnline;
   const reloadPrompt: ReloadPrompt | null = newBuildAvailable
     ? 'update'
-    : downloadInterrupted
+    : loadFailureShown
       ? 'interrupted'
       : null;
   // Load what a click opens while the page is idle, so its first open is not
@@ -3477,6 +3552,15 @@ export function App() {
       featureWarnings: derived.featureWarnings ?? []
     });
   }
+  // Isolation is session-local and never saved: while it is on, the view
+  // saves the user's own hidden set from before it (QA 2026-11-14 #17).
+  const [bodyIsolation, setBodyIsolation] = useState<
+    (BodyIsolation & { projectId: string; bodyName: string }) | null
+  >(null);
+  const currentBodyIsolation =
+    bodyIsolation && bodyIsolation.projectId === doc?.projectId
+      ? bodyIsolation
+      : null;
   const {
     projection,
     setProjection,
@@ -3498,7 +3582,9 @@ export function App() {
     onCameraSettled: persistCameraPose,
     persistSection: persistSectionView,
     forget: forgetProjectView
-  } = useProjectView(doc?.projectId ?? null);
+  } = useProjectView(doc?.projectId ?? null, (onScreen) =>
+    persistedHiddenBodyIds(onScreen, currentBodyIsolation)
+  );
   // Read at callback time: the section slider's release handler runs after
   // the change that moved it.
   const viewerSettingsRef = useRef(viewerSettings);
@@ -3529,7 +3615,7 @@ export function App() {
     () =>
       doc
         ? doc.bodyOrder.filter((id) => {
-            const body = doc.derived.bodyRepresentations[id];
+            const body = ownEntry(doc.derived.bodyRepresentations, id);
             return (
               body !== undefined && !body.consumed && !hiddenBodyIds.has(id)
             );
@@ -3537,10 +3623,6 @@ export function App() {
         : [],
     [doc, hiddenBodyIds]
   );
-  // The view's hidden set persists; the prior isolation snapshot is session-local.
-  const [bodyIsolation, setBodyIsolation] = useState<
-    (BodyIsolation & { projectId: string }) | null
-  >(null);
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
   // D06: an assistant proposal's annotations, drawn on its sheet in Draw.
   const [drawingPreview, setDrawingPreview] = useState<{
@@ -3835,6 +3917,60 @@ export function App() {
     []
   );
   const [fitSignal, setFitSignal] = useState(0);
+  // A 3D mouse this browser already allows reopens with no prompt. Its keys
+  // run the same commands as the keyboard (spaceMouseActions.ts); the roll
+  // key turns the camera, so the viewer answers that one.
+  const spaceMouseActionRef = useRef<(action: SpaceMouseAction) => void>(
+    () => undefined
+  );
+  spaceMouseActionRef.current = (action) => {
+    switch (action.kind) {
+      case 'menu':
+        openSettingsAt('controls');
+        return;
+      case 'fit':
+        setFitSignal((value) => value + 1);
+        return;
+      case 'view':
+        requestView(action.view);
+        return;
+      case 'normal-to-face':
+        requestNormalToSelectedFace();
+        return;
+      case 'projection':
+        toggleProjection();
+        return;
+      case 'display':
+        cycleDisplayMode();
+        return;
+      case 'rotation-lock':
+        setStatus(
+          spaceMouse.isRotationLocked
+            ? '3D mouse rotation locked: pan and zoom only.'
+            : '3D mouse rotation unlocked.',
+          { unlogged: true }
+        );
+        return;
+      case 'key':
+        dispatchEmulatedKey(action.key, action.pressed);
+        return;
+      case 'roll':
+        return;
+    }
+  };
+  // The 3D mouse reads the cap with the account's own settings, applied at
+  // once to a cap that is held.
+  const spaceMouseSettings = appSettings.viewport.spaceMouse;
+  useEffect(() => {
+    spaceMouse.setPreferences(spaceMouseSettings);
+  }, [spaceMouseSettings]);
+  useEffect(() => {
+    void spaceMouse.restore();
+    return spaceMouse.subscribeButtons((event) => {
+      const action = spaceMouseAction(event);
+      if (action) spaceMouseActionRef.current(action);
+    });
+  }, []);
   const [presentedGeometry, setPresentedGeometry] = useState<{
     projectId: string;
     generation: number;
@@ -3894,7 +4030,9 @@ export function App() {
     }
   );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [contextMenu, setContextMenu] = useState<ViewportMenuState | null>(
+    null
+  );
   const contextMenuExit = useDelayedUnmount(contextMenu, OVERLAY_EXIT_MS);
   const orientationRef = useRef<OrientationLink | null>(null);
   /** Click point + normal of the latest topology pick (drag-handle anchor). */
@@ -4344,8 +4482,9 @@ export function App() {
     warnings: attributedFeatureWarnings(),
     // A user edit's check may propose carrying a later hash-only pick; the
     // commit stores it in the edit's own revision (`withCarriedSelections`).
-    rebuild: (document, analysis, lineageDemand) =>
+    rebuild: (document, analysis, lineageDemand, options) =>
       geometry.syncOnce(document, analysis, lineageDemand, {
+        ...options,
         proposeCarry: true
       }),
     track: trackKernelRefusal
@@ -4454,6 +4593,21 @@ export function App() {
     cloudProjectIds
   };
   const thumbnailAccountUserId = session?.userId;
+  // Every card the workspace captures goes straight to the shelf's tile
+  // cache, so the shelf shown on leaving draws it without waiting for the
+  // refreshed listing.
+  useEffect(
+    () =>
+      sharedThumbnailCapture.subscribe((captured) =>
+        rememberCapturedThumbnail({
+          projectId: captured.projectId,
+          source: captured.source,
+          accountId: thumbnailAccountUserId ?? null,
+          protected: isEncryptedProject(captured.projectId)
+        })
+      ),
+    [thumbnailAccountUserId]
+  );
   const loadProperties = useCallback(
     async (project: ProjectSummary) => {
       const { loadProjectProperties } = await import('./lib/projectProperties');
@@ -4540,6 +4694,7 @@ export function App() {
   const [syncRun, setSyncRun] = useState<SyncEntry[] | null>(null);
   const viewNonceRef = useRef(0);
   const projectImportInputRef = useRef<HTMLInputElement | null>(null);
+  const projectInsertInputRef = useRef<HTMLInputElement | null>(null);
   const projectTransferRef = useRef(false);
   const [projectTransferBusy, setProjectTransferBusy] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -5388,7 +5543,8 @@ export function App() {
   const validatedFeature = useValidatedFeatureCommit({
     manager: () => managerRef.current,
     derive: (document) => syncCandidate(document),
-    deriveCancellable: rebuildImportInDisposableWorker,
+    deriveCancellable: (document, signal) =>
+      rebuildInDisposableWorker(document, signal),
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
       executeTransaction(label, commands, derived ?? undefined),
@@ -5456,7 +5612,7 @@ export function App() {
         const valid =
           preview &&
           bodyId &&
-          preview.derived.bodyRepresentations[bodyId] &&
+          ownEntry(preview.derived.bodyRepresentations, bodyId) &&
           !warning;
         setPreviewDoc(
           valid ? { ...preview.document, derived: preview.derived } : null
@@ -6110,6 +6266,24 @@ export function App() {
   // mode was entered or the project was opened in a second tab.
   const editDisabledReasonRef = useRef(editDisabledReason);
   editDisabledReasonRef.current = editDisabledReason;
+  // Files dropped on the start screen import into the project made for them
+  // once it is on screen and editable: an account project can wait a moment
+  // for its live session, and importing before then would only be refused.
+  useEffect(() => {
+    const pending = pendingStartImportRef.current;
+    if (!pending || !doc) return;
+    if (pending.projectId === null) {
+      pending.projectId = doc.projectId;
+    } else if (pending.projectId !== doc.projectId) {
+      pendingStartImportRef.current = null;
+      return;
+    }
+    if (editDisabledReason) return;
+    pendingStartImportRef.current = null;
+    void handleImportFiles(pending.files);
+    // handleImportFiles is this render's, which holds the new document.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.projectId, editDisabledReason]);
   const parameterEditDisabledReasonRef = useRef(parameterEditDisabledReason);
   parameterEditDisabledReasonRef.current = parameterEditDisabledReason;
   const drawingEditDisabledReasonRef = useRef(drawingEditDisabledReason);
@@ -6118,6 +6292,27 @@ export function App() {
   assemblyEditDisabledReasonRef.current = assemblyEditDisabledReason;
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
+  // An import into a project that is still empty and still wears its
+  // suggested name names the project for the file once the import lands as
+  // its first content (lib/importProjectName, loaded with the first import:
+  // the main chunk is at its size budget).
+  const importNamingRef = useRef<
+    ((next: ProjectDocument) => string | null | undefined) | null
+  >(null);
+  useEffect(() => {
+    const name = doc ? importNamingRef.current?.(doc) : null;
+    if (name === undefined) return;
+    importNamingRef.current = null;
+    if (doc && name && projectRenameDisabledReasonRef.current === null) {
+      executeCommand(
+        commandFactories.renameNode({ nodeId: doc.rootNodeId, name }),
+        undefined,
+        'rename'
+      );
+    }
+    // executeCommand is this render's, which holds the changed document.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc]);
 
   /** "Cannot use Box: …": one stop, even after a reason that ends in "…". */
   function cannotSentence(action: string, reason: string): string {
@@ -6509,7 +6704,7 @@ export function App() {
     const controller = new CloudProjectAutosave({
       api,
       onStatus(status) {
-        setSaveState(status.state);
+        setSaveState(autosaveReportedSaveState(status.state, status.error));
         if (status.state === 'repair' && status.projectId) {
           accountDocumentUnavailableProjectIdRef.current = status.projectId;
           setCloudAvailable(false);
@@ -8005,25 +8200,57 @@ export function App() {
     () => partBodies.filter((body) => !hiddenBodyIds.has(body.bodyId)),
     [partBodies, hiddenBodyIds]
   );
-  const isolatedBodyId = useMemo(
+  const isolationState = useMemo(
     () =>
-      activeIsolatedBodyId(
+      bodyIsolationState(
         partBodies.map((body) => body.bodyId),
         hiddenBodyIds,
         localHiddenBodyIds,
-        bodyIsolation?.projectId === doc?.projectId ? bodyIsolation : null
+        currentBodyIsolation,
+        previewDoc !== null
       ),
     [
       partBodies,
       hiddenBodyIds,
       localHiddenBodyIds,
-      bodyIsolation,
-      doc?.projectId
+      currentBodyIsolation,
+      previewDoc
     ]
   );
-  // End the session permanently when its view changes. Merely hiding the
-  // indicator would let an old snapshot revive if the same set returns later.
-  if (bodyIsolation && isolatedBodyId === null) setBodyIsolation(null);
+  const isolatedBodyId =
+    isolationState.kind === 'active' ? isolationState.bodyId : null;
+  // A hidden set the user replaced, or another project, ends the session
+  // permanently: merely hiding the indicator would let an old snapshot revive
+  // if the same set returns later.
+  if (
+    bodyIsolation &&
+    (isolationState.kind === 'replaced' || isolationState.kind === 'none')
+  )
+    setBodyIsolation(null);
+  // The committed model took the isolated body away (deleted, consumed,
+  // undone, or switched off by a parameter). Before QA 2026-11-14 #17 the
+  // session ended silently and left every other body hidden, through a
+  // reload; it now puts back the bodies shown before isolating, and says so.
+  useEffect(() => {
+    if (isolationState.kind !== 'ended' || !currentBodyIsolation) return;
+    const { bodyName } = currentBodyIsolation;
+    setBodyIsolation(null);
+    setHiddenBodyIds(isolationState.hidden);
+    const restored = isolationState.hidden.size;
+    const notice = `Left isolation: ${bodyName} ${isolationState.reason === 'removed' ? 'is no longer in the model' : 'is now hidden'} · ${restored === 0 ? 'all bodies visible' : `${restored} previously hidden ${restored === 1 ? 'body stays' : 'bodies stay'} hidden`}.`;
+    // An Undo, Delete or boolean that ended it already reported its outcome,
+    // perhaps offering Undo; keep that and add the notice to it.
+    const offersUndo = undoableStatusAt === statusEntry.at;
+    setStatus(offersUndo ? `${statusEntry.text} ${notice}` : notice);
+    if (offersUndo) setUndoableStatusAt(lastStatusAtRef.current);
+  }, [
+    isolationState,
+    currentBodyIsolation,
+    setHiddenBodyIds,
+    setStatus,
+    statusEntry,
+    undoableStatusAt
+  ]);
   // Only whether a face drag is in progress matters to the bodies: keyed on
   // the whole interaction, every drag, keypad or selection event handed the
   // viewer a new bodies array and re-ran each of its bodies effects.
@@ -8117,7 +8344,7 @@ export function App() {
       if (!node) {
         return [];
       }
-      const representation = doc.derived.bodyRepresentations[bodyId];
+      const representation = ownEntry(doc.derived.bodyRepresentations, bodyId);
       return [
         { bodyId, name: node.name, consumed: representation?.consumed ?? false }
       ];
@@ -8151,7 +8378,7 @@ export function App() {
             : []
       );
     }
-    const node = doc.nodes[requestedFeatureNodeId];
+    const node = ownEntry(doc.nodes, requestedFeatureNodeId);
     return node?.kind === 'feature' ? node : null;
   }, [
     doc,
@@ -8428,7 +8655,7 @@ export function App() {
       };
     }
     const bodyName = (bodyId: BodyId) =>
-      doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId;
+      ownEntry(doc.derived.bodyRepresentations, bodyId)?.name ?? bodyId;
     const scope = exportScope(
       Object.values(doc.derived.bodyRepresentations).map((body) => ({
         bodyId: body.bodyId,
@@ -8932,7 +9159,7 @@ export function App() {
     // Against what is drawn: an edit preview republishes the faces it lights.
     const shown = previewDoc ?? doc;
     const focus = historyFeatureFocus(shown, selectedFeature, (bodyId) => {
-      const body = shown.derived.bodyRepresentations[bodyId];
+      const body = ownEntry(shown.derived.bodyRepresentations, bodyId);
       return Boolean(body && !body.consumed && !hiddenBodyIds.has(bodyId));
     });
     return focus.kind === 'focus' ? { feature: selectedFeature, focus } : null;
@@ -9290,6 +9517,12 @@ export function App() {
   ) {
     let normalized: ProjectDocument;
     try {
+      // Every document published here, from any source, is checked first: a
+      // reserved name such as "__proto__" as a key, id or selector would make
+      // map lookups reach inherited members. The project is not opened and the
+      // reason is shown; whatever was open stays open.
+      const refused = reservedDocumentIdentifierError(nextDocument);
+      if (refused) throw new Error(`This project cannot be opened: ${refused}`);
       normalized = normalizeDocument(nextDocument);
       // Shares are ephemeral; every persistence path still rejects owner writes.
       if (shareSessionRef.current) {
@@ -9585,6 +9818,11 @@ export function App() {
    * Says once, as the commit lands, that it stored a pick with no lineage
    * name: such a pick resolves only by its hash, which an upstream edit to
    * that entity orphans. Never blocks the commit (`lib/fragileSelections`).
+   *
+   * A face edit that filled in an opening an earlier cut made then says so,
+   * in the toast's place: that cut's step stays in the history but no longer
+   * changes the shape (`lib/closedOpenings`, loaded on demand). The pick
+   * advice stays in the activity log.
    */
   function announceFragileSelections(
     before: ProjectDocument,
@@ -9603,6 +9841,30 @@ export function App() {
       // Advice only: the commit has already landed.
     }
     if (advisory) announce(advisory);
+    const manager = managerRef.current;
+    if (!derived || !manager) return;
+    // The check lands a moment later. It speaks only about this commit, so
+    // it stays silent once anything moved on: an undo, redo or later edit
+    // (each moves the edit history; the rebuild's own repairs do not),
+    // another project or a reopen (another manager), or a newer notice.
+    const historyAt = (document: ProjectDocument) =>
+      `${document.editHistory?.cursor}/${document.editHistory?.entries.length}`;
+    const position = historyAt(manager.document);
+    const toastId = toastIdRef.current;
+    void closedOpenings()
+      .then(({ closedOpeningsAdvisory }) => {
+        if (
+          managerRef.current !== manager ||
+          historyAt(manager.document) !== position ||
+          toastIdRef.current !== toastId
+        )
+          return;
+        const notice = closedOpeningsAdvisory(before, after, derived);
+        if (notice) announce(notice, undefined, { tone: 'warning' });
+      })
+      .catch(() => {
+        // Advice only, as above.
+      });
   }
 
   function executeCommand(
@@ -9780,6 +10042,7 @@ export function App() {
     // includes the armed operation: an edge picked for the Fillet tool arms
     // one, and leaving it armed kept its "Fillet · Ready" chip and its lane
     // instructions up over the fillet they had just made.
+    offerUndoForCommit();
     dispatchInteraction({ type: 'commit-complete' });
     setTool(null);
     setSelectedFeatureNode(null);
@@ -9787,6 +10050,17 @@ export function App() {
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
+  }
+
+  /**
+   * "Added box." offered no Undo, though Delete and Duplicate do (13 November
+   * review I22). A toast per add would break the rule that only outcomes the
+   * viewport cannot show raise one, so the status line itself offers Undo
+   * while it still reports the commit. The success status is set just after
+   * a validated commit's `onSuccess` returns, hence the microtask.
+   */
+  function offerUndoForCommit(): void {
+    queueMicrotask(() => setUndoableStatusAt(lastStatusAtRef.current));
   }
 
   /**
@@ -10443,14 +10717,15 @@ export function App() {
     feature: FeatureNode
   ): { middle: Vector3; outward: Vector3 } | null {
     const focus = historyFeatureFocus(current, feature, (bodyId) => {
-      const body = current.derived.bodyRepresentations[bodyId];
+      const body = ownEntry(current.derived.bodyRepresentations, bodyId);
       return Boolean(body && !body.consumed && !hiddenBodyIds.has(bodyId));
     });
     if (focus.kind !== 'focus') return null;
     for (const selection of focus.faces) {
-      const geometry = current.derived.bodyRepresentations[
+      const geometry = ownEntry(
+        current.derived.bodyRepresentations,
         selection.bodyId
-      ]?.topology?.faces.find(
+      )?.topology?.faces.find(
         (face) =>
           face.topologyId === selection.topologyId ||
           face.hash === selection.hash
@@ -10762,6 +11037,18 @@ export function App() {
    */
   function cancelInPlaceCommand() {
     const editing = inPlaceRef.current.editing;
+    // A pattern's Done still rebuilding is stopped by the card's Cancel too,
+    // as by the pill's Cancel pattern: told to wait instead, the card read
+    // as having no way out of a minute-long rebuild. The command stays open
+    // with its picks, since nothing was added.
+    if (
+      patternAbortRef.current &&
+      !editing &&
+      isInPlacePatternTool(inPlaceRef.current.tool)
+    ) {
+      cancelPattern();
+      return;
+    }
     // A Done still validating keeps the command, and its selection, open.
     if (!inPlaceRef.current.cancel()) return;
     if (editing) {
@@ -10862,7 +11149,7 @@ export function App() {
     sketchId: SketchId,
     entityId: string
   ): boolean {
-    const node = current.nodes[entityId as EntityId];
+    const node = ownEntry(current.nodes, entityId as EntityId);
     return (
       node?.kind === 'sketch-object' &&
       !node.data.construction &&
@@ -11021,6 +11308,11 @@ export function App() {
     }
     if (!face) return null;
     const geometry = face.geometry;
+    const cylinder = facePickCylinder(
+      geometry,
+      representations[resolvedBodyId]?.mesh,
+      face
+    );
     return {
       bodyId: resolvedBodyId,
       hash: face.hash,
@@ -11031,18 +11323,7 @@ export function App() {
       ...(geometry?.normal ? { normal: geometry.normal } : {}),
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
-      ...(geometry?.surfaceType === 'cylinder' &&
-      geometry.axisStart &&
-      geometry.axisEnd &&
-      geometry.radius !== undefined
-        ? {
-            cylinder: {
-              axisStart: geometry.axisStart,
-              axisEnd: geometry.axisEnd,
-              radius: geometry.radius
-            }
-          }
-        : {}),
+      ...(cylinder ? { cylinder } : {}),
       ...(point ? { point } : {})
     };
   }
@@ -11876,13 +12157,30 @@ export function App() {
     setStatus(`${normalToFaceTarget.label}: viewing normal to face.`);
   }
 
+  /**
+   * Shows the model in `mode`. The toast names it at once rather than after
+   * the last message's dwell: paced, W pressed three times left "Wireframe"
+   * up while the model already showed Shaded + edges (I54).
+   */
+  function setDisplayMode(mode: DisplayMode) {
+    viewerSettingsRef.current = {
+      ...viewerSettingsRef.current,
+      displayMode: mode
+    };
+    setViewerSettings((current) => ({ ...current, displayMode: mode }));
+    setStatus(`Display: ${DISPLAY_MODE_LABELS[mode]}.`, { immediate: true });
+  }
+
   function cycleDisplayMode() {
-    const index = DISPLAY_MODE_ORDER.indexOf(viewerSettings.displayMode);
-    const next =
+    // From the latest mode, not this render's: two presses before a render
+    // would otherwise both step from the same mode.
+    const index = DISPLAY_MODE_ORDER.indexOf(
+      viewerSettingsRef.current.displayMode
+    );
+    setDisplayMode(
       DISPLAY_MODE_ORDER[(index + 1) % DISPLAY_MODE_ORDER.length] ??
-      'shaded-edges';
-    setViewerSettings((current) => ({ ...current, displayMode: next }));
-    setStatus(`Display: ${DISPLAY_MODE_LABELS[next]}.`);
+        'shaded-edges'
+    );
   }
 
   function toggleProjection() {
@@ -11921,11 +12219,15 @@ export function App() {
 
   function toggleXray() {
     const next = !viewerSettingsRef.current.xray;
+    viewerSettingsRef.current = { ...viewerSettingsRef.current, xray: next };
     setViewerSettings((current) => ({ ...current, xray: next }));
+    // At once, like the display mode it rides over: the Display menu's
+    // X-ray switch and its toast must not disagree.
     setStatus(
       next
         ? `X-ray on · faces at ${appSettings.viewport.xrayOpacity}% · picks and box selection go through them.`
-        : 'X-ray off.'
+        : 'X-ray off.',
+      { immediate: true }
     );
   }
 
@@ -12253,9 +12555,10 @@ export function App() {
     const attachment = faceSketchAttachment({
       bodyId: selection.bodyId,
       pickedHash: selection.hash,
-      face: current.derived.bodyRepresentations[
+      face: ownEntry(
+        current.derived.bodyRepresentations,
         selection.bodyId
-      ]?.topology?.faces.find((face) => face.hash === selection.hash)
+      )?.topology?.faces.find((face) => face.hash === selection.hash)
     });
     return attachment.ok ? attachment.planeRef : { reason: attachment.reason };
   }
@@ -12627,21 +12930,17 @@ export function App() {
       );
       return;
     }
-    const isolation =
-      bodyIsolation && bodyIsolation.projectId === doc?.projectId
-        ? bodyIsolation
-        : null;
     const step = toggleBodyIsolation(
       partBodies.map((body) => body.bodyId),
       bodyId,
       hiddenBodyIds,
       localHiddenBodyIds,
-      isolation
+      currentBodyIsolation
     );
     setHiddenBodyIds(step.hidden);
     setBodyIsolation(
       step.isolation && doc
-        ? { ...step.isolation, projectId: doc.projectId }
+        ? { ...step.isolation, projectId: doc.projectId, bodyName: body.name }
         : null
     );
     if (!step.entered) {
@@ -12801,7 +13100,7 @@ export function App() {
           ? // Signed out is the normal state, and the Settings footer already
             // reads "Device only"; the header stays quiet rather than repeat it.
             ''
-          : 'Beta sign-in unavailable · device settings remain active.'
+          : 'Cloud unavailable · settings and projects stay on this device.'
       );
       return;
     }
@@ -13419,7 +13718,12 @@ export function App() {
     setSettingsMessage('Viewport defaults applied to the current view.');
   }
 
-  async function handleCreateProject(name: string, units: UnitSystem) {
+  /** Resolves true once the new project is the one on screen. */
+  async function handleCreateProject(
+    name: string,
+    units: UnitSystem
+  ): Promise<boolean> {
+    let opened = false;
     const isCurrent = beginProjectNavigation();
     const activeProjectSince = snapshotActiveProject();
     setAssistantCollapsed(true);
@@ -13432,6 +13736,7 @@ export function App() {
       await saveLocalProject(localDocument);
       if (!isCurrent()) return;
       hydrateDocument(localDocument, { activeProjectSince });
+      opened = true;
       setProjects((current) => [
         summarizeLocalDocument(localDocument),
         ...current
@@ -13445,16 +13750,16 @@ export function App() {
       // This is a failed device save, not a cloud-create failure. Do not enter
       // the offline fallback and replace the unsaved project on screen.
       finishBusy();
-      return;
+      return false;
     }
     try {
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       if (!session) {
         // The document effect's flush lands on 'local' once the device write
         // is done; forcing it here would show "Local only" for a frame and
         // then the spinner the effect reports anyway.
         await createLocal(localUserId);
-        return;
+        return opened;
       }
       // The browser builds the new document and the account stores it as
       // sent (ADR-024 Phase 1). The route trims the name it compares with.
@@ -13474,16 +13779,18 @@ export function App() {
         response.document.projectId,
         response.document.version
       );
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       setCloudAvailable(true);
       setCloudProjectIds((current) =>
         new Set(current).add(response.document.projectId)
       );
       hydrateDocument(response.document, { activeProjectSince });
+      opened = true;
       setProjects((current) => [response.project, ...current]);
       setStatus(`Created ${response.project.name}.`);
+      return true;
     } catch (error) {
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       // A refused request is not an unreachable one. Falling back to local mode
       // on a validation failure would persist exactly the project the server
       // just rejected, so surface it and let the user correct the input.
@@ -13494,7 +13801,7 @@ export function App() {
       ) {
         setCloudAvailable(true);
         setStatus(errorMessage(error, 'Could not create the project.'));
-        return;
+        return false;
       }
       const sessionExpired = error instanceof ApiError && error.status === 401;
       if (sessionExpired) {
@@ -13505,6 +13812,7 @@ export function App() {
         sessionExpired ? localUserId : (session?.userId ?? localUserId),
         `${errorMessage(error, 'Cloud unavailable')} Working locally · save it to your account later.`
       );
+      return opened;
     } finally {
       finishBusy();
     }
@@ -14422,6 +14730,11 @@ export function App() {
     forgetCompleteCommit();
     clearAutoFrame();
     setDoc(null);
+    // A workspace notice speaks about the model just closed, and its action
+    // (an Undo above all) has no document left to act on. The library shares
+    // the toast slot, so one left standing was carried onto the shelf and,
+    // remounted there, started its lifetime over.
+    setToast(null);
     setArtifacts([]);
     setSelectedFeatureNode(null);
     setSelectedTopology(null);
@@ -14538,6 +14851,81 @@ export function App() {
     setStatus(plain.message, plain.detail ? { detail: plain.detail } : {});
     if (onStartScreenRef.current) {
       announce(plain.message, undefined, { tone: 'warning' });
+    }
+  }
+
+  /**
+   * Renames a project from the library's tile or its Properties, without
+   * opening it (design review I14: renaming meant opening the project and
+   * waiting on the kernel). An account project is written there first,
+   * fenced on the version just read; see `renameLibraryProject`.
+   */
+  async function handleRenameLibraryProject(
+    project: ProjectSummary,
+    name: string
+  ): Promise<boolean> {
+    if (name.trim() === project.name) return true;
+    const inAccount =
+      Boolean(session) && cloudProjectIds.has(project.projectId);
+    if (session && !inAccount && !accountProjectListReached) {
+      // Unknown, not device-only: renaming this device's copy alone could
+      // leave the account's under the old name.
+      const message = `Your account could not be reached, so ${project.name} was not renamed. Try again once it is back.`;
+      setStatus(message);
+      announce(message, undefined, { tone: 'warning' });
+      return false;
+    }
+    setBusy(true);
+    try {
+      const { renameLibraryProject } =
+        await import('./lib/libraryProjectRename');
+      const stored = await renameLibraryProject(project.projectId, name, {
+        actorUserId: session?.userId ?? localUserId,
+        loadLocal: loadLocalProject,
+        saveLocal: saveLocalProject,
+        ...(inAccount
+          ? {
+              account: {
+                load: (projectId: string) => api.loadProject(projectId),
+                save: (input: SaveProjectDocumentRequest) =>
+                  api.saveProjectDocument(input),
+                markSynced: saveLastSyncedVersion
+              }
+            }
+          : {})
+      });
+      if (inAccount) {
+        remoteVersionsRef.current.set(project.projectId, stored.version);
+      }
+      const storedBytes = measuredDocumentBytes(stored);
+      setProjects((current) =>
+        current.map((candidate) =>
+          candidate.projectId === project.projectId
+            ? {
+                ...withSavedVersion(candidate, stored, storedBytes),
+                name: stored.name
+              }
+            : candidate
+        )
+      );
+      setStatus(`Renamed ${project.name} to ${stored.name}.`);
+      return true;
+    } catch (error) {
+      const { LibraryRenameRefusal } =
+        await import('./lib/libraryProjectRename');
+      if (error instanceof LibraryRenameRefusal) {
+        setStatus(error.message);
+        announce(error.message, undefined, { tone: 'warning' });
+      } else if (error instanceof ApiError && error.status === 409) {
+        const message = `${project.name} changed in your account since this list was loaded. Open it to rename it.`;
+        setStatus(message);
+        announce(message, undefined, { tone: 'warning' });
+      } else {
+        reportLibraryFailure(error, `Could not rename ${project.name}.`);
+      }
+      return false;
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -14784,6 +15172,32 @@ export function App() {
    * fallback, the derived-projection rescue and the shelf bookkeeping below,
    * which is where the interesting failure modes live.
    */
+  /**
+   * Gives a copy its source's card picture before its tile mounts. A tile
+   * that reads no picture asks the backfill, which finds none for a project
+   * never opened, and the copy showed the bare placeholder cube until it was.
+   * Never throws: the copy is complete without a picture.
+   */
+  async function seedCopyThumbnail(
+    source: ProjectDocument,
+    copy: ProjectDocument
+  ): Promise<void> {
+    try {
+      const [{ seedRecoveryCopyThumbnail }, { renderPartThumbnail }] =
+        await Promise.all([
+          import('./lib/recoveryCopyThumbnail'),
+          import('./lib/partThumbnail')
+        ]);
+      await seedRecoveryCopyThumbnail(source, copy, {
+        loadCached: loadProjectThumbnail,
+        save: saveProjectThumbnail,
+        render: renderPartThumbnail
+      });
+    } catch {
+      // A placeholder, filled the first time the copy is opened and left.
+    }
+  }
+
   async function handleDuplicateProject(
     project: ProjectSummary,
     saveState?: ProjectCheckpoint
@@ -14886,8 +15300,13 @@ export function App() {
               response.project.organization
             ).catch(() => undefined);
           }
+          await seedCopyThumbnail(localSource ?? localCopy, localCopy);
+          // Measured on what the account now holds: uploading the copy's
+          // images saves a version after the one the response describes, and
+          // an encrypted account's response carries no size at all.
+          const copyRow = withSavedVersion(response.project, copied);
           setProjects((current) =>
-            [...current, response.project].sort(compareProjectSummaries)
+            [...current, copyRow].sort(compareProjectSummaries)
           );
           setStatus(
             [
@@ -14925,7 +15344,7 @@ export function App() {
       const copy = duplicateProjectDocument(
         source,
         duplicateProjectName(
-          head.name,
+          copyBaseName(head.projectId, head.name),
           projects.map((summary) => summary.name)
         ),
         session?.userId ?? localUserId,
@@ -14947,6 +15366,7 @@ export function App() {
       await saveLocalProjectOrganization(copy.projectId, organization, {
         mirrorPending: true
       }).catch(() => undefined);
+      await seedCopyThumbnail(source, copy);
       setProjects((current) =>
         [...current, summarizeLocalDocument(copy, organization)].sort(
           compareProjectSummaries
@@ -15367,7 +15787,7 @@ export function App() {
     } else {
       setToast(null);
     }
-    setStatus(label ? `Undo ${label}` : 'Undo');
+    setStatus(historyStepMessage('undo', label));
   }
 
   function handleRedo() {
@@ -15423,7 +15843,7 @@ export function App() {
       };
     }
     setToast(null);
-    setStatus(label ? `Redo ${label}` : 'Redo');
+    setStatus(historyStepMessage('redo', label));
   }
 
   /**
@@ -15757,7 +16177,14 @@ export function App() {
     if (!doc || !savingManager) {
       return;
     }
-    const isCurrentProject = () => managerRef.current === savingManager;
+    // Fenced to the autosave lifecycle this save began under as well as the
+    // project: a cleanup that disposes the controller keeps the manager
+    // reference, and a save outliving it must not write stale copies over
+    // what the next owner saved.
+    const savingController = cloudProjectAutosaveRef.current;
+    const isCurrentProject = () =>
+      managerRef.current === savingManager &&
+      cloudProjectAutosaveRef.current === savingController;
     if (shareSessionRef.current) {
       setStatus(
         'This is a shared link session — Make a copy to keep the model.'
@@ -15796,7 +16223,7 @@ export function App() {
                 ? 'synced'
                 : 'syncing'
             );
-            setStatus('Saved revision.');
+            setStatus('Made a save point.');
           }
         } catch (error) {
           if (isCurrent()) {
@@ -15859,7 +16286,7 @@ export function App() {
         await saveLocalProject(savingDocument);
         if (isCurrentProject())
           setStatus(
-            'Saved revision on this device · sharing through the room.'
+            'Made a save point on this device · sharing through the room.'
           );
         return;
       }
@@ -15927,7 +16354,13 @@ export function App() {
         }
         setCloudAvailable(false);
         setSaveState('local');
-        setStatus('Saved on this device.');
+        // Autosave already says "Saved on this device."; this save also made
+        // a save point in Revisions, so it says so (I22).
+        setStatus(
+          reason === DEFAULT_SAVE_REASON
+            ? 'Made a save point on this device.'
+            : `Made save point “${reason}” on this device.`
+        );
         return;
       }
       // A queued autosave writing the same document behind this one would race
@@ -15947,13 +16380,20 @@ export function App() {
       }) => {
         savingDocument = input.document;
         await saveLocalProject(savingDocument);
-        if (!readDocument()) return null;
+        if (!readDocument() || !isCurrentProject()) return null;
         accountWriteStarted = true;
-        return api.saveRevision({
-          ...input,
-          reason,
-          document: withoutDerivedProjection(savingDocument)
-        });
+        // A save held back while earlier saves' copies are freed is retried
+        // here, account write only: the device copy is already saved, and
+        // edits may have saved newer device copies since.
+        return retryWhileStorageCleanupPending(
+          () =>
+            api.saveRevision({
+              ...input,
+              reason,
+              document: withoutDerivedProjection(savingDocument)
+            }),
+          () => Boolean(readDocument()) && isCurrentProject()
+        );
       };
       const currentDocument = readDocument();
       if (!currentDocument) return;
@@ -15969,7 +16409,20 @@ export function App() {
             document: currentDocument
           });
       if (!saved) {
-        if (isCurrentProject()) controller?.schedule(savingManager.document);
+        if (isCurrentProject()) {
+          // A halted controller (before or during this save) puts back its
+          // own state and the action it offers. Otherwise the save was
+          // cancelled (the project changed mode or moved on meanwhile):
+          // settle the indicator rather than leave "Saving". The device copy
+          // was written before the account checkpoint began.
+          if (!controller?.reannounceHalt()) {
+            setSaveState('local');
+            setStatus(
+              'Save point not made. Your work is saved on this device.'
+            );
+          }
+          controller?.schedule(savingManager.document);
+        }
         return;
       }
       remoteVersionsRef.current.set(saved.projectId, saved.version);
@@ -15987,7 +16440,7 @@ export function App() {
         // controller gives it to writes already queued; this, to the model.
         showAccountEcho(withEchoedSavePoints(savingManager.document, saved));
         setCloudAvailable(true);
-        setStatus(sourceWarning ?? 'Saved revision.');
+        setStatus(sourceWarning ?? 'Made a save point.');
         return;
       }
       const restored = withLocalDerived(saved, savingManager.document);
@@ -16004,7 +16457,7 @@ export function App() {
       if (savingManager.document.version !== savingDocument.version) {
         await saveLocalProject(savingManager.document);
       }
-      setStatus(sourceWarning ?? 'Saved revision.');
+      setStatus(sourceWarning ?? 'Made a save point.');
     } catch (error) {
       if (!isCurrentProject()) {
         return;
@@ -16036,9 +16489,11 @@ export function App() {
       }
       // A local failure or a server refusal does not mean the account is
       // unreachable. Only an attempted account write with no usable response
-      // should turn the connectivity indicator offline.
+      // should turn the connectivity indicator offline. A save still held
+      // back while earlier copies are freed reached the account too.
       const accountUnreachable =
         accountWriteStarted &&
+        !isProjectStorageCleanupPendingError(error) &&
         (!(error instanceof ApiError) || error.status >= 500);
       if (accountUnreachable) setCloudAvailable(false);
       setSaveState(
@@ -16059,6 +16514,22 @@ export function App() {
   }
 
   const aiPreviewEpochRef = useRef(0);
+  // Bumped when something opens over the stage that the model should stay
+  // clear of: the viewer reframes only if part of the model is covered.
+  const [clearStageRequest, setClearStageRequest] = useState(0);
+  const sectionControlsShown =
+    viewerSettings.sectionView !== undefined &&
+    panelState.sectionPanelOpen !== false;
+  useEffect(() => {
+    if (sectionControlsShown) setClearStageRequest((request) => request + 1);
+  }, [sectionControlsShown]);
+  // The measurement workbench floats over View's and Tweak's stage (a
+  // phone's sheet across its foot, I47): what it measures stays in view.
+  // Build's workbench is a command card and never moves the camera.
+  const measuringOverStage = measuring && modelingLocked;
+  useEffect(() => {
+    if (measuringOverStage) setClearStageRequest((request) => request + 1);
+  }, [measuringOverStage]);
 
   /** D06 slice E: a proposal that edits a drawing sheet, not the model. */
   function isDrawingProposal(proposal: CadPatchProposal): boolean {
@@ -16136,6 +16607,9 @@ export function App() {
         };
       }
       setPreviewDoc(preflight.candidate);
+      // The proposal is reviewed on the model: keep it clear of the
+      // assistant's stream and the panels (I6).
+      setClearStageRequest((request) => request + 1);
       setStatus('Previewing exact proposed geometry.');
       return { ok: true };
     } catch (error) {
@@ -16260,7 +16734,13 @@ export function App() {
     // Local-first imports/exports keep their bytes on this device. A protected
     // upload cannot succeed before this project has an account copy, and its
     // failed request would add a console error to an otherwise valid import.
-    if (!sessionRef.current || !remoteVersionsRef.current.has(doc.projectId)) {
+    if (
+      !cloudArchivable(
+        Boolean(sessionRef.current),
+        doc.projectId,
+        remoteVersionsRef.current
+      )
+    ) {
       throw new Error(
         'Cloud archival needs an account project. The file stays on this device.'
       );
@@ -16903,6 +17383,32 @@ export function App() {
   }
 
   /**
+   * Files dropped on the start screen, or picked through its Import. A
+   * backup restores as it does from the File menu; CAD files make a new
+   * project named for them, and the import then runs in it once it is on
+   * screen — the same import Import CAD files runs, with its units prompt
+   * and progress card. The workspace's own drop target is not mounted here,
+   * and before this the browser opened or downloaded the file instead.
+   */
+  async function handleStartScreenFiles(files: File[], units: UnitSystem) {
+    const { planStartScreenImport } = await import('./lib/startScreenImport');
+    const plan = planStartScreenImport(files);
+    if (plan.kind === 'refuse') {
+      setStatus(plan.message);
+      announce(plan.message, undefined, { tone: 'warning' });
+      return;
+    }
+    if (plan.kind === 'backup') {
+      await handleImportProject(plan.file);
+      return;
+    }
+    pendingStartImportRef.current = { files: plan.files, projectId: null };
+    if (!(await handleCreateProject(plan.name, units))) {
+      pendingStartImportRef.current = null;
+    }
+  }
+
+  /**
    * Files dropped on the viewport. A backup restores as its own project, so
    * it travels alone; anything else is the File menu's import, same rules.
    */
@@ -16923,6 +17429,9 @@ export function App() {
   }
 
   async function handleImportFiles(files: File[]) {
+    importNamingRef.current = doc
+      ? (await import('./lib/importProjectName')).watchImportNaming(doc, files)
+      : null;
     const shaprFiles = files.filter((file) => /\.shapr$/i.test(file.name));
     if (shaprFiles.length === 0) {
       if (files.length !== 1) {
@@ -16966,6 +17475,8 @@ export function App() {
       inspection: null
     });
     try {
+      const { inspectShaprPair } =
+        await import('./lib/shaprImportWorkerClient');
       const inspection = await inspectShaprPair(shaprFile, sourceStepFile, {
         signal: controller.signal,
         onProgress: (progress) => {
@@ -17023,12 +17534,6 @@ export function App() {
     ) {
       return;
     }
-    const migration = shaprMigrationDraft({
-      ir: pending.inspection.ir,
-      shaprFileName: pending.shaprFile.name,
-      stepFileName: pending.sourceStepFile.name,
-      stepChecksumSha256: pending.inspection.stepChecksumSha256
-    });
     const importId = toShaprImportId(`shapr_${crypto.randomUUID()}`);
     setPendingShaprImport((current) =>
       current
@@ -17040,6 +17545,30 @@ export function App() {
           }
         : null
     );
+    // Loaded here, after the card says it is applying, so a second click
+    // during the load finds the apply already under way.
+    let shaprMigrationDraft: typeof ShaprMigrationDraftFn;
+    try {
+      ({ shaprMigrationDraft } = await import('./lib/shaprMigration'));
+    } catch (error) {
+      setPendingShaprImport((current) =>
+        current
+          ? {
+              ...current,
+              phase: 'preview',
+              progress: 'Preview ready.',
+              error: errorMessage(error, 'The import could not start.')
+            }
+          : null
+      );
+      return;
+    }
+    const migration = shaprMigrationDraft({
+      ir: pending.inspection.ir,
+      shaprFileName: pending.shaprFile.name,
+      stepFileName: pending.sourceStepFile.name,
+      stepChecksumSha256: pending.inspection.stepChecksumSha256
+    });
     const shaprAbort = startImportAbort();
     const { runStepImport } = await stepImportRun();
     const result = await runStepImport({
@@ -17466,6 +17995,60 @@ export function App() {
     }
   }
 
+  /**
+   * File → Insert project…: another project's bodies come into this one as
+   * one undoable step, each keeping its name, colour and opacity, filed in a
+   * folder named after the project. A copy of the solids, not of the
+   * history, and no link back (AS01). See `lib/projectInsertRun.ts`.
+   */
+  async function handleInsertProject(file: File) {
+    if (!managerRef.current || !doc || !ensureCanEdit('insert a project')) {
+      return;
+    }
+    if (importAbortRef.current) {
+      setStatus(
+        'Another import is still running. Try again once it completes.'
+      );
+      return;
+    }
+    const importManager = managerRef.current;
+    const abort = startImportAbort();
+    try {
+      let insert: Awaited<ReturnType<typeof projectInsertRun>>;
+      try {
+        insert = await projectInsertRun();
+      } catch (error) {
+        // A chunk that will not load (offline, a deploy since this page
+        // loaded) has no run to report it; say so on the card.
+        refuseImportOnCard(
+          file.name,
+          errorMessage(error, `Could not insert ${file.name}.`)
+        );
+        return;
+      }
+      await insert.runProjectInsert({
+        file,
+        ownerUserId: session?.userId ?? localUserId,
+        signal: abort.signal,
+        progress: createImportProgressSink(),
+        setStatus,
+        stillCurrent: () => managerRef.current === importManager,
+        onFailure: () => trackDetail('error_import'),
+        stepImport: {
+          archive: archiveArtifact,
+          validatedFeature,
+          status: { setStatus, setFeatureFormError },
+          marks: importMarks(),
+          currentDocument: () => managerRef.current?.document ?? null,
+          editDisabledReason: () => editDisabledReasonRef.current,
+          newId: () => crypto.randomUUID()
+        }
+      });
+    } finally {
+      finishImportAbort(abort);
+    }
+  }
+
   async function handleDownloadProjectArtifact(artifact: ArtifactRecord) {
     try {
       const { downloadProjectArtifact } =
@@ -17852,7 +18435,7 @@ export function App() {
     switch (command) {
       case 'open-model':
         void openDesktopCadFile()
-          .then((file) => (file ? handleImportFile(file) : undefined))
+          .then((file) => (file ? handleImportFiles([file]) : undefined))
           .catch((error) => {
             setStatus(errorMessage(error, 'Could not open the CAD model.'));
           });
@@ -18034,8 +18617,10 @@ export function App() {
     document: ProjectDocument,
     selection: TopologySelection
   ): boolean {
-    const topology =
-      document.derived.bodyRepresentations[selection.bodyId]?.topology;
+    const topology = ownEntry(
+      document.derived.bodyRepresentations,
+      selection.bodyId
+    )?.topology;
     if (!topology) {
       return false;
     }
@@ -18063,7 +18648,12 @@ export function App() {
     // A later Move owns the lane. An automatic re-pick must neither ask a
     // user-selection question nor replace the values that card now holds.
     if (movePreview) return;
-    const pick = newBlendFacePick(pending.bodyId, pending.before, faces);
+    const pick = newBlendFacePick(
+      pending.bodyId,
+      pending.before,
+      faces,
+      pending.featureId
+    );
     if (pick) {
       // The pick is the app's, not the user's: it must not retire the
       // commit's own message ("Filleted 2 edges at 1 mm.") the way a real
@@ -18624,6 +19214,40 @@ export function App() {
     ) {
       setSelectedTopology(selection);
       return;
+    }
+    // Shift on another face of the body whose face is selected adds it to a
+    // face set (Shift on a held face takes it back out), the set a box sweep
+    // with the Face filter makes: Delete removes the set and heals the body.
+    // Shift on a face of another body keeps selecting bodies, as before.
+    if (
+      additive &&
+      selection.kind === 'face' &&
+      tool === null &&
+      interaction.mode !== 'sketch'
+    ) {
+      const held = heldFaces;
+      if (held && heldFaceSetBody(held) === selection.bodyId) {
+        const next = toggleFaceInSet(held, selection);
+        if (next.length === 0) {
+          clearSelection();
+          return;
+        }
+        if (interaction.mode !== 'idle') {
+          dispatchInteraction({ type: 'clear' });
+        }
+        const bodyIds = [selection.bodyId];
+        setSelectedEdges([]);
+        setSelectedTopology(null);
+        setSelectedBodyIds(bodyIds);
+        setBoxFaces({ bodyIds, faces: next });
+        inferFeatureNodeFor(selection.bodyId);
+        setStatus(
+          next.length === 1
+            ? '1 face selected.'
+            : `${next.length} faces selected · Delete removes them and closes the gap.`
+        );
+        return;
+      }
     }
     // Sketch entry: with the Sketch tool armed, a planar face click starts a
     // face-attached sketch instead of arming the offset handle.
@@ -19693,7 +20317,7 @@ export function App() {
         ? affectedFeatureTargets(base, sketchFeature.featureId)
         : [];
       if (repair) {
-        const node = base.nodes[repair.objectId];
+        const node = ownEntry(base.nodes, repair.objectId);
         if (node?.kind !== 'sketch-object' || pick.objects.length !== 1) {
           setStatus(
             'Re-pick one edge: a face projects several, and the object needs one source.'
@@ -19999,7 +20623,7 @@ export function App() {
       return false;
     const sketchId = target.sketchId as SketchId;
     const objectId = target.objectId as EntityId;
-    const selected = base.nodes[objectId];
+    const selected = ownEntry(base.nodes, objectId);
     const nextData =
       selected?.kind === 'sketch-object' && selected.data.construction
         ? { ...data, construction: true }
@@ -20059,7 +20683,7 @@ export function App() {
     if (!base || !target || sketchSolving || geometryBusy) return;
     const sketchId = target.sketchId as SketchId;
     const sourceObjectId = target.objectId as EntityId;
-    const source = base.nodes[sourceObjectId];
+    const source = ownEntry(base.nodes, sourceObjectId);
     if (
       source?.kind !== 'sketch-object' ||
       (source.data.objectKind !== 'rectangle' &&
@@ -20538,6 +21162,8 @@ export function App() {
   // orphans it.
   useEffect(() => {
     if (interaction.mode !== 'sketch') {
+      // A first Escape armed in one sketch never confirms leaving the next.
+      sketchExitArmedAtRef.current = null;
       setSketchSolveStatus(null);
       setSketchSolving(false);
       setSketchDimensionDraft(null);
@@ -21907,13 +22533,17 @@ export function App() {
         (p) => p.name === name
       )?.toggle;
       // setParameter both adds and changes one; say which happened.
-      if (toggle)
+      if (toggle) {
         setHiddenBodyIds(
           (hidden) =>
             new Set(
               [...hidden].filter((id) => !toggle.bodyIds.includes(id as BodyId))
             )
         );
+        setBodyIsolation((recorded) =>
+          releaseIsolationToParameter(recorded, toggle.bodyIds)
+        );
+      }
       setStatus(
         added ? `Added parameter ${name}.` : `Parameter ${name} updated.`
       );
@@ -22821,7 +23451,20 @@ export function App() {
         ? inPlaceEditSeedFor(current, feature)
         : null;
     },
-    derive: (document) => syncCandidate(document),
+    // A pattern's frame is built as the live rebuild after its Done will
+    // be, with the live lineage demand: Done commits the frame's own result
+    // (see `commit`), and that rebuild then restores the frame instead of
+    // replaying the whole history in the other lineage mode, which built a
+    // large grid a second time.
+    derive: (document, signal) =>
+      syncCandidate(
+        document,
+        undefined,
+        isInPlacePatternTool(inPlaceRef.current.tool)
+          ? geometry.liveLineageDemand()
+          : undefined,
+        { signal }
+      ),
     buildCommand: (request, title, edit) => {
       if (edit) {
         const command = inPlaceEditCommand(request, edit);
@@ -22834,10 +23477,16 @@ export function App() {
           resultBodyId: inPlaceEditResultBodyId(request, edit)
         };
       }
-      const command = inPlaceCommandFor(request, title);
+      // A pattern's frame is named as its commit names it, so Done can land
+      // this very command and keep the rebuild the frame already made.
+      const command = inPlaceCommandFor(
+        request,
+        request.tool === 'pattern' ? newFeatureName(title) : title
+      );
       const datum = inPlaceDatum(request, command);
       const base = managerRef.current?.document;
       return {
+        command,
         validate: (document) => command.validate(document),
         apply: (document) => command.apply(document),
         resultBodyId: inPlaceResultBodyId(request, command),
@@ -22849,7 +23498,7 @@ export function App() {
           : {})
       };
     },
-    commit: (request, title, edit, withdrawn) => {
+    commit: (request, title, edit, withdrawn, previewed) => {
       // A command closed while its Done validates (another tool, a new
       // selection) withdraws the candidate: nothing lands after it is gone.
       if (edit) {
@@ -22866,7 +23515,10 @@ export function App() {
         return;
       }
       const name = newFeatureName(title);
-      const command = inPlaceCommandFor(request, name);
+      // The frame Done was pressed on built this pattern already; see below.
+      const previewedPattern =
+        request.tool === 'pattern' ? (previewed?.built.command ?? null) : null;
+      const command = previewedPattern ?? inPlaceCommandFor(request, name);
       const datum = inPlaceDatum(request, command);
       if (datum) {
         // A datum has no body to validate: its resolved frame or line is
@@ -22887,13 +23539,26 @@ export function App() {
       const resultBodyId = inPlaceResultBodyId(request, command);
       if (request.tool === 'pattern' && resultBodyId) {
         // Through the pattern runner, so a large pattern shows its progress
-        // and can be stopped, as the card's did.
+        // and can be stopped, as the card's did. Its rebuild runs in a
+        // disposable worker so Cancel can stop it; that worker starts cold
+        // and replays the whole history, which on a 10 × 10 grid repeated a
+        // minute-long preview. The preview's own exact rebuild of this same
+        // command is judged instead while the model has not moved.
         return runPattern(command, {
           featureName: name,
           resultBodyId,
           successMessage: commandOutcomeMessage(command.label),
           onSuccess: finishFeatureCreation,
-          cancelled: withdrawn
+          cancelled: withdrawn,
+          ...(previewedPattern && previewed
+            ? {
+                prebuilt: {
+                  projectId: previewed.document.projectId,
+                  version: previewed.baseVersion,
+                  derived: previewed.derived
+                }
+              }
+            : {})
         }).then((outcome) => outcome === 'committed');
       }
       // The command stays open until this lands: refused or held off by
@@ -24025,15 +24690,7 @@ export function App() {
     // hash, its plane, a saved hole's place on it), so its handles follow
     // a face an update moved.
     let facesMoved = false;
-    const placed = (pick: FacePick) =>
-      JSON.stringify([
-        pick.hash,
-        pick.topologyId,
-        pick.normal,
-        pick.centroid,
-        pick.center,
-        pick.point
-      ]);
+    const placed = facePickKey;
     const faces = inPlaceEditPicks.faces.flatMap((pick) => {
       const body = representations[pick.bodyId];
       if (!body?.topology) return [pick];
@@ -25046,7 +25703,7 @@ export function App() {
       target.hash,
       {
         localBlendGroup: localBlendGroupBoss(
-          base.derived.bodyRepresentations[target.bodyId as BodyId],
+          ownEntry(base.derived.bodyRepresentations, target.bodyId as BodyId),
           target.concavity
         )
       }
@@ -25191,7 +25848,8 @@ export function App() {
       z: value[2]
     });
     const bodyId = target.bodyId as BodyId;
-    const faces = document.derived.bodyRepresentations[bodyId]?.topology?.faces;
+    const faces = ownEntry(document.derived.bodyRepresentations, bodyId)
+      ?.topology?.faces;
     const wall = faces
       ? findResizedCylinderFace(
           faces,
@@ -25261,7 +25919,10 @@ export function App() {
       y: value[1],
       z: value[2]
     });
-    const body = document.derived.bodyRepresentations[target.bodyId as BodyId];
+    const body = ownEntry(
+      document.derived.bodyRepresentations,
+      target.bodyId as BodyId
+    );
     if (!body) return;
     const wall = findHistoryBoreFace(
       body,
@@ -25873,6 +26534,7 @@ export function App() {
     const op = interaction.op;
     const resultBodyId =
       command.payload.ids?.bodyId ?? command.payload.targetBodyId;
+    const newFeatureId = command.payload.ids?.featureId;
     const facesBefore =
       representations[command.payload.targetBodyId]?.topology?.faces;
     // Judged as the preview judges it: the kernel names a refusal after the
@@ -25888,7 +26550,8 @@ export function App() {
         if (op === 'fillet') {
           pendingBlendRearmRef.current = {
             bodyId: resultBodyId,
-            before: facesBefore
+            before: facesBefore,
+            featureId: newFeatureId
           };
         }
       },
@@ -26066,9 +26729,10 @@ export function App() {
     // As for a new blend: the preview stays until the commit or a refusal.
     stopEdgePreview();
     const removing = size <= 1e-9;
-    const sourceFace = base.derived.bodyRepresentations[
+    const sourceFace = ownEntry(
+      base.derived.bodyRepresentations,
       current.target.bodyId as BodyId
-    ]?.topology?.faces.find(
+    )?.topology?.faces.find(
       (face) => face.topologyId === current.target.topologyId
     );
     const committedDirectEditFeatureId =
@@ -26751,7 +27415,10 @@ export function App() {
     }
     const target = current.target;
     const bodyId = target.bodyId as BodyId;
-    const face = base.derived.bodyRepresentations[bodyId]?.topology?.faces.find(
+    const face = ownEntry(
+      base.derived.bodyRepresentations,
+      bodyId
+    )?.topology?.faces.find(
       (candidate) =>
         candidate.topologyId === target.topologyId ||
         (target.hash !== undefined && candidate.hash === target.hash)
@@ -26760,7 +27427,10 @@ export function App() {
       return null;
     }
     const capBoundary =
-      base.derived.bodyRepresentations[bodyId]?.topology?.edges.filter((e) =>
+      ownEntry(
+        base.derived.bodyRepresentations,
+        bodyId
+      )?.topology?.edges.filter((e) =>
         e.adjacentFaceHashes?.includes(face.hash)
       ) ?? [];
     const sampledShoulderCap =
@@ -26769,12 +27439,12 @@ export function App() {
       (face.geometry?.normal?.z ?? 0) > 0.999 &&
       capBoundary.length > 0 &&
       capBoundary.every((e) => e.curve?.type === 'CIRCLE') &&
-      base.derived.bodyRepresentations[bodyId]?.topology?.faces.some(
+      ownEntry(base.derived.bodyRepresentations, bodyId)?.topology?.faces.some(
         (f) =>
           f.geometry?.surfaceType === 'torus' &&
           f.geometry.featureType === 'blend'
       ) &&
-      base.derived.bodyRepresentations[bodyId]?.topology?.faces.some(
+      ownEntry(base.derived.bodyRepresentations, bodyId)?.topology?.faces.some(
         (f) =>
           f.geometry?.surfaceType === 'cylinder' &&
           f.geometry.featureType === 'blend'
@@ -26834,7 +27504,7 @@ export function App() {
       command: plan.command,
       bodyId,
       editedFeatureId: null,
-      successMessage: `Offset face by ${Math.round(offset * 100) / 100} ${base.units}.`,
+      successMessage: offsetFaceCommitMessage(offset, base.units),
       ...(plan.travelHint ? { travelHint: plan.travelHint } : {})
     };
   }
@@ -26909,7 +27579,11 @@ export function App() {
   function handleOffsetCommit(
     offset: number,
     exact?: ParamValue,
-    options?: { keepingLastValid?: boolean }
+    options?: {
+      keepingLastValid?: boolean;
+      /** The Total the chip read at release, when it read one. */
+      total?: number;
+    }
   ): OffsetCommitOutcome {
     stopOffsetRestCheck();
     // The arrow rig is shared: in region mode its drag is an extrude height.
@@ -26981,10 +27655,22 @@ export function App() {
       if (!retakenRelease.commit(retaken)) return 'blocked';
       return 'started';
     }
+    // A plain face offset released from a Total reading names that Total
+    // beside the change its history row records.
+    const successMessage =
+      plan.editedFeatureId === null && options?.total !== undefined
+        ? offsetFaceCommitMessage(
+            offset,
+            managerRef.current?.document.units ?? '',
+            options.total
+          )
+        : reuse
+          ? reuse.successMessage
+          : plan.successMessage;
     void executeValidatedDirectEdit(
       reuse ? reuse.command : plan.command,
       reuse ? reuse.bodyId : plan.bodyId,
-      reuse ? reuse.successMessage : plan.successMessage,
+      successMessage,
       offset,
       undefined,
       reuse ? reuse.validationTargets : plan.validationTargets
@@ -27157,7 +27843,7 @@ export function App() {
       return;
     }
     const nodeId = featureNodeIdForBody(commit.bodyId);
-    const feature = nodeId ? doc.nodes[nodeId] : undefined;
+    const feature = nodeId ? ownEntry(doc.nodes, nodeId) : undefined;
     if (
       feature?.kind !== 'feature' ||
       feature.data.featureKind !== 'primitive' ||
@@ -27372,7 +28058,7 @@ export function App() {
     if (!current) return;
     // A datum plane's row is a plane an in-place Mirror or Split can take:
     // the way to reach one a body hides in the viewport.
-    const clicked = current.nodes[nodeId];
+    const clicked = ownEntry(current.nodes, nodeId);
     // So is it a Plane's or Axis's source, or a plane for a picture.
     if (
       inPlaceRef.current.active &&
@@ -27417,7 +28103,7 @@ export function App() {
       selectedFeatureNodeId === nodeId
         ? null
         : nodeId;
-    const node = current.nodes[nodeId];
+    const node = ownEntry(current.nodes, nodeId);
     if (node?.kind !== 'feature') {
       setStatus('This history feature is no longer available to edit.');
       return;
@@ -27529,7 +28215,7 @@ export function App() {
     // running against geometry the panel no longer shows.
     dispatchInteraction({ type: 'clear' });
     selectFeatureNode(next, 'pinned');
-    const node = next ? current.nodes[next] : undefined;
+    const node = next ? ownEntry(current.nodes, next) : undefined;
 
     const sourceSketchId =
       node?.kind === 'feature' &&
@@ -27578,7 +28264,7 @@ export function App() {
       setSelectedProfiles([]);
     }
     const visible = (id: BodyId) => {
-      const result = current.derived.bodyRepresentations[id];
+      const result = ownEntry(current.derived.bodyRepresentations, id);
       return Boolean(result && !result.consumed && !hiddenBodyIds.has(id));
     };
     // A feature still on screen selects its body. One a later feature
@@ -27679,7 +28365,7 @@ export function App() {
       return;
     }
     const declared =
-      doc.derived.bodyRepresentations[feature.bodyId]
+      ownEntry(doc.derived.bodyRepresentations, feature.bodyId)
         ?.importedStepDeclaredSolidCount ?? 0;
     if (declared === 0) {
       return;
@@ -27749,7 +28435,15 @@ export function App() {
     });
   }
 
-  function handleDeleteImportedFace(selection: TopologySelection) {
+  /**
+   * Heals one face by a replayable direct edit: a face of an imported STEP
+   * part, which has no history to delete, or a face a subtract cut, whose
+   * inferred feature (the cutting tool) the cut still needs.
+   */
+  function handleDeleteImportedFace(
+    selection: TopologySelection,
+    origin: 'imported' | 'cut' = 'imported'
+  ) {
     // A pick may demand lineage while a complete validated body is already
     // displayed. The candidate rebuild re-resolves its face before healing.
     if (!requireDisplayedGeometryComplete()) return;
@@ -27757,7 +28451,7 @@ export function App() {
     const base = manager?.document;
     if (!base) return;
     void import('./lib/featureDeletion')
-      .then(({ importedFaceDeletion }) => {
+      .then(({ importedFaceDeletion, cutFaceDeletion }) => {
         const current = manager.document;
         if (
           managerRef.current !== manager ||
@@ -27769,11 +28463,17 @@ export function App() {
           );
           return;
         }
-        const removal = importedFaceDeletion(current, selection);
+        const removal =
+          origin === 'cut'
+            ? cutFaceDeletion(current, selection)
+            : importedFaceDeletion(current, selection);
         void validatedFeature.runTransaction([removal.command], {
           label: removal.command.label,
           targets: [removal.target],
-          validatingMessage: 'Checking imported feature removal…',
+          validatingMessage:
+            origin === 'cut'
+              ? 'Checking the cut removal…'
+              : 'Checking imported feature removal…',
           successMessage: removal.successMessage,
           onFailure: (message) => announce(message),
           onSuccess: () => {
@@ -27787,8 +28487,58 @@ export function App() {
       })
       .catch((error: unknown) =>
         setStatus(
-          errorMessage(error, 'Could not remove this imported feature.')
+          errorMessage(
+            error,
+            origin === 'cut'
+              ? 'Could not fill this cut.'
+              : 'Could not remove this imported feature.'
+          )
         )
+      );
+  }
+
+  /**
+   * Several faces of one body, picked with Shift or swept with a box: delete
+   * them together and heal the body, so every wall of a window or pocket
+   * deleted at once fills it. A replayable, undoable direct edit.
+   */
+  function handleDeleteFaces(selections: readonly TopologySelection[]) {
+    if (!requireDisplayedGeometryComplete()) return;
+    const manager = managerRef.current;
+    const base = manager?.document;
+    if (!base) return;
+    const faces = selections.map((selection) => ({ ...selection }));
+    void import('./lib/featureDeletion')
+      .then(({ faceSetDeletion }) => {
+        const current = manager.document;
+        if (
+          managerRef.current !== manager ||
+          current.projectId !== base.projectId ||
+          current.version !== base.version
+        ) {
+          setStatus(
+            'The model changed. Select the faces again before deleting them.'
+          );
+          return;
+        }
+        const removal = faceSetDeletion(current, faces);
+        void validatedFeature.runTransaction([removal.command], {
+          label: removal.command.label,
+          targets: [removal.target],
+          validatingMessage: `Checking the removal of ${faces.length} faces…`,
+          successMessage: removal.successMessage,
+          onFailure: (message) => announce(message),
+          onSuccess: () => {
+            clearSelection();
+            announce(removal.successMessage, {
+              label: 'Undo',
+              run: handleUndo
+            });
+          }
+        });
+      })
+      .catch((error: unknown) =>
+        setStatus(errorMessage(error, 'Could not delete these faces.'))
       );
   }
 
@@ -28090,7 +28840,32 @@ export function App() {
       });
     },
     selectBodies(bodyIds, additive) {
-      if (bodyIds.length === 0) return;
+      // An open body command owns the picks: the folder goes to its slots,
+      // as a body row's click does, and the selection follows them.
+      const command = inPlaceRef.current;
+      if (command.active && command.spec?.bodyMode) {
+        const plan = folderCommandPicks(
+          command.slots.bodies.map((body) => body.bodyId),
+          bodyIds.filter((bodyId) => inPlaceEditTakesBody(bodyId)),
+          command.spec.bodyMode
+        );
+        if (plan.kind === 'too-many') {
+          setStatus(
+            `${command.spec.title} takes one body; pick it in the list or the view.`
+          );
+          return;
+        }
+        if (plan.kind === 'toggle') {
+          for (const bodyId of plan.bodies) {
+            const body = inPlaceBodyPick(bodyId);
+            if (body) command.pickBody(body);
+          }
+        }
+        return;
+      }
+      // ⌘/Shift on an empty folder adds nothing; a plain click on one still
+      // replaces the selection, so the old pick does not linger.
+      if (additive && bodyIds.length === 0) return;
       if (moveHasUnappliedChange(movePreview)) {
         setStatus('Apply or cancel the move before selecting a folder.');
         return;
@@ -28103,9 +28878,7 @@ export function App() {
       setSelectedEdges([]);
       setSelectedTopology(null);
       setSelectedSketchProfileId(null);
-      const nextIds = additive
-        ? [...new Set([...selectedBodyIds, ...bodyIds])]
-        : [...bodyIds];
+      const nextIds = folderClickSelection(selectedBodyIds, bodyIds, additive);
       setSelectedBodyIds(nextIds);
       if (nextIds.length === 1) {
         setSelectedTopology({ bodyId: nextIds[0]!, kind: 'body' });
@@ -28114,7 +28887,9 @@ export function App() {
         setSelectedFeatureNode(null);
       }
       setStatus(
-        `${nextIds.length} ${nextIds.length === 1 ? 'body' : 'bodies'} selected.`
+        nextIds.length > 0
+          ? `${nextIds.length} ${nextIds.length === 1 ? 'body' : 'bodies'} selected.`
+          : 'Body selection cleared.'
       );
     }
   };
@@ -28567,7 +29342,8 @@ export function App() {
     x: number,
     y: number,
     entries: { item: ContextMenuState['items'][number]; run(): void }[],
-    heading?: string
+    heading?: string,
+    face?: ViewportMenuState['face']
   ) {
     contextMenuActionsRef.current = Object.fromEntries(
       entries.map((entry) => [entry.item.id, entry.run])
@@ -28576,18 +29352,31 @@ export function App() {
       x,
       y,
       items: entries.map((entry) => entry.item),
-      ...(heading ? { heading } : {})
+      ...(heading ? { heading } : {}),
+      ...(face ? { face } : {})
     });
   }
 
   function handleViewportContextMenu(
     x: number,
     y: number,
-    selection: TopologySelection | null
+    selection: TopologySelection | null,
+    options: ViewportContextMenuOptions = {}
   ) {
     if (!doc) {
       return;
     }
+    // I18: over stacked targets the menu leads with Select other, whose list
+    // reopens this menu for the target chosen from it.
+    const selectOther = options.selectOther;
+    const leading = selectOther
+      ? [
+          {
+            item: selectOtherMenuItem(selectOther.count),
+            run: selectOther.open
+          }
+        ]
+      : [];
     // A running command owns both its geometry and empty viewport space.
     // A preview can move an edge away from the pointer before right-click.
     if (!modelingLocked && inPlaceRef.current.active) {
@@ -28599,12 +29388,14 @@ export function App() {
     // the viewport controls someone reading a model actually wants.
     if (!selection || modelingLocked) {
       openContextMenu(x, y, [
+        ...leading,
         {
           item: {
             id: 'fit',
             label: 'Fit view',
             icon: <Maximize2 size={13} aria-hidden="true" />,
-            shortcut: menuShortcut('view-fit')
+            shortcut: menuShortcut('view-fit'),
+            section: leading.length > 0
           },
           run: () => setFitSignal((value) => value + 1)
         },
@@ -28655,17 +29446,23 @@ export function App() {
     }
     // Actions wait for the clicked selection to land. An unapplied Move
     // owns the question first; a menu here would act on the old selection.
-    if (handleSelectTopologyFromViewer(selection, false, undefined, { x, y })) {
+    // The keyboard's menu is for the selection as it stands, so it picks
+    // nothing (a multi-selection stays whole).
+    if (
+      !options.keyboard &&
+      handleSelectTopologyFromViewer(selection, false, undefined, { x, y })
+    ) {
       setContextMenu(null);
       return;
     }
-    openViewportSelectionContextMenu(x, y, selection);
+    openViewportSelectionContextMenu(x, y, selection, leading);
   }
 
   function openViewportSelectionContextMenu(
     x: number,
     y: number,
-    selection: TopologySelection
+    selection: TopologySelection,
+    leading: { item: ContextMenuState['items'][number]; run(): void }[] = []
   ) {
     const owner = managerRef.current;
     const current = owner?.document;
@@ -28699,20 +29496,28 @@ export function App() {
         }
         run(viewportMenuHandlersRef.current);
       };
-    const body = current.derived.bodyRepresentations[selection.bodyId];
+    const body = ownEntry(
+      current.derived.bodyRepresentations,
+      selection.bodyId
+    );
     const feature = selectionFeature(current, body, selection);
     const edge = selection.kind === 'edge';
+    // Union and Subtract say why they are greyed out, as the rail does.
+    const combineReason =
+      viewerBodies.length < 2 ? 'Needs a second body to combine with' : null;
     openContextMenu(
       x,
       y,
       [
+        ...leading,
         ...(edge
           ? [
               {
                 item: {
                   id: 'fillet',
                   label: 'Fillet edge…',
-                  icon: <Spline size={13} aria-hidden="true" />
+                  icon: <Spline size={13} aria-hidden="true" />,
+                  section: leading.length > 0
                 },
                 run: runCurrent((handlers) => handlers.launchTool('fillet'))
               },
@@ -28732,7 +29537,7 @@ export function App() {
             label: 'Move / Rotate…',
             icon: <Move3d size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-transform'),
-            section: edge
+            section: edge || leading.length > 0
           },
           run: runCurrent((handlers) => handlers.launchTool('transform'))
         },
@@ -28742,7 +29547,7 @@ export function App() {
             label: 'Union…',
             icon: <Combine size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-union'),
-            disabled: viewerBodies.length < 2
+            ...(combineReason ? { disabled: true, detail: combineReason } : {})
           },
           run: runCurrent((handlers) => handlers.launchTool('union'))
         },
@@ -28752,7 +29557,7 @@ export function App() {
             label: 'Subtract…',
             icon: <Scissors size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-subtract'),
-            disabled: viewerBodies.length < 2
+            ...(combineReason ? { disabled: true, detail: combineReason } : {})
           },
           run: runCurrent((handlers) => handlers.launchTool('subtract'))
         },
@@ -28806,7 +29611,14 @@ export function App() {
             ]
           : [])
       ],
-      topologySelectionLabel(body, selection)
+      topologySelectionLabel(body, selection),
+      selection.kind === 'face'
+        ? {
+            bodyId: selection.bodyId,
+            topologyId: selection.topologyId,
+            hash: selection.hash
+          }
+        : undefined
     );
   }
 
@@ -30028,6 +30840,15 @@ export function App() {
             return;
           }
           if (interaction.mode === 'sketch') {
+            if (event.defaultPrevented) {
+              // A value prompt (a dimension, a fillet radius, an offset)
+              // spent this press closing itself: it cancels the value and
+              // climbs no rung, so it neither leaves nor arms the exit
+              // (I43). Read before our own preventDefault below, which
+              // would otherwise make every press look spent.
+              sketchExitArmedAtRef.current = null;
+              return;
+            }
             // Inside a sketch Escape still climbs its ladder one rung per
             // press: chain, pick sequence, tool, selection, then the sketch.
             event.preventDefault();
@@ -30046,6 +30867,23 @@ export function App() {
             // sketch had already been left — only Finish Sketch said
             // anything. Both dispatch the same exit, so both can say so.
             const leftSketch = escapeTarget(interaction) === 'exit-sketch';
+            if (leftSketch) {
+              // I43: the last rung asks before it leaves; a reflex second
+              // Escape after closing a prompt or deselecting stays put.
+              const step = sketchExitEscape(
+                sketchExitArmedAtRef.current,
+                performance.now()
+              );
+              sketchExitArmedAtRef.current = step.armedAt;
+              if (!step.leave) {
+                setStatus(
+                  'Press Esc again to leave the sketch, or choose Finish Sketch. Your geometry is kept either way.'
+                );
+                return;
+              }
+            } else {
+              sketchExitArmedAtRef.current = null;
+            }
             dispatchInteraction({ type: 'escape' });
             if (leftSketch) {
               setStatus('Sketch closed.');
@@ -30128,6 +30966,31 @@ export function App() {
             }
             return;
           }
+          // Several faces picked together are deleted together and healed,
+          // whatever built the body: every wall of a window closes it.
+          if (
+            featureSelectionSource !== 'pinned' &&
+            boxSelectedFaces &&
+            boxSelectedFaces.length > 1
+          ) {
+            event.preventDefault();
+            if (new Set(boxSelectedFaces.map((face) => face.bodyId)).size > 1) {
+              setStatus(
+                'Faces on different bodies cannot be deleted together. Select faces on one body.'
+              );
+              return;
+            }
+            if (
+              !(
+                isOperationState(interaction) &&
+                interaction.phase !== 'armed' &&
+                interaction.phase !== 'failed'
+              ) &&
+              validateSelectionEdit({ acceptCompleteCommit: true })
+            )
+              handleDeleteFaces(boxSelectedFaces);
+            return;
+          }
           // A STEP face is healed by a replayable direct edit. Its import
           // history row is never deleted by a viewport face pick.
           if (
@@ -30149,6 +31012,27 @@ export function App() {
               validateSelectionEdit({ acceptCompleteCommit: true })
             )
               handleDeleteImportedFace(selectedTopology);
+            return;
+          }
+          // A face a subtract cut — the wall of a round hole — is healed in
+          // place. The feature it is inferred to is the cutting tool, and
+          // deleting that would leave the subtract with nothing to cut.
+          if (
+            featureSelectionSource !== 'pinned' &&
+            selectedTopology?.kind === 'face' &&
+            doc &&
+            isCutFace(doc, selectedTopology)
+          ) {
+            event.preventDefault();
+            if (
+              !(
+                isOperationState(interaction) &&
+                interaction.phase !== 'armed' &&
+                interaction.phase !== 'failed'
+              ) &&
+              validateSelectionEdit({ acceptCompleteCommit: true })
+            )
+              handleDeleteImportedFace(selectedTopology, 'cut');
             return;
           }
           // A drag or a commit still in flight owns the selection; Delete
@@ -30469,6 +31353,9 @@ export function App() {
       <>
         <StartScreen
           onImportProject={(file) => void handleImportProject(file)}
+          onImportFiles={(files, units) =>
+            void handleStartScreenFiles(files, units)
+          }
           projects={projects}
           status={status}
           previousWorkspaceStatus={previousWorkspaceStatus.current}
@@ -30476,7 +31363,7 @@ export function App() {
             newBuildAvailable ? () => window.location.reload() : undefined
           }
           onReloadForLoadFailure={
-            downloadInterrupted ? () => window.location.reload() : undefined
+            loadFailureShown ? () => window.location.reload() : undefined
           }
           // Discovery must finish before a new/opened part can commit: the
           // startup result would otherwise replace its session and listing.
@@ -30503,11 +31390,16 @@ export function App() {
           onOpenSettings={openSettings}
           onSignIn={() => openSettingsAt('account')}
           onDuplicate={(project) => void handleDuplicateProject(project)}
+          onRename={handleRenameLibraryProject}
           loadProperties={loadProperties}
           cloudProjectIds={cloudProjectIds}
           accountProjectListReached={accountProjectListReached}
           conflictedProjectIds={conflictedProjectIds}
           signedIn={Boolean(session)}
+          cloudUnavailable={
+            cloudFunctionsEnabled && authConfigStatus === 'unavailable'
+          }
+          onRetryCloud={() => void handleRefreshAuthConfig()}
           onSaveToAccount={(project) => void handleSaveToAccount(project)}
           onSaveAllToAccount={(candidates) =>
             void handleSaveAllToAccount(candidates)
@@ -30541,6 +31433,9 @@ export function App() {
           loadThumbnail={loadThumbnail}
           thumbnailAccountId={thumbnailAccountUserId ?? null}
           publishThumbnail={publishThumbnail}
+          {...(session &&
+            cloudFunctionsEnabled && { loadStorageUsage: api.storageUsage })}
+          onOpenAccountSettings={() => openSettingsAt('account')}
         />
         <StatusActivityLog
           status={status}
@@ -31034,7 +31929,7 @@ export function App() {
         : 'Section view: on',
       group: 'View',
       keywords: ['section', 'cut', 'clip', 'plane'],
-      icon: <Slice size={16} aria-hidden="true" />,
+      icon: <SquareSplitVertical size={16} aria-hidden="true" />,
       disabledReason: viewerBodies.length === 0 ? 'Create a body first' : null,
       run: toggleSectionView
     },
@@ -31097,6 +31992,14 @@ export function App() {
         ? 'Project transfer in progress'
         : null,
       run: () => projectImportInputRef.current?.click()
+    },
+    {
+      id: 'file-insert-project',
+      label: 'Insert project…',
+      group: 'File',
+      keywords: ['merge', 'combine', 'add', 'openzcad', 'into'],
+      icon: <Upload size={16} aria-hidden="true" />,
+      run: () => projectInsertInputRef.current?.click()
     },
     {
       // The face outline export used to be a tab on the tool card, where it
@@ -32183,6 +33086,7 @@ export function App() {
           geometryFailed={geometry.state.phase === 'failed'}
           projectTransferBusy={projectTransferBusy}
           onImportProject={(file) => void handleImportProject(file)}
+          onInsertProject={(file) => void handleInsertProject(file)}
           onExportProject={() => void handleExportProject()}
           onDownloadArtifact={(artifact) =>
             void handleDownloadProjectArtifact(artifact)
@@ -32238,6 +33142,15 @@ export function App() {
               collaboration.status === 'read-only')
           }
           collaboratorCount={collaboration.members.length}
+          shareSession={
+            shareSession
+              ? {
+                  // A plaintext link always opens in Tweak.
+                  mode: shareSession.encryptedMode ?? 'tweak',
+                  onMakeCopy: requestShareCopy
+                }
+              : null
+          }
           projectSharingEnabled={
             cloudFunctionsEnabled && projectSharingPreferenceEnabled
           }
@@ -32295,9 +33208,12 @@ export function App() {
             }
             onView={requestView}
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
-            onCycleDisplayMode={cycleDisplayMode}
+            onDisplayMode={setDisplayMode}
+            onToggleXray={toggleXray}
             onToggleProjection={toggleProjection}
             onToggleOrbitMode={toggleOrbitMode}
+            onToggleSection={toggleSectionView}
+            nothingToSection={!viewerBodies.some((body) => !body.consumed)}
           />
         ) : // The sketch session brings its own tool rail. Before it, while
         // the plane is being picked, the plane chooser in the command slot
@@ -32344,7 +33260,8 @@ export function App() {
             onViewActivityLog={openActivityLog}
             onExportStep={() => void handleExportStep()}
             onOpenMeshExport={() => setMeshExportOpen(true)}
-            share={shareSession ? { onMakeCopy: requestShareCopy } : null}
+            // Make a copy is the top bar's labelled button now (I73).
+            share={null}
             panelOpen={panelState.tweakPanelOpen}
             onTogglePanel={() =>
               setPanelState((current) => ({
@@ -32457,6 +33374,7 @@ export function App() {
             fitSignal={fitSignal}
             autoFrame={autoFrame}
             creationFrame={creationFrame}
+            clearStageRequest={clearStageRequest}
             viewRequest={projectViewRequest}
             normalToFaceRequest={normalToFaceRequest}
             units={doc.units}
@@ -32628,7 +33546,7 @@ export function App() {
                 : null
             }
             onOffsetPreview={handleOffsetPreview}
-            onOffsetCommit={(value) => {
+            onOffsetCommit={(value, reading) => {
               if (interactionRef.current.mode === 'region') {
                 regionDistanceSetter.current?.(Math.round(value * 1000) / 1000);
                 dispatchInteraction({ type: 'drag-release' });
@@ -32637,7 +33555,11 @@ export function App() {
                 );
                 return 'started';
               }
-              return handleOffsetCommit(value);
+              return handleOffsetCommit(
+                value,
+                undefined,
+                reading ? { total: reading.total } : undefined
+              );
             }}
             onOffsetCancel={handleViewerOffsetCancel}
             offsetPreviewInvalid={holdsRefusal(interaction)}
@@ -33001,17 +33923,15 @@ export function App() {
                 }
               : {})}
             facePickOnly={toFacePick !== null}
+            faceSetPickBodyId={
+              tool === null && interaction.mode !== 'sketch'
+                ? heldFaceSetBody(heldFaces)
+                : null
+            }
             modeOverlay={
               modelingLocked ? (
                 <>
-                  {viewMode && (
-                    <ViewModeRail
-                      {...partsProps}
-                      {...(shareSession?.encryptedMode
-                        ? { onMakeCopy: requestShareCopy }
-                        : {})}
-                    />
-                  )}
+                  {viewMode && <ViewModeRail {...partsProps} />}
                   {viewMode && (
                     <AssemblyPlayer
                       projectId={doc.projectId}
@@ -33019,9 +33939,11 @@ export function App() {
                     />
                   )}
                   {assembleMode && (
-                    <MotionStudyTimeline
+                    <MotionStudyTimelineSlot
+                      resetKey={doc.projectId}
                       floating
                       assembly={doc.assembly}
+                      lengthUnit={doc.units}
                       execute={executeCommand}
                     />
                   )}
@@ -33358,7 +34280,8 @@ export function App() {
             onMeasure={toggleMeasure}
             onView={requestView}
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
-            onCycleDisplayMode={cycleDisplayMode}
+            onDisplayMode={setDisplayMode}
+            onToggleXray={toggleXray}
             onToggleProjection={toggleProjection}
             onToggleOrbitMode={toggleOrbitMode}
             sectionRange={
@@ -33413,14 +34336,17 @@ export function App() {
                 }
                 historyOpen={panelShowing('history')}
                 exportSeen={tourExportSeen}
-                startIndex={
-                  tourStepRef.current?.projectId === doc.projectId
-                    ? tourStepRef.current.index
-                    : 0
+                // The step reached, kept per device: the card unmounts while
+                // a command or a sketch runs, and a second empty project
+                // picks up where the first left off (I16).
+                startIndex={panelState.workspaceTourStep}
+                onIndexChange={(index) =>
+                  setPanelState((current) =>
+                    current.workspaceTourStep === index
+                      ? current
+                      : { ...current, workspaceTourStep: index }
+                  )
                 }
-                onIndexChange={(index) => {
-                  tourStepRef.current = { projectId: doc.projectId, index };
-                }}
                 onDismiss={() =>
                   setPanelState((current) => ({
                     ...current,
@@ -33467,7 +34393,14 @@ export function App() {
                 document={doc}
                 execute={assembleApp.execute}
                 onStatus={assembleApp.onStatus}
-                onAnnounce={(message) => announce(message)}
+                onAnnounce={(message, options) =>
+                  announce(
+                    message,
+                    options?.undo
+                      ? { label: 'Undo', run: handleUndo }
+                      : undefined
+                  )
+                }
                 bodyBounds={assemblyBodyBounds}
                 reducedMotion={appSettings.appearance.reducedMotion}
               />
@@ -33963,6 +34896,10 @@ export function App() {
                 editDisabledReason={drawingEditDisabledReason}
                 onCommand={(command) => executeCommand(command)}
                 onStatus={(message, options) => setStatus(message, options)}
+                onAnnounceUndoable={(message) =>
+                  announce(message, { label: 'Undo', run: handleUndo })
+                }
+                pointerNavigation={appSettings.viewport.pointerNavigation}
                 onAssistantSource={handleDrawingAssistantSource}
                 onActiveSheetChange={setDrawingActiveSheetId}
                 previewAnnotations={drawingPreview}
@@ -33980,7 +34917,7 @@ export function App() {
               file is moving, the pill is the one notice about it. */}
           <div className="activity-lane">
             {patternProgress && (
-              <PatternProgress
+              <PatternProgressSlot
                 name={patternProgress.name}
                 onCancel={cancelPattern}
               />
@@ -33991,7 +34928,18 @@ export function App() {
                   run={importRun}
                   onCancel={cancelImportRun}
                   onDismiss={dismissImportRun}
-                  onArchiveNow={archiveImportSourcesFromCard}
+                  // The same test archiveArtifact applies: signed out, or
+                  // signed in with a device-only project, the upload can
+                  // only fail (I8), so there is no Archive now.
+                  onArchiveNow={
+                    cloudArchivable(
+                      Boolean(session),
+                      doc.projectId,
+                      remoteVersionsRef.current
+                    )
+                      ? archiveImportSourcesFromCard
+                      : undefined
+                  }
                 />
               </Suspense>
             )}
@@ -34014,6 +34962,11 @@ export function App() {
               sketchPlaneCardShown
             }
             onOpenLog={openActivityLog}
+            onUndo={
+              undoableStatusAt === statusEntry.at && managerRef.current?.canUndo
+                ? handleUndo
+                : undefined
+            }
             prompt={workspacePrompt}
             promptResting={workspacePrompt === idleHint}
             instructionDetails={
@@ -34190,7 +35143,10 @@ export function App() {
                   units={doc.units}
                   profileCount={Math.max(1, selectedProfiles.length)}
                   bodies={doc.bodyOrder.flatMap((bodyId) => {
-                    const body = doc.derived.bodyRepresentations[bodyId];
+                    const body = ownEntry(
+                      doc.derived.bodyRepresentations,
+                      bodyId
+                    );
                     return body && !body.consumed
                       ? [{ bodyId, name: body.name }]
                       : [];
@@ -34453,6 +35409,17 @@ export function App() {
             }}
           />
           <input
+            ref={projectInsertInputRef}
+            type="file"
+            accept={fileAccept('.openzcad')}
+            hidden
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = '';
+              if (file) void handleInsertProject(file);
+            }}
+          />
+          <input
             ref={importInputRef}
             type="file"
             accept={fileAccept(CAD_IMPORT_ACCEPT)}
@@ -34488,16 +35455,45 @@ export function App() {
                 setPanelState((current) => ({
                   ...current,
                   workspaceTourDismissed: false,
-                  workspaceTourMinimized: false
+                  workspaceTourMinimized: false,
+                  // Asked for again: from the start, not where it was left.
+                  workspaceTourStep: 0
                 }));
               }}
             />
           )}
           {contextMenuExit.rendered ? (
             <ContextMenu
-              menu={contextMenuExit.rendered}
+              menu={withFaceVerbs(
+                contextMenuExit.rendered,
+                renderedSelectedTopology?.kind === 'face'
+                  ? renderedSelectedTopology
+                  : null,
+                calloutWithOperation?.anchor === 'selection'
+                  ? calloutWithOperation.verbs
+                  : null,
+                {
+                  disabledReason: normalToFaceTarget
+                    ? null
+                    : 'The face is not flat',
+                  shortcut: menuShortcut('view-normal-to-face')
+                }
+              )}
               closing={contextMenuExit.closing}
-              onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
+              onSelect={(itemId) => {
+                // A face's verbs act as its rail buttons do (I19).
+                if (itemId.startsWith(FACE_VERB_PREFIX)) {
+                  calloutWithOperation?.onVerb(
+                    itemId.slice(
+                      FACE_VERB_PREFIX.length
+                    ) as SelectionCalloutVerbId
+                  );
+                } else if (itemId === LOOK_AT_FACE_ITEM_ID) {
+                  requestNormalToSelectedFace();
+                } else {
+                  contextMenuActionsRef.current[itemId]?.();
+                }
+              }}
               onClose={() => setContextMenu(null)}
             />
           ) : null}
@@ -34742,9 +35738,13 @@ export function App() {
                 }
                 bodies={exportBodyIds.map((bodyId) => ({
                   bodyId,
-                  name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId,
-                  meshReference:
-                    doc.derived.bodyRepresentations[bodyId]?.meshReference
+                  name:
+                    ownEntry(doc.derived.bodyRepresentations, bodyId)?.name ??
+                    bodyId,
+                  meshReference: ownEntry(
+                    doc.derived.bodyRepresentations,
+                    bodyId
+                  )?.meshReference
                 }))}
                 revision={doc.version}
                 onClose={() => setMeshExportOpen(false)}

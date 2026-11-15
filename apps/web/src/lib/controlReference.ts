@@ -549,10 +549,10 @@ export const POINTER_CONTROL_GROUPS = [
     items: [
       {
         id: 'context-menu',
-        keys: ['Right-click'],
-        action: 'Select other or open the context menu',
+        keys: ['Right-click', 'Shift+F10'],
+        action: 'Open the context menu',
         detail:
-          'Lists stacked topology under the pointer; a single target opens its actions.'
+          'Acts on what is under the pointer; over stacked targets the menu starts with Select other. Shift+F10 or the Menu key opens it for the selection.'
       },
       {
         id: 'drag-handle',

@@ -33,12 +33,22 @@ const CAN_CREATE_ENCRYPTED = isSupportedProjectFormat(
 export function ProjectEncryptionPreference({
   userId,
   unlocked,
+  afterSetup = false,
+  onAfterSetupDone,
   api: injectedApi,
   pins: injectedPins
 }: {
   userId: string;
   /** This device holds the account key (keys set up and unlocked here). */
   unlocked: boolean;
+  /**
+   * Encryption setup has just finished on this device: end it with the
+   * question "Encrypt new projects?", answered yes unless unticked (design
+   * review I75). Without it, "Encryption is on" sat above new projects that
+   * were still created unencrypted.
+   */
+  afterSetup?: boolean;
+  onAfterSetupDone?(): void;
   api?: ProjectPreferenceApi;
   pins?: PreferencePinStore;
 }) {
@@ -55,6 +65,8 @@ export function ProjectEncryptionPreference({
   const [state, setState] = useState<ProjectPreferenceState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The setup step's own box, ticked by default (design review I75).
+  const [encryptChoice, setEncryptChoice] = useState(true);
 
   const context = useCallback(() => {
     const account = unlockedAccount(userId);
@@ -117,6 +129,49 @@ export function ProjectEncryptionPreference({
 
   const checked =
     required || (state?.kind === 'verified' && state.encryptNewProjects);
+  const storedChoice =
+    state?.kind === 'verified' ? state.encryptNewProjects : false;
+  if (
+    afterSetup &&
+    !required &&
+    (state?.kind === 'verified' || state?.kind === 'unset')
+  ) {
+    return (
+      <Group title="Last step">
+        <SettingRow
+          title="Encrypt new projects?"
+          hint="Recommended. New cloud projects are then end-to-end encrypted, so only your devices can read them. Projects you already have stay as they are until you encrypt them below."
+        >
+          <div className="encryption-setup-choice">
+            <label>
+              <input
+                type="checkbox"
+                checked={encryptChoice}
+                disabled={busy}
+                onChange={(event) => setEncryptChoice(event.target.checked)}
+              />
+              Encrypt new projects
+            </label>
+            <button
+              className="primary"
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                void (async () => {
+                  if (encryptChoice !== storedChoice) {
+                    await choose(encryptChoice);
+                  }
+                  onAfterSetupDone?.();
+                })()
+              }
+            >
+              Done
+            </button>
+          </div>
+        </SettingRow>
+      </Group>
+    );
+  }
   return (
     <Group title="Projects">
       {error ? (

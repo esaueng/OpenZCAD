@@ -1,5 +1,8 @@
 import { expect, it, vi } from 'vitest';
-import { pageEncryptedShareLinkClient } from './EncryptedShareLinks';
+import {
+  pageEncryptedShareLinkClient,
+  snapshotProblem
+} from './EncryptedShareLinks';
 
 const { createShareLink } = vi.hoisted(() => ({ createShareLink: vi.fn() }));
 
@@ -92,4 +95,38 @@ it('returns the share view and warning when upkeep and journal reads are unavail
     removalLinks: [],
     problem: 'Share work unavailable'
   });
+});
+
+it('reports a link snapshot the upkeep could not publish until one is published', () => {
+  const none = { published: [], failed: [] };
+  const failed = {
+    published: [],
+    failed: [{ shareId: 'link', reason: 'Snapshot unavailable' }]
+  };
+  expect(snapshotProblem(null)).toBeNull();
+  expect(
+    snapshotProblem({
+      authorities: {
+        issued: ['link'],
+        current: [],
+        needsConfirmation: [],
+        failed: [],
+        snapshots: failed
+      },
+      snapshots: none
+    })
+  ).toMatch(/could not be published.*Snapshot unavailable/);
+  // The upkeep's later publication caught up.
+  expect(
+    snapshotProblem({
+      authorities: {
+        issued: ['link'],
+        current: [],
+        needsConfirmation: [],
+        failed: [],
+        snapshots: failed
+      },
+      snapshots: { published: ['link'], failed: [] }
+    })
+  ).toBeNull();
 });

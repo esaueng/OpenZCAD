@@ -432,7 +432,7 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
   await expect(
     page.getByRole('region', { name: 'Feature inspector' })
   ).toHaveCount(0);
-  await page.getByRole('button', { name: 'Undo' }).click();
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect
     .poll(async () => (await readBlend(canvas))?.blendRadius ?? null)
     .toBeCloseTo(1, 6);

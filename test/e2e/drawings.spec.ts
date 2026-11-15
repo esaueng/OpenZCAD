@@ -395,3 +395,98 @@ test('starts a sheet from the bodies on screen, not the export scope', async ({
   ).toHaveCount(4, { timeout: 30_000 });
   await expect(drawings.getByLabel('Sheet bodies')).toHaveText('Bodies: Upper 1');
 });
+
+test('sheet tabs edit the set, the title block numbers it, paper refits and the wheel zooms (review I62–I66, I2)', async ({
+  page
+}) => {
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Sheet set');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '120', depth: '80', height: '60' }
+  });
+  await mode(page, 'Draw').click();
+  const drawings = page.getByRole('region', { name: 'Drawings' });
+  await drawings.getByRole('button', { name: 'New drawing sheet' }).click();
+  const canvas = drawings.getByRole('application', { name: /^Sheet / });
+  await expect(
+    canvas.locator('.drawing-view:not(.is-placeholder)')
+  ).toHaveCount(4, { timeout: 30_000 });
+  const panel = drawings.getByRole('complementary', {
+    name: 'Drawing properties'
+  });
+  const tabs = drawings.getByRole('tablist', { name: 'Drawing sheets' });
+  const texts = canvas.locator('.drawing-texts');
+
+  // I63: the SHEET cell numbers the sheet and names it; it printed "A3".
+  await expect(texts).toContainText('1 / 1 · Sheet 1');
+
+  // I65: Add view offers the orientation the starter lacks.
+  await expect(panel.getByLabel('New view')).toHaveValue('right');
+
+  // I66: a plain wheel zooms a fitted sheet, as in Build.
+  const fitted = await canvas.getAttribute('viewBox');
+  const box = (await canvas.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -240);
+  await expect.poll(() => canvas.getAttribute('viewBox')).not.toBe(fitted);
+  await drawings.getByRole('button', { name: 'Fit sheet' }).click();
+
+  // I64: A4 refits the views in the same step, so export stays available.
+  await panel.getByLabel('Paper').selectOption('A4');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    /Changed the paper to A4 landscape and fitted the views/
+  );
+  await expect(
+    drawings.getByRole('button', { name: 'Export PDF' })
+  ).toBeEnabled();
+
+  // I62: duplicate, rename and reorder from the tab.
+  await tabs.getByRole('tab', { name: 'Sheet 1' }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: /Duplicate/ }).click();
+  await expect(tabs.getByRole('tab')).toHaveText(['Sheet 1', 'Sheet 1 copy']);
+  await expect(texts).toContainText('2 / 2 · Sheet 1 copy');
+  await tabs.getByRole('tab', { name: 'Sheet 1 copy' }).dblclick();
+  await drawings
+    .getByRole('textbox', { name: 'Rename Sheet 1 copy' })
+    .fill('Details');
+  await page.keyboard.press('Enter');
+  await drawings.getByRole('button', { name: 'Sheet actions' }).click();
+  await page.getByRole('menuitem', { name: /Move left/ }).click();
+  await expect(tabs.getByRole('tab')).toHaveText(['Details', 'Sheet 1']);
+  await expect(texts).toContainText('1 / 2 · Details');
+
+  // I2: a delete says what went, and Undo brings it back.
+  await canvas.getByRole('button', { name: 'Front view' }).click();
+  await panel.getByRole('button', { name: /Delete view/ }).click();
+  await expect(page.locator('.toast-message')).toContainText(
+    'Deleted Front view'
+  );
+  await page.locator('.toast-action', { hasText: 'Undo' }).click();
+  await expect(
+    canvas.locator('.drawing-view:not(.is-placeholder)')
+  ).toHaveCount(4);
+  await tabs.getByRole('tab', { name: 'Details' }).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: /Delete sheet/ }).click();
+  await expect(page.locator('.toast-message')).toContainText(
+    'Deleted Details and its 4 views.'
+  );
+  await expect(tabs.getByRole('tab')).toHaveText(['Sheet 1']);
+  await page.locator('.toast-action', { hasText: 'Undo' }).click();
+  await expect(tabs.getByRole('tab')).toHaveText(['Details', 'Sheet 1']);
+
+  // I62: a new sheet takes the next unused name, never a second "Sheet 2".
+  await tabs.getByRole('tab', { name: 'Sheet 1' }).click();
+  await drawings.getByRole('button', { name: 'Delete sheet' }).click();
+  await drawings.getByRole('button', { name: 'New sheet', exact: true }).click();
+  await drawings.getByRole('button', { name: 'New sheet', exact: true }).click();
+  // Details is now on A4, so the tabs also show each sheet's paper.
+  await expect(tabs.locator('.drawing-sheet-tab-name')).toHaveText([
+    'Details',
+    'Sheet 2',
+    'Sheet 3'
+  ]);
+});

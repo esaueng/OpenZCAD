@@ -125,6 +125,51 @@ export class ApiError extends Error {
 
 export const PROJECT_DOCUMENT_UNAVAILABLE_CODE = 'PROJECT_DOCUMENT_UNAVAILABLE';
 
+/**
+ * A save held back while earlier saves' replaced copies are still being
+ * freed (migration 0049): each attempt frees more, so it is retried, not
+ * reported as a quota refusal or an unreachable account.
+ */
+export const PROJECT_STORAGE_CLEANUP_PENDING_CODE =
+  'PROJECT_STORAGE_CLEANUP_PENDING';
+
+export function isProjectStorageCleanupPendingError(
+  error: unknown
+): error is ApiError {
+  return (
+    error instanceof ApiError &&
+    error.status === 503 &&
+    error.code === PROJECT_STORAGE_CLEANUP_PENDING_CODE
+  );
+}
+
+/**
+ * Runs an account write, trying it again while the account answers that
+ * earlier saves' copies are still being freed: each attempt frees a bounded
+ * share, and the refusal comes before anything is written, so a retry never
+ * saves twice. Stops early (null) once `stillWanted` says the save no longer
+ * applies, e.g. the project was closed meanwhile.
+ */
+export async function retryWhileStorageCleanupPending<T>(
+  write: () => Promise<T>,
+  stillWanted: () => boolean,
+  options: { attempts?: number; delayMs?: number } = {}
+): Promise<T | null> {
+  const attempts = options.attempts ?? 8;
+  const delayMs = options.delayMs ?? 1_000;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await write();
+    } catch (error) {
+      if (!isProjectStorageCleanupPendingError(error) || attempt >= attempts) {
+        throw error;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    if (!stillWanted()) return null;
+  }
+}
+
 export function isProjectDocumentUnavailableError(
   error: unknown
 ): error is ApiError {
@@ -469,6 +514,67 @@ export async function encryptsNewProjects(): Promise<boolean> {
   const preference = stored.preference as
     { encryptNewProjects?: unknown } | null | undefined;
   return preference?.encryptNewProjects === true;
+}
+
+/**
+ * Whether this account's library is encrypted: everything it stores beside
+ * its projects (folder records) and every device project it saves to the
+ * account. True when it encrypts new projects (decision D2), and also when
+ * it owns or is a member of an encrypted project: encrypting existing
+ * projects and accepting an encrypted invitation need no opt-in, yet the
+ * library then names those projects, and a device project saved to the
+ * account can be a "Keep both" or recovery copy of one.
+ *
+ * The opt-in keeps every guarantee of `encryptsNewProjects`; the
+ * project-holding half is the Worker's answer, which can only add
+ * encryption. An account whose answer cannot be read while encrypted
+ * projects are open refuses (`E2EE_PREFERENCE_UNVERIFIED`) rather than
+ * reading as no.
+ */
+export async function encryptsAccountLibrary(): Promise<boolean> {
+  if (await encryptsNewProjects()) return true;
+  const stored = await readJsonAnswer('/api/e2ee/project-preferences');
+  if (stored.kind === 'ok') return stored.body.libraryEncrypted === true;
+  const config = await readJsonAnswer('/api/e2ee/config');
+  if (config.kind === 'ok') {
+    if (config.body.enabled === true && config.body.projectsEnabled === true) {
+      throw preferenceUnverified();
+    }
+    return false;
+  }
+  // Only a Worker that has no encryption routes at all reads as no. One that
+  // cannot be reached, errors or answers something else could be hiding an
+  // encrypted library, and `encryptsNewProjects` reads it as no too.
+  if (config.kind === 'absent') return false;
+  throw preferenceUnverified();
+}
+
+/**
+ * A route's JSON body; `absent` when nothing there serves the route (404,
+ * or a static host's HTML page in its place); `unavailable` when it cannot
+ * be reached, fails, or answers JSON that is not an object.
+ */
+async function readJsonAnswer(
+  path: string
+): Promise<
+  | { kind: 'ok'; body: Record<string, unknown> }
+  | { kind: 'absent' }
+  | { kind: 'unavailable' }
+> {
+  try {
+    const response = await desktopFetch(path, { credentials: 'same-origin' });
+    if (response.status === 404) return { kind: 'absent' };
+    if (!response.ok) return { kind: 'unavailable' };
+    if (!/\bjson\b/i.test(response.headers.get('content-type') ?? '')) {
+      return { kind: 'absent' };
+    }
+    const body: unknown = await response.json();
+    return body !== null && typeof body === 'object' && !Array.isArray(body)
+      ? { kind: 'ok', body: body as Record<string, unknown> }
+      : { kind: 'unavailable' };
+  } catch {
+    return { kind: 'unavailable' };
+  }
 }
 
 /**
@@ -828,7 +934,10 @@ export const api = {
         throw error;
       }
     };
-    return encryptsNewProjects().then((encrypts) => adopt(encrypts));
+    // The library rule, not the opt-in alone: a device project can be a copy
+    // of an encrypted one ("Keep both", recovery), which must not reach the
+    // account as plaintext because the account never opted in.
+    return encryptsAccountLibrary().then((encrypts) => adopt(encrypts));
   },
   loadProject: (projectId: string) =>
     byFormat(

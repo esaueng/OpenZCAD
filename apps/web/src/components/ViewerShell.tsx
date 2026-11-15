@@ -32,6 +32,7 @@ import {
   type BodyAppearancePreview,
   type FaceResizeCommit,
   type ModelViewerProps,
+  type ViewportContextMenuOptions,
   type CylinderRadiusHandleTarget,
   type EdgeHandleTarget,
   type OrientationDragControls,
@@ -42,6 +43,7 @@ import {
   type OffsetHandleTarget
 } from './ModelViewer';
 import type {
+  DisplayMode,
   ExactSectionRegionDisplay,
   MovePreview,
   MoveSnap,
@@ -167,6 +169,8 @@ interface ViewerShellProps {
   fitSignal: number;
   autoFrame?: AutoFrameRequest | null;
   creationFrame?: AutoFrameRequest | null;
+  /** Bumped to keep the model in the clear stage (ModelViewer). */
+  clearStageRequest?: number;
   viewRequest: { view: ViewRequestTarget; nonce: number } | null;
   normalToFaceRequest: NormalToFaceRequest | null;
   units: string;
@@ -384,6 +388,8 @@ interface ViewerShellProps {
   modelPanelsHidden?: boolean;
   /** F01: a click picks only a body face (see `ModelViewer`). */
   facePickOnly?: boolean;
+  /** Shift adds faces of this body to a held face set (see `ModelViewer`). */
+  faceSetPickBodyId?: string | null;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onMovePreviewChange(
@@ -394,7 +400,8 @@ interface ViewerShellProps {
   onContextMenu(
     x: number,
     y: number,
-    selection: TopologySelection | null
+    selection: TopologySelection | null,
+    options?: ViewportContextMenuOptions
   ): void;
   onToggleGrid(): void;
   onFit(): void;
@@ -407,7 +414,8 @@ interface ViewerShellProps {
   onView(view: ViewTarget): void;
   /** The project's saved views, shown in the Standard views panel. */
   savedViews?: SavedViewsSectionProps;
-  onCycleDisplayMode(): void;
+  onDisplayMode(mode: DisplayMode): void;
+  onToggleXray(): void;
   onToggleProjection(): void;
   /** Flips orbiting between Free and Turntable; absent, no rail button. */
   onToggleOrbitMode?(): void;
@@ -455,6 +463,7 @@ export function ViewerShell({
   fitSignal,
   autoFrame = null,
   creationFrame = null,
+  clearStageRequest = 0,
   viewRequest,
   normalToFaceRequest,
   units,
@@ -572,6 +581,7 @@ export function ViewerShell({
   regionHandle,
   modelPanelsHidden,
   facePickOnly,
+  faceSetPickBodyId = null,
   onSelectSketchProfile,
   onResizePrimitiveFace,
   onMovePreviewChange,
@@ -582,7 +592,8 @@ export function ViewerShell({
   onMeasure,
   onView,
   savedViews,
-  onCycleDisplayMode,
+  onDisplayMode,
+  onToggleXray,
   onToggleProjection,
   onToggleOrbitMode,
   fieldOfView,
@@ -726,7 +737,8 @@ export function ViewerShell({
       {...(onMeasure ? { onMeasure } : {})}
       onView={onView}
       {...(savedViews ? { savedViews } : {})}
-      onCycleDisplayMode={onCycleDisplayMode}
+      onDisplayMode={onDisplayMode}
+      onToggleXray={onToggleXray}
       onToggleProjection={onToggleProjection}
       {...(onToggleOrbitMode ? { onToggleOrbitMode } : {})}
       sectionRange={sectionRange}
@@ -799,6 +811,7 @@ export function ViewerShell({
         fitSignal={fitSignal}
         autoFrame={autoFrame}
         creationFrame={creationFrame}
+        clearStageRequest={clearStageRequest}
         viewRequest={viewRequest}
         normalToFaceRequest={normalToFaceRequest}
         units={units}
@@ -839,8 +852,9 @@ export function ViewerShell({
                 })
             : onOffsetPreview
         }
-        onOffsetCommit={(value) => {
-          if (!datumHandle || !onDatumOffsetDrag) return onOffsetCommit(value);
+        onOffsetCommit={(value, reading) => {
+          if (!datumHandle || !onDatumOffsetDrag)
+            return onOffsetCommit(value, reading);
           setDatumDrag(null);
           setDatumGesture((gesture) => gesture + 1);
           return onDatumOffsetDrag(value * datumHandle.sense)
@@ -951,6 +965,7 @@ export function ViewerShell({
         regionHandle={regionHandle}
         modelPanelsHidden={modelPanelsHidden}
         {...(facePickOnly ? { facePickOnly } : {})}
+        faceSetPickBodyId={faceSetPickBodyId}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
         onMovePreviewChange={onMovePreviewChange}

@@ -76,6 +76,11 @@ interface WorkspaceReadoutProps {
   /** Opens Settings › Activity log. */
   onOpenLog(): void;
   /**
+   * Undoes the commit the status reports ("Added box."); offered beside the
+   * toast while it shows that status (13 November review I22).
+   */
+  onUndo?: () => void;
+  /**
    * The context-sensitive next-step line the status bar showed beside the
    * message: what a click takes, what Escape does next. The tool card and the
    * selection dock carry it visually now; it stays here for assistive tech.
@@ -153,6 +158,7 @@ export function WorkspaceReadout({
   tone,
   muted = false,
   onOpenLog,
+  onUndo,
   prompt,
   promptResting = false,
   instructionDetails = null,
@@ -462,10 +468,12 @@ export function WorkspaceReadout({
                 ? `${paced.status} — ${missed} in the activity log`
                 : `${paced.status} — View activity log`
           }
+          // No trailing period on the action's name (I9): the status, when
+          // there is one, follows it as what the toast currently says.
           aria-label={
             quiet || line === ''
-              ? 'Open activity log.'
-              : `Open activity log. Current status: ${line}`
+              ? 'Open activity log'
+              : `Open activity log — current status: ${line}`
           }
           aria-haspopup="dialog"
           onClick={onOpenLog}
@@ -482,6 +490,16 @@ export function WorkspaceReadout({
             </span>
           ) : null}
         </button>
+        {shown && onUndo && paced.status === line ? (
+          <button
+            type="button"
+            className="workspace-toast-undo"
+            aria-label={`Undo: ${line}`}
+            onClick={onUndo}
+          >
+            Undo
+          </button>
+        ) : null}
         <div
           className="workspace-status-summary"
           role="group"

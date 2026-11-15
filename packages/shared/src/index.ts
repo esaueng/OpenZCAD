@@ -20,6 +20,7 @@ export * from './assembly-kinematics';
 export * from './gear-mesh-types';
 export * from './gear-mesh';
 import type { DocumentHistory } from './document-history';
+import { ownEntry } from './document-validation';
 import type { KeymapOverrides } from './keymap-settings';
 import type { DrawingSet } from './drawings';
 import type {
@@ -30,6 +31,7 @@ import type { BoundaryProvenance } from './sketch-boundary-provenance';
 import type { SketchPromotion } from './sketch-promotions';
 import type { ObjectFolderSet } from './object-folders';
 import type { AssemblySet } from './assembly';
+import type { PipeThreadSize } from './pipe-threads';
 export * from './drawing-annotations';
 export * from './topology-reference';
 export * from './reference-images';
@@ -43,6 +45,7 @@ export * from './e2ee-contacts';
 export * from './e2ee-assistant-consents';
 export * from './e2ee-invitations';
 export * from './e2ee-share-links';
+export * from './share-link-token';
 export * from './e2ee-project-migrations';
 import type { ReferenceImageSet } from './reference-images';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
@@ -231,7 +234,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // older client would refuse the unknown commands, or, past that, drop the
 // list on its next save and let the gears turn out of mesh, so it must
 // refuse the document.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 56 as const;
+// v57 adds M15 thread runouts and tapered pipe threads: `runoutStart` and
+// `runoutEnd` finish a thread end with the kernel's runout cone, and the
+// `'npt'` and `'bspt'` profiles with their `pipeSize` cut a 1:16 taper.
+// Every field is optional and absent keeps the v53 thread, so older
+// documents load unchanged. An older client would build a plain end or a
+// cylindrical thread in their place, so it must refuse.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 57 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -264,9 +273,12 @@ export type GearHand = 'right' | 'left';
 /**
  * A thread's form: the ISO 68-1 metric profile (60°), a printable profile
  * whose flanks stand 45° so neither overhangs more than 45° printed upright,
- * or a custom trapezoid.
+ * a custom trapezoid, or (schema v57) a tapered pipe thread: NPT (ASME
+ * B1.20.1, 60°) or BSPT R/Rc (ISO 7-1, 55°, its rounded crests and roots
+ * approximated by flats).
  */
-export type ThreadProfile = 'iso-metric' | 'printable' | 'custom';
+export type ThreadProfile =
+  'iso-metric' | 'printable' | 'custom' | 'npt' | 'bspt';
 /** Which way a thread winds: a right hand advances turning counter-clockwise. */
 export type ThreadHand = 'right' | 'left';
 /**
@@ -611,6 +623,23 @@ export type DirectEditOperation =
       sourceAxisEnd?: Vector3;
     }
   | {
+      /**
+       * Delete several faces of one body together and heal the gap the way
+       * Remus's `defeature` does: the faces around them extend until they
+       * close again. Selecting every wall of an opening closes the opening.
+       * The face fields name the first face, as every direct edit names one;
+       * `additionalFaces` are the rest, each pinned the same way.
+       */
+      kind: 'remove-faces';
+      faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
+      sourceSurfaceType: string;
+      sourceArea: number;
+      sourceCenter: Vector3;
+      /** The other faces removed with the first; at least one. */
+      additionalFaces: RemovedFaceSnapshot[];
+    }
+  | {
       kind: 'offset-face';
       faceHash: number;
       faceReference?: FaceTopologyReferenceV5;
@@ -682,6 +711,15 @@ export type DirectEditOperation =
       /** Every band to remove, the seed's carrier included. */
       blends: RecordedBlendCarrier[];
     };
+
+/** One face a `remove-faces` edit deletes, pinned as it was when picked. */
+export interface RemovedFaceSnapshot {
+  faceHash: number;
+  faceReference?: FaceTopologyReferenceV5;
+  sourceSurfaceType: string;
+  sourceArea: number;
+  sourceCenter: Vector3;
+}
 
 /** Exact analytic carrier of one blend band, as `resize-blend` records it. */
 export interface RecordedBlendCarrier {
@@ -2100,8 +2138,29 @@ export type FeatureData =
        */
       chamferStart?: boolean;
       chamferEnd?: boolean;
-      /** The chamfer cone's angle from the axis, degrees; absent is 45. */
+      /**
+       * The end cone's angle from the axis, degrees, for a chamfer or a
+       * runout; absent is 45.
+       */
       chamferAngleDeg?: ParamValue;
+      /**
+       * Schema v57: run the thread out at its start or end: a cone from the
+       * crest at that end plane down to the root, so the groove fades out
+       * against the collar a thread stopping short of the face leaves (or a
+       * shoulder the face ends on) with no undercut. An end takes a chamfer
+       * or a runout, not both. Absent is plain.
+       */
+      runoutStart?: boolean;
+      runoutEnd?: boolean;
+      /**
+       * Schema v57, `'npt'` and `'bspt'` profiles only: the nominal pipe
+       * size, which sets the pitch, the gauge-plane diameter and the thread
+       * length taken when `length` is absent. Absent takes the size the
+       * face is nearest: a boss its pipe, a bore its minor diameter. A pipe
+       * thread's fitting end is the end it starts at (`anchor`): a boss
+       * tapers small toward it, a bore opens large at it.
+       */
+      pipeSize?: PipeThreadSize;
     }
   | {
       featureKind: 'split';
@@ -3767,6 +3826,16 @@ export interface ProjectSummary {
    */
   documentVersion?: number;
   /**
+   * Bytes of the saved document at `documentVersion`, measured as
+   * {@link persistedDocumentBytes} of the canonical document (without its
+   * derived projection) — the size Project properties calls "Document size"
+   * and the account's per-project limit measures. Imported sources stored
+   * beside the document are not included. Absent when the store has not
+   * measured this version: a device projection written before sizes were
+   * recorded, or an encrypted project the account holds only as ciphertext.
+   */
+  documentBytes?: number;
+  /**
    * Absent when the store holding this summary has no shelf state for the
    * project — an older row, or a device that has never organised it. Read it
    * through {@link projectOrganization} so a missing record reads as defaults
@@ -4174,14 +4243,21 @@ export const MAX_ARTIFACT_UPLOAD_BYTES =
 /** Unfinished upload sessions one account may hold at once. */
 export const MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS = 16;
 /**
- * Ceiling on finalized artifact bytes per account, attributed to the project
- * owner. Uploads are otherwise unmetered R2 writes on an open-signup beta —
- * without an account ceiling, a scripted client can park unbounded storage on
- * the operator's bucket (32 MiB × 64 parts per artifact, no artifact count
- * limit). The Free allowance, 1 GiB, covers real use (the largest supported
- * STEP import is 128 MB) while bounding abuse; Premium raises it.
+ * The Free account's one storage allowance: everything the account stores,
+ * attributed to the project owner — documents, revisions and source assets
+ * (plaintext or encrypted) together with imports, exports and encrypted
+ * content blobs, in one bucket (migration 0049). Uploads and saves are
+ * otherwise unmetered writes on an open-signup beta; 100 MiB bounds abuse
+ * while covering typical projects. It is smaller than the largest supported
+ * STEP import (128 MiB), so a Free account cannot store an import that big.
+ * Premium raises it.
  */
-export const MAX_ACCOUNT_ARTIFACT_BYTES = 1024 * 1024 * 1024;
+export const MAX_ACCOUNT_STORAGE_BYTES = 100 * 1024 * 1024;
+/**
+ * @deprecated One allowance covers artifacts and projects alike; use
+ * {@link MAX_ACCOUNT_STORAGE_BYTES}. Kept equal to it.
+ */
+export const MAX_ACCOUNT_ARTIFACT_BYTES = MAX_ACCOUNT_STORAGE_BYTES;
 /**
  * Explicit ceiling on the unfinished portion of account artifact usage. It
  * matches the 2 GiB that migration 0017's reservation triggers hard-code, so
@@ -4264,7 +4340,21 @@ export type AccountTier = 'free' | 'premium';
 export interface AccountEntitlements {
   tier: AccountTier;
   projectLimit: number;
+  /**
+   * The account's one storage allowance, for everything it stores: projects,
+   * save states, imports, exports and encrypted files. Older servers omit it;
+   * read {@link projectStorageLimitBytes} then.
+   */
+  storageLimitBytes?: number;
+  /**
+   * @deprecated Equal to `storageLimitBytes`; kept for clients that predate
+   * the single allowance.
+   */
   projectStorageLimitBytes: number;
+  /**
+   * @deprecated Equal to `storageLimitBytes`; kept for clients that predate
+   * the single allowance.
+   */
   artifactLimitBytes: number;
   ai: {
     requestLimit: number;
@@ -4393,6 +4483,11 @@ export interface E2eeProjectPreferenceRecord {
 
 export interface E2eeProjectPreferenceResponse {
   preference: E2eeProjectPreferenceRecord | null;
+  /**
+   * Whether the account's library must be encrypted: opted in, or owning or
+   * a member of an encrypted project. Absent from an older Worker.
+   */
+  libraryEncrypted?: boolean;
 }
 
 export interface E2eeSaveProjectPreferenceRequest {
@@ -4551,6 +4646,103 @@ export const SETTINGS_ORBIT_MODES: readonly SettingsOrbitMode[] = [
  * a device's meaning for hardware the classification reads wrongly.
  */
 export type SettingsPointerNavigation = 'auto' | 'mouse' | 'trackpad';
+
+/** A 3D mouse cap axis, named for what it does to the view. */
+export type SpaceMouseAxisName =
+  'pan-x' | 'pan-y' | 'zoom' | 'tilt' | 'spin' | 'roll';
+
+export const SPACE_MOUSE_AXIS_NAMES: readonly SpaceMouseAxisName[] = [
+  'pan-x',
+  'pan-y',
+  'zoom',
+  'tilt',
+  'spin',
+  'roll'
+];
+
+/** What a 3D mouse turns the view about. */
+export type SpaceMouseRotateAbout = 'model' | 'orbit-point';
+
+/** How a 3Dconnexion SpaceMouse moves the view. */
+export interface SpaceMouseSettings {
+  /** Pan and zoom speed, as a whole percentage of the default. */
+  panZoomSpeed: number;
+  /** Tilt, spin and roll speed, as a whole percentage of the default. */
+  rotationSpeed: number;
+  /** Cap travel ignored around rest, as a whole percentage of full travel. */
+  deadZone: number;
+  /** Only the axis pushed hardest acts, so a push never also turns. */
+  dominantAxis: boolean;
+  /** The selection's or the model's centre, or the orbit point. */
+  rotateAbout: SpaceMouseRotateAbout;
+  /** Whether rolling the cap rolls the view. */
+  roll: boolean;
+  /** Axes that move the view the other way. */
+  reversed: SpaceMouseAxisName[];
+}
+
+export const SPACE_MOUSE_SPEED_BOUNDS = {
+  min: 10,
+  max: 400,
+  default: 100
+} as const;
+
+export const SPACE_MOUSE_DEAD_ZONE_BOUNDS = {
+  min: 0,
+  max: 40,
+  default: 8
+} as const;
+
+export const DEFAULT_SPACE_MOUSE_SETTINGS: SpaceMouseSettings = {
+  panZoomSpeed: SPACE_MOUSE_SPEED_BOUNDS.default,
+  rotationSpeed: SPACE_MOUSE_SPEED_BOUNDS.default,
+  deadZone: SPACE_MOUSE_DEAD_ZONE_BOUNDS.default,
+  dominantAxis: false,
+  rotateAbout: 'model',
+  roll: true,
+  reversed: []
+};
+
+/**
+ * Stored 3D mouse settings read leniently, field by field: anything missing
+ * or malformed (an older client, a newer one's unknown axis) falls back to
+ * its default, and numbers are clamped and rounded to their bounds.
+ */
+export function normalizeSpaceMouseSettings(
+  value: unknown
+): SpaceMouseSettings {
+  const record =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  const bounded = (
+    candidate: unknown,
+    bounds: { min: number; max: number; default: number }
+  ) =>
+    typeof candidate === 'number' && Number.isFinite(candidate)
+      ? Math.round(Math.min(bounds.max, Math.max(bounds.min, candidate)))
+      : bounds.default;
+  const defaults = DEFAULT_SPACE_MOUSE_SETTINGS;
+  return {
+    panZoomSpeed: bounded(record.panZoomSpeed, SPACE_MOUSE_SPEED_BOUNDS),
+    rotationSpeed: bounded(record.rotationSpeed, SPACE_MOUSE_SPEED_BOUNDS),
+    deadZone: bounded(record.deadZone, SPACE_MOUSE_DEAD_ZONE_BOUNDS),
+    dominantAxis:
+      typeof record.dominantAxis === 'boolean'
+        ? record.dominantAxis
+        : defaults.dominantAxis,
+    rotateAbout:
+      record.rotateAbout === 'model' || record.rotateAbout === 'orbit-point'
+        ? record.rotateAbout
+        : defaults.rotateAbout,
+    roll: typeof record.roll === 'boolean' ? record.roll : defaults.roll,
+    reversed: Array.isArray(record.reversed)
+      ? SPACE_MOUSE_AXIS_NAMES.filter((axis) =>
+          (record.reversed as unknown[]).includes(axis)
+        )
+      : []
+  };
+}
 /**
  * Which sketch relations draw a glyph on their geometry: all of them, only
  * those that mention the selected entity, or none. Presentation only.
@@ -4650,6 +4842,8 @@ export interface AppSettings {
      * fingers navigate.
      */
     pencilDrawsOnly: boolean;
+    /** How a 3Dconnexion SpaceMouse moves the view. */
+    spaceMouse: SpaceMouseSettings;
   };
   sketching: {
     /** Sketch-plane grid visibility is independent from grid snapping. */
@@ -4807,7 +5001,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     fieldOfView: VIEWPORT_FIELD_OF_VIEW_BOUNDS.default,
     xrayOpacity: XRAY_OPACITY_BOUNDS.default,
     touchHistoryGestures: true,
-    pencilDrawsOnly: true
+    pencilDrawsOnly: true,
+    spaceMouse: DEFAULT_SPACE_MOUSE_SETTINGS
   },
   sketching: {
     gridVisible: true,
@@ -5185,10 +5380,10 @@ export const MAX_CLOUD_PROJECT_WRITE_BYTES =
 /** Account limits include projects in the recycle bin until hard deletion. */
 export const MAX_ACCOUNT_PROJECTS = 100;
 /**
- * Free project storage per owner: stored documents, revisions and
- * externalized source assets, plaintext or encrypted. Premium raises it.
+ * @deprecated One allowance covers projects and artifacts alike; use
+ * {@link MAX_ACCOUNT_STORAGE_BYTES}. Kept equal to it.
  */
-export const MAX_ACCOUNT_PROJECT_STORAGE_BYTES = 1024 * 1024 * 1024;
+export const MAX_ACCOUNT_PROJECT_STORAGE_BYTES = MAX_ACCOUNT_STORAGE_BYTES;
 
 /** Serialized size of `document`, measured the way the store measures it. */
 export function persistedDocumentBytes(document: ProjectDocument): number {
@@ -5219,26 +5414,49 @@ export const MAX_LOCAL_CHECKPOINT_DOCUMENTS = 25;
 /** What an account is currently storing, for the settings panel. */
 export interface AccountStorageUsage {
   entitlements?: AccountEntitlements;
+  /**
+   * Projects the account owns outside the recycle bin (archived included),
+   * as the library lists them.
+   */
   projectCount: number;
+  /**
+   * Projects in the recycle bin, kept until they are deleted for good. Their
+   * bytes still count toward `storageBytes`. Older servers omit it.
+   */
+  trashedProjectCount?: number;
   /** Bytes held by the current copy of each project. */
   documentBytes: number;
   /** Bytes held by saved revisions, across every project. */
   revisionBytes: number;
   /**
-   * How many revisions are retained in total. Reported separately from the
-   * bytes because retention bounds the count, not the size — later revisions of
-   * a project are larger than earlier ones, so a flat byte total cannot show
-   * that pruning is working.
+   * How many named save states are retained in total. Reported separately
+   * from the bytes because retention bounds the count, not the size — later
+   * revisions of a project are larger than earlier ones, so a flat byte total
+   * cannot show that pruning is working.
    */
   revisionCount: number;
   /**
-   * Project storage as the account's quota measures it, against
-   * `entitlements.projectStorageLimitBytes`: inline documents and revisions,
-   * stored (compressed) R2 objects and source assets, and retained encrypted
-   * envelopes. Unlike `documentBytes + revisionBytes` (logical sizes, for the
-   * erasure preview), this is what a save is refused against.
+   * Project storage as the account's quota measures it: inline documents and
+   * revisions, stored (compressed) R2 objects and source assets, and retained
+   * encrypted envelopes. Unlike `documentBytes + revisionBytes` (logical
+   * sizes, for the erasure preview), this is the project share of
+   * `storageBytes`.
    */
   projectStorageBytes: number;
+  /**
+   * Everything the account stores, against `storageLimitBytes`, as the quota
+   * counts it: project storage (`projectStorageBytes`), finalized files
+   * (`artifactBytes`) and uploads in flight (`artifactReservedBytes`).
+   * Older servers omit it.
+   */
+  storageBytes?: number;
+  /**
+   * Bytes reserved by uploads still in flight: they hold their room until
+   * they finish or are abandoned. Older servers omit it.
+   */
+  artifactReservedBytes?: number;
+  /** The account's one storage allowance. Older servers omit it. */
+  storageLimitBytes?: number;
   /** The per-document ceiling, so the client can name it without hardcoding. */
   documentLimitBytes: number;
   maxRevisionsPerProject: number;
@@ -5246,7 +5464,10 @@ export interface AccountStorageUsage {
   artifactBytes: number;
   /** How many finalized artifacts the account's projects hold. */
   artifactCount: number;
-  /** The account-wide artifact ceiling, for the same no-hardcoding reason. */
+  /**
+   * @deprecated Equal to `storageLimitBytes`: files and projects share one
+   * allowance. Kept for clients that predate it.
+   */
   artifactLimitBytes: number;
 }
 
@@ -5402,7 +5623,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
 };
 
 export const featureColor = (kind: FeatureKind): string =>
-  FEATURE_COLORS[kind] ?? FEATURE_COLORS.primitive;
+  ownEntry(FEATURE_COLORS, kind) ?? FEATURE_COLORS.primitive;
 
 /**
  * The colour a body's own metadata asks for, or null when it asks for none:
@@ -5475,6 +5696,18 @@ export const UNIT_TO_MM: Record<UnitSystem, number> = {
   m: 1000,
   inch: 25.4
 };
+
+/**
+ * Millimetres per `units`. Anything but a unit system is refused rather than
+ * read as `UNIT_TO_MM[units]`, which turns an unknown value into NaN geometry
+ * and an inherited name into a prototype member.
+ */
+export function millimetresPerUnit(units: UnitSystem): number {
+  const millimetres = ownEntry(UNIT_TO_MM, units);
+  if (millimetres === undefined)
+    throw new RangeError(`Unknown units "${String(units)}".`);
+  return millimetres;
+}
 
 /** One ISO 261 coarse-pitch metric thread size, in millimetres. */
 export interface IsoMetricThreadSize {
@@ -5562,3 +5795,5 @@ export function sanitizeFileName(fileName: string): string {
 export * from './legacy-project-storage';
 export * from './import-limits';
 export * from './mesh-buffer-equality';
+export * from './pipe-threads';
+export * from './thread-span';

@@ -1,4 +1,4 @@
-import { UNIT_TO_MM } from './index';
+import { millimetresPerUnit } from './index';
 import type { BodyId, Brand, UnitSystem, Vector3 } from './index';
 import {
   drawingAnnotationError,
@@ -264,7 +264,7 @@ export function drawingPaperPerModelUnit(
   scale: DrawingScale,
   units: UnitSystem
 ): number {
-  return (scale.numerator / scale.denominator) * UNIT_TO_MM[units];
+  return (scale.numerator / scale.denominator) * millimetresPerUnit(units);
 }
 
 /**

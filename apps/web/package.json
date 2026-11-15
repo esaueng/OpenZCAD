@@ -11,7 +11,7 @@
     "build:desktop": "vite build --mode desktop",
     "preview": "vite preview",
     "predeploy:beta": "node ../../scripts/validate-deployment-config.mjs --config ../../wrangler.jsonc --target official",
-    "deploy:beta": "node ../../scripts/apply-beta-migrations.mjs && wrangler deploy --config ../../wrangler.jsonc && node ../../scripts/verify-beta-deployment.mjs",
+    "deploy:beta": "pnpm -w run build && pnpm -w run check:release-build && node ../../scripts/apply-beta-migrations.mjs && wrangler deploy --config ../../wrangler.jsonc && node ../../scripts/verify-beta-deployment.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:full": "vitest run --config vitest.full.config.ts",

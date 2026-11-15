@@ -389,13 +389,16 @@ test('encrypts an existing project, resumes after a reload, and opens it', async
   await expect(card.or(back).first()).toBeVisible({ timeout: SYNC_BUDGET_MS });
   if (await back.isVisible()) await back.click();
   await expect(card).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await expect(
-    card.getByRole('img', { name: 'End-to-end encrypted' })
-  ).toBeVisible();
+  // Encrypted now, the card is unmarked: only a plaintext project in an
+  // encrypting account carries a mark. The top bar says it is encrypted.
+  await expect(card.getByRole('img', { name: /encrypted/i })).toHaveCount(0);
   await card.locator('.start-tile-open').click();
   await expectBodyCount(page, 1);
   await expect(
     page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  await expect(
+    page.locator('.topbar-identity').getByLabel(/^End-to-end encrypted/)
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
   await expect(page.getByText(/could not be fetched/)).toHaveCount(0);
   expect(errors).toEqual([]);

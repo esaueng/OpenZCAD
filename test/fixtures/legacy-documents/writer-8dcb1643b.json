@@ -1,0 +1,271 @@
+{
+  "projectId": "proj_001",
+  "ownerUserId": "user_fixture",
+  "rootNodeId": "ent_002",
+  "rootAssemblyId": "ent_003",
+  "activePartId": "ent_004",
+  "name": "Writer 8dcb1643b",
+  "units": "mm",
+  "version": 7,
+  "nodes": {
+    "ent_002": {
+      "id": "ent_002",
+      "kind": "project",
+      "name": "Writer 8dcb1643b",
+      "parentId": null,
+      "revisionId": null,
+      "projectId": "proj_001",
+      "units": "mm",
+      "activePartId": "ent_004"
+    },
+    "ent_003": {
+      "id": "ent_003",
+      "kind": "assembly",
+      "name": "Root Assembly",
+      "parentId": "ent_002",
+      "revisionId": null,
+      "childIds": ["ent_004"]
+    },
+    "ent_004": {
+      "id": "ent_004",
+      "kind": "part",
+      "name": "Part 1",
+      "parentId": "ent_003",
+      "revisionId": null,
+      "childIds": [
+        "ent_005",
+        "ent_006",
+        "ent_007",
+        "ent_008",
+        "ent_009",
+        "ent_010",
+        "ent_011",
+        "ent_012",
+        "ent_013",
+        "ent_014",
+        "ent_015",
+        "ent_016"
+      ]
+    },
+    "ent_005": {
+      "id": "ent_005",
+      "kind": "feature",
+      "name": "Base",
+      "parentId": "ent_004",
+      "revisionId": null,
+      "featureId": "feat_017",
+      "bodyId": "body_018",
+      "featureKind": "primitive",
+      "data": {
+        "featureKind": "primitive",
+        "primitiveKind": "box",
+        "dimensions": {
+          "width": 40,
+          "height": 20,
+          "depth": 5
+        }
+      }
+    },
+    "ent_006": {
+      "id": "ent_006",
+      "kind": "body",
+      "name": "Base Body",
+      "parentId": "ent_004",
+      "revisionId": null,
+      "bodyId": "body_018",
+      "featureId": "feat_017",
+      "bodyType": "solid",
+      "representationSource": "mock",
+      "exportableStep": false,
+      "metadata": {
+        "color": "#e1a948"
+      }
+    },
+    "ent_007": {
+      "id": "ent_007",
+      "kind": "feature",
+      "name": "Boss",
+      "parentId": "ent_004",
+      "revisionId": null,
+      "featureId": "feat_019",
+      "bodyId": "body_020",
+      "featureKind": "primitive",
+      "data": {
+        "featureKind": "primitive",
+        "primitiveKind": "cylinder",
+        "dimensions": {
+          "radius": 4,
+          "height": 10
+        }
+      }
+    },
+    "ent_008": {
+      "id": "ent_008",
+      "kind": "body",
+      "name": "Boss Body",
+      "parentId": "ent_004",
+      "revisionId": null,
+      "bodyId": "body_020",
+      "featureId": "feat_019",
+      "bodyType": "solid",
+      "representationSource": "mock",
+      "exportableStep": false,
+      "metadata": {
+        "color": "#e1a948"
+      }
+    },
+    "ent_021": {
+      "id": "ent_021",
+      "kind": "sketch-object",
+      "name": "rectangle profile",
+      "parentId": "ent_010",
+      "revisionId": null,
+      "objectKind": "rectangle",
+      "data": {
+        "objectKind": "rectangle",
+        "width": 10,
+        "height": 6
+      }
+    },
+    "ent_010": {
+      "id": "ent_010",
+      "kind": "sketch",
+      "name": "Sketch",
+      "parentId": "ent_004",
+      "revisionId": null,
+      "sketchId": "sketch_022",
+      "plane": "XY",
+      "objectIds": ["ent_021"],
+      "constraintIds": []
+    },
+    "ent_009": {
+      "id": "ent_009",
+      "kind": "feature",
+      "name": "Sketch Feature",
+      "parentId": "ent_004",
+      "revisionId": null,
+      "featureId": "feat_023",
+      "featureKind": "sketch",
+      "data": {
+        "featureKind": "sketch",
+        "sketchId": "sketch_022"
+      }
+    },
+    "ent_011": {
+      "id": "ent_011",
+      "kind": "feature",
+      "name": "Extrude",
+      "parentId": "ent_004",
+      "revisionId": null,
+      "featureId": "feat_024",
+      "bodyId": "body_025",
+      "featureKind": "extrude",
+      "data": {
+        "featureKind": "extrude",
+        "sketchId": "sketch_022",
+        "distance": 4
+      }
+    },
+    "ent_012": {
+      "id": "ent_012",
+      "kind": "body",
+      "name": "Extrude Body",
+      "parentId": "ent_004",
+      "revisionId": null,
+      "bodyId": "body_025",
+      "featureId": "feat_024",
+      "bodyType": "solid",
+      "representationSource": "mock",
+      "exportableStep": false,
+      "metadata": {
+        "color": "#4bb7a7"
+      }
+    },
+    "ent_013": {
+      "id": "ent_013",
+      "kind": "feature",
+      "name": "Union",
+      "parentId": "ent_004",
+      "revisionId": null,
+      "featureId": "feat_026",
+      "bodyId": "body_027",
+      "featureKind": "boolean",
+      "data": {
+        "featureKind": "boolean",
+        "operation": "union",
+        "targetBodyIds": ["body_018", "body_020"]
+      }
+    },
+    "ent_014": {
+      "id": "ent_014",
+      "kind": "body",
+      "name": "Union Result",
+      "parentId": "ent_004",
+      "revisionId": null,
+      "bodyId": "body_027",
+      "featureId": "feat_026",
+      "bodyType": "solid",
+      "representationSource": "composite",
+      "exportableStep": false,
+      "metadata": {
+        "color": "#ff7452"
+      }
+    },
+    "ent_015": {
+      "id": "ent_015",
+      "kind": "feature",
+      "name": "Scan",
+      "parentId": "ent_004",
+      "revisionId": null,
+      "featureId": "feat_028",
+      "bodyId": "body_029",
+      "featureKind": "imported-mesh",
+      "data": {
+        "featureKind": "imported-mesh",
+        "artifactId": "art_fixture",
+        "sourceName": "scan.stl",
+        "triangleCount": 12
+      }
+    },
+    "ent_016": {
+      "id": "ent_016",
+      "kind": "body",
+      "name": "Scan",
+      "parentId": "ent_004",
+      "revisionId": null,
+      "bodyId": "body_029",
+      "featureId": "feat_028",
+      "bodyType": "mesh-reference",
+      "representationSource": "mesh-reference",
+      "exportableStep": false,
+      "metadata": {
+        "color": "#7aa3ff"
+      }
+    }
+  },
+  "featureOrder": [
+    "feat_017",
+    "feat_019",
+    "feat_023",
+    "feat_024",
+    "feat_026",
+    "feat_028"
+  ],
+  "bodyOrder": ["body_018", "body_020", "body_025", "body_027", "body_029"],
+  "sketchOrder": ["sketch_022"],
+  "revisions": [
+    {
+      "revisionId": "rev_030",
+      "createdAt": "2026-06-12T00:00:00.000Z",
+      "reason": "Initial document",
+      "commandCount": 0
+    }
+  ],
+  "commandLog": [],
+  "derived": {
+    "bodyRepresentations": {},
+    "exportableBodyIds": [],
+    "warnings": [],
+    "updatedAt": "2026-06-12T00:00:00.000Z"
+  }
+}

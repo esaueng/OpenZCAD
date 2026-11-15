@@ -1,17 +1,26 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Camera, Grid3x3, Maximize2, Orbit, Ruler } from 'lucide-react';
+import {
+  Camera,
+  Grid3x3,
+  Maximize2,
+  Orbit,
+  Ruler,
+  SquareSplitVertical
+} from 'lucide-react';
 import {
   SavedViewsSection,
   type SavedViewsSectionProps
 } from './SavedViewsSection';
 import { VIEW_LABELS } from '@openzcad/viewport';
 import type {
+  DisplayMode,
   ProjectionMode,
   StandardView,
   ViewerSettings
 } from '@openzcad/viewport';
-import { AxisTriadIcon, DisplayModeIcon } from './ViewerRailIcons';
-import { DISPLAY_MODE_LABELS } from '../lib/displayMode';
+import { AxisTriadIcon } from './ViewerRailIcons';
+import { DisplayModeMenu, isWorkspaceShortcutKey } from './DisplayModeMenu';
+import { SECTION_PLANE_LABELS } from '../lib/sectionPlaneLabels';
 import { Tooltip } from './Tooltip';
 import { labelWithKey, useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
@@ -54,23 +63,34 @@ interface ViewModeBarProps {
   onView(view: StandardView): void;
   /** The project's saved views, listed under the standard view tiles. */
   savedViews?: SavedViewsSectionProps;
-  onCycleDisplayMode(): void;
+  /** Shows the model in a display mode, from the Display menu. */
+  onDisplayMode(mode: DisplayMode): void;
+  /** Turns X-ray on or off (Shift+X), from the Display menu. */
+  onToggleXray(): void;
   onToggleProjection(): void;
   /**
    * Flips orbiting between Free and Turntable, the account preference
    * `settings.orbitMode` reports. Absent, no orbit button is drawn.
    */
   onToggleOrbitMode?(): void;
+  /**
+   * Turns the section cut on or off. Its plane and offset are Build's to
+   * set; here the cut's chip names it. Absent, no Section button is drawn.
+   */
+  onToggleSection?(): void;
+  /** No body on screen to cut; Section is greyed. */
+  nothingToSection?: boolean;
 }
 
 /**
  * View mode's one piece of chrome: a bar of viewport controls floated at the
  * bottom of the viewport, where the modeling tool palette would otherwise be.
  *
- * It carries what someone reading a model needs — measure, fit, standard
- * views, grid, display mode, projection, orbit mode — and nothing that writes
- * to the document. Build mode keeps its own right-hand `ViewerToolbar`; the
- * two never render together.
+ * It carries what someone reading a model needs — measure, fit, grid,
+ * projection, orbit mode, section, display (with X-ray), standard views: the
+ * order Build's viewer bar keeps, so a control stands in the same place in
+ * every mode (I52) — and nothing that writes to the document. Build mode
+ * keeps its own right-hand `ViewerToolbar`; the two never render together.
  */
 export function ViewModeBar({
   settings,
@@ -81,22 +101,22 @@ export function ViewModeBar({
   onToggleGrid,
   onView,
   savedViews,
-  onCycleDisplayMode,
+  onDisplayMode,
+  onToggleXray,
   onToggleProjection,
-  onToggleOrbitMode
+  onToggleOrbitMode,
+  onToggleSection,
+  nothingToSection = false
 }: ViewModeBarProps) {
   const keymap = useKeymap();
   const [viewsOpen, setViewsOpen] = useState(false);
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const panelId = useId();
-  // X-ray rides over the display mode and has no button of its own here, as
-  // on Build's rail: the rail's height is what its loading placeholder and
-  // the stage centring are sized to. Shift+X, the command bar and the view
-  // menu reach it.
-  const displayModeLabel = `${DISPLAY_MODE_LABELS[settings.displayMode]}${
-    settings.xray ? ' · X-ray' : ''
-  }`;
+  const sectionOn = Boolean(settings.sectionView);
+  const sectionLabel = settings.sectionView
+    ? SECTION_PLANE_LABELS[settings.sectionView.plane]
+    : 'Off';
   const projectionLabel = PROJECTION_LABELS[projection];
   // Saved views from before the preference existed carry none: free.
   const orbitMode = settings.orbitMode ?? 'free';
@@ -113,10 +133,22 @@ export function ViewModeBar({
     }
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
+        // A saved view's name field takes its own Escape: it puts the
+        // name away and leaves the flyout open.
+        if (
+          event.target instanceof HTMLInputElement &&
+          anchorRef.current?.contains(event.target)
+        ) {
+          return;
+        }
         event.stopPropagation();
         setViewsOpen(false);
         triggerRef.current?.focus();
+        return;
       }
+      // A shortcut goes on to arm its tool; the flyout steps aside rather
+      // than stand over it (I54). A saved view's name field keeps its keys.
+      if (isWorkspaceShortcutKey(event)) setViewsOpen(false);
     }
     window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onKeyDown, true);
@@ -162,6 +194,88 @@ export function ViewModeBar({
           <Maximize2 size={16} aria-hidden="true" />
         </button>
       </Tooltip>
+      <Tooltip label="Toggle grid" shortcut={keymap.label('view-grid')}>
+        <button
+          type="button"
+          className={`view-mode-button${settings.showGrid ? ' active' : ''}`}
+          onClick={onToggleGrid}
+          aria-label={labelWithKey('Toggle grid', keymap.label('view-grid'))}
+          aria-pressed={settings.showGrid}
+        >
+          <Grid3x3 size={16} aria-hidden="true" />
+        </button>
+      </Tooltip>
+      <Tooltip
+        label="Projection"
+        shortcut={keymap.label('view-projection')}
+        description={`Now: ${projectionLabel}`}
+      >
+        <button
+          type="button"
+          className={`view-mode-button${projection === 'orthographic' ? ' active' : ''}`}
+          onClick={onToggleProjection}
+          aria-label={`${labelWithKey('Orthographic projection', keymap.label('view-projection'))} — now: ${projectionLabel}`}
+          aria-pressed={projection === 'orthographic'}
+        >
+          <Camera size={16} aria-hidden="true" />
+        </button>
+      </Tooltip>
+      {onToggleOrbitMode && (
+        <Tooltip
+          label="Orbit mode"
+          shortcut={orbitKey}
+          description={`Now: ${ORBIT_MODE_LABELS[orbitMode]} · ${ORBIT_MODE_DETAILS[orbitMode]}`}
+        >
+          <button
+            type="button"
+            className={`view-mode-button view-orbit-mode${orbitMode === 'turntable' ? ' active' : ''}`}
+            onClick={onToggleOrbitMode}
+            aria-label={`${labelWithKey('Turntable orbit', orbitKey)} — now: ${ORBIT_MODE_LABELS[orbitMode]}`}
+            aria-pressed={orbitMode === 'turntable'}
+          >
+            <Orbit size={16} aria-hidden="true" />
+          </button>
+        </Tooltip>
+      )}
+      {onToggleSection && (
+        <Tooltip
+          label="Section view"
+          description={`Now: ${sectionLabel} · ${
+            sectionOn
+              ? 'click to turn off'
+              : nothingToSection
+                ? 'nothing to cut yet'
+                : 'cuts the display only'
+          }`}
+        >
+          <button
+            type="button"
+            className={`view-mode-button view-mode-section-toggle${
+              sectionOn ? ' active' : ''
+            }`}
+            onClick={() => {
+              // Greyed by aria, as on Build's rail: a disabled button
+              // cannot take focus or show the tooltip that says why.
+              if (!sectionOn && nothingToSection) return;
+              onToggleSection();
+            }}
+            aria-label={`Section view — now: ${sectionLabel}`}
+            aria-pressed={sectionOn}
+            aria-disabled={!sectionOn && nothingToSection ? true : undefined}
+          >
+            <SquareSplitVertical size={16} aria-hidden="true" />
+          </button>
+        </Tooltip>
+      )}
+      <DisplayModeMenu
+        variant="bar"
+        settings={settings}
+        onDisplayMode={onDisplayMode}
+        onToggleXray={onToggleXray}
+        onOpenChange={(open) => {
+          if (open) setViewsOpen(false);
+        }}
+      />
       <div className="view-mode-views-anchor" ref={anchorRef}>
         <Tooltip label="Standard views">
           <button
@@ -227,63 +341,6 @@ export function ViewModeBar({
           </div>
         )}
       </div>
-      <Tooltip label="Toggle grid" shortcut={keymap.label('view-grid')}>
-        <button
-          type="button"
-          className={`view-mode-button${settings.showGrid ? ' active' : ''}`}
-          onClick={onToggleGrid}
-          aria-label={labelWithKey('Toggle grid', keymap.label('view-grid'))}
-          aria-pressed={settings.showGrid}
-        >
-          <Grid3x3 size={16} aria-hidden="true" />
-        </button>
-      </Tooltip>
-      <Tooltip
-        label="Display mode"
-        shortcut={keymap.label('view-display')}
-        description={`Now: ${displayModeLabel}`}
-      >
-        <button
-          type="button"
-          className="view-mode-button"
-          onClick={onCycleDisplayMode}
-          aria-label={`${labelWithKey('Display mode', keymap.label('view-display'))} — now: ${displayModeLabel}`}
-        >
-          <DisplayModeIcon mode={settings.displayMode} />
-        </button>
-      </Tooltip>
-      <Tooltip
-        label="Projection"
-        shortcut={keymap.label('view-projection')}
-        description={`Now: ${projectionLabel}`}
-      >
-        <button
-          type="button"
-          className={`view-mode-button${projection === 'orthographic' ? ' active' : ''}`}
-          onClick={onToggleProjection}
-          aria-label={`${labelWithKey('Orthographic projection', keymap.label('view-projection'))} — now: ${projectionLabel}`}
-          aria-pressed={projection === 'orthographic'}
-        >
-          <Camera size={16} aria-hidden="true" />
-        </button>
-      </Tooltip>
-      {onToggleOrbitMode && (
-        <Tooltip
-          label="Orbit mode"
-          shortcut={orbitKey}
-          description={`Now: ${ORBIT_MODE_LABELS[orbitMode]} · ${ORBIT_MODE_DETAILS[orbitMode]}`}
-        >
-          <button
-            type="button"
-            className={`view-mode-button view-orbit-mode${orbitMode === 'turntable' ? ' active' : ''}`}
-            onClick={onToggleOrbitMode}
-            aria-label={`${labelWithKey('Turntable orbit', orbitKey)} — now: ${ORBIT_MODE_LABELS[orbitMode]}`}
-            aria-pressed={orbitMode === 'turntable'}
-          >
-            <Orbit size={16} aria-hidden="true" />
-          </button>
-        </Tooltip>
-      )}
     </div>
   );
 }

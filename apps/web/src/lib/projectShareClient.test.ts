@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildShareLinkUrl,
   createProjectShareLinkClient,
-  sharedAssetUrl,
-  sharedImportSourceUrl
+  sharedAssetPath,
+  sharedImportSourcePath,
+  shareTokenHeaders
 } from './projectShareClient';
 import { ProjectSharingApiError } from './projectSharing';
 import { createProjectDocument } from '@openzcad/document-core';
@@ -62,15 +63,19 @@ describe('project share link client', () => {
       '/api/projects/project%2Fone/share-links',
       '/api/projects/project%2Fone/share-links',
       '/api/projects/project%2Fone/share-links/share%2F1',
-      '/api/share/token_value'
+      '/api/share'
     ]);
     expect(fetcher.mock.calls[0]![1]).toMatchObject({
       method: 'POST',
       credentials: 'same-origin',
       body: JSON.stringify({ mode: 'tweak' })
     });
-    // The anonymous route must never carry an authenticated session.
-    expect(fetcher.mock.calls[3]![1]).toMatchObject({ credentials: 'omit' });
+    // The anonymous route must never carry an authenticated session, and
+    // its token goes in a header, never the URL that request logs record.
+    expect(fetcher.mock.calls[3]![1]).toMatchObject({
+      credentials: 'omit',
+      headers: { 'x-openzcad-share-token': 'token_value' }
+    });
   });
 
   it('names a link at creation and renames it with PATCH', async () => {
@@ -192,17 +197,16 @@ describe('project share link client', () => {
     });
   });
 
-  it('builds fragment share URLs and asset URLs', () => {
+  it('builds fragment share URLs, token-free asset paths and the token header', () => {
     const token = 'a'.repeat(43);
     expect(buildShareLinkUrl(token)).toBe(`${location.origin}/#share=${token}`);
-    expect(sharedAssetUrl(token, 'asset/1')).toBe(
-      `/api/share/${token}/assets/asset%2F1`
+    expect(sharedAssetPath('asset/1')).toBe('/api/share/assets/asset%2F1');
+    expect(sharedImportSourcePath('artifact/1')).toBe(
+      '/api/share/sources/artifact%2F1'
     );
-    expect(sharedImportSourceUrl(token, 'artifact/1')).toBe(
-      `/api/share/${token}/sources/artifact%2F1`
-    );
-    expect(() => sharedAssetUrl('  ', 'asset_1')).toThrow(
-      'Share token is required.'
-    );
+    expect(shareTokenHeaders(token)).toEqual({
+      'x-openzcad-share-token': token
+    });
+    expect(() => shareTokenHeaders('  ')).toThrow('Share token is required.');
   });
 });

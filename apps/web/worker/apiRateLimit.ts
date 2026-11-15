@@ -1,5 +1,6 @@
 import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
 import { PROJECT_INVITATION_RATE_WINDOW_SECONDS } from '@openzcad/persistence';
+import { requestClientAddressKey } from './clientAddress';
 import { HttpError } from './validation';
 
 /** Refuses an exhausted bucket without allocating or incrementing one. */
@@ -20,7 +21,14 @@ export async function assertApiRateLimitAvailable(
     throw new HttpError(429, 'API request limit reached. Try again later.');
 }
 
-/** Atomic fixed-window buckets share the existing expiring auth accounting table. */
+/**
+ * Atomic fixed-window buckets share the existing expiring auth accounting
+ * table. A request past the limit is refused without a write: the upsert
+ * only counts while the window has room, so a client that keeps calling
+ * after its 429 costs one keyed statement each and changes no row. Stale
+ * windows are reclaimed by the scheduled `purgeStaleRateLimitBuckets`, not
+ * here.
+ */
 export async function enforceApiRateLimit(
   env: CloudflareEnv,
   bucket: string,
@@ -29,7 +37,6 @@ export async function enforceApiRateLimit(
   if (env.ENVIRONMENT === 'development' && env.PRODUCTION_GUARD === undefined)
     return;
   if (!env.DB) throw new HttpError(503, 'API request guard is unavailable.');
-  const windowStart = currentWindowStart();
   const usage = await env.DB.prepare(
     `
     INSERT INTO auth_rate_limits (bucket, window_start, request_count)
@@ -38,25 +45,187 @@ export async function enforceApiRateLimit(
       window_start = excluded.window_start,
       request_count = CASE WHEN auth_rate_limits.window_start = excluded.window_start
         THEN auth_rate_limits.request_count + 1 ELSE 1 END
+    WHERE auth_rate_limits.window_start != excluded.window_start
+      OR auth_rate_limits.request_count < ?
     RETURNING request_count
   `
   )
-    .bind(bucket, windowStart)
+    .bind(bucket, currentWindowStart(), limit)
     .first<{ request_count: number }>();
-  if (!usage) throw new HttpError(503, 'API request guard is unavailable.');
-  // Public traffic must also expire its buckets when no login flow runs.
-  // The shared table includes hourly invitation counters as well as login
-  // counters. Retain two of the longest windows before reclaiming rows.
-  await env.DB.prepare(
-    `DELETE FROM auth_rate_limits WHERE bucket IN (
-      SELECT bucket FROM auth_rate_limits WHERE window_start < ?
-      ORDER BY window_start LIMIT 100
-    )`
-  )
-    .bind(windowStart - PROJECT_INVITATION_RATE_WINDOW_SECONDS * 2)
-    .run();
-  if (usage.request_count > limit)
+  if (!usage || usage.request_count > limit)
     throw new HttpError(429, 'API request limit reached. Try again later.');
+}
+
+/**
+ * Reclaims rate-limit rows whose window ended long ago, from the scheduled
+ * handler rather than the request path. The shared table includes hourly
+ * invitation counters as well as login and per-minute counters, so two of
+ * the longest windows are kept. Bounded per run; anything left goes on the
+ * next one.
+ */
+export async function purgeStaleRateLimitBuckets(
+  env: CloudflareEnv,
+  now = Date.now()
+): Promise<void> {
+  if (!env.DB) return;
+  const cutoff =
+    Math.floor(now / 60_000) * 60 - PROJECT_INVITATION_RATE_WINDOW_SECONDS * 2;
+  for (let batch = 0; batch < STALE_PURGE_BATCHES; batch += 1) {
+    const result = await env.DB.prepare(
+      `DELETE FROM auth_rate_limits WHERE bucket IN (
+        SELECT bucket FROM auth_rate_limits WHERE window_start < ?
+        LIMIT ?
+      )`
+    )
+      .bind(cutoff, STALE_PURGE_BATCH_ROWS)
+      .run();
+    if ((result.meta?.changes ?? 0) < STALE_PURGE_BATCH_ROWS) return;
+  }
+}
+
+const STALE_PURGE_BATCH_ROWS = 1_000;
+const STALE_PURGE_BATCHES = 50;
+
+/** A Workers rate-limit binding (a `ratelimits` entry in the Wrangler config). */
+export interface WorkersRateLimit {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
+}
+
+/**
+ * The plaintext share-link load budget (documented where index.ts grants
+ * it): reads per source, slack, loads per grant and the grant's lifetime.
+ */
+export const SHARED_LOAD_SOURCE_FACTOR = 2;
+export const SHARED_LOAD_SLACK = 32;
+export const SHARED_LOAD_MAX_LOADS = 8;
+export const SHARED_LOAD_GRANT_SECONDS = 15 * 60;
+
+/**
+ * The largest model, in import sources, that `SHARED_LOAD_MAX_LOADS`
+ * viewers behind one address can each open within one minute under the
+ * share-read ceiling (judgment: well above the sources of models seen so
+ * far).
+ */
+export const SHARED_LOAD_CEILING_SOURCES = 1_800;
+
+/**
+ * Requests per minute for each Workers rate-limit binding, keyed by binding
+ * name. The bindings are checked before any D1 work; their `simple.limit`
+ * (with a 60-second `period`) in wrangler.jsonc and
+ * wrangler.selfhost.example.jsonc must equal these, which
+ * test/worker-public-request-limits.test.ts checks. They count per
+ * Cloudflare location, so they are a cheap, approximate first line. A
+ * deployment without a binding counts the same limit in D1 instead.
+ */
+export const REQUEST_LIMITS = {
+  /**
+   * Email-code verification and desktop refresh, per address: sign-in
+   * routes with no other per-address limit before their body is read
+   * (judgment: far above what a person typing a code needs).
+   */
+  AUTH_REQUEST_LIMITER: 30,
+  /**
+   * Desktop sign-in exchange, per address (judgment: far above a desktop
+   * app polling for its approval every couple of seconds).
+   */
+  DESKTOP_EXCHANGE_LIMITER: 60,
+  /**
+   * Desktop sign-in start, per address, before the body is read or D1 is
+   * touched; D1's own 20-per-15-minutes allowance stays behind it
+   * (judgment: a person starts a sign-in a few times, not every few
+   * seconds).
+   */
+  DESKTOP_START_LIMITER: 10,
+  /** Anonymous assistant proposals (development only), per address. */
+  ANONYMOUS_ASSISTANT_LIMITER: 20,
+  /**
+   * Plaintext share-link reads per address outside a load's own budget:
+   * document reads, and asset and source reads of a link this address has
+   * not loaded (judgment; set like the encrypted routes' blob budget).
+   */
+  SHARE_LINK_LIMITER: 300,
+  /**
+   * Every plaintext share-link read per address, checked in the Workers
+   * binding alone before a load's own budget is looked up in D1, so a
+   * flood of reads never reaches D1. Sized so `SHARED_LOAD_MAX_LOADS`
+   * viewers behind one address can each open a model of
+   * `SHARED_LOAD_CEILING_SOURCES` sources within one minute (8 × (1800 × 2
+   * + 32) + 8 = 29,064), which test/worker-public-request-limits.test.ts
+   * checks.
+   */
+  SHARE_READ_CEILING_LIMITER: 30_000,
+  /**
+   * Signed-in GET and HEAD requests, per account. Writes keep their tighter
+   * `api:` budget; reads get one generous enough for loading a large
+   * project's assets or encrypted blobs several times a minute.
+   */
+  ACCOUNT_READ_LIMITER: 1_200
+} as const;
+
+export type RequestLimiter = keyof typeof REQUEST_LIMITS;
+
+export type RequestLimiterEnv = { [Name in RequestLimiter]?: WorkersRateLimit };
+
+/**
+ * Counts one request against `bucket` and the limiter's limit: in the named
+ * Workers rate-limit binding when the deployment has it, with no D1 work at
+ * all, and otherwise in D1 like `enforceApiRateLimit`.
+ */
+export async function enforceRequestLimit(
+  env: CloudflareEnv & RequestLimiterEnv,
+  limiter: RequestLimiter,
+  bucket: string
+): Promise<void> {
+  if (env.ENVIRONMENT === 'development' && env.PRODUCTION_GUARD === undefined)
+    return;
+  const binding = env[limiter];
+  if (binding && typeof binding.limit === 'function') {
+    let outcome: { success: boolean } | null = null;
+    try {
+      outcome = await binding.limit({ key: bucket });
+    } catch {
+      // An unavailable binding falls back to D1 below.
+    }
+    if (outcome) {
+      if (!outcome.success)
+        throw new HttpError(429, 'API request limit reached. Try again later.');
+      return;
+    }
+  }
+  await enforceApiRateLimit(env, bucket, REQUEST_LIMITS[limiter]);
+}
+
+/**
+ * Counts one request against `bucket` in the named Workers rate-limit
+ * binding only: a coarse ceiling in front of D1 work. Without the binding,
+ * or when it is unavailable, nothing is counted here: counting it in D1
+ * would add the very write the ceiling is there to spare.
+ */
+export async function enforceWorkersCeiling(
+  env: CloudflareEnv & RequestLimiterEnv,
+  limiter: RequestLimiter,
+  bucket: string
+): Promise<void> {
+  if (env.ENVIRONMENT === 'development' && env.PRODUCTION_GUARD === undefined)
+    return;
+  const binding = env[limiter];
+  if (!binding || typeof binding.limit !== 'function') return;
+  let outcome: { success: boolean };
+  try {
+    outcome = await binding.limit({ key: bucket });
+  } catch {
+    return;
+  }
+  if (!outcome.success)
+    throw new HttpError(429, 'API request limit reached. Try again later.');
+}
+
+/** Counts one signed-in read against the account's read budget. */
+export async function enforceAccountReadRateLimit(
+  env: CloudflareEnv & RequestLimiterEnv,
+  userId: string
+): Promise<void> {
+  await enforceRequestLimit(env, 'ACCOUNT_READ_LIMITER', `api-read:${userId}`);
 }
 
 /**
@@ -122,7 +291,28 @@ export async function publicRequestBucket(
   const digest = await crypto.subtle.sign(
     'HMAC',
     key,
-    encoder.encode(request.headers.get('cf-connecting-ip') ?? 'unknown')
+    encoder.encode(requestClientAddressKey(request))
   );
   return `${scope}:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/**
+ * Counts one anonymous request against its client address's bucket for
+ * `scope`, before the route reads a body or looks anything up: in the named
+ * Workers rate-limit binding when there is one, else in D1. Skipped exactly
+ * where `enforceApiRateLimit` is, so local development needs no pepper.
+ */
+export async function enforcePublicRequestRateLimit(
+  request: Request,
+  env: CloudflareEnv & RequestLimiterEnv,
+  scope: string,
+  limiter: RequestLimiter
+): Promise<void> {
+  if (env.ENVIRONMENT === 'development' && env.PRODUCTION_GUARD === undefined)
+    return;
+  await enforceRequestLimit(
+    env,
+    limiter,
+    await publicRequestBucket(request, env, scope)
+  );
 }

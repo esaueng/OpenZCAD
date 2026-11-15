@@ -232,8 +232,13 @@ export interface GeometryWorkerApi {
      * fillet/chamfer the edit stranded may be carried and reported in
      * `edgeHashRepairs`, for the commit to store in the same revision. Every
      * other rebuild leaves it unset and depends on the document alone.
+     *
+     * `signal`: aborting rejects with an `AbortError`-named error and asks
+     * the worker to drop the job. A queued job is skipped; a running one
+     * stops at its next feature boundary (a wasm call already under way
+     * completes), and its result is discarded either way.
      */
-    options?: { proposeCarry?: boolean }
+    options?: { proposeCarry?: boolean; signal?: AbortSignal }
   ): Promise<DerivedState>;
   /** Exact display/validation only; cannot be used as an authoritative commit. */
   previewGeometry(
@@ -558,6 +563,35 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       return null;
     };
 
+    let waitingForConnection = false;
+    const respawnAndResync = () => {
+      setState({ type: 'state', phase: 'starting', stale: true });
+      spawn();
+      // The replacement worker owes the visible document a rebuild: a
+      // respawn used to sit idle at "starting" until the next edit
+      // happened to post a sync again.
+      const manager = hostRef.current.manager();
+      const replacement = workerRef.current;
+      if (manager && replacement) {
+        broadcastDocument.current = manager.document;
+        postSync(
+          replacement,
+          manager.document,
+          lastSyncedKey,
+          armedRef,
+          lastDemandRef.current ?? undefined,
+          persistSessionFor(persistSessionRef, manager.document)
+        );
+      }
+    };
+    const respawnOnline = () => {
+      if (navigator.onLine === false) return;
+      window.removeEventListener('online', respawnOnline);
+      waitingForConnection = false;
+      if (disposed || workerRef.current) return;
+      respawnAndResync();
+    };
+
     const failAndMaybeRespawn = (
       failed: Worker | null,
       message: string,
@@ -573,29 +607,25 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       broadcastDocument.current = null;
       failed?.terminate();
       workerRef.current = null;
+      if (!disposed && !reloadRequired && navigator.onLine === false) {
+        // 13 November review I5: offline, the worker's script or kernel
+        // cannot download, so three immediate respawns all failed and the
+        // startup screen sat at "Building the model" after the connection
+        // returned, with a reload as the only way out. Offline failures
+        // cost no attempts: wait for the connection, then start again.
+        setState({ type: 'state', phase: 'starting', stale: true });
+        if (!waitingForConnection) {
+          waitingForConnection = true;
+          window.addEventListener('online', respawnOnline);
+        }
+        return;
+      }
       if (!disposed && !reloadRequired && respawnsSinceReady < RESPAWN_LIMIT) {
         respawnsSinceReady += 1;
         hostRef.current.onError(
           `${message} Restarting the geometry worker (attempt ${respawnsSinceReady} of ${RESPAWN_LIMIT}).`
         );
-        setState({ type: 'state', phase: 'starting', stale: true });
-        spawn();
-        // The replacement worker owes the visible document a rebuild: a
-        // respawn used to sit idle at "starting" until the next edit
-        // happened to post a sync again.
-        const manager = hostRef.current.manager();
-        const replacement = workerRef.current;
-        if (manager && replacement) {
-          broadcastDocument.current = manager.document;
-          postSync(
-            replacement,
-            manager.document,
-            lastSyncedKey,
-            armedRef,
-            lastDemandRef.current ?? undefined,
-            persistSessionFor(persistSessionRef, manager.document)
-          );
-        }
+        respawnAndResync();
       } else {
         armedRef.current = false;
         setState({
@@ -1112,6 +1142,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
 
     return () => {
       disposed = true;
+      window.removeEventListener('online', respawnOnline);
       clearInterval(watchdog);
       const closed = new Error('Geometry worker closed.');
       rejectOutstanding(closed);
@@ -1268,6 +1299,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         } satisfies GeometryWorkerRequest);
     },
     syncOnce(document, analysis, lineageDemand, options) {
+      const signal = options?.signal;
+      if (signal?.aborted)
+        return Promise.reject(abortError('Rebuild cancelled.'));
       // One-off rebuilds (previews, preflights, demo seeding, AI proposals)
       // read lineage straight from the result, so they get full lineage by
       // default. Only an explicit demand opts one into the idle skip.
@@ -1278,16 +1312,33 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         ...(lineageDemand ? { lineageDemand: [...lineageDemand] } : {}),
         ...(options?.proposeCarry ? { proposeCarry: true } : {})
       });
-      return posted.ok
-        ? posted.promise.then((derived) => {
-            syncOrigins.current.set(derived, {
-              document,
-              lineageDemand,
-              analysis: analysis !== undefined
-            });
-            return derived;
-          })
-        : Promise.reject(new Error('Geometry worker unavailable.'));
+      if (!posted.ok)
+        return Promise.reject(new Error('Geometry worker unavailable.'));
+      // A preview its command closed (Cancel, another tool) no longer holds
+      // the worker: without this a large pattern's preview kept building for
+      // a minute after its card was gone, and everything queued behind it.
+      const onAbort = () => {
+        const pending = syncRequests.current.get(posted.requestId);
+        if (!pending) return;
+        syncRequests.current.delete(posted.requestId);
+        armedRef.current = true;
+        workerRef.current?.postMessage({
+          type: 'cancel',
+          requestId: posted.requestId
+        });
+        pending.reject(abortError('Rebuild cancelled.'));
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      return posted.promise
+        .finally(() => signal?.removeEventListener('abort', onAbort))
+        .then((derived) => {
+          syncOrigins.current.set(derived, {
+            document,
+            lineageDemand,
+            analysis: analysis !== undefined
+          });
+          return derived;
+        });
     },
     releaseEditPreview(document) {
       workerRef.current?.postMessage({

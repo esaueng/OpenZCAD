@@ -8,7 +8,8 @@ import {
   sliderRange,
   suggestJointKind,
   sweepDof,
-  sweepUnavailableReason
+  sweepUnavailableReason,
+  unitSymbol
 } from './assemblyUi';
 import { emptyAssemblySet } from '@openzcad/shared';
 
@@ -29,6 +30,19 @@ describe('assembly presentation helpers', () => {
     expect(formatAssemblyValue(-0.01, 'deg')).toBe('0.0°');
     expect(jointValueSummary('cylindrical', [90, 5])).toBe('90.0° · 5.0 mm');
     expect(jointValueSummary('rigid', [])).toBe('Fixed');
+  });
+
+  it('labels lengths in the document unit (review I56)', () => {
+    expect(formatAssemblyValue(0.255, 'mm', 'inch')).toBe('0.26 in');
+    expect(jointValueSummary('cylindrical', [90, 2], 'inch')).toBe(
+      '90.0° · 2.00 in'
+    );
+    expect(formatAssemblyValue(1.5, 'mm', 'cm')).toBe('1.50 cm');
+    expect(unitSymbol('mm', 'inch')).toBe('in');
+    expect(unitSymbol('deg', 'inch')).toBe('°');
+    // A new limit and the free slider span 4 in, not 100 in.
+    expect(defaultLimit('mm', 0, 'inch')).toEqual({ min: 0, max: 4 });
+    expect(sliderRange('mm', null, 0, 'inch')).toEqual({ min: -4, max: 4 });
   });
 
   it('plays the first value with a range, and says why when none has one', () => {

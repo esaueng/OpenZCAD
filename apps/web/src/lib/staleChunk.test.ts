@@ -3,6 +3,7 @@ import {
   isChunkLoadError,
   loadWhenOnline,
   lazyWithStaleChunkNotice,
+  loadRetryingOnReconnect,
   onStaleChunk,
   refreshFailedChunk,
   watchPreloadErrors
@@ -272,5 +273,58 @@ describe('loadWhenOnline', () => {
     expect(fetcher.mock.calls[0]![0]).toBe(
       `${window.location.origin}/assets/EncryptionSettings-x.css`
     );
+  });
+});
+
+describe('loadRetryingOnReconnect', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const chunkError = () =>
+    new TypeError(
+      'Failed to fetch dynamically imported module: https://zcad.app/assets/ViewerShell-x.js'
+    );
+
+  it('waits for the connection after an offline chunk failure, then loads in place', async () => {
+    // 13 November review I5: the surface used to reach the page's
+    // "Loading interrupted" card, with Reload as the only way out.
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    const listener = vi.fn();
+    const stopListening = onStaleChunk(listener);
+    const stopWatching = watchPreloadErrors(window);
+    const failure = chunkError();
+    const load = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValue('chunk');
+    const result = loadRetryingOnReconnect(load);
+    // The preload helper announces the same failure; it is being retried,
+    // so no Reload is offered for it.
+    const event = new Event('vite:preloadError');
+    Object.assign(event, { payload: failure });
+    window.dispatchEvent(event);
+    await nextTask();
+    expect(load).toHaveBeenCalledOnce();
+    expect(listener).not.toHaveBeenCalled();
+    onLine.mockReturnValue(true);
+    window.dispatchEvent(new Event('online'));
+    await expect(result).resolves.toBe('chunk');
+    expect(load).toHaveBeenCalledTimes(2);
+    stopWatching();
+    stopListening();
+  });
+
+  it('rejects at once online, and for any other failure', async () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    const failure = chunkError();
+    await expect(
+      loadRetryingOnReconnect(() => Promise.reject(failure))
+    ).rejects.toBe(failure);
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    const broken = new Error('Cannot read properties of null');
+    await expect(
+      loadRetryingOnReconnect(() => Promise.reject(broken))
+    ).rejects.toBe(broken);
   });
 });

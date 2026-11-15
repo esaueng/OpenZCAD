@@ -1,27 +1,25 @@
 import type { DisplayMode } from '@openzcad/viewport';
 
 /**
- * Isometric unit cube, drawn once and reused by every display-mode glyph so
- * the three modes differ only in what shading and which edges are present.
- * The near and far corners of an isometric cube both land on the centre, so
- * `FRONT_EDGES` are the three edges meeting the near corner and `BACK_EDGES`
- * the three that are hidden behind the solid.
+ * A sphere, drawn once and reused by every display-mode glyph so the three
+ * modes differ only in what shading and which lines are present. A sphere,
+ * not a cube: the cube was the Box tool's own icon, so the Display button
+ * read as a second Box (I52).
  */
-const OUTLINE = 'M12 3 20.5 7.75V16.25L12 21 3.5 16.25V7.75Z';
-const FRONT_EDGES = 'M12 12V21M12 12 3.5 7.75M12 12 20.5 7.75';
-const BACK_EDGES = 'M12 12V3M12 12 3.5 16.25M12 12 20.5 16.25';
-const FACE_TOP = 'M12 3 20.5 7.75 12 12 3.5 7.75Z';
-const FACE_LEFT = 'M3.5 7.75 12 12 12 21 3.5 16.25Z';
-const FACE_RIGHT = 'M20.5 7.75 12 12 12 21 20.5 16.25Z';
+const CX = 12;
+const CY = 12;
+const R = 8.5;
+/** The equator seen from a little above: its near half, then its far half. */
+const EQUATOR_NEAR = 'M3.5 12A8.5 3 0 0 0 20.5 12';
+const EQUATOR_FAR = 'M3.5 12A8.5 3 0 0 1 20.5 12';
+/** One meridian, edge-on enough to read as a line round the back. */
+const MERIDIAN = 'M12 3.5A3.2 8.5 0 0 0 12 20.5A3.2 8.5 0 0 0 12 3.5Z';
 
-/** Face fills per mode. Lighter top, darker left reads as a lit solid. */
-const FACE_OPACITY: Record<
-  'shaded' | 'shaded-edges',
-  [number, number, number]
-> = {
-  shaded: [0.85, 0.3, 0.55],
-  // Dimmer under `shaded-edges`, so the drawn edges stay the louder signal.
-  'shaded-edges': [0.55, 0.18, 0.34]
+/** Fill per mode: the body, its lit side, and the highlight. */
+const SHADING: Record<'shaded' | 'shaded-edges', [number, number, number]> = {
+  shaded: [0.3, 0.45, 0.9],
+  // Dimmer under `shaded-edges`, so the drawn lines stay the louder signal.
+  'shaded-edges': [0.18, 0.28, 0.7]
 };
 
 interface DisplayModeIconProps {
@@ -30,12 +28,12 @@ interface DisplayModeIconProps {
 }
 
 /**
- * Says which display mode is active by showing it: a lit solid for `shaded`,
- * a lit solid with its edges drawn for `shaded-edges`, and an all-edges cube
- * with its hidden edges ghosted for `wireframe`.
+ * Says which display mode is active by showing it: a lit ball for `shaded`,
+ * the same ball with its outline and equator drawn for `shaded-edges`, and
+ * a see-through ball of lines, its far side ghosted, for `wireframe`.
  */
 export function DisplayModeIcon({ mode, size = 16 }: DisplayModeIconProps) {
-  const faces = mode === 'wireframe' ? null : FACE_OPACITY[mode];
+  const shading = mode === 'wireframe' ? null : SHADING[mode];
   return (
     <svg
       width={size}
@@ -49,16 +47,21 @@ export function DisplayModeIcon({ mode, size = 16 }: DisplayModeIconProps) {
       aria-hidden="true"
       focusable="false"
     >
-      {faces && (
+      {shading && (
         <g fill="currentColor" stroke="none">
-          <path d={FACE_TOP} opacity={faces[0]} />
-          <path d={FACE_LEFT} opacity={faces[1]} />
-          <path d={FACE_RIGHT} opacity={faces[2]} />
+          <circle cx={CX} cy={CY} r={R} opacity={shading[0]} />
+          <circle cx={10.4} cy={10.4} r={6} opacity={shading[1]} />
+          <circle cx={9.2} cy={9.2} r={2} opacity={shading[2]} />
         </g>
       )}
-      {mode === 'wireframe' && <path d={BACK_EDGES} opacity={0.4} />}
-      {mode !== 'shaded' && <path d={FRONT_EDGES} />}
-      {mode !== 'shaded' && <path d={OUTLINE} />}
+      {mode === 'wireframe' && (
+        <>
+          <path d={EQUATOR_FAR} opacity={0.4} />
+          <path d={MERIDIAN} />
+        </>
+      )}
+      {mode !== 'shaded' && <path d={EQUATOR_NEAR} />}
+      {mode !== 'shaded' && <circle cx={CX} cy={CY} r={R} />}
     </svg>
   );
 }

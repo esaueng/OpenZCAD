@@ -37,6 +37,24 @@ export function assertDirectEditParam(value: unknown, label: string): void {
   throw new Error(`Direct-edit ${label} must be a finite value or expression.`);
 }
 
+/** A face set this large is a sweep of the whole body, not a feature. */
+export const MAX_REMOVED_FACES = 64;
+
+function assertRemovedFaceSnapshot(
+  value: Record<string, unknown>,
+  label: string
+): void {
+  if (typeof value.sourceSurfaceType !== 'string' || !value.sourceSurfaceType) {
+    throw new Error(`Direct-edit ${label} surface type is invalid.`);
+  }
+  if (
+    assertFiniteDirectEditNumber(value.sourceArea, `${label} area`) <= 0
+  ) {
+    throw new Error(`Direct-edit ${label} area must be greater than zero.`);
+  }
+  assertDirectEditVector(value.sourceCenter, `${label} center`);
+}
+
 export function assertDirectEditOperation(
   operation: DirectEditOperation
 ): void {
@@ -290,6 +308,41 @@ export function assertDirectEditOperation(
         assertDirectEditVector(blend.axis, 'blend axis');
       }
       return;
+    case 'remove-faces': {
+      assertRemovedFaceSnapshot(value, 'face 1');
+      if (
+        !Array.isArray(value.additionalFaces) ||
+        value.additionalFaces.length === 0
+      ) {
+        throw new Error('Direct-edit face removal needs at least two faces.');
+      }
+      if (value.additionalFaces.length + 1 > MAX_REMOVED_FACES) {
+        throw new Error(
+          `Direct-edit face removal takes at most ${MAX_REMOVED_FACES} faces.`
+        );
+      }
+      const hashes = new Set<unknown>([value.faceHash]);
+      for (const [index, entry] of (
+        value.additionalFaces as unknown[]
+      ).entries()) {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+          throw new Error(`Direct-edit face ${index + 2} is invalid.`);
+        }
+        const face = entry as Record<string, unknown>;
+        if (
+          typeof face.faceHash !== 'number' ||
+          !Number.isSafeInteger(face.faceHash)
+        ) {
+          throw new Error('Direct-edit face hash must be a safe integer.');
+        }
+        assertRemovedFaceSnapshot(face, `face ${index + 2}`);
+        hashes.add(face.faceHash);
+      }
+      if (hashes.size !== value.additionalFaces.length + 1) {
+        throw new Error('Direct-edit face removal names a face twice.');
+      }
+      return;
+    }
     default:
       throw new Error('Direct-edit operation kind is not supported.');
   }

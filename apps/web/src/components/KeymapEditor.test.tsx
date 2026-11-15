@@ -55,6 +55,32 @@ describe('KeymapEditor', () => {
     expect(within(row('view-grid')).getByText('G')).toBeInTheDocument();
   });
 
+  it('moves focus to the next key, then to Add key, after a removal', () => {
+    // 13 November review I9: removing a key sent focus to <body>.
+    render(<Harness onChange={vi.fn()} />);
+    const add = screen.getByRole('button', {
+      name: 'Add a shortcut for Toggle the grid'
+    });
+    fireEvent.click(add);
+    fireEvent.keyDown(add, { key: 'h', code: 'KeyH' });
+
+    const removeG = screen.getByRole('button', {
+      name: 'Remove G from Toggle the grid'
+    });
+    removeG.focus();
+    fireEvent.click(removeG);
+    expect(
+      screen.getByRole('button', { name: 'Remove H from Toggle the grid' })
+    ).toHaveFocus();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Remove H from Toggle the grid' })
+    );
+    expect(
+      screen.getByRole('button', { name: 'Add a shortcut for Toggle the grid' })
+    ).toHaveFocus();
+  });
+
   it('refuses a taken key and names the command holding it', () => {
     const onChange = vi.fn();
     render(<Harness onChange={onChange} />);

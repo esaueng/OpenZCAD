@@ -194,6 +194,77 @@ test('Move to trash offers Undo, and Empty trash asks in-page', async ({
   expect(native).toEqual([]);
 });
 
+test(
+  'Empty trash asks over the library and takes a pointer answer',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    // The confirm used to paint under the start screen while its backdrop
+    // inerted the page: the dialog was in the DOM and focused but hidden, so
+    // the library looked frozen. Neither a keyboard answer nor a click sees
+    // that, because hit testing skips an inert element and reaches the dialog
+    // beneath it; only a hit test with the page's inert lifted shows what is
+    // actually drawn on top.
+    const destroyed: string[] = [];
+    await page.route('**/api/projects/*', (route) => {
+      if (route.request().method() !== 'DELETE') return route.fallback();
+      destroyed.push(
+        decodeURIComponent(
+          new URL(route.request().url()).pathname.split('/').at(-1)!
+        )
+      );
+      return route.fulfill({ status: 204 });
+    });
+    await page.route('**/api/projects', (route) =>
+      route.fulfill({
+        json: {
+          projects: projects.filter(
+            (project) => !destroyed.includes(project.projectId)
+          )
+        }
+      })
+    );
+    await page.getByRole('checkbox', { name: `Select ${names[2]}` }).click();
+    await page
+      .getByRole('toolbar', { name: '1 project selected' })
+      .getByRole('button', { name: 'Move to trash' })
+      .click();
+    await page.getByRole('tab', { name: /Trash/ }).click();
+    await expect.poll(() => cardOrder(page)).toEqual([names[2]]);
+    await page.getByRole('button', { name: 'Empty trash' }).click();
+
+    const confirm = page.getByRole('alertdialog', { name: 'Empty the trash?' });
+    const answer = confirm.getByRole('button', { name: 'Empty trash' });
+    await expect(answer).toBeVisible();
+    // Whatever is painted at the answer's centre must be the answer itself.
+    await expect
+      .poll(() =>
+        answer.evaluate((button) => {
+          const inert = [...document.querySelectorAll('[inert]')];
+          inert.forEach((element) => element.removeAttribute('inert'));
+          try {
+            const box = button.getBoundingClientRect();
+            const hit = document.elementFromPoint(
+              box.left + box.width / 2,
+              box.top + box.height / 2
+            );
+            return hit !== null && button.contains(hit);
+          } finally {
+            inert.forEach((element) => element.setAttribute('inert', ''));
+          }
+        })
+      )
+      .toBe(true);
+    await answer.click();
+
+    await expect(confirm).toHaveCount(0);
+    await expect.poll(() => cardOrder(page)).toEqual([]);
+    expect(destroyed).toEqual(['reorder-2']);
+    await expect(page.locator('.start-screen')).not.toHaveAttribute('inert');
+    await page.getByRole('tab', { name: /Projects/ }).click();
+    await expect.poll(() => cardOrder(page)).toEqual([names[0], names[1]]);
+  }
+);
+
 test('drops a dragged card on Trash', async ({ page }) => {
   const trash = page.getByRole('tab', { name: /Trash/ });
   const source = await card(page, names[1]!)

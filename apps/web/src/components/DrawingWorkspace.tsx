@@ -74,7 +74,23 @@ import {
   type Vector3,
   hasDraftDisplay
 } from '@openzcad/shared';
+import {
+  WheelGestureClassifier,
+  type PointerNavigationMode
+} from '@openzcad/viewport/wheel-gesture';
 import { DrawingSheetTabs } from './DrawingSheetTabs';
+import {
+  readWheelDeviceMemory,
+  writeWheelDeviceMemory
+} from '../lib/wheelDeviceMemory';
+import {
+  deletedSheetSummary,
+  deletedViewSummary,
+  duplicateDrawingSheet,
+  movedSheets,
+  nextSheetName,
+  sheetOrderSteps
+} from '../lib/drawing/sheetEdits';
 import { pruneProjectionCache } from '../lib/drawing/projectionCache';
 import {
   DrawingProjectionClient,
@@ -93,8 +109,9 @@ import {
   SHEET_STROKE_ORDER,
   type ComposedView,
   fitViewsToSheet,
+  freeViewCenter,
+  nextViewOrientation,
   sheetUnprintableCharacters,
-  sheetViewArea,
   titleBlockBox,
   viewPageBox,
   viewPlacementIssue,
@@ -251,6 +268,17 @@ export interface DrawingWorkspaceProps {
   editDisabledReason: string | null;
   onCommand: (command: AnyCommand) => boolean;
   onStatus: (message: string, options?: { immediate?: boolean }) => void;
+  /**
+   * A notice that offers Undo, for a delete that removes more than was
+   * clicked (a sheet's views, a view's sections and dimensions). Absent,
+   * it is a plain status.
+   */
+  onAnnounceUndoable?: (message: string) => void;
+  /**
+   * What a plain wheel does, as in Build (Settings > Controls): a notch
+   * zooms, a trackpad swipe pans. Auto when absent.
+   */
+  pointerNavigation?: PointerNavigationMode;
   /**
    * D06: the sheet on screen as the assistant reads it, or null when there
    * is none. Called whenever what it measures changes.
@@ -1824,8 +1852,23 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   );
   const selectedView =
     sheet?.views.find((view) => view.viewId === selectedViewId) ?? null;
-  const [addOrientation, setAddOrientation] =
-    useState<DrawingViewOrientation>('front');
+  // "New view" offers the first orientation the sheet does not show yet
+  // (review I65); a pick holds until the sheet's views change.
+  const addKey = sheet
+    ? `${sheet.sheetId}|${sheet.views.map((view) => view.viewId).join(',')}`
+    : '';
+  const [addChoice, setAddChoice] = useState<{
+    key: string;
+    orientation: DrawingViewOrientation;
+  } | null>(null);
+  const addOrientation: DrawingViewOrientation =
+    addChoice?.key === addKey
+      ? addChoice.orientation
+      : sheet
+        ? nextViewOrientation(sheet)
+        : 'front';
+  const setAddOrientation = (orientation: DrawingViewOrientation) =>
+    setAddChoice({ key: addKey, orientation });
   const [drag, setDrag] = useState<{
     sheetId: DrawingSheetId;
     viewId: DrawingViewId;
@@ -1933,14 +1976,35 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   } | null>(null);
   /** Touch points on the canvas, for a two-finger pinch. */
   const touchesRef = useRef(new Map<number, { x: number; y: number }>());
+  const wheelClassifier = useRef<WheelGestureClassifier | null>(null);
   const wheelRef = useRef<(event: WheelEvent) => void>(() => undefined);
   wheelRef.current = (event: WheelEvent) => {
     const current = zoomRef.current;
     if (!current || !zoomPaper) return;
     const delta = wheelPixels(event);
-    if (event.ctrlKey || event.metaKey) {
-      // Ctrl/Cmd+wheel, and a trackpad pinch (which browsers send as a
-      // wheel with ctrlKey), zoom about the pointer.
+    // The wheel means what it means in Build (review I66): a notch, Ctrl/
+    // Cmd+wheel and a pinch zoom about the pointer, and a trackpad swipe
+    // pans, by the same classifier and the same remembered device. Shift
+    // keeps a notch scrolling sideways across a zoomed sheet.
+    wheelClassifier.current ??= new WheelGestureClassifier({
+      device: readWheelDeviceMemory()
+    });
+    const { intent, learned } = wheelClassifier.current.classify(
+      {
+        deltaX: event.deltaX,
+        deltaY: event.deltaY,
+        deltaMode: event.deltaMode,
+        ctrlKey: event.ctrlKey
+      },
+      props.pointerNavigation ?? 'auto',
+      event.timeStamp
+    );
+    if (learned) writeWheelDeviceMemory(learned);
+    if (
+      event.ctrlKey ||
+      event.metaKey ||
+      (intent === 'zoom' && !event.shiftKey)
+    ) {
       event.preventDefault();
       setSheetZoom(
         zoomSheetAt(
@@ -1953,11 +2017,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       );
       return;
     }
-    // A plain wheel scrolls a zoomed sheet; a fitted one has nowhere to go.
+    // A swipe pans a zoomed sheet; a fitted one has nowhere to go.
+    event.preventDefault();
     if (current.zoom <= 1) return;
     const rect = canvasRect();
     if (!rect) return;
-    event.preventDefault();
     const x = event.shiftKey && delta.x === 0 ? delta.y : delta.x;
     const y = event.shiftKey && delta.x === 0 ? 0 : delta.y;
     setSheetZoom(panSheet(current, zoomPaper, rect, -x, -y));
@@ -2465,7 +2529,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     let created: DrawingSheet;
     try {
       created = createStarterSheet({
-        name: `Sheet ${sheets.length + 1}`,
+        name: nextSheetName(sheets),
         bodyIds,
         bodies,
         units: document.units,
@@ -2481,6 +2545,97 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     }
     if (run(commandFactories.addDrawingSheet({ sheet: created })))
       setSelectedSheetId(created.sheetId);
+  };
+
+  /** Says what a delete removed, offering Undo where the host can. */
+  const announceUndoable = (message: string) =>
+    props.onAnnounceUndoable
+      ? props.onAnnounceUndoable(message)
+      : props.onStatus(message);
+
+  const renameSheet = (sheetId: DrawingSheetId, name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    run(
+      commandFactories.updateDrawingSheet(
+        { sheetId, name: trimmed },
+        `Rename drawing to ${trimmed}`
+      )
+    );
+  };
+
+  /**
+   * The commands that put the sheets in `next` order, or null (with a
+   * status) when a sheet that has to be taken out and put back draws a
+   * body no longer in the model: adding it back would be refused.
+   */
+  const sheetOrderCommands = (next: readonly DrawingSheet[]) => {
+    const { remove, add } = sheetOrderSteps(sheets, next);
+    const known = new Set(document.bodyOrder);
+    const orphaned = add.find((entry) =>
+      entry.views.some((view) => view.bodyIds.some((id) => !known.has(id)))
+    );
+    if (orphaned) {
+      props.onStatus(
+        `${orphaned.name} draws a body that is no longer in the model. Update or delete it, then move the sheets.`
+      );
+      return null;
+    }
+    return [
+      ...remove.map((id) => commandFactories.deleteDrawingSheet({ sheetId: id })),
+      ...add.map((entry) => commandFactories.addDrawingSheet({ sheet: entry }))
+    ];
+  };
+
+  const duplicateSheet = (sheetId: DrawingSheetId) => {
+    const original = sheets.find((entry) => entry.sheetId === sheetId);
+    if (!original) return;
+    const copy = duplicateDrawingSheet(original, sheets);
+    // Beside its original, not at the end of the strip: one undo step.
+    const at = sheets.findIndex((entry) => entry.sheetId === sheetId) + 1;
+    const commands = sheetOrderCommands([
+      ...sheets.slice(0, at),
+      copy,
+      ...sheets.slice(at)
+    ]);
+    if (!commands) return;
+    if (!run(composeCommands(`Duplicate ${original.name}`, commands))) return;
+    selectSheet(copy.sheetId);
+    props.onStatus(`Duplicated ${original.name} as ${copy.name}.`);
+  };
+
+  const moveSheet = (sheetId: DrawingSheetId, index: number) => {
+    const next = movedSheets(sheets, sheetId, index);
+    if (!next) return;
+    const commands = sheetOrderCommands(next);
+    if (!commands) return;
+    const moved = next.findIndex((entry) => entry.sheetId === sheetId);
+    if (run(composeCommands('Move sheet', commands)))
+      props.onStatus(
+        `Moved ${next[moved]!.name} to position ${moved + 1} of ${next.length}.`
+      );
+  };
+
+  const deleteSheet = (sheetId: DrawingSheetId) => {
+    const target = sheets.find((entry) => entry.sheetId === sheetId);
+    if (!target) return;
+    const message = deletedSheetSummary(target);
+    if (!run(commandFactories.deleteDrawingSheet({ sheetId }))) return;
+    if (selectedSheetId === sheetId) setSelectedSheetId(null);
+    announceUndoable(message);
+  };
+
+  const deleteView = (viewId: DrawingViewId) => {
+    if (!sheet) return;
+    const message = deletedViewSummary(sheet, viewId, viewLabel);
+    if (
+      !run(
+        commandFactories.deleteDrawingView({ sheetId: sheet.sheetId, viewId })
+      )
+    )
+      return;
+    if (selectedViewId === viewId) setSelectedViewId(null);
+    announceUndoable(message);
   };
 
   const updateSheet = (
@@ -2525,13 +2680,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         view.parentViewId === undefined &&
         drawingViewAlignment(view.orientation, addOrientation) !== null
     );
-    const area = sheetViewArea(sheet);
     const viewBodies = bodyIds.filter((id) => liveBodies.includes(id));
     // A projected view goes beside its base, on the side the projection
-    // angle gives it, clear of the base by a gap; anything else starts in
-    // the middle of the sheet.
-    let centerMm = { x: area.x + area.width / 2, y: area.y + area.height / 2 };
-    if (base) {
+    // angle gives it, clear of the base by a gap; anything else goes in the
+    // free space nearest the middle of the sheet, clear of the other views.
+    let centerMm: { x: number; y: number };
+    if (!base) {
+      const extent = estimateViewExtent(bodies, viewBodies, addOrientation);
+      const k = drawingPaperPerModelUnit(sheet.scale, document.units);
+      centerMm = freeViewCenter(sheet, viewExtents, document.units, {
+        width: extent ? (extent.maxU - extent.minU) * k : 0,
+        height: extent ? (extent.maxV - extent.minV) * k : 0
+      });
+    } else {
       const side = projectedViewSide(
         base.orientation,
         addOrientation,
@@ -2610,7 +2771,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const page = composeSheetPage(
       sheet,
       drawn,
-      { projectName: document.name, units: document.units },
+      { projectName: document.name, units: document.units, sheetNumber },
       composeSheetAnnotations(sheet, drawn, resolutions, document.units)
     );
     const fileName = drawingExportFileName(document.name, sheet.name, format);
@@ -2753,17 +2914,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     } else if (event.key === 'Delete' || event.key === 'Backspace') {
       event.preventDefault();
       event.stopPropagation();
-      if (
-        run(
-          commandFactories.deleteDrawingView({
-            sheetId: sheet.sheetId,
-            viewId: selectedView.viewId
-          })
-        )
-      )
-        setSelectedViewId(null);
+      deleteView(selectedView.viewId);
     }
   };
+
+  // "2 / 3" in the title block's SHEET cell: where this sheet sits in the
+  // set, in tab order (review I63).
+  const sheetPosition = sheet
+    ? sheets.findIndex((entry) => entry.sheetId === sheet.sheetId) + 1
+    : 0;
+  const sheetNumber = useMemo(
+    () => ({ index: Math.max(1, sheetPosition), count: sheets.length }),
+    [sheetPosition, sheets.length]
+  );
 
   const composed = useMemo(() => {
     if (!shownSheet) return null;
@@ -2771,7 +2934,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return {
         page: composeSheetPage(shownSheet, ghostViews, {
           projectName: document.name,
-          units: document.units
+          units: document.units,
+          sheetNumber
         }),
         boxes: new Map<DrawingAnnotationId, AnnotationBox>(),
         ghost: true
@@ -2786,7 +2950,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       page: composeSheetPage(
         shownSheet,
         drawnViews,
-        { projectName: document.name, units: document.units },
+        { projectName: document.name, units: document.units, sheetNumber },
         annotations
       ),
       boxes: annotations.boxes,
@@ -2798,7 +2962,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     ghostViews,
     resolutions,
     document.name,
-    document.units
+    document.units,
+    sheetNumber
   ]);
   const page: SheetPage | null = composed?.page ?? null;
   // Each view's projected extent: the drawn one once it is ready, the
@@ -2854,24 +3019,20 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     return `${listNames(names)} ${names.length === 1 ? 'runs' : 'run'} off the paper. Fit views to sheet, or move ${names.length === 1 ? 'it' : 'them'} onto the page, to export.`;
   }
 
-  const fitViews = (autoScale = false) => {
-    if (!sheet) return;
-    const label = autoScale ? 'Auto scale' : 'Fit views to sheet';
+  /**
+   * The view moves that lay `target` out again, by "Fit views to sheet" or
+   * "Auto scale", and the scale they need; null when nothing fits. `target`
+   * may carry an edit not yet run, such as a new paper.
+   */
+  const fittedLayout = (target: DrawingSheet, autoScale: boolean) => {
     const fitted = (autoScale ? autoScaleSheet : fitViewsToSheet)(
-      sheet,
+      target,
       viewExtents,
       document.units
     );
-    if (!fitted) {
-      props.onStatus(
-        sheet.views.length === 0
-          ? `Add a view to ${autoScale ? 'scale it' : 'fit it'} to the sheet.`
-          : 'These views do not fit this paper at any scale. Pick a larger paper.'
-      );
-      return;
-    }
+    if (!fitted) return null;
     const scaled =
-      formatDrawingScale(fitted.scale) !== formatDrawingScale(sheet.scale);
+      formatDrawingScale(fitted.scale) !== formatDrawingScale(target.scale);
     // Bases first: moving one carries its projected views, which are then
     // set to their own fitted centres.
     const depth = (view: DrawingView): number => {
@@ -2880,28 +3041,44 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         entry?.parentViewId ?? entry?.section?.sourceViewId;
       let count = 0;
       let parent = baseOf(view);
-      while (parent && count < sheet.views.length) {
+      while (parent && count < target.views.length) {
         count += 1;
-        parent = baseOf(sheet.views.find((entry) => entry.viewId === parent));
+        parent = baseOf(target.views.find((entry) => entry.viewId === parent));
       }
       return count;
     };
-    const byId = new Map(sheet.views.map((view) => [view.viewId, view]));
+    const byId = new Map(target.views.map((view) => [view.viewId, view]));
     const moves = [...fitted.centers]
       .sort((a, b) => depth(byId.get(a.viewId)!) - depth(byId.get(b.viewId)!))
       .map(({ viewId, centerMm }) =>
         commandFactories.updateDrawingView({
-          sheetId: sheet.sheetId,
+          sheetId: target.sheetId,
           viewId,
           centerMm
         })
       );
+    return { scale: fitted.scale, scaled, moves };
+  };
+
+  const fitViews = (autoScale = false) => {
+    if (!sheet) return;
+    const label = autoScale ? 'Auto scale' : 'Fit views to sheet';
+    const layout = fittedLayout(sheet, autoScale);
+    if (!layout) {
+      props.onStatus(
+        sheet.views.length === 0
+          ? `Add a view to ${autoScale ? 'scale it' : 'fit it'} to the sheet.`
+          : 'These views do not fit this paper at any scale. Pick a larger paper.'
+      );
+      return;
+    }
+    const { scale, scaled, moves } = layout;
     const commands = [
       ...(scaled
         ? [
             commandFactories.updateDrawingSheet({
               sheetId: sheet.sheetId,
-              scale: fitted.scale
+              scale
             })
           ]
         : []),
@@ -2911,12 +3088,43 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       props.onStatus(
         autoScale
           ? scaled
-            ? `Scaled the views to ${formatDrawingScale(fitted.scale)}, the largest scale that fits the sheet.`
-            : `${formatDrawingScale(fitted.scale)} is already the largest scale that fits the sheet.`
+            ? `Scaled the views to ${formatDrawingScale(scale)}, the largest scale that fits the sheet.`
+            : `${formatDrawingScale(scale)} is already the largest scale that fits the sheet.`
           : scaled
-            ? `Fitted the views to the sheet at ${formatDrawingScale(fitted.scale)}.`
+            ? `Fitted the views to the sheet at ${formatDrawingScale(scale)}.`
             : 'Fitted the views to the sheet.'
       );
+  };
+
+  /**
+   * A new paper size or orientation, with the views laid out again on it in
+   * the same undo step: the old centres sit wherever the old paper put them,
+   * so a smaller sheet left views off the page and export refused (review
+   * I64). The fit keeps the views' arrangement and scale, and lowers the
+   * scale only when they do not fit.
+   */
+  const changePaper = (paper: DrawingSheet['paper']) => {
+    if (!sheet) return;
+    const name = `${DRAWING_PAPER_LABELS[paper.size]} ${paper.orientation}`;
+    const layout =
+      sheet.views.length > 0 ? fittedLayout({ ...sheet, paper }, false) : null;
+    const commands = [
+      commandFactories.updateDrawingSheet({
+        sheetId: sheet.sheetId,
+        paper,
+        ...(layout?.scaled ? { scale: layout.scale } : {})
+      }),
+      ...(layout?.moves ?? [])
+    ];
+    if (!run(composeCommands(`Paper ${name}`, commands))) return;
+    if (sheet.views.length === 0) return;
+    props.onStatus(
+      !layout
+        ? `Changed the paper to ${name}. These views do not fit it at any scale; pick a larger paper.`
+        : layout.scaled
+          ? `Changed the paper to ${name} and fitted the views at ${formatDrawingScale(layout.scale)}.`
+          : `Changed the paper to ${name} and fitted the views to it.`
+    );
   };
   // Edges a tool can pick, kept while the drawn views and model are the same
   // objects: a pointer move re-renders, it must not re-project every edge.
@@ -3670,6 +3878,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             activeId={sheet.sheetId}
             onSelect={selectSheet}
             onCreate={createSheet}
+            onRename={renameSheet}
+            onDuplicate={duplicateSheet}
+            onMove={moveSheet}
+            onDelete={deleteSheet}
+            editDisabledReason={editable ? null : editDisabledReason}
             createDisabled={!editable || geometryPending}
             createTitle={
               editDisabledReason ??
@@ -3789,7 +4002,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 type="button"
                 className="drawing-zoom-button"
                 aria-label="Zoom out"
-                title="Zoom out (Ctrl+wheel or pinch on the sheet)"
+                title="Zoom out (scroll wheel or pinch on the sheet)"
                 disabled={zoom.zoom <= 1}
                 onClick={() => zoomBy(1 / SHEET_ZOOM_STEP)}
               >
@@ -3804,7 +4017,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 type="button"
                 className="drawing-zoom-button"
                 aria-label="Zoom in"
-                title="Zoom in (Ctrl+wheel or pinch on the sheet)"
+                title="Zoom in (scroll wheel or pinch on the sheet)"
                 disabled={zoom.zoom >= MAX_SHEET_ZOOM}
                 onClick={() => zoomBy(SHEET_ZOOM_STEP)}
               >
@@ -4471,17 +4684,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               type="button"
               className="secondary"
               disabled={!editable}
-              onClick={() => {
-                if (
-                  run(
-                    commandFactories.deleteDrawingView({
-                      sheetId: sheet.sheetId,
-                      viewId: selectedView.viewId
-                    })
-                  )
-                )
-                  setSelectedViewId(null);
-              }}
+              onClick={() => deleteView(selectedView.viewId)}
             >
               <Trash2 size={13} aria-hidden="true" /> Delete view
             </button>
@@ -4505,11 +4708,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   value={sheet.paper.size}
                   disabled={!editable}
                   onChange={(event) =>
-                    updateSheet({
-                      paper: {
-                        ...sheet.paper,
-                        size: event.target.value as DrawingPaperSize
-                      }
+                    changePaper({
+                      ...sheet.paper,
+                      size: event.target.value as DrawingPaperSize
                     })
                   }
                 >
@@ -4526,12 +4727,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   value={sheet.paper.orientation}
                   disabled={!editable}
                   onChange={(event) =>
-                    updateSheet({
-                      paper: {
-                        ...sheet.paper,
-                        orientation: event.target
-                          .value as DrawingSheet['paper']['orientation']
-                      }
+                    changePaper({
+                      ...sheet.paper,
+                      orientation: event.target
+                        .value as DrawingSheet['paper']['orientation']
                     })
                   }
                 >
@@ -4751,16 +4950,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 type="button"
                 className="secondary drawing-delete-sheet"
                 disabled={!editable}
-                onClick={() => {
-                  if (
-                    run(
-                      commandFactories.deleteDrawingSheet({
-                        sheetId: sheet.sheetId
-                      })
-                    )
-                  )
-                    setSelectedSheetId(null);
-                }}
+                onClick={() => deleteSheet(sheet.sheetId)}
               >
                 <Trash2 size={13} aria-hidden="true" /> Delete sheet
               </button>
