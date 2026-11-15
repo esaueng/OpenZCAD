@@ -1681,6 +1681,7 @@ import {
   saveLocalProjectOrganization,
   saveLocalProjectOrganizationIfCurrent,
   saveProjectMeasurements,
+  saveAccountThumbnail,
   saveProjectThumbnail,
   saveLocalProject,
   saveLocalSaveStates,
@@ -4079,15 +4080,28 @@ export function App() {
    * A project with no published preview simply shows the placeholder.
    */
   const loadThumbnail = useCallback(
-    (project: ProjectSummary): Promise<string | null | undefined> =>
-      resolveShelfThumbnail(project, {
+    (project: ProjectSummary): Promise<string | null | undefined> => {
+      const keyRevision = getKeySessionRevision();
+      return resolveShelfThumbnail(project, {
         loadCached: loadProjectThumbnail,
         download: async (artifactId) => {
           const { downloadCloudThumbnail } =
             await import('./lib/cloudThumbnail');
           return downloadCloudThumbnail(artifactId);
-        }
-      }),
+        },
+        // The next load reads it from this device instead of downloading
+        // it again. An encrypted project's image is kept only while the key
+        // session that decrypted it is still the current one.
+        remember: (projectId, thumbnail, replaces) =>
+          saveAccountThumbnail(projectId, thumbnail, {
+            replaces,
+            shouldWrite: () =>
+              (project.storageFormat !== 2 &&
+                !isEncryptedProject(project.projectId)) ||
+              isCurrentKeySession(keyRevision)
+          })
+      });
+    },
     []
   );
   const [fitSignal, setFitSignal] = useState(0);

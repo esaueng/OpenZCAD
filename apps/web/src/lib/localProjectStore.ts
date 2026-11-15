@@ -1506,6 +1506,53 @@ export function saveProjectThumbnail(
 }
 
 /**
+ * Keeps a card image downloaded from the account, but only over the record
+ * the download was decided on (`replaces`, null for none). The check runs
+ * inside the write's transaction, so a card the workspace captured while the
+ * download was in flight — or one another tab wrote — is never overwritten
+ * with the older account image. Resolves to whether it wrote.
+ *
+ * `shouldWrite` is asked last, immediately before the put, as in
+ * {@link saveProjectThumbnail}; declining writes nothing and is not an error.
+ */
+export function saveAccountThumbnail(
+  projectId: string,
+  thumbnail: Omit<ProjectThumbnailRecord, 'projectId'>,
+  options: {
+    replaces: ProjectThumbnailRecord | null;
+    shouldWrite?: () => boolean;
+  }
+): Promise<boolean> {
+  return scopedTransaction(
+    'readwrite',
+    [THUMBNAIL_STORE_NAME, ALIAS_STORE_NAME],
+    async (store) => {
+      await assertCurrentProjectId(store(ALIAS_STORE_NAME), projectId);
+      const thumbnails = store(THUMBNAIL_STORE_NAME);
+      const current = (await settled(thumbnails.get(projectId))) as
+        ProjectThumbnailRecord | undefined;
+      if (!sameThumbnailRecord(current ?? null, options.replaces)) return false;
+      if (options.shouldWrite && !options.shouldWrite()) return false;
+      await settled(thumbnails.put({ ...thumbnail, projectId }));
+      return true;
+    }
+  );
+}
+
+function sameThumbnailRecord(
+  a: ProjectThumbnailRecord | null,
+  b: ProjectThumbnailRecord | null
+): boolean {
+  if (!a || !b) return a === b;
+  return (
+    a.source === b.source &&
+    a.artifactId === b.artifactId &&
+    a.version === b.version &&
+    a.updatedAt === b.updatedAt
+  );
+}
+
+/**
  * The cached preview for one project, or null when this device has never
  * rendered it. A stale image is deliberately preferred over loading the
  * document to refresh it: the tile is a recognition aid, not a source of truth.

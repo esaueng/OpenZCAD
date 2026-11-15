@@ -12,6 +12,7 @@ import {
   compareProjectSummaries,
   MAX_LOCAL_CHECKPOINT_DOCUMENTS,
   persistedDocumentBytes,
+  toArtifactId,
   toBodyId,
   toProjectId,
   toUserId,
@@ -31,6 +32,7 @@ import {
   loadLocalSaveState,
   loadProjectMeasurements,
   loadProjectThumbnail,
+  saveAccountThumbnail,
   saveProjectMeasurements,
   saveProjectThumbnail,
   ThumbnailWriteCancelledError,
@@ -1413,6 +1415,56 @@ describe('project thumbnails', () => {
     expect(await loadProjectThumbnail('project_card')).toEqual({
       projectId: 'project_card',
       ...card
+    });
+  });
+  describe('an image downloaded from the account', () => {
+    const account = {
+      source: 'data:image/webp;base64,ACCOUNT',
+      artifactId: toArtifactId('artifact_account'),
+      version: -1,
+      updatedAt: '2026-11-15T09:00:00.000Z'
+    };
+
+    it('is kept when the device had no card', async () => {
+      await expect(
+        saveAccountThumbnail('project_card', account, { replaces: null })
+      ).resolves.toBe(true);
+      expect(await loadProjectThumbnail('project_card')).toEqual({
+        projectId: 'project_card',
+        ...account
+      });
+    });
+
+    it('replaces the record the download was decided on', async () => {
+      await saveProjectThumbnail('project_card', card);
+      const replaces = await loadProjectThumbnail('project_card');
+      await expect(
+        saveAccountThumbnail('project_card', account, { replaces })
+      ).resolves.toBe(true);
+      expect(await loadProjectThumbnail('project_card')).toMatchObject(account);
+    });
+
+    it('never overwrites a card written while it downloaded', async () => {
+      // The workspace captured a newer card between the shelf's read and
+      // the download landing: the older account image must not replace it.
+      await saveProjectThumbnail('project_card', card);
+      await expect(
+        saveAccountThumbnail('project_card', account, { replaces: null })
+      ).resolves.toBe(false);
+      expect(await loadProjectThumbnail('project_card')).toEqual({
+        projectId: 'project_card',
+        ...card
+      });
+    });
+
+    it('writes nothing once its caller stops', async () => {
+      await expect(
+        saveAccountThumbnail('project_card', account, {
+          replaces: null,
+          shouldWrite: () => false
+        })
+      ).resolves.toBe(false);
+      expect(await loadProjectThumbnail('project_card')).toBeNull();
     });
   });
 });
