@@ -583,6 +583,19 @@
   color: var(--color-text);
 }
 
+/* The box's ring is shared, so a keyboard focus on the units also marks the
+   units themselves: a wash on the suffix and an accent chevron. Without it,
+   tabbing from the name left the same ring and only lost the caret. */
+.start-launch-field .start-field-units select:focus-visible {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-radius: 0 calc(var(--radius-sm) - 1px) calc(var(--radius-sm) - 1px) 0;
+}
+
+.start-field-units:has(select:focus-visible)::after {
+  background: var(--color-accent);
+}
+
 /* Centred on the select, which is the label's whole height at any size. */
 .start-field-units::after {
   content: '';
