@@ -14,12 +14,14 @@ import {
 import {
   FLAT_PATTERN_DXF_LAYERS,
   flatPatternBendNote,
+  formatFlatPatternNumber,
   flatPatternDxf,
   flatPatternExtents,
   flatPatternSvg,
   type SheetMetalFlatPattern
 } from '@openzcad/kernel-adapter/sheet-metal-flat-pattern';
 import {
+  FEATURE_SUPPRESSED_METADATA_KEY,
   sheetMetalBendMetrics,
   toUserId,
   type BodyId,
@@ -40,6 +42,7 @@ import {
   flatPatternChangedWarning
 } from '../apps/web/src/lib/sheetMetalFlatPattern';
 import {
+  flatPatternTarget,
   sheetMetalFeatureForBody,
   sheetMetalFeatureOptions
 } from '../apps/web/src/lib/sheetMetalFeatures';
@@ -136,10 +139,15 @@ function sheet(
   blank: SketchObjectData[],
   lines: SketchObjectData[],
   bends: (lineIds: EntityId[], sketchId: SketchId) => SheetMetalBend[],
-  cells?: { x: number; y: number }[]
+  cells?: { x: number; y: number }[],
+  options: {
+    base?: ProjectDocument;
+    name?: string;
+    fixedPoint?: [number, number];
+  } = {}
 ): Sheet {
   const { document: withSketch, sketchId } = addSketchFeature(
-    createProjectDocument('Flat pattern', user),
+    options.base ?? createProjectDocument('Flat pattern', user),
     {
       name: 'Blank',
       planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
@@ -148,8 +156,9 @@ function sheet(
   );
   const objectIds = [...findSketch(withSketch, sketchId)!.objectIds];
   const { document, bodyId } = sheetMetalBody(withSketch, {
-    name: 'Bracket',
+    name: options.name ?? 'Bracket',
     sketchId,
+    ...(options.fixedPoint ? { fixedPoint: options.fixedPoint } : {}),
     profiles: cells
       ? cells.map((point) => cellAt(withSketch, sketchId, point))
       : [{ all: true, sourceEntityIds: objectIds.slice(0, blank.length) }],
@@ -486,5 +495,157 @@ describe('bend table and flat-pattern lookups', { timeout: 240_000 }, () => {
     ).toBe(
       '2 later features change this body; the flat pattern shows the sheet before them.'
     );
+  });
+});
+
+describe('review fixes (PR #1560)', { timeout: 240_000 }, () => {
+  it('refuses the flat pattern of a part the build refused (folded-overlap)', async () => {
+    // Spec example: a 20 mm base, two outward 135° up bends, 30 mm flanges.
+    const ba = sheetMetalBendMetrics(135 * DEG, R, T, K).bendAllowance;
+    const flat = 30 + ba + 20 + ba + 30;
+    const first = 30 + ba / 2;
+    const second = 30 + ba + 20 + ba / 2;
+    const overlap = sheet(
+      [rectangle(0, 0, flat, 30)],
+      [line(first, 0, first, 30), line(second, 0, second, 30)],
+      ([a, b], sketchId) => [
+        bend('left', sketchId, a!, { angleDeg: 135 }),
+        bend('right', sketchId, b!, { angleDeg: 135 })
+      ],
+      undefined,
+      { fixedPoint: [flat / 2, 15] }
+    );
+    // Cold, and again after the history cache holds the refused build.
+    for (let pass = 0; pass < 2; pass += 1) {
+      await expect(
+        adapter.sheetMetalFlatPattern(overlap.document, overlap.featureId)
+      ).rejects.toThrow(
+        'Feature "Bracket": Sheet metal: Folded, the flange of bend 1 passes through the flange of bend 2.'
+      );
+      await expect(
+        adapter.sheetMetalFlatPattern(overlap.document, overlap.featureId)
+      ).rejects.toThrow(/not exported until the part builds/);
+      await adapter.syncDocument(overlap.document);
+    }
+    // A part that builds still flattens.
+    const bracket = lBracket();
+    await expect(
+      adapter.sheetMetalFlatPattern(bracket.document, bracket.featureId)
+    ).resolves.toMatchObject({ featureId: bracket.featureId });
+  });
+
+  it('opens the requested sheet or says why, never another sheet', () => {
+    const first = lBracket();
+    const second = sheet(
+      [rectangle(0, 100, L_BLANK, 100 + WIDTH)],
+      [line(L_LINE, 100, L_LINE, 100 + WIDTH)],
+      ([lineId], sketchId) => [bend('c1', sketchId, lineId!)],
+      undefined,
+      { base: first.document, name: 'Cover' }
+    );
+    const both = second.document;
+    expect(flatPatternTarget(both)).toEqual({ featureId: first.featureId });
+    expect(flatPatternTarget(both, second.featureId)).toEqual({
+      featureId: second.featureId
+    });
+    const [nodeId, node] = Object.entries(both.nodes).find(
+      ([, entry]) =>
+        entry.kind === 'feature' && entry.featureId === second.featureId
+    )!;
+    const suppressed: ProjectDocument = {
+      ...both,
+      nodes: {
+        ...both.nodes,
+        [nodeId]: {
+          ...node,
+          metadata: {
+            ...node.metadata,
+            [FEATURE_SUPPRESSED_METADATA_KEY]: true
+          }
+        }
+      }
+    };
+    expect(sheetMetalFeatureOptions(suppressed).map((o) => o.name)).toEqual([
+      'Bracket'
+    ]);
+    // Inspector › Flat pattern… on the suppressed sheet: not the other one.
+    expect(flatPatternTarget(suppressed, second.featureId)).toEqual({
+      error:
+        'Cover is suppressed, so it has no flat pattern. Resume it to flatten it.'
+    });
+    expect(flatPatternTarget(suppressed)).toEqual({
+      featureId: first.featureId
+    });
+    expect(flatPatternTarget(suppressed, 'feature_gone' as FeatureId)).toEqual({
+      error: 'That sheet-metal part is no longer in this project.'
+    });
+  });
+
+  it('keeps small values in notes and the table (0.0004 m radius)', () => {
+    const pattern: SheetMetalFlatPattern = {
+      featureId: 'feature_small' as FeatureId,
+      thickness: 0.0005,
+      frame: {
+        origin: [0, 0, 0],
+        u: [1, 0, 0],
+        v: [0, 1, 0],
+        normal: [0, 0, 1]
+      },
+      loops: [
+        {
+          outer: true,
+          entities: [
+            { kind: 'line', start: [0, 0], end: [0.1, 0] },
+            { kind: 'line', start: [0.1, 0], end: [0.1, 0.04] },
+            { kind: 'line', start: [0.1, 0.04], end: [0, 0.04] },
+            { kind: 'line', start: [0, 0.04], end: [0, 0] }
+          ]
+        }
+      ],
+      bends: [
+        {
+          bendId: 'b1',
+          piece: 0,
+          segment: [
+            [0.05, 0],
+            [0.05, 0.04]
+          ],
+          direction: 'up',
+          angleDeg: 90,
+          insideRadius: 0.0004,
+          kFactor: 0.44,
+          bendAllowance: 0.00097397,
+          bendDeduction: 0.00082603,
+          lineLength: 0.04
+        }
+      ],
+      changedBy: []
+    };
+    expect(flatPatternBendNote(pattern.bends[0]!)).toBe('UP 90° R0.0004');
+    expect(flatPatternDxf(pattern, 'm')).toContain('UP 90\\U+00B0 R0.0004');
+    expect(flatPatternSvg(pattern, { units: 'm' })).toContain(
+      '>UP 90° R0.0004</text>'
+    );
+    expect(bendTableRows(pattern)[0]).toMatchObject({
+      insideRadius: '0.0004',
+      bendAllowance: '0.000974',
+      bendDeduction: '0.000826',
+      lineLength: '0.04'
+    });
+    // The app's three decimals where they are enough.
+    expect(
+      [96.5239, 1.5, 0.44, 4.52389, 90, 0, -0.00012346, 12345678].map(
+        formatFlatPatternNumber
+      )
+    ).toEqual([
+      '96.524',
+      '1.5',
+      '0.44',
+      '4.524',
+      '90',
+      '0',
+      '-0.0001235',
+      '1.235e+7'
+    ]);
   });
 });

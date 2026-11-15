@@ -5,11 +5,12 @@ import {
   flatPatternDxf,
   flatPatternExtents,
   flatPatternSvg,
+  formatFlatPatternNumber,
   type SheetMetalFlatPattern
 } from '@openzcad/kernel-adapter/sheet-metal-flat-pattern';
 import { useModalFocus } from '../lib/useModalFocus';
 import { unitLabel } from '../lib/measurements';
-import { exportFileStem, formatNumber } from '../lib/model';
+import { exportFileStem } from '../lib/model';
 import {
   bendTableCsv,
   bendTableHeadings,
@@ -25,7 +26,13 @@ export interface FlatPatternDialogProps {
   units: UnitSystem;
   /** The project's name, for the file names. */
   projectName: string;
-  /** Rebuilds the feature's flat pattern (the geometry worker). */
+  /**
+   * The document's revision. A pattern belongs to the revision it was built
+   * from: when this changes, the view rebuilds it, drops any answer for an
+   * older revision, and offers no export until the new one arrives.
+   */
+  revision: string;
+  /** Rebuilds the feature's flat pattern from the current document. */
   loadPattern(featureId: FeatureId): Promise<SheetMetalFlatPattern>;
   /** Saves one exported file; resolves false when the user cancelled. */
   onSave(file: {
@@ -38,10 +45,11 @@ export interface FlatPatternDialogProps {
   onClose(): void;
 }
 
-type Load =
-  | { featureId: FeatureId; status: 'loading' }
-  | { featureId: FeatureId; status: 'ready'; pattern: SheetMetalFlatPattern }
-  | { featureId: FeatureId; status: 'error'; message: string };
+type Load = { featureId: FeatureId; revision: string } & (
+  | { status: 'loading' }
+  | { status: 'ready'; pattern: SheetMetalFlatPattern }
+  | { status: 'error'; message: string }
+);
 
 function svgDataUrl(svg: string): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
@@ -58,6 +66,7 @@ export function FlatPatternDialog({
   initialFeatureId,
   units,
   projectName,
+  revision,
   loadPattern,
   onSave,
   onCopy,
@@ -69,24 +78,41 @@ export function FlatPatternDialog({
   const [featureId, setFeatureId] = useState<FeatureId>(initialFeatureId);
   const [load, setLoad] = useState<Load>({
     featureId: initialFeatureId,
+    revision,
     status: 'loading'
   });
   const [notice, setNotice] = useState<string | null>(null);
   const loadRef = useRef(loadPattern);
   loadRef.current = loadPattern;
 
+  const shownRef = useRef<{ featureId: FeatureId; revision: string } | null>(
+    null
+  );
+
   useEffect(() => {
     let active = true;
-    setLoad({ featureId, status: 'loading' });
-    setNotice(null);
+    const shown = shownRef.current;
+    setLoad({ featureId, revision, status: 'loading' });
+    // The same sheet at a newer revision: say why the drawing went away.
+    setNotice(
+      shown && shown.featureId === featureId && shown.revision !== revision
+        ? 'The model changed; updating the flat pattern…'
+        : null
+    );
     loadRef.current(featureId).then(
       (pattern) => {
-        if (active) setLoad({ featureId, status: 'ready', pattern });
+        if (!active) return;
+        shownRef.current = { featureId, revision };
+        setLoad({ featureId, revision, status: 'ready', pattern });
+        setNotice(null);
       },
       (error: unknown) => {
         if (!active) return;
+        shownRef.current = { featureId, revision };
+        setNotice(null);
         setLoad({
           featureId,
+          revision,
           status: 'error',
           message:
             error instanceof Error && error.message
@@ -98,11 +124,13 @@ export function FlatPatternDialog({
     return () => {
       active = false;
     };
-  }, [featureId]);
+  }, [featureId, revision]);
 
   const feature =
     features.find((entry) => entry.featureId === featureId) ?? features[0];
-  const pattern = load.status === 'ready' ? load.pattern : null;
+  // Only an answer for this sheet at this revision is shown or exported.
+  const current = load.featureId === featureId && load.revision === revision;
+  const pattern = current && load.status === 'ready' ? load.pattern : null;
   const view = useMemo(() => {
     if (!pattern) return null;
     try {
@@ -202,12 +230,12 @@ export function FlatPatternDialog({
             {warning}
           </p>
         )}
-        {load.status === 'loading' && (
+        {(!current || load.status === 'loading') && (
           <p className="export-dialog-progress" role="status">
             Unfolding…
           </p>
         )}
-        {load.status === 'error' && (
+        {current && load.status === 'error' && (
           <p className="export-dialog-error" role="alert">
             {load.message}
           </p>
@@ -234,10 +262,10 @@ export function FlatPatternDialog({
               <span className="flat-pattern-size">
                 Flat size{' '}
                 <strong>
-                  {formatNumber(drawn.extents.width)} ×{' '}
-                  {formatNumber(drawn.extents.height)} {length}
+                  {formatFlatPatternNumber(drawn.extents.width)} ×{' '}
+                  {formatFlatPatternNumber(drawn.extents.height)} {length}
                 </strong>
-                , {formatNumber(pattern!.thickness)} {length} thick
+                , {formatFlatPatternNumber(pattern!.thickness)} {length} thick
               </span>
             </p>
             {drawn.rows.length === 0 ? (

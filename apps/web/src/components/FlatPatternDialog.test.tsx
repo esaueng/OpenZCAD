@@ -86,19 +86,37 @@ function renderDialog(
   const loadPattern =
     overrides.loadPattern ??
     vi.fn<FlatPatternDialogProps['loadPattern']>(async () => bracket());
-  render(
+  const element = (revision: string) => (
     <FlatPatternDialog
       features={overrides.features ?? [{ featureId: SHEET, name: 'Bracket' }]}
       initialFeatureId={SHEET}
       units="mm"
       projectName="Shelf"
+      revision={revision}
       loadPattern={loadPattern}
       onSave={onSave}
       onCopy={onCopy}
       onClose={onClose}
     />
   );
-  return { onSave, onCopy, onClose, loadPattern };
+  const { rerender } = render(element('project:1'));
+  return {
+    onSave,
+    onCopy,
+    onClose,
+    loadPattern,
+    /** The document moved on to `revision` while the dialog was open. */
+    setRevision: (revision: string) => rerender(element(revision))
+  };
+}
+
+/** A promise the test settles by hand. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
 }
 
 describe('FlatPatternDialog', () => {
@@ -224,5 +242,58 @@ describe('FlatPatternDialog', () => {
     ).toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
     expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('rebuilds when the document changes, exports nothing stale, and drops late answers', async () => {
+    const angled = (angleDeg: number) => {
+      const pattern = bracket();
+      return {
+        ...pattern,
+        bends: [{ ...pattern.bends[0]!, angleDeg }]
+      };
+    };
+    const second = deferred<SheetMetalFlatPattern>();
+    const third = deferred<SheetMetalFlatPattern>();
+    const loadPattern = vi
+      .fn<FlatPatternDialogProps['loadPattern']>()
+      .mockResolvedValueOnce(angled(90))
+      .mockReturnValueOnce(second.promise)
+      .mockReturnValueOnce(third.promise);
+    const props = renderDialog({ loadPattern });
+    const table = await screen.findByRole('table', { name: 'Bend table' });
+    expect(table.querySelector('tbody td:nth-child(3)')).toHaveTextContent(
+      '90'
+    );
+
+    // A collaborator edits the blank: the 90° pattern is out of date.
+    props.setRevision('project:2');
+    await waitFor(() => expect(loadPattern).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('table', { name: 'Bend table' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Export DXF' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Export SVG' })).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: 'Copy bend table' })
+    ).toBeDisabled();
+    expect(
+      screen.getByText('The model changed; updating the flat pattern…')
+    ).toBeVisible();
+
+    // Another edit lands before the first rebuild answers.
+    props.setRevision('project:3');
+    await waitFor(() => expect(loadPattern).toHaveBeenCalledTimes(3));
+    third.resolve(angled(30));
+    await screen.findByRole('table', { name: 'Bend table' });
+    // The answer for revision 2 arrives late and is dropped.
+    second.resolve(angled(45));
+    await new Promise((settle) => setTimeout(settle, 0));
+    expect(
+      screen
+        .getByRole('table', { name: 'Bend table' })
+        .querySelector('tbody td:nth-child(3)')
+    ).toHaveTextContent('30');
+    fireEvent.click(screen.getByRole('button', { name: 'Export DXF' }));
+    await waitFor(() => expect(props.onSave).toHaveBeenCalledTimes(1));
+    expect(props.onSave.mock.calls[0]![0].text).toContain('UP 30\\U+00B0 R2');
+    expect(props.onSave.mock.calls[0]![0].text).not.toContain('UP 45');
   });
 });

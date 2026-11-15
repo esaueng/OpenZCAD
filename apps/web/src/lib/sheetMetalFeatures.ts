@@ -77,3 +77,37 @@ export function sheetMetalFeatureForBody(
   const featureId = source.get(bodyId);
   return featureId ? (sheets.get(featureId) ?? null) : null;
 }
+
+/**
+ * Which sheet the flat-pattern view opens on. With no feature requested (the
+ * File menu with nothing selected), the first sheet that builds. With one
+ * requested (the Inspector, a body's menu), that sheet or a reason it has no
+ * flat pattern — never a different sheet in its place.
+ */
+export function flatPatternTarget(
+  document: ProjectDocument,
+  requested?: FeatureId
+): { featureId: FeatureId } | { error: string } {
+  const options = sheetMetalFeatureOptions(document);
+  if (requested === undefined) {
+    const first = options[0];
+    return first
+      ? { featureId: first.featureId }
+      : { error: 'This project has no sheet-metal part to flatten.' };
+  }
+  if (options.some((option) => option.featureId === requested)) {
+    return { featureId: requested };
+  }
+  const feature = listFeaturesInOrder(document).find(
+    (entry) => entry.featureId === requested
+  );
+  if (!feature || feature.data.featureKind !== 'sheet-metal') {
+    return { error: 'That sheet-metal part is no longer in this project.' };
+  }
+  const state = isFeatureManuallySuppressed(feature)
+    ? 'suppressed'
+    : 'paused by the rollback';
+  return {
+    error: `${feature.name} is ${state}, so it has no flat pattern. Resume it to flatten it.`
+  };
+}

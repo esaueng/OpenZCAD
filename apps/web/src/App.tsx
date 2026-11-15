@@ -572,6 +572,7 @@ import {
   previewExpression
 } from './lib/model';
 import {
+  flatPatternTarget,
   sheetMetalFeatureForBody,
   sheetMetalFeatureOptions
 } from './lib/sheetMetalFeatures';
@@ -18457,16 +18458,15 @@ export function App() {
   }
 
   /**
-   * M16: the flat-pattern view, on `featureId` or else the first sheet-metal
-   * feature that builds.
+   * M16: the flat-pattern view, on the requested sheet-metal feature (or
+   * why it has none), or with none requested on the first that builds.
    */
   function openFlatPattern(featureId?: FeatureId) {
     const current = managerRef.current?.document;
-    const options = current ? sheetMetalFeatureOptions(current) : [];
-    const target =
-      options.find((option) => option.featureId === featureId) ?? options[0];
-    if (!target) {
-      setStatus('This project has no sheet-metal part to flatten.');
+    if (!current) return;
+    const target = flatPatternTarget(current, featureId);
+    if ('error' in target) {
+      setStatus(target.error);
       return;
     }
     setFlatPatternFeatureId(target.featureId);
@@ -36583,6 +36583,9 @@ export function App() {
               initialFeatureId={flatPatternFeatureId}
               units={doc.units}
               projectName={doc.name}
+              // Any edit, local or a collaborator's, is a new revision: the
+              // view rebuilds the pattern before it offers an export again.
+              revision={`${doc.projectId}:${doc.version}`}
               loadPattern={(featureId) => {
                 const current = managerRef.current?.document ?? doc;
                 return geometry.sheetMetalFlatPattern(current, featureId);

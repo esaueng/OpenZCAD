@@ -5,10 +5,10 @@
 import type { UnitSystem } from '@openzcad/shared';
 import {
   flatPatternBendLabels,
+  formatFlatPatternNumber,
   type SheetMetalFlatPattern
 } from '@openzcad/kernel-adapter/sheet-metal-flat-pattern';
 import { unitLabel } from './measurements';
-import { formatNumber } from './model';
 
 /** One row of the bend table, formatted for display. */
 export interface BendTableRow {
@@ -24,7 +24,8 @@ export interface BendTableRow {
 }
 
 /**
- * The bend table in document units with the app's number formatting. Bends
+ * The bend table in document units, formatted as the DXF notes are (the
+ * app's three decimals, at least four significant digits). Bends
  * count from 1 in the pattern's order; a bend whose line crosses the sheet
  * in several pieces numbers them `2.1`, `2.2`, … along its line (as the DXF
  * notes do).
@@ -37,13 +38,15 @@ export function bendTableRows(
     return {
       number: labels[index]!,
       direction: bend.direction === 'up' ? 'Up' : 'Down',
-      angle: formatNumber(bend.angleDeg),
-      insideRadius: formatNumber(bend.insideRadius),
-      kFactor: formatNumber(bend.kFactor),
-      bendAllowance: formatNumber(bend.bendAllowance),
+      angle: formatFlatPatternNumber(bend.angleDeg),
+      insideRadius: formatFlatPatternNumber(bend.insideRadius),
+      kFactor: formatFlatPatternNumber(bend.kFactor),
+      bendAllowance: formatFlatPatternNumber(bend.bendAllowance),
       bendDeduction:
-        bend.bendDeduction === null ? '—' : formatNumber(bend.bendDeduction),
-      lineLength: formatNumber(bend.lineLength)
+        bend.bendDeduction === null
+          ? '—'
+          : formatFlatPatternNumber(bend.bendDeduction),
+      lineLength: formatFlatPatternNumber(bend.lineLength)
     };
   });
 }

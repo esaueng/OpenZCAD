@@ -54,17 +54,25 @@ const GLYPH_ADVANCE = 0.6;
 const NOTE_GAP = 0.5;
 
 /**
- * Three decimals, trailing zeros dropped: the app's display rounding, so a
- * note reads `R1.5` where the table reads 1.5.
+ * A flat-pattern value as the notes, the bend table and the size readout all
+ * write it: the app's three decimals, trailing zeros dropped (`1.5`,
+ * `96.524`), but never fewer than four significant digits, so a small value
+ * in a large unit (a 0.0004 m radius) keeps its size instead of rounding to
+ * `0`. Non-finite values read `—`.
  */
-function noteNumber(value: number): string {
-  const rounded = Math.round(value * 1000) / 1000;
-  return String(Object.is(rounded, -0) ? 0 : rounded);
+export function formatFlatPatternNumber(value: number): string {
+  if (!Number.isFinite(value)) return '—';
+  const abs = Math.abs(value);
+  if (abs === 0) return '0';
+  if (abs >= 1e7) return value.toExponential(3);
+  const decimals = Math.min(15, Math.max(3, 3 - Math.floor(Math.log10(abs))));
+  const fixed = value.toFixed(decimals).replace(/\.?0+$/, '');
+  return fixed === '-0' || fixed === '' ? '0' : fixed;
 }
 
 /** `UP 90° R1.5`: direction, angle and inside radius of one bend line. */
 export function flatPatternBendNote(bend: SheetMetalFlatPatternBend): string {
-  return `${bend.direction === 'up' ? 'UP' : 'DOWN'} ${noteNumber(bend.angleDeg)}° R${noteNumber(bend.insideRadius)}`;
+  return `${bend.direction === 'up' ? 'UP' : 'DOWN'} ${formatFlatPatternNumber(bend.angleDeg)}° R${formatFlatPatternNumber(bend.insideRadius)}`;
 }
 
 /**
@@ -120,7 +128,7 @@ function bendNoteEntity(
     ],
     height,
     text,
-    rotationDeg: noteNumber(angle) === '0' ? 0 : angle,
+    rotationDeg: Math.abs(angle) < 5e-4 ? 0 : angle,
     align: 'center'
   };
 }
