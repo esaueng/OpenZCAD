@@ -34972,9 +34972,11 @@ export function App() {
             promptResting={workspacePrompt === idleHint}
             instructionDetails={
               displayedGeometryComplete && offsetHandleTarget
-                ? offsetHandleTarget.totalBaseline === undefined
-                  ? 'Offset is how far this edit moves the face, + out, − in. Where a flat face lies opposite, the tag switches to Total: the distance from this face to that face behind the picked point. Holes, fillets and chamfers are not counted; a stepped face can read differently where you pick.'
-                  : 'Offset is how far this edit moves the face, + out, − in. Switch the tag to Total to read the feature dimension.'
+                ? `Offset is how far this edit moves the face, + out, − in. ${
+                    offsetHandleTarget.totalBaseline === undefined
+                      ? 'Where a flat face lies opposite, the tag switches to Total: the distance from this face to that face behind the picked point. Holes, fillets and chamfers are not counted; a stepped face can read differently where you pick.'
+                      : 'Switch the tag to Total to read the feature dimension.'
+                  }`
                 : null
             }
             pick={

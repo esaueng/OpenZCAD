@@ -295,7 +295,6 @@ import {
   rearmedChipMode,
   regionChipState,
   continuesOffsetFace,
-  offsetFaceIdentity,
   type OffsetChipMode,
   type OffsetFaceIdentity
 } from '../lib/offsetChip';
@@ -5425,9 +5424,7 @@ export function ModelViewer({
           // The switch belongs to the face it was made on.
           const handle = offsetHandleRef.current;
           offsetChipChosenRef.current = offsetChipModeRef.current;
-          offsetChipFaceRef.current = handle
-            ? offsetFaceIdentity(handle)
-            : null;
+          offsetChipFaceRef.current = handle;
           // Open exact entry edits what the chip shows, so it switches with
           // it: left alone it kept the other mode's label and prefill, and
           // its Apply read the number in that mode.
@@ -14606,8 +14603,7 @@ export function ModelViewer({
     const chosenHere =
       chosenFace !== null && continuesOffsetFace(chosenFace, offsetHandle);
     // The commit renumbered the face the switch was made on: it follows it.
-    if (chosenHere)
-      offsetChipFaceRef.current = offsetFaceIdentity(offsetHandle);
+    if (chosenHere) offsetChipFaceRef.current = offsetHandle;
     offsetChipModeRef.current = rearmedChipMode(
       chipState,
       offsetChipChosenRef.current,

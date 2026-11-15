@@ -68,13 +68,6 @@ export interface OffsetFaceHandle extends OffsetFaceIdentity {
   movedFrom?: string;
 }
 
-export function offsetFaceIdentity(
-  handle: OffsetFaceIdentity
-): OffsetFaceIdentity {
-  const { bodyId, topologyId, point, normal } = handle;
-  return { bodyId, topologyId, point, normal };
-}
-
 /**
  * Whether a re-armed face handle is the face the chip's switch was made on,
  * proven, never guessed: the same face id on the same plane (an id reused
@@ -88,26 +81,20 @@ export function continuesOffsetFace(
   chosen: OffsetFaceIdentity,
   next: OffsetFaceHandle
 ): boolean {
-  if (chosen.bodyId !== next.bodyId) return false;
-  const a = chosen.normal;
-  const b = next.normal;
-  const length = Math.hypot(a.x, a.y, a.z) * Math.hypot(b.x, b.y, b.z);
-  if (
-    !(length > 0) ||
-    (a.x * b.x + a.y * b.y + a.z * b.z) / length < 1 - 1e-6
-  ) {
-    return false;
-  }
-  if (next.movedFrom !== undefined) return next.movedFrom === chosen.topologyId;
-  if (next.topologyId !== chosen.topologyId) return false;
-  const unit = Math.hypot(a.x, a.y, a.z);
-  const off =
-    (a.x * (next.point.x - chosen.point.x) +
-      a.y * (next.point.y - chosen.point.y) +
-      a.z * (next.point.z - chosen.point.z)) /
-    unit;
-  const scale = 1 + Math.hypot(chosen.point.x, chosen.point.y, chosen.point.z);
-  return Math.abs(off) <= 1e-6 * scale;
+  // Face normals are unit vectors; points are in document units.
+  const n = chosen.normal;
+  const m = next.normal;
+  const p = chosen.point;
+  const q = next.point;
+  return (
+    chosen.bodyId === next.bodyId &&
+    n.x * m.x + n.y * m.y + n.z * m.z > 1 - 1e-6 &&
+    (next.movedFrom === undefined
+      ? next.topologyId === chosen.topologyId &&
+        Math.abs(n.x * (q.x - p.x) + n.y * (q.y - p.y) + n.z * (q.z - p.z)) <
+          1e-5
+      : next.movedFrom === chosen.topologyId)
+  );
 }
 
 /**
