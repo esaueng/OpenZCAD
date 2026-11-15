@@ -14,6 +14,7 @@
   // Cloudflare does not generate Preview URLs for Workers that implement a DO.
   "preview_urls": false,
   "observability": {
+    "issues": { "enabled": true },
     "enabled": true,
     "head_sampling_rate": 1
   },
