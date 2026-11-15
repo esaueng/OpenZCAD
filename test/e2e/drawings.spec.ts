@@ -366,13 +366,19 @@ test('starts a sheet from the bodies on screen, not the export scope', async ({
     bodies.getByRole('checkbox', { name: /^Upper/ })
   ).not.toBeChecked();
 
-  // A second saved sheet draws the other isolated body. Returning to Draw
+  // A second saved sheet draws the other body alone. Returning to Draw
   // keeps that sheet instead of projecting the first body's sheet again.
+  // Hidden by hand rather than isolated: isolation's hiding is never saved
+  // (#1498), and the reload below needs Lower to stay hidden.
   await mode(page, 'Build').click();
   await page.getByRole('button', { name: /^Show body Upper/ }).click();
   await page
-    .getByRole('button', { name: /^Isolate body Upper/ })
+    .locator('.body-row', { hasText: 'Lower' })
+    .getByRole('button', { name: /^Hide body / })
     .click();
+  await expect(
+    page.locator('.body-row.hidden-body', { hasText: 'Lower' })
+  ).toHaveCount(1);
   await mode(page, 'Draw').click();
   await drawings
     .getByRole('button', { name: 'New sheet', exact: true })
@@ -388,7 +394,7 @@ test('starts a sheet from the bodies on screen, not the export scope', async ({
   await expect(second.locator('.drawing-view.is-placeholder')).toHaveCount(0);
 
   // A cold reopen has no retained sheet selection or geometry yet. Once
-  // rebuilt it chooses the unique sheet of the still-isolated Upper body.
+  // rebuilt it chooses the unique sheet of the still-shown Upper body.
   await page.reload();
   await expect(
     second.locator('.drawing-view:not(.is-placeholder)')

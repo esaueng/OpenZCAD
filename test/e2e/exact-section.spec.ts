@@ -276,7 +276,8 @@ test('restores each duplicated project’s own exact section with shared body ID
     ['Section copy', 400],
     ['Section source', 800]
   ] as const) {
-    await page.getByRole('button', { name: new RegExp(`^${name} `) }).click();
+    // A library card is named "<project>, edited <date>".
+    await page.getByRole('button', { name: new RegExp(`^${name},`) }).click();
     await expect(page.locator('.rail-section-state-kind')).toHaveText('Exact', {
       timeout: 30_000
     });

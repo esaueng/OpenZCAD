@@ -4254,8 +4254,11 @@ test('dragging the move gizmo streams live values and commits what was dragged',
 
   await page.mouse.move(grabPoint.x, grabPoint.y);
   await page.mouse.down();
+  // Up and to the right: the sweep can land on any of the three arrows, and
+  // this direction runs along each of them in the default view, where a
+  // purely sideways drag left the vertical Z arrow at 0 mm.
   for (let step = 1; step <= 12; step += 1) {
-    await page.mouse.move(grabPoint.x + step * 4, grabPoint.y);
+    await page.mouse.move(grabPoint.x + step * 4, grabPoint.y - step * 2);
     await page.waitForTimeout(12);
   }
 
