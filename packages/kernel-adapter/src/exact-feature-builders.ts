@@ -93,7 +93,7 @@ import {
 } from './exact-edge-modifiers';
 import {
   assertQualifiedVariableFillet,
-  variableBlendFailureMessage,
+  variableBlendRefusal,
   type VariableFilletSpec
 } from './exact-variable-blends';
 import {
@@ -2640,12 +2640,10 @@ function buildEdgeModifierFeature(
   );
   if (modified === null) {
     if (variableRadius || chamferSecondDistance !== undefined) {
-      throw new Error(
-        variableBlendFailureMessage(
-          data.featureKind,
-          selected.length,
-          reportedRefusal
-        )
+      throw variableBlendRefusal(
+        data.featureKind,
+        selected.length,
+        reportedRefusal
       );
     }
     const refusal = edgeModifierRefusal(
