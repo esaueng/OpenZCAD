@@ -25,6 +25,27 @@ describe('stepImportRefusal', () => {
 });
 
 describe('plainRefusal', () => {
+  it('says which fillets removal and resize cannot rebuild yet, by code', () => {
+    const text =
+      'unsupported-support-pair: resize blend: unsupported analytic support pair: plane x cone';
+    const plain = plainRefusal(text, {
+      category: 'unsupported',
+      code: 'unsupported-support-pair'
+    });
+    expect(plain.message).toMatch(/can't rebuild yet/);
+    expect(plain.message).not.toMatch(/plane x cone|support-pair/);
+    expect(plain.detail).toBe(text);
+    // A too-large radius keeps its own, more specific sentence.
+    expect(
+      plainRefusal(
+        'radius-too-large: resize blend: radius 30 mm does not fit on the recovered sharp feature',
+        { category: 'invalid_input', code: 'radius-too-large' }
+      ).message
+    ).toBe(
+      'That radius is too large for the faces this blend joins. Try a smaller radius.'
+    );
+  });
+
   it('explains a typed blend-group diameter limit without parsing prose', () => {
     expect(
       plainRefusal('opaque detail', {

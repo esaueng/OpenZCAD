@@ -1,8 +1,8 @@
 {
   "summary": {
     "qualified": 31,
-    "typed-refusal": 37,
-    "untyped-refusal": 1,
+    "typed-refusal": 38,
+    "untyped-refusal": 0,
     "wrong": 0,
     "timeout": 0
   },
@@ -23,7 +23,7 @@
     "imported-twin/upright/R6/tangent-chain": "qualified",
     "imported-twin/upright/R6/tangent-chain-small": "qualified",
     "imported-twin/upright/R6/chamfer-chain": "qualified",
-    "imported-twin/upright/R7/invalid-blend": "untyped-refusal",
+    "imported-twin/upright/R7/invalid-blend": "typed-refusal",
     "imported-twin/upright/R7/negative-blend": "typed-refusal",
     "imported-twin/upright/R7/negative-fillet": "typed-refusal",
     "imported-twin/upright/R7/negative-wall": "typed-refusal",
