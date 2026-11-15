@@ -98,6 +98,9 @@ export async function regenerateProjectThumbnails(
       drawn = await redraw(project, host);
     } catch (error) {
       if (error instanceof ThumbnailRegenerationStopped) throw error;
+      // A save the store refused because the session ended is a stop, not a
+      // skip — the last project's included, which no later step would catch.
+      ensureActive(host);
       drawn = false;
     }
     if (drawn) result.redrawn += 1;

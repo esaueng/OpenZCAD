@@ -300,4 +300,23 @@ describe('regenerateProjectThumbnails', () => {
     expect(drawn).not.toHaveBeenCalled();
     expect(loadLocal).toHaveBeenCalledTimes(1);
   });
+
+  it("reports a stop, not a finish, when the last project's save is refused", async () => {
+    // Review: a key lock during the final save was counted as a skip, and
+    // with no later step to notice, the run reported "Redrew …".
+    const last = model('Last', true);
+    let live = true;
+    const regenerate = host({
+      loadLocal: vi.fn().mockResolvedValue(last),
+      save: vi.fn(async () => {
+        live = false;
+        throw new Error('The project card was not saved: its caller stopped.');
+      }),
+      active: () => live
+    });
+
+    await expect(
+      regenerateProjectThumbnails([summary(last)], regenerate)
+    ).rejects.toBeInstanceOf(ThumbnailRegenerationStopped);
+  });
 });
