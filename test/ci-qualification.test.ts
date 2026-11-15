@@ -8,6 +8,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { FLEET_CI_PATH } from './fleet-workflow';
 import {
   findTrackingIssue,
   issueBody,
@@ -116,7 +117,7 @@ describe('complete application qualification', () => {
   });
 
   it('does not resolve runtime-only runner expressions in job environments', () => {
-    const workflow = readFileSync('.github/workflows/fleet-ci-v7.yml', 'utf8');
+    const workflow = readFileSync(FLEET_CI_PATH, 'utf8');
     // GitHub resolves a job's env before a runner exists. Step env and
     // action inputs can use runner paths, but job env cannot.
     const environments = [
@@ -127,8 +128,8 @@ describe('complete application qualification', () => {
       expect(environment[1]).not.toMatch(/\$\{\{[^}]*\brunner(?:\.|\[)/);
   });
 
-  it('stages sharded affected tests and requires real browser coverage of combined queue trees', () => {
-    const staged = readFileSync('.github/workflows/fleet-ci-v7.yml', 'utf8');
+  it('shards affected tests and requires real browser coverage of combined queue trees', () => {
+    const staged = readFileSync(FLEET_CI_PATH, 'utf8');
     expect(staged).toContain(
       'node scripts/run-ci-units.mjs root --shard=${{ matrix.shard }}/2'
     );
@@ -136,7 +137,7 @@ describe('complete application qualification', () => {
     expect(staged).toContain('pnpm test:parity-corpus');
     expect(staged).toContain('test "$TYPECHECK_RESULT" = success');
     expect(staged).toContain(
-      'pnpm test:e2e test/e2e/save-state-history.spec.ts test/e2e/feature-history.spec.ts'
+      'pnpm test:e2e --reporter=dot,json test/e2e/save-state-history.spec.ts test/e2e/feature-history.spec.ts'
     );
     expect(staged).toContain('merge_group/skipped/skipped/success)');
     expect(staged).not.toContain(

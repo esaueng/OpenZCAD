@@ -48,8 +48,9 @@ commit `158a250b52a1c83b31eb9088c09782383c8f835c` and retires the checked-in
 v6 file. v8's workflow header, `queue-trust` job, `&fleet-isolation` guard and
 runner expression are byte-identical to v6 at `18b7421`;
 `scripts/test-merge-queue-routing.py` pins that, and still checks v6's
-immutable bytes against the original queue policy. The unused staged v7 file
-stays checked in. Before routing any job to Jane, add this exact entry to the
+immutable bytes against the original queue policy. The staged v7 file was never
+activated and has been removed, together with the standalone `kernel-pin.yml`
+(the required `plan` preflight runs the same declaration). Before routing any job to Jane, add this exact entry to the
 `ci-trusted-main` runner group; until then keep `CI_FLEET_ENABLED=false` or
 the Jane-selected jobs wait for a runner the group refuses:
 
