@@ -9,11 +9,32 @@ import {
   folderSetFromDevice,
   mergeFolderSets,
   parseFolderSet,
+  plaintextFolderSet,
   pruneFolderSet,
   recordFolderChanges,
-  type FolderSet
+  recordShelfEdits,
+  seedMissingShelf,
+  shelfOfOrganization,
+  withoutShelf,
+  type FolderSet,
+  type ProjectShelf,
+  type ShelfEdit
 } from './libraryFolderSync';
 import { unlockedAccount } from './e2ee/unlockedKeys';
+import {
+  agreedShelfState,
+  confirmShelfSealed,
+  consumeShelfEdits,
+  folderSyncRecordKey,
+  isShelfSealed,
+  legacyShelfRows,
+  notifySealedShelfApplied,
+  readShelfEdits,
+  resetLegacyShelfRows,
+  shelfSealedOrSafe
+} from './sealedShelfState';
+
+export { folderSyncRecordKey };
 
 /**
  * Keeps the library's folders in step with the account copy
@@ -33,6 +54,15 @@ import { unlockedAccount } from './e2ee/unlockedKeys';
  * `e2ee/sealedLibraryFolders.ts`, ADR-024 amendment 2026-10-30) and never
  * sends their names in plaintext; any other account stores the plaintext
  * set (format 1).
+ *
+ * A sealed record also carries each project's shelf state (pin, manual
+ * order, archive; ADR-024 amendment 2026-11-14), which such an account no
+ * longer stores on its project rows. Its sources are kept per account:
+ * the account's own shelf edits on this device (a journal), and readable
+ * state its listed rows still hold from before (seeds). This device's
+ * project organization rows (`localProjectStore.ts`) are shared by every
+ * account signed in on it, so the sync neither reads nor writes them; the
+ * listing lays the agreed set over the account's rows instead.
  */
 export interface LibraryFolderSnapshot {
   /** 0 while the account has never stored folders. */
@@ -99,7 +129,10 @@ export const plaintextFolderCodec: FolderRecordCodec = {
         : { kind: 'unsupported' }
     ),
   encode: (set) =>
-    Promise.resolve({ record: canonicalFolderJson(set), commit: () => {} })
+    Promise.resolve({
+      record: canonicalFolderJson(plaintextFolderSet(set)),
+      commit: () => {}
+    })
 };
 
 export interface FolderSyncHost {
@@ -116,6 +149,20 @@ export interface FolderSyncHost {
    */
   codec(): Promise<FolderRecordCodec | null>;
   now(): number;
+  /**
+   * This account's shelf edits made on this device that the account has
+   * not taken yet. A host without it syncs folders only. Recorded only when
+   * the codec seals (format 2); a plaintext library keeps its shelf state
+   * on the project rows.
+   */
+  readShelfEdits?(): ReadonlyMap<string, ShelfEdit>;
+  /** Forgets these edits, except any made again since they were read. */
+  consumeShelfEdits?(recorded: ReadonlyMap<string, ShelfEdit>): void;
+  /**
+   * Shelf state the account still holds readable on its project rows, to
+   * seed wherever the sealed record holds nothing.
+   */
+  readShelfSeeds?(): ReadonlyMap<string, ProjectShelf>;
 }
 
 /**
@@ -150,7 +197,8 @@ function canonical(value: unknown): string {
 function isEmpty(set: FolderSet): boolean {
   return (
     Object.keys(set.folders).length === 0 &&
-    Object.keys(set.members).length === 0
+    Object.keys(set.members).length === 0 &&
+    Object.keys(set.projects ?? {}).length === 0
   );
 }
 
@@ -173,6 +221,15 @@ export async function syncLibraryFolders(
   let remote = await host.load();
   const codec = await host.codec();
   if (!codec) return 'waiting';
+  const edits = host.readShelfEdits?.() ?? new Map<string, ShelfEdit>();
+  local =
+    codec.format === 2 && host.readShelfEdits
+      ? recordShelfEdits(
+          seedMissingShelf(local, host.readShelfSeeds?.() ?? new Map()),
+          edits,
+          host.now()
+        )
+      : withoutShelf(local);
   for (let attempt = 1; ; attempt += 1) {
     let remoteSet: FolderSet | null = null;
     if (remote.revision > 0) {
@@ -208,6 +265,8 @@ export async function syncLibraryFolders(
       revision = result.saved.revision;
     }
     finish(host, device, merged, revision);
+    // Sealed, or kept on the project rows by a plaintext library's mirror.
+    host.consumeShelfEdits?.(edits);
     return 'synced';
   }
 }
@@ -232,12 +291,6 @@ function finish(
 }
 
 // ── Browser wiring ─────────────────────────────────────────────────────────
-
-const RECORD_PREFIX = 'openzcad.library.folders.sync.v2';
-
-export function folderSyncRecordKey(accountId: string): string {
-  return `${RECORD_PREFIX}:${accountId}`;
-}
 
 function readSyncRecord(key: string): SyncRecord | null {
   try {
@@ -315,14 +368,6 @@ export function browserFolderSyncHost(
   };
 }
 
-/**
- * Whether this account encrypts, asked only after the first read answered:
- * a yes holds for the visit, a no is asked again next round. An
- * unanswerable check counts as encrypting, so plaintext names never leave
- * the device on a guess.
- */
-const encrypting = new Map<string, Promise<boolean>>();
-
 const SEQUENCE_PREFIX = 'openzcad.library.folders.sequence.v1';
 /** Shared across sync rounds even when persistent storage refuses a pin. */
 const sequenceFloors = new Map<string, number>();
@@ -370,37 +415,55 @@ export async function syncAccountLibraryFolders(
 ): Promise<boolean> {
   try {
     const { api, encryptsAccountLibrary } = await import('./api');
-    const host = browserFolderSyncHost(accountId, api, async () => {
-      // Only "encrypted" is kept for the visit. "Not encrypted" is asked
-      // again every round: this page can encrypt a project or accept an
-      // encrypted invitation at any time, and a round that kept the old
-      // answer would send folder names before the Worker refused them.
-      let encrypts = encrypting.get(accountId);
-      if (!encrypts) {
-        encrypts = encryptsAccountLibrary().catch(() => true);
-        encrypting.set(accountId, encrypts);
-        void encrypts.then((answer) => {
-          if (!answer && encrypting.get(accountId) === encrypts)
-            encrypting.delete(accountId);
+    // Rows still holding readable shelf state, as this account's listing
+    // noted them: once the sealed record holds them they are reset.
+    const legacy = legacyShelfRows(accountId);
+    const agreedBefore = JSON.stringify(agreedShelfState(accountId));
+    let sealed = false;
+    const host: FolderSyncHost = {
+      ...browserFolderSyncHost(accountId, api, async () => {
+        // Asked only after the first read answered: a yes holds for the
+        // visit, a no is asked again next round. An unanswerable check
+        // counts as encrypting, so plaintext names never leave the device
+        // on a guess.
+        if (!(await shelfSealedOrSafe(accountId, encryptsAccountLibrary)))
+          return plaintextFolderCodec;
+        const account = unlockedAccount(accountId);
+        if (!account || cancelled()) return null;
+        const { sealedFolderCodec } =
+          await import('./e2ee/sealedLibraryFolders');
+        sealed = true;
+        return sealedFolderCodec({
+          accountKey: account.accountKey,
+          userId: accountId,
+          pins: localStorageFolderSequencePins(accountId)
         });
-      }
-      if (!(await encrypts)) return plaintextFolderCodec;
-      const account = unlockedAccount(accountId);
-      if (!account || cancelled()) return null;
-      const { sealedFolderCodec } = await import('./e2ee/sealedLibraryFolders');
-      return sealedFolderCodec({
-        accountKey: account.accountKey,
-        userId: accountId,
-        pins: localStorageFolderSequencePins(accountId)
-      });
-    });
-    return (await syncLibraryFolders(host)) === 'unsupported';
+      }),
+      readShelfEdits: () => readShelfEdits(accountId),
+      consumeShelfEdits: (recorded) => consumeShelfEdits(accountId, recorded),
+      readShelfSeeds: () =>
+        new Map(
+          [...legacy].map(([projectId, organization]) => [
+            projectId,
+            shelfOfOrganization(organization)
+          ])
+        )
+    };
+    const outcome = await syncLibraryFolders(host);
+    // The listing lays the agreed set over the account's rows: re-list when
+    // this round changed what it holds.
+    if (JSON.stringify(agreedShelfState(accountId)) !== agreedBefore)
+      notifySealedShelfApplied(accountId);
+    if (outcome === 'synced' && sealed && isShelfSealed(accountId)) {
+      await resetLegacyShelfRows(api, accountId, legacy);
+    }
+    return outcome === 'unsupported';
   } catch (error) {
     // The account started encrypting during this visit (a project was
     // encrypted, or an encrypted invitation accepted): seal from the next
     // round on instead of stopping on the plaintext refusal.
     if (errorCode(error) === 'LIBRARY_FOLDERS_ENCRYPTION_REQUIRED') {
-      encrypting.set(accountId, Promise.resolve(true));
+      confirmShelfSealed(accountId);
       return false;
     }
     return STOP_CODES.has(errorCode(error) ?? '');

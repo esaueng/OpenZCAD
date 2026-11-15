@@ -1609,15 +1609,10 @@ async function createProject(
     await discardCopiedObjects(ctx.db, objects, copied);
     throw error;
   }
-  // A copy lands next to its source on the shelf, as a plaintext one does.
-  const sortOrder = copy
-    ? ((
-        await ctx.db
-          .prepare('SELECT sort_order FROM projects WHERE id = ?')
-          .bind(copy.sourceProjectId)
-          .first<{ sort_order: number | null }>()
-      )?.sort_order ?? 0)
-    : 0;
+  // An account that stores an encrypted project encrypts its library, so its
+  // shelf order is sealed (ADR-024 amendment 2026-11-14): the row holds the
+  // default and the browser places a copy beside its source in that record.
+  const sortOrder = 0;
   const now = new Date().toISOString();
   const db = ctx.db;
   // The version and the info were checked against this same list.

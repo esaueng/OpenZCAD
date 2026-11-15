@@ -761,6 +761,23 @@ describe('encrypted projects required (decision D2)', () => {
     ).toBe(201);
   });
 
+  it('answers the library rule, not 501, while encrypted projects are closed', async () => {
+    // The browser asks before every library write; a 501 there was logged
+    // as a failed request each time (#1524).
+    const closed = await seed({ E2EE_KEYS_ENABLED: 'true' });
+    const read = await closed.call('GET', '/api/e2ee/project-preferences');
+    expect(read.status).toBe(200);
+    // The seeded owner holds an encrypted project: still encrypted.
+    expect(await read.json()).toEqual({
+      preference: null,
+      libraryEncrypted: true
+    });
+    const write = await closed.call('PUT', '/api/e2ee/project-preferences', {
+      body: {}
+    });
+    expect(write.status).toBe(501);
+  });
+
   it('reports the library rule on the preference route', async () => {
     const { call, db } = await seed(projectsOn);
     db.prepare(
@@ -872,8 +889,16 @@ describe('the "encrypt new projects" record routes', () => {
     expect(
       await (await keysOnly.call('GET', '/api/e2ee/config')).json()
     ).toEqual({ enabled: true, projectsEnabled: false });
+    // Closed: a read answers the library rule (no opt-in), a write refuses.
     expect(
       (await keysOnly.call('GET', '/api/e2ee/project-preferences')).status
+    ).toBe(200);
+    expect(
+      (
+        await keysOnly.call('PUT', '/api/e2ee/project-preferences', {
+          body: {}
+        })
+      ).status
     ).toBe(501);
     // The projects flag alone opens nothing without the key routes.
     const projectsOnly = await seed({ E2EE_PROJECTS_ENABLED: 'true' });
