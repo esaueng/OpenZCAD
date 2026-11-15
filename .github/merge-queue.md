@@ -25,7 +25,7 @@ not arm unrelated PRs. The queue’s `merge_group` run must pass the required
 checks before GitHub merges it.
 
 CI and Cloudflare verification handle `merge_group: checks_requested` without
-replacing pending queue verdicts. The immutable fleet workflow runs queue
+replacing pending queue verdicts. `checks.yml` runs queue
 candidates on GitHub-hosted runners; its PR-only kernel announcement policy
 is checked before enqueueing and again in the required `plan` preflight. A
 candidate runs `quality`, `typecheck`, `unit` and `validation`, plus five

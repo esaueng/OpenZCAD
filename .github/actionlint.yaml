@@ -1,4 +1,0 @@
-self-hosted-runner:
-  labels:
-    - ci-server-jane
-    - ci-server-jane-5gb

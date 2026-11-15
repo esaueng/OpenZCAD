@@ -1,11 +1,9 @@
 # CI runtime optimization
 
-The runtime update staged `fleet-ci-v8.yml` without changing the then-active
-v6 caller; a separate PR activates it following the two-PR procedure in
-[runner routing](runner-routing.md).
-The new callee retains the exact runner trust and isolation boundaries, adds a
-kernel preflight to required validation, partitions root units over two runners,
-separates lint and typecheck, and retains critical plus affected coverage.
+The required checks live in `.github/workflows/checks.yml`, which `ci.yml`
+calls from the same commit. They run a kernel declaration inside required
+validation, partition root units over two runners, separate lint and
+typecheck, and run critical plus affected coverage.
 STEP parity, build/bundle checks, per-runner worker limits, isolation, browser
 deadlines, retries and all six required contexts stay enforced.
 
@@ -30,24 +28,33 @@ last fourteen. Browser retries retain traces and failure screenshots. Full
 daily qualification retains its complete tests, coverage and single attempt.
 Privacy audit scope, receipts and CodeQL overlay caches are unaffected.
 
-## Staged v9: no serial preflight, lint on two runners
+## No serial preflight, lint on two runners
 
-`fleet-ci-v9.yml` is staged, not active; it goes live through the same
-two-PR procedure. It changes scheduling only. In v8 every check waits for the
-hosted `plan` job, so a pull request pays for two runner waits before its
-first test starts (a median of two minutes each under load, up to eight). In
-v9 lint, typecheck, units, the build and the PR browser shards depend on queue
-trust alone and each runs `scripts/ci-selection.mjs` itself. `plan` still runs
-the kernel declaration and still chooses the queue and manual browser set, and
-`validate` and `e2e` still fail unless it succeeds.
+Every check used to wait for the hosted `plan` job, so a pull request paid
+for two runner waits before its first test started (a median of two minutes
+each under load, up to eight). Lint, typecheck, units, the build and the PR
+browser shards now start with no dependency and each runs
+`scripts/ci-selection.mjs` itself. `plan` still runs the kernel declaration
+and still chooses the queue and manual browser set, and `validate` and `e2e`
+still fail unless it succeeds.
 
-Lint is the longest single step (222 s hosted). v9 runs it as two partitions,
+Lint is the longest single step (222 s hosted). It runs as two partitions,
 `apps` and `packages test types`, through `pnpm lint:paths`; each took 77 to
 78 s locally against 158 s for the whole tree. ESLint's `--concurrency` was
 rejected: one type-aware process peaks at 5.8 GB and every thread builds its
-own program. `test/ci-staged-fleet.test.ts` holds the partitions to the paths
-of `pnpm lint` and pins the workflow header, queue authorization, isolation
-guard, runner expression and both gates to v8's bytes.
+own program. `test/ci-checks.test.ts` holds the partitions to the paths of
+`pnpm lint`.
+
+## Hosted runners only
+
+The checks previously ran through a versioned reusable workflow pinned by
+commit, which could route jobs to a self-hosted runner group. That routing
+was disabled here (`CI_FLEET_ENABLED=false`) and has been removed with
+its queue-authorization job, runner isolation guard, routing policy scripts
+and Git fixture setup. Every job runs on `ubuntu-24.04`. Running CI on
+self-hosted runners again would need its own design: a same-commit workflow
+gives a pull request control of the jobs, which is safe only on hosted
+runners.
 
 ## Qualification and later work
 

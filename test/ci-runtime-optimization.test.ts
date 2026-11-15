@@ -11,9 +11,10 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { selectDependencyAudits } from '../scripts/dependency-audit-selection.mjs';
+import { CI_CHECKS_PATH } from './ci-workflow';
 import { bashExecutable } from './support/testTools';
 
-const staged = readFileSync('.github/workflows/fleet-ci-v8.yml', 'utf8');
+const staged = readFileSync(CI_CHECKS_PATH, 'utf8');
 const jobs = Object.fromEntries(
   [
     ...staged
@@ -33,23 +34,17 @@ const shell = (source: string, env: Record<string, string>) =>
   });
 
 describe('CI runtime optimizations preserve required coverage', () => {
-  it('keeps the kernel declaration in the preflight and gates every application job on it', () => {
+  it('keeps the kernel declaration in the preflight and both required gates on it', () => {
     expect(jobs.plan).toContain('node scripts/kernel-pin-declaration.mjs');
     expect(jobs.plan!.indexOf('kernel-pin-declaration.mjs')).toBeLessThan(
       jobs.plan!.indexOf('node scripts/ci-selection.mjs')
     );
-    for (const job of [
-      'quality',
-      'typecheck',
-      'unit',
-      'validation',
-      'e2e-tests',
-      'e2e-tests-pr',
-      'e2e-queue'
-    ]) {
+    // The application jobs start beside `plan` (test/ci-checks.test.ts); a
+    // failed declaration still fails both required contexts.
+    for (const gate of ['validate', 'e2e'])
+      expect(jobs[gate]).toContain('test "$PLAN_RESULT" = success');
+    for (const job of ['e2e-tests', 'e2e-queue'])
       expect(jobs[job]).toContain("needs.plan.result == 'success'");
-      expect(jobs[job]).toContain('queue-trust, plan');
-    }
     expect(jobs.unit).toContain('shard: [1, 2]');
     expect(jobs.validation).toContain('pnpm test:parity-corpus');
     expect(jobs.validation).toContain('run: pnpm build');
