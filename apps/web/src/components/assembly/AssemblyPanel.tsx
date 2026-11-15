@@ -17,7 +17,11 @@ import {
   TriangleAlert
 } from 'lucide-react';
 import { commandFactories } from '@openzcad/command-system';
-import { assemblyBomToCsv, deriveAssemblyBom } from '@openzcad/document-core';
+import {
+  assemblyBomTable,
+  assemblyBomToCsv,
+  deriveAssemblyBom
+} from '@openzcad/document-core';
 import {
   ASSEMBLY_JOINT_DOFS,
   coupledJointLimits,
@@ -221,6 +225,8 @@ function AssemblyLists({
   ]);
   const addable = candidates.filter((body) => !used.has(body.bodyId));
   const bom = deriveAssemblyBom(document);
+  // The table the CSV and later drawing rows read: one set of item numbers.
+  const bomTable = assemblyBomTable(bom);
   const missingQuantity = bom.rows.reduce(
     (count, row) => count + (row.status === 'missing' ? row.quantity : 0),
     0
@@ -228,7 +234,7 @@ function AssemblyLists({
 
   const downloadBom = () => {
     const fileName = `${exportFileStem(document.name)}.bom.csv`;
-    const csv = `${assemblyBomToCsv(bom)}\n`;
+    const csv = `${assemblyBomToCsv(bomTable)}\n`;
     if (saveBomCsv) saveBomCsv(fileName, csv);
     else downloadText(fileName, csv, 'text/csv');
     onStatus(
@@ -795,36 +801,63 @@ function AssemblyLists({
             <p className="assembly-muted">No parts to list.</p>
           ) : (
             <ul className="assembly-list" aria-label="Bill of materials">
-              {bom.rows.map((row) => (
-                <li
-                  key={`${row.status}:${row.bodyId}`}
-                  className="assembly-row is-static"
-                >
-                  <div
-                    className="assembly-row-line"
-                    title={row.instances.map((i) => i.name).join(', ')}
+              {bomTable.rows.map((row) => {
+                // A part picked on the model lights up its row; a click on
+                // the row picks every instance it counts.
+                const picked = row.componentIds.filter((id) =>
+                  selectedComponentIds.includes(id)
+                );
+                const all =
+                  picked.length === row.componentIds.length &&
+                  selectedComponentIds.length === picked.length;
+                return (
+                  <li
+                    key={`${row.status}:${row.cells.source_body}`}
+                    className={`assembly-row${picked.length > 0 ? ' is-selected' : ''}`}
                   >
-                    <span className="assembly-row-main is-static">
-                      <span className="assembly-row-name">{row.name}</span>
-                      {row.status === 'missing' && (
-                        <span
-                          className="assembly-row-flag"
-                          title="The part's body cannot be found"
-                        >
-                          <TriangleAlert size={12} aria-hidden="true" />
-                          Missing
-                        </span>
-                      )}
-                      <span
-                        className="assembly-row-value"
-                        aria-label={`Quantity ${row.quantity}`}
+                    <div
+                      className="assembly-row-line"
+                      title={row.cells.instances}
+                    >
+                      <button
+                        type="button"
+                        className="assembly-row-main"
+                        aria-pressed={all}
+                        aria-label={`Item ${row.cells.item}: ${row.cells.part}, quantity ${row.cells.quantity}${
+                          row.status === 'missing' ? ', missing' : ''
+                        }`}
+                        onClick={() =>
+                          assemblyRuntime.selectComponents(
+                            all ? [] : row.componentIds
+                          )
+                        }
                       >
-                        &times;{row.quantity}
-                      </span>
-                    </span>
-                  </div>
-                </li>
-              ))}
+                        <span className="assembly-row-item" aria-hidden="true">
+                          {row.cells.item}
+                        </span>
+                        <span className="assembly-row-name">
+                          {row.cells.part}
+                        </span>
+                        {row.status === 'missing' && (
+                          <span
+                            className="assembly-row-flag"
+                            title="The part's body cannot be found"
+                          >
+                            <TriangleAlert size={12} aria-hidden="true" />
+                            Missing
+                          </span>
+                        )}
+                        <span
+                          className="assembly-row-value"
+                          aria-label={`Quantity ${row.cells.quantity}`}
+                        >
+                          &times;{row.cells.quantity}
+                        </span>
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </Section>
