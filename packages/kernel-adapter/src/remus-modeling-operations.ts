@@ -1,4 +1,5 @@
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
+import { modelingOperationRefusal } from './remus-operation-refusal';
 
 const VOLUME_DEFLECTION_RATIO = 1e-4;
 /**
@@ -228,7 +229,11 @@ function assertNewOutputHandle(
 function operationFailure(operation: string, error: unknown): Error {
   const detail =
     error instanceof Error ? error.message : 'unknown kernel error';
-  return new Error(`Remus ${operation} refused: ${detail}`, { cause: error });
+  return modelingOperationRefusal(
+    operation,
+    error,
+    `Remus ${operation} refused: ${detail}`
+  );
 }
 
 function runOperation(

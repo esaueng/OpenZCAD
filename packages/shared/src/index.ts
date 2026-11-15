@@ -3567,6 +3567,7 @@ export interface FeatureWarning {
       | 'thread'
       | 'sheet-metal'
       | 'direct-edit'
+      | 'modeling'
       | 'reference';
     operation?: string;
     category: string;
