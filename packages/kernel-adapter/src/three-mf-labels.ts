@@ -25,16 +25,20 @@ export interface ThreeMfObjectLabel {
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 const OBJECT_TAG = /<object\b[^>]*>/g;
 
-/** A name as an XML 1.0 attribute: other control characters cannot be written at all. */
+/** A name as an XML 1.0 attribute: characters XML cannot carry are left out. */
 function escapeXmlAttribute(value: string): string {
-  return value
-    .replace(/[^\t\n\r\u0020-\u{10ffff}]/gu, '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
-    .replace(/[\t\n\r]/g, (c) => `&#${c.charCodeAt(0)};`);
+  return (
+    value
+      // XML 1.0's Char production: no other controls, surrogate halves,
+      // U+FFFE or U+FFFF.
+      .replace(/[^\t\n\r\u0020-\ud7ff\ue000-\ufffd\u{10000}-\u{10ffff}]/gu, '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;')
+      .replace(/[\t\n\r]/g, (c) => `&#${c.charCodeAt(0)};`)
+  );
 }
 
 /**

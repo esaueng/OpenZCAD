@@ -57,7 +57,10 @@ describe('labelThreeMfObjects', () => {
     const model = labelThreeMfObjects(MODEL, [
       { name: `Owner's "A&B" <1>`, color: '#000000' },
       { name: '', color: '#000000' },
-      { name: 'Cost $& more\ttab\u0001', color: '#ffffff' }
+      {
+        name: 'Cost $& more\ttab\u0001\ufffe\uffff\ud800 \u{1f527}',
+        color: '#ffffff'
+      }
     ]);
     const [first, second, third] = objectTags(model);
     expect(first).toContain(
@@ -65,8 +68,9 @@ describe('labelThreeMfObjects', () => {
     );
     expect(second).not.toContain('name=');
     // `$&` stays literal instead of being read as a replacement pattern, and
-    // a control character XML cannot carry is left out.
-    expect(third).toContain('name="Cost $&amp; more&#9;tab"');
+    // characters XML 1.0 cannot carry (a control, U+FFFE, U+FFFF, a lone
+    // surrogate) are left out while an astral character is kept.
+    expect(third).toContain('name="Cost $&amp; more&#9;tab \u{1f527}"');
   });
 
   it('refuses a part whose objects do not match the labels one to one', () => {
