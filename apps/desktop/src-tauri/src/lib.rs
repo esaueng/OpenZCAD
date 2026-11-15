@@ -9,6 +9,7 @@ use tauri::{
 mod desktop_auth;
 mod device_keys;
 mod external_links;
+mod slicer_handoff;
 
 use desktop_auth::{
     cancel_desktop_sign_in, desktop_api_request, desktop_collaboration_url, poll_desktop_sign_in,
@@ -128,6 +129,27 @@ async fn save_cad_file(
     let path = export_path(handle.path(), &format)?;
     std::fs::write(path, contents.as_bytes()).map_err(|error| error.to_string())?;
     Ok(true)
+}
+
+/// L09 "Open in slicer": writes the exported 3MF to a private hand-off folder
+/// and opens it with the chosen slicer through Launch Services. The renderer
+/// names a slicer from a fixed list; see `slicer_handoff`.
+#[tauri::command]
+async fn open_in_slicer(
+    slicer: String,
+    suggested_name: String,
+    contents: Vec<u8>,
+) -> Result<(), String> {
+    let target = slicer_handoff::slicer(&slicer)?;
+    let root = std::env::temp_dir();
+    slicer_handoff::prune_handoffs(
+        &root,
+        slicer_handoff::HANDOFF_RETENTION,
+        std::time::SystemTime::now(),
+    );
+    let path =
+        slicer_handoff::write_handoff(&root, &suggested_name, &contents, MAX_NATIVE_FILE_BYTES)?;
+    slicer_handoff::open_in(target, &path)
 }
 
 #[tauri::command]
@@ -286,6 +308,7 @@ pub fn run() {
             open_cad_file,
             save_cad_file,
             save_cad_binary_file,
+            open_in_slicer,
             start_desktop_sign_in,
             poll_desktop_sign_in,
             cancel_desktop_sign_in,

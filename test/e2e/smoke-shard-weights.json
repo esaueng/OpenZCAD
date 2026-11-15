@@ -64,6 +64,7 @@
   "modeling.spec.ts": 165,
   "objects-folders.spec.ts": 20,
   "offline-startup.spec.ts": 6,
+  "open-in-slicer.spec.ts": 16,
   "orbit-mode-setting.spec.ts": 16,
   "overlay-reach.spec.ts": 5,
   "panel-float.spec.ts": 11,

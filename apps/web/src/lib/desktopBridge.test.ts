@@ -12,6 +12,8 @@ import {
   NativeDeviceKeysError,
   nativeCadFile,
   openExternalUrl,
+  DESKTOP_SLICERS,
+  openInDesktopSlicer,
   protectDesktopClose,
   saveCadBinaryFile
 } from './desktopBridge';
@@ -228,6 +230,48 @@ describe('desktop bridge', () => {
       format: '3mf',
       contents: [0x50, 0x4b, 0x03, 0x04]
     });
+  });
+
+  it('opens a 3MF in a desktop slicer only in the desktop app (L09)', async () => {
+    const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
+    await expect(
+      openInDesktopSlicer('orcaslicer', 'gear.3mf', bytes)
+    ).resolves.toBe(false);
+    expect(invoke).not.toHaveBeenCalled();
+
+    markDesktopRuntime();
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    await expect(
+      openInDesktopSlicer('orcaslicer', 'gear.3mf', bytes)
+    ).resolves.toBe(true);
+    expect(invoke).toHaveBeenCalledWith('open_in_slicer', {
+      slicer: 'orcaslicer',
+      suggestedName: 'gear.3mf',
+      contents: [0x50, 0x4b, 0x03, 0x04]
+    });
+    vi.mocked(invoke).mockRejectedValueOnce(
+      'OrcaSlicer did not open. Is it installed?'
+    );
+    await expect(
+      openInDesktopSlicer('orcaslicer', 'gear.3mf', bytes)
+    ).rejects.toThrow('OrcaSlicer did not open. Is it installed?');
+  });
+
+  it('offers exactly the slicers the shell accepts (L09)', () => {
+    const shell = readFileSync(
+      resolve(process.cwd(), '../desktop/src-tauri/src/slicer_handoff.rs'),
+      'utf8'
+    );
+    const ids = [...shell.matchAll(/^\s+id: "([^"]+)",$/gm)].map(
+      (match) => match[1]
+    );
+    expect(ids).toEqual(DESKTOP_SLICERS.map((slicer) => slicer.id));
+    expect(
+      readFileSync(
+        resolve(process.cwd(), '../desktop/src-tauri/src/lib.rs'),
+        'utf8'
+      )
+    ).toMatch(/generate_handler!\[[^\]]*\bopen_in_slicer\b/);
   });
 
   it('downloads binary exports through a blob anchor in the browser', async () => {

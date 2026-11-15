@@ -705,6 +705,46 @@ export async function saveCadBinaryFile(
   });
 }
 
+/**
+ * L09: the slicers the desktop shell can open a 3MF with, by the ids
+ * `open_in_slicer` accepts (apps/desktop/src-tauri/src/slicer_handoff.rs).
+ */
+export const DESKTOP_SLICERS = [
+  { id: 'bambu-studio', label: 'Bambu Studio' },
+  { id: 'orcaslicer', label: 'OrcaSlicer' },
+  { id: 'prusaslicer', label: 'PrusaSlicer' }
+] as const;
+
+export type DesktopSlicerId = (typeof DESKTOP_SLICERS)[number]['id'];
+
+/**
+ * L09 "Open in slicer" in the desktop app: the shell writes the 3MF to a
+ * private hand-off folder and opens it with the chosen slicer, with no
+ * server involved. Rejects with the shell's reason (the slicer is not
+ * installed, say); returns false outside the desktop app.
+ */
+export async function openInDesktopSlicer(
+  slicer: DesktopSlicerId,
+  suggestedName: string,
+  contents: Uint8Array<ArrayBuffer>
+): Promise<boolean> {
+  if (!isDesktopApp()) {
+    return false;
+  }
+  const { invoke } = await import('@tauri-apps/api/core');
+  try {
+    await invoke('open_in_slicer', {
+      slicer,
+      suggestedName,
+      contents: Array.from(contents)
+    });
+  } catch (reason) {
+    // The shell rejects with its message as a plain string.
+    throw reason instanceof Error ? reason : new Error(String(reason));
+  }
+  return true;
+}
+
 export async function listenForDesktopMenu(
   handler: (command: DesktopMenuCommand) => void
 ): Promise<() => void> {
