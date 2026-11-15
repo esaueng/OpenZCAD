@@ -350,6 +350,9 @@ function sketchObject(data: SketchObjectData, rewrite: Rewrite): void {
       fields(data, ['size', 'x', 'y'], rewrite, 'length');
       fields(data, ['rotation'], rewrite, 'angle');
       return;
+    case 'point':
+      fields(data, ['x', 'y'], rewrite, 'length');
+      return;
     default:
       data satisfies never;
   }

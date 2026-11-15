@@ -9509,7 +9509,8 @@ export function App() {
       if (
         data.objectKind === 'text' ||
         data.objectKind === 'ellipse' ||
-        data.objectKind === 'spline'
+        data.objectKind === 'spline' ||
+        data.objectKind === 'point'
       ) {
         // Text has no single closed profile — it is many regions with holes,
         // and the region overlay renders it. I01 curves fill through region
@@ -22242,7 +22243,10 @@ export function App() {
       selectedSketchEntity.id
     );
     const side = composite?.edgeIds.indexOf(selectedSketchEntity.id) ?? -1;
-    if (!composite || side < 0) return null;
+    // I01: a slot's sizes are driven by ordinary dimensions on its centre
+    // line and arcs; its card has no resize yet.
+    if (!composite || side < 0 || composite.compositeKind === 'slot')
+      return null;
     const objects = new Map(
       editingSketchNode.objectIds.flatMap((id) => {
         const node = sketchReadDocument?.nodes[id];

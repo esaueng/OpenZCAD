@@ -918,6 +918,9 @@ export function snapTargetsForObject(
       // The baseline origin is the one point that exists without parsed font
       // data, and it is the handle a user drags, so it is the snap target.
       return [target('endpoint', resolve(data.x), resolve(data.y))];
+    case 'point':
+      // I01: the point itself, named `center` for the solver.
+      return [target('endpoint', resolve(data.x), resolve(data.y), 'center')];
   }
 }
 
@@ -1327,6 +1330,7 @@ function positionFields(data: SketchObjectData): [string, string][] {
         ['x2', 'y2']
       ];
     case 'text':
+    case 'point':
       return [['x', 'y']];
     case 'spline':
       // A spline's position is its point list; callers move it point by point.
@@ -1386,6 +1390,7 @@ export function sketchObjectGrabPoint(
           ? { x: resolve(data.centerX), y: resolve(data.centerY) }
           : null;
       case 'text':
+      case 'point':
         return { x: resolve(data.x), y: resolve(data.y) };
       default:
         return null;
@@ -1457,6 +1462,7 @@ export function placeSketchObjectGrabPoint(
     case 'ellipse':
       return { ...data, centerX: target.x, centerY: target.y };
     case 'text':
+    case 'point':
       return { ...data, x: target.x, y: target.y };
     default:
       return data;

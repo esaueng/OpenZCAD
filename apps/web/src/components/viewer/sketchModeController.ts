@@ -180,6 +180,9 @@ export function sketchObjectMarkerPoints(
   if (data.objectKind === 'circle') {
     return [{ x: resolve(data.centerX), y: resolve(data.centerY) }];
   }
+  if (data.objectKind === 'point') {
+    return [{ x: resolve(data.x), y: resolve(data.y) }];
+  }
   if (data.objectKind === 'ellipse') {
     return [{ x: resolve(data.centerX), y: resolve(data.centerY) }];
   }
@@ -525,6 +528,27 @@ export function buildSketchModeRig(
       polylines = objectPolylines(object.data, state.resolve);
     } catch {
       return;
+    }
+    if (object.data.objectKind === 'point') {
+      // I01: a point draws as its dot below; this zero-length proxy is what
+      // a click selects it by.
+      try {
+        const at = liftPoint(basis, {
+          x: state.resolve(object.data.x),
+          y: state.resolve(object.data.y)
+        });
+        const proxy = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([at, at.clone()]),
+          new THREE.LineBasicMaterial()
+        );
+        proxy.visible = false;
+        proxy.frustumCulled = false;
+        proxy.userData.sketchObjectId = object.id;
+        proxy.userData.pickProxy = true;
+        container.add(proxy);
+      } catch {
+        return;
+      }
     }
     for (const polyline of polylines) {
       if (polyline.points.length < 2) {

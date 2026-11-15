@@ -487,6 +487,8 @@ function compositeRefusal(data: SketchObjectData, verb: string): string | null {
       return `${verb[0]!.toUpperCase()}${verb.slice(1)} is not available for an ellipse yet.`;
     case 'spline':
       return `${verb[0]!.toUpperCase()}${verb.slice(1)} is not available for a spline yet.`;
+    case 'point':
+      return `A point has no curve to ${verb}.`;
     default:
       return null;
   }

@@ -53,6 +53,80 @@ export interface CompositeShape {
   corners: CompositePoint[];
   /** The polygon's circumcircle; absent for rectangles. */
   circle?: { center: CompositePoint; radius: number };
+  /** I01: a slot's two end centres (first, then second) and radius. */
+  slot?: { first: CompositePoint; second: CompositePoint; radius: number };
+}
+
+/**
+ * I01: a straight slot about the centres `first` and `second`, `radius`
+ * wide either side of the line between them. Corner 0 is the first end's
+ * right-hand tangent point and the loop runs counter-clockwise: side 0 to
+ * the second end, the half circle round it, side 2 back and the half circle
+ * round the first. Null while the centres or the radius are too small to
+ * draw.
+ */
+export function slotShape(
+  first: CompositePoint,
+  second: CompositePoint,
+  radius: number
+): CompositeShape | null {
+  const spacing = Math.hypot(second.x - first.x, second.y - first.y);
+  if (
+    !Number.isFinite(radius) ||
+    spacing < MIN_COMPOSITE_SIZE ||
+    radius < MIN_COMPOSITE_SIZE / 2
+  ) {
+    return null;
+  }
+  const u = {
+    x: (second.x - first.x) / spacing,
+    y: (second.y - first.y) / spacing
+  };
+  const n = { x: -u.y, y: u.x };
+  const at = (c: CompositePoint, side: number) => ({
+    x: c.x + n.x * radius * side,
+    y: c.y + n.y * radius * side
+  });
+  return {
+    composite: { compositeKind: 'slot', method: 'center-to-center' },
+    corners: [at(first, -1), at(second, -1), at(second, 1), at(first, 1)],
+    slot: { first: { ...first }, second: { ...second }, radius }
+  };
+}
+
+/** The slot's radius when the pointer is at `point`: its distance off the axis. */
+export function slotRadiusAt(
+  first: CompositePoint,
+  second: CompositePoint,
+  point: CompositePoint
+): number {
+  const spacing = Math.hypot(second.x - first.x, second.y - first.y);
+  if (spacing === 0) return Math.hypot(point.x - first.x, point.y - first.y);
+  return Math.abs(
+    ((point.x - first.x) * (second.y - first.y) -
+      (point.y - first.y) * (second.x - first.x)) /
+      spacing
+  );
+}
+
+/** The slot outline as points, for the live preview. */
+export function slotPreviewPoints(shape: CompositeShape): CompositePoint[] {
+  if (!shape.slot) return shape.corners;
+  const { first, second, radius } = shape.slot;
+  const axis = Math.atan2(second.y - first.y, second.x - first.x);
+  const points: CompositePoint[] = [];
+  const half = (c: CompositePoint, from: number) => {
+    for (let step = 0; step <= 24; step += 1) {
+      const angle = from + (Math.PI * step) / 24;
+      points.push({
+        x: c.x + radius * Math.cos(angle),
+        y: c.y + radius * Math.sin(angle)
+      });
+    }
+  };
+  half(second, axis - Math.PI / 2);
+  half(first, axis + Math.PI / 2);
+  return points;
 }
 
 function axisAlignedCorners(
@@ -244,6 +318,10 @@ const roundTenth = (value: number) => Math.round(value * 10) / 10;
 
 /** The live size beside the pointer: width × height, or circumradius and side. */
 export function compositeSizeLabel(shape: CompositeShape): string {
+  if (shape.slot) {
+    const { first, second, radius } = shape.slot;
+    return `${roundTenth(Math.hypot(second.x - first.x, second.y - first.y))} · R ${roundTenth(radius)}`;
+  }
   if (shape.composite.compositeKind === 'polygon' && shape.circle) {
     const [a, b] = shape.corners as [CompositePoint, CompositePoint];
     return `R ${roundTenth(shape.circle.radius)} · side ${roundTenth(
@@ -252,6 +330,25 @@ export function compositeSizeLabel(shape: CompositeShape): string {
   }
   const { width, height } = rectangleSize(shape.corners);
   return `${roundTenth(width)} × ${roundTenth(height)}`;
+}
+
+/** A slot's half-circle side: about its centre, counter-clockwise. */
+function slotArc(shape: CompositeShape, index: number): SketchObjectData {
+  const { first, second, radius } = shape.slot!;
+  const axisDeg =
+    (Math.atan2(second.y - first.y, second.x - first.x) * 180) / Math.PI;
+  // Side 1 turns round the second end from -90° to +90° off the axis; side
+  // 3 round the first from +90° to +270°.
+  const centre = index === 1 ? second : first;
+  const start = axisDeg + (index === 1 ? -90 : 90);
+  return {
+    objectKind: 'arc',
+    centerX: centre.x,
+    centerY: centre.y,
+    radius,
+    startAngleDeg: start,
+    endAngleDeg: start + 180
+  };
 }
 
 /** Side `index` as line data, from corner `index` to the next. */
@@ -270,7 +367,19 @@ function sideObject(
  * the centre; a polygon's circumcircle.
  */
 function helperObjects(shape: CompositeShape): SketchObjectData[] {
-  const { composite, corners, circle } = shape;
+  const { composite, corners, circle, slot } = shape;
+  if (composite.compositeKind === 'slot' && slot) {
+    return [
+      {
+        objectKind: 'line',
+        x1: slot.first.x,
+        y1: slot.first.y,
+        x2: slot.second.x,
+        y2: slot.second.y,
+        construction: true
+      }
+    ];
+  }
   if (composite.compositeKind === 'polygon' && circle) {
     return [
       {
@@ -367,6 +476,53 @@ export function compositeRelations(
       );
     }
   }
+  if (compositeKind === 'slot') {
+    // Each line runs tangent into each half circle at the corner they
+    // share, the two ends are equal, and the centre line joins the centres.
+    const [line0, arc1, line2, arc3] = edgeIds as [
+      EntityId,
+      EntityId,
+      EntityId,
+      EntityId
+    ];
+    relations.push(
+      {
+        constraintKind: 'tangent',
+        a: line0,
+        b: arc1,
+        at: { objectId: arc1, point: 'start' }
+      },
+      {
+        constraintKind: 'tangent',
+        a: line2,
+        b: arc1,
+        at: { objectId: arc1, point: 'end' }
+      },
+      {
+        constraintKind: 'tangent',
+        a: line2,
+        b: arc3,
+        at: { objectId: arc3, point: 'start' }
+      },
+      {
+        constraintKind: 'tangent',
+        a: line0,
+        b: arc3,
+        at: { objectId: arc3, point: 'end' }
+      },
+      { constraintKind: 'equal', a: arc1, b: arc3 },
+      {
+        constraintKind: 'coincident',
+        a: { objectId: helperIds[0]!, point: 'start' },
+        b: { objectId: arc3, point: 'center' }
+      },
+      {
+        constraintKind: 'coincident',
+        a: { objectId: helperIds[0]!, point: 'end' },
+        b: { objectId: arc1, point: 'center' }
+      }
+    );
+  }
   if (compositeKind === 'polygon') {
     const circle = helperIds[0]!;
     for (let index = 0; index < count; index += 1) {
@@ -404,6 +560,7 @@ export interface CompositeCommit {
 /** The tool's name for a composite, as its transaction and status say it. */
 export function compositeLabel(composite: SketchCompositeData): string {
   if (composite.compositeKind === 'polygon') return 'polygon';
+  if (composite.compositeKind === 'slot') return 'slot';
   return composite.method === 'center'
     ? 'center rectangle'
     : composite.method === 'three-point'
@@ -424,7 +581,10 @@ export function compositeCommands(
   options: { construction?: boolean } = {}
 ): CompositeCommit {
   const sides = shape.corners.map((_, index) => {
-    const side = sideObject(shape.corners, index);
+    const side =
+      shape.slot && index % 2 === 1
+        ? slotArc(shape, index)
+        : sideObject(shape.corners, index);
     return options.construction ? { ...side, construction: true } : side;
   });
   const helpers = helperObjects(shape);

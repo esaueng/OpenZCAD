@@ -20,7 +20,8 @@ export const SKETCH_DIMENSION_FIELDS: Record<
   ],
   // Spline points are a list, not named fields; nothing here addresses them.
   spline: [],
-  text: ['size', 'x', 'y', 'rotation']
+  text: ['size', 'x', 'y', 'rotation'],
+  point: ['x', 'y']
 };
 
 export function isSketchDimensionField(

@@ -21,6 +21,8 @@ import {
   inscribedPolygonShape,
   resizedPolygon,
   resizedRectangleCorners,
+  slotRadiusAt,
+  slotShape,
   threePointRectangleShape,
   typedRectangleShape
 } from './composites';
@@ -335,5 +337,79 @@ describe('S04 composite resize', () => {
       y2: 4,
       construction: true
     });
+  });
+});
+
+describe('I01 slot shape', () => {
+  it('places its corners on both ends, square to the axis, counter-clockwise', () => {
+    const shape = slotShape({ x: 0, y: 0 }, { x: 10, y: 0 }, 2)!;
+    expect(shape.composite).toEqual({
+      compositeKind: 'slot',
+      method: 'center-to-center'
+    });
+    expect(shape.corners).toEqual([
+      { x: 0, y: -2 },
+      { x: 10, y: -2 },
+      { x: 10, y: 2 },
+      { x: 0, y: 2 }
+    ]);
+    expect(compositeSizeLabel(shape)).toBe('10 · R 2');
+  });
+
+  it('takes its radius as the pointer’s distance off the axis', () => {
+    expect(slotRadiusAt({ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 4, y: -3 })).toBe(
+      3
+    );
+  });
+
+  it('refuses ends that are too close or a radius that is too small', () => {
+    expect(slotShape({ x: 0, y: 0 }, { x: 0.2, y: 0 }, 2)).toBeNull();
+    expect(slotShape({ x: 0, y: 0 }, { x: 10, y: 0 }, 0.1)).toBeNull();
+  });
+
+  it('commits two lines, two half circles and a centre line, held tangent', () => {
+    const shape = slotShape({ x: 0, y: 0 }, { x: 0, y: 10 }, 3)!;
+    const commit = compositeCommands(shape, {
+      kind: 'sketch',
+      sketchId: 'sketch_1' as SketchId
+    });
+    const objects = (
+      commit.commands[0]!.payload as { objects: SketchObjectData[] }
+    ).objects;
+    expect(objects.map((object) => object.objectKind)).toEqual([
+      'line',
+      'arc',
+      'line',
+      'arc',
+      'line'
+    ]);
+    // Axis +y: the second end's arc turns from 0° to 180°, the first's
+    // from 180° to 360°.
+    expect(objects[1]).toMatchObject({
+      centerX: 0,
+      centerY: 10,
+      radius: 3,
+      startAngleDeg: 0,
+      endAngleDeg: 180
+    });
+    expect(objects[3]).toMatchObject({
+      centerX: 0,
+      centerY: 0,
+      startAngleDeg: 180,
+      endAngleDeg: 360
+    });
+    expect(objects[4]).toMatchObject({ construction: true });
+    expect(
+      compositeRelations(shape, commit.edgeIds, commit.helperIds)
+        .map((relation) => relation.constraintKind)
+        .sort()
+    ).toEqual(
+      [
+        ...Array<string>(6).fill('coincident'),
+        'equal',
+        ...Array<string>(4).fill('tangent')
+      ].sort()
+    );
+    expect(commit.label).toBe('Add slot');
   });
 });

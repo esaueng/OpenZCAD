@@ -270,8 +270,13 @@ describe('SketchToolRail', () => {
       within(strip)
         .getAllByRole('radio')
         .map((radio) => radio.textContent)
-    ).toEqual(['Corner', 'Center', '3 points', 'Polygon']);
+    ).toEqual(['Corner', 'Center', '3 points', 'Polygon', 'Slot', 'Point']);
     expect(within(strip).getByRole('radio', { name: 'Corner' })).toBeChecked();
+    // I01: the slot and the point are their own tools sharing the slot too.
+    await user.click(within(strip).getByRole('radio', { name: 'Slot' }));
+    expect(onTool).toHaveBeenLastCalledWith('slot');
+    await user.click(within(strip).getByRole('radio', { name: 'Point' }));
+    expect(onTool).toHaveBeenLastCalledWith('point');
 
     await user.click(within(strip).getByRole('radio', { name: '3 points' }));
     expect(onRectangleMode).toHaveBeenLastCalledWith('three-point');
