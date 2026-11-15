@@ -66,7 +66,10 @@ test(
     const keypad = page.getByRole('dialog', { name: 'Total value' });
     await keypad.getByRole('textbox').fill('25');
     await keypad.getByRole('button', { name: 'Apply total' }).click();
-    await switchFaceOffsetToTotal(page);
+    // The cap keeps the Total chosen on it through its own commit.
+    await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+      /^Total/
+    );
     await expect(page.getByTestId('direct-manipulation-value')).toContainText(
       '25',
       { timeout: 30_000 }

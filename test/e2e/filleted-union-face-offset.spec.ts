@@ -352,9 +352,11 @@ test(
       }));
     const contentinfo = page.getByRole('contentinfo');
     const drag = async (from: number, delta: number) => {
-      // The re-armed handle, on the moved side and at rest, read as its
-      // Total (a face starts on Offset).
-      await switchFaceOffsetToTotal(page);
+      // The re-armed handle, on the moved side and at rest, still reads the
+      // Total chosen on that side (a face starts on Offset).
+      await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+        /^Total/
+      );
       await expect(value).toContainText(String(from));
       await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
       await waitForStillViewport(page);
@@ -377,6 +379,8 @@ test(
     // commit adopts it: no second rebuild of the same edit follows it.
     const expectNoRebuildAfter = async (liveSyncs: number | undefined) =>
       expect(await page.evaluate(() => window.__liveSyncs)).toBe(liveSyncs);
+    // A face starts on Offset; this reads the side as its Total.
+    await switchFaceOffsetToTotal(page);
     const firstRelease = await drag(30, -7);
     await expect(contentinfo).toContainText('width set to 23 mm', {
       timeout: 30_000
@@ -503,6 +507,7 @@ test(
         .toBe('boolean.face.operand.1.primitive.box.face.x-max');
     await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(30, 4);
     await pickSide();
+    await switchFaceOffsetToTotal(page);
     const value = page.getByTestId('direct-manipulation-value');
     const contentinfo = page.getByRole('contentinfo');
     const heldChecks = () => page.evaluate(() => window.__heldChecks!.length);
@@ -517,8 +522,10 @@ test(
      * the viewport keeps drawing that check, so it is never still.
      */
     const press = async (from: number, delta: number, checking = false) => {
-      // Read as its Total (a face starts on Offset).
-      await switchFaceOffsetToTotal(page);
+      // It still reads the Total chosen on that side.
+      await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+        /^Total/
+      );
       await expect(value).toContainText(String(from));
       await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
       if (!checking) await waitForStillViewport(page);
@@ -569,6 +576,7 @@ test(
     // Abandoning the retaken drag lands the release it set aside, from that
     // release's own check: no second one is asked for.
     await pickSide();
+    await switchFaceOffsetToTotal(page);
     await page.evaluate(() => {
       window.__holdChecks = true;
     });
@@ -591,6 +599,7 @@ test(
     // Let go again where the release was: it lands from the check already
     // running for it, and no second check is asked for.
     await pickSide();
+    await switchFaceOffsetToTotal(page);
     await page.evaluate(() => {
       window.__holdChecks = true;
     });
@@ -616,6 +625,7 @@ test(
     // cylinder it is fused to and out past the far side): no refusal takes
     // the release away. It lands as it was let go, from its own check.
     await pickSide();
+    await switchFaceOffsetToTotal(page);
     await page.evaluate(() => {
       window.__holdChecks = true;
     });

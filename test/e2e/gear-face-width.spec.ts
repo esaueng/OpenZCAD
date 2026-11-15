@@ -153,7 +153,10 @@ test(
 
     // Typed 13 → 9.
     await selectTop(canvas);
-    await switchFaceOffsetToTotal(page);
+    // The cap keeps the Total chosen on it through its own commit.
+    await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+      /^Total/
+    );
     await expect(chip).toContainText('13');
     await chip.click();
     const keypad = page.getByRole('dialog', { name: 'Total value' });
@@ -168,7 +171,9 @@ test(
     // A fresh pick reads the committed width.
     await page.keyboard.press('Escape');
     await selectTop(canvas);
-    await switchFaceOffsetToTotal(page);
+    await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+      /^Total/
+    );
     await expect(chip).toContainText('9');
     await page.keyboard.press('Escape');
 

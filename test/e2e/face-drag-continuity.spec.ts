@@ -604,10 +604,11 @@ for (const cancel of ['Escape', 'click-away', 'tool switch'] as const) {
         Number(element.dataset.e2eChipAnchorWorldZ)
       ]);
     const committedAnchor = await anchor();
+    // Typed as the tag's Total, the box side's span: 21 is a 3 mm pull.
+    await switchFaceOffsetToTotal(page);
     await page.getByTestId('direct-manipulation-value').click();
-    // The field takes the signed Offset by default: 3 is a 3 mm pull.
-    const keypad = page.getByRole('dialog', { name: 'Offset value' });
-    await keypad.getByRole('textbox').fill('3');
+    const keypad = page.getByRole('dialog', { name: 'Total value' });
+    await keypad.getByRole('textbox').fill('21');
     await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(-3, 3);
     await expect(canvas).toHaveAttribute('data-e2e-offset-ghost', '1');
     if (cancel === 'Escape') await keypad.getByRole('textbox').press('Escape');
@@ -1344,14 +1345,16 @@ test('typing an offset keeps the ghost and handle while exact previews land', as
     window.__holdPreviews!.hold = true;
   });
   const held = () => page.evaluate(() => window.__holdPreviews!.held);
+  // Typed as the tag's Total: a box side reads its span, 18 mm deep, so 20
+  // is a 2 mm pull.
+  await switchFaceOffsetToTotal(page);
   await page.getByTestId('direct-manipulation-value').click();
-  // The field takes the signed Offset by default: 2 is a 2 mm pull.
-  const keypad = page.getByRole('dialog', { name: 'Offset value' });
+  const keypad = page.getByRole('dialog', { name: 'Total value' });
   await expect(keypad).toBeVisible();
   const field = keypad.getByRole('textbox');
   const typing = await now(page);
   let landed = 0;
-  for (const value of ['2', '5', '8']) {
+  for (const value of ['20', '23', '26']) {
     await field.fill(value);
     await expect(canvas).toHaveAttribute('data-e2e-offset-ghost', '1');
     // The exact frame for this value is in hand; let it land.
@@ -1367,9 +1370,9 @@ test('typing an offset keeps the ghost and handle while exact previews land', as
 
   // Back at the baseline there is no change to show, so no ghost; the next
   // change takes it again.
-  await field.fill('0');
+  await field.fill('18');
   await expect(canvas).not.toHaveAttribute('data-e2e-offset-ghost', /.+/);
-  await field.fill('4');
+  await field.fill('22');
   await expect(canvas).toHaveAttribute('data-e2e-offset-ghost', '1');
 
   // Escape abandons the typed value: no ghost survives it, nothing is added.
@@ -1388,7 +1391,7 @@ test('typing an offset keeps the ghost and handle while exact previews land', as
   // Applying a typed value commits it cleanly.
   await page.getByTestId('direct-manipulation-value').click();
   await expect(keypad).toBeVisible();
-  await field.fill('3');
+  await field.fill('21');
   await field.press('Enter');
   await expect(page.getByText('Offset face by', { exact: false })).toBeVisible({
     timeout: 30_000

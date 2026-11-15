@@ -4,7 +4,8 @@ import {
   createPrimitiveInPlace,
   test,
   expect,
-  stubApi
+  stubApi,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 /**
@@ -122,10 +123,12 @@ test('a typed offset keeps naming the face while its exact preview is up', async
     'Box 1 · Front face'
   );
   await sampleCard(page, '.selection-readout');
+  // Typed as the tag's Total, the box side's whole span (18 mm deep): 21 is
+  // a 3 mm pull.
+  await switchFaceOffsetToTotal(page);
   await page.getByTestId('direct-manipulation-value').click();
-  // The field takes the signed Offset by default: 3 is a 3 mm pull.
-  const keypad = page.getByRole('dialog', { name: 'Offset value' });
-  await keypad.getByRole('textbox').fill('3');
+  const keypad = page.getByRole('dialog', { name: 'Total value' });
+  await keypad.getByRole('textbox').fill('21');
   // Long enough for the typed value's exact preview to land and show.
   await page.waitForTimeout(1500);
   await keypad.getByRole('textbox').press('Enter');

@@ -45,7 +45,19 @@ for (const units of ['mm', 'inch'] as const) {
           )?.match(/(\d+) features?/)?.[1]
         );
       const read = async () => parseFloat(await value.innerText());
-      const pick = async (x: number, y: number, expected: number) => {
+      /**
+       * Picks the plate's right face at (x, y) and reads its Total. `reads`
+       * is the reading the chip must show before anything is clicked: a
+       * fresh face starts on Offset (owner decision after QA 2026-11-14
+       * finding #9) and takes the switch; a Total chosen on this face
+       * (through its own commit, too) must already be there.
+       */
+      const pick = async (
+        x: number,
+        y: number,
+        expected: number,
+        reads: 'Offset' | 'Total'
+      ) => {
         await expect
           .poll(async () => {
             await canvas.evaluate(
@@ -60,9 +72,11 @@ for (const units of ['mm', 'inch'] as const) {
             return canvas.getAttribute('data-e2e-handle-x');
           })
           .not.toBeNull();
-        // A face starts on Offset, the signed move (owner decision after
-        // QA 2026-11-14 finding #9); these picks read Total, one switch away.
-        if (!/^Total/.test(await mode.innerText())) await mode.click();
+        await expect(mode).toHaveText(new RegExp(`^${reads}`));
+        if (reads === 'Offset') {
+          await expect(value).toHaveText(/^\+0 /);
+          await mode.click();
+        }
         await expect(mode).toHaveText(/^Total/);
         await expect.poll(read).toBeCloseTo(expected * scale, 2);
       };
@@ -102,11 +116,12 @@ for (const units of ['mm', 'inch'] as const) {
       // plane, to the flat face across the plate: the line from y=20 crosses
       // the hole's wall, which is not the reference, and still reads 80, the
       // same as y=8 beside the hole.
-      await pick(80, 20, 80);
+      await pick(80, 20, 80, 'Offset');
       const initial = await count();
-      await pick(80, 8, 80);
+      // The switch stays with the face it was made on.
+      await pick(80, 8, 80, 'Total');
       expect(await count()).toBe(initial);
-      await pick(80, 20, 80);
+      await pick(80, 20, 80, 'Total');
       // Accepting the rounded prefill must not subtract it from a more precise
       // mesh baseline and accidentally create a microscopic offset feature.
       await value.click();
@@ -120,17 +135,20 @@ for (const units of ['mm', 'inch'] as const) {
       await expect.poll(count).toBe(initial + 1);
       await expect.poll(span).toBeCloseTo(75 * scale, 4);
       const grown = await span();
-      // The moved face is armed again; its Total is the new width.
-      if (!/^Total/.test(await mode.innerText())) await mode.click();
+      // The moved face is armed again and keeps the Total chosen for it
+      // through its own commit: no click, it reads the new width.
+      await expect(mode).toHaveText(/^Total/);
       await expect.poll(read).toBeCloseTo(75 * scale, 2);
-      await pick(grown / scale, 8, 75);
-      await pick(grown / scale, 20, 75);
+      await pick(grown / scale, 8, 75, 'Total');
+      await pick(grown / scale, 20, 75, 'Total');
       await page.getByRole('button', { name: 'Undo', exact: true }).click();
       await expect.poll(span).toBeCloseTo(80 * scale, 4);
-      await pick(80, 20, 80);
+      // Undo and Redo put back faces nothing proves are the one switched:
+      // they read the default.
+      await pick(80, 20, 80, 'Offset');
       await page.getByRole('button', { name: 'Redo', exact: true }).click();
       await expect.poll(span).toBeCloseTo(grown, 4);
-      await pick(grown / scale, 20, 75);
+      await pick(grown / scale, 20, 75, 'Offset');
       await mode.click();
       await expect(mode).toHaveText(/^Offset/);
       await enter(units === 'mm' ? '5' : '5 / 25.4', 'Offset');
@@ -181,7 +199,8 @@ for (const units of ['mm', 'inch'] as const) {
         .toBe(true);
       await page.reload({ waitUntil: 'domcontentloaded' });
       await expectBodyCount(page, 1);
-      await pick(restored / scale, 20, 80);
+      // The switch is not stored: a reloaded pick starts on Offset.
+      await pick(restored / scale, 20, 80, 'Offset');
       await expect.poll(span).toBeCloseTo(restored, 4);
       expect(await count()).toBe(initial + 2);
       await page.getByLabel('Operation instructions', { exact: true }).click();

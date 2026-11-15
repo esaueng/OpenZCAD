@@ -73,7 +73,11 @@ async function setHeight(page: Page, height: number) {
   await keypad.getByRole('textbox').fill(String(height));
   await keypad.getByRole('button', { name: 'Apply total' }).click();
   await expect(keypad).toBeHidden({ timeout: 30_000 });
-  await switchFaceOffsetToTotal(page);
+  // The cap keeps the Total chosen on it through its own commit.
+  await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+    /^Total/,
+    { timeout: 30_000 }
+  );
   await expect(page.getByTestId('direct-manipulation-value')).toContainText(
     String(height),
     { timeout: 30_000 }

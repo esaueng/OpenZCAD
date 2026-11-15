@@ -41,7 +41,7 @@ export function faceOffsetChipState(
  * landing, an edit on another body landing — so the same face re-arms many
  * times while it stays selected, and resetting each time undid the user's
  * Total/Offset switch under an open keypad. The face the switch was made on
- * (see `sameOffsetFace`) reads what was chosen for it whenever it has a span
+ * (see `continuesOffsetFace`) reads what was chosen for it whenever it has a span
  * to read; any other face, or a moment without a span (the body's analysis
  * catching up), reads the default, Offset, without forgetting the choice.
  * The choice is never stored beyond that face: no setting, no session
@@ -55,31 +55,59 @@ export function rearmedChipMode(
   return chosenHere && fresh.totalAvailable ? chosen : fresh.mode;
 }
 
-/** What `sameOffsetFace` compares of an armed face handle. */
+/** The face a Total/Offset switch was made on, as `continuesOffsetFace` reads it. */
 export interface OffsetFaceIdentity {
   bodyId: string;
   topologyId: string;
+  point: { x: number; y: number; z: number };
   normal: { x: number; y: number; z: number };
 }
 
+/** An armed face handle: its identity, and the face a commit moved into it. */
+export interface OffsetFaceHandle extends OffsetFaceIdentity {
+  movedFrom?: string;
+}
+
+export function offsetFaceIdentity(
+  handle: OffsetFaceIdentity
+): OffsetFaceIdentity {
+  const { bodyId, topologyId, point, normal } = handle;
+  return { bodyId, topologyId, point, normal };
+}
+
 /**
- * Whether a re-armed face handle is the face the chip's reading was chosen
- * on. A commit renumbers the moved face, so the same face is also one on the
- * same body facing the same way: like the cylinder's Diameter/Radius, a
- * Total chosen for a face is carried through its own edit instead of the
- * chip jumping back to Offset +0 as the edit lands.
+ * Whether a re-armed face handle is the face the chip's switch was made on,
+ * proven, never guessed: the same face id on the same plane (an id reused
+ * for another face after the topology changed lies elsewhere), or the face
+ * a committed offset moved it to, as the commit itself names it
+ * (`movedFrom`). Facing the same way proves nothing — a shoulder and the cap
+ * above it, or two coplanar faces of one part, are different faces — and
+ * anything unproven reads the default, Offset.
  */
-export function sameOffsetFace(
-  previous: OffsetFaceIdentity,
-  next: OffsetFaceIdentity
+export function continuesOffsetFace(
+  chosen: OffsetFaceIdentity,
+  next: OffsetFaceHandle
 ): boolean {
-  if (previous.bodyId !== next.bodyId) return false;
-  if (previous.topologyId === next.topologyId) return true;
-  const a = previous.normal;
+  if (chosen.bodyId !== next.bodyId) return false;
+  const a = chosen.normal;
   const b = next.normal;
-  const dot = a.x * b.x + a.y * b.y + a.z * b.z;
   const length = Math.hypot(a.x, a.y, a.z) * Math.hypot(b.x, b.y, b.z);
-  return length > 0 && dot / length > 1 - 1e-6;
+  if (
+    !(length > 0) ||
+    (a.x * b.x + a.y * b.y + a.z * b.z) / length < 1 - 1e-6
+  ) {
+    return false;
+  }
+  if (next.movedFrom !== undefined) return next.movedFrom === chosen.topologyId;
+  if (next.topologyId !== chosen.topologyId) return false;
+  const unit = Math.hypot(a.x, a.y, a.z);
+  const off =
+    (a.x * (next.point.x - chosen.point.x) +
+      a.y * (next.point.y - chosen.point.y) +
+      a.z * (next.point.z - chosen.point.z)) /
+    unit;
+  const scale = 1 + Math.hypot(chosen.point.x, chosen.point.y, chosen.point.z);
+  return Math.abs(off) <= 1e-6 * scale;
 }
 
 /**

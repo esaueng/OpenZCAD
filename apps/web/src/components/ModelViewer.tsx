@@ -294,7 +294,8 @@ import {
   offsetTotalReading,
   rearmedChipMode,
   regionChipState,
-  sameOffsetFace,
+  continuesOffsetFace,
+  offsetFaceIdentity,
   type OffsetChipMode,
   type OffsetFaceIdentity
 } from '../lib/offsetChip';
@@ -522,6 +523,8 @@ export interface OffsetHandleTarget {
   profilePreview?: CylinderPreviewProfile;
   bodyId: string;
   topologyId: string;
+  /** The face a committed offset moved to make this one (`FaceTarget`). */
+  movedFrom?: string;
   point: { x: number; y: number; z: number };
   normal: { x: number; y: number; z: number };
   /** Displayed displacement; zero when the committed face is restored. */
@@ -5423,11 +5426,7 @@ export function ModelViewer({
           const handle = offsetHandleRef.current;
           offsetChipChosenRef.current = offsetChipModeRef.current;
           offsetChipFaceRef.current = handle
-            ? {
-                bodyId: handle.bodyId,
-                topologyId: handle.topologyId,
-                normal: handle.normal
-              }
+            ? offsetFaceIdentity(handle)
             : null;
           // Open exact entry edits what the chip shows, so it switches with
           // it: left alone it kept the other mode's label and prefill, and
@@ -14603,11 +14602,16 @@ export function ModelViewer({
       extentBehind
     );
     offsetExtentRef.current = chipState.extent;
+    const chosenFace = offsetChipFaceRef.current;
+    const chosenHere =
+      chosenFace !== null && continuesOffsetFace(chosenFace, offsetHandle);
+    // The commit renumbered the face the switch was made on: it follows it.
+    if (chosenHere)
+      offsetChipFaceRef.current = offsetFaceIdentity(offsetHandle);
     offsetChipModeRef.current = rearmedChipMode(
       chipState,
       offsetChipChosenRef.current,
-      offsetChipFaceRef.current !== null &&
-        sameOffsetFace(offsetChipFaceRef.current, offsetHandle)
+      chosenHere
     );
     const rig = buildOffsetFaceHandle({
       ...placement,

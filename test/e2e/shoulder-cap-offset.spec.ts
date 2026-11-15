@@ -142,6 +142,56 @@ async function verifyExport(
   await menu.locator('summary').click();
 }
 
+// Review of #1533: a Total switch made on the 26 mm shoulder carried to the
+// separate 35 mm cap above it (same body, facing the same way), so the cap
+// read "Total 35 mm" and a typed 5 moved it −30. A switch belongs to the face
+// it was made on; any other face starts on Offset.
+test('a Total switch on the shoulder does not carry to the cap', async ({
+  page
+}) => {
+  test.setTimeout(180_000);
+  await importShoulder(page, { height: 26, capHeight: 35 }, false);
+  await setSelectionFilter(page, 'Face');
+  const chip = page.getByTestId('direct-manipulation-value');
+  const tag = page.getByTestId('direct-manipulation-mode');
+  const pick = async (point: [number, number, number]) => {
+    await page.keyboard.press('Escape');
+    await expect
+      .poll(
+        async () => {
+          await clickWorldPoint(page, point);
+          return chip.isVisible();
+        },
+        { timeout: 30_000 }
+      )
+      .toBe(true);
+  };
+  await pick([20, 14, 26]);
+  await expect(tag).toHaveText(/^Offset/);
+  await switchFaceOffsetToTotal(page);
+  await expect
+    .poll(async () => parseFloat(await chip.innerText()))
+    .toBeCloseTo(26, 2);
+
+  await pick([0, 0, 35]);
+  await expect(tag).toHaveText(/^Offset/);
+  await expect(chip).toHaveText('+0 mm');
+  await chip.click();
+  const pad = page.getByRole('dialog', { name: 'Offset value' });
+  await expect(pad.getByRole('textbox')).toHaveAccessibleDescription(
+    'Offset: how far the face moves, + out, − in'
+  );
+  await page.keyboard.press('Escape');
+  await expect(pad).toBeHidden();
+
+  // The shoulder, picked again, still reads the Total chosen on it.
+  await pick([20, 14, 26]);
+  await expect(tag).toHaveText(/^Total/);
+  await expect
+    .poll(async () => parseFloat(await chip.innerText()))
+    .toBeCloseTo(26, 2);
+});
+
 test(
   'R5 fillet and independent shoulder and cap offsets reach the joined rim',
   { tag: '@ci-smoke' },

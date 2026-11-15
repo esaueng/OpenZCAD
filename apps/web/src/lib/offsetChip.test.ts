@@ -10,7 +10,7 @@ import {
   offsetTotalReading,
   rearmedChipMode,
   regionChipState,
-  sameOffsetFace,
+  continuesOffsetFace,
   valueInsideLimit,
   type OffsetChipState
 } from './offsetChip';
@@ -80,31 +80,82 @@ describe('offset chip', () => {
     ).toBe('offset');
   });
 
-  it('knows the moved face again after its commit renumbers it', () => {
-    const top = {
+  describe('which face a Total switch belongs to', () => {
+    const up = { x: 0, y: 0, z: 1 };
+    // The shoulder fixture: a 26 mm shoulder and, above it, a 35 mm cap of
+    // the same body, both facing up.
+    const shoulder = {
       bodyId: 'body-1',
       topologyId: 'face:7',
-      normal: { x: 0, y: 0, z: 1 }
+      point: { x: 20, y: 14, z: 26 },
+      normal: up
     };
-    expect(sameOffsetFace(top, top)).toBe(true);
-    // The commit renumbers the face it moved: same body, same facing.
-    expect(sameOffsetFace(top, { ...top, topologyId: 'face:12' })).toBe(true);
-    // Another face of the body, or the same facing on another body, is not.
-    expect(
-      sameOffsetFace(top, {
-        ...top,
-        topologyId: 'face:3',
-        normal: { x: 1, y: 0, z: 0 }
-      })
-    ).toBe(false);
-    expect(
-      sameOffsetFace(top, {
-        ...top,
-        topologyId: 'face:3',
-        normal: { x: 0, y: 0, z: -1 }
-      })
-    ).toBe(false);
-    expect(sameOffsetFace(top, { ...top, bodyId: 'body-2' })).toBe(false);
+
+    it('keeps it on the same face, wherever on it the pick lands', () => {
+      expect(continuesOffsetFace(shoulder, shoulder)).toBe(true);
+      expect(
+        continuesOffsetFace(shoulder, {
+          ...shoulder,
+          point: { x: 3, y: -8, z: 26 }
+        })
+      ).toBe(true);
+    });
+
+    it('does not carry it to another face that faces the same way', () => {
+      // Review of #1533: the 26 mm shoulder switched to Total, then the
+      // separate 35 mm cap read "Total 35 mm", so a typed 5 moved it −30.
+      expect(
+        continuesOffsetFace(shoulder, {
+          ...shoulder,
+          topologyId: 'face:9',
+          point: { x: 0, y: 0, z: 35 }
+        })
+      ).toBe(false);
+      // Two coplanar, disconnected faces of one part (the tops of a U's arms).
+      expect(
+        continuesOffsetFace(shoulder, {
+          ...shoulder,
+          topologyId: 'face:11',
+          point: { x: -20, y: 14, z: 26 }
+        })
+      ).toBe(false);
+      // Facing another way, or on another body.
+      expect(
+        continuesOffsetFace(shoulder, {
+          ...shoulder,
+          normal: { x: 0, y: 0, z: -1 }
+        })
+      ).toBe(false);
+      expect(
+        continuesOffsetFace(shoulder, { ...shoulder, bodyId: 'body-2' })
+      ).toBe(false);
+    });
+
+    it('does not trust a face id the topology handed to another face', () => {
+      expect(
+        continuesOffsetFace(shoulder, {
+          ...shoulder,
+          point: { x: 20, y: 14, z: 35 }
+        })
+      ).toBe(false);
+    });
+
+    it('follows the face only where the commit says it moved it', () => {
+      const moved = {
+        ...shoulder,
+        topologyId: 'face:12',
+        point: { x: 20, y: 14, z: 31 }
+      };
+      expect(
+        continuesOffsetFace(shoulder, { ...moved, movedFrom: 'face:7' })
+      ).toBe(true);
+      // Without the commit's word, a renumbered face on a new plane is not it.
+      expect(continuesOffsetFace(shoulder, moved)).toBe(false);
+      // Another face the commit moved is not this one either.
+      expect(
+        continuesOffsetFace(shoulder, { ...moved, movedFrom: 'face:9' })
+      ).toBe(false);
+    });
   });
 
   it('reads Total as the span plus the signed offset', () => {

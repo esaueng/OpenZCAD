@@ -27741,6 +27741,7 @@ export function App() {
     const nextTarget: FaceTarget = {
       ...stableTarget,
       topologyId: moved.topologyId,
+      movedFrom: target.topologyId,
       hash: moved.hash,
       ...(moved.reference ? { reference: moved.reference } : {}),
       point: shift(target.point),

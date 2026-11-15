@@ -190,7 +190,10 @@ test(
     await expect(chip).not.toHaveAttribute('data-state', 'warning');
     await pad.getByRole('button', { name: 'Apply total' }).click();
     await featureCount(page, 6);
-    await switchFaceOffsetToTotal(page);
+    // The face keeps the Total chosen on it through its own commit.
+    await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+      /^Total/
+    );
     await chip.click();
     pad = page.getByRole('dialog', { name: 'Total value' });
     await pad.getByRole('textbox').fill('47.5');
