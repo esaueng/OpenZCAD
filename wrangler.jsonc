@@ -11,7 +11,23 @@
   // apps/web/dist that did not pass the Remus package gate or that came from
   // local (+local) Remus packages: scripts/check-release-build.mjs.
   "build": { "command": "pnpm -w run check:release-build" },
-  // Cloudflare does not generate Preview URLs for Workers that implement a DO.
+  // Domains. Every deploy replaces the dashboard's routes and workers.dev
+  // toggles with these, so change them here, not in the dashboard.
+  // zcad.app serves production. dev.zcad.app serves Previews only, at
+  // <preview-name>.dev.zcad.app (Cloudflare adds the *.dev.zcad.app record
+  // and certificate). Both workers.dev URLs stay off: without
+  // `workers_dev: false` a deploy would turn production's back on.
+  "workers_dev": false,
+  "routes": [
+    { "pattern": "zcad.app", "custom_domain": true },
+    {
+      "pattern": "dev.zcad.app",
+      "custom_domain": true,
+      "previews_enabled": true,
+      "enabled": false
+    }
+  ],
+  // workers.dev Preview and Version URLs stay off.
   "preview_urls": false,
   "observability": {
     "issues": { "enabled": true },
