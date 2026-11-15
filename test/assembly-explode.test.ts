@@ -220,7 +220,10 @@ describe('assembly.explode.set (AS03)', () => {
 describe('exploded view schema and validation (v61)', () => {
   it('is refused below schema v61, in the document and in its commands', () => {
     const { manager } = rig();
-    const old = { ...manager.document, schemaVersion: 60 } as ProjectDocument;
+    const old = {
+      ...manager.document,
+      schemaVersion: 60
+    } as unknown as ProjectDocument;
     expect(() =>
       setAssemblyExplode(old, { offsets: { c_arm: { x: 1, y: 0, z: 0 } } })
     ).toThrow('Exploded views require project schema v61 or newer.');
@@ -228,7 +231,7 @@ describe('exploded view schema and validation (v61)', () => {
     const stamped = {
       ...manager.document,
       schemaVersion: 60
-    } as ProjectDocument;
+    } as unknown as ProjectDocument;
     expect(() => assertDocumentContentSchema(stamped)).toThrow(
       'Exploded views require project schema v61 or newer.'
     );
@@ -239,7 +242,7 @@ describe('exploded view schema and validation (v61)', () => {
     const document = {
       ...manager.document,
       schemaVersion: 60
-    } as ProjectDocument;
+    } as unknown as ProjectDocument;
     const { editHistory: _history, ...withoutHistory } = document;
     expect(() => assertDocumentContentSchema(withoutHistory)).not.toThrow();
     expect(
@@ -259,7 +262,9 @@ describe('exploded view schema and validation (v61)', () => {
     expect(
       assemblySetError({
         ...set,
-        explode: { offsets: JSON.parse('{"__proto__":{"x":1,"y":0,"z":0}}') }
+        explode: {
+          offsets: JSON.parse('{"__proto__":{"x":1,"y":0,"z":0}}') as unknown
+        }
       })
     ).toMatch(/not in the assembly/);
     expect(
