@@ -368,6 +368,7 @@ import {
 } from './lib/sketch/session';
 import type { CompositeShape } from './lib/sketch/composites';
 import type { SketchSnapHint } from './lib/sketch/inference';
+import type { DrawnEntity } from './lib/sketch/inferenceCommit';
 import { resolvedSketchPlaneBasis } from './lib/sketch/planeBasis';
 import { sketchEntityEditTarget } from './lib/sketch/editTarget';
 import {
@@ -20783,9 +20784,7 @@ export function App() {
   } | null>(null);
 
   function queueDrawnEntity(
-    drawn: Parameters<
-      typeof import('./lib/sketch/inferenceCommit').drawnEntityCommands
-    >[0],
+    drawn: DrawnEntity,
     hints: SketchSnapHint[] | undefined
   ) {
     setSketchDiagnosticPoints([]);
@@ -20804,9 +20803,7 @@ export function App() {
    * kept relation is named on the status line and its glyph is shown.
    */
   async function commitDrawnEntity(
-    drawn: Parameters<
-      typeof import('./lib/sketch/inferenceCommit').drawnEntityCommands
-    >[0],
+    drawn: DrawnEntity,
     hints: SketchSnapHint[] | undefined
   ) {
     const current = interactionRef.current;

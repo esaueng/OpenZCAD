@@ -20,6 +20,11 @@ export type DrawnEntityTarget =
   | { kind: 'sketch'; sketchId: SketchId }
   | { kind: 'new-sketch'; name: string; planeRef: SketchPlaneRef };
 
+/** What a drawing gesture completed: one entity, or a held-line composite. */
+export type DrawnEntity =
+  | { kind: 'object'; data: SketchObjectData }
+  | { kind: 'composite'; shape: CompositeShape };
+
 export interface DrawnEntityPlan {
   label: string;
   sketchId: SketchId;
@@ -49,9 +54,7 @@ export interface DrawnEntityOptions {
  * as one undo step. `existing` is the sketch the pointer snapped against.
  */
 export function drawnEntityCommands(
-  drawn:
-    | { kind: 'object'; data: SketchObjectData }
-    | { kind: 'composite'; shape: CompositeShape },
+  drawn: DrawnEntity,
   target: DrawnEntityTarget,
   existing: readonly SketchInferenceObject[],
   options: DrawnEntityOptions
