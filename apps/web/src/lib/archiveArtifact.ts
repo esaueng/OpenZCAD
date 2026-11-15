@@ -25,10 +25,12 @@ export interface ArchiveArtifactTransport extends ArtifactUploadTransport {
     input: ArchiveArtifactInput
   ): Promise<string>;
   createUploadSession(
-    payload: CreateUploadSessionRequest
+    payload: CreateUploadSessionRequest,
+    options?: ArtifactSources
   ): Promise<CreateUploadSessionResponse>;
   finalizeArtifact(
-    payload: FinalizeArtifactRequest
+    payload: FinalizeArtifactRequest,
+    options?: ArtifactSources
   ): Promise<{ artifactId: string | null }>;
   getArtifactMetadata(artifactId: string): Promise<ArtifactMetadataResponse>;
   discardMeshPayload?(
@@ -38,7 +40,12 @@ export interface ArchiveArtifactTransport extends ArtifactUploadTransport {
   ): Promise<{ deleted: boolean }>;
 }
 
-export interface ArchiveArtifactInput {
+/** Other projects whose content an upload carries (`projectRequest`). */
+export interface ArtifactSources {
+  sources?: readonly string[];
+}
+
+export interface ArchiveArtifactInput extends ArtifactSources {
   fileName: string;
   contentType: string;
   kind: ArtifactKind;
@@ -90,13 +97,20 @@ export async function archiveArtifact(
       await import('./e2ee/encryptedProjects');
     return archiveEncryptedArtifact(projectId, input);
   }
-  const { session: upload } = await transport.createUploadSession({
-    projectId,
-    fileName: input.fileName,
-    contentType: input.contentType,
-    kind: input.kind,
-    ...(input.metadata ? { metadata: input.metadata } : {})
-  });
+  // Each request names them too, so the gate checks them at every send.
+  const sources: ArtifactSources = input.sources?.length
+    ? { sources: input.sources }
+    : {};
+  const { session: upload } = await transport.createUploadSession(
+    {
+      projectId,
+      fileName: input.fileName,
+      contentType: input.contentType,
+      kind: input.kind,
+      ...(input.metadata ? { metadata: input.metadata } : {})
+    },
+    sources
+  );
   if (!upload.uploadUrl) {
     throw new Error('Artifact upload is unavailable.');
   }
@@ -110,6 +124,7 @@ export async function archiveArtifact(
         projectId,
         // Decided before the session opened: checked again at each send.
         payload: 'plaintext',
+        ...sources,
         uploadSessionId: upload.uploadSessionId,
         uploadUrl: upload.uploadUrl
       },
@@ -122,11 +137,14 @@ export async function archiveArtifact(
       }
     );
     input.signal?.throwIfAborted();
-    const finalized = await transport.finalizeArtifact({
-      projectId,
-      uploadSessionId: upload.uploadSessionId,
-      artifactId: upload.artifactId
-    });
+    const finalized = await transport.finalizeArtifact(
+      {
+        projectId,
+        uploadSessionId: upload.uploadSessionId,
+        artifactId: upload.artifactId
+      },
+      sources
+    );
     if (finalized.artifactId !== upload.artifactId) {
       throw new Error('The artifact could not be finalized.');
     }

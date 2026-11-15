@@ -6,6 +6,7 @@ import {
   beginEncryptCutover,
   E2EE_CUTOVER_UNRESOLVED_CODE,
   E2EE_PINS_RESET_ELSEWHERE_CODE,
+  E2EE_PLAINTEXT_REFUSED_CODE,
   encryptedPinsResetElsewhere,
   isEncryptedProject,
   rememberProjectFormats,
@@ -430,6 +431,82 @@ describe('an upload session', () => {
       expect(network).not.toHaveBeenCalled();
     }
   );
+});
+
+// PR #1418 review: an insert's uploads carry another project's content,
+// so they name it (`sources`) and the gate checks it at each send.
+describe('content another project gave', () => {
+  const noDelay = { retryDelay: () => Promise.resolve() };
+  const session = (source: string) => ({
+    projectId: 'proj_gate_insert_destination',
+    payload: 'plaintext' as const,
+    sources: [source],
+    uploadSessionId: 'upload_open',
+    uploadUrl: '/api/uploads/upload_open/content'
+  });
+
+  it('is sent while its source is held as nothing', async () => {
+    await uploadArtifactBody(
+      api,
+      session('proj_gate_source_plain'),
+      new Blob(['x'])
+    );
+    expect(network).toHaveBeenCalledOnce();
+  });
+
+  it('refuses each plaintext request once another tab pins the source, mid-upload', async () => {
+    const source = 'proj_gate_source_pinned_mid_upload';
+    const answer = network.getMockImplementation()!;
+    network.mockImplementation(async (input, init) => {
+      // Another tab pins the source as the first part goes out.
+      if (pathOf(input).includes('/parts/1')) {
+        localStorageEncryptedProjectPins().pin(source);
+      }
+      return answer(input, init);
+    });
+    try {
+      expect(
+        await codeOf(
+          uploadArtifactBody(api, session(source), new Blob(['x'.repeat(20)]), {
+            partBytes: 8,
+            ...noDelay
+          })
+        )
+      ).toBe(E2EE_PLAINTEXT_REFUSED_CODE);
+    } finally {
+      network.mockImplementation(answer);
+    }
+    const sent = network.mock.calls.map(
+      ([input, init]) => `${init?.method ?? 'GET'} ${pathOf(input)}`
+    );
+    expect(sent).toEqual([
+      'POST /api/uploads/upload_open/multipart',
+      'PUT /api/uploads/upload_open/parts/1?uploadId=mp_1'
+    ]);
+  });
+
+  it('refuses plaintext of a source whose switch did not finish here, but not an encrypted body', async () => {
+    const source = 'proj_gate_source_unresolved';
+    expect(
+      localStorageEncryptedProjectPins().markCutoverUnresolved(source)
+    ).toBe(true);
+    expect(
+      await codeOf(uploadArtifactBody(api, session(source), new Blob(['x'])))
+    ).toBe(E2EE_CUTOVER_UNRESOLVED_CODE);
+    expect(network).not.toHaveBeenCalled();
+    await desktopFetch(
+      '/api/uploads/upload_open/content',
+      projectRequest(
+        {
+          projectId: 'proj_gate_insert_destination',
+          payload: 'encrypted',
+          sources: [source]
+        },
+        { method: 'PUT', body: new Blob(['sealed']) }
+      )
+    );
+    expect(network).toHaveBeenCalledOnce();
+  });
 });
 
 describe('a reset made in another tab', () => {

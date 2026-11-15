@@ -3,7 +3,10 @@
  * project's id. When this device keeps that other project encrypted, the
  * content keeps that requirement here too, settled before anything is
  * stored, archived or committed (PR #1418), the way a backup import or a
- * duplicate carries it (`carryEncryptionRequirement`).
+ * duplicate carries it (`carryEncryptionRequirement`). It is settled again
+ * immediately before the commit, since another tab can pin the source
+ * meanwhile, and every upload names the source to the send gate
+ * (`projectRequest`'s `sources`), which refuses its plaintext then.
  */
 import {
   carryEncryptionRequirement,
@@ -17,6 +20,9 @@ export interface ProjectInsertDestination {
   /** The account holds a copy of it (its writes go to the account). */
   onAccount: boolean;
 }
+
+export const INSERT_DESTINATION_CHANGED =
+  'The project changed while inserting; nothing was added.';
 
 export const INSERT_INTO_PLAINTEXT_REFUSED =
   'This device keeps the project you picked end-to-end encrypted, and this project is not encrypted, so nothing was added. Encrypt this project first, or insert into an encrypted project.';

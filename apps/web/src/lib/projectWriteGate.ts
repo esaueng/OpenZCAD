@@ -22,6 +22,9 @@
  *
  * A request's context says which project it writes, whether its payload
  * is the project's content in plaintext or encrypted (`projectRequest`),
+ * which other projects that content came from (its `sources`: plaintext
+ * is refused while any of them is held as encrypted, as for the project
+ * itself),
  * whether it is an assistant request about that project
  * (`assistantProjectRequest`), and whether it is one of this device's own
  * migration requests, bound to the run's project and routes and to the run
@@ -52,6 +55,12 @@ export type ProjectPayload = 'plaintext' | 'encrypted' | 'none';
 export interface ProjectRequestContext {
   readonly projectId: string;
   readonly payload: ProjectPayload;
+  /**
+   * Other projects whose content the payload carries (File > Insert
+   * project's source): checked at the send like the project itself, so
+   * plaintext is refused while any of them is held as encrypted then.
+   */
+  readonly sources?: readonly string[];
 }
 
 /**
@@ -111,6 +120,8 @@ export interface ResolvedProjectRequest {
    * device holds as encrypted, whatever consent exists (PR #1418).
    */
   readonly assistant: boolean;
+  /** The other projects its content came from, as declared. */
+  readonly sources?: readonly string[];
 }
 
 /**
@@ -524,8 +535,24 @@ export function resolveProjectRequest(
     payload: route.plaintext ? 'plaintext' : (declared?.payload ?? 'none'),
     migration,
     ...(migrationLive ? { migrationLive } : {}),
-    assistant: route.assistant
+    assistant: route.assistant,
+    ...(declared?.sources?.length ? { sources: declared.sources } : {})
   };
+}
+
+/**
+ * Refuses plaintext carrying content of a project this tab holds as
+ * encrypted now, or may not write: each declared source is checked as the
+ * project itself would be.
+ */
+function checkSources(
+  payload: ProjectPayload,
+  sources: readonly string[] | undefined
+): void {
+  if (!check || payload !== 'plaintext') return;
+  for (const projectId of sources ?? []) {
+    check({ projectId, payload, migration: null, assistant: false });
+  }
 }
 
 /**
@@ -541,6 +568,7 @@ export function checkProjectRequest(request: ResolvedProjectRequest): void {
     request.migration !== null && request.migrationLive?.() === true
       ? request.migration
       : null;
+  checkSources(request.payload, request.sources);
   if (!check || migration === 'encrypt' || !request.projectId) return;
   check({
     projectId: request.projectId,
@@ -591,6 +619,7 @@ export function sendProjectFrame(
   socket: Pick<WebSocket, 'send'>,
   frame: string
 ): void {
+  checkSources(context.payload, context.sources);
   check?.({
     projectId: context.projectId,
     payload: context.payload,

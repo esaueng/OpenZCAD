@@ -650,9 +650,23 @@ const checkProjectSend: ProjectWriteCheck = ({
 
 installProjectWriteGate(checkProjectSend);
 
-/** A request carrying the project's content in plaintext. */
-const plaintextOf = (projectId: string, init: RequestInit = {}): RequestInit =>
-  projectRequest({ projectId, payload: 'plaintext' }, init);
+/**
+ * A request carrying the project's content in plaintext, and that of any
+ * `sources` it came from (`projectRequest`).
+ */
+const plaintextOf = (
+  projectId: string,
+  init: RequestInit = {},
+  sources?: readonly string[]
+): RequestInit =>
+  projectRequest(
+    {
+      projectId,
+      payload: 'plaintext',
+      ...(sources?.length ? { sources } : {})
+    },
+    init
+  );
 
 /**
  * Whether another tab reset pins this tab still holds in memory, so this
@@ -1773,16 +1787,20 @@ export const api = {
       })
     );
   },
-  createUploadSession: async (payload: CreateUploadSessionRequest) => {
+  createUploadSession: async (
+    payload: CreateUploadSessionRequest,
+    options?: { sources?: readonly string[] }
+  ) => {
     if (isEncryptedProject(payload.projectId)) {
       throw encryptedLocalOnly('Files');
     }
     return requestJson<CreateUploadSessionResponse>(
       '/api/uploads',
-      plaintextOf(payload.projectId, {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      })
+      plaintextOf(
+        payload.projectId,
+        { method: 'POST', body: JSON.stringify(payload) },
+        options?.sources
+      )
     );
   },
   /**
@@ -1882,13 +1900,17 @@ export const api = {
       );
     }
   },
-  finalizeArtifact: (payload: FinalizeArtifactRequest) =>
+  finalizeArtifact: (
+    payload: FinalizeArtifactRequest,
+    options?: { sources?: readonly string[] }
+  ) =>
     requestJson<{ artifactId: string | null }>(
       '/api/artifacts/finalize',
-      plaintextOf(payload.projectId, {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      })
+      plaintextOf(
+        payload.projectId,
+        { method: 'POST', body: JSON.stringify(payload) },
+        options?.sources
+      )
     ),
   discardMeshPayload: async (
     projectId: string,

@@ -52,6 +52,8 @@ export interface ArtifactUploadTransport {
 export interface ArtifactUploadSession {
   projectId: string;
   payload: 'plaintext' | 'encrypted';
+  /** Other projects whose content the body carries (`projectRequest`). */
+  sources?: readonly string[];
   uploadSessionId: string;
   uploadUrl: string;
 }
@@ -165,7 +167,8 @@ export async function uploadArtifactBody(
   const uploadUrl = verifiedUploadUrl(session);
   const context: ProjectRequestContext = {
     projectId: session.projectId,
-    payload: session.payload
+    payload: session.payload,
+    ...(session.sources?.length ? { sources: session.sources } : {})
   };
   const onProgress = options?.onProgress;
   const signal = options?.signal;
