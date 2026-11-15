@@ -70,6 +70,30 @@ describe('R2 project storage readiness', () => {
     );
   });
 
+  it('retries one failed D1 read before refusing project routes', async () => {
+    const { db, first } = database();
+    first.mockRejectedValueOnce(new Error('D1_ERROR: network connection lost'));
+    await expect(isProjectObjectStorageReady(db, bucket())).resolves.toBe(true);
+    expect(first).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails closed when the retried D1 read fails too', async () => {
+    const { db, first } = database();
+    first.mockRejectedValue(new Error('D1_ERROR: network connection lost'));
+    await expect(isProjectObjectStorageReady(db, bucket())).resolves.toBe(
+      false
+    );
+    expect(first).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry a schema that is genuinely not ready', async () => {
+    const { db, first } = database({ ...readyRow, storage_assets_table: 0 });
+    await expect(isProjectObjectStorageReady(db, bucket())).resolves.toBe(
+      false
+    );
+    expect(first).toHaveBeenCalledOnce();
+  });
+
   it('fails closed without R2 before querying D1', async () => {
     const { db, first } = database();
     await expect(isProjectObjectStorageReady(db, undefined)).resolves.toBe(

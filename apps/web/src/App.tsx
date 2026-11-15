@@ -462,6 +462,7 @@ import {
   retryWhileStorageCleanupPending,
   isProjectFormatUnsupportedError
 } from './lib/api';
+import { readAccountSession } from './lib/accountSession';
 import {
   useEncryptedPins,
   type PinResetTarget
@@ -2960,6 +2961,8 @@ export function App() {
   const cloudConfigurationReads = useRef(createCloudConfigurationReads());
   const [authConfigStatus, setAuthConfigStatus] =
     useState<AuthConfigStatus>('loading');
+  /** The last session read could not tell signed in from signed out. */
+  const [sessionUnavailable, setSessionUnavailable] = useState(false);
   const [panelState, setPanelState] = useState<PanelState>(() =>
     loadPanelState()
   );
@@ -4120,7 +4123,8 @@ export function App() {
     if (
       !cloudFunctionsEnabled ||
       accountResolving ||
-      authConfigStatus === 'unavailable'
+      authConfigStatus === 'unavailable' ||
+      sessionUnavailable
     )
       return;
     rememberAccountShape({ signedIn: sessionUserId !== null });
@@ -4128,8 +4132,14 @@ export function App() {
     accountResolving,
     authConfigStatus,
     cloudFunctionsEnabled,
+    sessionUnavailable,
     sessionUserId
   ]);
+  // A session from any path (startup, sign-in, a refresh) settles the
+  // question an unreachable check left open.
+  useEffect(() => {
+    if (sessionUserId !== null) setSessionUnavailable(false);
+  }, [sessionUserId]);
   useEffect(() => {
     setAutomaticMigrationLoadError(null);
     if (!sessionUserId || !cloudFunctionsEnabled) return;
@@ -7792,6 +7802,20 @@ export function App() {
       window.removeEventListener(SEALED_SHELF_APPLIED_EVENT, applied);
     };
   }, [cloudFunctionsEnabled, libraryShown, session?.userId]);
+  // A session check that could not be answered is asked again on the
+  // shelf's own schedule (focus, visibility, the slow timer), so a rate
+  // limit or server blip at load clears without the user doing anything.
+  const recheckSessionRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => {
+    if (
+      !libraryShown ||
+      !cloudFunctionsEnabled ||
+      !sessionUnavailable ||
+      session !== null
+    )
+      return;
+    return watchLibraryFreshness(() => recheckSessionRef.current());
+  }, [cloudFunctionsEnabled, libraryShown, session, sessionUnavailable]);
 
   useEffect(() => {
     syncCloudSettingsSession(
@@ -7876,12 +7900,19 @@ export function App() {
         });
         let sessionLookupFailed = false;
         const sessionPromise = bootCloudFunctionsEnabledRef.current
-          ? timedAsync('startup.session', () =>
-              api.session().catch(() => {
-                sessionLookupFailed = true;
-                return null;
-              })
-            )
+          ? timedAsync('startup.session', async () => {
+              // Only a 401 is signed out. A rate limit or server error is
+              // retried and otherwise left as "unreachable", never shown as
+              // a signed-out device-only shelf.
+              const read = await readAccountSession(() => api.session(), {
+                isCurrent: () => !cancelled
+              });
+              if (!cancelled)
+                setSessionUnavailable(read.state === 'unavailable');
+              if (read.state === 'signed-in') return read.session;
+              sessionLookupFailed = true;
+              return null;
+            })
           : Promise.resolve(null);
         const [rememberedLocal, activeSession] = await Promise.all([
           startupProjectId
@@ -13716,6 +13747,7 @@ export function App() {
     setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
   }
 
+  recheckSessionRef.current = refreshCloudConnection;
   async function refreshCloudConnection() {
     if (!cloudFunctionsEnabledRef.current) {
       return;
@@ -13762,12 +13794,12 @@ export function App() {
           setDeploymentHealth(health);
         }
       });
-    const [nextAuth, activeSession] = await Promise.all([
+    const [nextAuth, sessionRead] = await Promise.all([
       api
         .authConfig()
         .then((config) => ({ config, status: 'ready' as const }))
         .catch(() => ({ config: null, status: 'unavailable' as const })),
-      api.session().catch(() => null)
+      readAccountSession(() => api.session(), { isCurrent })
     ]);
     if (!isCurrent()) {
       return;
@@ -13776,6 +13808,22 @@ export function App() {
       setAuthConfig(nextAuth.config);
       setAuthConfigStatus(nextAuth.status);
     }
+    if (sessionRead.state === 'unavailable') {
+      // An unreachable session check says nothing about the account: a
+      // signed-in page keeps its session, keys and sync baselines rather
+      // than signing out on a rate limit or a server error.
+      setSessionUnavailable(sessionRef.current === null);
+      accountKnown();
+      setSettingsMessage(
+        sessionRef.current
+          ? 'Your account could not be reached · work stays saved on this device.'
+          : 'Cloud unavailable · settings and projects stay on this device.'
+      );
+      return;
+    }
+    setSessionUnavailable(false);
+    const activeSession =
+      sessionRead.state === 'signed-in' ? sessionRead.session : null;
     organizationBackground.begin(activeSession?.userId ?? null);
     sessionRef.current = activeSession;
     setSession(activeSession);
@@ -32710,9 +32758,14 @@ export function App() {
           conflictedProjectIds={conflictedProjectIds}
           signedIn={Boolean(session)}
           cloudUnavailable={
-            cloudFunctionsEnabled && authConfigStatus === 'unavailable'
+            cloudFunctionsEnabled &&
+            (authConfigStatus === 'unavailable' || sessionUnavailable)
           }
-          onRetryCloud={() => void handleRefreshAuthConfig()}
+          onRetryCloud={() =>
+            void (sessionUnavailable
+              ? refreshCloudConnection()
+              : handleRefreshAuthConfig())
+          }
           onRetryAccountListing={() => void handleRetryAccountListing()}
           onSaveToAccount={(project) => void handleSaveToAccount(project)}
           onSaveAllToAccount={(candidates) =>

@@ -1725,7 +1725,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const session = await authenticateRequest(request, env);
   const userId = session.userId;
-  if (request.method === 'GET' || request.method === 'HEAD') {
+  // The session read is exempt: `authenticateRequest` above already did its
+  // only D1 work, and refusing it made a busy signed-in page look signed out.
+  if (
+    (request.method === 'GET' || request.method === 'HEAD') &&
+    pathname !== '/api/session'
+  ) {
     await enforceAccountReadRateLimit(env, userId);
   }
   if (pathname.startsWith('/api/e2ee/')) {

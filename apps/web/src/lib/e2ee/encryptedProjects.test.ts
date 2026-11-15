@@ -711,3 +711,40 @@ it('does not retry or publish progressive shelf data after locking', async () =>
   expect(verify).toHaveBeenCalledOnce();
   expect(f.load).toHaveBeenCalledOnce();
 });
+
+// A shelf of encrypted thumbnails asked `/api/session` once per read, which
+// spent the account's read budget until the session read itself was refused
+// and the page showed the account as signed out.
+it('shares one session read across concurrent and back-to-back encrypted reads', async () => {
+  const f = await fixture();
+  const sessionReads = () =>
+    f.fetcher.mock.calls.filter(([path]) => path === '/api/session').length;
+  await Promise.all([
+    f.page.encryptedProjectStore(),
+    f.page.encryptedProjectStore(),
+    f.page.encryptedInvitations()
+  ]);
+  await f.page.encryptedProjectStore();
+  expect(sessionReads()).toBe(1);
+  // A key-session change (sign-out, another account) asks the server again.
+  const keySession = await import('./keySession');
+  keySession.announceKeySessionChange();
+  await f.page.encryptedProjectStore().catch(() => undefined);
+  expect(sessionReads()).toBe(2);
+});
+
+it('never reuses a failed session read', async () => {
+  const f = await fixture();
+  const realFetch = f.fetcher.getMockImplementation()!;
+  f.fetcher.mockImplementationOnce(
+    async () => new Response('API request limit reached.', { status: 429 })
+  );
+  await expect(f.page.encryptedProjectStore()).rejects.toMatchObject({
+    status: 429
+  });
+  f.fetcher.mockImplementation(realFetch);
+  await expect(f.page.encryptedProjectStore()).resolves.toBeDefined();
+  expect(
+    f.fetcher.mock.calls.filter(([path]) => path === '/api/session')
+  ).toHaveLength(2);
+});

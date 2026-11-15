@@ -188,6 +188,8 @@ function forgetOpened(keepStateSubscription = false): void {
 
 /** Retire the view; unlocked direct file readers can reopen lazily. */
 function invalidateAccountClients(userId: string, revision: number): void {
+  // A lock, unlock or key rotation asks the server again on the next read.
+  forgetPageSession();
   if (!opened) accountViewRevision += 1;
   forgetOpened(true);
   if (!unlockedAccount(userId)) {
@@ -213,6 +215,7 @@ function invalidateAccountClients(userId: string, revision: number): void {
 }
 
 subscribeKeySession(() => {
+  forgetPageSession();
   forgetOpened();
   decoder?.dispose();
   decoder = null;
@@ -247,10 +250,53 @@ function removalNotifier(
   };
 }
 
-async function pageSession(): Promise<{
-  userId: string;
-  email: string | null;
-}> {
+type PageSession = { userId: string; email: string | null };
+
+/**
+ * How long one answer from `/api/session` serves this page's encrypted
+ * reads. Every blob read checks which account the page holds, and asking
+ * the server each time doubled a shelf's requests (one session read per
+ * thumbnail) until the account's read budget refused the session read
+ * itself. The Worker still authenticates every request, and a key-session
+ * change (sign-out, another account, a notice from another tab) drops the
+ * answer at once.
+ */
+export const PAGE_SESSION_REUSE_MS = 15_000;
+
+let pageSessionAnswer: {
+  revision: number;
+  at: number;
+  session: Promise<PageSession>;
+} | null = null;
+
+function forgetPageSession(): void {
+  pageSessionAnswer = null;
+}
+
+/** One shared, briefly reused session read per key session. */
+function pageSession(): Promise<PageSession> {
+  const revision = getKeySessionRevision();
+  const now = Date.now();
+  if (
+    pageSessionAnswer &&
+    pageSessionAnswer.revision === revision &&
+    now - pageSessionAnswer.at < PAGE_SESSION_REUSE_MS
+  )
+    return pageSessionAnswer.session;
+  const answer = {
+    revision,
+    at: now,
+    session: readPageSession()
+  };
+  pageSessionAnswer = answer;
+  // A failed read is never reused: the next caller asks again.
+  answer.session.catch(() => {
+    if (pageSessionAnswer === answer) pageSessionAnswer = null;
+  });
+  return answer.session;
+}
+
+async function readPageSession(): Promise<PageSession> {
   const response = await desktopFetch('/api/session', {
     credentials: 'same-origin'
   });
