@@ -4210,13 +4210,21 @@ export function StartScreen({
                   />
                 </div>
               )}
-              {storageMeter && (
+              {storageMeter ? (
                 <StorageBar
                   segments={storageMeter.segments}
                   limit={storageLimit}
                   level={storageMeter.level}
                   label="Account storage used"
                   valueText={storageMeter.figure}
+                />
+              ) : (
+                // The meter's place, kept while the account is checked and
+                // its first figure loads (and when there is none), so the
+                // library below never jumps when the meter lands.
+                <span
+                  className="storage-bar is-small is-placeholder"
+                  aria-hidden="true"
                 />
               )}
             </div>
