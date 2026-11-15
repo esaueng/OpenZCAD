@@ -154,6 +154,67 @@ test('a copy of a sample drops "Demo ·" and wears its picture', async ({
   await expect(copy.locator('.start-tile-thumb img')).toHaveCount(1);
 });
 
+// 14 Nov 2026 recording: a copy made before copies carried their source's
+// picture kept the placeholder until it was opened. Settings redraws it.
+test(
+  'Regenerate project thumbnails redraws a card this device lost',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    await stubApi(page);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto('/');
+    await page
+      .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+      .click();
+    await expectBodyCount(page, 1);
+    await page.getByTitle('Back to projects').click();
+    await page
+      .getByRole('button', {
+        name: 'Save a copy of Mounting Bracket to your projects'
+      })
+      .click();
+    const copy = page.locator('.start-tile-project', {
+      hasText: 'Mounting Bracket (copy)'
+    });
+    await expect(copy.locator('.start-tile-thumb img')).toHaveCount(1);
+
+    // Lose every card this device drew, as a copy made before the fix had.
+    await page.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open('openzcad-v2');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () =>
+          reject(request.error ?? new Error('Cache open failed'));
+      });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction('projectThumbnails', 'readwrite');
+          tx.objectStore('projectThumbnails').clear();
+          tx.oncomplete = () => resolve();
+          tx.onerror = () =>
+            reject(tx.error ?? new Error('Cache clear failed'));
+        });
+      } finally {
+        db.close();
+      }
+    });
+    await page.reload();
+    await expect(copy).toHaveCount(1);
+    await expect(copy.locator('.start-tile-thumb img')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    const settings = page.getByRole('dialog', { name: 'Settings' });
+    await settings.getByRole('button', { name: 'Advanced' }).click();
+    await settings.getByRole('button', { name: 'Regenerate' }).click();
+    await expect(settings).toContainText(/Redrew \d+ project cards?\./, {
+      timeout: 60_000
+    });
+    await settings.getByRole('button', { name: 'Back to projects' }).click();
+    await expect(copy.locator('.start-tile-thumb img')).toHaveCount(1);
+  }
+);
+
 // 14 Nov 2026: New project and then Import kept the suggested name ("Lucky
 // Quokka"), and a library of them could not be searched by what they were.
 test(

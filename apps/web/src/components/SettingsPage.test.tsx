@@ -1341,6 +1341,69 @@ describe('settings advanced section', () => {
     expect(value.textContent).toMatch(/^Remus /);
   });
 
+  it('regenerates project thumbnails from the library, with progress', async () => {
+    const user = userEvent.setup();
+    const onRegenerateThumbnails = vi.fn();
+    const view = renderSettings(null, {
+      workspaceOpen: false,
+      onRegenerateThumbnails
+    });
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+    await user.click(screen.getByRole('button', { name: 'Regenerate' }));
+    expect(onRegenerateThumbnails).toHaveBeenCalledTimes(1);
+
+    view.rerender(
+      settingsElement(null, {
+        workspaceOpen: false,
+        onRegenerateThumbnails,
+        thumbnailRegeneration: { done: 3, total: 40 }
+      })
+    );
+    expect(screen.getByRole('button', { name: 'Redrawing…' })).toBeDisabled();
+    expect(screen.getByText('Redrawing 3 of 40…')).toBeInTheDocument();
+
+    view.rerender(
+      settingsElement(null, {
+        workspaceOpen: false,
+        onRegenerateThumbnails,
+        thumbnailRegenerationNote: 'Redrew 40 project cards.'
+      })
+    );
+    expect(screen.getByText('Redrew 40 project cards.')).toBeInTheDocument();
+  });
+
+  it('asks to leave an open project before regenerating thumbnails', async () => {
+    const user = userEvent.setup();
+    renderSettings(null, {
+      workspaceOpen: true,
+      onRegenerateThumbnails: vi.fn()
+    });
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+    expect(screen.getByRole('button', { name: 'Regenerate' })).toBeDisabled();
+    expect(
+      screen.getByText('Go back to your projects to redraw every project card.')
+    ).toBeInTheDocument();
+  });
+
+  it('finds Regenerate project thumbnails by searching for thumbnails', async () => {
+    const user = userEvent.setup();
+    renderSettings(null, {
+      workspaceOpen: false,
+      onRegenerateThumbnails: vi.fn()
+    });
+    const field = screen.getByLabelText('Find a setting');
+    await user.type(field, 'thumbnails');
+    expect(screen.getByRole('button', { name: 'Advanced' })).toHaveAttribute(
+      'aria-current',
+      'page'
+    );
+    expect(
+      screen.getByRole('button', { name: 'Regenerate' })
+    ).toBeInTheDocument();
+    // Settings restores the last search; leave none for the next test.
+    await user.clear(field);
+  });
+
   it('turns the frame rate overlay on, off by default', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

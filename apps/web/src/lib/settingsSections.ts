@@ -349,6 +349,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     settings: [
       'Direct manipulation',
       'Frame rate overlay',
+      'Regenerate project thumbnails',
       'Export diagnostics',
       'Export interaction log',
       'Geometry kernel',
@@ -360,6 +361,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Reset application settings'
     ],
     searchTerms: [
+      'thumbnails',
+      'previews',
+      'project cards',
+      'missing picture',
       'STEP',
       'STL',
       '3MF',
