@@ -131,21 +131,25 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
       `${E}/view-states/view_1`,
       `${E}/blobs/uploads`
     ].map((path) => [path, 'none'] as const),
-  [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(?:share-links(?:\/.*)?|mls\/proposals|invitations|key-packages(?:\/claim)?)$/`]:
+  [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(?:share-links(?:\/.*)?|mls\/proposals|invitations(?:\/[^/]+\/acceptance)?|key-packages(?:\/claim)?)$/`]:
     [
       `${E}/share-links/link_1/keys`,
       `${E}/mls/proposals`,
       `${E}/invitations`,
+      `${E}/invitations/inv_1/acceptance`,
       `${E}/key-packages/claim`
     ].map((path) => [path, 'none'] as const),
   [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(document|versions|revisions|revisions\/[^/]+|info)$/`]:
     [`${E}/document`, `${E}/revisions`, `${E}/info`].map(
       (path) => [path, 'none'] as const
     ),
-  [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(invitations|invitations\/[^/]+|key-packages|key-packages\/claim|welcome)$/`]:
-    [`${E}/invitations/inv_1`, `${E}/key-packages`, `${E}/welcome`].map(
-      (path) => [path, 'none'] as const
-    ),
+  [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(invitations|invitations\/[^/]+|invitations\/[^/]+\/acceptance|key-packages|key-packages\/claim|welcome)$/`]:
+    [
+      `${E}/invitations/inv_1`,
+      `${E}/invitations/inv_1/acceptance`,
+      `${E}/key-packages`,
+      `${E}/welcome`
+    ].map((path) => [path, 'none'] as const),
   [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(measurements|view-states|view-states\/[^/]+)$/`]:
     [`${E}/measurements`, `${E}/view-states`].map(
       (path) => [path, 'none'] as const
