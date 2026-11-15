@@ -1479,6 +1479,18 @@ export function SketchToolRail({
             <label>
               <input
                 type="checkbox"
+                checked={settings.autoConstrain}
+                onChange={(event) =>
+                  patchSettings({
+                    autoConstrain: event.currentTarget.checked
+                  })
+                }
+              />
+              Auto-constrain
+            </label>
+            <label>
+              <input
+                type="checkbox"
                 checked={settings.snapEnabled}
                 onChange={(event) =>
                   patchSettings({

@@ -4863,6 +4863,12 @@ export interface AppSettings {
     geometrySnapEnabled: boolean;
     /** Offer temporary horizontal/vertical relations while drawing. */
     inferenceEnabled: boolean;
+    /**
+     * S08: keep what a drawn entity's placement satisfies as relations
+     * (horizontal/vertical, perpendicular, tangent, coincident). Off keeps
+     * only connected endpoints and midpoints.
+     */
+    autoConstrain: boolean;
     linearSnap: number;
     angleSnap: number;
     /** Screen-space radius used for sketch snap candidates. */
@@ -5018,6 +5024,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     snapEnabled: true,
     geometrySnapEnabled: true,
     inferenceEnabled: true,
+    autoConstrain: false,
     linearSnap: 1,
     angleSnap: 15,
     snapTolerancePx: 10,

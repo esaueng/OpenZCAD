@@ -367,6 +367,7 @@ import {
   type UnreferencedSnap
 } from './lib/sketch/session';
 import type { CompositeShape } from './lib/sketch/composites';
+import type { SketchSnapHint } from './lib/sketch/inference';
 import { resolvedSketchPlaneBasis } from './lib/sketch/planeBasis';
 import { sketchEntityEditTarget } from './lib/sketch/editTarget';
 import {
@@ -3312,6 +3313,14 @@ export function App() {
     featureId: string | undefined;
   } | null>(null);
   const [sketchConstruction, setSketchConstruction] = useState(false);
+  /**
+   * S08: the relations the latest drawing commit inferred. Their glyphs are
+   * drawn even when relation glyphs show only the selection's, so nothing a
+   * commit adds is out of sight; the next commit or leaving the sketch
+   * replaces them.
+   */
+  const [recentInferredConstraintIds, setRecentInferredConstraintIds] =
+    useState<readonly string[]>([]);
   /** When a first Escape armed leaving the sketch (I43), or null. */
   const sketchExitArmedAtRef = useRef<number | null>(null);
   /**
@@ -20758,9 +20767,149 @@ export function App() {
     }
   }, [interaction, projectionRepair]);
 
+  /**
+   * S08: drawing commits run one at a time, in order, each against the
+   * document the previous one left: the next segment of a chain is joined to
+   * the segment before it, which a settle solve may still be committing.
+   */
+  const sketchDrawQueueRef = useRef<Promise<void>>(Promise.resolve());
+  /**
+   * The sketch a drawing commit just started, until the session learns its
+   * id: a queued second segment lands in it instead of starting another.
+   */
+  const startedSketchRef = useRef<{
+    plane: unknown;
+    sketchId: SketchId;
+  } | null>(null);
+
+  function queueDrawnEntity(
+    drawn: Parameters<
+      typeof import('./lib/sketch/inferenceCommit').drawnEntityCommands
+    >[0],
+    hints: SketchSnapHint[] | undefined
+  ) {
+    setSketchDiagnosticPoints([]);
+    const next = sketchDrawQueueRef.current
+      .then(() => commitDrawnEntity(drawn, hints))
+      .catch((error: unknown) => {
+        setStatus(errorMessage(error, 'The sketch entity could not be added.'));
+      });
+    sketchDrawQueueRef.current = next;
+  }
+
+  /**
+   * Commits a drawn entity with the relations its placement satisfies
+   * (S08), in one undo step. Optional relations are kept only where a solve
+   * says they add rank, so inference never makes a sketch redundant; every
+   * kept relation is named on the status line and its glyph is shown.
+   */
+  async function commitDrawnEntity(
+    drawn: Parameters<
+      typeof import('./lib/sketch/inferenceCommit').drawnEntityCommands
+    >[0],
+    hints: SketchSnapHint[] | undefined
+  ) {
+    const current = interactionRef.current;
+    const manager = managerRef.current;
+    const base = manager?.document;
+    if (current.mode !== 'sketch' || !manager || !base) return;
+    const session = current.session;
+    const started = startedSketchRef.current;
+    const sketchId =
+      (session.sketchId as SketchId | null) ??
+      (started &&
+      started.plane === session.plane &&
+      findSketch(base, started.sketchId)
+        ? started.sketchId
+        : null);
+    const sketch = sketchId ? findSketch(base, sketchId) : null;
+    const name = `Sketch ${String(sketchOptions.length + 1).padStart(2, '0')}`;
+    const settings = appSettingsRef.current.sketching;
+    const [
+      { drawnEntityCommands, addedConstraintIds },
+      { describeInferredRelations },
+      { settleOptionalRelations }
+    ] = await Promise.all([
+      import('./lib/sketch/inferenceCommit'),
+      import('./lib/sketch/inference'),
+      import('./lib/sketch/modify')
+    ]);
+    const resolve = sketchValueResolver(parameterScope.scope, base.units);
+    const existing = (sketch?.objectIds ?? []).flatMap((id) => {
+      const node = ownEntry(base.nodes, id);
+      return node?.kind === 'sketch-object'
+        ? [{ id: String(id), data: node.data }]
+        : [];
+    });
+    const plan = drawnEntityCommands(
+      drawn,
+      sketchId
+        ? { kind: 'sketch', sketchId }
+        : { kind: 'new-sketch', name, planeRef: session.plane },
+      existing,
+      {
+        autoConstrain: settings.autoConstrain,
+        hints,
+        resolve,
+        construction: sketchConstruction
+      }
+    );
+    const commands =
+      plan.optional.length === 0
+        ? plan.commands
+        : await settleOptionalRelations(
+            base,
+            plan.sketchId,
+            plan.commands,
+            plan.optional,
+            (document, id) => geometry.solveSketch(document, id)
+          );
+    // Another project took over while the relations were settled: what was
+    // drawn belonged to the one that left.
+    if (managerRef.current !== manager) return;
+    if (manager.document.version !== base.version) {
+      // Something else changed the document meanwhile: plan again against
+      // what is there now.
+      await commitDrawnEntity(drawn, hints);
+      return;
+    }
+    if (!executeTransaction(plan.label, commands)) return;
+    const inferred = commands.flatMap((command) => {
+      const kind = plan.kinds.get(command);
+      return kind ? [kind] : [];
+    });
+    setRecentInferredConstraintIds(
+      addedConstraintIds(commands.filter((command) => plan.kinds.has(command)))
+    );
+    if (!sketchId) {
+      startedSketchRef.current = {
+        plane: session.plane,
+        sketchId: plan.sketchId
+      };
+      dispatchInteraction({ type: 'sketch-created', sketchId: plan.sketchId });
+      setStatus(describeInferredRelations(`${name} started`, inferred));
+      return;
+    }
+    if (inferred.length > 0) {
+      setStatus(
+        describeInferredRelations(
+          commandOutcomeMessage(plan.label).replace(/\.$/, ''),
+          inferred
+        )
+      );
+    }
+  }
+
   /** A drawing gesture finished: commit the entity as a real command. */
-  function handleSketchCommit(object: SketchObjectData) {
+  function handleSketchCommit(
+    object: SketchObjectData,
+    hints?: SketchSnapHint[]
+  ) {
     if (interaction.mode !== 'sketch') {
+      return;
+    }
+    if (object.objectKind !== 'text') {
+      queueDrawnEntity({ kind: 'object', data: object }, hints);
       return;
     }
     setSketchDiagnosticPoints([]);
@@ -21050,32 +21199,14 @@ export function App() {
    * hold them and the record that names them commit as one transaction
    * (S04), so one undo removes the whole shape.
    */
-  async function handleSketchCommitComposite(shape: CompositeShape) {
+  function handleSketchCommitComposite(
+    shape: CompositeShape,
+    hints?: SketchSnapHint[]
+  ) {
     if (interaction.mode !== 'sketch') {
       return;
     }
-    setSketchDiagnosticPoints([]);
-    const session = interaction.session;
-    const construction = sketchConstruction;
-    const name = `Sketch ${String(sketchOptions.length + 1).padStart(2, '0')}`;
-    const { compositeCommands } = await import('./lib/sketch/composites');
-    const commit = compositeCommands(
-      shape,
-      session.sketchId
-        ? { kind: 'sketch', sketchId: session.sketchId as SketchId }
-        : { kind: 'new-sketch', name, planeRef: session.plane },
-      { construction }
-    );
-    if (!executeTransaction(commit.label, commit.commands)) {
-      return;
-    }
-    if (!session.sketchId) {
-      dispatchInteraction({
-        type: 'sketch-created',
-        sketchId: commit.sketchId
-      });
-      setStatus(`${name} started.`);
-    }
+    queueDrawnEntity({ kind: 'composite', shape }, hints);
   }
 
   function showProfileDiagnostics() {
@@ -21757,6 +21888,8 @@ export function App() {
     if (interaction.mode !== 'sketch') {
       // A first Escape armed in one sketch never confirms leaving the next.
       sketchExitArmedAtRef.current = null;
+      startedSketchRef.current = null;
+      setRecentInferredConstraintIds([]);
       setSketchSolveStatus(null);
       setSketchSolving(false);
       setSketchDimensionDraft(null);
@@ -21792,6 +21925,7 @@ export function App() {
               selectedObjectId: sketchModeState.selectedObjectId,
               selectedConstraintId: selectedSketchConstraintId,
               hiddenKinds: new Set(appSettings.sketching.hiddenRelationGlyphs),
+              alsoShownConstraintIds: new Set(recentInferredConstraintIds),
               conflictingConstraintIds: new Set(
                 sketchSolveStatus?.conflictingConstraintIds ?? []
               )
@@ -21806,7 +21940,8 @@ export function App() {
       appSettings.sketching.relationGlyphs,
       appSettings.sketching.hiddenRelationGlyphs,
       selectedSketchConstraintId,
-      sketchSolveStatus
+      sketchSolveStatus,
+      recentInferredConstraintIds
     ]
   );
   // A relation is picked from its glyph, so the pick lasts only while that
@@ -34237,9 +34372,7 @@ export function App() {
             sketchMode={modelingLocked ? null : sketchModeForViewer}
             sketchTextAnchorRef={sketchTextAnchorRef}
             onSketchCommit={handleSketchCommit}
-            onSketchCommitComposite={(shape) => {
-              void handleSketchCommitComposite(shape);
-            }}
+            onSketchCommitComposite={handleSketchCommitComposite}
             onEditSketchDimension={handleEditSketchDimension}
             onMoveSketchDimension={handleMoveSketchDimension}
             onSelectSketchConstraint={handleSelectSketchConstraint}

@@ -691,6 +691,8 @@ export type SnapTargetKind =
   | 'quadrant'
   | 'horizontal'
   | 'vertical'
+  | 'perpendicular'
+  | 'tangent'
   | 'grid';
 
 export interface SnapTarget extends SketchPoint {
@@ -698,6 +700,8 @@ export interface SnapTarget extends SketchPoint {
   /** Stable within one evaluated sketch; used by hysteresis and Tab cycling. */
   id?: string;
   sourceId?: string;
+  /** The two objects an intersection lies on (S08 holds the point on both). */
+  sourceIds?: readonly [string, string];
   /**
    * The constraint-schema name of this snap point on its source object, set
    * only where `SketchPointRef` has one (line/arc start and end, circle and
@@ -733,6 +737,8 @@ export const SKETCH_SNAP_PRIORITY: Record<SnapTargetKind, number> = {
   quadrant: 5,
   horizontal: 6,
   vertical: 6,
+  perpendicular: 6,
+  tangent: 6,
   grid: 7
 };
 
@@ -745,6 +751,8 @@ export const SKETCH_SNAP_LABELS: Record<SnapTargetKind, string> = {
   quadrant: 'Quadrant',
   horizontal: 'Horizontal',
   vertical: 'Vertical',
+  perpendicular: 'Perpendicular',
+  tangent: 'Tangent',
   grid: 'Grid'
 };
 
@@ -757,6 +765,8 @@ export const SKETCH_SNAP_GLYPHS: Record<SnapTargetKind, string> = {
   quadrant: '◇',
   horizontal: '—',
   vertical: '|',
+  perpendicular: '⊥',
+  tangent: '⌒',
   grid: '•'
 };
 
@@ -1085,7 +1095,11 @@ export function collectSketchSnapTargets(
           {
             id: `intersection:${segments[first]!.id}:${segments[second]!.id}`,
             ...point,
-            kind: 'intersection'
+            kind: 'intersection',
+            sourceIds: [
+              segments[first]!.id.split(':')[0]!,
+              segments[second]!.id.split(':')[0]!
+            ]
           }
         ]);
       }
