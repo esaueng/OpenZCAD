@@ -29,6 +29,7 @@ import { AdapterRefusal } from './adapter-refusal';
 import { exactBooleanOutcome, exactFuseAll } from './exact-boolean-refusal';
 import { analyzeUnionConnectivity, type UnionBounds } from './union-connectivity';
 import type { ExactShape } from './exact-types';
+import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import {
   DIRECT_EDIT_TOLERANCE,
   GEOMETRY_EPSILON,
@@ -1005,7 +1006,12 @@ function locateAmong(
   return { total, key: enclosing.join(','), clearance };
 }
 
-/** Clearance a lump witness keeps from every face, per unit of lump size. */
+/**
+ * Clearance a lump witness keeps from every face, per unit of the lump's
+ * THINNEST box span — not its diagonal, which on a 1 m plate 0.001 mm thick
+ * demanded more clearance than half the plate's thickness allows. Floored at
+ * the geometry's linear tolerance so it never reaches zero.
+ */
 const LUMP_WITNESS_CLEARANCE_RATIO = 1e-6;
 
 /** Candidate points a small step inside each planar face of `faces`. */
@@ -1071,9 +1077,9 @@ function planarStepCandidates(
  * that this component alone encloses with winding +1 witnesses its lump; a
  * point it winds −1 shows it is a cavity. A witness must also clear every
  * triangle of the solid by {@link LUMP_WITNESS_CLEARANCE_RATIO} of the
- * lump's size, so it is never a point that merely grazes a face (a grid
- * point 2e-17 off a cavity wall classified inside, then could not be located
- * against the fuse).
+ * lump's thinnest span, and never less than the linear tolerance, so it is
+ * never a point that merely grazes a face (a grid point 2e-17 off a cavity
+ * wall classified inside, then could not be located against the fuse).
  */
 function lumpWitnesses(
   kernel: RemusKernel,
@@ -1098,8 +1104,15 @@ function lumpWitnesses(
       high[1]! - low[1]!,
       high[2]! - low[2]!
     );
+    const clearance = Math.max(
+      Math.min(high[0]! - low[0]!, high[1]! - low[1]!, high[2]! - low[2]!) *
+        LUMP_WITNESS_CLEARANCE_RATIO,
+      GEOMETRY_LINEAR_TOLERANCE
+    );
+    // The classifier's band stays inside the witness's own clearance: a
+    // band of 1e-7 of a 1 m plate's diagonal is wider than a 0.0001 mm plate.
     const tolerance = Math.max(
-      extent * EXTENT_TOLERANCE_RATIO,
+      Math.min(extent * EXTENT_TOLERANCE_RATIO, clearance),
       Number.MIN_VALUE
     );
     const candidates: [number, number, number][] = [];
@@ -1126,7 +1139,7 @@ function lumpWitnesses(
       if (
         located.total === 1 &&
         located.key === `${index}:1` &&
-        located.clearance > extent * LUMP_WITNESS_CLEARANCE_RATIO &&
+        located.clearance > clearance &&
         insideExactly(kernel, solid, point, tolerance)
       ) {
         witnesses.push({ point, tolerance });

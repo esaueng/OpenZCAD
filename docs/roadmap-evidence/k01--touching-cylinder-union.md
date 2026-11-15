@@ -35,6 +35,7 @@ overlapping bosses on a flange in all six operand orders, hub-on-flange at 0,
 1e5 and 1e7, cavity bodies, injected material-dropping repairs, twelve pins
 past the repair cap, a hub beside one or eleven separate thin tubes, thin-wall
 tubes on a flange, a no-contact union that tessellates nothing, compound
-operands with separate contact regions, cubes sharing only a vertex, and a pattern
+operands with separate contact regions, cubes sharing only a vertex, a block
+on a 0.001 or 0.0001 mm plate in a compound body, and a pattern
 ×4/×8 bolt-circle subtract about the world and bore axes. Open: the upstream
 fixes for remus#1738 and remus#1742, then retire `fuseAllMergingFaceContacts`.

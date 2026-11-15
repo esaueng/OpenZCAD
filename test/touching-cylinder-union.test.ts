@@ -723,6 +723,37 @@ describe('certifying each contact group on its own', () => {
     expect(faceComponentsOf(kernel, result)).toHaveLength(2);
   });
 
+  it.each([0.001, 0.0001])(
+    'unites a block resting on a %s mm plate held in a compound body',
+    (thickness) => {
+      const kernel = new RemusKernel();
+      // A 1 m × 1 m plate compounded with a separate 1 mm cube, and a block
+      // resting on the plate. Before: a witness had to clear every face by
+      // 1e-6 of the plate's DIAGONAL (≈ 0.0014 mm), more than half the
+      // plate's thickness, so the plate had no witness and the union was
+      // refused.
+      const operands = () => [
+        kernel.fuseAll(
+          Uint32Array.from([
+            kernel.makeBox(1000, 1000, thickness),
+            lifted(kernel, kernel.makeBox(1, 1, 1), 2000, 0)
+          ])
+        ),
+        lifted(kernel, kernel.makeBox(10, 10, 1), 100, thickness, 100)
+      ];
+      const plain = kernel.fuseAll(Uint32Array.from(operands()));
+      const result = fuseAllMergingFaceContacts(kernel, operands());
+      expect(kernel.volume(result, 0.01)).toBeCloseTo(
+        1000 * 1000 * thickness + 1 + 100,
+        6
+      );
+      expect(kernel.getSolidFaces(result)).toHaveLength(
+        kernel.getSolidFaces(plain).length
+      );
+      expect(faceComponentsOf(kernel, result)).toHaveLength(2);
+    }
+  );
+
   it('leaves cubes that share only a vertex exactly as fuseAll makes them', () => {
     const kernel = new RemusKernel();
     // A shared vertex cannot hold an internal wall. Before: distance 0 made
