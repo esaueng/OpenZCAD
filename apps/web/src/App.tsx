@@ -1176,9 +1176,16 @@ const InPlaceCommandBar = preloadableSlot(
 // The in-place Extrude bar (region extrude and editing a stored extrude).
 // It shares the command bar's chunk, so loading it on demand is what lets the
 // bar above leave the entry chunk at all. Warmed with the keypad as soon as a
-// sketch or command is up, and with the idle warm-up; a distance the region's
-// arrow sets before a cold load finishes is held for it (see the slot).
-const ExtrudeCommand = extrudeCommandSlot();
+// sketch or command is up, and with the idle warm-up. Until it is ready the
+// region offers nothing the bar would have to answer (`extrudeBarReady`).
+const ExtrudeCommand = preloadableSlot(
+  'Extrude',
+  () =>
+    import('./components/ExtrudeCommand').then((module) => ({
+      default: module.ExtrudeCommand
+    })),
+  { pending: <WorkspacePending /> }
+);
 
 const LazyViewerShell = preloadableLazy(() =>
   import('./components/ViewerShell').then((module) => ({
@@ -1976,7 +1983,6 @@ const AssemblyPlayer = createAssemblyPlayer(() =>
   }))
 );
 import { createAssemblyPlayer } from './components/assembly/AssemblyPlayerSlot';
-import { extrudeCommandSlot } from './components/ExtrudeCommandSlot';
 import { preloadableSlot } from './components/PreloadableSlot';
 import {
   assembleKeyFor,
@@ -4334,7 +4340,12 @@ export function App() {
       }
     })
   ).current;
-  useEffect(() => () => exactEntryQueue.cancel(), [exactEntryQueue]);
+  useEffect(
+    () => () => {
+      exactEntryQueue.cancel();
+    },
+    [exactEntryQueue]
+  );
   useEffect(
     () => () => {
       ++parameterEditRequest.current;
@@ -8491,6 +8502,29 @@ export function App() {
       doc && extrudeEdit ? findFeature(doc, extrudeEdit.featureId) : null;
     return feature?.data.featureKind === 'extrude' ? feature : null;
   }, [doc, extrudeEdit]);
+  // The in-place Extrude's bar loads on demand. Until it is there, a picked
+  // region shows no arrow, chip or handle: a drag, a chip tap or a handle
+  // has no bar to set yet, and holding one for it could reach the wrong
+  // region. Typed entry waits on the arrow as it always has (the deferred
+  // exact entry retries), and Escape closes that waiting entry first.
+  const [extrudeBarArrived, setExtrudeBarArrived] = useState(false);
+  const extrudeBarReady = extrudeBarArrived || ExtrudeCommand.isLoaded();
+  const extrudeBarWanted =
+    interaction.mode === 'region' || extrudeEditFeature !== null;
+  useEffect(() => {
+    if (extrudeBarReady || !extrudeBarWanted) return;
+    let current = true;
+    ExtrudeCommand.preload().then(
+      () => {
+        if (current) setExtrudeBarArrived(true);
+      },
+      // The bar's own slot says it did not load; the region stays bare.
+      () => undefined
+    );
+    return () => {
+      current = false;
+    };
+  }, [extrudeBarReady, extrudeBarWanted]);
   /** What it opens on: memoized, so its to-face target keeps its identity. */
   const extrudeEditInitialDraft = useMemo(
     () => (extrudeEditFeature ? extrudeEditInitial(extrudeEditFeature) : null),
@@ -24243,7 +24277,7 @@ export function App() {
   const regionExtrudeLastValue =
     interaction.mode === 'region' ? (interaction.lastValue ?? 0) : 0;
   const regionExtrudeHandles = useMemo(() => {
-    if (inPlace.active) return [];
+    if (inPlace.active || !extrudeBarReady) return [];
     // An edit's region is its stored profile (the sketch's first region for
     // one stored before profiles); a new extrude's, the one its arrow is on.
     const edited =
@@ -24336,6 +24370,7 @@ export function App() {
     regionExtrudeState,
     extrudeEditFeature,
     inPlace.active,
+    extrudeBarReady,
     availableSketchViews,
     inPlaceUnits
   ]);
@@ -30359,7 +30394,17 @@ export function App() {
       if (!doc) {
         return;
       }
-      if (event.key === 'Escape') exactEntryQueue.cancel();
+      // An exact entry still waiting for its arrow (the Extrude bar loading)
+      // is the entry Escape closes first, as an open one is: the armed
+      // region stays.
+      if (
+        event.key === 'Escape' &&
+        exactEntryQueue.cancel() &&
+        interaction.mode === 'region'
+      ) {
+        event.preventDefault();
+        return;
+      }
       // Hide all keeps the layout; the panels are Build's, so View and
       // Tweak leave it as it is.
       if (global === 'panels-hide-all') {
@@ -33861,7 +33906,9 @@ export function App() {
             }
             onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
-            regionHandle={modelingLocked ? null : regionHandleTarget}
+            regionHandle={
+              modelingLocked || !extrudeBarReady ? null : regionHandleTarget
+            }
             modelPanelsHidden={panelsHidden}
             axisPicker={modelingLocked ? null : inPlaceAxisPicker}
             onPickAxis={inPlace.pickAxis}
