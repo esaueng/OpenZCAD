@@ -11,7 +11,13 @@ import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import { describeProject } from '../lib/projectProperties';
 import { DEMO_DEFINITIONS } from '../lib/demoDefinitions';
+import {
+  CUTE_PART_ADJECTIVES,
+  CUTE_PART_ANIMALS,
+  isCutePartName
+} from '../lib/cutePartName';
 import type { ComponentProps } from 'react';
+import { StrictMode } from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   PROJECT_STORAGE_FORMAT_E2EE_V1,
@@ -649,6 +655,96 @@ describe('StartScreen library discovery', () => {
     fireEvent.focus(field);
     expect(field.selectionEnd).toBe(suggestion.length);
     expect(field.selectionStart).toBe(0);
+  });
+
+  it('suggests a fresh name on reload but keeps the units', () => {
+    // 15 Nov 2026: a reload restored the same suggestion every time. Every
+    // draw lands on the earlier suggestion, which is avoided all the same.
+    const gentle = CUTE_PART_ADJECTIVES.indexOf('Gentle');
+    const panda = CUTE_PART_ANIMALS.indexOf('Panda');
+    let draw = 0;
+    const getRandomValues = vi
+      .spyOn(globalThis.crypto, 'getRandomValues')
+      .mockImplementation(<T extends ArrayBufferView | null>(array: T): T => {
+        if (array instanceof Uint32Array) {
+          array[0] = draw % 2 === 0 ? gentle : panda;
+          draw += 1;
+        }
+        return array;
+      });
+    try {
+      // A draft from an earlier page load.
+      sessionStorage.setItem(
+        'openzcad.start.draft',
+        JSON.stringify({
+          name: 'Gentle Panda',
+          units: 'inch',
+          suggested: true,
+          page: 'an-earlier-load'
+        })
+      );
+      renderStartScreen({ projects: [] });
+      const field = screen.getByLabelText<HTMLInputElement>('Project name');
+      expect(field).not.toHaveValue('Gentle Panda');
+      expect(isCutePartName(field.value)).toBe(true);
+      expect(screen.getByLabelText('Units')).toHaveValue('inch');
+    } finally {
+      getRandomValues.mockRestore();
+    }
+  });
+
+  it('keeps the suggestion across a StrictMode remount', () => {
+    // StrictMode runs state initialisers twice; the kept suggestion has to
+    // be the one the draft records.
+    const first = render(
+      <StrictMode>
+        <StartScreen {...startScreenProps({ projects: [] })} />
+      </StrictMode>
+    );
+    const suggestion =
+      screen.getByLabelText<HTMLInputElement>('Project name').value;
+    first.unmount();
+    render(
+      <StrictMode>
+        <StartScreen {...startScreenProps({ projects: [] })} />
+      </StrictMode>
+    );
+    expect(screen.getByLabelText('Project name')).toHaveValue(suggestion);
+  });
+
+  it('moves a suggestion off a name the library turns out to use', () => {
+    const getRandomValues = vi
+      .spyOn(globalThis.crypto, 'getRandomValues')
+      .mockImplementation(<T extends ArrayBufferView | null>(array: T): T => {
+        if (array instanceof Uint32Array) array[0] = 0;
+        return array;
+      });
+    try {
+      // Every draw lands on the first pair until the library says it is
+      // taken; the suggestion then walks to a free one. The field has focus
+      // meanwhile, and the replacement stays selected for typing over.
+      const { rerender } = renderStartScreen({ projects: [] });
+      const field = screen.getByLabelText<HTMLInputElement>('Project name');
+      const first = field.value;
+      field.focus();
+      fireEvent.focus(field);
+      rerender(
+        <StartScreen
+          {...startScreenProps({
+            projects: [{ ...localProject, name: first.toUpperCase() }]
+          })}
+        />
+      );
+      expect(field.value).not.toBe(first);
+      expect(isCutePartName(field.value)).toBe(true);
+      expect(field.selectionStart).toBe(0);
+      expect(field.selectionEnd).toBe(field.value.length);
+      expect(
+        screen.queryByText(/You already have a project called/)
+      ).toBeNull();
+    } finally {
+      getRandomValues.mockRestore();
+    }
   });
 
   it('restores the unfinished project name and units on reload without adopting a later default', () => {

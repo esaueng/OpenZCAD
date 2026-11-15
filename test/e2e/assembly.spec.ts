@@ -201,8 +201,8 @@ test(
     await assemble(page);
     const bom = panel(page).getByRole('region', { name: 'Bill of materials' });
     await expect(bom.getByRole('listitem')).toHaveText([
-      'Blade A×2',
-      'Blade BMissing×1'
+      '1Blade A×2',
+      '2Blade BMissing×1'
     ]);
     const pending = page.waitForEvent('download');
     await bom
@@ -397,9 +397,9 @@ test(
     // AS03: the bill of materials lists the new part and exports as CSV.
     const bom = panel(page).getByRole('region', { name: 'Bill of materials' });
     await expect(bom.getByRole('listitem')).toHaveText([
-      'Blade A×1',
-      'Blade B×1',
-      'Pivot screw×1'
+      '1Blade A×1',
+      '2Blade B×1',
+      '3Pivot screw×1'
     ]);
     const pending = page.waitForEvent('download');
     await bom

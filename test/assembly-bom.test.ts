@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
+  ASSEMBLY_BOM_COLUMNS,
   ASSEMBLY_BOM_CSV_HEADER,
   addAssemblyComponents,
+  assemblyBomTable,
   assemblyBomToCsv,
   createProjectDocument,
   deriveAssemblyBom,
@@ -479,5 +481,175 @@ describe('deriveAssemblyBom (AS03)', () => {
       '1,2,"Bolt, M3 ""short""",Bolt 1; Bolt 2,body_1,ready',
       `2,1,"'=HYPERLINK(""x"")",'-Spacer,body_2,ready`
     ]);
+  });
+});
+
+describe('assemblyBomTable (AS03)', () => {
+  /** Plate, then two pins that are one part, then a bracket. */
+  function rig() {
+    const {
+      manager,
+      ids: [plate, pin, bracket]
+    } = bodies(['Plate', 'Pin', 'Bracket']);
+    const copy = copyPart(manager, pin!);
+    manager.execute(
+      commandFactories.addAssemblyComponents({
+        components: [
+          {
+            componentId: 'c_plate',
+            name: 'Base',
+            bodyId: plate!,
+            grounded: true
+          },
+          {
+            componentId: 'c_pin_1',
+            name: 'Pin 1',
+            bodyId: pin!,
+            grounded: false
+          },
+          {
+            componentId: 'c_bracket',
+            name: 'Arm',
+            bodyId: bracket!,
+            grounded: false
+          },
+          {
+            componentId: 'c_pin_2',
+            name: 'Pin 2',
+            bodyId: copy,
+            grounded: false
+          }
+        ]
+      })
+    );
+    return { manager, plate: plate!, pin: pin!, bracket: bracket! };
+  }
+
+  it('gives every reader the same columns, cells and item numbers', () => {
+    const { manager, plate, pin, bracket } = rig();
+    const bom = deriveAssemblyBom(manager.document, allLive);
+    const table = assemblyBomTable(bom);
+    expect(table.columns).toBe(ASSEMBLY_BOM_COLUMNS);
+    expect(table.columns.map((column) => column.key).join(',')).toBe(
+      ASSEMBLY_BOM_CSV_HEADER
+    );
+    expect(table.columns.filter((c) => c.numeric).map((c) => c.key)).toEqual([
+      'item',
+      'quantity'
+    ]);
+    expect(table.rows).toEqual([
+      {
+        item: 1,
+        status: 'ready',
+        componentIds: ['c_plate'],
+        cells: {
+          item: '1',
+          quantity: '1',
+          part: 'Plate Body',
+          instances: 'Base',
+          source_body: plate,
+          status: 'ready'
+        }
+      },
+      {
+        item: 2,
+        status: 'ready',
+        componentIds: ['c_pin_1', 'c_pin_2'],
+        cells: {
+          item: '2',
+          quantity: '2',
+          part: 'Pin Body',
+          instances: 'Pin 1; Pin 2',
+          source_body: pin,
+          status: 'ready'
+        }
+      },
+      {
+        item: 3,
+        status: 'ready',
+        componentIds: ['c_bracket'],
+        cells: {
+          item: '3',
+          quantity: '1',
+          part: 'Bracket Body',
+          instances: 'Arm',
+          source_body: bracket,
+          status: 'ready'
+        }
+      }
+    ]);
+    expect(table.totalQuantity).toBe(4);
+    // A balloon on any instance reads its row's number.
+    expect([...table.itemByComponent]).toEqual([
+      ['c_plate', 1],
+      ['c_pin_1', 2],
+      ['c_pin_2', 2],
+      ['c_bracket', 3]
+    ]);
+    // The CSV is the table, byte for byte the same as from the rows.
+    expect(assemblyBomToCsv(table)).toBe(assemblyBomToCsv(bom));
+  });
+
+  it('does not change when parts are posed, and is identical after save and reopen', () => {
+    const { manager } = rig();
+    manager.execute(
+      commandFactories.addAssemblyJoint({
+        joint: {
+          id: 'joint_arm',
+          name: 'Arm hinge',
+          kind: 'revolute',
+          parent: {
+            componentId: 'c_plate',
+            frame: {
+              origin: { x: 0, y: 0, z: 0 },
+              zAxis: { x: 0, y: 0, z: 1 },
+              xAxis: { x: 1, y: 0, z: 0 }
+            }
+          },
+          child: {
+            componentId: 'c_bracket',
+            frame: {
+              origin: { x: 0, y: 0, z: 0 },
+              zAxis: { x: 0, y: 0, z: 1 },
+              xAxis: { x: 1, y: 0, z: 0 }
+            }
+          },
+          values: [0],
+          limits: [null]
+        }
+      })
+    );
+    const before = assemblyBomTable(
+      deriveAssemblyBom(manager.document, allLive)
+    );
+    manager.execute(
+      commandFactories.setAssemblyPose({ values: { joint_arm: [70] } })
+    );
+    const posed = assemblyBomTable(
+      deriveAssemblyBom(manager.document, allLive)
+    );
+    expect(posed).toEqual(before);
+    const reopened = normalizeDocument(
+      JSON.parse(JSON.stringify(manager.document)) as ProjectDocument
+    );
+    const again = assemblyBomTable(deriveAssemblyBom(reopened, allLive));
+    expect(again).toEqual(before);
+    expect(assemblyBomToCsv(again)).toBe(assemblyBomToCsv(before));
+  });
+
+  it('keeps a missing part numbered in place, so later item numbers do not shift', () => {
+    const { manager, plate } = rig();
+    const table = assemblyBomTable(
+      deriveAssemblyBom(manager.document, (bodyId) => bodyId !== plate)
+    );
+    // The base plate's body is gone: its row stays, marked, at item 1.
+    expect(
+      table.rows.map((row) => [row.item, row.status, row.componentIds])
+    ).toEqual([
+      [1, 'missing', ['c_plate']],
+      [2, 'ready', ['c_pin_1', 'c_pin_2']],
+      [3, 'ready', ['c_bracket']]
+    ]);
+    expect(table.itemByComponent.get('c_bracket')).toBe(3);
   });
 });
