@@ -276,9 +276,17 @@ function largestFirst(a: number | undefined, b: number | undefined): number {
   return b - a;
 }
 
-/** The size the list shows for a project: none for one this build cannot open. */
+/**
+ * The size the list shows for a project: none for one this build cannot open,
+ * or for a figure that is not a number of bytes (the column shows a dash).
+ */
 function shownBytes(project: ProjectSummary): number | undefined {
-  return projectNeedsUpdate(project) ? undefined : project.documentBytes;
+  const bytes = project.documentBytes;
+  return projectNeedsUpdate(project) ||
+    bytes === undefined ||
+    !Number.isFinite(bytes)
+    ? undefined
+    : bytes;
 }
 type ShelfLayout = 'grid' | 'list';
 
@@ -1101,6 +1109,11 @@ export function StartScreen({
     ...looseProjects.map((project) => project.projectId)
   ];
   const folderById = new Map(folders.map((folder) => [folder.id, folder]));
+  // An open folder's members as shown. A move starts from the order on
+  // screen: from the stored order, under a sort, Alt+Right on the last card
+  // shown did nothing because it was first in storage. Reordering needs the
+  // whole shelf (no search or filter), so these are all its members.
+  const shownMemberIds = matchingProjects.map((project) => project.projectId);
 
   /**
    * Saves a new order of the tiles on screen, and the tile a drag took into
@@ -1201,9 +1214,7 @@ export function StartScreen({
   }
 
   const reorder = useTileReorder({
-    ids: openFolder
-      ? baseProjects.map((project) => project.projectId)
-      : reorderIds,
+    ids: openFolder ? shownMemberIds : reorderIds,
     enabled: canReorder,
     tileRefs,
     // Pinned projects and folders head the shelf as their own group: dragging
@@ -1291,9 +1302,7 @@ export function StartScreen({
 
   /** Alt and an arrow key move the focused card one place among its kind. */
   function nudge(id: string, offset: number) {
-    const ids = openFolder
-      ? baseProjects.map((project) => project.projectId)
-      : reorderIds;
+    const ids = openFolder ? shownMemberIds : reorderIds;
     const kind = ids.filter(
       (entry) => Boolean(folderIdOf(entry)) === Boolean(folderIdOf(id))
     );
@@ -1721,9 +1730,9 @@ export function StartScreen({
     if (members.length === 0) return undefined;
     let total = 0;
     for (const member of members) {
-      if (projectNeedsUpdate(member) || member.documentBytes === undefined)
-        return undefined;
-      total += member.documentBytes;
+      const bytes = shownBytes(member);
+      if (bytes === undefined) return undefined;
+      total += bytes;
     }
     return total;
   }

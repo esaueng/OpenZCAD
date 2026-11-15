@@ -1631,6 +1631,57 @@ describe('StartScreen folders and selection', () => {
     expect(names()).toEqual(['Zulu big', 'Alpha small', 'Middle unsized']);
   });
 
+  // Review of #1526: inside a sorted folder a move started from the stored
+  // order, so Alt+Right on the last card shown did nothing.
+  it('moves a card inside a sorted folder from the order on screen', () => {
+    seedFolder(parts.slice(0, 3).map((part) => part.projectId));
+    renderStartScreen({
+      projects: parts.map((part, index) => ({
+        ...part,
+        documentBytes: 100 * (index + 1)
+      }))
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open folder Fixtures, 3 projects' })
+    );
+    fireEvent.change(screen.getByLabelText('Sort projects'), {
+      target: { value: 'size' }
+    });
+    expect(names()).toEqual(['Charlie plate', 'Bravo plate', 'Alpha plate']);
+
+    fireEvent.keyDown(
+      screen.getByRole('button', { name: /^Charlie plate, edited/ }),
+      { key: 'ArrowRight', altKey: true }
+    );
+
+    const stored = JSON.parse(
+      localStorage.getItem('openzcad.library.folders.v1:device')!
+    ) as { folders: { projectIds: string[] }[] };
+    expect(stored.folders[0]!.projectIds).toEqual(
+      [1, 2, 0].map((index) => parts[index]!.projectId)
+    );
+    expect(names()).toEqual(['Bravo plate', 'Charlie plate', 'Alpha plate']);
+    expect(screen.getByLabelText('Sort projects')).toHaveValue('custom');
+  });
+
+  it('gives a size that is not a number the dash, and sorts it last', () => {
+    renderStartScreen({
+      projects: parts.map((part, index) => ({
+        ...part,
+        documentBytes: [Number.NaN, 500, Number.POSITIVE_INFINITY, 100][index]
+      }))
+    });
+    fireEvent.change(screen.getByLabelText('Sort projects'), {
+      target: { value: 'size' }
+    });
+    expect(names()).toEqual([
+      'Bravo plate',
+      'Delta plate',
+      'Alpha plate',
+      'Charlie plate'
+    ]);
+  });
+
   it('shows filed parts inside their folder, not loose on the shelf', () => {
     seedFolder([parts[1]!.projectId, parts[2]!.projectId]);
     renderStartScreen({ projects: parts });
