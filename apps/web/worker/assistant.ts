@@ -263,6 +263,12 @@ interface ProposalInput {
   attachments?: readonly AssistantAttachment[];
   /** Operation kinds the requesting client can parse, when it says. */
   operations?: readonly string[];
+  /**
+   * The digest is of an end-to-end encrypted project, sent under its
+   * owner's consent (ADR-024 Phase 6): OpenRouter routes it only to
+   * providers that do not collect it (`openRouterProviderOptions`).
+   */
+  encryptedProject?: boolean;
 }
 
 export interface AssistantStatus {
@@ -1176,9 +1182,17 @@ async function requestAnthropic(
   );
 }
 
-function openRouterProviderOptions(model: string) {
+/**
+ * OpenRouter's provider preferences. A request carrying an encrypted
+ * project's model (ADR-024 amendment 2026-11-14) may go only to providers
+ * whose policy is not to store or train on prompts: `data_collection:
+ * 'deny'`. OpenRouter refuses the request rather than falling back to one
+ * that does, and the Worker reports that as no eligible route.
+ */
+export function openRouterProviderOptions(model: string, privateData = false) {
   return {
     require_parameters: true,
+    ...(privateData ? { data_collection: 'deny' as const } : {}),
     ...(model.endsWith(':free')
       ? { max_price: { prompt: 0, completion: 0, request: 0 } }
       : {})
@@ -1320,7 +1334,12 @@ export async function streamAssistantProposal(
         store: false,
         stream: true,
         ...(provider === 'openrouter'
-          ? { provider: openRouterProviderOptions(model) }
+          ? {
+              provider: openRouterProviderOptions(
+                model,
+                input.encryptedProject === true
+              )
+            }
           : {}),
         ...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {})
       })
@@ -1360,7 +1379,10 @@ export async function streamAssistantProposal(
                 runtime?.maxOutputTokens ?? maxOutputTokensFor(env)
             }),
         stream: false,
-        provider: openRouterProviderOptions(model),
+        provider: openRouterProviderOptions(
+          model,
+          input.encryptedProject === true
+        ),
         ...(safetyIdentifier ? { user: safetyIdentifier } : {})
       })
     });

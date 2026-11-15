@@ -521,6 +521,7 @@ export type StatementKind =
   | 'revocation cutoffs'
   | 'group reset'
   | 'contacts list'
+  | 'sealed contacts list'
   | 'share delegation'
   | 'share authority'
   | 'share link grant'
