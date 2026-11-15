@@ -2712,3 +2712,190 @@ describe('a body whose put a project deletion overtook (PR #1477 review, round 6
     expect(rows(srv, 'SELECT * FROM r2_pending_objects')).toEqual([]);
   }, 30_000);
 });
+
+describe('detached pending records (PR #1477 review, round 7)', () => {
+  it('does not commit a body deleted and detached after verification', async () => {
+    const { D1R2PersistenceService } =
+      await import('@openzcad/cloudflare-adapters');
+    const {
+      addPrimitiveFeature,
+      assertStorableDocument,
+      withoutDerivedProjection
+    } = await import('@openzcad/document-core');
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    // A valid document large enough that its body is stored in R2.
+    const original = initialDocument('Race');
+    let document = structuredClone(original);
+    for (let index = 0; index < 4000; index++) {
+      const one = addPrimitiveFeature(original, {
+        name: `Block ${index}`,
+        primitiveKind: 'box',
+        dimensions: { width: index + 1, height: 10, depth: 10 }
+      });
+      for (const [id, node] of Object.entries(one.nodes)) {
+        if (!original.nodes[id]) document.nodes[id] = node;
+      }
+      document.featureOrder.push(...one.featureOrder);
+      document.bodyOrder.push(...one.bodyOrder);
+      (
+        document.nodes[document.activePartId] as unknown as {
+          childIds: string[];
+        }
+      ).childIds.push(
+        ...(
+          one.nodes[one.activePartId] as unknown as { childIds: string[] }
+        ).childIds.filter((id) => !original.nodes[id])
+      );
+    }
+    document = withoutDerivedProjection(document);
+    assertStorableDocument(document);
+    let raw: Uint8Array<ArrayBuffer> | undefined;
+    laptop.before = async (path, init) => {
+      if (path === '/api/e2ee/projects' && init.method === 'POST') {
+        raw = new Uint8Array(await new Response(init.body).arrayBuffer());
+      }
+    };
+    // Create A stores and verifies its body, then pauses before its batch.
+    const db = srv.env.DB as D1Database;
+    const batch = db.batch.bind(db);
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => (enter = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let first = true;
+    db.batch = async (statements) => {
+      if (
+        first &&
+        statements.some((statement) =>
+          (statement as unknown as { sql: string }).sql.includes(
+            'INSERT INTO projects'
+          )
+        )
+      ) {
+        first = false;
+        enter();
+        await released;
+      }
+      return batch(statements);
+    };
+    const stalled = laptop.store.createProject({
+      name: 'Race',
+      initialDocument: document
+    });
+    stalled.catch(() => undefined);
+    await entered;
+    const early = rows<{ object_key: string }>(
+      srv,
+      'SELECT object_key FROM r2_pending_objects'
+    )[0]!;
+    expect(early).toBeTruthy();
+    // An identical create commits, and the project is deleted for good:
+    // A's body is reclaimed and its record detached.
+    const winner = await srv.call('POST', '/api/e2ee/projects', {
+      raw: raw!,
+      contentType: FRAME
+    });
+    expect(winner.status).toBe(201);
+    await new D1R2PersistenceService(srv.env).deleteProject(
+      OWNER as never,
+      document.projectId
+    );
+    expect(srv.bucket.objects.has(early.object_key)).toBe(false);
+    expect(
+      rows(srv, 'SELECT object_key, project_id FROM r2_pending_objects')
+    ).toEqual([{ object_key: early.object_key, project_id: '' }]);
+    // A resumes: its detached record authorizes nothing, so it creates no
+    // project whose version names the missing body.
+    release();
+    db.batch = batch;
+    await expect(stalled).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof ApiError &&
+        error.status === 503 &&
+        error.code === 'PROJECT_STORAGE_UNAVAILABLE'
+    );
+    expect(rows(srv, 'SELECT envelope_key FROM e2ee_project_versions')).toEqual(
+      []
+    );
+    expect(
+      (
+        await srv.call(
+          'GET',
+          `/api/e2ee/projects/${document.projectId}/document`
+        )
+      ).status
+    ).toBe(404);
+    // A's own rollback, its put long done, removed the body and its record.
+    expect(srv.bucket.objects.has(early.object_key)).toBe(false);
+    expect(rows(srv, 'SELECT * FROM r2_pending_objects')).toEqual([]);
+  }, 60_000);
+
+  it('a full account erasure keeps tracking its pending objects without naming the account, and the sweep reclaims them', async () => {
+    const { recordPendingObject, PENDING_OBJECT_GRACE_MS } =
+      await import('@openzcad/cloudflare-adapters');
+    const worker = (await import('../apps/web/worker/index')).default;
+    const srv = server();
+    srv.db.exec('PRAGMA foreign_keys=ON');
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document } = await createEncrypted(laptop);
+    // A write of the account is still putting this body.
+    const key = `e2ee/${document.projectId}/v/pending.nonce`;
+    expect(
+      await recordPendingObject(srv.env.DB as D1Database, {
+        key,
+        attempt: 'pending',
+        projectId: document.projectId,
+        ownerUserId: OWNER,
+        bytes: 3,
+        bucket: 'project-storage'
+      })
+    ).toBe('recorded');
+    // So is a copy whose project does not exist yet.
+    expect(
+      await recordPendingObject(srv.env.DB as D1Database, {
+        key: 'e2ee/proj_not_created/blob',
+        attempt: 'copying',
+        projectId: 'proj_not_created',
+        ownerUserId: OWNER,
+        bytes: 3,
+        bucket: 'artifacts'
+      })
+    ).toBe('recorded');
+    const response = await srv.call('POST', '/api/account/delete-data', {
+      body: { scope: 'all', confirmation: 'DELETE ALL CLOUD DATA' }
+    });
+    expect(response.status).toBe(200);
+    expect(rows(srv, 'SELECT id FROM users WHERE id = ?', OWNER)).toEqual([]);
+    // Both records stay for the sweep, detached, naming no account.
+    expect(
+      rows(
+        srv,
+        `SELECT object_key, project_id, owner_user_id FROM r2_pending_objects
+         ORDER BY attempt`
+      )
+    ).toEqual([
+      {
+        object_key: 'e2ee/proj_not_created/blob',
+        project_id: '',
+        owner_user_id: ''
+      },
+      { object_key: key, project_id: '', owner_user_id: '' }
+    ]);
+    expect(
+      rows(
+        srv,
+        'SELECT 1 FROM r2_pending_objects WHERE owner_user_id = ?',
+        OWNER
+      )
+    ).toEqual([]);
+    // A put still in flight lands; the sweep removes it once aged.
+    srv.bucket.objects.set(key, new Uint8Array([1, 2, 3]).buffer);
+    srv.db
+      .prepare('UPDATE r2_pending_objects SET created_at = ?')
+      .run(Date.now() - 2 * PENDING_OBJECT_GRACE_MS);
+    await worker.scheduled({}, srv.env);
+    expect(rows(srv, 'SELECT * FROM r2_pending_objects')).toEqual([]);
+    expect(srv.bucket.objects.has(key)).toBe(false);
+  });
+});

@@ -1774,3 +1774,68 @@ describe('a forced drain of writes that may still be putting (PR #1477 review, r
     expect(db.prepare('SELECT * FROM r2_pending_objects').all()).toEqual([]);
   });
 });
+
+describe('detached pending records (PR #1477 review, round 7)', () => {
+  it('authorize no commit, and a commit naming their key leaves them for the sweep', async () => {
+    const { drainPendingObjects, recordPendingObject } =
+      await import('@openzcad/cloudflare-adapters');
+    const db = database();
+    const d1 = sqliteD1(db);
+    const blobId = 'b'.repeat(32);
+    const key = `e2ee/p1/${blobId}`;
+    expect(
+      await recordPendingObject(d1, {
+        key,
+        attempt: 'copy-a',
+        projectId: 'p1',
+        ownerUserId: OWNER,
+        bytes: 3,
+        bucket: 'artifacts'
+      })
+    ).toBe('recorded');
+    const require = () =>
+      db
+        .prepare(
+          `INSERT INTO r2_pending_objects_required (object_key, attempt)
+           VALUES (?, 'copy-a')`
+        )
+        .run(key);
+    // Attached, the record authorizes its attempt's commit.
+    require();
+    // A forced drain reclaims the object while the put may still be in
+    // flight: the record stays, detached, and authorizes nothing.
+    await drainPendingObjects(
+      d1,
+      { artifacts: { delete: async () => {} } },
+      'p1'
+    );
+    expect(
+      db.prepare('SELECT project_id FROM r2_pending_objects').all()
+    ).toEqual([{ project_id: '' }]);
+    expect(require).toThrow('r2_object_not_pending');
+    // Another attempt's row committing the key leaves the detached record
+    // in place: the row now references the key, and the sweep drops the
+    // record without deleting the object.
+    db.prepare(
+      `INSERT INTO e2ee_content_blobs
+         (project_id, blob_id, kind, object_key, ciphertext_bytes,
+          dedupe_tag, state, created_at)
+       VALUES ('p1', ?, 'import-source', ?, 3, NULL, 'committed', ?)`
+    ).run(blobId, key, CREATED);
+    expect(
+      db.prepare('SELECT attempt, project_id FROM r2_pending_objects').all()
+    ).toEqual([{ attempt: 'copy-a', project_id: '' }]);
+    db.prepare('UPDATE r2_pending_objects SET created_at = 0').run();
+    const removed: string[] = [];
+    await drainPendingObjects(
+      d1,
+      {
+        artifacts: { delete: async (deleted: string) => removed.push(deleted) }
+      },
+      null,
+      { olderThanMs: 60 * 60 * 1000 }
+    );
+    expect(removed).toEqual([]);
+    expect(db.prepare('SELECT * FROM r2_pending_objects').all()).toEqual([]);
+  });
+});

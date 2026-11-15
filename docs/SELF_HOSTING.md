@@ -99,7 +99,8 @@ with `STORAGE_CLEANUP_BUSY` (after reclaiming what it can) while earlier
 failures are still waiting. Project deletion and the encrypted-data drop
 delete pending objects at once, but keep any record younger than the hour
 (its write may still be putting the bytes) for the sweep, filed under no
-project. Without the cron, those refusals, retention and deletion still
+project; such a record lets no write commit. Deleting all of an account's
+cloud data also clears the account id from its kept records. Without the cron, those refusals, retention and deletion still
 reclaim pending objects on demand, but such records and the leftovers of an
 account with no further activity stay. You
 may change the schedule, but keep a schedule if uploads or encrypted projects

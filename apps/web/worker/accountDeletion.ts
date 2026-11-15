@@ -23,6 +23,8 @@ import type {
 } from '@openzcad/shared';
 import {
   cachedSchemaProbe,
+  erasePendingObjectOwnerStatement,
+  isPendingObjectStorageReady,
   isProjectInstanceReady,
   type CloudflareEnv,
   type ProjectCollaborationRoom
@@ -674,7 +676,13 @@ export async function deleteAccountData(
           db,
           session.userId,
           input.scope
-        ))
+        )),
+        // Pending objects (migration 0055) left by the account's writes:
+        // kept, detached, for the sweep to reclaim their keys, but no
+        // longer naming the erased account.
+        ...(input.scope === 'all' && (await isPendingObjectStorageReady(db))
+          ? [erasePendingObjectOwnerStatement(db, session.userId)]
+          : [])
       ]
     );
     try {

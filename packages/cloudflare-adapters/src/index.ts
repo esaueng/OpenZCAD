@@ -827,6 +827,32 @@ export async function drainPendingObjects(
 export const DETACHED_PENDING_PROJECT = '';
 
 /**
+ * The account a pending record is charged to once its account was erased:
+ * no account's id, so the record (kept, detached, until the sweep reclaims
+ * its key) names no erased account.
+ */
+export const ERASED_PENDING_OWNER = '';
+
+/**
+ * For an account's full erasure, inside its final batch: every pending
+ * record charged to `userId` is detached (no write of the erased account
+ * may commit any longer) and stops naming the account. Each still tracks
+ * its key, so the scheduled sweep reclaims bytes a write still putting
+ * them may yet store.
+ */
+export function erasePendingObjectOwnerStatement(
+  db: D1Database,
+  userId: string
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE r2_pending_objects SET project_id = ?, owner_user_id = ?
+       WHERE owner_user_id = ?`
+    )
+    .bind(DETACHED_PENDING_PROJECT, ERASED_PENDING_OWNER, userId);
+}
+
+/**
  * Settles pending records whose objects a cleanup reclaimed, by primary
  * key (one index lookup each, never a scan): records old enough that no
  * write can still be in flight (`PENDING_OBJECT_GRACE_MS`) go; younger ones

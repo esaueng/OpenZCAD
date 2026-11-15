@@ -49,11 +49,20 @@ END;
 -- Each record names the account it is charged to (the project's owner, or
 -- the creator of a project not yet created) and the object's size, so the
 -- admission guard below can bound what pending objects one account holds.
+--
+-- A cleanup that reclaimed a record's object while its write may still be
+-- putting the bytes keeps the record, detached: `project_id` becomes ''
+-- (no project's id). A detached record only tracks its key for the
+-- scheduled sweep. It has lost all authority to commit (the guards below
+-- accept no detached record), and a row committing its key leaves it in
+-- place (the sweep then finds the key referenced and drops the record).
+-- An account's full erasure detaches its records and clears their
+-- `owner_user_id` to '' as well, so none names the erased account.
 CREATE TABLE IF NOT EXISTS r2_pending_objects (
   object_key TEXT NOT NULL CHECK (length(object_key) BETWEEN 1 AND 512),
   attempt TEXT NOT NULL CHECK (length(attempt) BETWEEN 1 AND 64),
   project_id TEXT NOT NULL,
-  owner_user_id TEXT NOT NULL CHECK (length(owner_user_id) BETWEEN 1 AND 256),
+  owner_user_id TEXT NOT NULL CHECK (length(owner_user_id) <= 256),
   object_bytes INTEGER NOT NULL CHECK (object_bytes >= 0),
   bucket TEXT NOT NULL CHECK (bucket IN ('project-storage', 'artifacts')),
   created_at INTEGER NOT NULL CHECK (created_at >= 0),
@@ -123,11 +132,12 @@ END;
 -- transaction that commits those rows, that each object is still recorded
 -- as its own pending write: `INSERT INTO r2_pending_objects_required
 -- (object_key, attempt) …` aborts the whole batch unless every listed
--- record exists. A record goes once another attempt's row naming the key
--- commits (its bytes then belong to that row, which a later deletion may
--- remove) or once a cleanup reclaimed the object; either way this attempt
--- may no longer rely on the bytes it verified. The view holds no rows and
--- the insert writes none.
+-- record exists and is still attached to a project. A record goes once
+-- another attempt's row naming the key commits (its bytes then belong to
+-- that row, which a later deletion may remove), and it is deleted or
+-- detached once a cleanup reclaimed the object; either way this attempt may
+-- no longer rely on the bytes it verified. The view holds no rows and the
+-- insert writes none.
 CREATE VIEW IF NOT EXISTS r2_pending_objects_required AS
   SELECT object_key, attempt FROM r2_pending_objects WHERE 0;
 
@@ -139,15 +149,21 @@ BEGIN
   WHERE NOT EXISTS (
     SELECT 1 FROM r2_pending_objects
     WHERE object_key = NEW.object_key AND attempt = NEW.attempt
+      AND project_id <> ''
   );
 END;
 
+-- A per-attempt version body commits only while its record is attached to
+-- the very project the version is written to: a detached record (its body
+-- reclaimed by a cleanup, perhaps the deletion of the project this create
+-- would now re-create) authorizes nothing.
 DROP TRIGGER IF EXISTS r2_pending_version_body_required;
 CREATE TRIGGER r2_pending_version_body_required
 BEFORE INSERT ON e2ee_project_versions
 WHEN NEW.envelope_key GLOB '*/v/*.*'
   AND NOT EXISTS (
-    SELECT 1 FROM r2_pending_objects WHERE object_key = NEW.envelope_key
+    SELECT 1 FROM r2_pending_objects
+    WHERE object_key = NEW.envelope_key AND project_id = NEW.project_id
   )
 BEGIN
   SELECT RAISE(ABORT, 'r2_object_not_pending');
@@ -158,12 +174,14 @@ CREATE TRIGGER r2_pending_version_body_committed
 AFTER INSERT ON e2ee_project_versions
 WHEN NEW.envelope_key IS NOT NULL
 BEGIN
-  DELETE FROM r2_pending_objects WHERE object_key = NEW.envelope_key;
+  DELETE FROM r2_pending_objects
+  WHERE object_key = NEW.envelope_key AND project_id <> '';
 END;
 
 DROP TRIGGER IF EXISTS r2_pending_content_blob_committed;
 CREATE TRIGGER r2_pending_content_blob_committed
 AFTER INSERT ON e2ee_content_blobs
 BEGIN
-  DELETE FROM r2_pending_objects WHERE object_key = NEW.object_key;
+  DELETE FROM r2_pending_objects
+  WHERE object_key = NEW.object_key AND project_id <> '';
 END;
