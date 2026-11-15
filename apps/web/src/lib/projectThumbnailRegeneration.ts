@@ -84,9 +84,12 @@ export class ThumbnailRegenerationStopped extends Error {
  * Projects are taken strictly in turn, so at most one model is in memory and
  * one card renders at a time. The model drawn is the version the listing
  * describes: this device's copy when it is that version, else the account's.
- * Only that version is published, so a device holding an older or newer
- * model never replaces the card other devices see; failing a match, the
- * device's own model is drawn for this device alone. A model saved without
+ * A card is published only when the model drawn is the account's own
+ * version, read from the account copy itself: the shelf's listing merges
+ * this device's projects with the account's by recency, so it can describe
+ * a local version the account does not hold, or no version at all. A device
+ * holding an older or newer model therefore never replaces the card other
+ * devices see; its own model is drawn for this device alone. A model saved without
  * its meshes is rebuilt first. Anything that cannot be read or rebuilt — a
  * locked or newer-format project, an encrypted one whose key is not
  * unlocked — keeps its current card and counts as skipped, as does an empty
@@ -129,21 +132,31 @@ function matchesListing(
   return thumbnailRecordDescribes({ version: document.version }, project);
 }
 
+/**
+ * The model to draw, and the account's version when the account copy was
+ * read: the only thing that may authorise publishing a card.
+ */
 async function chooseDocument(
   project: ProjectSummary,
-  host: ThumbnailRegenerationHost
-): Promise<ProjectDocument | null> {
+  host: ThumbnailRegenerationHost,
+  publishing: boolean
+): Promise<{ document: ProjectDocument; accountVersion?: number } | null> {
   const local = await host.loadLocal(project.projectId).catch(() => null);
   ensureActive(host);
-  if (local && matchesListing(local, project)) return local;
-  if (host.loadAccount) {
-    const account = await host.loadAccount(project.projectId).catch(() => null);
-    ensureActive(host);
-    if (account && (!local || matchesListing(account, project))) {
-      return account;
-    }
+  const localDescribed = local !== null && matchesListing(local, project);
+  // Read the account when it may be drawn, or to learn whether the card
+  // drawn is the one the account holds.
+  const account =
+    host.loadAccount && (publishing || !localDescribed)
+      ? await host.loadAccount(project.projectId).catch(() => null)
+      : null;
+  ensureActive(host);
+  const known = account ? { accountVersion: account.version } : {};
+  if (local && localDescribed) return { document: local, ...known };
+  if (account && (!local || matchesListing(account, project))) {
+    return { document: account, ...known };
   }
-  return local;
+  return local ? { document: local, ...known } : null;
 }
 
 async function redraw(
@@ -151,8 +164,12 @@ async function redraw(
   host: ThumbnailRegenerationHost
 ): Promise<boolean> {
   if (projectNeedsUpdate(project)) return false;
-  let document = await chooseDocument(project, host);
-  if (!document) return false;
+  const publishing = Boolean(
+    host.publish && host.publishes?.(project.projectId)
+  );
+  const chosen = await chooseDocument(project, host, publishing);
+  if (!chosen) return false;
+  let document = chosen.document;
 
   let bodies = liveBodies(document.derived.bodyRepresentations);
   if (bodies.length === 0 && listFeaturesInOrder(document).length > 0) {
@@ -178,8 +195,8 @@ async function redraw(
   if (
     source &&
     host.publish &&
-    host.publishes?.(project.projectId) &&
-    matchesListing(document, project)
+    publishing &&
+    chosen.accountVersion === document.version
   ) {
     artifactId = await host
       .publish({

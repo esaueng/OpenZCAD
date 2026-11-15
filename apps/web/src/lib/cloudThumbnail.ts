@@ -103,7 +103,12 @@ export async function downloadCloudThumbnail(
   return thumbnailBlobSource(await download(artifactId));
 }
 
-/** Publishes the already-rendered card image without touching the document. */
+/**
+ * Publishes the already-rendered card image without touching the document.
+ * An aborted `signal` stops it before the next stage, and above all before
+ * the finalize that makes the card the account's; a stage already sent
+ * completes, and an unfinalized upload is never the project's card.
+ */
 export async function uploadCloudThumbnail(
   transport: ThumbnailCloudTransport,
   input: {
@@ -111,14 +116,19 @@ export async function uploadCloudThumbnail(
     version: number;
     updatedAt: string;
     source: string;
-  }
+  },
+  options: { signal?: AbortSignal } = {}
 ): Promise<ArtifactId> {
+  const { signal } = options;
+  signal?.throwIfAborted();
   const body = await thumbnailSourceBlob(input.source);
+  signal?.throwIfAborted();
   if (isEncryptedProject(input.projectId)) {
     // Never an artifact: an encrypted thumbnail blob, named by the
     // project's next project info (ADR-024 Phase 4, slice 4-7).
     const { publishEncryptedThumbnail } =
       await import('./e2ee/encryptedProjects');
+    signal?.throwIfAborted();
     return (await publishEncryptedThumbnail(
       input.projectId,
       new Blob([body], { type: THUMBNAIL_CONTENT_TYPE })
@@ -137,8 +147,10 @@ export async function uploadCloudThumbnail(
   if (!session.uploadUrl) {
     throw new Error('Thumbnail upload is unavailable.');
   }
+  signal?.throwIfAborted();
   // A 360x200 WebP is many orders of magnitude below the multipart boundary.
   await transport.uploadArtifact(session.uploadUrl, body);
+  signal?.throwIfAborted();
   const finalized = await transport.finalizeArtifact({
     projectId: input.projectId,
     uploadSessionId: session.uploadSessionId,

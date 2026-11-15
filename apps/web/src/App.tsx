@@ -4652,10 +4652,17 @@ export function App() {
       controller: new AbortController()
     };
     thumbnailRegenerationRun.current = run;
-    const active = () =>
-      thumbnailRegenerationRun.current === run &&
-      !run.controller.signal.aborted &&
-      isCurrentKeySession(run.keyRevision);
+    // One signal for every way the run ends, so an upload in flight stops
+    // before it finalizes whichever way that was.
+    const active = () => {
+      if (
+        thumbnailRegenerationRun.current !== run ||
+        !isCurrentKeySession(run.keyRevision)
+      ) {
+        run.controller.abort();
+      }
+      return !run.controller.signal.aborted;
+    };
     let done = 0;
     setThumbnailRegeneration({ done: 0, total: list.length });
     try {
@@ -4685,7 +4692,10 @@ export function App() {
         save: saveProjectThumbnail,
         publish: async (input) => {
           const { uploadCloudThumbnail } = await import('./lib/cloudThumbnail');
-          return uploadCloudThumbnail(api, input);
+          if (!active()) throw new Error('Stopped.');
+          return uploadCloudThumbnail(api, input, {
+            signal: run.controller.signal
+          });
         },
         publishes: (projectId) => publishes && cloudIds.has(projectId),
         drawn: (project, source, artifactId) => {

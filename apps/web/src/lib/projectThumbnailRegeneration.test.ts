@@ -122,6 +122,8 @@ describe('regenerateProjectThumbnails', () => {
     const drawn = vi.fn();
     const regenerate = host({
       loadLocal: vi.fn(async (id: string) => byId.get(id as never) ?? null),
+      // The account holds the same versions this device does.
+      loadAccount: vi.fn(async (id: string) => byId.get(id as never)!),
       publish,
       publishes: (id) => id !== device.projectId,
       drawn
@@ -259,27 +261,67 @@ describe('regenerateProjectThumbnails', () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
-  it('draws a local model ahead of an older account copy for this device only', async () => {
+  it('draws a local model ahead of the account for this device only', async () => {
+    // Re-review: the shelf's listing merges by recency, so it describes the
+    // device's newer version 15, which matched and was published over the
+    // account's version 12 without the account ever being read.
     const ahead = model('Unsynced edits', true);
     ahead.version = 15;
     const behind = { ...structuredClone(ahead), version: 12 };
+    const loadAccount = vi.fn().mockResolvedValue(behind);
     const publish = vi.fn().mockResolvedValue(toArtifactId('artifact_wrong'));
     const regenerate = host({
       loadLocal: vi.fn().mockResolvedValue(ahead),
-      loadAccount: vi.fn().mockResolvedValue(behind),
+      loadAccount,
       publish,
       publishes: () => true
     });
 
-    await regenerateProjectThumbnails(
-      [{ ...summary(ahead), documentVersion: 13 }],
-      regenerate
-    );
+    await regenerateProjectThumbnails([summary(ahead)], regenerate);
 
+    expect(loadAccount).toHaveBeenCalledTimes(1);
     expect(regenerate.save).toHaveBeenCalledWith(
       ahead.projectId,
       expect.objectContaining({ version: 15 })
     );
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('publishes nothing on a listing with no version unless the account holds it', async () => {
+    // Re-review: an unknown listing version matched any model.
+    const stale = model('Old listing', true);
+    stale.version = 9;
+    const account = { ...structuredClone(stale), version: 12 };
+    const publish = vi.fn().mockResolvedValue(toArtifactId('artifact_wrong'));
+    const regenerate = host({
+      loadLocal: vi.fn().mockResolvedValue(stale),
+      loadAccount: vi.fn().mockResolvedValue(account),
+      publish,
+      publishes: () => true
+    });
+    const { documentVersion: _unknown, ...unversioned } = summary(stale);
+
+    await regenerateProjectThumbnails([unversioned], regenerate);
+
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('publishes nothing when the account copy cannot be read', async () => {
+    const cloud = model('Offline', true);
+    const publish = vi.fn().mockResolvedValue(toArtifactId('artifact_wrong'));
+    const regenerate = host({
+      loadLocal: vi.fn().mockResolvedValue(cloud),
+      loadAccount: vi.fn().mockRejectedValue(new Error('offline')),
+      publish,
+      publishes: () => true
+    });
+
+    const result = await regenerateProjectThumbnails(
+      [summary(cloud)],
+      regenerate
+    );
+
+    expect(result).toEqual({ redrawn: 1, skipped: 0 });
     expect(publish).not.toHaveBeenCalled();
   });
 
