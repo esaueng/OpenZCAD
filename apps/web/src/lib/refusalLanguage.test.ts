@@ -518,6 +518,10 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
       'The cutting plane lies exactly along an existing edge. Move the plane slightly off the edge.'
     ],
     [
+      "the cutting plane does not cross the solid's interior; it only touches the body and contains edge 3 of the solid, so there is nothing to split",
+      'The cutting plane lies exactly along an existing edge. Move the plane slightly off the edge.'
+    ],
+    [
       'Remus solid offset refused: assembly failed: wire loop walk: no unvisited edge from vertex 2685 (40 visited, 3 in loop)',
       'Solid offset could not rebuild this body. It currently works on bodies with flat faces and sharp edges; fillets, shells and curved faces are not supported yet.'
     ],

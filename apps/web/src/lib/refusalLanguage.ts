@@ -289,7 +289,12 @@ const TRANSLATIONS: readonly Translation[] = [
       "The cutting plane crosses a curved face, which splitting can't cut yet. Move the plane so it crosses only flat faces."
   },
   {
-    pattern: /cutting plane contains edge/i,
+    // Remus 3c489d7 words it as a plane that only touches the body: "the
+    // cutting plane does not cross the solid's interior; it only touches
+    // the body and contains edge 3 of the solid, so there is nothing to
+    // split". Both say the plane lies along an edge.
+    pattern:
+      /cutting plane (?:does not cross the solid's interior; it only touches the body and )?contains edge/i,
     sentence:
       'The cutting plane lies exactly along an existing edge. Move the plane slightly off the edge.'
   },
