@@ -2,7 +2,7 @@
 row: L09
 ---
 
-Maker slice 2, document print clearance (PR #PRNUM, schema v60):
+Maker slice 2, document print clearance (PR #1563, schema v60):
 `printClearance` on the document, a length in document units (a number, or an
 expression with units and parameters), set under Parameters → Print
 clearance as one undoable command. ISO, printable and custom threads without
