@@ -609,6 +609,12 @@ const THREAD_OPTIONS: readonly OptionSpec[] = [
         label: 'Exact',
         tip: 'No gap: nominal size, for machined parts or drawings'
       },
+      {
+        // L09: no clearance of its own, so it takes the document's.
+        value: 'document',
+        label: 'Document',
+        tip: 'The print clearance set under Parameters; none set is no gap'
+      },
       { value: 'custom', label: 'Custom' }
     ],
     initial: 'print',
@@ -803,10 +809,14 @@ export function threadEditOptions(
   const preset = (['exact', 'print', 'loose'] as const).find((fit) =>
     close(clearance, fitClearance(fit, units))
   );
+  // L09: an ISO, printable or custom thread with no clearance of its own
+  // takes the document's print clearance; a pipe thread never does.
   options[standard ? 'pipeFit' : 'fit'] =
-    data.clearance !== undefined && typeof data.clearance !== 'number'
-      ? 'custom'
-      : (preset ?? 'custom');
+    !standard && data.clearance === undefined
+      ? 'document'
+      : data.clearance !== undefined && typeof data.clearance !== 'number'
+        ? 'custom'
+        : (preset ?? 'custom');
   // Its extent and end are not options: the stored length and anchor go
   // back as values and the face's end (see `threadIsPartial`).
   options.hand = data.hand ?? 'right';
@@ -881,7 +891,10 @@ export function threadRequestFields(
   const fit = standard ? (options.pipeFit ?? 'exact') : options.fit;
   const clearance =
     fit === 'custom' ? (values.clearance ?? 0) : fitClearance(fit, units);
-  if (clearance !== 0) fields.clearance = clearance;
+  // L09: an exact ISO or custom thread says so, since leaving the clearance
+  // out now means the document's print clearance ('document').
+  if (fit !== 'document' && (clearance !== 0 || !standard))
+    fields.clearance = clearance;
   const starts = values.starts;
   if (starts !== undefined && starts !== 1) fields.starts = starts;
   if (options.hand === 'left') fields.hand = 'left';

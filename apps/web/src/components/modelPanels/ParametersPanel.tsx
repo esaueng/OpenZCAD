@@ -5,6 +5,7 @@ import {
   ParameterRow,
   parameterTable
 } from '../ParameterRows';
+import { PrintClearanceRow } from '../PrintClearanceRow';
 
 export type ParametersPanelProps = Pick<
   ModelPanelSource,
@@ -24,13 +25,16 @@ export type ParametersPanelProps = Pick<
   | 'onDescribeParameter'
   | 'exposedParameterNames'
   | 'onConfigureToggle'
-> & {
-  /**
-   * Every live body, for a toggle parameter's body picker. The Objects name
-   * search never narrows it.
-   */
-  bodies: BodyRepresentation[];
-};
+  | 'printClearance'
+  | 'onSetPrintClearance'
+> &
+  Partial<Pick<ModelPanelSource, 'units'>> & {
+    /**
+     * Every live body, for a toggle parameter's body picker. The Objects name
+     * search never narrows it.
+     */
+    bodies: BodyRepresentation[];
+  };
 
 /** The Parameters header count. The panel always shows, empty or not. */
 export function parameterCount(parameters: readonly ParameterNode[]): number {
@@ -54,6 +58,9 @@ export function ParametersPanel({
   onDescribeParameter,
   exposedParameterNames,
   onConfigureToggle,
+  printClearance,
+  onSetPrintClearance,
+  units = 'mm',
   bodies
 }: ParametersPanelProps) {
   const table = parameterTable(parameters);
@@ -107,6 +114,13 @@ export function ParametersPanel({
           Name a value (<span className="mono">w = 30</span>) and use it in any
           feature field.
         </p>
+      )}
+      {printClearance && (
+        <PrintClearanceRow
+          clearance={printClearance}
+          units={units}
+          {...(onSetPrintClearance ? { onSet: onSetPrintClearance } : {})}
+        />
       )}
     </>
   );

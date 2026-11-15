@@ -26,7 +26,11 @@ import {
   type PipeThreadStandard,
   type ThreadProfile
 } from '@openzcad/shared';
-import { resolveParamValue } from '@openzcad/document-core';
+import {
+  documentPrintClearance,
+  featureReadsPrintClearance,
+  resolveParamValue
+} from '@openzcad/document-core';
 
 import { collapseShape } from './exact-boolean-helpers';
 import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
@@ -236,7 +240,9 @@ export function resolveThread(
     optional(value: ParamValue | undefined, label: string): number | undefined;
   },
   face: { kind: 'external' | 'internal'; radius: number; faceLength: number },
-  mm: number
+  mm: number,
+  /** The document's print clearance, for a thread without its own (L09). */
+  printClearance?: number
 ): ResolvedThread {
   if (data.profile === 'npt' || data.profile === 'bspt') {
     return resolvePipeThread(data, data.profile, values, face, mm);
@@ -267,7 +273,8 @@ export function resolveThread(
           )!
         }
       : threadProfileForm(data.profile, kind, pitch);
-  const clearance = values.optional(data.clearance, 'clearance') ?? 0;
+  const clearance =
+    values.optional(data.clearance, 'clearance') ?? printClearance ?? 0;
   // The thread's outer surface: an external crest, an internal root. The
   // clearance moves the whole profile away from the mating part.
   let outer = nominal / 2 + (kind === 'external' ? -clearance : clearance);
@@ -647,7 +654,10 @@ export function buildThreadFeature(
     data,
     values,
     { kind, radius: geometry.radius, faceLength: geometry.axialLength },
-    mm
+    mm,
+    featureReadsPrintClearance(data)
+      ? documentPrintClearance(document, scope)
+      : undefined
   );
   refuseChamferShortOfFace(
     thread,

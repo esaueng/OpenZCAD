@@ -13,13 +13,18 @@
  */
 import {
   defaultGearXDirection,
+  gearBacklashForClearance,
   gearModule,
   type FeatureId,
   type FeatureNode,
   type ParamValue,
   type ParametricVector3
 } from '@openzcad/shared';
-import { resolveParamValue } from '@openzcad/document-core';
+import {
+  documentPrintClearance,
+  featureReadsPrintClearance,
+  resolveParamValue
+} from '@openzcad/document-core';
 
 import { collapseShape } from './exact-boolean-helpers';
 import type { FaceWitnessV1 } from '@openzcad/shared';
@@ -315,7 +320,7 @@ export function buildGearFeature(
       'profileShift',
       values.optional(data.profileShift, 'profile shift')
     ),
-    ...withNumber('backlash', values.optional(data.backlash, 'backlash')),
+    ...withNumber('backlash', gearBacklash(ctx, data, values)),
     ...withNumber('addendum', values.optional(data.addendum, 'addendum')),
     ...withNumber('dedendum', values.optional(data.dedendum, 'dedendum')),
     ...withNumber(
@@ -367,6 +372,26 @@ export function buildGearFeature(
       values
     );
   }
+}
+
+/**
+ * A gear's tooth thinning: its own backlash, or (L09) the document's print
+ * clearance as each flank offset by it, or the kernel default (none).
+ */
+function gearBacklash(
+  ctx: Pick<FeatureBuildContext, 'scope' | 'document'>,
+  data: FeatureDataOf<'gear'>,
+  values: Pick<GearValues, 'optional'>
+): number | undefined {
+  const own = values.optional(data.backlash, 'backlash');
+  if (!featureReadsPrintClearance(data)) return own;
+  const clearance = documentPrintClearance(ctx.document, ctx.scope);
+  return clearance === undefined
+    ? undefined
+    : gearBacklashForClearance(
+        clearance,
+        values.optional(data.pressureAngleDeg, 'pressure angle') ?? 20
+      );
 }
 
 /** `{ [key]: value }` when the value is present, `{}` otherwise. */
@@ -728,7 +753,8 @@ export function gearTeethSpan(
     );
   }
   return {
-    offset: (data.anchor ?? 'start') === 'end' ? faceLength - offset - width : offset,
+    offset:
+      (data.anchor ?? 'start') === 'end' ? faceLength - offset - width : offset,
     width
   };
 }

@@ -16,9 +16,11 @@ import {
   type LocalHistoryAppend
 } from './lib/localHistoryAppend';
 import {
+  documentPrintClearance,
   repairLegacyBracketModel,
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
+import type { PrintClearanceState } from './components/PrintClearanceRow';
 import {
   noteProjectMigrating,
   registerProjectFlush,
@@ -8286,6 +8288,23 @@ export function App() {
     () => requiredValueResolver(parameterScope.scope, doc?.units),
     [parameterScope.scope, doc?.units]
   );
+  // L09: the document's print clearance, as the Parameters panel shows it.
+  const printClearance = useMemo((): PrintClearanceState | undefined => {
+    if (!doc) return undefined;
+    try {
+      return {
+        stored: doc.printClearance,
+        value: documentPrintClearance(doc, parameterScope.scope) ?? null,
+        error: null
+      };
+    } catch (error) {
+      return {
+        stored: doc.printClearance,
+        value: null,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }, [doc, parameterScope.scope]);
 
   // Text profiles resolve faces synchronously on this thread as well as in the
   // worker, so the faces this document names have to be parsed here too.
@@ -23035,6 +23054,23 @@ export function App() {
    * real. An assistant patch already landing is awaited first, since its
    * commit is what the edit must be checked against.
    */
+  /** L09: sets or clears the print clearance; answers with a refusal. */
+  function handleSetPrintClearance(value: ParamValue | null): string | null {
+    const manager = managerRef.current;
+    if (!manager) return 'Editing is unavailable.';
+    const command = commandFactories.setPrintClearance({ value });
+    try {
+      command.apply(manager.document);
+    } catch (error) {
+      return error instanceof Error
+        ? error.message
+        : 'The print clearance could not be changed.';
+    }
+    return executeCommand(command)
+      ? null
+      : 'The print clearance was not changed.';
+  }
+
   async function handleSetParameter(
     name: string,
     expression: string,
@@ -33540,6 +33576,10 @@ export function App() {
       onPreviewParameter={handlePreviewParameter}
       onSetParameter={(name, expression) =>
         handleSetParameter(name, expression)
+      }
+      printClearance={printClearance}
+      onSetPrintClearance={
+        editDisabledReason ? undefined : handleSetPrintClearance
       }
       onParameterAddRefused={(name, message) =>
         setStatus(`Parameter ${name} was not added.`, { detail: message })

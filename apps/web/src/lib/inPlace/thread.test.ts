@@ -79,23 +79,45 @@ describe('in-place thread', () => {
     expect(island.chamferAngleDeg).toBeUndefined();
   });
 
-  it('stores an ISO size in document units and an exact fit as no clearance', () => {
-    expect(
+  it('stores an ISO size in document units and an exact fit as no gap', () => {
+    const fields = (fit: string) =>
       threadRequestFields(
         initialValues(),
-        defaults({
-          profile: 'iso-metric',
-          size: 'M8',
-          fit: 'exact',
-          chamfer: 'none'
-        }),
+        defaults({ profile: 'iso-metric', size: 'M8', fit, chamfer: 'none' }),
         'inch'
-      )
-    ).toEqual({
+      );
+    // L09: exact says so, since a thread without a clearance of its own
+    // takes the document's print clearance.
+    expect(fields('exact')).toEqual({
+      profile: 'iso-metric',
+      majorDiameter: 8 / 25.4,
+      pitch: 1.25 / 25.4,
+      clearance: 0
+    });
+    expect(fields('document')).toEqual({
       profile: 'iso-metric',
       majorDiameter: 8 / 25.4,
       pitch: 1.25 / 25.4
     });
+  });
+
+  it('reads a thread without a clearance of its own as the document fit (L09)', () => {
+    const stored = (clearance?: number): ThreadRequest => ({
+      targetBodyId: 'body_a' as BodyId,
+      faceHash: 3,
+      profile: 'iso-metric',
+      ...(clearance === undefined ? {} : { clearance })
+    });
+    expect(threadEditOptions(stored(), evaluate, 'mm').fit).toBe('document');
+    expect(threadEditOptions(stored(0), evaluate, 'mm').fit).toBe('exact');
+    // A pipe thread never takes the document's: absent stays exact.
+    expect(
+      threadEditOptions(
+        { ...stored(), profile: 'npt', pipeSize: '1/4' },
+        evaluate,
+        'mm'
+      ).pipeFit
+    ).toBe('exact');
   });
 
   it('stores a custom form, a band from the far end and the extras', () => {
@@ -149,6 +171,8 @@ describe('in-place thread', () => {
         }),
         {}
       ],
+      [defaults({ fit: 'exact' }), {}],
+      [defaults({ fit: 'document' }), {}],
       [
         defaults({
           profile: 'custom',

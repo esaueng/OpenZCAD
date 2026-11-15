@@ -213,6 +213,8 @@ import {
   renameObjectFolder,
   deleteObjectFolder,
   moveToObjectFolder,
+  setPrintClearance,
+  type PrintClearanceSetInput,
   addAssemblyComponents,
   updateAssemblyComponent,
   deleteAssemblyComponent,
@@ -387,6 +389,7 @@ export type CommandKind =
   | 'objectFolder.rename'
   | 'objectFolder.delete'
   | 'objectFolder.move'
+  | 'printClearance.set'
   | 'assembly.components.add'
   | 'assembly.component.update'
   | 'assembly.component.delete'
@@ -503,6 +506,7 @@ export type AnyCommand =
   | CommandDefinition<ObjectFolderRenameInput>
   | CommandDefinition<ObjectFolderDeleteInput>
   | CommandDefinition<ObjectFolderMoveInput>
+  | CommandDefinition<PrintClearanceSetInput>
   | CommandDefinition<AssemblyComponentsAddInput>
   | CommandDefinition<AssemblyComponentUpdateInput>
   | CommandDefinition<AssemblyComponentDeleteInput>
@@ -3093,6 +3097,16 @@ export const commandFactories = {
   ): CommandDefinition<ObjectFolderMoveInput> {
     return makeCommand('objectFolder.move', label, payload, (document) =>
       moveToObjectFolder(document, payload)
+    );
+  },
+  setPrintClearance(
+    payload: PrintClearanceSetInput,
+    label = payload.value === null
+      ? 'Clear print clearance'
+      : 'Set print clearance'
+  ): CommandDefinition<PrintClearanceSetInput> {
+    return makeCommand('printClearance.set', label, payload, (document) =>
+      setPrintClearance(document, payload)
     );
   },
   addDrawingAnnotation(
@@ -6032,6 +6046,12 @@ export function replayCommands(
         next = moveToObjectFolder(
           next,
           command.payload as ObjectFolderMoveInput
+        );
+        break;
+      case 'printClearance.set':
+        next = setPrintClearance(
+          next,
+          command.payload as PrintClearanceSetInput
         );
         break;
       case 'drawing.annotation.add':
