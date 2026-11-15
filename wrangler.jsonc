@@ -173,5 +173,99 @@
       "tag": "v1",
       "new_sqlite_classes": ["ProjectCollaborationRoom"]
     }
-  ]
+  ],
+  // Worker Previews (<preview-name>.dev.zcad.app, built by `wrangler preview`).
+  // A Preview inherits none of the settings above except assets, compatibility
+  // and the Durable Object classes and migrations, so every binding the Worker
+  // reads is repeated here, pointed at staging resources. All Previews share
+  // the staging D1 database and R2 bucket. Each Preview gets its own Durable
+  // Object namespace. Cron triggers never run in a Preview.
+  // validate-deployment-config.mjs refuses any production resource here and
+  // any drift between these vars and production's beyond the listed ones.
+  // Apply D1 migrations with `pnpm migrate:preview`. Set Preview secrets with
+  // `wrangler preview base-config secret put` (docs/previews.md).
+  "previews": {
+    "vars": {
+      // Off in Previews: GLIMPSE is a service binding, which would reach the
+      // production collector.
+      "GLIMPSE_BASIC_ENABLED": "false",
+      "GLIMPSE_USAGE_ENABLED": "false",
+      "ENVIRONMENT": "beta",
+      "AUTH_MODE": "email-code",
+      "PRODUCTION_GUARD": "enabled",
+      "AUTH_EMAIL_FROM": "noreply@zcad.esau.app",
+      "PROJECT_INVITATION_EMAIL_FROM": "noreply@zcad.esau.app",
+      // PUBLIC_APP_ORIGIN is left unset: each Preview has its own hostname,
+      // and invitation links must not send people to production. Invitation
+      // email therefore answers 503 in Previews.
+      "AUTH_SESSION_DAYS": "30",
+      "DESKTOP_AUTH_ENABLED": "true",
+      "TURNSTILE_SITE_KEY": "0x4AAAAAAD_j6Y7NvXKtcxNX",
+      "AI_PROVIDER": "openrouter",
+      "AI_MODEL": "nvidia/nemotron-3.5-super-vl:free",
+      "AI_REASONING_EFFORT": "high",
+      "AI_DEPLOYMENT_FREE_ENABLED": "true",
+      "PROJECT_SHARING_ENABLED": "true",
+      "PROJECT_EDIT_LEASES_ENFORCED": "true",
+      "PROJECT_PERSONAL_SYNC_ENABLED": "true",
+      "LIBRARY_FOLDER_SYNC_ENABLED": "true",
+      "E2EE_KEYS_ENABLED": "true",
+      "E2EE_PROJECTS_ENABLED": "true",
+      "E2EE_MIGRATION_ENABLED": "true",
+      "E2EE_REVERSE_ENABLED": "false",
+      "E2EE_DEFAULT_ON": "false",
+      "E2EE_PLAINTEXT_FROZEN": "false",
+      "AI_PATCH_DIRECT_EDIT_ENABLED": "true",
+      "AI_PATCH_GROWING_HOLDER_ENABLED": "true",
+      "AI_PATCH_FACE_SKETCH_ENABLED": "true",
+      "AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED": "true",
+      "AI_PATCH_MIRROR_ENABLED": "true",
+      "AI_PATCH_SHELL_ENABLED": "true",
+      "AI_PATCH_SOLID_OFFSET_ENABLED": "true",
+      "AI_PATCH_PARTIAL_REVOLVE_ENABLED": "true",
+      "AI_PATCH_DATUM_PLANE_ENABLED": "true",
+      "AI_PATCH_DATUM_GEOMETRY_ENABLED": "true"
+    },
+    "d1_databases": [
+      {
+        "binding": "DB",
+        "database_name": "openzcad-preview",
+        "database_id": "41603249-77a4-478a-86e5-e349cbb2b868",
+        "migrations_dir": "apps/web/migrations"
+      }
+    ],
+    "r2_buckets": [
+      {
+        "binding": "ARTIFACTS",
+        "bucket_name": "openzcad-preview-artifacts"
+      }
+    ],
+    // Sign-in codes need this binding. Same sender as production.
+    "send_email": [
+      {
+        "name": "EMAIL",
+        "allowed_sender_addresses": ["noreply@zcad.esau.app"]
+      }
+    ],
+    "durable_objects": {
+      "bindings": [
+        {
+          "name": "PROJECT_ROOM",
+          "class_name": "ProjectCollaborationRoom"
+        }
+      ]
+    },
+    // Same limits as production, in separate namespaces so Preview traffic
+    // never spends production's budget.
+    "ratelimits": [
+      {"name":"GLIMPSE_USAGE_LIMITER", "namespace_id":"2026111501", "simple":{"limit":120,"period":60}},
+      {"name":"AUTH_REQUEST_LIMITER", "namespace_id":"2026111502", "simple":{"limit":30,"period":60}},
+      {"name":"DESKTOP_EXCHANGE_LIMITER", "namespace_id":"2026111503", "simple":{"limit":60,"period":60}},
+      {"name":"ANONYMOUS_ASSISTANT_LIMITER", "namespace_id":"2026111504", "simple":{"limit":20,"period":60}},
+      {"name":"SHARE_LINK_LIMITER", "namespace_id":"2026111505", "simple":{"limit":300,"period":60}},
+      {"name":"ACCOUNT_READ_LIMITER", "namespace_id":"2026111506", "simple":{"limit":1200,"period":60}},
+      {"name":"DESKTOP_START_LIMITER", "namespace_id":"2026111507", "simple":{"limit":10,"period":60}},
+      {"name":"SHARE_READ_CEILING_LIMITER", "namespace_id":"2026111508", "simple":{"limit":30000,"period":60}}
+    ]
+  }
 }
