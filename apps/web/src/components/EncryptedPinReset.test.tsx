@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { toProjectId } from '@openzcad/shared';
 import {
   encryptedProjectPinsUnavailable,
@@ -10,15 +10,64 @@ import {
 } from '../lib/api';
 import {
   ENCRYPTED_PROJECT_PIN_FAILED_KEY,
-  encryptedProjectPinKey
+  ENCRYPTED_PROJECT_RESET_PREFIX,
+  encryptedProjectPinKey,
+  localStorageEncryptedProjectPins
 } from '../lib/e2ee/encryptedProjectPins';
-import { EncryptedPinRecovery, PinResetDialog } from './EncryptedPinReset';
+import {
+  EncryptedPinRecovery,
+  PIN_RESET_NOT_SAVED,
+  PinResetDialog
+} from './EncryptedPinReset';
 
 const OWNER = { confirmedByOwner: true } as const;
 
 afterEach(() => {
+  resetGenerationsFit = true;
   window.localStorage.removeItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY);
 });
+
+/**
+ * This page's storage, with a switch that leaves no room for a new reset
+ * generation. Installed before the pin store first reads it.
+ */
+const realStorage = window.localStorage;
+const storageDescriptor = Object.getOwnPropertyDescriptor(
+  window,
+  'localStorage'
+);
+let resetGenerationsFit = true;
+const gatedStorage = {
+  getItem: (key: string) => realStorage.getItem(key),
+  setItem: (key: string, value: string) => {
+    if (
+      !resetGenerationsFit &&
+      key.startsWith(ENCRYPTED_PROJECT_RESET_PREFIX)
+    ) {
+      throw new DOMException('full', 'QuotaExceededError');
+    }
+    realStorage.setItem(key, value);
+  },
+  removeItem: (key: string) => realStorage.removeItem(key),
+  key: (index: number) => realStorage.key(index),
+  clear: () => realStorage.clear(),
+  get length() {
+    return realStorage.length;
+  }
+};
+Object.defineProperty(window, 'localStorage', {
+  configurable: true,
+  get: () => gatedStorage
+});
+afterAll(() => {
+  if (storageDescriptor) {
+    Object.defineProperty(window, 'localStorage', storageDescriptor);
+  }
+});
+
+function resetGenerationsRefused() {
+  resetGenerationsFit = false;
+}
 
 /** A project this device pinned, which the account now lists as plaintext. */
 function disagreeing(projectId: string, name: string) {
@@ -128,6 +177,43 @@ describe('Settings › Encryption › On this device', () => {
       treatProjectAsNotEncrypted(kept, OWNER);
     }
   });
+
+  // PR #1418 review: a reset whose new generation could not be saved
+  // reported success, and the project was still locked after a reload.
+  it('says a project reset was not saved, and changes nothing, when storage is full', () => {
+    const projectId = 'proj_reset_full';
+    disagreeing(projectId, 'Full bracket');
+    try {
+      render(<EncryptedPinRecovery />);
+      const row = screen.getByRole('group', { name: 'Full bracket' });
+      fireEvent.click(
+        within(row).getByRole('button', {
+          name: 'Treat as not encrypted on this device'
+        })
+      );
+      fireEvent.click(within(row).getByRole('checkbox'));
+      resetGenerationsRefused();
+      fireEvent.click(
+        within(row).getByRole('button', { name: 'Treat as not encrypted' })
+      );
+      expect(screen.getByText(PIN_RESET_NOT_SAVED)).toBeTruthy();
+      expect(PIN_RESET_NOT_SAVED).toMatch(/Free up browser storage/);
+      expect(
+        screen.queryByText(
+          'Full bracket now follows your account on this device.'
+        )
+      ).toBeNull();
+      expect(isEncryptedProject(projectId)).toBe(true);
+      expect(
+        localStorageEncryptedProjectPins(window.localStorage).has(projectId)
+      ).toBe(true);
+      // Still offered, so the owner can retry once storage has room.
+      expect(screen.getByRole('group', { name: 'Full bracket' })).toBeTruthy();
+    } finally {
+      resetGenerationsFit = true;
+      treatProjectAsNotEncrypted(projectId, OWNER);
+    }
+  });
 });
 
 describe('the reset dialog', () => {
@@ -170,6 +256,40 @@ describe('the reset dialog', () => {
       });
       expect(isEncryptedProject(projectId)).toBe(false);
     } finally {
+      treatProjectAsNotEncrypted(projectId, OWNER);
+    }
+  });
+
+  it('hands a reset that was not saved to its caller as a failure', () => {
+    const projectId = 'proj_reset_dialog_full';
+    disagreeing(projectId, 'Full dialog bracket');
+    const onReset = vi.fn();
+    try {
+      render(
+        <PinResetDialog
+          target={{
+            kind: 'project',
+            projectId,
+            name: 'Full dialog bracket',
+            reason: 'mismatch'
+          }}
+          onClose={() => {}}
+          onReset={onReset}
+        />
+      );
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('checkbox'));
+      resetGenerationsRefused();
+      fireEvent.click(
+        within(dialog).getByRole('button', { name: 'Treat as not encrypted' })
+      );
+      expect(onReset).toHaveBeenCalledWith({
+        ok: false,
+        message: PIN_RESET_NOT_SAVED
+      });
+      expect(isEncryptedProject(projectId)).toBe(true);
+    } finally {
+      resetGenerationsFit = true;
       treatProjectAsNotEncrypted(projectId, OWNER);
     }
   });

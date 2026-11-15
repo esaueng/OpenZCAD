@@ -3374,7 +3374,8 @@ export function App() {
         onReset={(result) => {
           setPinReset(null);
           setStatus(result.message);
-          announce(result.message);
+          if (result.ok) announce(result.message);
+          else announce(result.message, undefined, { tone: 'warning' });
           // Saves held back while it was stuck go out as the account
           // lists the project now.
           if (result.ok) {

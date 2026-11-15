@@ -27,7 +27,11 @@ import {
   type MigrationMemberState
 } from '../lib/e2ee/migrationMembers';
 import { Group, Meter, Notice, SettingRow, Status } from './settingsControls';
-import { PinResetConfirm, pinProblemText } from './EncryptedPinReset';
+import {
+  PIN_RESET_NOT_SAVED,
+  PinResetConfirm,
+  pinProblemText
+} from './EncryptedPinReset';
 
 const MB = 1024 * 1024;
 const megabytes = (bytes: number) =>
@@ -496,6 +500,7 @@ function ProjectRow({
   controller: MigrationController;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const [resetNotSaved, setResetNotSaved] = useState(false);
   const unresolved = progress.unresolved === true;
   // Waiting, but its cutover was asked for here: retried like a stop.
   const unfinished = unresolved && progress.phase === 'waiting';
@@ -618,7 +623,10 @@ function ProjectRow({
                 className="secondary"
                 type="button"
                 disabled={busy}
-                onClick={() => setConfirming(true)}
+                onClick={() => {
+                  setResetNotSaved(false);
+                  setConfirming(true);
+                }}
               >
                 <LockOpen size={13} aria-hidden="true" />
                 Treat as not encrypted on this device
@@ -643,11 +651,18 @@ function ProjectRow({
           onCancel={() => setConfirming(false)}
           onConfirm={() => {
             setConfirming(false);
-            controller.treatAsNotEncrypted(progress.projectId, {
-              confirmedByOwner: true
-            });
+            setResetNotSaved(
+              !controller.treatAsNotEncrypted(progress.projectId, {
+                confirmedByOwner: true
+              })
+            );
           }}
         />
+      ) : null}
+      {unresolved && !active && resetNotSaved ? (
+        <p className="encryption-migration-error" role="alert">
+          {PIN_RESET_NOT_SAVED}
+        </p>
       ) : null}
       {(active || stopped) && progress.phase !== 'members' && !unfinished ? (
         <Meter

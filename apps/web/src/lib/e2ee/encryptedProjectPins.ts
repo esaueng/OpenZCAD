@@ -115,9 +115,11 @@ export interface EncryptedProjectPinStore {
   encryptionRequired(projectId: string): boolean;
   /**
    * Unpins the project: only after this device's own decrypt run cut it
-   * over to plaintext. Other tabs see it reset elsewhere.
+   * over to plaintext. Other tabs see it reset elsewhere. Whether it was
+   * unpinned: false, with nothing changed, when its new reset generation
+   * could not be saved (storage full or blocked).
    */
-  forget(projectId: string): void;
+  forget(projectId: string): boolean;
   /**
    * Records, beside the pin, that this device is about to ask for the
    * project's encrypt cutover and has not seen it complete; whether that
@@ -138,9 +140,11 @@ export interface EncryptedProjectPinStore {
   /**
    * The owner's confirmed "Treat as not encrypted on this device" for one
    * project: drops its pin, its unresolved record and its requirement.
-   * Never called on the account's word.
+   * Never called on the account's word. Whether it was reset: false, with
+   * nothing changed here or in storage, when its new reset generation
+   * could not be saved and read back (storage full or blocked).
    */
-  resetProject(projectId: string): void;
+  resetProject(projectId: string): boolean;
   /**
    * The owner's confirmed reset of a degraded store: removes the failure
    * key and keeps every saved pin, then saves the reserve again. This
@@ -379,24 +383,31 @@ export function localStorageEncryptedProjectPins(
     staleProjects.add(projectId);
     return true;
   };
-  /** Saves a new reset generation for the project, as this tab's own. */
-  const markReset = (projectId: string) => {
-    staleProjects.delete(projectId);
-    if (storage) {
-      try {
-        storage.setItem(
-          ENCRYPTED_PROJECT_RESET_PREFIX + projectId,
-          resetToken()
-        );
-      } catch {
-        // Not saved: another tab keeps the pin it saw (held in its
-        // memory), so it stays encrypted there, which is safe.
-      }
+  /**
+   * Saves a new reset generation for the project, as this tab's own;
+   * whether it was saved (read back). Not saved (storage full or blocked),
+   * nothing changes here, and the caller clears nothing: the project's
+   * records of the current generation are still the ones a reload reads.
+   */
+  const markReset = (projectId: string): boolean => {
+    if (!storage) {
+      // Memory only: nothing is saved, so nothing outlives this page.
+      staleProjects.delete(projectId);
+      seenResets.set(projectId, null);
+      return true;
     }
-    seenResets.set(
-      projectId,
-      read(ENCRYPTED_PROJECT_RESET_PREFIX + projectId) ?? null
-    );
+    const token = resetToken();
+    try {
+      storage.setItem(ENCRYPTED_PROJECT_RESET_PREFIX + projectId, token);
+    } catch {
+      // Fall through to the read-back.
+    }
+    if (read(ENCRYPTED_PROJECT_RESET_PREFIX + projectId) !== token) {
+      return false;
+    }
+    staleProjects.delete(projectId);
+    seenResets.set(projectId, token);
+    return true;
   };
   /**
    * The generation this tab writes the project's records under: the one
@@ -548,26 +559,30 @@ export function localStorageEncryptedProjectPins(
    * before, and those this tab wrote under) are removed, never a newer
    * one's.
    */
-  const forget = (projectId: string) => {
-    if (!PROJECT_ID.test(projectId)) return;
-    own.delete(projectId);
-    ownUnresolved.delete(projectId);
-    ownRequired.delete(projectId);
+  const forget = (projectId: string): boolean => {
+    if (!PROJECT_ID.test(projectId)) return false;
     const older = new Set<string>();
     const written = writeTag(projectId);
     if (written !== undefined) older.add(written);
     const ownTag = unresolvedTags.get(projectId);
     if (ownTag !== undefined) older.add(ownTag);
-    unresolvedTags.delete(projectId);
     const replaced = read(ENCRYPTED_PROJECT_RESET_PREFIX + projectId);
     if (replaced !== undefined) older.add(replaced ?? NO_RESET);
-    markReset(projectId);
+    // Nothing is cleared, here or in storage, unless the new generation
+    // was saved: a reload would otherwise still read the old records while
+    // this page reported the project reset.
+    if (!markReset(projectId)) return false;
+    own.delete(projectId);
+    ownUnresolved.delete(projectId);
+    ownRequired.delete(projectId);
+    unresolvedTags.delete(projectId);
     // The generation saved now is never removed.
     const saved = read(ENCRYPTED_PROJECT_RESET_PREFIX + projectId);
-    if (saved === undefined) return;
+    if (saved === undefined) return true;
     older.delete(saved ?? NO_RESET);
     removeRecords(projectId, older);
     if (saved !== null) sweepOlderRecords(projectId, saved);
+    return true;
   };
   /**
    * Removes the unresolved record this page wrote, under the generation it
@@ -694,7 +709,7 @@ export function localStorageEncryptedProjectPins(
       return current(ENCRYPTED_PROJECT_UNRESOLVED_PREFIX, projectId) ?? true;
     },
     resetProject(projectId) {
-      forget(projectId);
+      return forget(projectId);
     },
     resetDegraded() {
       if (!storage) return false;

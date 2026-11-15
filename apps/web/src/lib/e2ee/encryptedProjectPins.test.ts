@@ -235,6 +235,69 @@ describe('encrypted project pins', () => {
     expect(reloaded.has('proj_kept')).toBe(true);
   });
 
+  it('reports a project reset as done once its new generation is saved', () => {
+    const storage = memoryStorage();
+    const pins = localStorageEncryptedProjectPins(storage);
+    pins.pin('proj_saved_reset');
+    expect(pins.resetProject('proj_saved_reset')).toBe(true);
+    expect(pins.has('proj_saved_reset')).toBe(false);
+    expect(
+      localStorageEncryptedProjectPins(storage).has('proj_saved_reset')
+    ).toBe(false);
+  });
+
+  // PR #1418 review: a reset whose new generation could not be saved
+  // (storage full) cleared this page's memory and reported success, while
+  // a reload still read the project's records of the current generation.
+  it('changes nothing when a project reset cannot save its new generation', () => {
+    const storage = memoryStorage();
+    const pins = localStorageEncryptedProjectPins(storage);
+    pins.pin('proj_full');
+    pins.markCutoverUnresolved('proj_full');
+    pins.requireEncryption('proj_full');
+    const before = new Map(storage.values);
+    const setItem = storage.setItem;
+    storage.setItem = (key, value) => {
+      if (key.startsWith(ENCRYPTED_PROJECT_RESET_PREFIX)) {
+        throw new DOMException('full', 'QuotaExceededError');
+      }
+      setItem(key, value);
+    };
+    expect(pins.resetProject('proj_full')).toBe(false);
+    expect(pins.forget('proj_full')).toBe(false);
+    // Nothing cleared, in storage or in this page.
+    expect(storage.values).toEqual(before);
+    expect(pins.has('proj_full')).toBe(true);
+    expect(pins.cutoverUnresolved('proj_full')).toBe(true);
+    expect(pins.encryptionRequired('proj_full')).toBe(true);
+    expect(pins.degraded).toBe(false);
+    const reloaded = localStorageEncryptedProjectPins(storage);
+    expect(reloaded.has('proj_full')).toBe(true);
+    expect(reloaded.cutoverUnresolved('proj_full')).toBe(true);
+    // Once storage has room again, the reset goes through.
+    storage.setItem = setItem;
+    expect(pins.resetProject('proj_full')).toBe(true);
+    expect(localStorageEncryptedProjectPins(storage).has('proj_full')).toBe(
+      false
+    );
+  });
+
+  it('changes nothing when the saved generation does not read back', () => {
+    const storage = memoryStorage();
+    const pins = localStorageEncryptedProjectPins(storage);
+    pins.pin('proj_dropped');
+    const setItem = storage.setItem;
+    // A write that reports success but keeps nothing.
+    storage.setItem = (key, value) => {
+      if (!key.startsWith(ENCRYPTED_PROJECT_RESET_PREFIX)) setItem(key, value);
+    };
+    expect(pins.resetProject('proj_dropped')).toBe(false);
+    expect(pins.has('proj_dropped')).toBe(true);
+    expect(localStorageEncryptedProjectPins(storage).has('proj_dropped')).toBe(
+      true
+    );
+  });
+
   it('keeps a carried encryption requirement across a reload, apart from the pin', () => {
     const storage = memoryStorage();
     const pins = localStorageEncryptedProjectPins(storage);

@@ -174,6 +174,13 @@ export function PinResetConfirm({
 }
 
 /**
+ * A project reset this device could not save: nothing changed, here or
+ * after a reload, so the project stays as it was.
+ */
+export const PIN_RESET_NOT_SAVED =
+  'This device couldn’t save the reset because browser storage is full or blocked, so nothing changed and the project stays as it was. Free up browser storage for this site (or allow site storage), then try again. Don’t clear site data: that would also remove unsynced work and this device’s encryption keys.';
+
+/**
  * Runs a confirmed reset and says what came of it. The account is never
  * asked: the reset is this device's own.
  */
@@ -194,11 +201,12 @@ export function runPinReset(target: PinResetTarget): {
             'Site storage is still blocked or full, so nothing changed. Allow site storage and free up space, then try again.'
         };
   }
-  treatProjectAsNotEncrypted(target.projectId, OWNER);
-  return {
-    ok: true,
-    message: `${target.name ?? 'The project'} now follows your account on this device.`
-  };
+  return treatProjectAsNotEncrypted(target.projectId, OWNER)
+    ? {
+        ok: true,
+        message: `${target.name ?? 'The project'} now follows your account on this device.`
+      }
+    : { ok: false, message: PIN_RESET_NOT_SAVED };
 }
 
 /**

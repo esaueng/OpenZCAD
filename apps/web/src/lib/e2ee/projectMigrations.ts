@@ -160,8 +160,14 @@ export interface MigrationController {
   /**
    * The owner's confirmed "Treat as not encrypted on this device" for a
    * project whose switch did not finish here: drops its pin and record.
+   * Whether it did: false, with nothing changed, when the reset could not
+   * be saved on this device (browser storage full or blocked) or a run is
+   * still going.
    */
-  treatAsNotEncrypted(projectId: string, confirmation: OwnerConfirmation): void;
+  treatAsNotEncrypted(
+    projectId: string,
+    confirmation: OwnerConfirmation
+  ): boolean;
   /**
    * Slice 7-4 (decision M8): new encrypted links, of the same modes, for
    * the plaintext links a migrated project's cutover revoked.
@@ -840,9 +846,10 @@ export function createMigrationController(
       return result;
     },
     treatAsNotEncrypted(projectId, confirmation) {
-      if (state.running) return;
-      treatProjectAsNotEncrypted(projectId, confirmation);
+      if (state.running) return false;
+      const reset = treatProjectAsNotEncrypted(projectId, confirmation);
       set({ projects: state.projects });
+      return reset;
     },
     async cancel(projectId) {
       if (state.running) return;

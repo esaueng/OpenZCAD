@@ -708,8 +708,11 @@ function pinCreated<
  */
 export function forgetEncryptedProject(projectId: string): void {
   // Its format is known here now, so no encrypt switch is left unknown.
-  encryptedProjectPins().resetProject(projectId);
-  formatMismatchIds.delete(projectId);
+  // Not saved (storage full or blocked): it stays pinned, so its writes
+  // name the disagreement and the owner's reset is offered, which is safe.
+  if (encryptedProjectPins().resetProject(projectId)) {
+    formatMismatchIds.delete(projectId);
+  }
   pinsChanged();
 }
 
@@ -814,15 +817,20 @@ export interface OwnerConfirmation {
  * its unfinished-cutover record; its next listing decides its format, as
  * for a project this device never saw. Never called on the account's
  * word (a listing, a status, an abandoned migration).
+ *
+ * Whether it was reset: false, with nothing changed, when the reset could
+ * not be saved on this device (browser storage full or blocked), so a
+ * reload would still hold the project as before.
  */
 export function treatProjectAsNotEncrypted(
   projectId: string,
   confirmation: OwnerConfirmation
-): void {
-  if (confirmation.confirmedByOwner !== true) return;
-  encryptedProjectPins().resetProject(projectId);
-  formatMismatchIds.delete(projectId);
+): boolean {
+  if (confirmation.confirmedByOwner !== true) return false;
+  const reset = encryptedProjectPins().resetProject(projectId);
+  if (reset) formatMismatchIds.delete(projectId);
   pinsChanged();
+  return reset;
 }
 
 /**
