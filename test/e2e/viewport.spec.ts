@@ -1141,17 +1141,26 @@ test('repeated face clicks reach a body behind direct-edit handles', async ({
     page.locator('.feature-row-main', { hasText: 'Cylinder' })
   ).toBeVisible();
 
+  // Taking a primitive from the Tools drawer leaves it open over the left
+  // of the stage, where the two bodies overlap; close it so clicks reach them.
+  const drawer = page.getByRole('group', { name: 'Tools drawer' });
+  if (await drawer.isVisible()) {
+    await drawer.getByRole('button', { name: 'Close tools drawer' }).click();
+    await expect(drawer).toHaveCount(0);
+  }
+
   const canvas = page.locator('.viewer-host canvas');
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
   const label = page.locator('.selection-readout .selection-callout-name');
   let cycled = false;
 
-  // The default box and cylinder overlap around the centre in the isometric
-  // view. Search a small grid so the assertion does not depend on a hard-coded
-  // camera projection or on which primitive is frontmost.
-  for (let y = 0.38; y <= 0.62 && !cycled; y += 0.04) {
-    for (let x = 0.38; x <= 0.62 && !cycled; x += 0.04) {
+  // The default box and cylinder overlap in the isometric view, framed into
+  // the clear stage beside the docked panels (#1440). Search a grid over the
+  // stage so the assertion does not depend on a hard-coded camera
+  // projection or on which primitive is frontmost.
+  for (let y = 0.3; y <= 0.7 && !cycled; y += 0.04) {
+    for (let x = 0.15; x <= 0.65 && !cycled; x += 0.04) {
       const point = {
         x: bounds!.x + bounds!.width * x,
         y: bounds!.y + bounds!.height * y

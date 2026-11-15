@@ -595,8 +595,20 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
     })
   ).toHaveCount(0);
 
+  // Delete on the bore fills that round opening (M07, #1474); it never takes
+  // the unrelated lower-rim fillet. Undo the fill: the steps below edit the
+  // bore.
   await page.keyboard.press('Delete');
+  await expect(page.getByRole('contentinfo')).toContainText('Filled the cut', {
+    timeout: 60_000
+  });
   expect((await readBlend(canvas, 2))?.blendRadius).toBeCloseTo(2, 6);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect
+    .poll(async () => (await probeFace(canvas, 'bore')) !== null, {
+      timeout: 60_000
+    })
+    .toBe(true);
 
   await revealModelPanel(page, 'History');
   await page

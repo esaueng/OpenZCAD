@@ -185,15 +185,15 @@ test('UI-04: a Settings filter can be cleared at every width', async ({
     .poll(() => sections.locator('nav button').count())
     .toBeLessThan(all);
 
-  const clear = page.getByRole('button', { name: 'Clear the filter “snap”' });
+  // The search field stays at every width (#1409): at 580 px and below it
+  // is a full row under the title, so the field itself is the way out.
+  const field = page.getByLabel('Find a setting');
   for (const width of [581, 580, 579, 390, 320]) {
     await page.setViewportSize({ width, height: 640 });
-    // Either the field itself or the rail's way out is in reach.
-    if (!(await page.getByLabel('Find a setting').isVisible())) {
-      await expectReachable(clear);
-    }
+    await expectReachable(field);
+    await expect.poll(() => insideWindow(field)).toBe(true);
   }
-  await clickCentre(page, clear);
+  await field.fill('');
   await expect(sections.locator('nav button')).toHaveCount(all);
   await page.setViewportSize({ width: 844, height: 600 });
   await expect(page.getByLabel('Find a setting')).toHaveValue('');
