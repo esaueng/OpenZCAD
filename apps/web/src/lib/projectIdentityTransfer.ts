@@ -394,6 +394,11 @@ async function transferAdoptedProjectIdentity(
   // The transaction's awaits may overlap another edit in this tab. Transfer
   // the live manager after commit so those edits retain their exact history.
   const latestManager = app.manager();
+  // Checked again here, synchronously before the account id is published:
+  // while the rekey ran, content that must stay encrypted can have landed
+  // under the device id (a project insert records its requirement there).
+  // Throws, publishing nothing, when it cannot be saved.
+  carryEncryptionRequirement(sourceId, remote.projectId, { account: true });
   if (latestManager?.document.projectId === sourceId) {
     const moved = latestTransferredProjectDocument(
       transferred,
