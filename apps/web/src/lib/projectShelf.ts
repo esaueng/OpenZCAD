@@ -116,22 +116,12 @@ export async function resolveShelfThumbnail(
   host: {
     loadCached(projectId: string): Promise<ProjectThumbnailRecord | null>;
     download(artifactId: string): Promise<string>;
-    /**
-     * True while this tab's freshly published card is newer than every
-     * listing it has applied (see `thumbnailPublications`). A listing naming
-     * another artifact then predates the device image rather than replacing
-     * it, and downloading it would put the previous card back on the tile.
-     */
-    deviceCardOutranksListing?(projectId: string): boolean;
   }
 ): Promise<string | null | undefined> {
   // A locked card shows no preview: the account's image of an encrypted
   // project is not one this build can show.
   if (projectNeedsUpdate(project)) return undefined;
   const cached = await host.loadCached(project.projectId).catch(() => null);
-  if (cached?.source && host.deviceCardOutranksListing?.(project.projectId)) {
-    return cached.source;
-  }
   const cachedSource = cachedThumbnailSource(cached, project);
   if (cachedSource !== undefined || !project.thumbnailArtifactId) {
     return cachedSource;

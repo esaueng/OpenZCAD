@@ -12,10 +12,7 @@ import {
 import { queuePartThumbnail, renderThumbnailFrame } from '../lib/partThumbnail';
 import type { ThumbnailCapture } from '../lib/projectThumbnailCapture';
 import { sharedThumbnailCapture } from '../lib/sharedThumbnailCapture';
-import {
-  notePublishedThumbnail,
-  publicationSession
-} from '../lib/thumbnailPublications';
+import { trackThumbnailUpload } from '../lib/thumbnailUploads';
 
 interface ProjectThumbnailSyncAgentProps {
   projectId: ProjectId;
@@ -69,32 +66,21 @@ export function ProjectThumbnailSyncAgent({
         return;
       }
       const source = captured.source;
-      const session = publicationSession();
       // Deliberately not cancelled on unmount: the leave flush notifies while
-      // this agent is still mounted and the upload must outlive it.
-      void uploadCloudThumbnail(transport, {
-        projectId,
-        version,
-        updatedAt,
-        source
-      })
-        .then(async (artifactId) => {
-          // Uploads can finish out of order. One that a later capture has
-          // already replaced on this device must not write its older image
-          // back over the newer card.
-          const current = await loadThumbnail(projectId);
-          if (current && current.version !== version) return;
-          await saveThumbnail(projectId, {
-            source,
-            artifactId,
-            version,
-            updatedAt
-          });
-          // A listing read before this point may name the card it replaced;
-          // the shelf keeps the device image until a later one is applied.
-          notePublishedThumbnail(projectId, session);
-        })
-        .catch(() => undefined);
+      // this agent is still mounted and the upload must outlive it. The
+      // record is keyed by version, so a late write cannot mislabel anything.
+      // Tracked so the shelf's listing refresh reads after it settles (see
+      // thumbnailUploads).
+      void trackThumbnailUpload(
+        uploadCloudThumbnail(transport, {
+          projectId,
+          version,
+          updatedAt,
+          source
+        }).then((artifactId) =>
+          saveThumbnail(projectId, { source, artifactId, version, updatedAt })
+        )
+      ).catch(() => undefined);
     });
     capture.stage(
       {

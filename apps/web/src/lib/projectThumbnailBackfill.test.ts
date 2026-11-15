@@ -42,28 +42,6 @@ describe('project thumbnail backfill', () => {
     });
 
     expect(result.artifactId).toBe(artifactId);
-    // A fresh upload, so the shelf can order it against listings in flight.
-    expect(result.published).toBe(true);
-  });
-
-  it('does not report an artifact the record already carried as a fresh upload', async () => {
-    const publish = vi.fn();
-    const result = await backfillProjectThumbnail(summary(), {
-      loadCached: vi.fn().mockResolvedValue({
-        projectId: 'project_backfill',
-        source: 'data:image/webp;base64,CACHED',
-        artifactId: toArtifactId('artifact_earlier'),
-        version: 3,
-        updatedAt: '2026-08-09T04:00:00.000Z'
-      }),
-      save: vi.fn().mockResolvedValue(undefined),
-      publish
-    });
-    expect(publish).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      source: 'data:image/webp;base64,CACHED',
-      artifactId: 'artifact_earlier'
-    });
   });
 
   it('keeps a cached device preview when publication is refused', async () => {

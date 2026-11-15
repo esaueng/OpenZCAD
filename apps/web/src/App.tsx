@@ -1666,13 +1666,9 @@ import {
 import { folderStorageKey, readLibraryFolders } from './lib/libraryFolders';
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import {
-  beginListingRead,
-  deviceCardOutranksListing,
-  finishListingRead,
-  notePublishedThumbnail,
-  publicationSession,
-  retireThumbnailPublications
-} from './lib/thumbnailPublications';
+  settleThumbnailUploads,
+  trackThumbnailUpload
+} from './lib/thumbnailUploads';
 import {
   cachedShelfNames,
   forgetShelfProjectNames,
@@ -2241,9 +2237,6 @@ async function loadProjectSummaries(
   cloudProjectIds: Set<string>;
 }> {
   const keySessionRevision = getKeySessionRevision();
-  // Before the account is asked: a card this tab publishes while the read is
-  // in flight is not something the read can be expected to name.
-  const readStartedAt = beginListingRead();
   const signedIn = accountId !== null;
   const scope = organizationBackground.begin(accountId);
   const unavailableAs =
@@ -2382,7 +2375,6 @@ async function loadProjectSummaries(
     (project) =>
       !purged.has(project.projectId) || remoteIds.has(project.projectId)
   );
-  finishListingRead(readStartedAt);
   return {
     projects,
     remoteReached: Boolean(remote),
@@ -3916,7 +3908,6 @@ export function App() {
     (project: ProjectSummary): Promise<string | null | undefined> =>
       resolveShelfThumbnail(project, {
         loadCached: loadProjectThumbnail,
-        deviceCardOutranksListing,
         download: async (artifactId) => {
           const { downloadCloudThumbnail } =
             await import('./lib/cloudThumbnail');
@@ -4617,11 +4608,6 @@ export function App() {
       ),
     [thumbnailAccountUserId]
   );
-  // A publication speaks for the account and key session it began in.
-  useEffect(() => {
-    retireThumbnailPublications();
-    return subscribeKeySession(retireThumbnailPublications);
-  }, [thumbnailAccountUserId]);
   const loadProperties = useCallback(
     async (project: ProjectSummary) => {
       const { loadProjectProperties } = await import('./lib/projectProperties');
@@ -4648,7 +4634,6 @@ export function App() {
       const cloudBacked =
         Boolean(thumbnailAccountUserId && accountProjectListReached) &&
         runtime.cloudProjectIds.has(project.projectId);
-      const publishedInSession = publicationSession();
       const result = await backfillProjectThumbnail(project, {
         loadCached: (projectId) =>
           loadProjectThumbnail(projectId).catch(() => null),
@@ -4662,7 +4647,7 @@ export function App() {
               }) => {
                 const { uploadCloudThumbnail } =
                   await import('./lib/cloudThumbnail');
-                return uploadCloudThumbnail(api, input);
+                return trackThumbnailUpload(uploadCloudThumbnail(api, input));
               }
             }
           : {}),
@@ -4676,11 +4661,6 @@ export function App() {
               : candidate
           )
         );
-      }
-      // Only a fresh upload can be newer than a listing read in flight; an
-      // id the record already carried was published before it.
-      if (result.published) {
-        notePublishedThumbnail(project.projectId, publishedInSession);
       }
       return result.source;
     },
@@ -7220,6 +7200,10 @@ export function App() {
     const stop = watchLibraryFreshness(async () => {
       if (!settled()) return;
       const before = latestProjects.current;
+      // A listing read while a card upload finalizes names the card it
+      // replaced; read after it instead (see thumbnailUploads).
+      await settleThumbnailUploads();
+      if (!settled() || latestProjects.current !== before) return;
       // Expiry purging stays with the explicit listings.
       const listed = await loadProjectSummaries(accountId, false);
       // An unreachable account keeps the shelf as it was rather than
@@ -14764,6 +14748,11 @@ export function App() {
     setSelectedProfiles([]);
     setTool(null);
     try {
+      // The flush above just started this project's card upload. The shelf
+      // already shows the card; the listing behind it is read once the upload
+      // settles, so it names that card rather than the one it replaced.
+      await settleThumbnailUploads();
+      if (!isCurrent()) return;
       const listed = await loadProjectSummaries(
         sessionRef.current?.userId ?? null
       );

@@ -24,8 +24,6 @@ interface ThumbnailBackfillHost {
 export interface ProjectThumbnailBackfillResult {
   source: string | null | undefined;
   artifactId?: ArtifactId;
-  /** True when `artifactId` was uploaded by this call. */
-  published?: boolean;
 }
 
 /**
@@ -51,7 +49,6 @@ export async function backfillProjectThumbnail(
   const updatedAt = cached?.updatedAt ?? project.updatedAt;
 
   let artifactId = cachedMatchesProject ? cached?.artifactId : undefined;
-  let published = false;
   if (source && !project.thumbnailArtifactId && !artifactId && host.publish) {
     // Read-only collaborators can render a useful device cache but cannot
     // publish into the owner's project. Keep that local success if upload is
@@ -65,7 +62,6 @@ export async function backfillProjectThumbnail(
       })
       .catch(() => undefined);
     if (artifactId) {
-      published = true;
       await host.save(project.projectId, {
         source,
         artifactId,
@@ -77,7 +73,6 @@ export async function backfillProjectThumbnail(
 
   return {
     source,
-    ...(artifactId ? { artifactId } : {}),
-    ...(published ? { published } : {})
+    ...(artifactId ? { artifactId } : {})
   };
 }
