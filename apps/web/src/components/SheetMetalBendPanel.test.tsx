@@ -133,3 +133,60 @@ describe('SheetMetalBendPanel: a row whose line is gone', () => {
     expect(props.onRemove).toHaveBeenCalledWith(LINE);
   });
 });
+
+describe('SheetMetalBendPanel: a refused field that is hidden', () => {
+  it('gives its refusal up, so Done is not held by a value nobody sees (re-check)', async () => {
+    const user = userEvent.setup();
+    const withRelief = (shape: 'rectangular' | 'none'): BendRow => ({
+      ...ROW,
+      relief: { shape, width: 3 }
+    });
+    const props = {
+      unitLabel: 'mm',
+      evaluate: (text: string) =>
+        Number.isFinite(Number(text)) ? Number(text) : null,
+      onOption: vi.fn(),
+      onRefuse: vi.fn(),
+      onRestore: vi.fn(),
+      onRemove: vi.fn(),
+      fold: 0,
+      onFold: vi.fn(),
+      fixedPoint: undefined,
+      onClearFixed: vi.fn()
+    };
+    const { rerender } = render(
+      <SheetMetalBendPanel {...props} rows={[withRelief('rectangular')]} />
+    );
+    const width = screen.getByLabelText('Bend 1 relief width (mm)');
+    await user.clear(width);
+    await user.type(width, 'nope{Enter}');
+    expect(props.onRefuse).toHaveBeenCalledWith(
+      'bend.ent_a.reliefWidth',
+      expect.stringContaining('nope')
+    );
+    expect(props.onRestore).not.toHaveBeenCalled();
+    // No relief hides the width field with its refused draft.
+    rerender(<SheetMetalBendPanel {...props} rows={[withRelief('none')]} />);
+    expect(
+      screen.queryByLabelText('Bend 1 relief width (mm)')
+    ).not.toBeInTheDocument();
+    expect(props.onRestore).toHaveBeenCalledWith('bend.ent_a.reliefWidth');
+    // Shown again, a valid entry and Escape both release, unconditionally.
+    rerender(
+      <SheetMetalBendPanel {...props} rows={[withRelief('rectangular')]} />
+    );
+    props.onRestore.mockClear();
+    const shown = screen.getByLabelText('Bend 1 relief width (mm)');
+    await user.clear(shown);
+    await user.type(shown, '4{Enter}');
+    expect(props.onOption).toHaveBeenLastCalledWith(
+      'bend.ent_a.reliefWidth',
+      '4'
+    );
+    expect(props.onRestore).toHaveBeenCalledWith('bend.ent_a.reliefWidth');
+    props.onRestore.mockClear();
+    shown.focus();
+    await user.keyboard('{Escape}');
+    expect(props.onRestore).toHaveBeenCalledWith('bend.ent_a.reliefWidth');
+  });
+});

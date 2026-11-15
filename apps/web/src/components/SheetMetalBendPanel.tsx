@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import type { ParamValue } from '@openzcad/shared';
 import {
@@ -80,8 +80,24 @@ function ExprField({
     setDraft(value);
     setRefused(false);
   }, [value]);
+  // The command holds a refusal by its value id while the row exists, not
+  // while this field is shown: a field hidden with its draft refused (a
+  // relief set to none) must give the refusal up, or Done stays held by a
+  // value nobody can see or correct.
+  const restoreRef = useRef(onRestore);
+  restoreRef.current = onRestore;
+  const refusedRef = useRef(false);
+  refusedRef.current = refused;
+  useEffect(
+    () => () => {
+      if (refusedRef.current) restoreRef.current?.();
+    },
+    []
+  );
+  // Releasing is idempotent, so Escape and every accepted value release
+  // unconditionally rather than trusting this field's own memory.
   const restore = () => {
-    if (refused) onRestore?.();
+    onRestore?.();
     setRefused(false);
   };
   const commit = () => {
