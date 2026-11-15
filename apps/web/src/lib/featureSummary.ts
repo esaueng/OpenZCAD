@@ -8,7 +8,7 @@ import {
   type UnitSystem,
   type Vector3
 } from '@openzcad/shared';
-import { pipeThreadLabel } from '@openzcad/shared';
+import { pipeThreadLabel, sheetMetalMaterialById } from '@openzcad/shared';
 import { edgeSelectionName, storedLoopEdges } from './edgeLoops';
 import { unitLabel } from './measurements';
 import { evalParamValue, formatNumber } from './model';
@@ -330,6 +330,17 @@ export function featureValueSummary(
             ? `pitch ${pitch} ${unit}`
             : 'fits the face';
       return `${size}, ${profile}`;
+    }
+    case 'sheet-metal': {
+      // "1.5 mm, 3 bends"; with a material preset, "1.5 mm steel, 3 bends".
+      const thickness = num(data.thickness);
+      if (thickness === null) return null;
+      const material =
+        data.materialPresetId === undefined
+          ? null
+          : sheetMetalMaterialById(data.materialPresetId);
+      const count = data.bends.length;
+      return `${thickness} ${unit}${material ? ` ${material.label.toLowerCase()}` : ''}, ${count === 0 ? 'flat' : `${count} ${count === 1 ? 'bend' : 'bends'}`}`;
     }
     case 'hole': {
       const diameter = num(data.diameter);

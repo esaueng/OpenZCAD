@@ -89,6 +89,19 @@ import {
   type StlExportMesh
 } from '@openzcad/io-stl';
 import { faceDxfEntities } from './exact-dxf';
+import {
+  foldSheetMetalAt,
+  sheetMetalFlatPattern,
+  type SheetMetalFlatPattern,
+  type SheetMetalFoldPreview
+} from './exact-sheet-metal';
+
+export type {
+  SheetMetalFlatPattern,
+  SheetMetalFlatPatternBend,
+  SheetMetalFoldPreview,
+  SheetMetalRefusalCode
+} from './exact-sheet-metal';
 import { sketchDxfEntities, SketchDxfExportError } from './exact-sketch-dxf';
 import { assertSketchProjectionsValid } from './exact-sketch-projection-failures';
 export { SketchDxfExportError } from './exact-sketch-dxf';
@@ -128,6 +141,7 @@ import {
   nowIso,
   type ArtifactId,
   type BodyId,
+  type FeatureId,
   type BodyMassProperties,
   type BodyRepresentation,
   type GeometryBodyRepresentation,
@@ -202,6 +216,7 @@ import {
 } from './kernel-step-import';
 import {
   buildDocumentHistoryCooperatively,
+  withSketchObjectOverrides,
   type StrictUnionVerdict,
   type StrictUnionVerdicts
 } from './exact-build-loop';
@@ -821,6 +836,27 @@ export interface ExactKernelAdapter {
     face: DxfFaceSelector,
     options?: ExportUnitOptions
   ): Promise<string>;
+  /**
+   * M16: the flat pattern of a sheet-metal feature — the flat sheet's
+   * outline loops and its bend centre lines in the blank's sketch
+   * coordinates (document units), with the features that changed the folded
+   * body since. Rebuilt from the document; refuses as the feature does.
+   */
+  sheetMetalFlatPattern(
+    document: ProjectDocument,
+    featureId: FeatureId
+  ): Promise<SheetMetalFlatPattern>;
+  /**
+   * M16: a view-only mesh of a sheet-metal feature folded to `fraction` of
+   * every bend's angle (0 is the flat sheet, 1 the stored part). Nothing is
+   * stored and the build's bodies are untouched; later features are not
+   * applied to it.
+   */
+  sheetMetalFoldPreview(
+    document: ProjectDocument,
+    featureId: FeatureId,
+    fraction: number
+  ): Promise<SheetMetalFoldPreview>;
   exportStl(
     document: ProjectDocument,
     bodyIds: BodyId[],
@@ -5124,6 +5160,61 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         })),
         skipped
       };
+    });
+  }
+
+  async sheetMetalFlatPattern(
+    document: ProjectDocument,
+    featureId: FeatureId
+  ): Promise<SheetMetalFlatPattern> {
+    return this.withExportBuild(document, (kernel, build) =>
+      sheetMetalFlatPattern(
+        kernel,
+        // The sketches as the build read them: a linked projection that
+        // moved is re-projected there, not in the stored document.
+        withSketchObjectOverrides(document, build.sketchObjectOverrides),
+        getParameterScope(document).scope,
+        build,
+        featureId,
+        millimetresPerUnit(document.units)
+      )
+    );
+  }
+
+  async sheetMetalFoldPreview(
+    document: ProjectDocument,
+    featureId: FeatureId,
+    fraction: number
+  ): Promise<SheetMetalFoldPreview> {
+    return this.withExportBuild(document, (kernel, build) => {
+      const solid = foldSheetMetalAt(
+        kernel,
+        withSketchObjectOverrides(document, build.sketchObjectOverrides),
+        getParameterScope(document).scope,
+        build,
+        featureId,
+        fraction
+      );
+      const box = kernel.boundingBox(solid);
+      const size = Math.hypot(
+        box[3]! - box[0]!,
+        box[4]! - box[1]!,
+        box[5]! - box[2]!
+      );
+      const mesh = kernel.tessellateSolid(solid, Math.max(size, 1e-6) * 5e-4);
+      try {
+        return {
+          featureId,
+          fraction,
+          positions: Float64Array.from(mesh.positions),
+          normals: Float64Array.from(mesh.normals),
+          indices: Uint32Array.from(mesh.indices),
+          volume: kernel.volume(solid, MEASUREMENT_DEFLECTION),
+          boundingBox: [box[0]!, box[1]!, box[2]!, box[3]!, box[4]!, box[5]!]
+        };
+      } finally {
+        mesh.free();
+      }
     });
   }
 

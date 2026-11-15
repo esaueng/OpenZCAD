@@ -39,6 +39,7 @@ const HANDLED_FEATURE_KINDS: ReadonlySet<FeatureKind> = new Set<FeatureKind>([
   'hole',
   'gear',
   'thread',
+  'sheet-metal',
   'transform',
   'mirror',
   'shell',
@@ -204,6 +205,12 @@ export function affectedFeatureTargets(
           affectedDatums.add(feature.featureId);
         continue;
       }
+      case 'sheet-metal':
+        // The blank's sketch, and each bend line's (it may be another's).
+        affected =
+          affectedSketches.has(data.sketchId) ||
+          data.bends.some((bend) => affectedSketches.has(bend.line.sketchId));
+        break;
       case 'extrude':
         affected =
           affectedSketches.has(data.sketchId) ||

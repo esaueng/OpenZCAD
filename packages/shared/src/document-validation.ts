@@ -26,6 +26,7 @@ import type {
   VariableFilletLaw
 } from './index';
 import { PIPE_THREAD_SIZES } from './pipe-threads';
+import type { SheetMetalKFactorMethod } from './sheet-metal';
 
 /** Limits apply before normalization, cloning, or recursive history traversal. */
 export const MAX_DOCUMENT_DEPTH = 64;
@@ -382,6 +383,15 @@ const FEATURE_ENUM_FIELDS = {
     anchor: THREAD_ANCHORS,
     pipeSize: new Set<string>(PIPE_THREAD_SIZES)
   },
+  'sheet-metal': {
+    thicknessSide: valuesOf<
+      NonNullable<FeatureDataOf<'sheet-metal'>['thicknessSide']>
+    >({ positive: true, negative: true }),
+    kFactorMethod: valuesOf<SheetMetalKFactorMethod>({
+      value: true,
+      'din-6935': true
+    })
+  },
   fillet: { radiusLaw: RADIUS_LAWS },
   'imported-mesh': { assumedUnits: UNIT_SYSTEMS }
 } satisfies {
@@ -507,6 +517,7 @@ const FEATURE_KINDS = valuesOf<FeatureKind>({
   hole: true,
   gear: true,
   thread: true,
+  'sheet-metal': true,
   'direct-edit': true,
   'imported-step': true,
   'imported-mesh': true,
@@ -540,6 +551,7 @@ export const COMMAND_FEATURE_KINDS = {
   'feature.hole': 'hole',
   'feature.gear': 'gear',
   'feature.thread': 'thread',
+  'feature.sheet-metal': 'sheet-metal',
   'feature.shell': 'shell',
   'feature.solid-offset': 'solid-offset',
   'feature.draft': 'draft',

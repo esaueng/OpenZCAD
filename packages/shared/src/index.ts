@@ -28,6 +28,7 @@ import type {
   SketchCompositeSideTarget
 } from './sketch-composite-targets';
 import type { BoundaryProvenance } from './sketch-boundary-provenance';
+import type { SheetMetalFeatureFields } from './sheet-metal';
 import type { SketchPromotion } from './sketch-promotions';
 import type { ObjectFolderSet } from './object-folders';
 import type { AssemblySet } from './assembly';
@@ -240,7 +241,10 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // Every field is optional and absent keeps the v53 thread, so older
 // documents load unchanged. An older client would build a plain end or a
 // cylindrical thread in their place, so it must refuse.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 57 as const;
+// v58 adds M16 sheet-metal features (`featureKind: 'sheet-metal'`): a flat
+// blank folded by a table of bends. An older client has no builder for the
+// kind and would drop the body on rebuild, so it must refuse.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 58 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -308,6 +312,7 @@ export type FeatureKind =
   | 'hole'
   | 'gear'
   | 'thread'
+  | 'sheet-metal'
   | 'direct-edit'
   | 'imported-step'
   | 'imported-mesh'
@@ -2162,6 +2167,17 @@ export type FeatureData =
        */
       pipeSize?: PipeThreadSize;
     }
+  /**
+   * M16 (schema v58): a sheet-metal part. The sketch cells in `profiles`
+   * are the flat blank, `thickness` thick; every bend in `bends` folds it
+   * about a line drawn on that blank. The feature owns one new body. See
+   * {@link SheetMetalFeatureFields} and `docs/plans/sheet-metal-plan.md`.
+   */
+  | ({ featureKind: 'sheet-metal' } & {
+      // Mapped, not the interface itself, so the member stays assignable to
+      // `Record<string, unknown>` like every other feature's data.
+      [K in keyof SheetMetalFeatureFields]: SheetMetalFeatureFields[K];
+    })
   | {
       featureKind: 'split';
       /** Consumed: the two halves replace the input body. */
@@ -3521,6 +3537,7 @@ export interface FeatureWarning {
       | 'blend'
       | 'gear'
       | 'thread'
+      | 'sheet-metal'
       | 'direct-edit'
       | 'reference';
     operation?: string;
@@ -5719,6 +5736,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   hole: '#fb923c',
   gear: '#c084fc',
   thread: '#84cc16',
+  'sheet-metal': '#94a3b8',
   'direct-edit': '#2dd4bf',
   'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff',
