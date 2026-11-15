@@ -1,8 +1,8 @@
 # Unit test suites
 
 Routine pull-request and merge-queue CI run the critical Vitest manifest
-in `test/unit-ci-files.json` plus the test files a change affects (fleet v8;
-see [CI qualification](ci-qualification.md) for when the complete suites run).
+in `test/unit-ci-files.json` plus the test files a change affects (see
+[CI qualification](ci-qualification.md) for when the complete suites run).
 The manifest covers representative model and command operations,
 exact-kernel validation/refusal, persistence, account authorization, crypto/MLS,
 and the web's editing, saving, sharing and recovery paths. Workflow, privacy,
@@ -51,34 +51,16 @@ Windows and symlinks on POSIX. They still test actual filesystem resolution,
 inode identity, dangling reparse points and byte preservation. Developer Mode
 and administrator privileges are not required.
 
-## Policy fixture setup
+## Test deadlines
 
-The root CI global setup acquires the existing immutable Git fixtures before
-workers start, with a 60-second process limit and fatal acquisition errors.
-When the shallow-checkout regression is selected, its disposable history is
-also prepared before workers, including in a local full run. Its original
-provenance assertions still run in the individual test cases.
-That disposable six-commit history uses normal shared Git hooks and has a
-separate two-minute provisioning budget (65 seconds measured on Windows).
-On timeout, the supervisor retires its owned process tree before cleanup;
-Windows cleanup retries transient locks and preserves the original error.
-The policy suite still runs its original setup and every assertion under the
-existing deadlines, including the cold/offline/stale-pin negative controls.
-The nested deadline harness uses its own full-selection config without outer
-global prewarming, so its deliberately cold control must still time out.
-This prevents a slow cold Git transfer from consuming the policy hook's
-10-second deadline, as happened in the preceding browser-profile PR.
-The nested routing control retains its five-second assertion deadline and
-ten-second preparation deadline. The outer process harness separately allows
-startup time. Multi-process Git fixtures have explicit 30-second integration
+Multi-process Git fixtures have explicit 30-second integration
 budgets. Root `test/e2ee-*.test.ts` files exercise complete encrypted-project
 flows with real cryptography and use a 30-second integration default. Other
 unit tests retain their five-second default, and explicit per-case deadlines
 still take precedence. Runtime regressions check all three boundaries.
 Protocol, provenance and refusal assertions remain unchanged.
 The explicit approximate-boolean validation probe has a 30-second integration
-budget. Policy child processes are bounded at 25 seconds while the routing
-probe keeps its five-second test deadline. Structured-output qualification
+budget. Structured-output qualification
 checks every rollout flag combination in batches of 64, retaining the ordinary
 unit deadline.
 The envelope stress checks retain the 500,000-part join under the ordinary

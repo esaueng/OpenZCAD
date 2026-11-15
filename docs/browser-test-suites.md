@@ -70,7 +70,6 @@ appears under User Timing, and the rendering frames show per-frame cost.
 ## Sharding and timing
 
 Both suites use the existing six shards and required E2E completion gate.
-The immutable fleet workflow and its runner restrictions are unchanged.
 The sharder selects files containing the smoke tag, and Playwright selects
 tagged cases within those files. An empty shard fails rather than publishing
 an empty success. Merge candidates run five tagged save/history canaries
