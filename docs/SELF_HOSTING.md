@@ -40,8 +40,8 @@ resource names owned by your Cloudflare account. `PUBLIC_APP_ORIGIN` must be a
 complete HTTPS origin with no trailing slash, for example
 `https://cad.example.com` or the `workers.dev` URL Wrangler assigns.
 
-The example enables `AI_DEPLOYMENT_FREE_ENABLED` and selects the free MiniMax
-model through OpenRouter. Once you add `OPENROUTER_API_KEY`, **every verified
+The example enables `AI_DEPLOYMENT_FREE_ENABLED` and selects the free NVIDIA
+Nemotron 3.5 Super VL model through OpenRouter. Once you add `OPENROUTER_API_KEY`, **every verified
 account can use your deployment's built-in assistant**, without Premium
 membership or an email allowlist. Account quotas and shared OpenRouter free-tier
 limits still apply. Prompts, context and selected attachments are sent to the AI
@@ -133,7 +133,7 @@ pnpm --filter @openzcad/web exec wrangler secret put AI_IDENTITY_PEPPER --config
 ```
 
 Deployment-funded AI is optional. The example's public free assistant needs an
-`OPENROUTER_API_KEY` allowed to use `minimax/minimax-m3.1-flash:free`:
+`OPENROUTER_API_KEY` allowed to use `nvidia/nemotron-3.5-super-vl:free`:
 
 ```bash
 pnpm --filter @openzcad/web exec wrangler secret put OPENROUTER_API_KEY --config ../../wrangler.selfhost.jsonc

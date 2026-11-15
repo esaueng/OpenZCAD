@@ -53,6 +53,10 @@ or without GitHub's ref suffix); it
 ignores requester conclusions, outputs and artifacts. Every push request audits
 all advertised owner branches/tags as well as the originally requested head, so
 annotated-tag objects and their metadata cannot be lost by event peeling.
+The requester runs for pushes to `main`, tag pushes and merge-queue candidates.
+A pull-request head is audited once, by the `pull_request_target` run; a branch
+with no pull request is inspected by the next `main` or tag push and by the
+daily audit, both of which read every advertised branch.
 Incoming Git objects are fetched into a fresh bare repository as data. The audit
 never checks out incoming trees, runs their programs, installs their dependencies,
 loads their configuration or uploads their contents as artifacts. Git subprocesses

@@ -425,76 +425,102 @@
 
 /* ── Column: launch form ─────────────────────────────────── */
 
-/* The one thing a visitor most often came to do sits first in the column as
-   a single card: New project over a name and its units on one row.
-   Creating stays one step. */
+/* The one thing a visitor most often came to do sits first in the column:
+   New project over the name it will get. Creating stays one step.
+
+   14 Nov 2026: no panel. The accent-tinted card set the form apart from a
+   column that already holds nothing else above the library, and it made
+   the launch the one tinted block on the page; the button and the field's
+   own edge group it. New project takes the row, Import is its icon beside
+   it, and the name and its units share one box. */
+/* Packed to the top of its row: on the first run the shelf beside the
+   column spans the column's rows, and its height was shared out as gaps
+   between New project and the name. */
 .start-launch {
   grid-area: launch;
   display: grid;
+  align-content: start;
   gap: var(--sp-2);
   padding: 4px 10px 12px;
 }
 
 .start-launch-form {
   display: grid;
-  /* The units track sizes to its longest option, so it never clips. */
-  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
   gap: 6px;
   align-items: center;
-  padding: 8px;
-  /* A faint accent tint, not an outline, sets the card apart from the
-     column: it reads as one panel without a ring drawn around it. */
-  background: color-mix(in srgb, var(--color-accent) 14%, var(--color-bg));
-  border: 0;
-  border-radius: var(--radius-lg);
-}
-
-/* The card's head: New project, the card's submit, with Import beside it as
-   the other way to start. */
-.start-launch-head,
-.start-launch-form .start-launch-error,
-.start-launch-hint {
-  grid-column: 1 / -1;
 }
 
 .start-launch-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--sp-2);
+  gap: 6px;
   min-width: 0;
 }
 
 .start-launch-create {
   display: inline-flex;
+  flex: 1;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  min-height: 28px;
+  min-width: 0;
+  min-height: 30px;
   padding: 0 10px;
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
   white-space: nowrap;
 }
 
+/* The other way to start, as its icon: the label stays its accessible
+   name ("Import project") and its tooltip says what it takes. */
 .start-launch-import {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-height: 26px;
-  padding: 0 6px;
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
   color: var(--color-text-muted);
   background: transparent;
-  border: 1px solid transparent;
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-sm);
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
+}
+
+.start-launch-import > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
   white-space: nowrap;
 }
 
 .start-launch-import:hover:not(:disabled) {
   color: var(--color-text);
   background: var(--color-surface-hover);
-  border-color: var(--color-border);
+}
+
+/* Name and units in one box, the units as its suffix behind a hairline.
+   The box takes the focus ring for whichever of the two has focus. */
+.start-launch-field {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.start-launch-field:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-dim);
+}
+
+.start-launch-field:has(:focus-visible) {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
 .start-field {
@@ -502,18 +528,24 @@
   min-width: 0;
 }
 
-.start-field input,
-.start-field select {
+.start-field-name {
+  flex: 1;
+}
+
+.start-launch-field .start-field input,
+.start-launch-field .start-field select {
   width: 100%;
   min-height: 30px;
   height: 30px;
-  /* Sunk below the tinted card, edged in the same tint. */
-  background: var(--color-bg);
-  border-color: color-mix(
-    in srgb,
-    var(--color-accent) 20%,
-    var(--color-border)
-  );
+}
+
+/* The box draws the edge and the focus for both. */
+.start-launch-field .start-field :is(input, select),
+.start-launch-field .start-field :is(input, select):is(:hover, :focus) {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  outline: none;
 }
 
 .start-field-name input {
@@ -523,15 +555,45 @@
 /* Drawn rather than native: each engine put its own arrow flush against the
    right border (Firefox's read as clipped), and the box sized to the text
    left no room for it. The chevron is the label's, masked so it follows the
-   theme's text colour. */
+   theme's text colour. The hairline before it is the label's too. */
 .start-field-units {
   position: relative;
+  flex: none;
 }
 
-.start-field-units select {
+.start-field-units::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  border-left: 1px solid var(--color-border);
+  pointer-events: none;
+}
+
+.start-launch-field .start-field-units select {
   appearance: none;
-  padding: 0 28px 0 10px;
+  padding: 0 26px 0 10px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
   cursor: pointer;
+}
+
+.start-launch-field .start-field-units select:hover {
+  color: var(--color-text);
+}
+
+/* The box's ring is shared, so a keyboard focus on the units also marks the
+   units themselves: a wash on the suffix and an accent chevron. Without it,
+   tabbing from the name left the same ring and only lost the caret. */
+.start-launch-field .start-field-units select:focus-visible {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-radius: 0 calc(var(--radius-sm) - 1px) calc(var(--radius-sm) - 1px) 0;
+}
+
+.start-field-units:has(select:focus-visible)::after {
+  background: var(--color-accent);
 }
 
 /* Centred on the select, which is the label's whole height at any size. */
@@ -550,6 +612,11 @@
   pointer-events: none;
 }
 
+.start-launch-form .start-launch-error,
+.start-launch-hint {
+  grid-column: 1 / -1;
+}
+
 .start-launch-hint {
   color: var(--color-text-subtle);
   font-size: var(--fs-xs);
@@ -557,8 +624,8 @@
 }
 
 /* In the column a once-a-session action should not take a third of it, so
-   the hint steps aside. The fields carry no captions either: they sit in the
-   tinted New project card, directly under its button. */
+   the hint steps aside. The fields carry no captions either: they sit
+   directly under New project. */
 @media (min-width: 901px) {
   .start-launch-hint:not(.is-taken) {
     display: none;
@@ -1641,7 +1708,8 @@
   white-space: nowrap;
 }
 
-/* Kept whole: it tells a part's recovery copies apart. */
+/* Kept whole: it tells a part's recovery copies apart, so the date clips
+   first. */
 .start-tile-clock {
   flex: none;
   white-space: pre;
@@ -2324,6 +2392,14 @@
   border: var(--border-thin);
 }
 
+/* Delete forever is the icon beside Restore: two labelled buttons overflowed
+   a narrow card and pressed Delete against its edge. */
+.start-tile-footer .start-tile-delete {
+  flex: none;
+  width: 28px;
+  padding: 0;
+}
+
 /* ── Cloud card: update notice ───────────────────────────── */
 
 /* A newer build is out: one quiet line above the cloud card — a dot, the
@@ -2491,15 +2567,11 @@
     display: none;
   }
 
-  /* The launch card is two rows — New project, then name and units — so it
-     costs the shelf little height. The hint can go; an
-     error still takes its own row. */
+  /* The launch is two rows — New project, then name and units — so it
+     costs the shelf little height. The hint can go; an error still takes
+     its own row. */
   .start-launch {
     padding: var(--sp-3) var(--sp-3) 0;
-  }
-
-  .start-launch-form {
-    padding: 8px;
   }
 
   .start-launch-hint {
@@ -2791,10 +2863,13 @@
   background: var(--color-surface-2);
 }
 
-.start-folder-empty-icon {
-  width: 34px;
-  height: 34px;
-  color: var(--color-text-dim);
+/* An empty folder's cover: an outline drawn like the parts' cube placeholder
+   (its colour, a hairline stroke) rather than a solid glyph. `.start-tile-thumb
+   svg` outranked a bare class and stretched it to the pane's height, the
+   heaviest mark on the shelf. */
+.start-folder-thumb .start-folder-empty-icon {
+  width: 48px;
+  height: 48px;
 }
 
 /* A folder in the list is a row like the rest: no tab over the row above
@@ -2817,6 +2892,7 @@
 .start-tile-grid.is-list .start-folder-empty-icon {
   width: 20px;
   height: 20px;
+  color: var(--color-text-dim);
 }
 
 /* Where a dragged part would go: a folder under it, or a part it is held

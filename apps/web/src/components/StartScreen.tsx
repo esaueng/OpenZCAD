@@ -264,7 +264,30 @@ const LOADING_PROJECT_TILES = 10;
 
 /** The Projects shelf's narrowing, beside its heading. */
 type ShelfFilter = 'all' | 'pinned' | 'attention' | 'local';
-type ShelfSort = 'custom' | 'edited' | 'name';
+type ShelfSort = 'custom' | 'edited' | 'name' | 'size';
+
+/**
+ * The size sort's order: largest first, and a row with no figure (unmeasured,
+ * or locked) after every row that has one, where its size cannot mislead.
+ */
+function largestFirst(a: number | undefined, b: number | undefined): number {
+  if (a === undefined) return b === undefined ? 0 : 1;
+  if (b === undefined) return -1;
+  return b - a;
+}
+
+/**
+ * The size the list shows for a project: none for one this build cannot open,
+ * or for a figure that is not a number of bytes (the column shows a dash).
+ */
+function shownBytes(project: ProjectSummary): number | undefined {
+  const bytes = project.documentBytes;
+  return projectNeedsUpdate(project) ||
+    bytes === undefined ||
+    !Number.isFinite(bytes)
+    ? undefined
+    : bytes;
+}
 type ShelfLayout = 'grid' | 'list';
 
 const SHELF_FILTERS: ReadonlyArray<{ id: ShelfFilter; label: string }> = [
@@ -363,7 +386,11 @@ function readLibraryView(): LibraryView {
     ) {
       view.filter = stored.filter;
     }
-    if (stored.sort === 'edited' || stored.sort === 'name') {
+    if (
+      stored.sort === 'edited' ||
+      stored.sort === 'name' ||
+      stored.sort === 'size'
+    ) {
       view.sort = stored.sort;
     }
     if (typeof stored.query === 'string') {
@@ -429,6 +456,26 @@ export function formatLastEdited(updatedAt: string): string {
     month: 'short',
     day: 'numeric',
     year: 'numeric'
+  });
+}
+
+/**
+ * A recovery copy's date, ahead of its time ("Nov 12" · "7:00 AM"). The time
+ * is what tells a part's copies apart, and with the year as well the date
+ * clipped to "Nov 12, …" on a card. The year shows only when it is not this
+ * one, and the tooltip keeps the exact moment.
+ */
+export function formatRecoveryDate(
+  updatedAt: string,
+  now: Date = new Date()
+): string {
+  const date = new Date(updatedAt);
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    ...(date.getFullYear() === now.getFullYear()
+      ? {}
+      : { year: 'numeric' as const })
   });
 }
 
@@ -584,6 +631,8 @@ export function StartScreen({
 }: StartScreenProps) {
   const projects = scopePending ? [] : discoveredProjects;
   const settingsKey = useKeymap().label('app-settings');
+  // Prefixes the ids the shelf's tiles describe themselves by.
+  const instanceId = useId();
   const [initialDraft] = useState(readLibraryDraft);
   const [name, setName] = useState(
     () => initialDraft?.name ?? generateCutePartName()
@@ -951,9 +1000,16 @@ export function StartScreen({
   const filterable = shelf === 'active';
   // "This device only" means something only against an account listing;
   // signed out, or with the listing unreachable, it would hide every project.
+  // Inside a folder, Pinned means nothing of its own: a pinned folder counts
+  // every project in it, so it repeated All, and the folder lists its
+  // projects in its own order with no pinned group. The tab is not offered
+  // there, and a Pinned filter chosen on the shelf waits until the folder
+  // closes.
+  const pinnedFilterShown = !openFolder;
   const activeFilter: ShelfFilter =
     !filterable ||
-    (filter === 'local' && !(signedIn && accountProjectListReached))
+    (filter === 'local' && !(signedIn && accountProjectListReached)) ||
+    (filter === 'pinned' && !pinnedFilterShown)
       ? 'all'
       : filter;
   const filterCounts = Object.fromEntries(
@@ -990,9 +1046,12 @@ export function StartScreen({
             Number(projectOrganization(b).pinned) -
             Number(projectOrganization(a).pinned);
           if (pinned !== 0) return pinned;
-          return sort === 'edited'
-            ? b.updatedAt.localeCompare(a.updatedAt)
-            : a.name.localeCompare(b.name, undefined, { numeric: true });
+          if (sort === 'edited') return b.updatedAt.localeCompare(a.updatedAt);
+          if (sort === 'size') {
+            const bySize = largestFirst(shownBytes(a), shownBytes(b));
+            if (bySize !== 0) return bySize;
+          }
+          return a.name.localeCompare(b.name, undefined, { numeric: true });
         });
   // Folders gather projects only on the unfiltered shelf; a filter or a search
   // looks through them, showing every matching project on its own.
@@ -1013,11 +1072,18 @@ export function StartScreen({
     ? []
     : sort === 'custom'
       ? folders
-      : [...folders].sort((a, b) =>
-          sort === 'edited'
-            ? latestEdit(b).localeCompare(latestEdit(a))
-            : a.name.localeCompare(b.name, undefined, { numeric: true })
-        );
+      : [...folders].sort((a, b) => {
+          if (sort === 'edited')
+            return latestEdit(b).localeCompare(latestEdit(a));
+          if (sort === 'size') {
+            const bySize = largestFirst(
+              folderBytes(folderMembers(a)),
+              folderBytes(folderMembers(b))
+            );
+            if (bySize !== 0) return bySize;
+          }
+          return a.name.localeCompare(b.name, undefined, { numeric: true });
+        });
 
   // A project sent to another shelf takes its tile, and the focused control in
   // it, off the page, which would leave focus on nothing. Once it is gone the
@@ -1072,6 +1138,11 @@ export function StartScreen({
     ...looseProjects.map((project) => project.projectId)
   ];
   const folderById = new Map(folders.map((folder) => [folder.id, folder]));
+  // An open folder's members as shown. A move starts from the order on
+  // screen: from the stored order, under a sort, Alt+Right on the last card
+  // shown did nothing because it was first in storage. Reordering needs the
+  // whole shelf (no search or filter), so these are all its members.
+  const shownMemberIds = matchingProjects.map((project) => project.projectId);
 
   /**
    * Saves a new order of the tiles on screen, and the tile a drag took into
@@ -1172,9 +1243,7 @@ export function StartScreen({
   }
 
   const reorder = useTileReorder({
-    ids: openFolder
-      ? baseProjects.map((project) => project.projectId)
-      : reorderIds,
+    ids: openFolder ? shownMemberIds : reorderIds,
     enabled: canReorder,
     tileRefs,
     // Pinned projects and folders head the shelf as their own group: dragging
@@ -1262,9 +1331,7 @@ export function StartScreen({
 
   /** Alt and an arrow key move the focused card one place among its kind. */
   function nudge(id: string, offset: number) {
-    const ids = openFolder
-      ? baseProjects.map((project) => project.projectId)
-      : reorderIds;
+    const ids = openFolder ? shownMemberIds : reorderIds;
     const kind = ids.filter(
       (entry) => Boolean(folderIdOf(entry)) === Boolean(folderIdOf(id))
     );
@@ -1692,9 +1759,9 @@ export function StartScreen({
     if (members.length === 0) return undefined;
     let total = 0;
     for (const member of members) {
-      if (projectNeedsUpdate(member) || member.documentBytes === undefined)
-        return undefined;
-      total += member.documentBytes;
+      const bytes = shownBytes(member);
+      if (bytes === undefined) return undefined;
+      total += bytes;
     }
     return total;
   }
@@ -1738,6 +1805,7 @@ export function StartScreen({
     const pinnedNow = shownFolderPinned(folder);
     const dropping = reorder.dropTarget?.target === key;
     const edited = latestEdit(folder);
+    const editedId = `${instanceId}-edited-${folder.id.replace(/[^\w-]/g, '_')}`;
     const renaming = renamingFolderId === folder.id;
     return (
       <div
@@ -1770,6 +1838,7 @@ export function StartScreen({
           data-tile-drag=""
           disabled={busy}
           aria-label={`Open folder ${folder.name}, ${members.length} ${members.length === 1 ? 'project' : 'projects'}`}
+          aria-describedby={edited ? editedId : undefined}
           aria-keyshortcuts={
             canReorder ? `${TILE_KEYS} ${REORDER_KEYS}` : TILE_KEYS
           }
@@ -1795,10 +1864,18 @@ export function StartScreen({
                 publishThumbnail={publishThumbnail}
               />
             ) : (
-              <FolderOpen
-                className="start-folder-empty-icon"
-                aria-hidden="true"
-              />
+              <>
+                <FolderOpen
+                  className="start-folder-empty-icon"
+                  size={48}
+                  strokeWidth={1.25}
+                  absoluteStrokeWidth
+                  aria-hidden="true"
+                />
+                <span className="start-tile-thumb-empty" aria-hidden="true">
+                  Drop projects here
+                </span>
+              </>
             )}
           </span>
           <span className="start-tile-body">
@@ -1830,15 +1907,31 @@ export function StartScreen({
                 </small>
               </>
             ) : (
+              // One short line, like a project card's date: the count with
+              // the newest edit as well wrapped to two or three lines. The
+              // empty folder's drop hint sits on its cover.
               <small className="start-tile-meta">
-                <span className="start-tile-when">
+                <span
+                  className="start-tile-when"
+                  title={
+                    edited
+                      ? `Last edited ${formatLastEditedExact(edited)}`
+                      : undefined
+                  }
+                >
                   {members.length === 0
-                    ? 'Empty — drop projects here'
-                    : `${members.length} ${members.length === 1 ? 'project' : 'projects'}${
-                        edited ? ` · ${formatLastEdited(edited)}` : ''
-                      }`}
+                    ? 'Empty'
+                    : `${members.length} ${members.length === 1 ? 'project' : 'projects'}`}
                 </span>
               </small>
+            )}
+            {/* The newest edit left the card's line, so the button
+                describes it to a keyboard or screen reader; touch has the
+                list's Edited column. */}
+            {edited && (
+              <span id={editedId} className="visually-hidden">
+                {`Last edited ${formatLastEdited(edited)}`}
+              </span>
             )}
           </span>
         </button>
@@ -2087,7 +2180,9 @@ export function StartScreen({
                   project.revisionCount
                 } ${project.revisionCount === 1 ? 'save' : 'saves'}`}
               >
-                {formatLastEdited(project.updatedAt)}
+                {recoveryOf === null
+                  ? formatLastEdited(project.updatedAt)
+                  : formatRecoveryDate(project.updatedAt)}
               </time>
               {/* The time is what tells a part's recovery copies apart, so
                   the date clips before it does. */}
@@ -2100,7 +2195,7 @@ export function StartScreen({
             {/* The list has Size and Saves columns; a card leaves both out. */}
             {layout === 'list' &&
               renderSize(
-                locked ? undefined : project.documentBytes,
+                shownBytes(project),
                 'Document size',
                 locked
                   ? undefined
@@ -2661,8 +2756,10 @@ export function StartScreen({
         )}
 
         {trashed && (
-          // The visible labels are short for the narrow footer; the names
-          // say which project, and match the menu's "Delete forever".
+          // Restore takes the row and Delete forever is an icon beside it,
+          // like New project and Import: two labelled buttons overflowed a
+          // narrow card. The names say which project, and match the menu's
+          // "Delete forever".
           <div className="start-tile-footer">
             <button
               type="button"
@@ -2677,15 +2774,15 @@ export function StartScreen({
             </button>
             <button
               type="button"
-              className="is-destructive"
+              className="start-tile-delete is-destructive"
               aria-label={`Delete ${project.name} forever`}
+              title="Delete forever"
               disabled={busy}
               onClick={() =>
                 leaveShelf(project, () => onDeleteForever(project))
               }
             >
               <Trash2 size={13} aria-hidden="true" />
-              Delete
             </button>
           </div>
         )}
@@ -2695,7 +2792,20 @@ export function StartScreen({
 
   const layoutCounts =
     loading && previousLayout ? previousLayout : filterCounts;
-  const showFilters = filterable && (loading || shelfProjects.length > 0);
+  const shownFilters = SHELF_FILTERS.filter(
+    (entry) =>
+      entry.id === 'all' ||
+      entry.id === activeFilter ||
+      (layoutCounts[entry.id] > 0 &&
+        (entry.id !== 'pinned' || pinnedFilterShown))
+  );
+  // 14 Nov 2026: a folder with nothing pinned showed one "All 2" tab beside
+  // its name, a control with nothing to choose; the note says the count
+  // instead. The shelf itself keeps its tabs, which hold the toolbar's line.
+  const showFilters =
+    filterable &&
+    (loading || shelfProjects.length > 0) &&
+    (!openFolder || shownFilters.length > 1);
   // Pinned projects and folders head the shelf as their own group when the
   // whole shelf is on screen. Partitioned by the flag, not sliced by count: a
   // project created this session is prepended to the listing ahead of pinned
@@ -3127,52 +3237,58 @@ export function StartScreen({
               />
             )}
           </div>
-          {/* No visible Name and Units captions: the fields sit in the New
-              project card under its button, and "mm" names its own field.
-              The captions read as form chrome over a one-click action. */}
-          <label className="start-field start-field-name">
-            <input
-              value={name}
-              aria-label="Project name"
-              placeholder="Project name"
-              aria-invalid={nameTooLong || undefined}
-              aria-describedby={nameTooLong ? 'project-name-error' : undefined}
-              onFocus={(event) => {
-                if (!nameSuggested.current) return;
-                event.currentTarget.select();
-                keepSuggestionSelected.current = true;
-              }}
-              // The click that focused the field would otherwise collapse
-              // the selection to a caret where it landed.
-              onMouseUp={(event) => {
-                if (keepSuggestionSelected.current) event.preventDefault();
-                keepSuggestionSelected.current = false;
-              }}
-              onBlur={() => {
-                keepSuggestionSelected.current = false;
-              }}
-              onChange={(event) => {
-                nameSuggested.current = false;
-                keepSuggestionSelected.current = false;
-                setName(event.target.value);
-              }}
-            />
-          </label>
-          <label className="start-field start-field-units">
-            <select
-              value={units}
-              aria-label="Units"
-              onChange={(event) => {
-                unitsEdited.current = true;
-                setUnits(event.target.value as UnitSystem);
-              }}
-            >
-              <option value="mm">mm</option>
-              <option value="cm">cm</option>
-              <option value="m">m</option>
-              <option value="inch">in</option>
-            </select>
-          </label>
+          {/* No visible Name and Units captions: the fields sit under New
+              project, and "mm" names its own field. The captions read as
+              form chrome over a one-click action. Name and units share one
+              box, the units as its suffix: two boxes side by side read as
+              two separate questions. */}
+          <div className="start-launch-field">
+            <label className="start-field start-field-name">
+              <input
+                value={name}
+                aria-label="Project name"
+                placeholder="Project name"
+                aria-invalid={nameTooLong || undefined}
+                aria-describedby={
+                  nameTooLong ? 'project-name-error' : undefined
+                }
+                onFocus={(event) => {
+                  if (!nameSuggested.current) return;
+                  event.currentTarget.select();
+                  keepSuggestionSelected.current = true;
+                }}
+                // The click that focused the field would otherwise collapse
+                // the selection to a caret where it landed.
+                onMouseUp={(event) => {
+                  if (keepSuggestionSelected.current) event.preventDefault();
+                  keepSuggestionSelected.current = false;
+                }}
+                onBlur={() => {
+                  keepSuggestionSelected.current = false;
+                }}
+                onChange={(event) => {
+                  nameSuggested.current = false;
+                  keepSuggestionSelected.current = false;
+                  setName(event.target.value);
+                }}
+              />
+            </label>
+            <label className="start-field start-field-units">
+              <select
+                value={units}
+                aria-label="Units"
+                onChange={(event) => {
+                  unitsEdited.current = true;
+                  setUnits(event.target.value as UnitSystem);
+                }}
+              >
+                <option value="mm">mm</option>
+                <option value="cm">cm</option>
+                <option value="m">m</option>
+                <option value="inch">in</option>
+              </select>
+            </label>
+          </div>
           {nameTooLong ? (
             <small
               id="project-name-error"
@@ -3411,12 +3527,7 @@ export function StartScreen({
                 role="group"
                 aria-label="Show projects"
               >
-                {SHELF_FILTERS.filter(
-                  (entry) =>
-                    entry.id === 'all' ||
-                    entry.id === activeFilter ||
-                    layoutCounts[entry.id] > 0
-                ).map((entry) => (
+                {shownFilters.map((entry) => (
                   <button
                     key={entry.id}
                     type="button"
@@ -3503,6 +3614,7 @@ export function StartScreen({
                       <option value="custom">Custom order</option>
                       <option value="edited">Last edited</option>
                       <option value="name">Name</option>
+                      <option value="size">Size</option>
                     </select>
                   </label>
                 ) : (
@@ -3519,6 +3631,7 @@ export function StartScreen({
                       <option value="custom">Custom order</option>
                       <option value="edited">Last edited</option>
                       <option value="name">Name</option>
+                      <option value="size">Size</option>
                     </select>
                   </span>
                 )}

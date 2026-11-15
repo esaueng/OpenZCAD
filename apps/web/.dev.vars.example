@@ -2,7 +2,7 @@
 # .env, or a populated .dev.vars file. Never commit a populated secret file.
 AI_PROVIDER=openrouter
 OPENROUTER_API_KEY=
-AI_MODEL=minimax/minimax-m3.1-flash:free
+AI_MODEL=nvidia/nemotron-3.5-super-vl:free
 AI_DEPLOYMENT_FREE_ENABLED=true
 
 # Required only for encrypted per-user API tokens in Settings. Generate a

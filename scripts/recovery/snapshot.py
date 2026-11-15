@@ -104,7 +104,7 @@ def load_sql(data: bytes):
 
 
 # Migrations above 0050 reviewed one by one (other numbers are still in review).
-REVIEWED_AFTER_0050 = frozenset({53, 54})
+REVIEWED_AFTER_0050 = frozenset({53, 54, 55})
 
 
 def required_objects(db):
@@ -126,6 +126,8 @@ def required_objects(db):
     # objects or keys.
     # 0054 adds only e2ee_invitations.acceptance_statement and
     # acceptance_signature (signed public statements): no stored objects or keys.
+    # 0055 adds only user_settings.sealed_settings (an account's settings
+    # sealed under its account key, base64url text): no stored objects or keys.
     # 0051-0052 are not reviewed.
     if any(int(name[:4]) > 50 and int(name[:4]) not in REVIEWED_AFTER_0050
            for name in migrations):

@@ -215,6 +215,10 @@ describe('assistant consent on encrypted projects (ADR-024 6-1)', () => {
     expect(plain.status).toBe(200);
     await plain.text();
     expect(upstream).toHaveBeenCalledTimes(1);
+    const [, init] = upstream.mock.calls[0]!;
+    expect(
+      (JSON.parse(init?.body as string) as { provider: object }).provider
+    ).not.toHaveProperty('data_collection');
   });
 
   it('keeps refusing as before while migration 0041 is missing', async () => {
@@ -275,12 +279,19 @@ describe('assistant consent on encrypted projects (ADR-024 6-1)', () => {
     expect(await stored.json()).toMatchObject({
       consent: { projectId, allowed: true, sequence: 1, revokedAt: null }
     });
+    // The client cannot opt out: the Worker decides from the consent.
     const sent = await call('POST', '/api/assistant/proposals', {
-      body: proposal(projectId)
+      body: { ...proposal(projectId), encryptedProject: false }
     });
     expect(sent.status).toBe(200);
     await sent.text();
     expect(upstream).toHaveBeenCalledTimes(1);
+    // An encrypted project's model goes only to providers that do not
+    // collect it (ADR-024 amendment 2026-11-14).
+    const [, init] = upstream.mock.calls[0]!;
+    expect(
+      (JSON.parse(init?.body as string) as { provider: unknown }).provider
+    ).toMatchObject({ data_collection: 'deny' });
 
     // Stop: the next sequence with allowed = false marks the row revoked.
     const revoked = await call(

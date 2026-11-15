@@ -868,7 +868,9 @@ the envelope header fields, and each user's device list: device labels, when
 devices and unlock methods were added or removed, and their public keys.
 Project names, checkpoint names, revision reasons,
 upload file names, thumbnails, measurements, workspace view state, archived
-exports and library folders are encrypted. R2 keys use opaque ids only.
+exports, library folders and the contacts list are encrypted (the list's
+entry count and write times stay visible; see the amendment of 2026-11-14).
+R2 keys use opaque ids only.
 
 ### AI assistant
 
@@ -892,6 +894,23 @@ MAC'd under the account key and pinned by sequence in each browser, so a
 server-forged consent never makes a browser send; the Worker keeps a live row
 as defence in depth. It is asked again when the copy version or the provider
 route changes.
+
+Consent copy version 2 (D06 slice E) adds the drawing sheet an ask from Draw
+is made on: its name, scale and views, the model edges each view draws with
+their positions on the paper, and its dimensions and notes with their values
+and text.
+
+Provider retention (2026-11-14). An encrypted project's request through
+OpenRouter carries `provider.data_collection: 'deny'`, so OpenRouter routes it
+only to providers whose policy is not to train on or store prompts, and
+refuses it (reported as no eligible route) rather than falling back to one
+that does. That is not zero retention: a provider may still keep a request
+for a while for abuse monitoring (OpenRouter's stricter `zdr` routing would
+narrow that further, at the cost of fewer eligible providers). Requests to
+OpenAI's Responses API already carry `store: false`, which leaves OpenAI's
+own abuse-monitoring retention. Any other route, such as a user's own
+Responses-compatible endpoint, follows that provider's terms. The consent
+dialog says all of this. A plaintext project's request is unchanged.
 
 ### Settled product decisions
 
@@ -1525,3 +1544,99 @@ account whose library is encrypted (the rule above) stores them sealed.
   adds them from settings.
 - **What the server sees.** The readable part, the record's length, write
   times, revision and the account-key commitment in its header.
+
+## Amendment 2026-11-14: sealed contacts list
+
+The contacts list (see [Version integrity](#version-integrity), "Pins must
+not roll back") was stored as identity-signed plaintext. That is a social
+graph the server could read: whom the user verified, their identity
+fingerprints and device-list heads, the action and when. The
+[Plaintext metadata](#plaintext-metadata) list never named it. The list now
+travels sealed under the account key. Its rules, its signatures and its
+rollback and fork protection stay as they were. These points extend the
+record above; apart from naming the list under Plaintext metadata, nothing in
+it changes.
+
+- **What is sealed.** Each entry is sealed on its own, in a record that
+  wraps exactly the canonical entry of the plaintext format, byte for byte.
+  The entry chain is unchanged: its hashes, its list rules, every device's
+  contacts pin, and the contacts head that device approval carries inside
+  its authenticated exchange all name the inner entries.
+- **Layout.** `"OZC"`, a version byte (1), the sequence (4 bytes), the
+  previous record's hash (length byte, then 0 or 32 bytes), the account-key
+  sequence (4 bytes: the device list's `accountKeySequence` of the key that
+  sealed it), a fresh random 96-bit IV, then AES-256-GCM ciphertext and tag
+  of a fixed 384-byte plaintext: `u16 length | entry | zero padding`. Every
+  record of a list therefore has the same size, whatever its action or
+  contact id. The key is derived from the account key by HKDF-SHA-256 with
+  an empty salt and the info label `OpenZCAD E2EE v1 contacts list key`,
+  distinct from every other account-key derivation. The additional data is
+  the label `OpenZCAD E2EE v1 sealed contacts entry`, a NUL, the user id, a
+  NUL and every byte before the ciphertext.
+- **Signatures and chain.** The identity key signs the whole sealed record
+  (a "sealed contacts list" statement, so a plaintext-entry signature never
+  verifies as one). Records chain by record hash, SHA-256 over the label
+  `OpenZCAD E2EE v1 sealed contacts record hash` and the record. A list is
+  sealed whole or not at all: a browser refuses a list that mixes records
+  and plaintext entries.
+- **What the Worker still checks.** Without the key, the Worker checks every
+  appended record as defence in depth: canonical header and size, the
+  identity signature, the sequence, the link to the stored head, and that
+  it is sealed under the account's current account key, in the same
+  statement that checks the device list has not moved. It refuses a
+  plaintext entry and stores the record hash as the row's `entry_hash`.
+  Browsers remain the authority: they open every record, apply every rule
+  and check their own pin, as before.
+- **Account-key rotation.** Removing a device rotates the account key.
+  Records are not resealed: the account-key history that the rotation writes
+  atomically (each replaced key wrapped under its successor) already keeps
+  every older key reachable from the current one, and only from it. A device
+  opens a record by walking the history back to the key its header names,
+  so every current device reads the whole effective pin set after any
+  number of rotations. Writers always seal under the current key, and
+  records never move back to an older key, so a removed device, which holds
+  only replaced keys, reads nothing written after its removal. Resealing the
+  list under each new key was rejected: the rotation would have to write a
+  signed snapshot in the same step as the key change, a rotation that
+  stopped part-way would leave records that no current key opens, and the
+  snapshot would be a second source of truth for pins. The history already
+  lands atomically with the rotation, and the removed device gains nothing
+  from it that it did not hold before.
+- **Identity generations.** The list stays per identity generation. A
+  replaced identity's list is never read again, so the account's first
+  sealed write deletes any plaintext rows that a replaced identity left.
+  Sealed rows of a replaced identity go when its identity is pruned, as
+  before.
+- **Migration.** Signed history cannot be rewritten in place, and none of it
+  needs to be. A browser reseals a plaintext list as the same entries in new
+  records, signed again by the identity key, and the Worker swaps the rows
+  in one transaction (`PUT /api/e2ee/contacts`). The swap goes through only
+  while the stored list is still the plaintext list whose head the browser
+  named, of the same length, and every record is under the current account
+  key. Because the inner entries are unchanged, every existing pin and
+  pending approval head stays valid. A device pinned anywhere in the old
+  list accepts the sealed one only if it contains that pinned entry, so the
+  cut-over cannot roll a pin back or hide a fork. A server that replays its
+  saved plaintext copy afterwards shows at most the state at the cut-over:
+  a device pinned past it refuses that as a rollback, and the server learns
+  nothing it had not already seen. Resealing needs the identity key, so it
+  happens at the user's next contacts signature, or at once from
+  Settings › Encryption › Contacts, which offers it while the list is
+  plaintext. Until then that list stays readable to the server, as it was.
+- **Reading needs an unlocked device.** A device that has not unlocked the
+  account key cannot read a sealed list. It is told to unlock first rather
+  than shown a list it cannot check.
+- **Who reads a contacts list.** Only the account's own devices, through
+  `GET /api/e2ee/contacts`, which returns only the caller's list. No other
+  user and no other route reads another account's list. The same response
+  lists the people the caller may look up (decision M2); that comes from
+  membership and invitations, not from the list, and is unchanged.
+- **What the server sees.** For each record: the user, the identity
+  generation, the sequence, the record hash and its predecessor, the
+  account-key sequence (which the device list already reveals), the fixed
+  record size and the time it was stored. So it learns how many changes the
+  user signed and when, but not whom they concern or what they were. Each
+  entry's own timestamp, action, contact, fingerprint and device-list head
+  are inside the ciphertext.
+- **Review.** This is a new account-key derivation and record format, so the
+  Phase 8 outside review covers it with the other account records.

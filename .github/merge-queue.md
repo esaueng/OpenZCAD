@@ -2,12 +2,14 @@
 
 Main uses squash merges with the PR title as the commit title and the PR
 description as the commit body. The active `Bounded merge queue` ruleset has
-no bypass actors, builds at most two queue entries concurrently, and uses
-`SQUASH` and `ALLGREEN`. It merges one or two passing entries at a time, with
-no minimum-group wait and a 180-minute check timeout, matching Remus.
+no bypass actors, builds at most five queue entries concurrently, and uses
+`SQUASH` and `ALLGREEN`. It merges one to five passing entries at a time, with
+no minimum-group wait and a 180-minute check timeout. Each entry still gets
+its own `merge_group` run on the combined tree; the larger limits only stop a
+burst of ready PRs from waiting two at a time.
 
 Branch protection requires `checks / validate`, `checks / e2e`,
-`commit-privacy`, `history-privacy`, and Cloudflare `verify` (the `verify` job in the
+`commit-privacy`, `history-privacy`, `dependency-review`, and Cloudflare `verify` (the `verify` job in the
 `Cloudflare version` workflow), with both privacy checks bound to the dedicated Esau History Privacy App and
 the other checks bound to GitHub Actions. Existing review
 requirements and conversation resolution are preserved. The queue validates
@@ -41,8 +43,8 @@ continues to trigger the repository's existing automatic deployment workflows.
    Classic protection enforces administrators; the active queue ruleset has
    no bypass actors.
 2. Address the PR’s reviews, comments and threads, and confirm the head you
-   are authorizing. The five required contexts are `checks / validate`,
-   `checks / e2e`, `commit-privacy`, `history-privacy`, and `verify`; the
+   are authorizing. The six required contexts are `checks / validate`,
+   `checks / e2e`, `commit-privacy`, `history-privacy`, `dependency-review`, and `verify`; the
    queue waits for them, so pending checks are not a reason to wait before
    arming. Advisory checks (Workers Builds, dependency audits when the PR
    changes a manifest or lockfile, public commit metadata) do not gate the
@@ -66,7 +68,7 @@ continues to trigger the repository's existing automatic deployment workflows.
    pushing a change outside the authorized scope.
 4. Once queued, read the entry’s `headCommit.oid` after it reaches
    `AWAITING_CHECKS` (it can initially be null) and match it to the
-   `merge_group` workflow runs. The queue merges only after all five
+   `merge_group` workflow runs. The queue merges only after all six
    required contexts pass on that candidate. A pending or failing Cloudflare
    `verify` blocks the merge; confirm `upload` is skipped, since queue
    candidates perform dry-run verification only. A manual dispatch or green

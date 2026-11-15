@@ -19,7 +19,12 @@ import {
   type AccountStorageUsage,
   type ProjectSummary
 } from '@openzcad/shared';
-import { formatLastEdited, recoveryCopyOf, StartScreen } from './StartScreen';
+import {
+  formatLastEdited,
+  formatRecoveryDate,
+  recoveryCopyOf,
+  StartScreen
+} from './StartScreen';
 import { useAccountStorageUsage } from './StorageUsagePanel';
 
 // An encrypted project's properties check the assistant consent against the
@@ -848,6 +853,20 @@ describe('StartScreen project timestamps', () => {
     }
     expect(formatLastEdited(today.toISOString())).not.toMatch(/^Today/);
   });
+
+  it("dates a recovery copy without this year's year", () => {
+    // 14 Nov 2026: "Nov 12, 2026 · 7:00 AM" clipped to "Nov 12, … · 7:00 AM"
+    // on a card. The time stays a span of its own that never shrinks.
+    const now = new Date(2026, 10, 14, 12, 0);
+    const thisYear = new Date(2026, 10, 12, 7, 0);
+    const lastYear = new Date(2025, 10, 12, 7, 0);
+    expect(formatRecoveryDate(thisYear.toISOString(), now)).toBe(
+      thisYear.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+    );
+    expect(formatRecoveryDate(lastYear.toISOString(), now)).toBe(
+      shortDate(lastYear)
+    );
+  });
 });
 
 describe('StartScreen cloud project status', () => {
@@ -1460,6 +1479,44 @@ describe('StartScreen shelf filters, order and layout', () => {
     ).toHaveLength(2);
   });
 
+  it('orders by size, largest first, with unmeasured parts last by name', () => {
+    const sizes: Record<string, number> = {
+      Axle: 300,
+      Bracket: 1200,
+      Clamp: 9000
+    };
+    renderStartScreen({
+      projects: [
+        ...projects.map((project) =>
+          project.name in sizes
+            ? { ...project, documentBytes: sizes[project.name] }
+            : project
+        ),
+        {
+          ...part(
+            'project_p',
+            'Pinned plate',
+            '2026-07-01T00:00:00.000Z',
+            true
+          ),
+          documentBytes: 1
+        }
+      ]
+    });
+    fireEvent.change(screen.getByLabelText('Sort projects'), {
+      target: { value: 'size' }
+    });
+    // Pinned still leads; "Bracket (Recovery)" has no size, so it follows
+    // every part that has one rather than passing as the smallest.
+    expect(tileNames()).toEqual([
+      'Pinned plate',
+      'Clamp',
+      'Bracket',
+      'Axle',
+      'Bracket (Recovery)'
+    ]);
+  });
+
   it('groups pinned parts by their flag, not their place in the listing', () => {
     // A part created this session is prepended ahead of pinned ones.
     renderStartScreen({
@@ -1559,6 +1616,91 @@ describe('StartScreen folders and selection', () => {
       (element) => element.textContent
     );
 
+  it('orders folders by their total size under the size sort', () => {
+    localStorage.setItem(
+      'openzcad.library.folders.v1:device',
+      JSON.stringify({
+        folders: [
+          ['folder-small', 'Alpha small', [parts[0]!.projectId]],
+          [
+            'folder-big',
+            'Zulu big',
+            [parts[1]!.projectId, parts[2]!.projectId]
+          ],
+          ['folder-unsized', 'Middle unsized', [parts[3]!.projectId]]
+        ].map(([id, name, projectIds]) => ({
+          id,
+          name,
+          projectIds,
+          pinned: false,
+          createdAt: '2026-10-29T00:00:00.000Z'
+        }))
+      })
+    );
+    renderStartScreen({
+      projects: parts.map((part, index) =>
+        index < 3 ? { ...part, documentBytes: 1000 * (index + 1) } : part
+      )
+    });
+    fireEvent.change(screen.getByLabelText('Sort projects'), {
+      target: { value: 'size' }
+    });
+    // 5000 before 1000; a folder with an unmeasured member has no total.
+    // Not name order (Alpha, Middle, Zulu) nor stored order.
+    expect(names()).toEqual(['Zulu big', 'Alpha small', 'Middle unsized']);
+  });
+
+  // Review of #1526: inside a sorted folder a move started from the stored
+  // order, so Alt+Right on the last card shown did nothing.
+  it('moves a card inside a sorted folder from the order on screen', () => {
+    seedFolder(parts.slice(0, 3).map((part) => part.projectId));
+    renderStartScreen({
+      projects: parts.map((part, index) => ({
+        ...part,
+        documentBytes: 100 * (index + 1)
+      }))
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open folder Fixtures, 3 projects' })
+    );
+    fireEvent.change(screen.getByLabelText('Sort projects'), {
+      target: { value: 'size' }
+    });
+    expect(names()).toEqual(['Charlie plate', 'Bravo plate', 'Alpha plate']);
+
+    fireEvent.keyDown(
+      screen.getByRole('button', { name: /^Charlie plate, edited/ }),
+      { key: 'ArrowRight', altKey: true }
+    );
+
+    const stored = JSON.parse(
+      localStorage.getItem('openzcad.library.folders.v1:device')!
+    ) as { folders: { projectIds: string[] }[] };
+    expect(stored.folders[0]!.projectIds).toEqual(
+      [1, 2, 0].map((index) => parts[index]!.projectId)
+    );
+    expect(names()).toEqual(['Bravo plate', 'Charlie plate', 'Alpha plate']);
+    expect(screen.getByLabelText('Sort projects')).toHaveValue('custom');
+  });
+
+  it('gives a size that is not a number the dash, and sorts it last', () => {
+    renderStartScreen({
+      projects: parts.map((part, index) => ({
+        ...part,
+        documentBytes: [Number.NaN, 500, Number.POSITIVE_INFINITY, 100][index]
+      }))
+    });
+    fireEvent.change(screen.getByLabelText('Sort projects'), {
+      target: { value: 'size' }
+    });
+    expect(names()).toEqual([
+      'Bravo plate',
+      'Delta plate',
+      'Alpha plate',
+      'Charlie plate'
+    ]);
+  });
+
   it('shows filed parts inside their folder, not loose on the shelf', () => {
     seedFolder([parts[1]!.projectId, parts[2]!.projectId]);
     renderStartScreen({ projects: parts });
@@ -1619,6 +1761,45 @@ describe('StartScreen folders and selection', () => {
     expect(
       within(pinned as HTMLElement).getByText('Fixtures')
     ).toBeInTheDocument();
+  });
+
+  it('offers no Pinned filter inside a folder, and keeps a shelf one for later', () => {
+    // 14 Nov 2026 recording: a pinned folder read "All 5 · Pinned 5", the
+    // second a repeat of the first. An unpinned folder holding one pinned
+    // and one unpinned project tells "shows All" from "still filters".
+    const mixed = parts.map((part, index) =>
+      index === 1
+        ? { ...part, organization: { ...part.organization!, pinned: true } }
+        : part
+    );
+    seedFolder([mixed[1]!.projectId, mixed[2]!.projectId]);
+    const view = renderStartScreen({ projects: mixed });
+    const filters = () =>
+      within(screen.getByRole('group', { name: 'Show projects' }));
+    fireEvent.click(filters().getByRole('button', { name: /^Pinned/ }));
+    expect(names()).toEqual(['Bravo plate']);
+
+    fireEvent.click(document.querySelector('.start-folder-link')!);
+    expect(filters().queryByRole('button', { name: /^Pinned/ })).toBeNull();
+    expect(filters().getByRole('button', { name: /^All/ })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(names()).toEqual(['Bravo plate', 'Charlie plate']);
+
+    // A reload inside the folder keeps it whole.
+    view.unmount();
+    renderStartScreen({ projects: mixed });
+    expect(filters().queryByRole('button', { name: /^Pinned/ })).toBeNull();
+    expect(names()).toEqual(['Bravo plate', 'Charlie plate']);
+
+    // Back on the shelf, the Pinned filter chosen there still holds.
+    fireEvent.click(document.getElementById('start-shelf-tab-active')!);
+    expect(filters().getByRole('button', { name: /^Pinned/ })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(names()).toEqual(['Bravo plate']);
   });
 
   it('selects a range and trashes it in one action', () => {
@@ -1791,6 +1972,24 @@ describe('StartScreen folders and selection', () => {
     expect(folder.querySelector('.start-tile-size')).toHaveTextContent('—');
   });
 
+  it('shows no filter tabs inside a folder when All would be the only one', () => {
+    // 14 Nov 2026: an open folder with nothing pinned showed one "All 2"
+    // tab; the note carries the count instead.
+    seedFolder([parts[0]!.projectId, parts[1]!.projectId]);
+    // Saved to the account, so "This device only" has nothing to show.
+    renderStartScreen({
+      projects: parts,
+      cloudProjectIds: new Set(parts.map((part) => part.projectId))
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open folder Fixtures, 2 projects' })
+    );
+    expect(screen.queryByRole('group', { name: 'Show projects' })).toBeNull();
+    expect(document.querySelector('.start-section-note')).toHaveTextContent(
+      /^2 projects$/
+    );
+  });
+
   it('counts a folder card’s projects once, under its name', () => {
     // 14 Nov 2026: a "5" chip on the cover repeated "5 projects" below it.
     seedFolder([parts[0]!.projectId, parts[1]!.projectId]);
@@ -1799,8 +1998,17 @@ describe('StartScreen folders and selection', () => {
       .getByRole('button', { name: 'Open folder Fixtures, 2 projects' })
       .closest('.start-tile')!;
     expect(folder.querySelector('.start-folder-thumb')).toHaveTextContent(/^$/);
-    expect(folder.querySelector('.start-tile-when')).toHaveTextContent(
-      /^2 projects · /
+    // 14 Nov 2026: with the newest edit's date as well, the line wrapped
+    // to two or three lines; the date is a hover away.
+    const when = folder.querySelector('.start-tile-when')!;
+    expect(when).toHaveTextContent(/^2 projects$/);
+    // Off the card's line, the newest edit still describes the button.
+    expect(
+      screen.getByRole('button', { name: 'Open folder Fixtures, 2 projects' })
+    ).toHaveAccessibleDescription(/^Last edited /);
+    expect(when).toHaveAttribute(
+      'title',
+      expect.stringMatching(/^Last edited /)
     );
   });
 
@@ -2109,6 +2317,32 @@ describe('StartScreen selection and dialogs', () => {
 });
 
 describe('StartScreen permanent deletion', () => {
+  it('offers a trashed card Restore and a Delete forever icon beside it', () => {
+    // 14 Nov 2026: two labelled buttons overflowed a narrow card.
+    const trashed: ProjectSummary = {
+      projectId: toProjectId('project_oscar'),
+      name: 'Oscar part',
+      revisionCount: 1,
+      updatedAt: '2026-10-01T12:00:00.000Z',
+      organization: {
+        status: 'deleted',
+        pinned: false,
+        sortOrder: 0,
+        deletedAt: '2026-10-20T12:00:00.000Z'
+      }
+    };
+    renderStartScreen({ projects: [trashed] });
+    fireEvent.click(screen.getByRole('tab', { name: /Trash/ }));
+    expect(
+      screen.getByRole('button', { name: 'Restore Oscar part' })
+    ).toHaveTextContent('Restore');
+    const remove = screen.getByRole('button', {
+      name: 'Delete Oscar part forever'
+    });
+    expect(remove).toHaveTextContent(/^$/);
+    expect(remove).toHaveAttribute('title', 'Delete forever');
+  });
+
   it('keeps the selection when deleting forever is not carried out', () => {
     const trashed: ProjectSummary[] = ['Lima', 'Mike'].map((name) => ({
       projectId: toProjectId(`project_${name.toLowerCase()}`),

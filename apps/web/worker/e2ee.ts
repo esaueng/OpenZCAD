@@ -55,6 +55,7 @@ import {
   type E2eeWriteAuthorization
 } from './e2eeWriteAuthorization';
 import {
+  accountRequiresEncryptedLibrary,
   PROJECT_PREFERENCES_ROUTE,
   handleProjectPreferenceRequest,
   isE2eeProjectPreferenceStorageReady
@@ -73,7 +74,11 @@ import {
   handleE2eeShareLinkRequest,
   isE2eeShareLinkPath
 } from './e2eeShareLinks';
-import { handleE2eeContactsRequest, isE2eeContactsPath } from './e2eeContacts';
+import {
+  handleE2eeContactsRequest,
+  isE2eeContactsPath,
+  MAX_CONTACTS_RESEAL_BODY_BYTES
+} from './e2eeContacts';
 import {
   handleE2eeInvitationRequest,
   isE2eeInvitationPath,
@@ -2181,6 +2186,24 @@ export async function handleE2eeRequest(
       }
     };
     if (pathname === PROJECT_PREFERENCES_ROUTE) {
+      if (!projectsEnabled && request.method === 'GET') {
+        // Closed to this account: no opt-in to read, but the library rule
+        // still answers, so a browser never has to guess from the general
+        // config, and asking logs no failed request.
+        const libraryEncrypted =
+          (await isE2eeProjectPreferenceStorageReady(rawDb)) &&
+          (await accountRequiresEncryptedLibrary(rawDb, userId));
+        return new Response(
+          JSON.stringify({ preference: null, libraryEncrypted }),
+          {
+            status: 200,
+            headers: {
+              'content-type': 'application/json',
+              'cache-control': 'no-store'
+            }
+          }
+        );
+      }
       if (!projectsEnabled) {
         refuse(
           501,
@@ -2258,7 +2281,14 @@ export async function handleE2eeRequest(
         rawDb,
         userId,
         db.authorization,
-        () => readBody(request)
+        // A reseal carries the whole list at once.
+        () =>
+          readBody(
+            request,
+            request.method === 'PUT'
+              ? MAX_CONTACTS_RESEAL_BODY_BYTES
+              : MAX_BODY_BYTES
+          )
       );
     }
     if (isAssistantConsentPath(pathname)) {
