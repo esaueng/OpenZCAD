@@ -140,6 +140,7 @@ import {
   resizeWallThroughBlends,
   sameBlendCarrier
 } from './exact-direct-edit-reblend';
+import { withResizeBlendRefusal } from './exact-resize-blend-refusal';
 
 // The restored drag source is immutable. Exact face digests keep its costly
 // area/domain measurement reusable without trusting recycled handle numbers.
@@ -1570,7 +1571,9 @@ function removeFaces(
     output = kernel.defeature(solid, Uint32Array.from(handles));
   } catch (error) {
     const detail =
-      error instanceof Error ? error.message : 'the kernel rejected the defeature';
+      error instanceof Error
+        ? error.message
+        : 'the kernel rejected the defeature';
     throw new Error(
       `Removing the ${handles.length} selected faces failed: ${detail}. To close an opening, select every face around it.`,
       { cause: error }
@@ -1630,7 +1633,9 @@ function removeBlends(
     // any member removes them all.
     const region = requireBlendRegion(kernel, output, matches[0]!);
     try {
-      output = kernel.resizeBlend(output, matches[0]!, region.radius, 0);
+      output = withResizeBlendRefusal(() =>
+        kernel.resizeBlend(output, matches[0]!, region.radius, 0)
+      );
     } catch (error) {
       throw new Error(
         `Removing the ${formatBlend(blend)} failed: ${
@@ -2277,17 +2282,21 @@ export function applyDirectEdit(
     const evolution =
       (preparedOutput === undefined || needsEvolution) &&
       operation.surfaceClass === 'cylinder'
-        ? kernel.resizeBlendWithEvolution(
-            solid,
-            face,
-            snapshot.radius,
-            newRadius
+        ? withResizeBlendRefusal(() =>
+            kernel.resizeBlendWithEvolution(
+              solid,
+              face,
+              snapshot.radius,
+              newRadius
+            )
           )
         : null;
     const output =
       evolution?.result.solid ??
       preparedOutput ??
-      kernel.resizeBlend(solid, face, snapshot.radius, newRadius);
+      withResizeBlendRefusal(() =>
+        kernel.resizeBlend(solid, face, snapshot.radius, newRadius)
+      );
     requireValidSolid(
       kernel,
       output,

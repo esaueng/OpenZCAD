@@ -45,6 +45,7 @@ import { sameAnalyticCarrier } from './exact-lineage-builders';
 import { requireValidSolid } from './kernel-validation';
 import { dot, length, normalized, scale, subtract } from './exact-math';
 import type { FaceWitnessV1 } from '@openzcad/shared';
+import { withResizeBlendRefusal } from './exact-resize-blend-refusal';
 
 type AnalyticCarrier = FaceWitnessV1['analytic'];
 
@@ -269,7 +270,9 @@ export function resizeWallThroughBlends(
     ) {
       throw new Error('A recognised blend changed radius before removal.');
     }
-    sharp = kernel.resizeBlend(sharp, seed, region.radius, 0);
+    sharp = withResizeBlendRefusal(() =>
+      kernel.resizeBlend(sharp, seed, region.radius, 0)
+    );
   }
   requireValidSolid(
     kernel,
