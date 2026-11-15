@@ -179,6 +179,56 @@ describe('WorkspaceReadout', () => {
     );
   });
 
+  it('folds the bar to its resting width only when it has nothing to say', () => {
+    const lane = (container: HTMLElement) =>
+      container.querySelector('.command-bar-lane');
+    // Guidance in the field keeps the full measure.
+    const { container, rerender } = render(
+      <WorkspaceReadout
+        status=""
+        tone="ready"
+        onOpenLog={vi.fn()}
+        {...SUMMARY}
+      />
+    );
+    expect(lane(container)).not.toHaveClass('is-resting');
+    // The bar's own name ("Search commands · ? shortcuts") is a resting line.
+    rerender(
+      <WorkspaceReadout
+        status=""
+        tone="ready"
+        onOpenLog={vi.fn()}
+        {...SUMMARY}
+        prompt="Search commands · ? shortcuts"
+        promptResting
+      />
+    );
+    expect(lane(container)).toHaveClass('is-resting');
+    // So is no guidance at all.
+    rerender(
+      <WorkspaceReadout
+        status=""
+        tone="ready"
+        onOpenLog={vi.fn()}
+        {...SUMMARY}
+        prompt={null}
+      />
+    );
+    expect(lane(container)).toHaveClass('is-resting');
+    // A pick reads on the bar's card, and the bar keeps its width under it.
+    rerender(
+      <WorkspaceReadout
+        status=""
+        tone="ready"
+        onOpenLog={vi.fn()}
+        {...SUMMARY}
+        prompt={null}
+        pick={<span>Box · Right face</span>}
+      />
+    );
+    expect(lane(container)).not.toHaveClass('is-resting');
+  });
+
   describe('guidance wider than the field', () => {
     // The test DOM lays nothing out: the probe's room and ink are given.
     function layOut(room: number, ink: number, phone = false) {

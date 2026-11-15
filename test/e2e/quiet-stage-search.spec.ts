@@ -32,7 +32,7 @@ test('a question typed into the prompt goes to the stream standing on it', async
   await expect(search).toBeVisible({ timeout: 30_000 });
   await expect(search).toHaveAttribute(
     'placeholder',
-    'Search commands or ask about the model'
+    'Search commands or ask'
   );
   await expect(page.locator('.assistant-panel')).toHaveCount(0);
   const viewerBefore = await page.locator('.viewer-area').boundingBox();

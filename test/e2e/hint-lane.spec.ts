@@ -90,27 +90,33 @@ for (const size of SIZES) {
       test.setTimeout(180_000);
       await openDemo(page, size);
 
-      await expectWholeGuidance(
-        page,
-        'Click a body, face, or edge · Shift+Click adds to selection'
-      );
-      // Too long for the field at either width, it stands over the bar, and
-      // the bar under it is the search field again.
+      // Nothing picked, no tool: the bar rests under its own name, folded
+      // to its short width. The old default ("Click a body, face, or edge ·
+      // Shift+Click adds to selection") was too long for the field at either
+      // width and stood on a card over the bar while nothing was happening.
+      await expectWholeGuidance(page, 'Search commands · ? shortcuts');
       const bar = page.locator('.command-bar');
+      await expect(page.locator('.command-bar-lane')).toHaveClass(
+        /\bis-resting\b/
+      );
       const [hintBox, barBox] = await Promise.all([
         hint(page).boundingBox(),
         bar.boundingBox()
       ]);
-      expect(hintBox!.y + hintBox!.height).toBeLessThanOrEqual(barBox!.y);
+      // In the field, on the bar's own row, and no card over it.
+      expect(Math.abs(hintBox!.y - barBox!.y)).toBeLessThan(2);
       await expect
-        .poll(() =>
-          page
-            .locator('.command-bar-input')
-            .evaluate(
-              (element) => getComputedStyle(element, '::placeholder').color
-            )
-        )
-        .not.toBe('rgba(0, 0, 0, 0)');
+        .poll(async () => (await bar.boundingBox())!.width)
+        .toBeLessThanOrEqual(361);
+      if (size.width >= 1440) {
+        // Focus widens it to the full measure for typing. (At 1024px the
+        // full measure is already under the resting width.)
+        await page.locator('.command-bar-input').focus();
+        await expect
+          .poll(async () => (await bar.boundingBox())!.width)
+          .toBeGreaterThan(361);
+        await page.keyboard.press('Escape');
+      }
 
       // A face: its name leads the card, and gives way only when the name
       // and the measurement fill the row.

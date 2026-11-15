@@ -33755,9 +33755,14 @@ export function App() {
                           'Edge selected — Fillet or Chamfer in Feature tools'
                         : selectedFeature
                           ? 'Edit in the panel · Del deletes · Esc closes'
-                          : viewerBodies.length > 0
-                            ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                            : idleHint));
+                          : // Nothing picked and no tool: the bar rests,
+                            // folded under its own name. "Click a body,
+                            // face, or edge · Shift+Click adds to
+                            // selection" was the same for every model and
+                            // stood on a card over the bar, the widest thing
+                            // at the foot of the stage when nothing was
+                            // happening.
+                            idleHint));
   const openReferenceImageEntry =
     (openReferenceImageId &&
       doc?.referenceImages?.images.find(
@@ -36725,6 +36730,10 @@ export function App() {
                 }
                 draft={promptDraft}
                 pick={commandContextLabel(commandSelection)}
+                result={
+                  assistantAvailable ? (assistantActivity.latest ?? null) : null
+                }
+                onResult={() => setAssistantCollapsed(false)}
               />
             }
           />

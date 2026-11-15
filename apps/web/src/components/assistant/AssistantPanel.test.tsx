@@ -23,7 +23,7 @@ import {
   sendAssistantPromptFiles,
   sendAssistantPromptKey
 } from '../../lib/assistant/promptKeys';
-import { AssistantPanel } from './AssistantPanel';
+import { AssistantPanel, type AssistantActivity } from './AssistantPanel';
 
 const doc = createProjectDocument('Bracket', toUserId('user_a'));
 
@@ -527,13 +527,67 @@ describe('asking from the prompt line', () => {
       />
     );
     expect(container).toBeEmptyDOMElement();
-    expect(onActivity).toHaveBeenLastCalledWith({
-      thinking: false,
-      unread: 0,
-      context: '2 selected edges',
-      unavailable: false,
-      canAttach: false
+    expect(onActivity).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        thinking: false,
+        unread: 0,
+        context: '2 selected edges',
+        unavailable: false,
+        canAttach: false
+      })
+    );
+    // The newest reply rides along for the closed bar; its words are
+    // `latestReplySummary`'s (failure.test.ts), here whatever the stored
+    // thread ends with.
+    expect(onActivity.mock.lastCall?.[0]).toHaveProperty('latest');
+  });
+
+  it('reports a failure for the closed bar in the words its card leads with', () => {
+    window.localStorage.clear();
+    const onActivity = vi.fn();
+    const document = allEdgeDocument();
+    saveAssistantThread(
+      document.projectId,
+      [
+        {
+          kind: 'user',
+          id: 'u1',
+          text: 'Fillet all edges',
+          attachments: [],
+          answers: [],
+          at: 1
+        },
+        {
+          kind: 'message',
+          id: 'm1',
+          tone: 'error',
+          text: 'This verified recipe did not pass exact geometry preflight. Nothing was changed.\n\nFillet could not be created on 126 selected edges with radius 2. Try a smaller radius.',
+          at: 2
+        }
+      ],
+      2
+    );
+    render(<AssistantPanel {...panelProps({ document, onActivity })} />);
+    const activity = onActivity.mock.lastCall?.[0] as
+      AssistantActivity | undefined;
+    expect(activity?.latest).toEqual({
+      tone: 'error',
+      text: 'Fillet could not be created on 126 selected edges with radius 2 mm.'
     });
+    // The card leads with the same line; the gate's preamble and the rest of
+    // the reason read under it, and the smaller radius is offered first.
+    const card = screen
+      .getByText(
+        'Fillet could not be created on 126 selected edges with radius 2 mm.'
+      )
+      .closest('.assistant-card')!;
+    expect(card).toHaveTextContent('Failed:');
+    expect(card).toHaveTextContent('Nothing was changed.');
+    const actions = within(card as HTMLElement).getAllByRole('button');
+    expect(actions.map((button) => button.textContent)).toEqual([
+      'Try 1 mm',
+      'Try again'
+    ]);
   });
 });
 

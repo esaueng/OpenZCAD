@@ -2387,7 +2387,7 @@ test('grounds an AI fillet request onto every selected edge', async ({
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   await expect(promptField(page)).toHaveAttribute(
     'placeholder',
-    'Search commands or ask about the model'
+    'Search commands or ask'
   );
   await expect(page.getByRole('button', { name: 'Deselect all' })).toHaveCount(
     0
@@ -2471,8 +2471,10 @@ test('rejects a disconnected Union proposed by the assistant before commit', asy
   await askAssistant(page, 'Union the two bodies');
   const failure = page.locator('.assistant-card.message.error');
   await expect(failure).toContainText('did not pass exact geometry preflight');
-  await expect(failure).toContainText(
-    'Feature "AI disconnected Union": Union does not fill empty space.'
+  // The card leads with the kernel's sentence, without the feature name it
+  // opens with.
+  await expect(failure.locator('.assistant-failure-head')).toContainText(
+    'Union does not fill empty space.'
   );
   await expect(page.getByRole('contentinfo')).toContainText(
     'Union does not fill empty space.'

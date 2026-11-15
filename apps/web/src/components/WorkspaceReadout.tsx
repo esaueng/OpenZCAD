@@ -340,6 +340,14 @@ export function WorkspaceReadout({
   const fieldPrompt =
     commandRow == null && !notice && !pick && prompt && !shown ? prompt : null;
   const probedPrompt = promptResting ? null : fieldPrompt;
+  // Nothing to say but the bar's own name: the idle bar folds to its short
+  // resting width (quiet-stage.css) rather than spanning the stage, and
+  // widens again when it takes focus or the conversation stands on it.
+  const resting =
+    commandRow == null &&
+    !notice &&
+    !pick &&
+    (fieldPrompt === null || promptResting);
   const probeRef = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => {
     const probe = probeRef.current;
@@ -373,7 +381,7 @@ export function WorkspaceReadout({
       <div
         className={`command-bar-lane${hasGuidance ? ' has-guidance' : ''}${
           hasSelectionHint || hintRaised ? ' has-selection-hint' : ''
-        }`}
+        }${resting ? ' is-resting' : ''}`}
         ref={laneRef}
       >
         {commandRow ??

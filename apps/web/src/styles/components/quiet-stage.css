@@ -614,6 +614,55 @@
   container-type: inline-size;
 }
 
+/* At rest, with nothing to say but its own name, the bar folds to a short
+   field instead of spanning the stage: the model keeps the room. Focus, the
+   conversation standing on it, guidance in its field, or an unread reply
+   beside it widen it again to the full measure. A phone's lane is already
+   the bar's width. */
+@media (min-width: 768px) {
+  .command-bar-lane {
+    /* Room for the placeholder ("Search commands or ask") and the key
+       badge, which the row drops below 360px. */
+    --command-bar-rest-w: min(360px, var(--command-bar-w));
+  }
+
+  /* The help glyph rides the bar's right end, so it moves with it. */
+  .command-bar-row,
+  .workspace-hint-help {
+    transition: width var(--dur-base) var(--ease-out);
+  }
+
+  :where(.workspace:not(.with-assistant))
+    .command-bar-lane.is-resting:not(
+      :has(.command-bar.open, .command-bar.has-result)
+    )
+    > .command-bar-row,
+  :where(.workspace:not(.with-assistant))
+    .command-bar-lane.is-resting:not(
+      :has(.command-bar.open, .command-bar.has-result)
+    )
+    > .workspace-hint,
+  :where(.workspace:not(.with-assistant))
+    .command-bar-lane.is-resting:not(
+      :has(.command-bar.open, .command-bar.has-result)
+    )
+    > .workspace-hint-help {
+    width: min(var(--command-bar-rest-w), 100%);
+  }
+
+  [data-reduced-motion='true'] .command-bar-row,
+  [data-reduced-motion='true'] .workspace-hint-help {
+    transition: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .command-bar-row,
+  .workspace-hint-help {
+    transition: none;
+  }
+}
+
 /* Narrower than 360px the badge would take the field's last words: the
    placeholder alone is some 290px. The badge is a hint, not a control; ⌘K
    still works without it. */
@@ -930,6 +979,72 @@
 .command-bar-attach:disabled {
   opacity: var(--opacity-disabled);
   cursor: not-allowed;
+}
+
+/* The newest reply, unread behind the closed bar: its icon in the reply's
+   colour and a few words, cut to fit. A press opens the conversation. The
+   unread dot on the glyph says the same thing, so it gives way. */
+.command-bar-result {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 55%;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  color: var(--color-text);
+  background: transparent;
+  border: 0;
+  border-left: var(--border-thin);
+  border-radius: 0;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.command-bar-result:hover,
+.command-bar-result:focus-visible {
+  background: var(--color-surface-hover);
+}
+
+.command-bar-result > svg {
+  flex: 0 0 auto;
+}
+
+.command-bar-result.error > svg {
+  color: var(--color-error-text);
+}
+
+.command-bar-result.proposal > svg,
+.command-bar-result.reply > svg {
+  color: var(--color-success);
+}
+
+.command-bar-result.questions > svg {
+  color: var(--color-accent);
+}
+
+.command-bar-result-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-bar.unread.has-result .command-bar-lead::after {
+  content: none;
+}
+
+/* Beside a reply, the field's invitation would only be cut short: the
+   reply is what the closed bar has to say. Focus brings it back. */
+.command-bar.has-result .command-bar-input::placeholder {
+  color: transparent;
+}
+
+/* The resting line is drawn over the field too, and would run under the
+   reply: the reply is the bar's line while it shows. */
+.command-bar-lane:has(.command-bar.has-result) > .workspace-hint {
+  display: none;
 }
 
 /* The list, standing on the bar where the conversation also stands. */

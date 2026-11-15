@@ -588,6 +588,58 @@
   color: var(--color-error-text);
 }
 
+/* A failure: what failed on one line behind its mark, the reason quieter
+   and indented under it, and the remedies as small framed buttons. */
+.assistant-failure-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-weight: var(--fw-medium);
+}
+
+.assistant-failure-head > svg {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  color: var(--color-error-text);
+}
+
+.assistant-failure-title {
+  min-width: 0;
+}
+
+.assistant-card-copy.assistant-failure-detail {
+  padding-left: 19px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-sm);
+}
+
+.assistant-card.message.error .assistant-card-actions {
+  gap: 6px;
+  margin-top: 4px;
+  padding-left: 19px;
+}
+
+.assistant-card.message.error .assistant-card-actions button {
+  min-height: 26px;
+  padding: 0 10px;
+  border-color: var(--color-border-strong);
+  border-radius: var(--radius-md);
+}
+
+.assistant-card.message.error
+  .assistant-card-actions
+  button:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.assistant-card.message.error .assistant-card-actions .assistant-primary {
+  color: var(--color-selected-text);
+  background: var(--color-selected-fill);
+  border-color: transparent;
+  font-weight: var(--fw-medium);
+}
+
 .assistant-card-note {
   color: var(--color-text-subtle);
   font-size: var(--fs-mini);
@@ -1076,6 +1128,25 @@
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
+}
+
+/* The tools under the stream on one line: the analysis and the two folded
+   lists side by side. A list that opens drops below the line, which stays. */
+.assistant-tools {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+}
+
+.assistant-tools > * {
+  min-width: 0;
+}
+
+.assistant-tools > .assistant-edit-catalog[open] {
+  flex: 1 0 100%;
+  order: 1;
 }
 
 .assistant-actions-row {

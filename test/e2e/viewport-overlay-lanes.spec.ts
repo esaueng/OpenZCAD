@@ -287,9 +287,16 @@ for (const { width, bar, height, type, key } of [
 
     const searchBar = page.locator('.command-bar');
     await expect(searchBar).toBeVisible();
+    // Idle with nothing to say, it rests folded to 360px (or the full
+    // measure, where that is less); focus gives it the full measure below.
+    await expect(page.locator('.command-bar-lane')).toHaveClass(
+      /\bis-resting\b/
+    );
+    await expect
+      .poll(async () => Math.round((await searchBar.boundingBox())!.width))
+      .toBe(Math.min(bar, 360));
     const barBox = await searchBar.boundingBox();
     expect(barBox).not.toBeNull();
-    expect(Math.round(barBox!.width)).toBe(bar);
     expect(Math.round(barBox!.height)).toBe(height);
     await expect(page.locator('.command-bar-input')).toHaveCSS(
       'font-size',
@@ -342,5 +349,25 @@ for (const { width, bar, height, type, key } of [
       rulerBox!.y < barBox!.y + barBox!.height &&
       barBox!.y < rulerBox!.y + rulerBox!.height;
     expect(overlaps).toBe(false);
+
+    // Focused, it takes the full measure, still centred and still clear of
+    // the ruler.
+    await page.locator('.command-bar-input').focus();
+    await expect
+      .poll(async () => Math.round((await searchBar.boundingBox())!.width))
+      .toBe(bar);
+    const openBox = (await searchBar.boundingBox())!;
+    expect(
+      Math.abs(
+        openBox.x + openBox.width / 2 - (laneBox!.x + laneBox!.width / 2)
+      )
+    ).toBeLessThan(1);
+    const openRuler = (await ruler.boundingBox())!;
+    expect(
+      openRuler.x < openBox.x + openBox.width &&
+        openBox.x < openRuler.x + openRuler.width &&
+        openRuler.y < openBox.y + openBox.height &&
+        openBox.y < openRuler.y + openRuler.height
+    ).toBe(false);
   });
 }
