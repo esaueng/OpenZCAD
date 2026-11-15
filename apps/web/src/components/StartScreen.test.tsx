@@ -2,6 +2,7 @@ import {
   act,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
   within
@@ -12,8 +13,20 @@ import { describeProject } from '../lib/projectProperties';
 import { DEMO_DEFINITIONS } from '../lib/demoDefinitions';
 import type { ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { toProjectId, type ProjectSummary } from '@openzcad/shared';
+import {
+  PROJECT_STORAGE_FORMAT_E2EE_V1,
+  toProjectId,
+  type AccountStorageUsage,
+  type ProjectSummary
+} from '@openzcad/shared';
 import { formatLastEdited, recoveryCopyOf, StartScreen } from './StartScreen';
+import { useAccountStorageUsage } from './StorageUsagePanel';
+
+// An encrypted project's properties check the assistant consent against the
+// account; nothing here signs in, so the check would reach for a server.
+vi.mock('./assistant/AssistantConsentSummary', () => ({
+  AssistantConsentSummary: () => 'Checked elsewhere'
+}));
 
 const localProject: ProjectSummary = {
   projectId: toProjectId('project_local'),
@@ -88,17 +101,52 @@ describe('StartScreen properties', () => {
       name: 'Project properties'
     });
     await waitFor(() =>
-      expect(within(dialog).getByText('Document size')).toBeInTheDocument()
+      expect(within(dialog).getByText('Project data size')).toBeInTheDocument()
     );
     expect(loadProperties).toHaveBeenCalledTimes(1);
     expect(onOpen).not.toHaveBeenCalled();
     expect(screen.queryByRole('menu')).toBeNull();
     expect(within(dialog).getByText(localProject.name)).toBeInTheDocument();
     expect(within(dialog).getByText('This device only')).toBeInTheDocument();
+    expect(
+      within(dialog).getByText('Encryption').nextElementSibling
+    ).toHaveTextContent('Not encrypted');
     expect(within(dialog).getByText('Millimeters (mm)')).toBeInTheDocument();
     fireEvent.keyDown(dialog, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(actions).toHaveFocus();
+  });
+
+  /**
+   * The dialog keeps the summary it opened with; the encryption row read
+   * its format there, so a migration finishing (or reversing) while it was
+   * open left the row stating the old protection.
+   */
+  it('states the current listing’s encryption, not the one it opened with', async () => {
+    const props = startScreenProps({
+      cloudProjectIds: new Set([localProject.projectId])
+    });
+    const { rerender } = render(<StartScreen {...props} />);
+    fireEvent.click(
+      screen.getByRole('button', { name: `Actions for ${localProject.name}` })
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Properties' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Project properties'
+    });
+    const value = () =>
+      within(dialog).getByText('Encryption').nextElementSibling;
+    expect(value()).toHaveTextContent('Not end-to-end encrypted');
+    rerender(
+      <StartScreen
+        {...props}
+        projects={[
+          { ...localProject, storageFormat: PROJECT_STORAGE_FORMAT_E2EE_V1 }
+        ]}
+      />
+    );
+    expect(value()).toHaveTextContent('End-to-end encrypted');
+    expect(value()).not.toHaveTextContent('Not');
   });
 
   it('keeps summary details and a retry action available after a failed load', async () => {
@@ -121,7 +169,7 @@ describe('StartScreen properties', () => {
       screen.getByText('Unknown — account listing unavailable')
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    await screen.findByText('Document size');
+    await screen.findByText('Project data size');
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
@@ -553,6 +601,44 @@ describe('StartScreen library discovery', () => {
       localStorage.removeItem(key);
     }
   );
+
+  it('selects the suggested name on focus until someone types over it', () => {
+    // 14 Nov 2026: typing a name into the field landed inside "Lucky
+    // Quokka", so the suggestions were kept rather than cleared.
+    const { unmount } = renderStartScreen();
+    const field = screen.getByLabelText<HTMLInputElement>('Project name');
+    const suggestion = field.value;
+    fireEvent.focus(field);
+    expect(field.selectionStart).toBe(0);
+    expect(field.selectionEnd).toBe(suggestion.length);
+    fireEvent.change(field, { target: { value: 'Pump housing' } });
+    fireEvent.blur(field);
+    field.setSelectionRange(4, 4);
+    fireEvent.focus(field);
+    expect(field.selectionStart).toBe(4);
+    expect(field.selectionEnd).toBe(4);
+    unmount();
+    // A typed draft restored on return stays a typed name.
+    renderStartScreen();
+    const restored = screen.getByLabelText<HTMLInputElement>('Project name');
+    expect(restored).toHaveValue('Pump housing');
+    restored.setSelectionRange(2, 2);
+    fireEvent.focus(restored);
+    expect(restored.selectionEnd).toBe(2);
+  });
+
+  it('still selects a suggestion restored from the draft', () => {
+    const first = renderStartScreen();
+    const suggestion =
+      screen.getByLabelText<HTMLInputElement>('Project name').value;
+    first.unmount();
+    renderStartScreen();
+    const field = screen.getByLabelText<HTMLInputElement>('Project name');
+    expect(field).toHaveValue(suggestion);
+    fireEvent.focus(field);
+    expect(field.selectionEnd).toBe(suggestion.length);
+    expect(field.selectionStart).toBe(0);
+  });
 
   it('restores the unfinished project name and units on reload without adopting a later default', () => {
     const { unmount } = renderStartScreen();
@@ -1374,6 +1460,44 @@ describe('StartScreen shelf filters, order and layout', () => {
     ).toHaveLength(2);
   });
 
+  it('orders by size, largest first, with unmeasured parts last by name', () => {
+    const sizes: Record<string, number> = {
+      Axle: 300,
+      Bracket: 1200,
+      Clamp: 9000
+    };
+    renderStartScreen({
+      projects: [
+        ...projects.map((project) =>
+          project.name in sizes
+            ? { ...project, documentBytes: sizes[project.name] }
+            : project
+        ),
+        {
+          ...part(
+            'project_p',
+            'Pinned plate',
+            '2026-07-01T00:00:00.000Z',
+            true
+          ),
+          documentBytes: 1
+        }
+      ]
+    });
+    fireEvent.change(screen.getByLabelText('Sort projects'), {
+      target: { value: 'size' }
+    });
+    // Pinned still leads; "Bracket (Recovery)" has no size, so it follows
+    // every part that has one rather than passing as the smallest.
+    expect(tileNames()).toEqual([
+      'Pinned plate',
+      'Clamp',
+      'Bracket',
+      'Axle',
+      'Bracket (Recovery)'
+    ]);
+  });
+
   it('groups pinned parts by their flag, not their place in the listing', () => {
     // A part created this session is prepended ahead of pinned ones.
     renderStartScreen({
@@ -1473,6 +1597,91 @@ describe('StartScreen folders and selection', () => {
       (element) => element.textContent
     );
 
+  it('orders folders by their total size under the size sort', () => {
+    localStorage.setItem(
+      'openzcad.library.folders.v1:device',
+      JSON.stringify({
+        folders: [
+          ['folder-small', 'Alpha small', [parts[0]!.projectId]],
+          [
+            'folder-big',
+            'Zulu big',
+            [parts[1]!.projectId, parts[2]!.projectId]
+          ],
+          ['folder-unsized', 'Middle unsized', [parts[3]!.projectId]]
+        ].map(([id, name, projectIds]) => ({
+          id,
+          name,
+          projectIds,
+          pinned: false,
+          createdAt: '2026-10-29T00:00:00.000Z'
+        }))
+      })
+    );
+    renderStartScreen({
+      projects: parts.map((part, index) =>
+        index < 3 ? { ...part, documentBytes: 1000 * (index + 1) } : part
+      )
+    });
+    fireEvent.change(screen.getByLabelText('Sort projects'), {
+      target: { value: 'size' }
+    });
+    // 5000 before 1000; a folder with an unmeasured member has no total.
+    // Not name order (Alpha, Middle, Zulu) nor stored order.
+    expect(names()).toEqual(['Zulu big', 'Alpha small', 'Middle unsized']);
+  });
+
+  // Review of #1526: inside a sorted folder a move started from the stored
+  // order, so Alt+Right on the last card shown did nothing.
+  it('moves a card inside a sorted folder from the order on screen', () => {
+    seedFolder(parts.slice(0, 3).map((part) => part.projectId));
+    renderStartScreen({
+      projects: parts.map((part, index) => ({
+        ...part,
+        documentBytes: 100 * (index + 1)
+      }))
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open folder Fixtures, 3 projects' })
+    );
+    fireEvent.change(screen.getByLabelText('Sort projects'), {
+      target: { value: 'size' }
+    });
+    expect(names()).toEqual(['Charlie plate', 'Bravo plate', 'Alpha plate']);
+
+    fireEvent.keyDown(
+      screen.getByRole('button', { name: /^Charlie plate, edited/ }),
+      { key: 'ArrowRight', altKey: true }
+    );
+
+    const stored = JSON.parse(
+      localStorage.getItem('openzcad.library.folders.v1:device')!
+    ) as { folders: { projectIds: string[] }[] };
+    expect(stored.folders[0]!.projectIds).toEqual(
+      [1, 2, 0].map((index) => parts[index]!.projectId)
+    );
+    expect(names()).toEqual(['Bravo plate', 'Charlie plate', 'Alpha plate']);
+    expect(screen.getByLabelText('Sort projects')).toHaveValue('custom');
+  });
+
+  it('gives a size that is not a number the dash, and sorts it last', () => {
+    renderStartScreen({
+      projects: parts.map((part, index) => ({
+        ...part,
+        documentBytes: [Number.NaN, 500, Number.POSITIVE_INFINITY, 100][index]
+      }))
+    });
+    fireEvent.change(screen.getByLabelText('Sort projects'), {
+      target: { value: 'size' }
+    });
+    expect(names()).toEqual([
+      'Bravo plate',
+      'Delta plate',
+      'Alpha plate',
+      'Charlie plate'
+    ]);
+  });
+
   it('shows filed parts inside their folder, not loose on the shelf', () => {
     seedFolder([parts[1]!.projectId, parts[2]!.projectId]);
     renderStartScreen({ projects: parts });
@@ -1487,6 +1696,31 @@ describe('StartScreen folders and selection', () => {
     // The crumb goes back out.
     fireEvent.click(screen.getByRole('button', { name: 'Projects' }));
     expect(names()).toEqual(['Fixtures', 'Alpha plate', 'Delta plate']);
+  });
+
+  it('highlights the open folder in the column, not also the Projects shelf', () => {
+    // 14 Nov 2026 recording: opening a folder left Projects lit beside it.
+    seedFolder([parts[1]!.projectId, parts[2]!.projectId]);
+    renderStartScreen({ projects: parts });
+    const projectsTab = document.getElementById('start-shelf-tab-active')!;
+    const folderLink = document.querySelector('.start-folder-link')!;
+    expect(projectsTab).toHaveClass('is-active');
+    expect(folderLink).not.toHaveClass('is-active');
+
+    fireEvent.click(folderLink);
+    expect(folderLink).toHaveClass('is-active');
+    expect(folderLink).toHaveAttribute('aria-current', 'page');
+    expect(projectsTab).not.toHaveClass('is-active');
+    // Still the shelf the folder is on, for the strip and assistive tech.
+    expect(projectsTab).toHaveClass('is-parent');
+    expect(projectsTab).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.click(projectsTab);
+    expect(projectsTab).toHaveClass('is-active');
+    expect(projectsTab).not.toHaveClass('is-parent');
+    expect(document.querySelector('.start-folder-link')).not.toHaveClass(
+      'is-active'
+    );
   });
 
   it('looks through folders while searching', () => {
@@ -1627,6 +1861,57 @@ describe('StartScreen folders and selection', () => {
     expect(folder.querySelector('.start-tile-rev')).toHaveTextContent(
       '2 projects'
     );
+  });
+
+  it('shows each row’s saved size in the list’s Size column', () => {
+    const sized = parts.map((part, index) =>
+      index < 2 ? { ...part, documentBytes: (index + 1) * 1536 } : part
+    );
+    seedFolder([sized[0]!.projectId, sized[1]!.projectId]);
+    renderStartScreen({ projects: sized });
+    fireEvent.click(screen.getByRole('button', { name: 'List' }));
+
+    expect(
+      Array.from(document.querySelectorAll('.start-list-head span')).map(
+        (cell) => cell.textContent
+      )
+    ).toEqual(['Name', 'Status', 'Edited', 'Size', 'Saves']);
+    // A folder totals its members once every one of them has a size.
+    const folder = screen
+      .getByRole('button', { name: 'Open folder Fixtures, 2 projects' })
+      .closest('.start-tile')!;
+    expect(folder.querySelector('.start-tile-size')).toHaveTextContent(
+      '4.5 KiB'
+    );
+    // The exact count stays readable behind the rounded label.
+    expect(folder.querySelector('data.start-tile-size')).toHaveAttribute(
+      'value',
+      '4608'
+    );
+    // A project with no measured size reads as a dash, and says why.
+    const unsized = screen
+      .getByRole('button', { name: /^Charlie plate, edited/ })
+      .closest('.start-tile')!;
+    const cell = unsized.querySelector('.start-tile-size');
+    expect(cell).toHaveTextContent('—');
+    expect(cell).toHaveAttribute(
+      'title',
+      expect.stringMatching(/^Not measured yet/)
+    );
+  });
+
+  it('leaves a folder’s size out until every member is measured', () => {
+    seedFolder([parts[0]!.projectId, parts[1]!.projectId]);
+    renderStartScreen({
+      projects: parts.map((part, index) =>
+        index === 0 ? { ...part, documentBytes: 2048 } : part
+      )
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'List' }));
+    const folder = screen
+      .getByRole('button', { name: 'Open folder Fixtures, 2 projects' })
+      .closest('.start-tile')!;
+    expect(folder.querySelector('.start-tile-size')).toHaveTextContent('—');
   });
 
   it('counts a folder card’s projects once, under its name', () => {
@@ -2389,5 +2674,227 @@ describe('StartScreen rename and import (design review I13, I14)', () => {
     // Default prevented: the browser no longer opens the file in place.
     expect(drop).toBe(false);
     expect(onImportFiles).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('StartScreen storage readout', () => {
+  const MB = 1024 * 1024;
+  const GB = 1024 * MB;
+
+  function storageReport(
+    overrides: Partial<AccountStorageUsage> = {}
+  ): AccountStorageUsage {
+    return {
+      projectCount: 12,
+      trashedProjectCount: 0,
+      documentBytes: 20 * MB,
+      revisionBytes: 30 * MB,
+      revisionCount: 34,
+      projectStorageBytes: 40 * MB,
+      artifactBytes: 2 * MB,
+      artifactReservedBytes: 0,
+      storageBytes: 42 * MB,
+      storageLimitBytes: GB,
+      documentLimitBytes: 16 * MB,
+      maxRevisionsPerProject: 50,
+      artifactCount: 7,
+      artifactLimitBytes: GB,
+      ...overrides
+    };
+  }
+
+  it('draws usage against the allowance under the saved line', async () => {
+    const loadStorageUsage = vi.fn().mockResolvedValue(storageReport());
+    renderStartScreen({
+      cloudProjectIds: new Set([localProject.projectId]),
+      loadStorageUsage
+    });
+
+    expect(await screen.findByText('42 MB of 1 GB')).toBeInTheDocument();
+    expect(
+      screen.getByRole('meter', { name: 'Account storage used' })
+    ).toHaveAttribute('aria-valuetext', '42 MB of 1 GB');
+    expect(loadStorageUsage).toHaveBeenCalled();
+  });
+
+  it('keeps an in-flight report during sync and refreshes when sync ends', async () => {
+    let resolve!: (usage: AccountStorageUsage) => void;
+    const load = vi.fn(
+      () =>
+        new Promise<AccountStorageUsage>((done) => {
+          resolve = done;
+        })
+    );
+    const { result, rerender } = renderHook<
+      ReturnType<typeof useAccountStorageUsage>,
+      { key: string | null }
+    >(({ key }) => useAccountStorageUsage(load, 'account', key), {
+      initialProps: { key: '1:0:0' }
+    });
+    rerender({ key: null });
+    await act(async () => resolve(storageReport()));
+    expect(result.current.usage?.storageBytes).toBe(42 * MB);
+    expect(result.current.state).toBe('ready');
+    expect(load).toHaveBeenCalledTimes(1);
+    rerender({ key: '1:0:0' });
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries explicitly during sync without starting a refresh loop', async () => {
+    const load = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue(storageReport());
+    const { result, rerender } = renderHook(() =>
+      useAccountStorageUsage(load, 'account', null)
+    );
+    await waitFor(() => expect(result.current.state).toBe('failed'));
+    act(() => result.current.refresh());
+    await waitFor(() => expect(result.current.state).toBe('ready'));
+    rerender();
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears reports on account changes and sign-out and ignores stale answers', async () => {
+    const pending: Array<(usage: AccountStorageUsage) => void> = [];
+    const load = vi.fn(
+      () =>
+        new Promise<AccountStorageUsage>((resolve) => {
+          pending.push(resolve);
+        })
+    );
+    const { result, rerender } = renderHook(
+      ({ account, enabled }) =>
+        useAccountStorageUsage(enabled ? load : undefined, account, '1'),
+      { initialProps: { account: 'first', enabled: true } }
+    );
+    await act(async () => pending[0]!(storageReport()));
+    act(() => result.current.refresh());
+    rerender({ account: 'second', enabled: true });
+    expect(result.current.usage).toBeNull();
+    await act(async () => pending[1]!(storageReport()));
+    expect(result.current.usage).toBeNull();
+    await act(async () => pending[2]!(storageReport({ storageBytes: MB })));
+    expect(result.current.usage?.storageBytes).toBe(MB);
+    act(() => result.current.refresh());
+    rerender({ account: 'second', enabled: false });
+    await act(async () => pending[3]!(storageReport()));
+    expect(result.current.usage).toBeNull();
+    expect(result.current.state).toBe('idle');
+  });
+
+  it('opens a breakdown of the account and this device, and closes on Escape', async () => {
+    const onShowTrashTarget = vi.fn();
+    renderStartScreen({
+      cloudProjectIds: new Set([localProject.projectId]),
+      loadStorageUsage: vi
+        .fn()
+        .mockResolvedValue(storageReport({ trashedProjectCount: 2 })),
+      onOpenAccountSettings: onShowTrashTarget
+    });
+    await screen.findByText('42 MB of 1 GB');
+
+    const opener = screen.getByRole('button', { name: /^Storage details/ });
+    expect(opener).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(opener);
+
+    const panel = await screen.findByRole('dialog', { name: 'Storage' });
+    expect(opener).toHaveAttribute('aria-expanded', 'true');
+    expect(within(panel).getByText('Projects')).toBeInTheDocument();
+    expect(
+      within(panel).getByText('12 projects · 34 save states')
+    ).toBeInTheDocument();
+    expect(within(panel).getByText('Imports and exports')).toBeInTheDocument();
+    expect(within(panel).getByText('7 files')).toBeInTheDocument();
+    expect(within(panel).getByText('982 MB free')).toBeInTheDocument();
+    expect(
+      within(panel).getByText('2 projects in the trash still count.')
+    ).toBeInTheDocument();
+    expect(within(panel).getByText('Only on this device')).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Storage' })).toBeNull();
+    expect(opener).toHaveFocus();
+  });
+
+  it('takes the details to the trash shelf and to account settings', async () => {
+    const onOpenAccountSettings = vi.fn();
+    renderStartScreen({
+      cloudProjectIds: new Set([localProject.projectId]),
+      loadStorageUsage: vi
+        .fn()
+        .mockResolvedValue(storageReport({ trashedProjectCount: 1 })),
+      onOpenAccountSettings
+    });
+    await screen.findByText('42 MB of 1 GB');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Storage details/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'View trash' }));
+    expect(screen.queryByRole('dialog', { name: 'Storage' })).toBeNull();
+    // The focused panel went away; focus follows to the tab it led to.
+    expect(
+      screen.getByRole('tab', { name: /Trash/, selected: true })
+    ).toHaveFocus();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Storage details/ }));
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Account and storage settings'
+      })
+    );
+    expect(onOpenAccountSettings).toHaveBeenCalledOnce();
+  });
+
+  it('names an overage instead of drawing past the track', async () => {
+    renderStartScreen({
+      cloudProjectIds: new Set([localProject.projectId]),
+      loadStorageUsage: vi
+        .fn()
+        .mockResolvedValue(
+          storageReport({ storageBytes: GB + 10 * MB, projectStorageBytes: GB })
+        )
+    });
+    // At one decimal place this read "1 GB of 1 GB" beside 101%.
+    await screen.findByText('1.01 GB of 1 GB');
+    expect(
+      screen.getByRole('meter', { name: 'Account storage used' })
+    ).toHaveClass('is-over');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Storage details/ }));
+    expect(
+      await screen.findByText('10 MB over your allowance')
+    ).toBeInTheDocument();
+  });
+
+  it('says so when the report cannot be loaded, and retries', async () => {
+    const loadStorageUsage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue(storageReport());
+    renderStartScreen({
+      cloudProjectIds: new Set([localProject.projectId]),
+      loadStorageUsage
+    });
+    await waitFor(() => expect(loadStorageUsage).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Storage details/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('982 MB free')).toBeInTheDocument();
+  });
+
+  it('measures this device alone when signed out', () => {
+    const onSignIn = vi.fn();
+    const loadStorageUsage = vi.fn();
+    renderStartScreen({ signedIn: false, onSignIn, loadStorageUsage });
+
+    expect(loadStorageUsage).not.toHaveBeenCalled();
+    expect(screen.queryByRole('meter')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Storage details' }));
+    const panel = screen.getByRole('dialog', { name: 'Storage' });
+    expect(within(panel).getByText('Projects')).toBeInTheDocument();
+    expect(within(panel).getByText('1')).toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Sign in' }));
+    expect(onSignIn).toHaveBeenCalledOnce();
   });
 });

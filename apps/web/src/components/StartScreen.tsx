@@ -4,6 +4,7 @@ import {
   Fragment,
   Suspense,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -62,6 +63,7 @@ import {
   PROJECT_STORAGE_FORMAT_E2EE_V1,
   projectOrganization,
   TRASH_RETENTION_DAYS,
+  type AccountStorageUsage,
   type LibraryCardSize,
   type ProjectStatus,
   type ProjectSummary,
@@ -105,6 +107,16 @@ import { BrandMark } from './BrandMark';
 import { DemoModelIcon } from './DemoModelIcon';
 import { PartThumbnail } from './PartThumbnail';
 import type { ProjectProperties } from '../lib/projectProperties';
+import { formatBytes } from '../lib/formatBytes';
+import {
+  StorageBar,
+  StorageUsagePanel,
+  storageFigure,
+  storageSegments,
+  useAccountStorageUsage,
+  useDeviceStorageEstimate
+} from './StorageUsagePanel';
+import { storageLevel, storageLimitOf, storedBytes } from '../lib/storageUsage';
 
 const ProjectPropertiesDialog = lazyWithStaleChunkNotice(async () => ({
   default: (await import('./ProjectPropertiesDialog')).ProjectPropertiesDialog
@@ -238,13 +250,44 @@ interface StartScreenProps {
    * Called as tiles approach the viewport, without rebuilding documents.
    */
   publishThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
+  /**
+   * The account's storage report, for the footer's meter and its details.
+   * Absent signed out or without cloud functions: the footer then measures
+   * this device alone.
+   */
+  loadStorageUsage?(): Promise<AccountStorageUsage>;
+  /** Settings at its Account section, where storage is managed. */
+  onOpenAccountSettings?(): void;
 }
 
 const LOADING_PROJECT_TILES = 10;
 
 /** The Projects shelf's narrowing, beside its heading. */
 type ShelfFilter = 'all' | 'pinned' | 'attention' | 'local';
-type ShelfSort = 'custom' | 'edited' | 'name';
+type ShelfSort = 'custom' | 'edited' | 'name' | 'size';
+
+/**
+ * The size sort's order: largest first, and a row with no figure (unmeasured,
+ * or locked) after every row that has one, where its size cannot mislead.
+ */
+function largestFirst(a: number | undefined, b: number | undefined): number {
+  if (a === undefined) return b === undefined ? 0 : 1;
+  if (b === undefined) return -1;
+  return b - a;
+}
+
+/**
+ * The size the list shows for a project: none for one this build cannot open,
+ * or for a figure that is not a number of bytes (the column shows a dash).
+ */
+function shownBytes(project: ProjectSummary): number | undefined {
+  const bytes = project.documentBytes;
+  return projectNeedsUpdate(project) ||
+    bytes === undefined ||
+    !Number.isFinite(bytes)
+    ? undefined
+    : bytes;
+}
 type ShelfLayout = 'grid' | 'list';
 
 const SHELF_FILTERS: ReadonlyArray<{ id: ShelfFilter; label: string }> = [
@@ -278,16 +321,21 @@ function writeShelfLayout(layout: ShelfLayout) {
 const LIBRARY_VIEW_KEY = 'openzcad.start.view';
 const LIBRARY_DRAFT_KEY = 'openzcad.start.draft';
 
-function readLibraryDraft(): { name: string; units: UnitSystem } | null {
+function readLibraryDraft(): {
+  name: string;
+  units: UnitSystem;
+  /** The name is still the suggestion nobody has typed over. */
+  suggested: boolean;
+} | null {
   try {
     const stored: unknown = JSON.parse(
       sessionStorage.getItem(LIBRARY_DRAFT_KEY) ?? 'null'
     );
     if (!stored || typeof stored !== 'object') return null;
-    const { name, units } = stored as Record<string, unknown>;
+    const { name, units, suggested } = stored as Record<string, unknown>;
     return typeof name === 'string' &&
       (units === 'mm' || units === 'cm' || units === 'm' || units === 'inch')
-      ? { name, units }
+      ? { name, units, suggested: suggested === true }
       : null;
   } catch {
     return null;
@@ -338,7 +386,11 @@ function readLibraryView(): LibraryView {
     ) {
       view.filter = stored.filter;
     }
-    if (stored.sort === 'edited' || stored.sort === 'name') {
+    if (
+      stored.sort === 'edited' ||
+      stored.sort === 'name' ||
+      stored.sort === 'size'
+    ) {
       view.sort = stored.sort;
     }
     if (typeof stored.query === 'string') {
@@ -553,7 +605,9 @@ export function StartScreen({
   onEmptyTrash,
   loadThumbnail,
   thumbnailAccountId,
-  publishThumbnail
+  publishThumbnail,
+  loadStorageUsage,
+  onOpenAccountSettings
 }: StartScreenProps) {
   const projects = scopePending ? [] : discoveredProjects;
   const settingsKey = useKeymap().label('app-settings');
@@ -565,11 +619,17 @@ export function StartScreen({
     initialDraft?.units ?? defaultUnits
   );
   const unitsEdited = useRef(initialDraft !== null);
+  // The suggested name is selected when the field takes focus, so typing a
+  // real one replaces it rather than landing inside "Lucky Quokka". Once
+  // anything is typed the field behaves as any other, and a click places
+  // the caret.
+  const nameSuggested = useRef(initialDraft?.suggested ?? true);
+  const keepSuggestionSelected = useRef(false);
   useEffect(() => {
     try {
       sessionStorage.setItem(
         LIBRARY_DRAFT_KEY,
-        JSON.stringify({ name, units })
+        JSON.stringify({ name, units, suggested: nameSuggested.current })
       );
     } catch {
       // Draft persistence is optional when browser storage is unavailable.
@@ -957,9 +1017,12 @@ export function StartScreen({
             Number(projectOrganization(b).pinned) -
             Number(projectOrganization(a).pinned);
           if (pinned !== 0) return pinned;
-          return sort === 'edited'
-            ? b.updatedAt.localeCompare(a.updatedAt)
-            : a.name.localeCompare(b.name, undefined, { numeric: true });
+          if (sort === 'edited') return b.updatedAt.localeCompare(a.updatedAt);
+          if (sort === 'size') {
+            const bySize = largestFirst(shownBytes(a), shownBytes(b));
+            if (bySize !== 0) return bySize;
+          }
+          return a.name.localeCompare(b.name, undefined, { numeric: true });
         });
   // Folders gather projects only on the unfiltered shelf; a filter or a search
   // looks through them, showing every matching project on its own.
@@ -980,11 +1043,18 @@ export function StartScreen({
     ? []
     : sort === 'custom'
       ? folders
-      : [...folders].sort((a, b) =>
-          sort === 'edited'
-            ? latestEdit(b).localeCompare(latestEdit(a))
-            : a.name.localeCompare(b.name, undefined, { numeric: true })
-        );
+      : [...folders].sort((a, b) => {
+          if (sort === 'edited')
+            return latestEdit(b).localeCompare(latestEdit(a));
+          if (sort === 'size') {
+            const bySize = largestFirst(
+              folderBytes(folderMembers(a)),
+              folderBytes(folderMembers(b))
+            );
+            if (bySize !== 0) return bySize;
+          }
+          return a.name.localeCompare(b.name, undefined, { numeric: true });
+        });
 
   // A project sent to another shelf takes its tile, and the focused control in
   // it, off the page, which would leave focus on nothing. Once it is gone the
@@ -1039,6 +1109,11 @@ export function StartScreen({
     ...looseProjects.map((project) => project.projectId)
   ];
   const folderById = new Map(folders.map((folder) => [folder.id, folder]));
+  // An open folder's members as shown. A move starts from the order on
+  // screen: from the stored order, under a sort, Alt+Right on the last card
+  // shown did nothing because it was first in storage. Reordering needs the
+  // whole shelf (no search or filter), so these are all its members.
+  const shownMemberIds = matchingProjects.map((project) => project.projectId);
 
   /**
    * Saves a new order of the tiles on screen, and the tile a drag took into
@@ -1139,9 +1214,7 @@ export function StartScreen({
   }
 
   const reorder = useTileReorder({
-    ids: openFolder
-      ? baseProjects.map((project) => project.projectId)
-      : reorderIds,
+    ids: openFolder ? shownMemberIds : reorderIds,
     enabled: canReorder,
     tileRefs,
     // Pinned projects and folders head the shelf as their own group: dragging
@@ -1229,9 +1302,7 @@ export function StartScreen({
 
   /** Alt and an arrow key move the focused card one place among its kind. */
   function nudge(id: string, offset: number) {
-    const ids = openFolder
-      ? baseProjects.map((project) => project.projectId)
-      : reorderIds;
+    const ids = openFolder ? shownMemberIds : reorderIds;
     const kind = ids.filter(
       (entry) => Boolean(folderIdOf(entry)) === Boolean(folderIdOf(id))
     );
@@ -1651,6 +1722,51 @@ export function StartScreen({
     );
   }
 
+  /**
+   * A folder's size is its members' total, and only once every member has
+   * one: a partial sum would read as the folder's size and undercount it.
+   */
+  function folderBytes(members: ProjectSummary[]): number | undefined {
+    if (members.length === 0) return undefined;
+    let total = 0;
+    for (const member of members) {
+      const bytes = shownBytes(member);
+      if (bytes === undefined) return undefined;
+      total += bytes;
+    }
+    return total;
+  }
+
+  /**
+   * The list's Size cell: saved document bytes in Project properties' IEC
+   * units, or a dash with the reason there is no figure. formatBytes rather
+   * than formatProjectBytes, which would pull projectProperties (and the
+   * document model it measures with) out of its lazy chunk.
+   */
+  function renderSize(
+    bytes: number | undefined,
+    label: string,
+    unmeasured: string | undefined
+  ) {
+    if (bytes === undefined || !Number.isFinite(bytes)) {
+      return (
+        <span className="start-tile-size" title={unmeasured}>
+          —
+        </span>
+      );
+    }
+    // A <data> element carries the exact byte count behind the rounded label.
+    return (
+      <data
+        className="start-tile-size"
+        value={bytes}
+        title={`${label}: ${formatBytes(bytes, 'iec')}. Saved model data and undo history; imported source files are not included.`}
+      >
+        {formatBytes(bytes, 'iec')}
+      </data>
+    );
+  }
+
   function renderFolderTile(folder: LibraryFolder) {
     const key = folderKey(folder.id);
     const members = folderMembers(folder);
@@ -1737,6 +1853,13 @@ export function StartScreen({
                   <span className="start-tile-when">
                     {edited ? formatLastEdited(edited) : '—'}
                   </span>
+                  {renderSize(
+                    folderBytes(members),
+                    'Projects in this folder',
+                    members.length === 0
+                      ? undefined
+                      : 'Shown once every project in this folder has a size.'
+                  )}
                   <span className="start-tile-rev">
                     {members.length === 0
                       ? 'Empty'
@@ -1967,7 +2090,7 @@ export function StartScreen({
                 // its name.
                 plaintext && (
                   <span
-                    className="start-tile-mark"
+                    className="start-tile-mark is-plaintext"
                     role="img"
                     aria-label={NOT_ENCRYPTED_LABEL}
                     title={`${NOT_ENCRYPTED_LABEL}. It is stored in your account as plaintext.`}
@@ -2012,7 +2135,15 @@ export function StartScreen({
                 </span>
               )}
             </span>
-            {/* The list has a Saves column; a card leaves the count out. */}
+            {/* The list has Size and Saves columns; a card leaves both out. */}
+            {layout === 'list' &&
+              renderSize(
+                shownBytes(project),
+                'Document size',
+                locked
+                  ? undefined
+                  : 'Not measured yet. Recorded the next time this project is saved.'
+              )}
             {layout === 'list' && (
               <span className="start-tile-rev">
                 {project.revisionCount}{' '}
@@ -2778,6 +2909,34 @@ export function StartScreen({
     partsElsewhere === null;
 
   const cloud = describeCloud();
+
+  // The footer's storage meter, and the details it opens. Asked again when
+  // what the account holds changes — not during a save run, only once it ends.
+  const [storageOpen, setStorageOpen] = useState(false);
+  const storageButtonRef = useRef<HTMLButtonElement>(null);
+  const storagePanelId = useId();
+  const storage = useAccountStorageUsage(
+    signedIn ? loadStorageUsage : undefined,
+    thumbnailAccountId ?? folderAccountId,
+    syncTotals?.active
+      ? null
+      : `${savedToAccountCount}:${shelves.archived.length}:${shelves.deleted.length}`
+  );
+  const deviceStorage = useDeviceStorageEstimate(storageOpen);
+  const storageUsed = storage.usage ? storedBytes(storage.usage) : 0;
+  const storageLimit = storageLimitOf(storage.usage);
+  const storageMeter =
+    storage.usage && storageLimit && !cloud.progress
+      ? {
+          segments: storageSegments(storage.usage),
+          level: storageLevel(storageUsed, storageLimit),
+          figure: storageFigure(storageUsed, storageLimit)
+        }
+      : null;
+  const refreshStorage = storage.refresh;
+  useEffect(() => {
+    if (storageOpen) refreshStorage();
+  }, [storageOpen, refreshStorage]);
   // A run's outcome is in the sentence, and the startup mode texts restate
   // what the sentence already says; anything else is news worth a line.
   const statusLine =
@@ -3016,7 +3175,25 @@ export function StartScreen({
               placeholder="Project name"
               aria-invalid={nameTooLong || undefined}
               aria-describedby={nameTooLong ? 'project-name-error' : undefined}
-              onChange={(event) => setName(event.target.value)}
+              onFocus={(event) => {
+                if (!nameSuggested.current) return;
+                event.currentTarget.select();
+                keepSuggestionSelected.current = true;
+              }}
+              // The click that focused the field would otherwise collapse
+              // the selection to a caret where it landed.
+              onMouseUp={(event) => {
+                if (keepSuggestionSelected.current) event.preventDefault();
+                keepSuggestionSelected.current = false;
+              }}
+              onBlur={() => {
+                keepSuggestionSelected.current = false;
+              }}
+              onChange={(event) => {
+                nameSuggested.current = false;
+                keepSuggestionSelected.current = false;
+                setName(event.target.value);
+              }}
             />
           </label>
           <label className="start-field start-field-units">
@@ -3076,7 +3253,14 @@ export function StartScreen({
               }
               className={
                 [
-                  shelf === entry.status ? 'is-active' : '',
+                  // An open folder is the place shown, so its row wears the
+                  // highlight; the shelf holding it steps back (is-parent),
+                  // lit again only where the folder list is not shown.
+                  shelf === entry.status
+                    ? openFolder
+                      ? 'is-parent'
+                      : 'is-active'
+                    : '',
                   reorder.dropTarget?.target === `shelf:${entry.status}`
                     ? 'is-drop-target'
                     : '',
@@ -3357,6 +3541,7 @@ export function StartScreen({
                       <option value="custom">Custom order</option>
                       <option value="edited">Last edited</option>
                       <option value="name">Name</option>
+                      <option value="size">Size</option>
                     </select>
                   </label>
                 ) : (
@@ -3373,6 +3558,7 @@ export function StartScreen({
                       <option value="custom">Custom order</option>
                       <option value="edited">Last edited</option>
                       <option value="name">Name</option>
+                      <option value="size">Size</option>
                     </select>
                   </span>
                 )}
@@ -3446,6 +3632,7 @@ export function StartScreen({
                         <span>Name</span>
                         <span>Status</span>
                         <span>Edited</span>
+                        <span className="start-list-head-size">Size</span>
                         <span>Saves</span>
                       </div>
                     )}
@@ -3470,7 +3657,14 @@ export function StartScreen({
                                   <time>&nbsp;</time>
                                 </span>
                                 {layout === 'list' && (
-                                  <span className="start-tile-rev">&nbsp;</span>
+                                  <>
+                                    <span className="start-tile-size">
+                                      &nbsp;
+                                    </span>
+                                    <span className="start-tile-rev">
+                                      &nbsp;
+                                    </span>
+                                  </>
                                 )}
                               </small>
                             </span>
@@ -3530,6 +3724,7 @@ export function StartScreen({
                             <span>Name</span>
                             <span>Status</span>
                             <span>Edited</span>
+                            <span className="start-list-head-size">Size</span>
                             <span>Saves</span>
                           </div>
                         )}
@@ -3818,54 +4013,88 @@ export function StartScreen({
             </span>
           ) : null}
           <div
-            className={`start-account is-${cloud.tone}`}
+            className={`start-account is-${cloud.tone}${storageOpen ? ' is-open' : ''}`}
             role="status"
             aria-live="polite"
           >
-            <div className="start-account-row">
-              <cloud.Icon
-                size={14}
-                aria-hidden="true"
-                className={cloud.spin ? 'spin' : undefined}
+            {/* The whole readout opens the storage details: one button
+                drawn under the line and its meter, with the line's own
+                actions standing above it. */}
+            <div className="start-account-head">
+              <button
+                ref={storageButtonRef}
+                type="button"
+                className="start-account-open"
+                aria-label={
+                  storageMeter
+                    ? `Storage details, ${storageMeter.figure} used`
+                    : 'Storage details'
+                }
+                title={cloud.title}
+                aria-haspopup="dialog"
+                aria-expanded={storageOpen}
+                aria-controls={storageOpen ? storagePanelId : undefined}
+                onClick={() => setStorageOpen((open) => !open)}
               />
-              <span className="start-account-text" title={cloud.title}>
-                {cloud.text}
-              </span>
-              {cloud.action && (
-                <button
-                  type="button"
-                  className="start-account-action"
-                  aria-label={cloud.action.label}
-                  title={cloud.action.label}
-                  disabled={cloud.action.needsIdle && busy}
-                  onClick={cloud.action.run}
-                >
-                  {cloud.action.text}
-                </button>
+              <div className="start-account-row">
+                <cloud.Icon
+                  size={14}
+                  aria-hidden="true"
+                  className={cloud.spin ? 'spin' : undefined}
+                />
+                <span className="start-account-text" title={cloud.title}>
+                  {cloud.text}
+                </span>
+                {storageMeter && !cloud.action && (
+                  <span className="start-account-figure" aria-hidden="true">
+                    {storageMeter.figure}
+                  </span>
+                )}
+                {cloud.action && (
+                  <button
+                    type="button"
+                    className="start-account-action"
+                    aria-label={cloud.action.label}
+                    title={cloud.action.label}
+                    disabled={cloud.action.needsIdle && busy}
+                    onClick={cloud.action.run}
+                  >
+                    {cloud.action.text}
+                  </button>
+                )}
+                {syncTotals && !syncTotals.active && (
+                  <button
+                    type="button"
+                    className="start-account-dismiss"
+                    aria-label="Dismiss sync results"
+                    onClick={onDismissSyncRun}
+                  >
+                    <X size={12} aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+              {cloud.progress && (
+                <div className="start-account-track" aria-hidden="true">
+                  <span
+                    className="start-account-fill"
+                    style={{ width: `${cloud.progress.saved * 100}%` }}
+                  />
+                  <span
+                    className="start-account-fill is-failed"
+                    style={{ width: `${cloud.progress.failed * 100}%` }}
+                  />
+                </div>
               )}
-              {syncTotals && !syncTotals.active && (
-                <button
-                  type="button"
-                  className="start-account-dismiss"
-                  aria-label="Dismiss sync results"
-                  onClick={onDismissSyncRun}
-                >
-                  <X size={12} aria-hidden="true" />
-                </button>
+              {storageMeter && (
+                <StorageBar
+                  segments={storageMeter.segments}
+                  limit={storageLimit}
+                  level={storageMeter.level}
+                  label="Account storage used"
+                  valueText={storageMeter.figure}
+                />
               )}
             </div>
-            {cloud.progress && (
-              <div className="start-account-track" aria-hidden="true">
-                <span
-                  className="start-account-fill"
-                  style={{ width: `${cloud.progress.saved * 100}%` }}
-                />
-                <span
-                  className="start-account-fill is-failed"
-                  style={{ width: `${cloud.progress.failed * 100}%` }}
-                />
-              </div>
-            )}
             {/* What the one-line readout cannot hold hangs below it. */}
             {(syncFailures.length > 0 || statusLine) && (
               <div className="start-account-details">
@@ -3901,6 +4130,34 @@ export function StartScreen({
               </div>
             )}
           </div>
+          {storageOpen && (
+            <StorageUsagePanel
+              id={storagePanelId}
+              signedIn={signedIn}
+              usage={storage.usage}
+              usageState={
+                signedIn && !loadStorageUsage ? 'failed' : storage.state
+              }
+              onRetryUsage={storage.refresh}
+              device={deviceStorage}
+              deviceProjectCount={userProjects.length}
+              localOnlyCount={localOnlyProjects.length}
+              anchorRef={storageButtonRef}
+              onClose={() => setStorageOpen(false)}
+              onShowTrash={() => {
+                selectShelf('deleted');
+                // The panel that held focus is going away; the Trash tab
+                // it led to takes it, as a click on the tab would.
+                globalThis.document
+                  .getElementById('start-shelf-tab-deleted')
+                  ?.focus();
+              }}
+              {...((onOpenAccountSettings ?? onSignIn) && {
+                onOpenAccountSettings: onOpenAccountSettings ?? onSignIn
+              })}
+              {...(onSignIn && { onSignIn })}
+            />
+          )}
         </aside>
       </section>
 
@@ -3954,6 +4211,20 @@ export function StartScreen({
                     ? 'This device only'
                     : 'Unknown — account listing unavailable'
             }
+            // Facts only: the dialog's lazy chunk words them, which keeps
+            // the status text out of the start screen's entry bundle. The
+            // format comes from the current listing: `propertiesProject` is
+            // the summary as it was when the dialog opened, and a migration
+            // can change it while the dialog is still open.
+            encryptionFacts={{
+              storageFormat: (
+                projects.find(
+                  (candidate) =>
+                    candidate.projectId === propertiesProject.projectId
+                ) ?? propertiesProject
+              ).storageFormat,
+              inAccount: cloudProjectIds.has(propertiesProject.projectId)
+            }}
             {...(onRename &&
               !projectNeedsUpdate(propertiesProject) && {
                 // The listed project, whose name a rename here has moved on.

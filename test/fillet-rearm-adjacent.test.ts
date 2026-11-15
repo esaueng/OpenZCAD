@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
+  booleanBodies,
   createProjectDocument,
   filletEdges,
   listFeaturesInOrder,
@@ -23,7 +24,9 @@ import { newBlendFacePick } from '../apps/web/src/lib/blendRearm';
  * Fillet 3, the face re-armed for the new fillet was Fillet 3's band (the
  * new fillet trims it to a new hash), so the Picked chip read "Fillet 3 R 3
  * mm" and a typed radius edited Fillet 3. Run on the exact kernel, on a box
- * whose bands carry names and on a shelled box whose faces are hash-only.
+ * on a shelled box (Shell has published face names since #1500), and on a
+ * union whose faces share carriers, so its bands stay hash-only and are told
+ * apart by their carrier alone.
  */
 
 type Edge = BodyTopology['edges'][number];
@@ -156,7 +159,7 @@ describe(
       expect(picked?.geometry?.blendRadius).toBe(2);
     });
 
-    it('never picks the earlier band on a hash-only shelled box', async () => {
+    it("re-arms the new fillet's own band on a shelled box", async () => {
       const boxed = addPrimitiveFeature(
         createProjectDocument('Rearm beside a fillet, shelled', user),
         {
@@ -183,14 +186,55 @@ describe(
         bodyId: resultId,
         fillet4Id
       } = await besideFillet(shelled.document, shelled.bodyId, 1);
-      // Hash-only: the bands carry no name to tell them apart.
-      expect(blends(after).every((face) => face.reference === undefined)).toBe(
+      // Since #1500 the shelled bands carry names, so the trimmed Fillet 3
+      // band is named for Fillet 3 and cannot be taken for the new one.
+      expect(blends(after).every((face) => face.reference !== undefined)).toBe(
         true
       );
       const pick = newBlendFacePick(resultId, before, after, fillet4Id);
       const picked = after.find((face) => face.hash === pick?.selection.hash);
-      // Whatever is re-armed, it is not Fillet 3's R3 band.
-      expect(picked?.geometry?.blendRadius ?? 1).toBe(1);
+      expect(picked?.reference?.producingFeatureId).toBe(fillet4Id);
+      expect(picked?.geometry?.blendRadius).toBe(1);
+    });
+    it('never picks the earlier band on a hash-only shared-carrier union', async () => {
+      // As in test/boolean-carrier-lineage.test.ts: both boxes stand on
+      // y = 0 and z = 0, so the fused faces there have two sources and no
+      // name, and fillets between them publish hash-only bands.
+      const withPlate = addPrimitiveFeature(
+        createProjectDocument('Rearm beside a fillet, union', user),
+        {
+          name: 'Plate',
+          primitiveKind: 'box',
+          dimensions: { width: 40, height: 24, depth: 10 }
+        }
+      );
+      const withPost = addPrimitiveFeature(withPlate, {
+        name: 'Post',
+        primitiveKind: 'box',
+        dimensions: { width: 12, height: 24, depth: 30 }
+      });
+      const fused = booleanBodies(withPost, {
+        name: 'Fuse',
+        operation: 'union',
+        targetBodyIds: [withPost.bodyOrder[0]!, withPost.bodyOrder[1]!]
+      });
+      const {
+        before,
+        after,
+        bodyId: resultId,
+        fillet4Id
+      } = await besideFillet(fused.document, fused.bodyId, 1);
+      // Hash-only: no band carries a name to tell it apart.
+      expect(blends(after).every((face) => face.reference === undefined)).toBe(
+        true
+      );
+      // Fillet 4 trimmed Fillet 3's band, which came back under a new hash.
+      const earlier = blends(before);
+      expect(earlier).toHaveLength(1);
+      expect(after.some((face) => face.hash === earlier[0]!.hash)).toBe(false);
+      const pick = newBlendFacePick(resultId, before, after, fillet4Id);
+      const picked = after.find((face) => face.hash === pick?.selection.hash);
+      expect(picked?.geometry?.blendRadius).toBe(1);
     });
   }
 );

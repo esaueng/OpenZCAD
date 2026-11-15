@@ -68,6 +68,7 @@
   "imperial-unit-expressions.spec.ts": 9,
   "import-cloud-sync.spec.ts": 37,
   "import-formats.spec.ts": 8,
+  "insert-project.spec.ts": 8,
   "inspector-object-panel.spec.ts": 22,
   "interaction-probe.spec.ts": 0,
   "invitation-dismissal-owned.spec.ts": 18,

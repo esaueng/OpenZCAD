@@ -47,9 +47,20 @@ function staged(
 afterEach(() => vi.useRealTimers());
 
 describe('createThumbnailCapture', () => {
-  it('waits for input to stop and exact work to finish, while leave-time flush still captures', async () => {
+  it('captures a part left alone for two seconds by default', async () => {
     vi.useFakeTimers();
     const capture = createThumbnailCapture();
+    const h = host();
+    capture.stage(staged(3), h);
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(h.render).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.render).toHaveBeenCalledOnce();
+  });
+
+  it('waits for input to stop and exact work to finish, while leave-time flush still captures', async () => {
+    vi.useFakeTimers();
+    const capture = createThumbnailCapture({ idleMs: 4000 });
     const h = host();
     capture.stage(staged(3), h);
     await vi.advanceTimersByTimeAsync(3500);

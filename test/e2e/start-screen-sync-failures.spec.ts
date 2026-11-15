@@ -27,7 +27,7 @@ test('a long list of failed saves stays reachable in the cloud card', async ({
   );
   await page.goto('/');
   // The library has settled (and opened its database) once the card speaks.
-  await expect(page.locator('.start-account')).toHaveText('Signed in');
+  await expect(page.locator('.start-account-text')).toHaveText('Signed in');
   await page.evaluate(async (snapshots) => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
       const open = indexedDB.open('openzcad-v2');
