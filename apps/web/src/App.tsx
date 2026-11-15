@@ -186,6 +186,7 @@ import {
   Scissors,
   SquareSplitVertical,
   SlidersHorizontal,
+  SquareDashed,
   ListOrdered,
   Spline,
   Trash2,
@@ -570,6 +571,10 @@ import {
   inferContentType,
   previewExpression
 } from './lib/model';
+import {
+  sheetMetalFeatureForBody,
+  sheetMetalFeatureOptions
+} from './lib/sheetMetalFeatures';
 import {
   sketchValueResolver,
   requiredValueResolver
@@ -1502,6 +1507,11 @@ const LazyImageExportDialog = lazyWithStaleChunkNotice(() =>
     default: module.ImageExportDialog
   }))
 );
+const LazyFlatPatternDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/FlatPatternDialog').then((module) => ({
+    default: module.FlatPatternDialog
+  }))
+);
 // Off the entry chunk: nothing shows for the first 600 ms of a run anyway,
 // and most sessions never move a file at all.
 const LazyActivityPill = lazyWithStaleChunkNotice(() =>
@@ -1628,6 +1638,18 @@ function ImageExportDialog(
     <ExportDialogBoundary onClose={props.onClose}>
       <Suspense fallback={null}>
         <LazyImageExportDialog {...props} />
+      </Suspense>
+    </ExportDialogBoundary>
+  );
+}
+
+function FlatPatternDialog(
+  props: ComponentProps<typeof LazyFlatPatternDialog>
+) {
+  return (
+    <ExportDialogBoundary onClose={props.onClose}>
+      <Suspense fallback={null}>
+        <LazyFlatPatternDialog {...props} />
       </Suspense>
     </ExportDialogBoundary>
   );
@@ -3002,6 +3024,9 @@ export function App() {
     height: number;
     maxSide: number;
   } | null>(null);
+  /** M16: the sheet-metal feature the flat-pattern view opened on. */
+  const [flatPatternFeatureId, setFlatPatternFeatureId] =
+    useState<FeatureId | null>(null);
   const viewportImageRef = useRef<ViewportImageSource | null>(null);
   const [pendingShaprImport, setPendingShaprImport] =
     useState<PendingShaprImport | null>(null);
@@ -8984,6 +9009,32 @@ export function App() {
   const selectedBody = selectedFeatureBodyId
     ? (renderedRepresentations[selectedFeatureBodyId] ?? null)
     : null;
+  // M16: whether the flat-pattern view has a sheet to show, and the one the
+  // current selection belongs to (the File menu opens on it).
+  const sheetMetalOptions = useMemo(
+    () => (doc ? sheetMetalFeatureOptions(doc) : []),
+    [doc]
+  );
+  const hasSheetMetal = sheetMetalOptions.length > 0;
+  const selectedSheetMetal = useMemo(
+    () =>
+      doc && hasSheetMetal
+        ? selectedFeature?.data.featureKind === 'sheet-metal'
+          ? (sheetMetalOptions.find(
+              (option) => option.featureId === selectedFeature.featureId
+            ) ?? null)
+          : selectedFeatureBodyId
+            ? sheetMetalFeatureForBody(doc, selectedFeatureBodyId)
+            : null
+        : null,
+    [
+      doc,
+      hasSheetMetal,
+      sheetMetalOptions,
+      selectedFeature,
+      selectedFeatureBodyId
+    ]
+  );
 
   /**
    * On-demand recognition of the selected imported STEP face (Phase D of the
@@ -18345,6 +18396,22 @@ export function App() {
     } catch (error) {
       setStatus(errorMessage(error, 'DXF export failed.'));
     }
+  }
+
+  /**
+   * M16: the flat-pattern view, on `featureId` or else the first sheet-metal
+   * feature that builds.
+   */
+  function openFlatPattern(featureId?: FeatureId) {
+    const current = managerRef.current?.document;
+    const options = current ? sheetMetalFeatureOptions(current) : [];
+    const target =
+      options.find((option) => option.featureId === featureId) ?? options[0];
+    if (!target) {
+      setStatus('This project has no sheet-metal part to flatten.');
+      return;
+    }
+    setFlatPatternFeatureId(target.featureId);
   }
 
   function openImageExport() {
@@ -30099,6 +30166,9 @@ export function App() {
       selection.bodyId
     );
     const feature = selectionFeature(current, body, selection);
+    // M16: a sheet-metal body (or one a later feature carried on) offers
+    // its flat pattern.
+    const sheetSource = sheetMetalFeatureForBody(current, selection.bodyId);
     const edge = selection.kind === 'edge';
     // Union and Subtract say why they are greyed out, as the rail does.
     const combineReason =
@@ -30192,6 +30262,19 @@ export function App() {
           },
           run: () => setFitSignal((value) => value + 1)
         },
+        ...(sheetSource
+          ? [
+              {
+                item: {
+                  id: 'flat-pattern',
+                  label: 'Flat pattern…',
+                  icon: <SquareDashed size={13} aria-hidden="true" />,
+                  section: true
+                },
+                run: () => openFlatPattern(sheetSource.featureId)
+              }
+            ]
+          : []),
         ...(feature
           ? [
               {
@@ -32638,6 +32721,16 @@ export function App() {
       }
     },
     {
+      // M16: the sheet-metal flat pattern, its layered DXF and bend table.
+      id: 'file-export-flat-pattern',
+      label: 'Flat pattern…',
+      group: 'File',
+      keywords: ['sheet metal', 'dxf', 'bend', 'unfold', 'laser', 'brake'],
+      icon: <SquareDashed size={16} aria-hidden="true" />,
+      disabledReason: hasSheetMetal ? null : 'Needs a sheet-metal part',
+      run: () => openFlatPattern(selectedSheetMetal?.featureId)
+    },
+    {
       id: 'file-export-step',
       label: 'Export STEP',
       group: 'File',
@@ -33784,6 +33877,12 @@ export function App() {
           onExportStep={() => void handleExportStep()}
           onOpenMeshExport={() => setMeshExportOpen(true)}
           onOpenImageExport={openImageExport}
+          {...(hasSheetMetal
+            ? {
+                onOpenFlatPattern: () =>
+                  openFlatPattern(selectedSheetMetal?.featureId)
+              }
+            : {})}
           onArchiveLocalSources={() => void handleArchiveLocalSources()}
           onRenameProject={(name) =>
             executeCommand(
@@ -35402,6 +35501,7 @@ export function App() {
                   );
                 }}
                 onEditModelingFeature={openModelingFeatureEditor}
+                onOpenFlatPattern={openFlatPattern}
                 onEditSketchInViewport={editSketchFeatureInViewport}
                 onApplyTransform={(feature, value) =>
                   applyValidatedFeature(
@@ -36416,6 +36516,23 @@ export function App() {
               onClose={() => setImageExportView(null)}
               onExportPng={(options) => void handleExportViewportPng(options)}
               onExportSvg={(options) => void handleExportSketchSvg(options)}
+            />
+          )}
+          {flatPatternFeatureId && doc && sheetMetalOptions.length > 0 && (
+            <FlatPatternDialog
+              features={sheetMetalOptions}
+              initialFeatureId={flatPatternFeatureId}
+              units={doc.units}
+              projectName={doc.name}
+              loadPattern={(featureId) => {
+                const current = managerRef.current?.document ?? doc;
+                return geometry.sheetMetalFlatPattern(current, featureId);
+              }}
+              onSave={({ fileName, format, text }) =>
+                saveCadTextFile(fileName, format, text)
+              }
+              onCopy={(text) => navigator.clipboard.writeText(text)}
+              onClose={() => setFlatPatternFeatureId(null)}
             />
           )}
           {pendingShaprImport && (

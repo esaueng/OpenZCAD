@@ -10,7 +10,8 @@
     "./face-attachment": "./src/face-attachment.ts",
     "./topology-lineage": "./src/topology-lineage.ts",
     "./extrude-inference": "./src/extrude-inference.ts",
-    "./mesh-import-formats": "./src/mesh-import-formats.ts"
+    "./mesh-import-formats": "./src/mesh-import-formats.ts",
+    "./sheet-metal-flat-pattern": "./src/sheet-metal-flat-pattern.ts"
   },
   "dependencies": {
     "@openzcad/document-core": "workspace:*",

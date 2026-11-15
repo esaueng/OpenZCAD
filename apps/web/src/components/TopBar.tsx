@@ -173,6 +173,11 @@ interface TopBarProps {
   onOpenMeshExport(): void;
   /** Opens the image export dialog (view PNG / sketch SVG). */
   onOpenImageExport?(): void;
+  /**
+   * M16: opens the sheet-metal flat-pattern view (layered DXF, SVG, bend
+   * table). Absent when the project has no sheet-metal part.
+   */
+  onOpenFlatPattern?(): void;
   onArchiveLocalSources(): void;
   onRenameProject(name: string): void;
   onGoHome(): void;
@@ -326,6 +331,7 @@ export function TopBar({
   onExportStep,
   onOpenMeshExport,
   onOpenImageExport,
+  onOpenFlatPattern,
   onArchiveLocalSources,
   onRenameProject,
   onGoHome,
@@ -518,6 +524,11 @@ export function TopBar({
   function openImageExportFromMenu() {
     closeFileMenuForDialog();
     onOpenImageExport?.();
+  }
+
+  function openFlatPatternFromMenu() {
+    closeFileMenuForDialog();
+    onOpenFlatPattern?.();
   }
 
   function beginProjectRename() {
@@ -1220,6 +1231,18 @@ export function TopBar({
                   <Download size={13} aria-hidden="true" />
                   <span>Export image…</span>
                   <small>PNG view · SVG sketch</small>
+                </button>
+              )}
+              {onOpenFlatPattern && (
+                <button
+                  type="button"
+                  className="topbar-menu-item"
+                  title="The sheet-metal flat pattern: a DXF with bend lines on their own layers, an SVG and the bend table"
+                  onClick={openFlatPatternFromMenu}
+                >
+                  <Download size={13} aria-hidden="true" />
+                  <span>Flat pattern…</span>
+                  <small>sheet metal · DXF · bend table</small>
                 </button>
               )}
               {onExportProject && (

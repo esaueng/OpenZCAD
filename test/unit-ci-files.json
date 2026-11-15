@@ -180,6 +180,7 @@
     "test/security-workflow.test.ts",
     "test/settings-search-index.test.ts",
     "test/sheet-metal-feature.test.ts",
+    "test/sheet-metal-flat-pattern.test.ts",
     "test/shell-draft-edge-lineage.test.ts",
     "test/sketch-constraint-set.test.ts",
     "test/sketch-editing.test.ts",
