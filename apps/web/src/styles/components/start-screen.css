@@ -2351,6 +2351,16 @@
   box-shadow: var(--shadow-popover);
 }
 
+/* The tile whose menu is open rides above its neighbours (below a dragged
+   tile). The pointer that opened it still hovers the tile, and the hover lift
+   (motion.css) makes the tile a stacking context, so the menu's own z-index
+   ranked only inside it: in the list, where the menu hangs over the rows
+   below, those rows painted through it and took the pointer from its items
+   (screen recording, 15 November). */
+.start-tile-project:has(> .start-tile-menu) {
+  z-index: 3;
+}
+
 .start-tile-menu button,
 .start-tile-footer button {
   display: flex;
