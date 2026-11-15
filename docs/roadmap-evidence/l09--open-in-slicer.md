@@ -3,7 +3,7 @@ row: L09
 state: Partial
 ---
 
-Maker slice 3, "Open in slicer" (PR #PRNUM): a spike found that no slicer URL
+Maker slice 3, "Open in slicer" (PR #1564): a spike found that no slicer URL
 scheme accepts a local file the browser made (`bambustudio://` and
 `orcaslicer://` take only an http(s) URL; Bambu Connect's `import-file` takes
 only a sliced `.gcode.3mf`), so none is used and no file is hosted, which keeps
