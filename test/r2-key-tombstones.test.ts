@@ -1529,3 +1529,186 @@ describe('the final batch of an erasure a retry completed (PR #1477 review, roun
     ).toEqual([{ request_token: 'later' }]);
   });
 });
+
+/**
+ * `d1`, whose statements naming `marker` wait at `method` until `release`
+ * (every one of them when `all`, else the first), reporting each arrival.
+ */
+function holding(
+  d1: D1Database,
+  marker: string,
+  method: 'run' | 'all',
+  every = false
+) {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  let arrivals = 0;
+  const arrived: (() => void)[] = [];
+  const arrival = (count: number) =>
+    new Promise<void>((resolve) => {
+      if (arrivals >= count) resolve();
+      else arrived.push(() => arrivals >= count && resolve());
+    });
+  let once = true;
+  const pass = <T extends object>(target: T, property: PropertyKey) => {
+    const value = Reflect.get(target, property) as unknown;
+    return typeof value === 'function'
+      ? (value as (...args: unknown[]) => unknown).bind(target)
+      : value;
+  };
+  const wrapped = new Proxy(d1, {
+    get(target, property) {
+      if (property !== 'prepare') return pass(target, property);
+      return (sql: string) => {
+        const statement = target.prepare(sql);
+        if (!sql.includes(marker)) return statement;
+        return new Proxy(statement, {
+          get(inner, key) {
+            if (key !== 'bind') return pass(inner, key);
+            return (...args: unknown[]) =>
+              new Proxy(inner.bind(...args), {
+                get(bound, name) {
+                  if (name === method && (every || once)) {
+                    once = false;
+                    return async () => {
+                      const result =
+                        method === 'all' ? await bound.all() : null;
+                      arrivals += 1;
+                      for (const notify of arrived) notify();
+                      await released;
+                      return method === 'all' ? result : bound.run();
+                    };
+                  }
+                  return pass(bound, name);
+                }
+              });
+          }
+        });
+      };
+    }
+  });
+  return { wrapped, release, arrival };
+}
+
+describe('pending records that outlive a failed write (PR #1477 review, round 5)', () => {
+  it('two copy rollbacks that block each other’s claim keep their records, so the sweep still removes the object', async () => {
+    const { discardCopiedObjects } =
+      await import('../apps/web/worker/e2eeProjectCopies');
+    const { drainPendingObjects, recordPendingObject } =
+      await import('@openzcad/cloudflare-adapters');
+    const { objectBucket } = await import('./support/e2ee-documents');
+    const db = database();
+    const d1 = sqliteD1(db);
+    const bucket = objectBucket();
+    const key = 'e2ee/proj_copy/blob_1';
+    bucket.objects.set(key, new Uint8Array([1, 2, 3]).buffer);
+    for (const attempt of ['copy-a', 'copy-b']) {
+      expect(
+        await recordPendingObject(d1, {
+          key,
+          attempt,
+          projectId: 'proj_copy',
+          ownerUserId: OWNER,
+          bytes: 3,
+          bucket: 'artifacts'
+        })
+      ).toBe('recorded');
+    }
+    // Both rollbacks take their claims (each blocked by the other's
+    // record) before either goes on.
+    const { wrapped, release, arrival } = holding(
+      d1,
+      'SELECT object_key, token, settling FROM r2_key_tombstones',
+      'all',
+      true
+    );
+    const rollbacks = Promise.all([
+      discardCopiedObjects(wrapped, bucket as never, [key], 'copy-a'),
+      discardCopiedObjects(wrapped, bucket as never, [key], 'copy-b')
+    ]);
+    await arrival(2);
+    release();
+    await rollbacks;
+    // Neither deleted the object, so neither may forget it.
+    expect(bucket.objects.has(key)).toBe(true);
+    expect(
+      db
+        .prepare('SELECT attempt FROM r2_pending_objects ORDER BY attempt')
+        .all()
+    ).toEqual([{ attempt: 'copy-a' }, { attempt: 'copy-b' }]);
+    // Once both are abandoned, one sweep removes the object and a record,
+    // exempting both attempts; the next removes what is left.
+    db.prepare('UPDATE r2_pending_objects SET created_at = 0').run();
+    await drainPendingObjects(d1, { artifacts: bucket as never }, null, {
+      olderThanMs: 60_000,
+      limit: 1
+    });
+    expect(bucket.objects.has(key)).toBe(false);
+    await drainPendingObjects(d1, { artifacts: bucket as never }, null, {
+      olderThanMs: 60_000
+    });
+    expect(db.prepare('SELECT * FROM r2_pending_objects').all()).toEqual([]);
+  });
+
+  it('a project’s deletion removes only the pending records it swept: a write admitted after its listing stays for the sweep', async () => {
+    const { D1R2PersistenceService, drainPendingObjects, recordPendingObject } =
+      await import('@openzcad/cloudflare-adapters');
+    const { objectBucket } = await import('./support/e2ee-documents');
+    const db = database();
+    const d1 = sqliteD1(db);
+    const bucket = objectBucket();
+    const record = (key: string, attempt: string) =>
+      recordPendingObject(d1, {
+        key,
+        attempt,
+        projectId: 'p1',
+        ownerUserId: OWNER,
+        bytes: 3,
+        bucket: 'project-storage'
+      });
+    // A body an earlier failed save could not remove.
+    const early = 'e2ee/p1/v/hash.early';
+    expect(await record(early, 'early')).toBe('recorded');
+    bucket.objects.set(early, new Uint8Array([1, 2, 3]).buffer);
+    // The deletion pauses after listing what it sweeps, before its claim.
+    const { wrapped, release, arrival } = holding(
+      d1,
+      'INSERT INTO r2_key_tombstones',
+      'run'
+    );
+    const env = {
+      DB: wrapped,
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket
+    };
+    const deletion = new D1R2PersistenceService(env as never).deleteProject(
+      OWNER,
+      'p1'
+    );
+    await arrival(1);
+    // A save already past its access check records and puts a new body,
+    // then fails without removing it.
+    const late = 'e2ee/p1/v/hash.late';
+    expect(await record(late, 'late')).toBe('recorded');
+    bucket.objects.set(late, new Uint8Array([4, 5, 6]).buffer);
+    release();
+    await deletion;
+    expect(db.prepare('SELECT id FROM projects').all()).toEqual([]);
+    expect(bucket.objects.has(early)).toBe(false);
+    // The late body is still recorded, so the sweep reclaims it.
+    expect(
+      db.prepare('SELECT object_key, attempt FROM r2_pending_objects').all()
+    ).toEqual([{ object_key: late, attempt: 'late' }]);
+    db.prepare('UPDATE r2_pending_objects SET created_at = 0').run();
+    await drainPendingObjects(
+      d1,
+      { 'project-storage': bucket as never },
+      null,
+      {
+        olderThanMs: 60_000
+      }
+    );
+    expect(bucket.objects.has(late)).toBe(false);
+    expect(db.prepare('SELECT * FROM r2_pending_objects').all()).toEqual([]);
+  });
+});

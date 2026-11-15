@@ -1756,6 +1756,7 @@ async function createProject(
   const copied: string[] = [];
   // This create's pending records of the objects it copies (migration 0055).
   const copyAttempt = crypto.randomUUID();
+  const pendingReady = await isPendingObjectStorageReady(ctx.db);
   let sortOrder: number;
   try {
     if (copy && objects) {
@@ -1804,7 +1805,24 @@ async function createProject(
                     AND version_hash = ?)`,
     binds: [projectId, version.header.documentVersion, version.hash] as const
   };
+  // Every object this copy put is still its own pending write (migration
+  // 0055), checked inside the create's own transaction: a retry that
+  // committed the same keys (and was deleted since), or a sweep that
+  // reclaimed them, took them from this attempt, which then commits
+  // nothing. First, so the CHAINED statements below keep their order.
+  const pendingCopy =
+    copy && objects && copied.length > 0 && pendingReady
+      ? [
+          db
+            .prepare(
+              `INSERT INTO r2_pending_objects_required (object_key, attempt)
+               SELECT value, ? FROM json_each(?)`
+            )
+            .bind(copyAttempt, JSON.stringify(copied))
+        ]
+      : [];
   const statements = [
+    ...pendingCopy,
     db
       .prepare(
         `INSERT INTO projects
@@ -1876,6 +1894,8 @@ async function createProject(
   ];
   // Rows that may change other than one row each, by statement index.
   const counts = new Map<number, number>();
+  // The pending check writes nothing.
+  if (pendingCopy.length) counts.set(0, 0);
   if (copy && copy.blobIds.length > 0) {
     counts.set(statements.length, copy.blobIds.length);
     statements.push(insertCopiedBlobs(db, projectId, copy, now, CHAINED));
@@ -1907,6 +1927,16 @@ async function createProject(
     results = await runVersionBatch(ctx, statements);
   } catch (error) {
     await rollBack();
+    // A copied object no longer this attempt's own (migration 0055): an
+    // identical create may have committed it, which then answers.
+    if (
+      error instanceof RouteError &&
+      error.status === 503 &&
+      error.code === 'PROJECT_STORAGE_UNAVAILABLE'
+    ) {
+      const winner = await storedCreate(ctx, projectId, version);
+      if (winner) return winner;
+    }
     if (
       error instanceof RouteError &&
       error.status === 409 &&

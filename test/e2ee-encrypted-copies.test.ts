@@ -1418,3 +1418,118 @@ describe('a copy retry and a rollback of the same key (PR #1477 review, round 4)
     expect(projectIds(srv)).toContain(copyId);
   });
 });
+
+describe('a copy whose verified objects were taken from it before it commits (PR #1477 review, round 5)', () => {
+  /**
+   * Starts a copy that pauses as its create batch starts, after it copied
+   * and verified its objects; `meanwhile` runs, then the copy resumes.
+   */
+  async function stalledCopy(
+    meanwhile: (context: {
+      srv: Server;
+      laptop: Device;
+      projectId: string;
+      copyId: string;
+      key: string;
+      copy: () => Promise<unknown>;
+    }) => Promise<void>
+  ) {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { projectId, blobId, step } = await projectWithImport(srv, laptop);
+    const request = await buildCopy(laptop, projectId, 'Bracket');
+    const copyId = request.document!.projectId;
+    const key = `e2ee/${copyId}/${blobId}`;
+    const copy = () =>
+      laptop.store.copyProject({
+        sourceProjectId: projectId,
+        document: request.document!
+      });
+    const db = srv.env.DB as D1Database;
+    const batch = db.batch.bind(db);
+    let entered!: () => void;
+    let release!: () => void;
+    const atBatch = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let first = true;
+    db.batch = async (statements: D1PreparedStatement[]) => {
+      if (
+        first &&
+        statements.some((statement) =>
+          (statement as unknown as { sql?: string }).sql?.includes(
+            'INSERT INTO projects'
+          )
+        )
+      ) {
+        first = false;
+        entered();
+        await released;
+      }
+      return batch(statements);
+    };
+    const stalled = copy();
+    stalled.catch(() => undefined);
+    await atBatch;
+    try {
+      await meanwhile({ srv, laptop, projectId, copyId, key, copy });
+    } finally {
+      release();
+    }
+    return { srv, laptop, stalled, copyId, key, blobId, step, copy, db, batch };
+  }
+
+  it('a copy resuming after an identical copy committed and was purged commits nothing', async () => {
+    const { srv, stalled, copyId, key, db, batch } = await stalledCopy(
+      async ({ srv, copyId, key, copy }) => {
+        // The identical retry commits, clearing every record of its keys.
+        await copy();
+        expect(srv.bucket.objects.has(key)).toBe(true);
+        // The user deletes it for good, with its object.
+        srv.db
+          .prepare(
+            "UPDATE projects SET status = 'deleted', deleted_at = '2000-01-01T00:00:00.000Z' WHERE id = ?"
+          )
+          .run(copyId);
+        const purged = await srv.call('POST', '/api/projects/purge');
+        expect(await purged.json()).toEqual({ purgedProjectIds: [copyId] });
+        expect(srv.bucket.objects.has(key)).toBe(false);
+      }
+    );
+    await refusedWith(stalled, 503, 'PROJECT_STORAGE_UNAVAILABLE');
+    db.batch = batch;
+    expect(projectIds(srv)).not.toContain(copyId);
+    expect(e2eeRowsOf(srv, copyId)).toEqual(nothingLeft);
+    // Nothing names the purged copy's key, so nothing is charged for it.
+    expect(
+      rows(
+        srv,
+        'SELECT object_key FROM e2ee_content_blobs WHERE object_key = ?',
+        key
+      )
+    ).toEqual([]);
+  });
+
+  it('a copy resuming after the sweep reclaimed its aged objects commits nothing, and a retry stores usable bytes', async () => {
+    const { drainPendingObjects } =
+      await import('@openzcad/cloudflare-adapters');
+    const { srv, stalled, copyId, key, copy, db, batch } = await stalledCopy(
+      async ({ srv, key }) => {
+        // The copy's record outlives the grace: the sweep reclaims it.
+        srv.db.prepare('UPDATE r2_pending_objects SET created_at = 0').run();
+        await drainPendingObjects(
+          srv.env.DB as D1Database,
+          { artifacts: srv.bucket as never },
+          null,
+          { olderThanMs: 60 * 60 * 1000 }
+        );
+        expect(srv.bucket.objects.has(key)).toBe(false);
+      }
+    );
+    await refusedWith(stalled, 503, 'PROJECT_STORAGE_UNAVAILABLE');
+    db.batch = batch;
+    expect(projectIds(srv)).not.toContain(copyId);
+    expect(e2eeRowsOf(srv, copyId)).toEqual(nothingLeft);
+    await copy();
+    expect(srv.bucket.objects.has(key)).toBe(true);
+  });
+});

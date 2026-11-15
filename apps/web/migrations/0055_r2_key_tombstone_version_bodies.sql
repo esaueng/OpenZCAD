@@ -119,6 +119,29 @@ BEGIN
     ), 2147483648);
 END;
 
+-- A write whose rows name objects it put first proves, inside the very
+-- transaction that commits those rows, that each object is still recorded
+-- as its own pending write: `INSERT INTO r2_pending_objects_required
+-- (object_key, attempt) …` aborts the whole batch unless every listed
+-- record exists. A record goes once another attempt's row naming the key
+-- commits (its bytes then belong to that row, which a later deletion may
+-- remove) or once a cleanup reclaimed the object; either way this attempt
+-- may no longer rely on the bytes it verified. The view holds no rows and
+-- the insert writes none.
+CREATE VIEW IF NOT EXISTS r2_pending_objects_required AS
+  SELECT object_key, attempt FROM r2_pending_objects WHERE 0;
+
+DROP TRIGGER IF EXISTS r2_pending_objects_required_check;
+CREATE TRIGGER r2_pending_objects_required_check
+INSTEAD OF INSERT ON r2_pending_objects_required
+BEGIN
+  SELECT RAISE(ABORT, 'r2_object_not_pending')
+  WHERE NOT EXISTS (
+    SELECT 1 FROM r2_pending_objects
+    WHERE object_key = NEW.object_key AND attempt = NEW.attempt
+  );
+END;
+
 DROP TRIGGER IF EXISTS r2_pending_version_body_required;
 CREATE TRIGGER r2_pending_version_body_required
 BEFORE INSERT ON e2ee_project_versions

@@ -730,6 +730,7 @@ export async function drainPendingObjects(
 ): Promise<boolean> {
   if (!(await isPendingObjectStorageReady(db))) return false;
   const limit = options.limit ?? 64;
+  const cutoff = Date.now() - (options.olderThanMs ?? 0);
   const { results } = await db
     .prepare(
       `SELECT object_key, attempt, bucket FROM r2_pending_objects
@@ -741,7 +742,7 @@ export async function drainPendingObjects(
     )
     .bind(
       projectId,
-      Date.now() - (options.olderThanMs ?? 0),
+      cutoff,
       limit + 1,
       ...(options.ownerUserId === undefined ? [] : [options.ownerUserId])
     )
@@ -752,10 +753,31 @@ export async function drainPendingObjects(
     }>();
   const rows = (results ?? []).slice(0, limit);
   if (!rows.length) return false;
+  // Every attempt abandoned as long as these on the same keys (two failed
+  // rollbacks of one copy each left a record, and each blocked the other's
+  // claim): none of them keeps a key alive against this drain.
+  const { results: abandoned } = await db
+    .prepare(
+      `SELECT DISTINCT attempt FROM r2_pending_objects
+       WHERE object_key IN (SELECT value FROM json_each(?1))
+         AND created_at <= ?2`
+    )
+    .bind(
+      JSON.stringify([...new Set(rows.map((row) => row.object_key))]),
+      cutoff
+    )
+    .all<{ attempt: string }>();
   const claim = await claimObjectKeysForDelete(
     db,
     rows.map((row) => row.object_key),
-    { pending: rows.map((row) => row.attempt) },
+    {
+      pending: [
+        ...new Set([
+          ...rows.map((row) => row.attempt),
+          ...(abandoned ?? []).map((row) => row.attempt)
+        ])
+      ]
+    },
     options.fence
   );
   try {
@@ -770,8 +792,10 @@ export async function drainPendingObjects(
         deleted.add(key);
       }
     }
-    // A key a committed row names lost its records with that commit; one
-    // still recorded here is only the record.
+    // Deleted, or not claimable for a reason that keeps the object
+    // tracked: a row names it (a committed row cleared its records with
+    // its commit), or a younger attempt's record still does. Contended
+    // keys and failed or lapsed deletes keep their records for a retry.
     const done = rows.filter(
       (row) =>
         deleted.has(row.object_key) ||
@@ -8475,6 +8499,8 @@ export class D1R2PersistenceService implements PersistenceService {
     // Keep the database rows when object deletion fails so the operation
     // is visible, retryable, and cannot strand unreferenced user data.
     const claims: ObjectKeyClaim[] = [];
+    // The pending records (key, attempt) whose objects this deletion swept.
+    const sweptPending: [string, string][] = [];
     try {
       for (const projectId of projectIds) {
         const keysOf = async (sql: string) =>
@@ -8505,15 +8531,29 @@ export class D1R2PersistenceService implements PersistenceService {
                WHERE project_id = ? AND envelope_key IS NOT NULL`
             )
           : [];
-        // Objects failed writes left pending (migration 0055).
-        if (pendingReady) {
-          bodyKeys.push(
-            ...(await keysOf(
-              `SELECT object_key FROM r2_pending_objects
-               WHERE project_id = ? AND bucket = 'project-storage'`
-            ))
-          );
-        }
+        // Objects failed writes left pending (migration 0055), each record
+        // kept by (key, attempt): the final batch removes only the records
+        // this deletion swept. One a write admitted after this listing
+        // names an object no delete here reaches, so it outlives the
+        // project for the scheduled sweep.
+        const pendingOf = async (bucket: PendingObjectBucket) => {
+          if (!pendingReady) return [];
+          const listed =
+            (
+              await this.env
+                .DB!.prepare(
+                  `SELECT object_key, attempt FROM r2_pending_objects
+                   WHERE project_id = ? AND bucket = ?`
+                )
+                .bind(projectId, bucket)
+                .all<{ object_key: string; attempt: string }>()
+            ).results ?? [];
+          for (const row of listed) {
+            sweptPending.push([row.object_key, row.attempt]);
+          }
+          return listed.map((row) => row.object_key);
+        };
+        bodyKeys.push(...(await pendingOf('project-storage')));
         if (bodyKeys.length && !projectBucket) {
           throw new ProjectObjectStorageError(
             'Encrypted project storage is unavailable.'
@@ -8525,14 +8565,7 @@ export class D1R2PersistenceService implements PersistenceService {
               'SELECT object_key FROM e2ee_content_blobs WHERE project_id = ?'
             )
           : [];
-        if (pendingReady) {
-          blobKeys.push(
-            ...(await keysOf(
-              `SELECT object_key FROM r2_pending_objects
-               WHERE project_id = ? AND bucket = 'artifacts'`
-            ))
-          );
-        }
+        blobKeys.push(...(await pendingOf('artifacts')));
         if (blobKeys.length && !this.env.ARTIFACTS) {
           throw new ArtifactStorageError(
             'Encrypted project storage is unavailable.'
@@ -8686,8 +8719,10 @@ export class D1R2PersistenceService implements PersistenceService {
       // cannot leave orphaned revisions behind if it is ever off. Every
       // statement is fenced on the generations being destroyed, and their
       // cleanup claims go last, so the fence holds to the end of the batch.
-      await this.env.DB!.batch(
-        [
+      const fenced = (statement: string) =>
+        this.env.DB!.prepare(`${statement} ${fencedIds}`).bind(generationIds);
+      await this.env.DB!.batch([
+        ...[
           ...groupTables,
           'DELETE FROM project_access_events WHERE project_id IN',
           'DELETE FROM project_share_links WHERE project_id IN',
@@ -8703,16 +8738,26 @@ export class D1R2PersistenceService implements PersistenceService {
           'DELETE FROM project_document_objects WHERE project_id IN',
           'DELETE FROM project_storage_assets WHERE project_id IN',
           'DELETE FROM project_adoptions WHERE cloud_project_id IN',
-          ...migrationTables,
-          ...(pendingReady
-            ? ['DELETE FROM r2_pending_objects WHERE project_id IN']
-            : []),
-          'DELETE FROM projects WHERE id IN',
-          'DELETE FROM project_copy_cleanup_claims WHERE project_id IN'
-        ].map((statement) =>
-          this.env.DB!.prepare(`${statement} ${fencedIds}`).bind(generationIds)
-        )
-      );
+          ...migrationTables
+        ].map(fenced),
+        // Only the swept records, by primary key.
+        ...(pendingReady && sweptPending.length
+          ? [
+              this.env
+                .DB!.prepare(
+                  `DELETE FROM r2_pending_objects
+                   WHERE (object_key, attempt) IN (
+                     SELECT json_extract(d.value, '$[0]'),
+                            json_extract(d.value, '$[1]')
+                     FROM json_each(?) d)
+                     AND project_id IN ${fencedIds}`
+                )
+                .bind(JSON.stringify(sweptPending), generationIds)
+            ]
+          : []),
+        fenced('DELETE FROM projects WHERE id IN'),
+        fenced('DELETE FROM project_copy_cleanup_claims WHERE project_id IN')
+      ]);
     } finally {
       for (const claim of claims) await claim.release();
     }

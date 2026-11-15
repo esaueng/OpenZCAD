@@ -480,14 +480,12 @@ export async function discardCopiedObjects(
     try {
       const outcome = await claim.deleteObjects(bucket);
       if (attempt) {
-        // Kept only where this rollback's own delete did not complete.
-        await forgetPendingObjects(
-          db,
-          attempt,
-          keys.filter(
-            (key) => !outcome.failed.has(key) && !outcome.lapsed.has(key)
-          )
-        );
+        // Only records whose objects this rollback deleted: a key it could
+        // not claim (another attempt's record, another deleter, a row)
+        // keeps its record, so the object stays tracked until a later
+        // sweep removes it. A key a committed row names lost its records
+        // with that commit already.
+        await forgetPendingObjects(db, attempt, [...outcome.deleted]);
       }
     } finally {
       await claim.release();
