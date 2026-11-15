@@ -1,79 +1,55 @@
-import { describe, expect, it, vi } from 'vitest';
-import { toArtifactId, type ProjectSummary } from '@openzcad/shared';
+import { describe, expect, it } from 'vitest';
 import {
   beginListingRead,
+  deviceCardOutranksListing,
+  finishListingRead,
   notePublishedThumbnail,
-  subscribePublishedThumbnails,
-  withPublishedThumbnail,
-  withPublishedThumbnails
+  publicationSession,
+  retireThumbnailPublications
 } from './thumbnailPublications';
 
-function summary(
-  projectId: string,
-  thumbnailArtifactId?: string
-): ProjectSummary {
-  return {
-    projectId,
-    name: 'Card',
-    updatedAt: '2026-11-14T20:00:00.000Z',
-    documentVersion: 9,
-    ...(thumbnailArtifactId
-      ? { thumbnailArtifactId: toArtifactId(thumbnailArtifactId) }
-      : {})
-  } as ProjectSummary;
-}
-
 describe('thumbnailPublications', () => {
-  it('names the card this tab published while the listing was being read', () => {
+  it('keeps the device card over a listing read before the publish finished', () => {
     // Leaving a project uploads its card and refreshes the listing at once.
-    // A listing read before the upload finalized names the card it replaced.
-    const readStartedAt = beginListingRead();
-    notePublishedThumbnail('proj_race', toArtifactId('artifact_fresh'));
-    expect(
-      withPublishedThumbnail(
-        summary('proj_race', 'artifact_replaced'),
-        readStartedAt
-      ).thumbnailArtifactId
-    ).toBe('artifact_fresh');
-    // A listing read before the project had any card at all, too.
-    expect(
-      withPublishedThumbnail(summary('proj_race'), readStartedAt)
-        .thumbnailArtifactId
-    ).toBe('artifact_fresh');
+    const read = beginListingRead();
+    notePublishedThumbnail('proj_race', publicationSession());
+    finishListingRead(read);
+    expect(deviceCardOutranksListing('proj_race')).toBe(true);
   });
 
-  it("leaves a listing read after the publish alone, so another device's newer card wins", () => {
-    notePublishedThumbnail('proj_later', toArtifactId('artifact_mine'));
-    const readStartedAt = beginListingRead();
-    const listed = summary('proj_later', 'artifact_other_device');
-    expect(withPublishedThumbnail(listed, readStartedAt)).toBe(listed);
+  it('hands back to the account once a listing read after the publish is applied', () => {
+    notePublishedThumbnail('proj_settled', publicationSession());
+    const later = beginListingRead();
+    expect(deviceCardOutranksListing('proj_settled')).toBe(true);
+    finishListingRead(later);
+    // That listing may name another device's newer card; it is not overruled.
+    expect(deviceCardOutranksListing('proj_settled')).toBe(false);
   });
 
-  it('leaves projects this tab has not published untouched', () => {
-    const readStartedAt = beginListingRead();
-    notePublishedThumbnail('proj_published', toArtifactId('artifact_new'));
-    const untouched = summary('proj_untouched', 'artifact_listed');
-    const corrected = withPublishedThumbnails(
-      [untouched, summary('proj_published', 'artifact_old')],
-      readStartedAt
-    );
-    expect(corrected[0]).toBe(untouched);
-    expect(corrected[1]?.thumbnailArtifactId).toBe('artifact_new');
+  it('is not overruled by an older read finishing after a newer one', () => {
+    const older = beginListingRead();
+    notePublishedThumbnail('proj_order', publicationSession());
+    const newer = beginListingRead();
+    finishListingRead(newer);
+    finishListingRead(older);
+    expect(deviceCardOutranksListing('proj_order')).toBe(false);
   });
 
-  it('returns the same list when nothing needed correcting', () => {
-    const readStartedAt = beginListingRead();
-    const projects = [summary('proj_quiet', 'artifact_listed')];
-    expect(withPublishedThumbnails(projects, readStartedAt)).toBe(projects);
+  it('says nothing about projects this tab has not published', () => {
+    expect(deviceCardOutranksListing('proj_never')).toBe(false);
   });
 
-  it('tells subscribers about each publish, and stops when unsubscribed', () => {
-    const listener = vi.fn();
-    const unsubscribe = subscribePublishedThumbnails(listener);
-    notePublishedThumbnail('proj_heard', toArtifactId('artifact_heard'));
-    unsubscribe();
-    notePublishedThumbnail('proj_heard', toArtifactId('artifact_unheard'));
-    expect(listener).toHaveBeenCalledOnce();
-    expect(listener).toHaveBeenCalledWith('proj_heard', 'artifact_heard');
+  it('retires publications when the account or key session changes', () => {
+    notePublishedThumbnail('proj_retired', publicationSession());
+    retireThumbnailPublications();
+    expect(deviceCardOutranksListing('proj_retired')).toBe(false);
+  });
+
+  it('ignores a publish that began in a session since retired', () => {
+    // An upload started under the previous account finishes after sign-out.
+    const startedIn = publicationSession();
+    retireThumbnailPublications();
+    notePublishedThumbnail('proj_late', startedIn);
+    expect(deviceCardOutranksListing('proj_late')).toBe(false);
   });
 });

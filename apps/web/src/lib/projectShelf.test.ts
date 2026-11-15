@@ -354,6 +354,52 @@ describe('thumbnailRecordDescribes', () => {
 describe('resolveShelfThumbnail', () => {
   const artifactId = toArtifactId('artifact_listed');
 
+  it('keeps a freshly published device card over a listing read before it', async () => {
+    // The device record already carries the new artifact; the listing, read
+    // while that upload finalized, still names the card it replaced.
+    const download = vi.fn(async () => 'data:image/webp;base64,PREVIOUS');
+    const source = await resolveShelfThumbnail(
+      { ...summary(LISTED), thumbnailArtifactId: artifactId },
+      {
+        loadCached: async () => ({
+          ...record('data:image/webp;base64,FRESH', LISTED),
+          artifactId: toArtifactId('artifact_just_published')
+        }),
+        deviceCardOutranksListing: () => true,
+        download
+      }
+    );
+    expect(source).toBe('data:image/webp;base64,FRESH');
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it('defers to the account once a later listing has been applied', async () => {
+    const source = await resolveShelfThumbnail(
+      { ...summary(LISTED), thumbnailArtifactId: artifactId },
+      {
+        loadCached: async () => ({
+          ...record('data:image/webp;base64,MINE', LISTED),
+          artifactId: toArtifactId('artifact_mine')
+        }),
+        deviceCardOutranksListing: () => false,
+        download: async () => 'data:image/webp;base64,ACCOUNT'
+      }
+    );
+    expect(source).toBe('data:image/webp;base64,ACCOUNT');
+  });
+
+  it('never prefers a device "no geometry" over an account image', async () => {
+    const source = await resolveShelfThumbnail(
+      { ...summary(LISTED), thumbnailArtifactId: artifactId },
+      {
+        loadCached: async () => record(null, LISTED),
+        deviceCardOutranksListing: () => true,
+        download: async () => 'data:image/webp;base64,ACCOUNT'
+      }
+    );
+    expect(source).toBe('data:image/webp;base64,ACCOUNT');
+  });
+
   it('shows the device image when the account copy cannot be fetched', async () => {
     // A listing one refresh stale names a thumbnail the Worker has already
     // superseded and deleted. The device image is still the part.

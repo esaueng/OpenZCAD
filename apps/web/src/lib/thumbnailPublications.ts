@@ -1,80 +1,65 @@
-import type { ArtifactId, ProjectSummary } from '@openzcad/shared';
-
 /**
- * The account cards this tab has published, ordered against listing reads.
+ * Which device cards the shelf should keep showing over the account's.
  *
- * The account lists a project's most recently created thumbnail, and
- * finalizing one deletes the cards before it. A card this tab published is
- * therefore the account's current card for any listing read that began
- * before the publish finished: whatever that listing names was there first
- * and has been replaced. Without this, leaving a project raced its card
- * upload against the shelf's listing refresh; a listing read while the
- * upload finalized named the previous card, and the tile fetched that over
- * the one the device had just drawn.
+ * Leaving a project uploads its card while the shelf refreshes the project
+ * listing. A listing read while the upload finalized names the card it
+ * replaced, and because the device record by then carries the new artifact,
+ * the tile used to download that previous card over the one just drawn.
  *
- * Ordering is by when this tab saw each event, not by version numbers or
- * artifact lineage: two devices can each make their own version 9, and an
- * encrypted card's deduplicated blob id can name a later publication. A
- * listing read that began after the publish is the account's word and is
- * left alone, so a newer card from another device still wins.
+ * Nothing here decides what the account's current card is: the order in
+ * which this tab hears back says nothing certain about the server's order,
+ * and listings are left exactly as the account sent them. It only says that
+ * this device's card is at least as new as any listing this tab has applied
+ * since — so the tile shows the device image until a listing whose read
+ * began after the publish has been applied. That listing is the account's
+ * word again, and the ordinary artifact comparison takes over.
+ *
+ * Publications belong to the account and key session they began in. A
+ * session change retires every entry, and a publish that began before it is
+ * ignored when it finishes.
  */
 let clock = 0;
-const published = new Map<string, { artifactId: ArtifactId; at: number }>();
-const listeners = new Set<
-  (projectId: string, artifactId: ArtifactId) => void
->();
+let session = 0;
+let lastAppliedReadStartedAt = 0;
+const published = new Map<string, number>();
 
-/** Marks the start of a listing read; pass the result to the corrections. */
-export function beginListingRead(): number {
-  return clock;
+/** Taken before a publish begins; hand it back to {@link notePublishedThumbnail}. */
+export function publicationSession(): number {
+  return session;
 }
 
-/** Records a card this tab finished publishing to the account. */
+/** Retires every publication: the account or key session changed. */
+export function retireThumbnailPublications(): void {
+  session += 1;
+  published.clear();
+}
+
+/** Records that this tab finished publishing a project's device card. */
 export function notePublishedThumbnail(
   projectId: string,
-  artifactId: ArtifactId
+  startedInSession: number
 ): void {
-  published.set(projectId, { artifactId, at: ++clock });
-  for (const listener of listeners) listener(projectId, artifactId);
+  if (startedInSession !== session) return;
+  published.set(projectId, ++clock);
 }
 
-/** The listing's summary, naming this tab's card if it was published later. */
-export function withPublishedThumbnail(
-  project: ProjectSummary,
-  readStartedAt: number
-): ProjectSummary {
-  const mine = published.get(project.projectId);
-  if (
-    !mine ||
-    mine.at <= readStartedAt ||
-    project.thumbnailArtifactId === mine.artifactId
-  )
-    return project;
-  return { ...project, thumbnailArtifactId: mine.artifactId };
+/** Marks the start of a listing read; pass the result to the finish. */
+export function beginListingRead(): number {
+  return ++clock;
 }
 
-export function withPublishedThumbnails(
-  projects: ProjectSummary[],
-  readStartedAt: number
-): ProjectSummary[] {
-  let changed = false;
-  const next = projects.map((project) => {
-    const corrected = withPublishedThumbnail(project, readStartedAt);
-    if (corrected !== project) changed = true;
-    return corrected;
-  });
-  return changed ? next : projects;
+/** The listing whose read began at `readStartedAt` is now the shelf's. */
+export function finishListingRead(readStartedAt: number): void {
+  lastAppliedReadStartedAt = Math.max(lastAppliedReadStartedAt, readStartedAt);
+  for (const [projectId, at] of published)
+    if (at < lastAppliedReadStartedAt) published.delete(projectId);
 }
 
 /**
- * Called after each publish, for listings already applied: every one of them
- * was read before it, so the published card replaces what they name.
+ * True while no applied listing was read after this tab published the
+ * project's card, so a listing naming another artifact may simply predate it.
  */
-export function subscribePublishedThumbnails(
-  listener: (projectId: string, artifactId: ArtifactId) => void
-): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+export function deviceCardOutranksListing(projectId: string): boolean {
+  const at = published.get(projectId);
+  return at !== undefined && at > lastAppliedReadStartedAt;
 }

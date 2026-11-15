@@ -1667,10 +1667,11 @@ import { folderStorageKey, readLibraryFolders } from './lib/libraryFolders';
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import {
   beginListingRead,
+  deviceCardOutranksListing,
+  finishListingRead,
   notePublishedThumbnail,
-  subscribePublishedThumbnails,
-  withPublishedThumbnail,
-  withPublishedThumbnails
+  publicationSession,
+  retireThumbnailPublications
 } from './lib/thumbnailPublications';
 import {
   cachedShelfNames,
@@ -2240,8 +2241,8 @@ async function loadProjectSummaries(
   cloudProjectIds: Set<string>;
 }> {
   const keySessionRevision = getKeySessionRevision();
-  // Before the account is asked, so a card this tab publishes while the read
-  // is in flight counts as newer than whatever the read returns.
+  // Before the account is asked: a card this tab publishes while the read is
+  // in flight is not something the read can be expected to name.
   const readStartedAt = beginListingRead();
   const signedIn = accountId !== null;
   const scope = organizationBackground.begin(accountId);
@@ -2293,9 +2294,7 @@ async function loadProjectSummaries(
                     )
                       return;
                     rememberVerifiedShelfName(accountId, project);
-                    progress.onVerified(
-                      withPublishedThumbnail(project, readStartedAt)
-                    );
+                    progress.onVerified(project);
                   }
                 }
               : undefined
@@ -2383,8 +2382,9 @@ async function loadProjectSummaries(
     (project) =>
       !purged.has(project.projectId) || remoteIds.has(project.projectId)
   );
+  finishListingRead(readStartedAt);
   return {
-    projects: withPublishedThumbnails(projects, readStartedAt),
+    projects,
     remoteReached: Boolean(remote),
     cloudProjectIds: remoteIds
   };
@@ -3916,6 +3916,7 @@ export function App() {
     (project: ProjectSummary): Promise<string | null | undefined> =>
       resolveShelfThumbnail(project, {
         loadCached: loadProjectThumbnail,
+        deviceCardOutranksListing,
         download: async (artifactId) => {
           const { downloadCloudThumbnail } =
             await import('./lib/cloudThumbnail');
@@ -4616,27 +4617,11 @@ export function App() {
       ),
     [thumbnailAccountUserId]
   );
-  // Listings already applied were all read before this publish finished, so
-  // the account's current card for that project is the one just published.
-  useEffect(
-    () =>
-      subscribePublishedThumbnails((projectId, artifactId) =>
-        setProjects((current) =>
-          current.some(
-            (project) =>
-              project.projectId === projectId &&
-              project.thumbnailArtifactId !== artifactId
-          )
-            ? current.map((project) =>
-                project.projectId === projectId
-                  ? { ...project, thumbnailArtifactId: artifactId }
-                  : project
-              )
-            : current
-        )
-      ),
-    []
-  );
+  // A publication speaks for the account and key session it began in.
+  useEffect(() => {
+    retireThumbnailPublications();
+    return subscribeKeySession(retireThumbnailPublications);
+  }, [thumbnailAccountUserId]);
   const loadProperties = useCallback(
     async (project: ProjectSummary) => {
       const { loadProjectProperties } = await import('./lib/projectProperties');
@@ -4663,6 +4648,7 @@ export function App() {
       const cloudBacked =
         Boolean(thumbnailAccountUserId && accountProjectListReached) &&
         runtime.cloudProjectIds.has(project.projectId);
+      const publishedInSession = publicationSession();
       const result = await backfillProjectThumbnail(project, {
         loadCached: (projectId) =>
           loadProjectThumbnail(projectId).catch(() => null),
@@ -4691,10 +4677,10 @@ export function App() {
           )
         );
       }
-      // Only a fresh upload is news to a listing read in flight; an id the
-      // record already carried was published before it.
-      if (result.published && result.artifactId) {
-        notePublishedThumbnail(project.projectId, result.artifactId);
+      // Only a fresh upload can be newer than a listing read in flight; an
+      // id the record already carried was published before it.
+      if (result.published) {
+        notePublishedThumbnail(project.projectId, publishedInSession);
       }
       return result.source;
     },

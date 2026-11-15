@@ -12,7 +12,10 @@ import {
 import { queuePartThumbnail, renderThumbnailFrame } from '../lib/partThumbnail';
 import type { ThumbnailCapture } from '../lib/projectThumbnailCapture';
 import { sharedThumbnailCapture } from '../lib/sharedThumbnailCapture';
-import { notePublishedThumbnail } from '../lib/thumbnailPublications';
+import {
+  notePublishedThumbnail,
+  publicationSession
+} from '../lib/thumbnailPublications';
 
 interface ProjectThumbnailSyncAgentProps {
   projectId: ProjectId;
@@ -66,9 +69,9 @@ export function ProjectThumbnailSyncAgent({
         return;
       }
       const source = captured.source;
+      const session = publicationSession();
       // Deliberately not cancelled on unmount: the leave flush notifies while
-      // this agent is still mounted and the upload must outlive it. The
-      // record is keyed by version, so a late write cannot mislabel anything.
+      // this agent is still mounted and the upload must outlive it.
       void uploadCloudThumbnail(transport, {
         projectId,
         version,
@@ -76,15 +79,20 @@ export function ProjectThumbnailSyncAgent({
         source
       })
         .then(async (artifactId) => {
+          // Uploads can finish out of order. One that a later capture has
+          // already replaced on this device must not write its older image
+          // back over the newer card.
+          const current = await loadThumbnail(projectId);
+          if (current && current.version !== version) return;
           await saveThumbnail(projectId, {
             source,
             artifactId,
             version,
             updatedAt
-          }).catch(() => undefined);
-          // The account now lists this card; a listing read before this
-          // point names the one it replaced (see thumbnailPublications).
-          notePublishedThumbnail(projectId, artifactId);
+          });
+          // A listing read before this point may name the card it replaced;
+          // the shelf keeps the device image until a later one is applied.
+          notePublishedThumbnail(projectId, session);
         })
         .catch(() => undefined);
     });
