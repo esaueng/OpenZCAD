@@ -4,6 +4,7 @@ import { ENCRYPTED_INVITATION_SESSION_KEY } from '../../apps/web/src/lib/e2ee/en
 import {
   test,
   expect,
+  shareLoadResponse,
   stubAnonymousApi,
   stubApi,
   stubAssistant,
@@ -125,7 +126,7 @@ for (const pending of [false, true]) {
         )
       ).toBe(invitation);
       if (pending) {
-        const response = page.waitForResponse(/\/api\/share\//);
+        const response = shareLoadResponse(page);
         release();
         await response;
         // The superseded request must get a chance to process its response.
@@ -207,7 +208,8 @@ for (const link of [token, encrypted]) {
     page
   }) => {
     await stubAnonymousApi(page);
-    await page.route('**/api/**/share/*', (route) =>
+    // Both loads carry the token in a header, never in the path.
+    await page.route('**/api/e2ee/share', (route) =>
       route.fulfill({ status: 404, json: { error: 'Unavailable' } })
     );
     await page.route('**/api/share', (route) =>
@@ -319,7 +321,7 @@ test('loading a share hides the shelf and Back cancels a late completion', async
     await expect.poll(() => requested).toBe(true);
     await expect(page.getByRole('tab', { name: /^Projects/ })).toHaveCount(0);
     await page.getByRole('button', { name: 'Back to projects' }).click();
-    const response = page.waitForResponse(/\/api\/share\//);
+    const response = shareLoadResponse(page);
     release();
     await response;
     await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
@@ -374,7 +376,7 @@ test('a newer share replaces an error and ignores an older delayed failure', asy
       window.location.hash = `share=${link}`;
     }, latest);
     await expect(page.locator('.breadcrumb')).toContainText(document.name);
-    const response = page.waitForResponse(/\/api\/share\/a+/);
+    const response = shareLoadResponse(page, token);
     release();
     await response;
     await expect(page.locator('.breadcrumb')).toContainText(document.name);

@@ -3203,6 +3203,11 @@
   height: 8px;
 }
 
+/* Holds the footer meter's height before (or without) a figure. */
+.storage-bar.is-placeholder {
+  visibility: hidden;
+}
+
 .storage-bar-part {
   display: block;
   /* A sliver still shows: 40 KB of 1 GB must not read as an empty bar. */
