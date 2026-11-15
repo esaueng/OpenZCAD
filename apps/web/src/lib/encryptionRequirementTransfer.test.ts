@@ -234,6 +234,42 @@ describe('an adoption the account redirects to another project', () => {
     expect(writes()).toEqual([]);
   });
 
+  // Review round 19: the move to the account's id was checked only after
+  // its transaction had committed, so a reset of that id in another tab
+  // meanwhile left this device's content under an id it no longer pins.
+  it('moves nothing when another tab resets the account’s project during the move', async () => {
+    const source = nextId('pinned_reset_mid_move');
+    const redirected = nextId('redirect_reset_mid_move');
+    const { ancestor, local } = deviceProject(source);
+    expect(rememberEncryptedProject(source)).toBe(true);
+    await saveLocalProject(local);
+    encryptedModule.createEncryptedProject.mockRejectedValue(
+      alreadyAdopted(redirected)
+    );
+    const remote = {
+      ...reidentifyProjectDocument(ancestor, toProjectId(redirected)),
+      ownerUserId: ACCOUNT
+    };
+    store.loadProject.mockImplementation(async () => {
+      // Pinned here a moment ago; another tab resets it now.
+      expect(
+        localStorageEncryptedProjectPins(window.localStorage).resetProject(
+          redirected
+        )
+      ).toBe(true);
+      return remote;
+    });
+    await saveLastSyncedVersion(redirected, remote.version);
+
+    await expect(adoptLocalProject(source, adoptionState())).rejects.toThrow();
+    // The move was aborted: the device copy is where it was, and nothing
+    // landed under the account's id.
+    expect((await loadLocalProject(source))?.projectId).toBe(source);
+    expect(await loadLocalProject(redirected)).toBeNull();
+    expect(writes()).toEqual([]);
+    expect(store.saveProjectDocument).not.toHaveBeenCalled();
+  });
+
   it('refuses the recovery when the requirement cannot be saved', async () => {
     const source = nextId('pinned_full');
     const redirected = nextId('redirect_full');

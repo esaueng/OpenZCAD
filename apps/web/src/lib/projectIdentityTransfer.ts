@@ -149,11 +149,16 @@ export function retainPreviousAccountProject(
   );
 }
 
-/** Moves the same local model and companion records in one durable transaction. */
+/**
+ * Moves the same local model and companion records in one durable
+ * transaction. `beforeCommit` runs synchronously after the transaction's
+ * last read, with every write queued and none committed; a throw aborts
+ * the whole move.
+ */
 export function rekeyLocalProject(
   source: ProjectDocument,
   targetProjectId: string,
-  options: { retainSource?: boolean } = {}
+  options: { retainSource?: boolean; beforeCommit?: () => void } = {}
 ): Promise<ProjectDocument> {
   if (source.projectId === targetProjectId) return Promise.resolve(source);
   const singleStores = [
@@ -348,6 +353,7 @@ export function rekeyLocalProject(
         store(ALIAS_STORE_NAME).put({ projectId: sourceId, targetProjectId });
       }
       store(ACCOUNT_IDENTITY_STORE_NAME).put({ projectId: targetProjectId });
+      options.beforeCommit?.();
       return durable;
     }
   );
@@ -388,7 +394,15 @@ async function transferAdoptedProjectIdentity(
         local,
         app.localUserId,
         remote.ownerUserId
-      )
+      ),
+      // Inside the transaction, after its awaits: another tab can reset
+      // the account id while the move runs, and content that must stay
+      // encrypted is never committed under an id this device no longer
+      // holds durably. A throw aborts the move, so nothing lands there.
+      beforeCommit: () =>
+        carryEncryptionRequirement(sourceId, remote.projectId, {
+          account: true
+        })
     }
   );
   // The transaction's awaits may overlap another edit in this tab. Transfer
