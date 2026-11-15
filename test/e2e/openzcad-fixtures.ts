@@ -17,6 +17,20 @@ import { WORKSPACE_SESSION_STORAGE_KEY } from '../../apps/web/src/lib/workspaceS
 export { test, expect, WORKSPACE_SESSION_STORAGE_KEY };
 
 /**
+ * The next plaintext share-link load. The client sends `GET /api/share` with
+ * the token in a header, never in the path, so match the path exactly and,
+ * when given, the token the request carried.
+ */
+export function shareLoadResponse(page: Page, token?: string) {
+  return page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/share' &&
+      (token === undefined ||
+        response.request().headers()['x-openzcad-share-token'] === token)
+  );
+}
+
+/**
  * A write body with its document whole again. The browser splits embedded
  * import payloads into `storageAssets` (ADR-024 Phase 1), and the worker
  * hydrates the projection from them before storing it, so a fixture that

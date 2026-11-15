@@ -1,4 +1,9 @@
-import { test, expect, stubAnonymousApi } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  shareLoadResponse,
+  stubAnonymousApi
+} from './openzcad-fixtures';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
@@ -103,7 +108,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
             )
           )
           .toBe(true);
-        const response = page.waitForResponse(/\/api\/share\//);
+        const response = shareLoadResponse(page);
         release();
         await response;
         await page.waitForTimeout(250);
@@ -115,7 +120,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
       }
       await expect(page.locator('.breadcrumb')).toContainText(expected);
       if (action !== 'import') {
-        const response = page.waitForResponse(/\/api\/share\//);
+        const response = shareLoadResponse(page);
         release();
         await response;
         await page.waitForTimeout(250);
@@ -221,7 +226,7 @@ test('a newer share wins over a held restore that saves locally without opening'
   }, token);
   try {
     await expect.poll(() => requested).toBe(true);
-    const response = page.waitForResponse(/\/api\/share\//);
+    const response = shareLoadResponse(page);
     release();
     await response;
     await expect(page.locator('.breadcrumb')).toContainText(latest.name);
