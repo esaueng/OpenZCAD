@@ -342,6 +342,127 @@ function validateCommon(config, { allowPlaceholders }) {
   return errors;
 }
 
+function sameOrigin(value, origin) {
+  if (typeof value !== 'string') return false;
+  try {
+    return new URL(value.trim()).origin === new URL(origin).origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Worker Previews (`previews` in wrangler.jsonc) inherit no bindings or vars,
+ * so the official config must declare them, and they must never reach
+ * production data, analytics or rate-limit budgets. Preview vars may differ
+ * from production's on purpose (a flag tried in a Preview first), so only the
+ * safety-relevant ones are pinned.
+ */
+function validateOfficialPreviews(config) {
+  const previews = config.previews;
+  if (!previews || typeof previews !== 'object') {
+    return [
+      'previews is required: without it Worker Previews run with no D1, R2 or Durable Object bindings'
+    ];
+  }
+  const errors = [];
+  const db = binding(previews, 'd1_databases', 'DB');
+  if (!db?.database_name || !db?.database_id || !db?.migrations_dir) {
+    errors.push(
+      'previews D1 binding DB requires database_name, database_id, and migrations_dir'
+    );
+  } else if (!D1_DATABASE_ID.test(db.database_id)) {
+    errors.push('previews D1 binding DB has an invalid database_id');
+  }
+  for (const item of previews.d1_databases ?? []) {
+    if (
+      item?.database_id === OFFICIAL.databaseId ||
+      item?.database_name === OFFICIAL.databaseName
+    ) {
+      errors.push(`previews D1 binding ${item.binding} uses the production database`);
+    }
+  }
+  if (!binding(previews, 'r2_buckets', 'ARTIFACTS')?.bucket_name) {
+    errors.push('previews R2 binding ARTIFACTS requires bucket_name');
+  }
+  for (const item of previews.r2_buckets ?? []) {
+    if (item?.bucket_name === OFFICIAL.bucketName) {
+      errors.push(`previews R2 binding ${item.binding} uses the production bucket`);
+    }
+  }
+  const room = (previews.durable_objects?.bindings ?? []).find(
+    (item) => item?.name === 'PROJECT_ROOM'
+  );
+  if (room?.class_name !== 'ProjectCollaborationRoom') {
+    errors.push(
+      'previews Durable Object binding PROJECT_ROOM must use ProjectCollaborationRoom'
+    );
+  }
+  // A script_name points the binding at another Worker's objects (production's
+  // own name included); only same-Worker classes get per-Preview isolation.
+  for (const item of previews.durable_objects?.bindings ?? []) {
+    if (item?.script_name) {
+      errors.push(
+        `previews Durable Object binding ${item.name} must not set script_name`
+      );
+    }
+  }
+  if (!binding(previews, 'send_email', 'EMAIL', 'name')) {
+    errors.push('previews email binding EMAIL is required for sign-in codes');
+  }
+  // A Preview's service binding calls the bound Worker's production deployment.
+  for (const item of previews.services ?? []) {
+    errors.push(
+      `previews service binding ${item?.binding} would call a production Worker`
+    );
+  }
+
+  const vars = previews.vars ?? {};
+  if (vars.ENVIRONMENT !== 'beta') {
+    errors.push('previews.vars.ENVIRONMENT must be beta');
+  }
+  if (vars.AUTH_MODE !== 'email-code') {
+    errors.push('previews.vars.AUTH_MODE must be email-code');
+  }
+  if (vars.PRODUCTION_GUARD !== 'enabled') {
+    errors.push('previews.vars.PRODUCTION_GUARD must be enabled');
+  }
+  if (sameOrigin(vars.PUBLIC_APP_ORIGIN, OFFICIAL.publicOrigin)) {
+    errors.push(
+      'previews.vars.PUBLIC_APP_ORIGIN must not send invitation links to production'
+    );
+  }
+  for (const flag of ['GLIMPSE_BASIC_ENABLED', 'GLIMPSE_USAGE_ENABLED']) {
+    if (flagEnabled(vars[flag]) || vars[flag] === true) {
+      errors.push(`previews.vars.${flag} must be off`);
+    }
+  }
+  for (const secret of REQUIRED_SECRETS) {
+    if (Object.hasOwn(vars, secret)) {
+      errors.push(
+        `previews.vars.${secret} must not contain a secret; set it with wrangler preview base-config secret put`
+      );
+    }
+  }
+  errors.push(
+    ...validateE2eeFlags({ vars }, { canaryAllowed: true }).map((error) =>
+      error.replaceAll('vars.', 'previews.vars.')
+    )
+  );
+
+  const productionNamespaces = new Set(
+    (config.ratelimits ?? []).map((limit) => limit?.namespace_id)
+  );
+  for (const limit of previews.ratelimits ?? []) {
+    if (productionNamespaces.has(limit?.namespace_id)) {
+      errors.push(
+        `previews rate limit ${limit.name} shares production namespace ${limit.namespace_id}`
+      );
+    }
+  }
+  return errors;
+}
+
 function officialOriginUrl(originUrl) {
   return /(?:github\.com[/:])esaueng\/OpenZCAD(?:\.git)?$/i.test(
     originUrl.trim()
@@ -422,6 +543,7 @@ export function validateDeploymentConfig(
         errors.push(`${label} changed from the official deployment value`);
       }
     }
+    errors.push(...validateOfficialPreviews(config));
     if (originUrl && !officialOriginUrl(originUrl)) {
       errors.push(
         `official deployment requires an esaueng/OpenZCAD origin; found ${originUrl}`

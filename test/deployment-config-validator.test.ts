@@ -170,6 +170,132 @@ describe('deployment configuration preflight', () => {
     ).toContain('vars.AUTH_MODE must be email-code for a hosted deployment');
   });
 
+  describe('Worker Previews', () => {
+    type Previews = {
+      vars: Record<string, unknown>;
+      d1_databases: { binding: string; database_name: string; database_id: string; migrations_dir: string }[];
+      r2_buckets: { binding: string; bucket_name: string }[];
+      services?: { binding: string; service: string }[];
+      ratelimits: { name: string; namespace_id: string }[];
+    };
+    function withPreviews(change: (previews: Previews) => void) {
+      const config = officialConfig() as ReturnType<typeof hostedConfig> & {
+        previews?: Previews;
+      };
+      change(config.previews!);
+      return validateDeploymentConfig(config, officialOptions);
+    }
+
+    it('requires a previews block on the official deployment', () => {
+      const config = officialConfig() as Record<string, unknown>;
+      delete config.previews;
+      expect(validateDeploymentConfig(config, officialOptions)).toEqual([
+        'previews is required: without it Worker Previews run with no D1, R2 or Durable Object bindings'
+      ]);
+    });
+
+    it('refuses production D1, R2 and rate-limit namespaces', () => {
+      expect(
+        withPreviews((previews) => {
+          previews.d1_databases[0]!.database_id = OFFICIAL.databaseId;
+          previews.r2_buckets[0]!.bucket_name = OFFICIAL.bucketName;
+          previews.ratelimits[0]!.namespace_id = '2026101501';
+        })
+      ).toEqual([
+        'previews D1 binding DB uses the production database',
+        'previews R2 binding ARTIFACTS uses the production bucket',
+        'previews rate limit GLIMPSE_USAGE_LIMITER shares production namespace 2026101501'
+      ]);
+    });
+
+    it('refuses production analytics, invitation links and weakened auth', () => {
+      expect(
+        withPreviews((previews) => {
+          previews.services = [{ binding: 'GLIMPSE', service: 'glimpse' }];
+          previews.vars.GLIMPSE_USAGE_ENABLED = 'true';
+          previews.vars.PUBLIC_APP_ORIGIN = OFFICIAL.publicOrigin;
+          previews.vars.AUTH_MODE = 'development';
+          previews.vars.AUTH_OTP_PEPPER = 'committed';
+        })
+      ).toEqual([
+        'previews service binding GLIMPSE would call a production Worker',
+        'previews.vars.AUTH_MODE must be email-code',
+        'previews.vars.PUBLIC_APP_ORIGIN must not send invitation links to production',
+        'previews.vars.GLIMPSE_USAGE_ENABLED must be off',
+        'previews.vars.AUTH_OTP_PEPPER must not contain a secret; set it with wrangler preview base-config secret put'
+      ]);
+    });
+
+    it('refuses a Durable Object binding to another Worker, production included', () => {
+      expect(
+        withPreviews((previews) => {
+          (
+            previews as unknown as {
+              durable_objects: { bindings: Record<string, string>[] };
+            }
+          ).durable_objects.bindings[0]!.script_name = OFFICIAL.workerName;
+        })
+      ).toEqual([
+        'previews Durable Object binding PROJECT_ROOM must not set script_name'
+      ]);
+    });
+
+    it('refuses production invitation links written another way', () => {
+      for (const origin of ['https://zcad.app/', ' https://ZCAD.app ', 'https://zcad.app:443/invite']) {
+        expect(
+          withPreviews((previews) => {
+            previews.vars.PUBLIC_APP_ORIGIN = origin;
+          })
+        ).toEqual([
+          'previews.vars.PUBLIC_APP_ORIGIN must not send invitation links to production'
+        ]);
+      }
+      expect(
+        withPreviews((previews) => {
+          previews.vars.PUBLIC_APP_ORIGIN = 'https://staging.zcad.app';
+        })
+      ).toEqual([]);
+    });
+
+    it('lets a Preview try a flag production has not turned on', () => {
+      expect(
+        withPreviews((previews) => {
+          previews.vars.E2EE_DEFAULT_ON = 'true';
+        })
+      ).toEqual([]);
+      expect(
+        withPreviews((previews) => {
+          previews.vars.E2EE_MIGRATION_ENABLED = 'false';
+          previews.vars.E2EE_DEFAULT_ON = 'true';
+        })
+      ).toContain(
+        'previews.vars.E2EE_DEFAULT_ON requires previews.vars.E2EE_MIGRATION_ENABLED to be "true"'
+      );
+    });
+
+    it('migrates the database the Previews bind', () => {
+      const migrations = ts.parseConfigFileTextToJson(
+        'wrangler.preview-migrations.jsonc',
+        readFileSync('wrangler.preview-migrations.jsonc', 'utf8')
+      ).config as { d1_databases: Previews['d1_databases'] };
+      const previews = (officialConfig() as unknown as { previews: Previews })
+        .previews;
+      expect(migrations.d1_databases).toEqual(previews.d1_databases);
+    });
+
+    it('gives Previews every rate limit production has', () => {
+      const config = officialConfig() as unknown as {
+        ratelimits: { name: string; simple: unknown }[];
+        previews: { ratelimits: { name: string; simple: unknown }[] };
+      };
+      const shape = (limits: { name: string; simple: unknown }[]) =>
+        limits.map(({ name, simple }) => ({ name, simple }));
+      expect(shape(config.previews.ratelimits)).toEqual(
+        shape(config.ratelimits)
+      );
+    });
+  });
+
   describe('end-to-end encryption flags', () => {
     function withFlags(flags: Record<string, unknown>) {
       const config = hostedConfig();
