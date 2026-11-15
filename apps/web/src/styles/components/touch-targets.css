@@ -232,6 +232,16 @@
     gap: 20px;
   }
 
+  /* A trashed card's Restore and its Delete forever icon, side by side:
+     drawn at 44 px rather than reaching over each other. */
+  .start-tile-footer button {
+    min-height: 44px;
+  }
+
+  .start-tile-footer .start-tile-delete {
+    width: 44px;
+  }
+
   /* Revealed without hover. */
   .start-tile-action,
   .start-tile-select,
