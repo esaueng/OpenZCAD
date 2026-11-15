@@ -1497,6 +1497,44 @@ describe('StartScreen shelf filters, order and layout', () => {
     ).toHaveLength(2);
   });
 
+  it('orders by size, largest first, with unmeasured parts last by name', () => {
+    const sizes: Record<string, number> = {
+      Axle: 300,
+      Bracket: 1200,
+      Clamp: 9000
+    };
+    renderStartScreen({
+      projects: [
+        ...projects.map((project) =>
+          project.name in sizes
+            ? { ...project, documentBytes: sizes[project.name] }
+            : project
+        ),
+        {
+          ...part(
+            'project_p',
+            'Pinned plate',
+            '2026-07-01T00:00:00.000Z',
+            true
+          ),
+          documentBytes: 1
+        }
+      ]
+    });
+    fireEvent.change(screen.getByLabelText('Sort projects'), {
+      target: { value: 'size' }
+    });
+    // Pinned still leads; "Bracket (Recovery)" has no size, so it follows
+    // every part that has one rather than passing as the smallest.
+    expect(tileNames()).toEqual([
+      'Pinned plate',
+      'Clamp',
+      'Bracket',
+      'Axle',
+      'Bracket (Recovery)'
+    ]);
+  });
+
   it('groups pinned parts by their flag, not their place in the listing', () => {
     // A part created this session is prepended ahead of pinned ones.
     renderStartScreen({
@@ -1596,6 +1634,91 @@ describe('StartScreen folders and selection', () => {
       (element) => element.textContent
     );
 
+  it('orders folders by their total size under the size sort', () => {
+    localStorage.setItem(
+      'openzcad.library.folders.v1:device',
+      JSON.stringify({
+        folders: [
+          ['folder-small', 'Alpha small', [parts[0]!.projectId]],
+          [
+            'folder-big',
+            'Zulu big',
+            [parts[1]!.projectId, parts[2]!.projectId]
+          ],
+          ['folder-unsized', 'Middle unsized', [parts[3]!.projectId]]
+        ].map(([id, name, projectIds]) => ({
+          id,
+          name,
+          projectIds,
+          pinned: false,
+          createdAt: '2026-10-29T00:00:00.000Z'
+        }))
+      })
+    );
+    renderStartScreen({
+      projects: parts.map((part, index) =>
+        index < 3 ? { ...part, documentBytes: 1000 * (index + 1) } : part
+      )
+    });
+    fireEvent.change(screen.getByLabelText('Sort projects'), {
+      target: { value: 'size' }
+    });
+    // 5000 before 1000; a folder with an unmeasured member has no total.
+    // Not name order (Alpha, Middle, Zulu) nor stored order.
+    expect(names()).toEqual(['Zulu big', 'Alpha small', 'Middle unsized']);
+  });
+
+  // Review of #1526: inside a sorted folder a move started from the stored
+  // order, so Alt+Right on the last card shown did nothing.
+  it('moves a card inside a sorted folder from the order on screen', () => {
+    seedFolder(parts.slice(0, 3).map((part) => part.projectId));
+    renderStartScreen({
+      projects: parts.map((part, index) => ({
+        ...part,
+        documentBytes: 100 * (index + 1)
+      }))
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open folder Fixtures, 3 projects' })
+    );
+    fireEvent.change(screen.getByLabelText('Sort projects'), {
+      target: { value: 'size' }
+    });
+    expect(names()).toEqual(['Charlie plate', 'Bravo plate', 'Alpha plate']);
+
+    fireEvent.keyDown(
+      screen.getByRole('button', { name: /^Charlie plate, edited/ }),
+      { key: 'ArrowRight', altKey: true }
+    );
+
+    const stored = JSON.parse(
+      localStorage.getItem('openzcad.library.folders.v1:device')!
+    ) as { folders: { projectIds: string[] }[] };
+    expect(stored.folders[0]!.projectIds).toEqual(
+      [1, 2, 0].map((index) => parts[index]!.projectId)
+    );
+    expect(names()).toEqual(['Bravo plate', 'Charlie plate', 'Alpha plate']);
+    expect(screen.getByLabelText('Sort projects')).toHaveValue('custom');
+  });
+
+  it('gives a size that is not a number the dash, and sorts it last', () => {
+    renderStartScreen({
+      projects: parts.map((part, index) => ({
+        ...part,
+        documentBytes: [Number.NaN, 500, Number.POSITIVE_INFINITY, 100][index]
+      }))
+    });
+    fireEvent.change(screen.getByLabelText('Sort projects'), {
+      target: { value: 'size' }
+    });
+    expect(names()).toEqual([
+      'Bravo plate',
+      'Delta plate',
+      'Alpha plate',
+      'Charlie plate'
+    ]);
+  });
+
   it('shows filed parts inside their folder, not loose on the shelf', () => {
     seedFolder([parts[1]!.projectId, parts[2]!.projectId]);
     renderStartScreen({ projects: parts });
@@ -1656,6 +1779,45 @@ describe('StartScreen folders and selection', () => {
     expect(
       within(pinned as HTMLElement).getByText('Fixtures')
     ).toBeInTheDocument();
+  });
+
+  it('offers no Pinned filter inside a folder, and keeps a shelf one for later', () => {
+    // 14 Nov 2026 recording: a pinned folder read "All 5 · Pinned 5", the
+    // second a repeat of the first. An unpinned folder holding one pinned
+    // and one unpinned project tells "shows All" from "still filters".
+    const mixed = parts.map((part, index) =>
+      index === 1
+        ? { ...part, organization: { ...part.organization!, pinned: true } }
+        : part
+    );
+    seedFolder([mixed[1]!.projectId, mixed[2]!.projectId]);
+    const view = renderStartScreen({ projects: mixed });
+    const filters = () =>
+      within(screen.getByRole('group', { name: 'Show projects' }));
+    fireEvent.click(filters().getByRole('button', { name: /^Pinned/ }));
+    expect(names()).toEqual(['Bravo plate']);
+
+    fireEvent.click(document.querySelector('.start-folder-link')!);
+    expect(filters().queryByRole('button', { name: /^Pinned/ })).toBeNull();
+    expect(filters().getByRole('button', { name: /^All/ })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(names()).toEqual(['Bravo plate', 'Charlie plate']);
+
+    // A reload inside the folder keeps it whole.
+    view.unmount();
+    renderStartScreen({ projects: mixed });
+    expect(filters().queryByRole('button', { name: /^Pinned/ })).toBeNull();
+    expect(names()).toEqual(['Bravo plate', 'Charlie plate']);
+
+    // Back on the shelf, the Pinned filter chosen there still holds.
+    fireEvent.click(document.getElementById('start-shelf-tab-active')!);
+    expect(filters().getByRole('button', { name: /^Pinned/ })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(names()).toEqual(['Bravo plate']);
   });
 
   it('selects a range and trashes it in one action', () => {
