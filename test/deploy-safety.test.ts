@@ -197,6 +197,32 @@ describe('beta deployment safety', () => {
     expect(csp).toContain("object-src 'none'");
     expect(csp).toContain("frame-ancestors 'none'");
     expect(csp).not.toContain("'unsafe-eval'");
+    // The page holds decrypted models, unlocked account keys and, on a share
+    // link, the share key in its fragment (ADR-024): no third-party script
+    // runs in it but Turnstile on the sign-in form. Analytics injected by the
+    // edge (Cloudflare Web Analytics) is refused rather than allowlisted.
+    const directive = (name: string) =>
+      (
+        csp
+          .split(';')
+          .map((part) => part.trim().split(/\s+/))
+          .find(([key]) => key === name) ?? []
+      ).slice(1);
+    expect(directive('script-src')).toEqual([
+      "'self'",
+      "'wasm-unsafe-eval'",
+      'https://challenges.cloudflare.com'
+    ]);
+    expect(directive('connect-src')).toEqual([
+      "'self'",
+      'https://challenges.cloudflare.com'
+    ]);
+    expect(csp).not.toContain('cloudflareinsights');
+    // Directives that would override script-src for elements or handlers.
+    for (const name of ['script-src-elem', 'script-src-attr'])
+      expect(
+        csp.split(';').map((part) => part.trim().split(/\s+/)[0])
+      ).not.toContain(name);
     expect(headers.get('x-content-type-options')).toBe('nosniff');
     expect(headers.get('referrer-policy')).toBe(
       'strict-origin-when-cross-origin'
