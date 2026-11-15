@@ -11,8 +11,10 @@ import {
   type ProjectDocument,
   type ProjectSummary
 } from '@openzcad/shared';
+import { resolveShelfThumbnail } from './projectShelf';
 import {
   regenerateProjectThumbnails,
+  ThumbnailRegenerationStopped,
   type ThumbnailRegenerationHost
 } from './projectThumbnailRegeneration';
 
@@ -197,5 +199,147 @@ describe('regenerateProjectThumbnails', () => {
       version: empty.version,
       updatedAt: empty.derived.updatedAt
     });
+  });
+
+  it("draws the account's version when this device holds an older one, and publishes it", async () => {
+    const stale = model('Shared', true);
+    stale.version = 9;
+    const current = { ...structuredClone(stale), version: 12 };
+    current.derived.bodyRepresentations = {};
+    const derived = {
+      ...current.derived,
+      bodyRepresentations: {
+        [toBodyId('body_v12')]: { consumed: false } as BodyRepresentation
+      }
+    };
+    const publish = vi.fn().mockResolvedValue(toArtifactId('artifact_v12'));
+    const regenerate = host({
+      loadLocal: vi.fn().mockResolvedValue(stale),
+      loadAccount: vi.fn().mockResolvedValue(current),
+      rebuild: vi.fn().mockResolvedValue(derived),
+      publish,
+      publishes: () => true
+    });
+
+    await regenerateProjectThumbnails(
+      [{ ...summary(stale), documentVersion: 12 }],
+      regenerate
+    );
+
+    expect(regenerate.rebuild).toHaveBeenCalledWith(current);
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ version: 12 })
+    );
+  });
+
+  it('never publishes a version the listing does not describe', async () => {
+    // Review: a device holding version 9 of a project the account lists at
+    // 12 replaced the card every other device sees with version 9's.
+    const stale = model('Out of date', true);
+    stale.version = 9;
+    const publish = vi.fn().mockResolvedValue(toArtifactId('artifact_wrong'));
+    const regenerate = host({
+      loadLocal: vi.fn().mockResolvedValue(stale),
+      loadAccount: vi.fn().mockRejectedValue(new Error('offline')),
+      publish,
+      publishes: () => true
+    });
+
+    const result = await regenerateProjectThumbnails(
+      [{ ...summary(stale), documentVersion: 12 }],
+      regenerate
+    );
+
+    // Drawn for this device from what it holds, keyed to that version.
+    expect(result).toEqual({ redrawn: 1, skipped: 0 });
+    expect(regenerate.save).toHaveBeenCalledWith(
+      stale.projectId,
+      expect.objectContaining({ version: 9 })
+    );
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('draws a local model ahead of an older account copy for this device only', async () => {
+    const ahead = model('Unsynced edits', true);
+    ahead.version = 15;
+    const behind = { ...structuredClone(ahead), version: 12 };
+    const publish = vi.fn().mockResolvedValue(toArtifactId('artifact_wrong'));
+    const regenerate = host({
+      loadLocal: vi.fn().mockResolvedValue(ahead),
+      loadAccount: vi.fn().mockResolvedValue(behind),
+      publish,
+      publishes: () => true
+    });
+
+    await regenerateProjectThumbnails(
+      [{ ...summary(ahead), documentVersion: 13 }],
+      regenerate
+    );
+
+    expect(regenerate.save).toHaveBeenCalledWith(
+      ahead.projectId,
+      expect.objectContaining({ version: 15 })
+    );
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("leaves an empty model's card alone while the account still holds a picture", async () => {
+    // Review: a "No geometry" record lost to the account's older image on
+    // the next shelf load, so the redraw reported a change nobody saw.
+    const empty = createProjectDocument('Emptied', owner);
+    const project = {
+      ...summary(empty),
+      thumbnailArtifactId: toArtifactId('artifact_old')
+    };
+    const regenerate = host({
+      loadLocal: vi.fn().mockResolvedValue(empty),
+      render: vi.fn().mockResolvedValue(null)
+    });
+
+    const result = await regenerateProjectThumbnails([project], regenerate);
+
+    expect(result).toEqual({ redrawn: 0, skipped: 1 });
+    expect(regenerate.save).not.toHaveBeenCalled();
+    await expect(
+      resolveShelfThumbnail(project, {
+        loadCached: async () => null,
+        download: async () => 'data:image/webp;base64,OLD'
+      })
+    ).resolves.toBe('data:image/webp;base64,OLD');
+  });
+
+  it('stops before saving anything once its session ends mid-project', async () => {
+    // Review: the run outlived the library, the account and the key session.
+    const first = model('First', false);
+    const second = model('Second', true);
+    let live = true;
+    const derived = {
+      ...first.derived,
+      bodyRepresentations: {
+        [toBodyId('body_first')]: { consumed: false } as BodyRepresentation
+      }
+    };
+    const loadLocal = vi.fn(async (id: string) =>
+      id === first.projectId ? first : second
+    );
+    const drawn = vi.fn();
+    const regenerate = host({
+      loadLocal,
+      // A project opens while the first model rebuilds.
+      rebuild: vi.fn(async () => {
+        live = false;
+        return derived;
+      }),
+      active: () => live,
+      drawn
+    });
+
+    await expect(
+      regenerateProjectThumbnails([summary(first), summary(second)], regenerate)
+    ).rejects.toBeInstanceOf(ThumbnailRegenerationStopped);
+    expect(regenerate.render).not.toHaveBeenCalled();
+    expect(regenerate.save).not.toHaveBeenCalled();
+    expect(drawn).not.toHaveBeenCalled();
+    expect(loadLocal).toHaveBeenCalledTimes(1);
   });
 });

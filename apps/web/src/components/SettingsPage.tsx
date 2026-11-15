@@ -2888,12 +2888,15 @@ export function SettingsPage({
                   <SettingRow
                     title="Regenerate project thumbnails"
                     hint={
-                      thumbnailRegeneration
-                        ? `Redrawing ${thumbnailRegeneration.done} of ${thumbnailRegeneration.total}…`
-                        : workspaceOpen
-                          ? 'Go back to your projects to redraw every project card.'
-                          : thumbnailRegenerationNote ||
-                            'Redraws every project card from its model, one at a time. Large projects can take a while.'
+                      // Announced as it changes: progress, then the result.
+                      <span role="status">
+                        {thumbnailRegeneration
+                          ? `Redrawing ${thumbnailRegeneration.done} of ${thumbnailRegeneration.total}…`
+                          : workspaceOpen
+                            ? 'Go back to your projects to redraw every project card.'
+                            : thumbnailRegenerationNote ||
+                              'Redraws every project card from its model, one at a time. Large projects can take a while.'}
+                      </span>
                     }
                   >
                     <button

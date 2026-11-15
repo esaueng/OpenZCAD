@@ -1360,7 +1360,11 @@ describe('settings advanced section', () => {
       })
     );
     expect(screen.getByRole('button', { name: 'Redrawing…' })).toBeDisabled();
-    expect(screen.getByText('Redrawing 3 of 40…')).toBeInTheDocument();
+    // A live region: progress, then the result, are announced.
+    expect(screen.getByText('Redrawing 3 of 40…')).toHaveAttribute(
+      'role',
+      'status'
+    );
 
     view.rerender(
       settingsElement(null, {

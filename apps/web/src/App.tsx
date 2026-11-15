@@ -4616,6 +4616,24 @@ export function App() {
   } | null>(null);
   const [thumbnailRegenerationNote, setThumbnailRegenerationNote] =
     useState('');
+  // The run in progress and the session it belongs to. It stops — and its
+  // rebuild is cancelled — the moment a project opens or the account
+  // changes; a key session locking stops it at its next step.
+  const thumbnailRegenerationRun = useRef<{
+    accountId: string | null;
+    keyRevision: number;
+    controller: AbortController;
+  } | null>(null);
+  useEffect(() => {
+    const run = thumbnailRegenerationRun.current;
+    if (run && (doc !== null || run.accountId !== (session?.userId ?? null))) {
+      run.controller.abort();
+    }
+  }, [doc, session?.userId]);
+  useEffect(
+    () => () => thumbnailRegenerationRun.current?.controller.abort(),
+    []
+  );
   /**
    * Redraws every project's card from its model, on request only. The shelf
    * never loads a model to draw a card (see `loadThumbnail`); this is the
@@ -4628,14 +4646,28 @@ export function App() {
     const accountId = session?.userId ?? null;
     const cloudIds = cloudProjectIds;
     const publishes = Boolean(session && accountProjectListReached);
+    const run = {
+      accountId,
+      keyRevision: getKeySessionRevision(),
+      controller: new AbortController()
+    };
+    thumbnailRegenerationRun.current = run;
+    const active = () =>
+      thumbnailRegenerationRun.current === run &&
+      !run.controller.signal.aborted &&
+      isCurrentKeySession(run.keyRevision);
+    let done = 0;
     setThumbnailRegeneration({ done: 0, total: list.length });
     try {
-      const [{ regenerateProjectThumbnails }, { renderPartThumbnail }] =
-        await Promise.all([
-          import('./lib/projectThumbnailRegeneration'),
-          import('./lib/partThumbnail')
-        ]);
+      const [
+        { regenerateProjectThumbnails, ThumbnailRegenerationStopped },
+        { renderPartThumbnail }
+      ] = await Promise.all([
+        import('./lib/projectThumbnailRegeneration'),
+        import('./lib/partThumbnail')
+      ]);
       const result = await regenerateProjectThumbnails(list, {
+        active,
         loadLocal: loadLocalProject,
         ...(session
           ? {
@@ -4645,7 +4677,10 @@ export function App() {
                   : Promise.reject(new Error('Not stored in the account.'))
             }
           : {}),
-        rebuild: (document) => geometry.syncOnce(document),
+        rebuild: (document) =>
+          geometry.syncOnce(document, undefined, undefined, {
+            signal: run.controller.signal
+          }),
         render: renderPartThumbnail,
         save: saveProjectThumbnail,
         publish: async (input) => {
@@ -4670,13 +4705,24 @@ export function App() {
             );
           }
         },
-        progress: (done, total) => setThumbnailRegeneration({ done, total })
+        progress: (count, total) => {
+          done = count;
+          if (active()) setThumbnailRegeneration({ done: count, total });
+        }
+      }).catch((error: unknown) => {
+        if (error instanceof ThumbnailRegenerationStopped) return null;
+        throw error;
       });
+      if (!result) {
+        const note = `Stopped after ${done} of ${list.length} project cards: a project was opened or the account changed.`;
+        setThumbnailRegenerationNote(note);
+        return;
+      }
       const note = [
         `Redrew ${result.redrawn} ${result.redrawn === 1 ? 'project card' : 'project cards'}.`,
         ...(result.skipped > 0
           ? [
-              `${result.skipped} could not be read here and kept ${result.skipped === 1 ? 'its' : 'their'} card.`
+              `${result.skipped} kept ${result.skipped === 1 ? 'its' : 'their'} card: unreadable here, not rebuilt, or unchanged.`
             ]
           : [])
       ].join(' ');
@@ -4687,6 +4733,9 @@ export function App() {
       setThumbnailRegenerationNote(note);
       setStatus(note);
     } finally {
+      if (thumbnailRegenerationRun.current === run) {
+        thumbnailRegenerationRun.current = null;
+      }
       setThumbnailRegeneration(null);
     }
   }
