@@ -6,7 +6,13 @@ import type {
 import type { ProjectThumbnailRecord } from './localProjectStore';
 import { thumbnailRecordDescribes } from './projectShelf';
 
-const DEFAULT_IDLE_MS = 4000;
+/**
+ * How long input and regeneration must stay quiet before the card is drawn.
+ * Every pointer, key and wheel event restarts it, so it waits out a gesture
+ * in progress; shorter means the account copy (and another tab's shelf) catches
+ * up sooner, and a leave more often finds the card already written.
+ */
+const DEFAULT_IDLE_MS = 2000;
 
 export interface StagedThumbnail {
   projectId: ProjectId;

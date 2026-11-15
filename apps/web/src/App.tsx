@@ -1654,9 +1654,15 @@ import {
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   projectNeedsUpdate,
   resolveShelfThumbnail,
-  cachedThumbnailSource
+  cachedThumbnailSource,
+  measuredDocumentBytes,
+  summarizeLocalDocument,
+  withSavedVersion
 } from './lib/projectShelf';
-import { preparePartThumbnails } from './components/PartThumbnail';
+import {
+  preparePartThumbnails,
+  rememberCapturedThumbnail
+} from './components/PartThumbnail';
 import { folderStorageKey, readLibraryFolders } from './lib/libraryFolders';
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import {
@@ -2172,21 +2178,6 @@ function desktopAuthorizationAttemptFromLocation(): string | null {
     'desktopAuth'
   );
   return attempt && /^[A-Za-z0-9-]{16,64}$/.test(attempt) ? attempt : null;
-}
-
-/** Start-screen summary of a document held on this device. */
-function summarizeLocalDocument(
-  document: ProjectDocument,
-  organization?: ProjectOrganization
-): ProjectSummary {
-  return {
-    projectId: document.projectId,
-    name: document.name,
-    lastRevisionId: document.revisions.at(-1)?.revisionId,
-    updatedAt: document.derived.updatedAt,
-    revisionCount: document.checkpoints.length,
-    ...(organization ? { organization } : {})
-  };
 }
 
 interface HydrateOptions {
@@ -4598,6 +4589,21 @@ export function App() {
     cloudProjectIds
   };
   const thumbnailAccountUserId = session?.userId;
+  // Every card the workspace captures goes straight to the shelf's tile
+  // cache, so the shelf shown on leaving draws it without waiting for the
+  // refreshed listing.
+  useEffect(
+    () =>
+      sharedThumbnailCapture.subscribe((captured) =>
+        rememberCapturedThumbnail({
+          projectId: captured.projectId,
+          source: captured.source,
+          accountId: thumbnailAccountUserId ?? null,
+          protected: isEncryptedProject(captured.projectId)
+        })
+      ),
+    [thumbnailAccountUserId]
+  );
   const loadProperties = useCallback(
     async (project: ProjectSummary) => {
       const { loadProjectProperties } = await import('./lib/projectProperties');
@@ -14887,13 +14893,13 @@ export function App() {
       if (inAccount) {
         remoteVersionsRef.current.set(project.projectId, stored.version);
       }
+      const storedBytes = measuredDocumentBytes(stored);
       setProjects((current) =>
         current.map((candidate) =>
           candidate.projectId === project.projectId
             ? {
-                ...candidate,
-                name: stored.name,
-                documentVersion: stored.version
+                ...withSavedVersion(candidate, stored, storedBytes),
+                name: stored.name
               }
             : candidate
         )
@@ -15291,8 +15297,12 @@ export function App() {
             ).catch(() => undefined);
           }
           await seedCopyThumbnail(localSource ?? localCopy, localCopy);
+          // Measured on what the account now holds: uploading the copy's
+          // images saves a version after the one the response describes, and
+          // an encrypted account's response carries no size at all.
+          const copyRow = withSavedVersion(response.project, copied);
           setProjects((current) =>
-            [...current, response.project].sort(compareProjectSummaries)
+            [...current, copyRow].sort(compareProjectSummaries)
           );
           setStatus(
             [
@@ -31394,6 +31404,9 @@ export function App() {
           loadThumbnail={loadThumbnail}
           thumbnailAccountId={thumbnailAccountUserId ?? null}
           publishThumbnail={publishThumbnail}
+          {...(session &&
+            cloudFunctionsEnabled && { loadStorageUsage: api.storageUsage })}
+          onOpenAccountSettings={() => openSettingsAt('account')}
         />
         <StatusActivityLog
           status={status}
