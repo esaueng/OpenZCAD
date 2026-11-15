@@ -158,6 +158,36 @@ describe('exact body clash (M09, shared by AS04)', () => {
     }
   });
 
+  it('counts a micrometre overlap of kilometre bars at the overlap’s own scale', () => {
+    // Scaled to either bar, 0.1 mm³ rounds away; scaled to the region the
+    // kernel built (0.001 × 10 × 10) it is plainly real.
+    const kernel = new RemusKernel();
+    const a = kernel.makeBox(1_000_000, 10, 10);
+    const b = moved(
+      kernel,
+      kernel.makeBox(1_000_000, 10, 10),
+      999_999.999,
+      0,
+      0
+    );
+    const verdict = exactSolidClash(kernel, a, b);
+    expect(verdict.kind).toBe('interference');
+    if (verdict.kind !== 'interference') return;
+    expect(verdict.volume).toBeCloseTo(0.1, 3);
+    // Butted end to end instead, the same bars only touch.
+    const butted = moved(
+      kernel,
+      kernel.makeBox(1_000_000, 10, 10),
+      1_000_000,
+      0,
+      0
+    );
+    expect(exactSolidClash(kernel, a, butted)).toMatchObject({
+      kind: 'clear',
+      touching: true
+    });
+  });
+
   it('counts a small pin sunk into a long bar where only the difference answers', () => {
     // A curved pin inside a long bar: whichever boolean measures it, a
     // sunk part is never reported clear.

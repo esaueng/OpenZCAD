@@ -16,11 +16,14 @@
  *    assembly case. The exact difference of one solid by the other then
  *    measures the same volume as `volume(b) − volume(b − a)`, and the other
  *    way round if that is declined too.
- * 3. A shared volume above a noise floor is interference. The floor is the
- *    smaller solid's box diagonal³ × 1e-9 (a part sunk whole into a much
- *    larger one must still count), and for a difference also its
- *    cancellation noise, 1e-9 of the larger operand. Anything below it is
- *    still interference when a point lies strictly inside both solids. Its witness is a point
+ * 3. A resolved shared volume is interference. An intersection the kernel
+ *    built resolves when it has thickness on every axis at its own scale
+ *    (never the bodies': a micrometre overlap of kilometre bars is real); a
+ *    difference resolves above its cancellation noise, 1e-9 of the minuend,
+ *    the smaller solid tried first. An unresolved figure is still
+ *    interference when a point lies strictly inside both solids, and is
+ *    unknown (never clear) when it is above the smaller solid's floor
+ *    (diagonal³ × 1e-9) or the kernel built a positive sliver. Its witness is a point
  *    classified strictly inside both solids by the exact and the robust
  *    classifiers, and the box of the shared region when the kernel built it.
  * 4. No shared volume is clearance. Where the kernel certifies the solid
@@ -105,12 +108,19 @@ interface SharedMeasure {
   /** The intersection solid, when the kernel built a non-empty one. */
   region: number | null;
   /**
-   * The largest volume this measure can report from rounding alone: the
-   * pair's floor for an intersection, measured on its own result; for a
-   * difference also the cancellation noise of `volume(b) − volume(b − a)`,
-   * which scales with b, the possibly much larger body.
+   * Whether the measure resolves a real overlap, judged at the scale it was
+   * measured at. An intersection the kernel built is real when it has volume
+   * and thickness on every axis, judged against its OWN box (two kilometre
+   * bars overlapping by a micrometre share a real 0.1 mm³ the bars' scale
+   * would round away). A difference `volume(m) − volume(m − s)` carries the
+   * cancellation noise of m, so it resolves only what clears that noise.
    */
-  noise: number;
+  resolved: boolean;
+  /**
+   * A positive figure that did not resolve and is above the pair's floor:
+   * it may be real, so without other proof it is unknown, never clear.
+   */
+  ambiguous: boolean;
 }
 
 type SharedOutcome =
@@ -135,6 +145,7 @@ function differenceShare(
   subtrahend: number,
   floor: number
 ): { shared: number; noise: number } | null {
+  // `floor` stays the pair's: the noise below scales with the minuend.
   const outcome = exactBooleanOutcome(kernel, 'cut', minuend, subtrahend);
   if (outcome.status !== 'ok') return null;
   try {
@@ -159,26 +170,49 @@ function measureShared(
   if (common.status === 'ok') {
     const volume = volumeOf(kernel, common.solid);
     if (volume > 0) {
+      const box = boxOf(kernel, common.solid);
+      const thickness = Math.min(
+        box[3] - box[0],
+        box[4] - box[1],
+        box[5] - box[2]
+      );
+      const resolved = thickness > Math.max(boxDiagonal(box), 1) * 1e-9;
       return {
         ok: true,
         measure: {
           volume,
           proof: 'intersect',
           region: common.solid,
-          noise: floor
+          resolved,
+          ambiguous: !resolved
         }
       };
     }
     safeDelete(kernel, common.solid, [a, b]);
+    // The kernel built the intersection and it is empty: no shared volume.
     return {
       ok: true,
-      measure: { volume, proof: 'intersect', region: null, noise: floor }
+      measure: {
+        volume,
+        proof: 'intersect',
+        region: null,
+        resolved: false,
+        ambiguous: false
+      }
     };
   }
-  for (const [minuend, subtrahend] of [
-    [b, a],
-    [a, b]
-  ] as const) {
+  // The smaller solid first: the difference's noise scales with its minuend.
+  const ordered: (readonly [number, number])[] =
+    volumeOf(kernel, a) <= volumeOf(kernel, b)
+      ? [
+          [a, b],
+          [b, a]
+        ]
+      : [
+          [b, a],
+          [a, b]
+        ];
+  for (const [minuend, subtrahend] of ordered) {
     const measured = differenceShare(kernel, minuend, subtrahend, floor);
     if (measured !== null) {
       return {
@@ -187,7 +221,9 @@ function measureShared(
           volume: measured.shared,
           proof: 'difference',
           region: null,
-          noise: measured.noise
+          resolved: measured.shared > measured.noise,
+          ambiguous:
+            measured.shared > floor && measured.shared <= measured.noise
         }
       };
     }
@@ -304,7 +340,7 @@ export function exactSolidClash(
     };
   }
 
-  if (shared.ok && shared.measure.volume > shared.measure.noise) {
+  if (shared.ok && shared.measure.resolved) {
     const { volume, proof, region } = shared.measure;
     try {
       return {
@@ -335,13 +371,14 @@ export function exactSolidClash(
     return { kind: 'unknown', reason: shared.reason, message: shared.message };
   }
 
-  // Below the noise floor is not yet clear: a point the exact classifiers
-  // place strictly inside both solids still proves an overlap too small to
-  // measure, so clearance is only ever reported where no such point exists.
-  const { volume, proof, region } = shared.measure;
+  // Unresolved is not yet clear: a point the exact classifiers place
+  // strictly inside both solids still proves an overlap too small to
+  // measure, so clearance is only reported where no such point exists.
+  // (`sharedInteriorPoint` itself returns null for a degenerate common box,
+  // so touching boxes are never probed into an overlap.)
+  const { volume, proof, region, ambiguous } = shared.measure;
   if (region !== null) safeDelete(kernel, region, [a, b]);
-  const inside =
-    gap < -lengthTolerance ? sharedInteriorPoint(kernel, a, b) : null;
+  const inside = sharedInteriorPoint(kernel, a, b);
   if (inside) {
     return {
       kind: 'interference',
@@ -350,6 +387,15 @@ export function exactSolidClash(
       point: vector(inside),
       bounds: null,
       complete: volume > 0
+    };
+  }
+  if (ambiguous) {
+    return {
+      kind: 'unknown',
+      reason: 'below_resolution',
+      message: `the exact ${
+        proof === 'intersect' ? 'intersection' : 'difference'
+      } found a shared volume too small to tell from rounding`
     };
   }
 
