@@ -4689,7 +4689,9 @@ export function App() {
             signal: run.controller.signal
           }),
         render: renderPartThumbnail,
-        save: saveProjectThumbnail,
+        // Fenced inside the store's transaction, after its waits.
+        save: (projectId, thumbnail) =>
+          saveProjectThumbnail(projectId, thumbnail, { shouldWrite: active }),
         drawn: (project, source) =>
           rememberCapturedThumbnail({
             projectId: project.projectId,
@@ -4706,7 +4708,7 @@ export function App() {
         throw error;
       });
       if (!result) {
-        const note = `Stopped after ${done} of ${list.length} project cards: a project was opened or the account changed.`;
+        const note = `Stopped after ${done} of ${list.length} project cards: a project was opened, the account changed, or encrypted projects were locked.`;
         setThumbnailRegenerationNote(note);
         return;
       }

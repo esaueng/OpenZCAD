@@ -30,7 +30,10 @@ import {
   onLocalSaveStatesChanged,
   loadLocalSaveState,
   loadProjectMeasurements,
+  loadProjectThumbnail,
   saveProjectMeasurements,
+  saveProjectThumbnail,
+  ThumbnailWriteCancelledError,
   loadLocalProject,
   putSourceBlobIfAbsent,
   releaseSourceBlobClaim,
@@ -1380,5 +1383,36 @@ describe('save states on the device', () => {
     expect(await listLocalSaveStateIds('proj-a')).toEqual(
       new Set([saved.checkpoints.at(-1)!.checkpointId])
     );
+  });
+});
+
+describe('project thumbnails', () => {
+  const card = {
+    source: 'data:image/webp;base64,CARD',
+    version: 3,
+    updatedAt: '2026-11-14T12:00:00.000Z'
+  };
+
+  it('writes nothing when its caller stops while the store opens', async () => {
+    // Review of Settings' Regenerate project thumbnails: a key lock during
+    // the store's open and alias lookup still let the card commit.
+    let live = true;
+    const pending = saveProjectThumbnail('project_card', card, {
+      shouldWrite: () => live
+    });
+    live = false;
+
+    await expect(pending).rejects.toBeInstanceOf(ThumbnailWriteCancelledError);
+    expect(await loadProjectThumbnail('project_card')).toBeNull();
+  });
+
+  it('writes as before when the caller is still current', async () => {
+    await saveProjectThumbnail('project_card', card, {
+      shouldWrite: () => true
+    });
+    expect(await loadProjectThumbnail('project_card')).toEqual({
+      projectId: 'project_card',
+      ...card
+    });
   });
 });
