@@ -175,6 +175,10 @@ export function sketchSvgBounds(entities: readonly DxfEntity[]): Bounds {
   };
   for (const entity of entities) {
     switch (entity.kind) {
+      case 'text':
+        // The anchor only: glyph extents depend on the reader's font.
+        include(bounds, ...entity.position);
+        break;
       case 'line':
         include(bounds, ...entity.start);
         include(bounds, ...entity.end);
@@ -267,6 +271,21 @@ export function sketchSvgBounds(entities: readonly DxfEntity[]): Bounds {
 
 function element(entity: DxfEntity): string {
   switch (entity.kind) {
+    case 'text': {
+      const anchor =
+        entity.align === 'center'
+          ? 'middle'
+          : entity.align === 'right'
+            ? 'end'
+            : 'start';
+      const x = num(entity.position[0]);
+      const y = num(-entity.position[1]);
+      // y is negated, so a counter-clockwise DXF rotation is a negative SVG one.
+      const rotate = entity.rotationDeg
+        ? ` transform="rotate(${num(-entity.rotationDeg)} ${x} ${y})"`
+        : '';
+      return `<text x="${x}" y="${y}" font-size="${num(entity.height)}" text-anchor="${anchor}" stroke="none" fill="#000000"${rotate}>${escapeXml(entity.text)}</text>`;
+    }
     case 'line':
       return `<line x1="${num(entity.start[0])}" y1="${num(-entity.start[1])}" x2="${num(entity.end[0])}" y2="${num(-entity.end[1])}"/>`;
     case 'circle':

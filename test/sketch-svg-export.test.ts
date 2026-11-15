@@ -381,3 +381,30 @@ describe('exportSketchSvg', { timeout: 120_000 }, () => {
     ).rejects.toThrow('sketch-not-found');
   });
 });
+
+describe('SVG text from DXF TEXT entities', () => {
+  it('writes escaped, anchored text and counts only its anchor in the extent', () => {
+    const svg = writeSketchSvg(
+      [
+        { kind: 'line', start: [0, 0], end: [10, 0] },
+        {
+          kind: 'text',
+          position: [5, 4],
+          height: 2,
+          text: 'UP 90° <R1>',
+          align: 'center',
+          rotationDeg: 90
+        }
+      ],
+      { units: 'mm' }
+    );
+    expect(svg).toContain(
+      '<text x="5" y="-4" font-size="2" text-anchor="middle" stroke="none" fill="#000000" transform="rotate(-90 5 -4)">UP 90° &lt;R1&gt;</text>'
+    );
+    expect(
+      sketchSvgBounds([
+        { kind: 'text', position: [5, 4], height: 2, text: 'x' }
+      ])
+    ).toEqual({ minX: 5, minY: 4, maxX: 5, maxY: 4 });
+  });
+});
