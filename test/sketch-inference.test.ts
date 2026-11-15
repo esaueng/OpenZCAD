@@ -153,8 +153,8 @@ describe('S08 inference on the pinned kernel', () => {
     ]);
     expect((await sketch.draw(segment(0, 12, 0, 0))).kinds).toEqual([
       'coincident',
-      'coincident',
-      'vertical'
+      'vertical',
+      'coincident'
     ]);
     // Corner locked, four sides joined and squared: width and height remain.
     const outcome = await sketch.solve();
@@ -175,8 +175,8 @@ describe('S08 inference on the pinned kernel', () => {
     ]);
     expect((await sketch.draw(segment(-3, 4, 0, 0))).kinds).toEqual([
       'coincident',
-      'coincident',
-      'perpendicular'
+      'perpendicular',
+      'coincident'
     ]);
     const outcome = await sketch.solve();
     expectStill(outcome, sketch.objects());
@@ -226,6 +226,20 @@ describe('S08 inference on the pinned kernel', () => {
     await sketch.draw(segment(-10, 0, 0, 0));
     const shape = cornerRectangleShape({ x: 0, y: 0 }, { x: 6, y: 4 })!;
     const result = await sketch.draw({ kind: 'composite', shape });
+    expect(result.kinds).toEqual(['coincident']);
+    expectStill(await sketch.solve(), sketch.objects());
+  });
+
+  it('a rectangle dropped onto a horizontal line’s ends stays free of redundancy (review #1555)', async () => {
+    const sketch = drawing();
+    await sketch.draw(segment(0, 0, 6, 0));
+    const shape = cornerRectangleShape({ x: 0, y: 0 }, { x: 6, y: 4 })!;
+    const result = await sketch.draw(
+      { kind: 'composite', shape },
+      { autoConstrain: false }
+    );
+    // The first corner joins; the second would restate the horizontal
+    // sides and is left out.
     expect(result.kinds).toEqual(['coincident']);
     expectStill(await sketch.solve(), sketch.objects());
   });

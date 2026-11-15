@@ -454,3 +454,35 @@ describe('describeInferredRelations', () => {
     expect(describeInferredRelations('Add line', [])).toBe('Add line.');
   });
 });
+
+describe('review #1555 regressions', () => {
+  it('leaves every relation after a commit’s first to the solver', () => {
+    // A rectangle's bottom side dropped onto a line's two ends: the second
+    // join may restate the rectangle's own horizontal side.
+    const relations = inferSketchRelations(
+      [line('base', 0, 0, 6, 0)],
+      [line('s0', 0, 0, 6, 0), line('s1', 6, 0, 6, 4)],
+      resolve,
+      { autoConstrain: false },
+      false
+    );
+    expect(relations.map((relation) => relation.optional)).toEqual([
+      false,
+      true
+    ]);
+  });
+
+  it('never moves an arc centre placed on a snap', () => {
+    const objects = [line('l', 0, 100, 5, 100)];
+    const snapped = { x: 0, y: 0 };
+    expect(
+      tangentArcCenter(snapped, [{ x: 5, y: 100 }], objects, resolve, [
+        { x: 0, y: 0, kind: 'origin' }
+      ])
+    ).toEqual({ center: snapped, tangent: false });
+    // The same centre unsnapped, and near the normal, does slide onto it.
+    expect(
+      tangentArcCenter({ x: 5.3, y: 95 }, [{ x: 5, y: 100 }], objects, resolve)
+    ).toEqual({ center: { x: 5, y: 95 }, tangent: true });
+  });
+});

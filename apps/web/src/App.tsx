@@ -20823,7 +20823,7 @@ export function App() {
     const name = `Sketch ${String(sketchOptions.length + 1).padStart(2, '0')}`;
     const settings = appSettingsRef.current.sketching;
     const [
-      { drawnEntityCommands, addedConstraintIds },
+      { drawnEntityCommands, addedConstraintIds, drawingSessionStillOpen },
       { describeInferredRelations },
       { settleOptionalRelations }
     ] = await Promise.all([
@@ -20864,6 +20864,18 @@ export function App() {
     // Another project took over while the relations were settled: what was
     // drawn belonged to the one that left.
     if (managerRef.current !== manager) return;
+    // The sketch closed (or another opened) meanwhile: nothing lands unseen.
+    if (
+      !drawingSessionStillOpen(
+        { sketchId: sketchId ?? null, plane: session.plane },
+        interactionRef.current
+      )
+    ) {
+      setStatus(
+        'The sketch closed before the drawn entity was added; nothing changed.'
+      );
+      return;
+    }
     if (manager.document.version !== base.version) {
       // Something else changed the document meanwhile: plan again against
       // what is there now.

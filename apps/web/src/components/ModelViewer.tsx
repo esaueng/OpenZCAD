@@ -8868,7 +8868,8 @@ export function ModelViewer({
         center,
         [start],
         mode.objects,
-        sketchModeResolver(mode)
+        sketchModeResolver(mode),
+        placedSnapHints
       ).center;
     }
 

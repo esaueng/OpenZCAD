@@ -119,7 +119,11 @@ export function drawnEntityCommands(
     { autoConstrain: options.autoConstrain, hints: options.hints },
     drawn.kind === 'object'
   );
-  const optional: AnyCommand[] = [];
+  // The settle solve drops the first optional relation it finds redundant,
+  // so what auto-constrain proposes is offered up before a joined end or a
+  // midpoint, which the user drew onto and which stays when it can.
+  const optionalAuto: AnyCommand[] = [];
+  const optionalConnected: AnyCommand[] = [];
   const kinds = new Map<AnyCommand, SketchInferredRelationKind>();
   for (const relation of relations) {
     const command = commandFactories.addSketchConstraint(
@@ -127,8 +131,10 @@ export function drawnEntityCommands(
       label
     );
     kinds.set(command, relation.kind);
-    (relation.optional ? optional : commands).push(command);
+    if (!relation.optional) commands.push(command);
+    else (relation.connected ? optionalConnected : optionalAuto).push(command);
   }
+  const optional = [...optionalAuto, ...optionalConnected];
   return { label, sketchId, objectIds, commands, optional, kinds };
 }
 
@@ -139,4 +145,24 @@ export function addedConstraintIds(commands: readonly AnyCommand[]): string[] {
     const ids = (command.payload as { ids?: { constraintId: string } }).ids;
     return ids ? [String(ids.constraintId)] : [];
   });
+}
+
+/**
+ * Whether the sketch session a drawing commit was planned in is still the
+ * one open once its asynchronous settling has finished. Leaving the sketch,
+ * or moving to another sketch or plane meanwhile, abandons the commit: what
+ * it adds could no longer be shown, so it must not land unseen.
+ */
+export function drawingSessionStillOpen(
+  planned: { sketchId: string | null; plane: unknown },
+  now:
+    | { mode: 'sketch'; session: { sketchId?: string | null; plane: unknown } }
+    | { mode: string }
+): boolean {
+  if (now.mode !== 'sketch' || !('session' in now)) return false;
+  const sketchId = now.session.sketchId ?? null;
+  // A session that knows its sketch must know this one. One that does not
+  // yet (a sketch the previous commit just started) must be on this plane.
+  if (sketchId !== null) return sketchId === planned.sketchId;
+  return JSON.stringify(now.session.plane) === JSON.stringify(planned.plane);
 }

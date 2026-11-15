@@ -74,8 +74,8 @@ export interface SketchInferredRelation {
   /**
    * The solver decides: an optional relation is kept only when it adds rank
    * (`settleOptionalRelations`), so an inferred relation never makes a
-   * sketch redundant. A required one cannot be redundant: it is the first
-   * statement about a newly drawn point.
+   * sketch redundant. Only a commit's first relation is required: it is the
+   * first statement about a newly drawn entity and cannot be redundant.
    */
   optional: boolean;
 }
@@ -298,7 +298,15 @@ export function inferSketchRelations(
       ...directionRelations(object, joined, existingById, resolve)
     );
   }
-  return relations;
+  // Only the commit's first relation is certain to add rank: it is the
+  // first statement about a free new entity. Any later one may restate what
+  // the entity's own shape or an earlier relation already holds (a
+  // rectangle's two bottom corners both joined to a horizontal line, an arc
+  // whose centre and both ends land on existing points), so the solver
+  // decides for each of them.
+  return relations.map((relation, index) =>
+    index === 0 ? relation : { ...relation, optional: true }
+  );
 }
 
 /** Horizontal/vertical, perpendicular and tangent relations of one entity. */
@@ -536,15 +544,20 @@ export function lineDirectionLock(
 /**
  * The arc tool's tangent: an arc whose start or end lands on a line's end
  * with its centre within ~5° of that line's normal takes the normal exactly,
- * by sliding the centre onto it (the centre is the one point not yet on
- * anything). Returns the centre to use.
+ * by sliding the centre onto it. A centre placed on an exact snap stays
+ * where it was put: the snap wins. Returns the centre to use.
  */
 export function tangentArcCenter(
   center: SketchPoint,
   ends: readonly SketchPoint[],
   objects: readonly SketchInferenceObject[],
-  resolve: Resolve
+  resolve: Resolve,
+  /** Snaps points were placed on: a snapped centre is never moved. */
+  hints: readonly SketchSnapHint[] = []
 ): { center: SketchPoint; tangent: boolean } {
+  if (hints.some((hint) => samePoint(hint, center))) {
+    return { center, tangent: false };
+  }
   for (const end of ends) {
     for (const object of objects) {
       const line = lineDirection(object.data, resolve);
