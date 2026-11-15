@@ -695,6 +695,51 @@ describe('certifying each contact group on its own', () => {
     }
   });
 
+  it('certifies each contact of compound operands, not one witness per operand', () => {
+    const kernel = new RemusKernel();
+    // Operand A is one body of two flanges 200 mm apart. Operand B is one
+    // body of a small cylinder inside the first flange and a tall r40
+    // cylinder resting on the second. fuseAll merges both contacts: two
+    // separate regions, 251327.41 mm³. Before: A's single witness sat in
+    // region 1, B's in region 2, and the union was refused as walled.
+    const compound = (solids: number[]) =>
+      kernel.fuseAll(Uint32Array.from(solids));
+    const operands = () => [
+      compound([
+        kernel.makeCylinder(40, 10),
+        lifted(kernel, kernel.makeCylinder(40, 10), 200, 0)
+      ]),
+      compound([
+        lifted(kernel, kernel.makeCylinder(20, 5), 0, 2),
+        lifted(kernel, kernel.makeCylinder(40, 30), 200, 10)
+      ])
+    ];
+    const plain = kernel.fuseAll(Uint32Array.from(operands()));
+    const result = fuseAllMergingFaceContacts(kernel, operands());
+    expect(kernel.volume(result, 0.01)).toBeCloseTo(251327.412287, 5);
+    expect(kernel.getSolidFaces(result)).toHaveLength(
+      kernel.getSolidFaces(plain).length
+    );
+    expect(faceComponentsOf(kernel, result)).toHaveLength(2);
+  });
+
+  it('leaves cubes that share only a vertex exactly as fuseAll makes them', () => {
+    const kernel = new RemusKernel();
+    // A shared vertex cannot hold an internal wall. Before: distance 0 made
+    // the pair a contact group, its two shells failed certification, and
+    // the union was refused.
+    const operands = () => [
+      kernel.makeBox(10, 10, 10),
+      lifted(kernel, kernel.makeBox(10, 10, 10), 10, 10, 10)
+    ];
+    const plain = kernel.fuseAll(Uint32Array.from(operands()));
+    const result = fuseAllMergingFaceContacts(kernel, operands());
+    expect(kernel.volume(result, 0.01)).toBeCloseTo(2000, 9);
+    expect(faceComponentsOf(kernel, result)).toHaveLength(
+      faceComponentsOf(kernel, plain)!.length
+    );
+  });
+
   it('counts several cavities as part of one certified piece', () => {
     const kernel = new RemusKernel();
     // Two voids: three boundary components, one piece of material. (An

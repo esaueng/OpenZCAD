@@ -12,23 +12,29 @@ Pairwise `fuse` merges that pair but refuses two parallel r20 cylinders that
 overlap by 1 mm or less, whatever their cap planes
 ([remus#1742](https://github.com/esaueng/remus/issues/1742)); `fuseAll` fuses
 them when their caps are shared. The union gate (`fuseUniformSolidChecked`,
-used by Union, extrude Add and the move suggestion) is narrow. A result in one
-face-connected component, or one whose operands touch nowhere, is returned
-exactly as before. Otherwise the operands' proven contact groups are found:
-certified distance, shared interior point or positive intersection, or one
-pairwise fuse that joins them. Each group is certified as one piece: every
-operand's interior witness winds +1 against the result's boundary components,
-and all of the group's witnesses are enclosed by the same components. A
-witness near a curved chord re-tessellates that component alone, within a
-400k-triangle budget. A group that does not certify is repaired on its own
-operands, `fuseAll` first and then the pairwise fuse, with per-operand
-preservation checks. If it still cannot be certified, the union is refused
-with `union_unmerged_contact` (fail closed). Regressions with closed-form
+used by Union, extrude Add and the move suggestion) is narrow and certifies
+per contact interface. A result in one face-connected component, or one whose
+operands touch nowhere, is returned exactly as before. An interface is a pair
+that shares material (a shared interior point or a positive intersection) or
+whose exact pairwise fuse joins it (fewer face components, strictly valid,
+exact combined box). Vertex- or edge-only contact is no interface. Each
+operand gets one interior witness per material lump (a cavity winds −1 and
+gets none). An interface requires the lump witnesses its pairwise fuse
+encloses together to be enclosed together in the result, by winding number
+against the result's boundary components. A witness near a curved chord
+re-tessellates that component alone, within a 400k-triangle budget. Lumps no
+contact joins are never compared. An interface that does not certify gets its
+group repaired on its own operands, `fuseAll` first and then the pairwise
+fuse, with per-operand preservation checks. Whatever still cannot be
+certified refuses with `union_unmerged_contact` (fail closed). Witness
+agreement is evidence at finitely many points, not a proof that no doubled
+sheet exists elsewhere. Regressions with closed-form
 oracles in `test/touching-cylinder-union.test.ts`: annulus area, concave R2/R5
 foot fillet volume, bore cut, circular boss extruded onto a cylinder face, two
 overlapping bosses on a flange in all six operand orders, hub-on-flange at 0,
 1e5 and 1e7, cavity bodies, injected material-dropping repairs, twelve pins
 past the repair cap, a hub beside one or eleven separate thin tubes, thin-wall
-tubes on a flange, a no-contact union that tessellates nothing, and a pattern
+tubes on a flange, a no-contact union that tessellates nothing, compound
+operands with separate contact regions, cubes sharing only a vertex, and a pattern
 ×4/×8 bolt-circle subtract about the world and bore axes. Open: the upstream
 fixes for remus#1738 and remus#1742, then retire `fuseAllMergingFaceContacts`.
