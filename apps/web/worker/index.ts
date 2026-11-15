@@ -12,7 +12,10 @@ import {
 import { blobBucket } from './e2eeContentBlobs';
 import type { E2eeInvitationHost } from './e2eeInvitations';
 import { withEncryptedProjectInfo } from './e2eeProjectDocuments';
-import { accountRequiresEncryptedProjects } from './e2eeProjectPreferences';
+import {
+  accountRequiresEncryptedLibrary,
+  accountRequiresEncryptedProjects
+} from './e2eeProjectPreferences';
 import {
   isE2eeAssistantConsentStorageReady,
   liveAssistantConsentRoute
@@ -1926,13 +1929,14 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       const input = parseSaveLibraryFolderSetRequest(
         await readJsonBody(request, MAX_LIBRARY_FOLDER_RECORD_CHARS * 4 + 1024)
       );
-      // Folder names are the owner's words: an account whose projects must
-      // be encrypted (decision D2, slice 8-1) stores them sealed only.
+      // Folder names are the owner's words: an account that encrypts new
+      // projects (decision D2, slice 8-1), or already owns or shares an
+      // encrypted project, stores them sealed only.
       if (
         input.format === 1 &&
         (isE2eeDefaultOn(env, session.email ?? undefined) ||
           (isE2eeProjectsEnabled(env, session.email ?? undefined) &&
-            (await accountRequiresEncryptedProjects(env.DB, userId))))
+            (await accountRequiresEncryptedLibrary(env.DB, userId))))
       ) {
         return json(
           {
@@ -2068,6 +2072,19 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       await readJsonBody(request, MAX_CLOUD_PROJECT_WRITE_BYTES)
     );
     const payload = parseCreateProjectRequest(opened.body);
+    // A device project saved to an account that already holds encrypted
+    // projects can be a copy of one ("Keep both", recovery): it is adopted
+    // encrypted, whatever the opt-in says. The refusal sends the browser to
+    // the encrypted route, as it does for an opted-in account.
+    if (
+      payload.localProjectId !== undefined &&
+      isE2eeProjectsEnabled(env, session.email ?? undefined) &&
+      (await accountRequiresEncryptedLibrary(env.DB, userId))
+    ) {
+      throw new EncryptedProjectsRequiredError(
+        'This account holds end-to-end encrypted projects, so projects saved from this device are encrypted too. Update OpenZCAD to save it.'
+      );
+    }
     return json(
       await persistence.createProject(userId, payload, {
         storage: opened.storage
