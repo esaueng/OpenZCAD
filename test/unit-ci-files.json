@@ -162,6 +162,7 @@
     "test/project-authorization.test.ts",
     "test/project-diagnostics.test.ts",
     "test/project-sharing.test.ts",
+    "test/qa-2026-11-14-p1-early-edits.test.ts",
     "test/r2-key-tombstones.test.ts",
     "test/recovery-snapshot.test.ts",
     "test/redact-path.test.ts",
