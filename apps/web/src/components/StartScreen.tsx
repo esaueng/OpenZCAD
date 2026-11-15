@@ -4218,10 +4218,11 @@ export function StartScreen({
                   label="Account storage used"
                   valueText={storageMeter.figure}
                 />
-              ) : (
+              ) : cloud.progress ? null : (
                 // The meter's place, kept while the account is checked and
                 // its first figure loads (and when there is none), so the
-                // library below never jumps when the meter lands.
+                // library below never jumps when the meter lands. A save
+                // run's own track stands in that place instead.
                 <span
                   className="storage-bar is-small is-placeholder"
                   aria-hidden="true"
