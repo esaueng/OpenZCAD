@@ -191,6 +191,9 @@ test('the first-run demo cards go two to a row at 1024px', async ({ page }) => {
   await page.goto('/');
   const cards = page.locator('.start-learn .demo-card');
   await expect(cards.first()).toBeVisible();
+  // Until the listing says the library is empty, the demos stand in the
+  // column's one-wide list; measure the first-run grid once it is drawn.
+  await expect(page.locator('.start-screen.is-fresh')).toBeVisible();
   for (const card of await cards.all()) {
     expect((await card.boundingBox())!.width).toBeGreaterThan(240);
   }
