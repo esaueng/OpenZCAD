@@ -32,12 +32,26 @@ export function documentPrintClearance(
 ): number | undefined {
   const stored = document.printClearance;
   if (stored === undefined) return undefined;
-  const value = resolveParamValue(
-    stored,
-    scope ?? getParameterScope(document as ProjectDocument).scope,
-    'Print clearance',
-    document.units
-  );
+  const values = scope ?? getParameterScope(document as ProjectDocument).scope;
+  let value: number;
+  if (typeof stored === 'number') {
+    value = resolveParamValue(stored, values, 'Print clearance');
+  } else {
+    // A stored expression is checked as a length, as it was when it was
+    // set: an angle (`5 deg`) or an area written by another client must not
+    // become a gap in document units.
+    try {
+      value = evaluateFieldExpression(stored, values, {
+        documentUnits: document.units,
+        dimension: 'length'
+      });
+    } catch (error) {
+      throw new Error(
+        `Print clearance: ${error instanceof Error ? error.message : 'evaluation failed.'}`,
+        { cause: error }
+      );
+    }
+  }
   if (!(value >= 0)) {
     throw new Error('Print clearance: must be zero or more.');
   }

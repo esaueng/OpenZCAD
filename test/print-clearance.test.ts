@@ -95,6 +95,18 @@ describe('the stored print clearance', () => {
     );
   });
 
+  it('refuses a stored expression that is not a length (review #1563)', () => {
+    // Storage accepts any expression string; the rebuild must still read it
+    // as a length rather than take an angle's number as a gap.
+    const stored = { ...newDocument(), printClearance: '5 deg' };
+    expect(() => documentPrintClearance(stored)).toThrow(
+      /Print clearance: .*expected a length/
+    );
+    expect(
+      documentPrintClearance({ ...newDocument('inch'), printClearance: '1 mm' })
+    ).toBeCloseTo(1 / 25.4, 12);
+  });
+
   it('is refused on a document that declares an older schema', () => {
     const set = setPrintClearance(newDocument(), { value: 0.2 });
     expect(() =>
