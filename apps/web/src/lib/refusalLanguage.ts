@@ -95,6 +95,17 @@ const CURVED_NEIGHBOR =
   "This face meets a curved surface that resizing and moving faces can't follow yet. Change the size on the original shape in History instead.";
 const PARTIAL_WALL =
   "This hole's wall doesn't end in full circles, which resizing can't follow yet. Change the size on the original shape in History instead.";
+/**
+ * A refused diameter, split by the kernel's cause. `wall_meets_face` — and a
+ * kernel that predates the cause (esaueng/remus#1747) — is a size limit, so a
+ * smaller diameter can help. `group_reblend_failed` says the fillets around
+ * the wall did not re-fillet on the resized body, which may hold at every
+ * diameter, so that advice would be false there.
+ */
+const DIAMETER_DOES_NOT_FIT =
+  'That diameter does not fit the existing supports and fillets. Try a smaller diameter.';
+const FILLETS_NOT_REBUILT =
+  "The fillets around this wall can't be rebuilt at that diameter. Change or remove those fillets in History, then resize the wall.";
 
 /**
  * The sentence for a refused face move the kernel typed, read from its code
@@ -104,7 +115,9 @@ const PARTIAL_WALL =
  */
 function typedSentence(typed: RefusalClassification): string | null {
   if (typed.code === 'cylinder-diameter-unbuildable') {
-    return 'That diameter does not fit the existing supports and fillets. Try a smaller diameter.';
+    return typed.reason === 'group_reblend_failed'
+      ? FILLETS_NOT_REBUILT
+      : DIAMETER_DOES_NOT_FIT;
   }
   if (
     typed.category === 'quality_refused' &&

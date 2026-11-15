@@ -1670,6 +1670,10 @@ import {
 import { folderStorageKey, readLibraryFolders } from './lib/libraryFolders';
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import {
+  settleThumbnailUploads,
+  trackThumbnailUpload
+} from './lib/thumbnailUploads';
+import {
   cachedShelfNames,
   forgetShelfProjectNames,
   rememberVerifiedShelfName,
@@ -4647,7 +4651,7 @@ export function App() {
               }) => {
                 const { uploadCloudThumbnail } =
                   await import('./lib/cloudThumbnail');
-                return uploadCloudThumbnail(api, input);
+                return trackThumbnailUpload(uploadCloudThumbnail(api, input));
               }
             }
           : {}),
@@ -7200,6 +7204,10 @@ export function App() {
     const stop = watchLibraryFreshness(async () => {
       if (!settled()) return;
       const before = latestProjects.current;
+      // A listing read while a card upload finalizes names the card it
+      // replaced; read after it instead (see thumbnailUploads).
+      await settleThumbnailUploads();
+      if (!settled() || latestProjects.current !== before) return;
       // Expiry purging stays with the explicit listings.
       const listed = await loadProjectSummaries(accountId, false);
       // An unreachable account keeps the shelf as it was rather than
@@ -14744,6 +14752,11 @@ export function App() {
     setSelectedProfiles([]);
     setTool(null);
     try {
+      // The flush above just started this project's card upload. The shelf
+      // already shows the card; the listing behind it is read once the upload
+      // settles, so it names that card rather than the one it replaced.
+      await settleThumbnailUploads();
+      if (!isCurrent()) return;
       const listed = await loadProjectSummaries(
         sessionRef.current?.userId ?? null
       );
