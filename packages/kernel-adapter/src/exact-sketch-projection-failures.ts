@@ -41,5 +41,11 @@ export function assertFeatureSketchProjectionsValid(
     case 'helical-sweep':
       assertSketchProjectionsValid(result, data.profile.sketchId);
       break;
+    case 'sheet-metal':
+      // The blank's sketch, and each bend line's (it may be another's).
+      assertSketchProjectionsValid(result, data.sketchId);
+      for (const bend of data.bends)
+        assertSketchProjectionsValid(result, bend.line.sketchId);
+      break;
   }
 }

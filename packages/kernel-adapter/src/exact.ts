@@ -216,6 +216,7 @@ import {
 } from './kernel-step-import';
 import {
   buildDocumentHistoryCooperatively,
+  withSketchObjectOverrides,
   type StrictUnionVerdict,
   type StrictUnionVerdicts
 } from './exact-build-loop';
@@ -5169,9 +5170,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     return this.withExportBuild(document, (kernel, build) =>
       sheetMetalFlatPattern(
         kernel,
-        document,
+        // The sketches as the build read them: a linked projection that
+        // moved is re-projected there, not in the stored document.
+        withSketchObjectOverrides(document, build.sketchObjectOverrides),
         getParameterScope(document).scope,
-        build.sketchBases,
+        build,
         featureId,
         millimetresPerUnit(document.units)
       )
@@ -5186,9 +5189,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     return this.withExportBuild(document, (kernel, build) => {
       const solid = foldSheetMetalAt(
         kernel,
-        document,
+        withSketchObjectOverrides(document, build.sketchObjectOverrides),
         getParameterScope(document).scope,
-        build.sketchBases,
+        build,
         featureId,
         fraction
       );

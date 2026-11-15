@@ -217,6 +217,11 @@ interface StartScreenProps {
    */
   cloudUnavailable?: boolean;
   onRetryCloud?(): void;
+  /**
+   * Signed in, but the account's project list could not be read: lists the
+   * shelf again now instead of waiting for the next poll.
+   */
+  onRetryAccountListing?(): void;
   onSaveToAccount(project: ProjectSummary): void;
   onSaveAllToAccount(projects: ProjectSummary[]): void;
   /**
@@ -626,6 +631,7 @@ export function StartScreen({
   signedIn,
   cloudUnavailable = false,
   onRetryCloud,
+  onRetryAccountListing,
   onSaveToAccount,
   onSaveAllToAccount,
   syncRun,
@@ -3159,7 +3165,16 @@ export function StartScreen({
         Icon: CloudAlert,
         text: 'Account unavailable',
         title:
-          'Cloud project status is temporarily unavailable. Your projects remain saved on this device.'
+          'Cloud project status is temporarily unavailable. Your projects remain saved on this device.',
+        ...(onRetryAccountListing
+          ? {
+              action: {
+                text: 'Retry',
+                label: 'Retry reaching the account',
+                run: onRetryAccountListing
+              }
+            }
+          : {})
       };
     }
     if (localOnlyProjects.length > 0) {
