@@ -340,6 +340,31 @@ function writeShelfLayout(layout: ShelfLayout) {
   }
 }
 
+const EXAMPLES_COLLAPSED_STORAGE_KEY = 'openzcad.start.examplesCollapsed';
+
+/** A per-device convenience: an unreadable store simply means expanded. */
+function readExamplesCollapsed(): boolean {
+  try {
+    return (
+      globalThis.localStorage?.getItem(EXAMPLES_COLLAPSED_STORAGE_KEY) === '1'
+    );
+  } catch {
+    return false;
+  }
+}
+
+function writeExamplesCollapsed(collapsed: boolean) {
+  try {
+    if (collapsed) {
+      globalThis.localStorage?.setItem(EXAMPLES_COLLAPSED_STORAGE_KEY, '1');
+    } else {
+      globalThis.localStorage?.removeItem(EXAMPLES_COLLAPSED_STORAGE_KEY);
+    }
+  } catch {
+    // Private windows and blocked storage keep the choice for this visit.
+  }
+}
+
 const LIBRARY_VIEW_KEY = 'openzcad.start.view';
 const LIBRARY_DRAFT_KEY = 'openzcad.start.draft';
 
@@ -538,6 +563,9 @@ const MERGE_HOLD_MS = 450;
 const FOLDER_MADE_NOTICE =
   'Made a folder. Name it, or press Enter to keep the name.';
 const FOLDER_KEY_PREFIX = 'folder:';
+/** The column's folder rows, keyed apart from the shelf's folder tiles. */
+const SIDEBAR_FOLDER_PREFIX = 'sidebar-folder:';
+const SIDEBAR_REORDER_KEYS = 'Alt+ArrowUp Alt+ArrowDown';
 
 /** A folder's tile id, kept apart from project ids on the same shelf. */
 function folderKey(folderId: string) {
@@ -757,6 +785,9 @@ export function StartScreen({
     return () => globalThis.clearTimeout(timer);
   }, [notice]);
   const [layout, setLayout] = useState<ShelfLayout>(readShelfLayout);
+  const [examplesCollapsed, setExamplesCollapsed] = useState(
+    readExamplesCollapsed
+  );
   const [previousLayout] = useState(readLibraryLayout);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [propertiesProject, setPropertiesProject] =
@@ -1356,6 +1387,48 @@ export function StartScreen({
     },
     onCommit: (ids, moved) => commitOrder(ids, moved)
   });
+  // The column's folder list is dragged on its own, up and down. It saves
+  // the same stored order the shelf shows its folders in under Custom order.
+  const sidebarFolderRefs = useRef(new Map<string, HTMLElement>());
+  const sidebarFolderIds = folders.map(
+    (folder) => `${SIDEBAR_FOLDER_PREFIX}${folder.id}`
+  );
+  const canReorderSidebarFolders = !busy && folders.length > 1;
+  const sidebarReorder = useTileReorder({
+    ids: sidebarFolderIds,
+    enabled: canReorderSidebarFolders,
+    tileRefs: sidebarFolderRefs,
+    groupOf: () => 'folders',
+    axis: 'y',
+    onCommit: (ids) =>
+      updateFolders((state) =>
+        reorderFolders(
+          state,
+          ids.map((id) => id.slice(SIDEBAR_FOLDER_PREFIX.length))
+        )
+      )
+  });
+  // As stored, or as a drag would leave them.
+  const sidebarFolders = sidebarReorder.order
+    ? sidebarReorder.order.flatMap((id) => {
+        const folder = folderById.get(id.slice(SIDEBAR_FOLDER_PREFIX.length));
+        return folder ? [folder] : [];
+      })
+    : folders;
+
+  /** Alt and the up or down arrow move the focused folder row one place. */
+  function nudgeSidebarFolder(folderId: string, event: ReactKeyboardEvent) {
+    if (!canReorderSidebarFolders || !event.altKey) return;
+    const offset =
+      event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+    if (offset === 0) return;
+    event.preventDefault();
+    const ids = folders.map((folder) => folder.id);
+    const from = ids.indexOf(folderId);
+    const reordered = moveItem(ids, from, from + offset);
+    if (reordered === ids) return;
+    updateFolders((state) => reorderFolders(state, reordered));
+  }
   // A project on the move: Archive and Trash show they will take it.
   const draggingPart =
     reorder.draggingId !== null && !folderIdOf(reorder.draggingId);
@@ -3018,6 +3091,7 @@ export function StartScreen({
   // With nothing saved yet the demos are the most useful thing on the page,
   // so they take the stage as full cards instead of a list in the column.
   const fresh = !loading && userProjects.length === 0;
+  const showExamples = fresh || !examplesCollapsed;
   // An empty Projects shelf is not an empty library when every project was
   // archived or trashed: the shelf says where they went instead of
   // "nothing saved yet". Null when the library really is empty.
@@ -3477,11 +3551,35 @@ export function StartScreen({
                 Drag one project onto another to group them.
               </p>
             ) : (
-              <ul className="start-folders-list">
-                {folders.map((folder) => {
+              <ul
+                className={
+                  sidebarReorder.draggingId
+                    ? 'start-folders-list is-reordering'
+                    : 'start-folders-list'
+                }
+              >
+                {sidebarFolders.map((folder) => {
                   const open = openFolder?.id === folder.id;
+                  const key = `${SIDEBAR_FOLDER_PREFIX}${folder.id}`;
                   return (
-                    <li key={folder.id}>
+                    <li
+                      key={folder.id}
+                      ref={(element) => {
+                        if (element)
+                          sidebarFolderRefs.current.set(key, element);
+                        else sidebarFolderRefs.current.delete(key);
+                      }}
+                      data-tile-id={key}
+                      className={
+                        sidebarReorder.draggingId === key
+                          ? 'start-folder-row is-dragging'
+                          : 'start-folder-row'
+                      }
+                      onPointerDown={(event) =>
+                        sidebarReorder.onPointerDown(key, event)
+                      }
+                      onDragStart={(event) => event.preventDefault()}
+                    >
                       <button
                         type="button"
                         className={
@@ -3490,9 +3588,18 @@ export function StartScreen({
                             : 'start-folder-link'
                         }
                         aria-current={open ? 'page' : undefined}
+                        aria-keyshortcuts={
+                          canReorderSidebarFolders
+                            ? SIDEBAR_REORDER_KEYS
+                            : undefined
+                        }
                         data-drop-folder={folder.id}
+                        data-tile-drag=""
                         title={folder.name}
                         onClick={() => showFolder(folder.id)}
+                        onKeyDown={(event) =>
+                          nudgeSidebarFolder(folder.id, event)
+                        }
                       >
                         {open ? (
                           <FolderOpen size={14} aria-hidden="true" />
@@ -4017,14 +4124,48 @@ export function StartScreen({
         )}
       </div>
 
-      <section className="start-learn" aria-labelledby="start-demos-title">
+      <section
+        className={showExamples ? 'start-learn' : 'start-learn is-collapsed'}
+        aria-labelledby="start-demos-title"
+      >
         <div className="start-learn-head">
-          <h2 id="start-demos-title">Learn by example</h2>
-          <span className="start-section-note">
-            explore editable parts, design revisions and assemblies
-          </span>
+          {/* Collapsible in the column; on the first run the examples are
+              the way in, so they always show. */}
+          {fresh ? (
+            <h2 id="start-demos-title">Example projects</h2>
+          ) : (
+            <h2 id="start-demos-title">
+              <button
+                type="button"
+                className="start-learn-toggle"
+                aria-expanded={showExamples}
+                aria-controls={`${instanceId}-demo-list`}
+                onClick={() => {
+                  const next = !examplesCollapsed;
+                  setExamplesCollapsed(next);
+                  writeExamplesCollapsed(next);
+                }}
+              >
+                <ChevronRight
+                  size={12}
+                  className="start-learn-chevron"
+                  aria-hidden="true"
+                />
+                Example projects
+              </button>
+            </h2>
+          )}
+          {showExamples && (
+            <span className="start-section-note">
+              explore editable parts, design revisions and assemblies
+            </span>
+          )}
         </div>
-        <div className="demo-list">
+        <div
+          id={`${instanceId}-demo-list`}
+          className="demo-list"
+          hidden={!showExamples}
+        >
           {demos.map((demo) => {
             // Opened before: this device holds an edited copy, which the
             // sample opens as until it is reset.
