@@ -275,10 +275,16 @@ describe('a cylinder standing exactly on another cylinder', () => {
 
   it('refuses, by type, a contact it cannot merge instead of returning the wall', () => {
     const kernel = new RemusKernel();
-    const touching = [
-      kernel.makeCylinder(FLANGE_R, FLANGE_H),
-      lifted(kernel, kernel.makeCylinder(HUB_R, TOP - FLANGE_H), 0, FLANGE_H)
-    ];
+    // A cube standing on a slab: the stand-in fuseAll needs straight edges.
+    const touching = boxOnBox(kernel);
+    // A kernel whose `fuseAll` keeps the two caps gets the contact repaired
+    // by the pairwise fuse: one piece, the exact material, no wall.
+    const repaired = withFuseAllLeavingPieces(() =>
+      fuseAllMergingFaceContacts(kernel, touching)
+    );
+    expect(faceComponentsOf(kernel, repaired)).toHaveLength(1);
+    expect(kernel.getSolidFaces(repaired)).toHaveLength(11);
+    expect(kernel.volume(repaired, 0.01)).toBeCloseTo(BOX_ON_BOX_VOLUME, 6);
     // Stand in for a kernel that can merge the contact by neither entry
     // point: once the contact is proved, the pairwise fuse refuses, and
     // `fuseAll` keeps the two caps.
@@ -457,20 +463,22 @@ function withRepairFuse<T>(
 }
 
 /**
- * Run `body` with every `fuseAll` the gate makes replaced by one that leaves
- * touching operands in pieces, as the kernel did before esaueng/remus#1792:
- * each operand after the first is lifted by its index in millimetres before
- * the real `fuseAll`, so no contact survives. The contact proof still reads
- * the real operands.
+ * Run `body` with every `fuseAll` the gate makes replaced by the kernel's
+ * behaviour before esaueng/remus#1792: the operands joined without a
+ * boolean, every face of every operand sewn into one solid, so each contact
+ * keeps both caps while the material stays exact and a correct repair can
+ * still be accepted. Sewing takes straight edges only, so the fixtures run
+ * under it are boxes. The contact proof still reads the real operands.
  */
 function withFuseAllLeavingPieces<T>(body: () => T): T {
   contactRepairFaults.fuseAll = (kernel, solids) =>
-    kernel.fuseAll(
+    kernel.sewFaces(
       Uint32Array.from(
-        Array.from(solids, (solid, index) =>
-          index === 0 ? solid : lifted(kernel, solid, 0, index)
+        Array.from(solids).flatMap((solid) =>
+          Array.from<number>(kernel.getSolidFaces(kernel.copySolid(solid)))
         )
-      )
+      ),
+      1e-7
     );
   try {
     return body();
@@ -478,6 +486,15 @@ function withFuseAllLeavingPieces<T>(body: () => T): T {
     delete contactRepairFaults.fuseAll;
   }
 }
+
+/** A 20 mm cube standing on a 40 × 40 × 10 slab, both offset by `by`. */
+function boxOnBox(kernel: RemusKernel, by = 0): number[] {
+  return [
+    lifted(kernel, kernel.makeBox(40, 40, 10), by, by, by),
+    lifted(kernel, kernel.makeBox(20, 20, 20), 10 + by, 10 + by, 10 + by)
+  ];
+}
+const BOX_ON_BOX_VOLUME = 40 * 40 * 10 + 20 * 20 * 20;
 
 /** Planar face areas of `solid`, ascending. */
 function planeAreas(kernel: RemusKernel, solid: number): number[] {
@@ -572,11 +589,11 @@ describe('certifying each contact group on its own', () => {
 
   it('accepts no retry that drops material, however few pieces it has', () => {
     const kernel = new RemusKernel();
-    const operands = hubOnFlange(kernel, 0);
+    const operands = boxOnBox(kernel);
     const flange = operands[0]!;
-    // A pairwise fuse that "merges" by returning the flange alone: one
-    // piece, no wall — and no hub. Before 06483e5: accepted, 50265.48 mm³
-    // shipped for an 87964.59 mm³ union.
+    // A pairwise fuse that "merges" by returning the slab alone: one piece,
+    // no wall — and no cube. Before 06483e5 (on a hub and flange):
+    // accepted, 50265.48 mm³ shipped for an 87964.59 mm³ union.
     withFuseAllLeavingPieces(() =>
       withRepairFuse(
         (k) => k.copySolid(flange),
@@ -591,13 +608,14 @@ describe('certifying each contact group on its own', () => {
 
   it('accepts no retry that drops a small feature off a large body far away', () => {
     const kernel = new RemusKernel();
-    // A 2 m flange at (1e7, 1e7, 1e7) with a 0.5 mm r20 boss on top. Before
-    // 1f6c3fc: coordinate-scaled tolerances passed a retry returning the
-    // flange alone, and 628.32 mm³ of boss was lost.
-    const flange = far(kernel, kernel.makeCylinder(1000, 1000), 1e7);
+    // A 2 m block at (1e7, 1e7, 1e7) with a 0.5 mm 40 × 40 boss on top.
+    // Before 1f6c3fc (on an r1000 flange with an r20 boss): coordinate-scaled
+    // tolerances passed a retry returning the flange alone, and 628.32 mm³
+    // of boss was lost.
+    const flange = far(kernel, kernel.makeBox(2000, 2000, 1000), 1e7);
     const boss = far(
       kernel,
-      lifted(kernel, kernel.makeCylinder(20, 0.5), 0, 1000),
+      lifted(kernel, kernel.makeBox(40, 40, 0.5), 980, 1000, 980),
       1e7
     );
     withFuseAllLeavingPieces(() =>
@@ -644,11 +662,28 @@ describe('certifying each contact group on its own', () => {
       6
     );
     // A kernel that left them in pieces could not be repaired past the cap,
-    // and the gate fails closed.
+    // and the gate fails closed. The stand-in needs straight edges, so the
+    // same layout is built from a slab and square pins.
+    const boxes = [
+      lifted(kernel, kernel.makeBox(80, 80, FLANGE_H), -40, 0, -40)
+    ];
+    for (let index = 0; index < 12; index += 1) {
+      const angle = (index * Math.PI) / 6;
+      const side = 2 * (index === 11 ? last : 1);
+      boxes.push(
+        lifted(
+          kernel,
+          kernel.makeBox(side, side, 3),
+          30 * Math.cos(angle) - side / 2,
+          FLANGE_H,
+          30 * Math.sin(angle) - side / 2
+        )
+      );
+    }
     let refusal: unknown;
     withFuseAllLeavingPieces(() => {
       try {
-        fuseAllMergingFaceContacts(kernel, operands);
+        fuseAllMergingFaceContacts(kernel, boxes);
       } catch (error) {
         refusal = error;
       }
