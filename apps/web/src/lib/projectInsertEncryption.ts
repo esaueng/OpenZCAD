@@ -30,22 +30,25 @@ export const INSERT_INTO_PLAINTEXT_REFUSED =
 /**
  * Null when the insert may go ahead, or why it may not.
  *
- * - The source carries no requirement here, or the destination is held
- *   as encrypted: go ahead.
+ * - The source carries no requirement here: go ahead.
  * - The destination is an account project that is not encrypted: refused.
- * - The destination is on this device only: the requirement is recorded
- *   for it durably first (so a later adoption is encrypted only), or this
- *   throws and nothing is inserted.
+ * - Otherwise the requirement is carried to the destination durably first
+ *   (`carryEncryptionRequirement`), or this throws and nothing is
+ *   inserted: an encrypted account project's pin must be saved here, not
+ *   only held in this tab (another tab may have reset it, which a reload
+ *   would follow), and a device-only project records the requirement, so
+ *   a later adoption is encrypted only.
  */
 export function insertEncryptionRefusal(
   sourceProjectId: string,
   destination: ProjectInsertDestination
 ): string | null {
   if (!encryptionRequired(sourceProjectId)) return null;
-  if (isEncryptedProject(destination.projectId)) return null;
-  if (destination.onAccount) return INSERT_INTO_PLAINTEXT_REFUSED;
+  if (destination.onAccount && !isEncryptedProject(destination.projectId)) {
+    return INSERT_INTO_PLAINTEXT_REFUSED;
+  }
   carryEncryptionRequirement(sourceProjectId, destination.projectId, {
-    account: false
+    account: destination.onAccount
   });
   return null;
 }

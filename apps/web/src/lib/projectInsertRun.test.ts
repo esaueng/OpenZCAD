@@ -381,6 +381,48 @@ describe('runProjectInsert, a source pinned in another tab mid-insert', () => {
   });
 });
 
+// PR #1418 review: a destination another tab reset is still held as
+// encrypted in this tab, but its pin is gone after a reload, so an insert
+// may not rest on it.
+describe('runProjectInsert, the encrypted destination reset in another tab', () => {
+  function encryptedSourceAndDestination() {
+    const source = `project_source_${crypto.randomUUID()}`;
+    expect(rememberEncryptedProject(source)).toBe(true);
+    prepare.mockResolvedValueOnce({ ...prepared, sourceProjectId: source });
+    const h = harness({ onAccount: true });
+    expect(rememberEncryptedProject(h.document.projectId)).toBe(true);
+    return h;
+  }
+
+  it('adds nothing when the reset came before the insert', async () => {
+    const h = encryptedSourceAndDestination();
+    expect(
+      localStorageEncryptedProjectPins().resetProject(h.document.projectId)
+    ).toBe(true);
+    // Still held as encrypted here, as a stale tab holds it.
+    expect(isEncryptedProject(h.document.projectId)).toBe(true);
+    await runProjectInsert(h.deps);
+    expect(h.archive).not.toHaveBeenCalled();
+    expect(h.run).not.toHaveBeenCalled();
+    expect(h.finished.at(-1)?.tone).toBe('error');
+  });
+
+  it('commits nothing when the reset lands during the upload', async () => {
+    const h = encryptedSourceAndDestination();
+    const committed = { value: false };
+    h.archive.mockImplementation(async () => {
+      expect(
+        localStorageEncryptedProjectPins().resetProject(h.document.projectId)
+      ).toBe(true);
+      return 'artifact_gearbox';
+    });
+    h.run.mockImplementation(throughCommit(committed));
+    await runProjectInsert(h.deps);
+    expect(committed.value).toBe(false);
+    expect(h.finished.at(-1)?.tone).toBe('error');
+  });
+});
+
 // PR #1418 review: an adoption keeps the editor's manager but moves its
 // document to the account's id, so a manager fence alone let an insert
 // commit under an id its requirement was never recorded for.
