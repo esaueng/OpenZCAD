@@ -117,6 +117,7 @@
     "test/exact-dimension-proof-demand.test.ts",
     "test/exact-display-projection.test.ts",
     "test/exact-kernel-adapter.test.ts",
+    "test/fillet-rearm-adjacent.test.ts",
     "test/filleted-union-face-offset.test.ts",
     "test/flange-bolt-hole-resize.test.ts",
     "test/fleet-checkout-fixtures.test.ts",
