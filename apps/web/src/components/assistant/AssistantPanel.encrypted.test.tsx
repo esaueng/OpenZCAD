@@ -4,8 +4,13 @@ import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import {
   assistantDisabledReason,
-  ENCRYPTED_PROJECT_ASSISTANT_NOTICE
+  ENCRYPTED_PROJECT_ASSISTANT_NOTICE,
+  UNSETTLED_ENCRYPTED_PROJECT_ASSISTANT_NOTICE
 } from '../../lib/assistant/encryptedProject';
+import {
+  ENCRYPTED_PROJECT_PIN_FAILED_KEY,
+  localStorageEncryptedProjectPins
+} from '../../lib/e2ee/encryptedProjectPins';
 import { sendAssistantPromptFiles } from '../../lib/assistant/promptKeys';
 import { AssistantPanel } from './AssistantPanel';
 
@@ -135,5 +140,106 @@ describe('the assistant on an encrypted project', () => {
       ]);
     });
     expect(taken).toBe(true);
+  });
+});
+
+/**
+ * The lift is only for a project pinned and settled as encrypted here:
+ * App mounts no consent gate, and shows why, for every other state that
+ * holds a project as encrypted (`assistantHeldUnsettled`).
+ */
+describe('the assistant on a project held as encrypted but not settled', () => {
+  const otherTab = () => localStorageEncryptedProjectPins(window.localStorage);
+
+  it.each([
+    [
+      'its switch to encryption is unresolved',
+      (projectId: string) => {
+        otherTab().pin(projectId);
+        otherTab().markCutoverUnresolved(projectId);
+      }
+    ],
+    [
+      'another tab reset it',
+      (projectId: string, seen: (id: string) => void) => {
+        otherTab().pin(projectId);
+        seen(projectId);
+        otherTab().resetProject(projectId);
+      }
+    ],
+    [
+      'it only carries an encryption requirement',
+      (projectId: string) => {
+        otherTab().requireEncryption(projectId);
+      }
+    ],
+    [
+      'the pins are degraded',
+      (projectId: string) => {
+        otherTab().pin(projectId);
+        window.localStorage.setItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY, '1');
+      }
+    ]
+  ])('stays off when %s, and sends nothing', async (_state, hold) => {
+    // A fresh page: its pins are read from storage, as after a reload.
+    vi.resetModules();
+    const api = await import('../../lib/api');
+    const projectId = `proj_unsettled_${Math.random().toString(36).slice(2)}`;
+    hold(projectId, (id) => api.encryptedProjectSettled(id));
+    expect(api.assistantHeldUnsettled(projectId)).toBe(true);
+
+    const onDraft = vi.fn();
+    const { rerender } = render(
+      <AssistantPanel
+        document={doc}
+        selection={{ bodyIds: [], featureIds: [], topologies: [] }}
+        onApply={vi.fn().mockResolvedValue(true)}
+        onPreview={vi.fn().mockResolvedValue({ ok: true })}
+        collapsed={false}
+        onCollapsedChange={vi.fn()}
+        confirmDestructive
+        effectiveAssistant={configured}
+        signedIn
+        onDraft={onDraft}
+        disabledReason={UNSETTLED_ENCRYPTED_PROJECT_ASSISTANT_NOTICE}
+      />
+    );
+    await act(async () => {});
+    expect(
+      screen.getByText(UNSETTLED_ENCRYPTED_PROJECT_ASSISTANT_NOTICE)
+    ).toBeTruthy();
+    rerender(
+      <AssistantPanel
+        document={doc}
+        selection={{ bodyIds: [], featureIds: [], topologies: [] }}
+        onApply={vi.fn().mockResolvedValue(true)}
+        onPreview={vi.fn().mockResolvedValue({ ok: true })}
+        collapsed={false}
+        onCollapsedChange={vi.fn()}
+        confirmDestructive
+        effectiveAssistant={configured}
+        signedIn
+        onDraft={onDraft}
+        request={{ id: 1, text: 'Make the wall 3 mm' }}
+        disabledReason={UNSETTLED_ENCRYPTED_PROJECT_ASSISTANT_NOTICE}
+      />
+    );
+    await act(async () => {});
+    expect(onDraft).toHaveBeenCalledWith('Make the wall 3 mm');
+    expect(fetch).not.toHaveBeenCalledWith(
+      '/api/assistant/proposals',
+      expect.anything()
+    );
+  });
+
+  it('lifts for a pinned, settled project, which then asks for consent', async () => {
+    vi.resetModules();
+    const api = await import('../../lib/api');
+    const projectId = `proj_settled_${Math.random().toString(36).slice(2)}`;
+    otherTab().pin(projectId);
+    expect(api.encryptedProjectSettled(projectId)).toBe(true);
+    expect(api.assistantHeldUnsettled(projectId)).toBe(false);
+    // Plaintext projects are not held at all.
+    expect(api.assistantHeldUnsettled('proj_plain_lift')).toBe(false);
   });
 });

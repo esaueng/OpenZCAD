@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import { createProjectDocument } from '@openzcad/document-core';
 import {
+  ASSISTANT_CONSENT_COPY_VERSION,
   PROJECT_STORAGE_FORMAT_E2EE_V1,
   toProjectId,
   toUserId,
@@ -31,10 +32,17 @@ import { uploadCloudThumbnail } from './cloudThumbnail';
 import { desktopFetch } from './desktopBridge';
 import { uploadTransport } from './e2ee/encryptedContentBlobs';
 import { localStorageEncryptedProjectPins } from './e2ee/encryptedProjectPins';
+import {
+  ASSISTANT_GRANT_PREFIX,
+  beginAssistantAllow,
+  completeAssistantAllow,
+  stopAssistantGrant
+} from './e2ee/assistantConsentGrants';
 import { createEncryptedDocumentsApi } from './e2ee/encryptedDocumentsApi';
 import { projectMeasurementCloudApi } from './measurementCloudSync';
 import {
   assistantProjectRequest,
+  type AssistantSendConsent,
   migrationRun,
   projectRequest,
   sendProjectFrame,
@@ -638,59 +646,151 @@ describe('an assistant request', () => {
     expect(nativeSends()).toEqual([]);
   });
 
-  // Owner decision (2026-11-14): no consent exception in this PR. A
-  // request for a project this device holds as encrypted is refused before
-  // the send, whatever consent the panel verified (`consentedProjectId`).
+  /** An Allow clicked on this device, for the record at `sequence`. */
+  function grantHere(projectId: string, sequence = 1): AssistantSendConsent {
+    const ticket = beginAssistantAllow('user_ctx', projectId);
+    const grant = ticket
+      ? completeAssistantAllow(ticket, {
+          sequence,
+          route: 'v2|deployment|openrouter|m|d',
+          copyVersion: ASSISTANT_CONSENT_COPY_VERSION
+        })
+      : null;
+    if (!grant) throw new Error('grant not made');
+    return {
+      userId: 'user_ctx',
+      projectId,
+      sequence,
+      route: grant.route,
+      copyVersion: grant.copyVersion,
+      grant: grant.id
+    };
+  }
+
+  const assistantSend = (projectId: string, consent?: AssistantSendConsent) =>
+    desktopFetch(
+      '/api/assistant/proposals',
+      assistantProjectRequest(
+        projectId,
+        { method: 'POST', body: '{}' },
+        consent
+      )
+    );
+
+  // A project held as encrypted but not settled here stays refused at the
+  // send, whatever consent this device granted.
   it.each([
-    ['pinned', (projectId: string) => otherTab().pin(projectId)],
     [
       'unresolved',
-      (projectId: string) => otherTab().markCutoverUnresolved(projectId)
+      (projectId: string) => {
+        otherTab().pin(projectId);
+        return otherTab().markCutoverUnresolved(projectId);
+      }
     ],
     [
       'required to stay encrypted',
       (projectId: string) => otherTab().requireEncryption(projectId)
     ]
   ])(
-    'refuses a %s project even with its consent verified',
+    'refuses a %s project even with its consent granted here',
     async (state, hold) => {
       const projectId = `proj_assistant_held_${state.replace(/\W/g, '_')}`;
       expect(hold(projectId)).toBe(true);
+      const consent = grantHere(projectId);
       desktop();
       await expect(
         streamAssistantReply({
           prompt: 'Hi',
           digest: assistantDigest(projectId),
-          consentedProjectId: projectId
+          consent
         })
       ).rejects.toMatchObject({ code: 'AI_E2EE_PROJECT' });
       // The send gate refuses the request itself too, whatever sent it.
-      await expect(
-        desktopFetch(
-          '/api/assistant/proposals',
-          assistantProjectRequest(projectId, { method: 'POST', body: '{}' })
-        )
-      ).rejects.toBeInstanceOf(ApiError);
+      await expect(assistantSend(projectId, consent)).rejects.toBeInstanceOf(
+        ApiError
+      );
       expect(nativeSends()).toEqual([]);
     }
   );
 
-  it('refuses a pinned project in the browser too, consent or not', async () => {
+  it('refuses a pinned project without this device’s grant, in the browser too', async () => {
     const projectId = 'proj_assistant_held_browser';
     otherTab().pin(projectId);
+    await expect(
+      streamAssistantReply({ prompt: 'Hi', digest: assistantDigest(projectId) })
+    ).rejects.toMatchObject({ code: 'AI_E2EE_PROJECT' });
+    await expect(assistantSend(projectId)).rejects.toMatchObject({
+      code: E2EE_PLAINTEXT_REFUSED_CODE
+    });
+    // A consent naming a grant this device never made.
+    await expect(
+      assistantSend(projectId, {
+        ...grantHere('proj_assistant_other_grant'),
+        projectId
+      })
+    ).rejects.toMatchObject({ code: E2EE_PLAINTEXT_REFUSED_CODE });
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it('sends a pinned, settled project with this device’s grant', async () => {
+    const projectId = 'proj_assistant_settled';
+    otherTab().pin(projectId);
+    const consent = grantHere(projectId);
+    await streamAssistantReply({
+      prompt: 'Hi',
+      digest: assistantDigest(projectId),
+      consent
+    }).catch(() => undefined);
+    expect(sentPaths()).toContain('POST /api/assistant/proposals');
+  });
+
+  it('refuses at the send a grant stopped while the desktop app readied its credential', async () => {
+    const projectId = 'proj_assistant_stop_native';
+    otherTab().pin(projectId);
+    const consent = grantHere(projectId);
+    desktop((command) => {
+      // Another tab's Stop: it reaches this page only through storage.
+      if (command === 'desktop_prepare_access') {
+        window.localStorage.removeItem(
+          `${ASSISTANT_GRANT_PREFIX}user_ctx:${projectId}`
+        );
+      }
+    });
     await expect(
       streamAssistantReply({
         prompt: 'Hi',
         digest: assistantDigest(projectId),
-        consentedProjectId: projectId
+        consent
       })
     ).rejects.toMatchObject({ code: 'AI_E2EE_PROJECT' });
+    expect(nativeSends()).toEqual([]);
+  });
+
+  it('refuses at the send a grant stopped in this tab, and one whose switch became unresolved', async () => {
+    const stopped = 'proj_assistant_stop_here';
+    otherTab().pin(stopped);
+    const consent = grantHere(stopped);
+    stopAssistantGrant('user_ctx', stopped);
+    await expect(assistantSend(stopped, consent)).rejects.toMatchObject({
+      code: E2EE_PLAINTEXT_REFUSED_CODE
+    });
+
+    const unresolved = 'proj_assistant_unresolved_later';
+    otherTab().pin(unresolved);
+    const granted = grantHere(unresolved);
+    desktop((command) => {
+      if (command === 'desktop_prepare_access') {
+        otherTab().markCutoverUnresolved(unresolved);
+      }
+    });
     await expect(
-      desktopFetch(
-        '/api/assistant/proposals',
-        assistantProjectRequest(projectId, { method: 'POST', body: '{}' })
-      )
-    ).rejects.toMatchObject({ code: E2EE_PLAINTEXT_REFUSED_CODE });
+      streamAssistantReply({
+        prompt: 'Hi',
+        digest: assistantDigest(unresolved),
+        consent: granted
+      })
+    ).rejects.toMatchObject({ code: 'AI_E2EE_PROJECT' });
+    expect(nativeSends()).toEqual([]);
     expect(network).not.toHaveBeenCalled();
   });
 

@@ -94,6 +94,7 @@ import {
   ASSISTANT_CONSENT_LOCKED_NOTICE,
   type AssistantConsentGate
 } from '../../lib/assistant/consentGate';
+import type { AssistantSendConsent } from '../../lib/projectWriteGate';
 import { labelWithKey, useKeymap } from '../../lib/keymap';
 import { platformShortcutLabel } from '../../lib/platformShortcut';
 import { QuestionCard } from './QuestionCard';
@@ -596,21 +597,26 @@ export function AssistantPanel({
 
   /**
    * Right before an encrypted project's request leaves the device: re-read
-   * and verify this account's consent, ask when there is none for this copy
-   * and provider, and answer why nothing may be sent, or null to send.
+   * and verify this account's consent, ask when this device has not granted
+   * it for this copy and provider, and answer why nothing may be sent, or
+   * the consent to send under (none for a plaintext project).
    */
   const ensureConsent = useCallback(
-    async (signal: AbortSignal): Promise<string | null> => {
+    async (
+      signal: AbortSignal
+    ): Promise<
+      { refusal: string } | { consent: AssistantSendConsent | undefined }
+    > => {
       const gate = consentRef.current;
-      if (!gate) return null;
+      if (!gate) return { consent: undefined };
       const current = consentStatusRef.current;
-      if (!current) return ASSISTANT_CONSENT_NOT_GIVEN;
+      if (!current) return { refusal: ASSISTANT_CONSENT_NOT_GIVEN };
       const route = assistantConsentRoute(current);
       const decision = await gate.confirm(route);
-      if (signal.aborted) return ASSISTANT_CONSENT_NOT_GIVEN;
-      if (decision.kind === 'permitted') return null;
+      if (signal.aborted) return { refusal: ASSISTANT_CONSENT_NOT_GIVEN };
+      if (decision.kind === 'permitted') return { consent: decision.consent };
       if (decision.kind === 'blocked') {
-        return decision.message;
+        return { refusal: decision.message };
       }
       const allowed = await new Promise<boolean>((resolve) => {
         const settle = (value: boolean) => {
@@ -626,7 +632,20 @@ export function AssistantPanel({
           resolve: settle
         });
       });
-      return allowed && !signal.aborted ? null : ASSISTANT_CONSENT_NOT_GIVEN;
+      if (!allowed || signal.aborted) {
+        return { refusal: ASSISTANT_CONSENT_NOT_GIVEN };
+      }
+      // Allowed just now: read and verify it once more, so the request
+      // carries this device's grant of exactly the stored record.
+      const granted = await gate.confirm(route);
+      if (signal.aborted) return { refusal: ASSISTANT_CONSENT_NOT_GIVEN };
+      if (granted.kind === 'permitted') return { consent: granted.consent };
+      return {
+        refusal:
+          granted.kind === 'blocked'
+            ? granted.message
+            : ASSISTANT_CONSENT_NOT_GIVEN
+      };
     },
     []
   );
@@ -942,11 +961,11 @@ export function AssistantPanel({
         }
         // An encrypted project sends only with this account's verified
         // consent for it (ADR-024 Phase 6); a plaintext one has no gate.
-        const refusal = await ensureConsent(controller.signal);
+        const consented = await ensureConsent(controller.signal);
         if (controller.signal.aborted) {
           throw new DOMException('Stopped.', 'AbortError');
         }
-        if (refusal !== null) throw new Error(refusal);
+        if ('refusal' in consented) throw new Error(consented.refusal);
         if (consentRef.current) consentedRequestRef.current = controller;
         // One immutable snapshot per turn: if the selection or document changes
         // while the provider is thinking, this turn still means what it meant
@@ -968,10 +987,9 @@ export function AssistantPanel({
               drawingDigest?.() ?? null
             ),
             history: historyForRequest(conversation),
-            // Verified just above: this project's consent lets it through.
-            ...(consentRef.current
-              ? { consentedProjectId: doc.projectId }
-              : {}),
+            // Verified just above: this device's grant of this project's
+            // consent, checked again at the send.
+            ...(consented.consent ? { consent: consented.consent } : {}),
             attachments: attachments.map((attachment) => ({
               id: attachment.id,
               mediaType: attachment.mediaType,

@@ -25,8 +25,8 @@
  * which other projects that content came from (its `sources`: plaintext
  * is refused while any of them is held as encrypted, as for the project
  * itself),
- * whether it is an assistant request about that project
- * (`assistantProjectRequest`), and whether it is one of this device's own
+ * whether it is an assistant request about that project and the consent
+ * it was sent under (`assistantProjectRequest`), and whether it is one of this device's own
  * migration requests, bound to the run's project and routes and to the run
  * still working on that project when the request leaves (`migrationRun`).
  * It is attached to the request itself, never kept in module state that
@@ -88,8 +88,26 @@ interface MigrationContext {
   readonly live: () => boolean;
 }
 
+/**
+ * The assistant consent an encrypted project's request was sent under:
+ * the account's verified record (`sequence`, `route`, `copyVersion`) and
+ * this device's own grant of it (`grant`, from an Allow clicked here). The
+ * send gate compares it with this device's grants at the send, so a Stop
+ * made since, in any tab, refuses it (`e2ee/assistantConsentGrants.ts`).
+ */
+export interface AssistantSendConsent {
+  readonly userId: string;
+  readonly projectId: string;
+  readonly sequence: number;
+  readonly route: string;
+  readonly copyVersion: number;
+  readonly grant: string;
+}
+
 interface RequestContext {
   readonly project?: ProjectRequestContext;
+  /** An assistant request's consent (`assistantProjectRequest`). */
+  readonly assistantConsent?: AssistantSendConsent;
   readonly migration?: MigrationContext;
   /** A create whose body carries no project's content (`contentFreeCreate`). */
   readonly contentFree?: true;
@@ -117,9 +135,12 @@ export interface ResolvedProjectRequest {
   readonly migrationLive?: () => boolean;
   /**
    * An assistant request about the project: refused for any project this
-   * device holds as encrypted, whatever consent exists (PR #1418).
+   * device holds as encrypted unless that project is settled as encrypted
+   * here and the consent it carries is still this device's grant.
    */
   readonly assistant: boolean;
+  /** The consent an assistant request was sent under, if any. */
+  readonly assistantConsent?: AssistantSendConsent;
   /** The other projects its content came from, as declared. */
   readonly sources?: readonly string[];
 }
@@ -133,6 +154,7 @@ export type ProjectWriteCheck = (request: {
   readonly payload: ProjectPayload;
   readonly migration: MigrationKind | null;
   readonly assistant: boolean;
+  readonly assistantConsent?: AssistantSendConsent;
 }) => void;
 
 let check: ProjectWriteCheck | null = null;
@@ -187,16 +209,18 @@ export function projectRequest(
  * `init` (copied) declared as an assistant request about `projectId`,
  * whose model digest, conversation and attachments are that project's
  * content in plaintext. Refused at the send for any project this device
- * holds as encrypted (pinned, switch unresolved, or carrying an encryption
- * requirement), with no consent exception: the assistant is off for
- * end-to-end encrypted projects on this device for now.
+ * holds as encrypted (pinned, switch unresolved, reset in another tab, or
+ * carrying an encryption requirement), except one pinned and settled as
+ * encrypted here whose `consent` is still this device's grant for it.
  */
 export function assistantProjectRequest(
   projectId: string,
-  init: RequestInit = {}
+  init: RequestInit = {},
+  consent?: AssistantSendConsent
 ): ProjectRequestInit {
   return withContext(init, {
-    project: { projectId, payload: 'plaintext' }
+    project: { projectId, payload: 'plaintext' },
+    ...(consent ? { assistantConsent: consent } : {})
   });
 }
 
@@ -536,6 +560,9 @@ export function resolveProjectRequest(
     migration,
     ...(migrationLive ? { migrationLive } : {}),
     assistant: route.assistant,
+    ...(route.assistant && context?.assistantConsent
+      ? { assistantConsent: context.assistantConsent }
+      : {}),
     ...(declared?.sources?.length ? { sources: declared.sources } : {})
   };
 }
@@ -574,7 +601,10 @@ export function checkProjectRequest(request: ResolvedProjectRequest): void {
     projectId: request.projectId,
     payload: request.payload,
     migration,
-    assistant: request.assistant
+    assistant: request.assistant,
+    ...(request.assistantConsent
+      ? { assistantConsent: request.assistantConsent }
+      : {})
   });
 }
 

@@ -10,15 +10,21 @@ import {
 } from '@openzcad/ai-contracts';
 import {
   ApiError,
+  assistantSendBlock,
   E2EE_CUTOVER_UNRESOLVED_CODE,
   E2EE_PLAINTEXT_REFUSED_CODE,
-  encryptionRequired,
-  isEncryptedProject
+  type AssistantSendBlock
 } from './api';
 import { loadLocalAppSettings } from './appSettings';
-import { ENCRYPTED_PROJECT_ASSISTANT_NOTICE } from './assistant/encryptedProject';
+import {
+  ENCRYPTED_PROJECT_ASSISTANT_NOT_ALLOWED,
+  UNSETTLED_ENCRYPTED_PROJECT_ASSISTANT_NOTICE
+} from './assistant/encryptedProject';
 import { desktopFetch } from './desktopBridge';
-import { assistantProjectRequest } from './projectWriteGate';
+import {
+  assistantProjectRequest,
+  type AssistantSendConsent
+} from './projectWriteGate';
 
 interface AssistantStreamOptions {
   signal?: AbortSignal;
@@ -83,11 +89,13 @@ export interface AssistantTurnRequest {
   attachments?: readonly AssistantAttachment[];
   /**
    * Set by the panel once this account's consent for the project verified
-   * right before sending (ADR-024 Phase 6). Never sent; without it an
-   * encrypted project's request is refused here. It lifts nothing for a
-   * project this device holds as encrypted (PR #1418).
+   * right before sending (ADR-024 Phase 6), with this device's grant of it.
+   * Never sent; it travels with the request, and the send gate refuses it
+   * unless the project is settled as encrypted here and the grant is still
+   * this device's (`assistantSendBlock`). Without it, a project this device
+   * holds as encrypted is refused.
    */
-  consentedProjectId?: string;
+  consent?: AssistantSendConsent;
 }
 
 export interface AssistantStatus {
@@ -340,25 +348,26 @@ export async function streamAssistantReply(
   }
 }
 
+function blockMessage(block: AssistantSendBlock | null): string {
+  return block === 'consent'
+    ? ENCRYPTED_PROJECT_ASSISTANT_NOT_ALLOWED
+    : UNSETTLED_ENCRYPTED_PROJECT_ASSISTANT_NOTICE;
+}
+
 async function streamAssistantReplyAttempt(
   request: AssistantTurnRequest,
   options: AssistantStreamOptions,
   retryAttempt: 0 | 1
 ): Promise<AssistantReply> {
-  // ADR-024 D7 and Phase 6: nothing of an encrypted project reaches the
-  // assistant, whichever entry point asked, unless its consent verified.
-  // PR #1418: nothing of a project this device holds as encrypted (pinned,
-  // switch unresolved, or carrying an encryption requirement) reaches it at
-  // all, consent or not; the send gate refuses it again at the send.
+  // ADR-024 D7 and Phase 6: nothing of a project this device holds as
+  // encrypted reaches the assistant, whichever entry point asked, unless
+  // it is pinned and settled as encrypted here and the request carries
+  // this device's current grant of its verified consent. The send gate
+  // asks the same again at the send, after every await.
   const projectId = request.digest.projectId;
-  if (
-    encryptionRequired(projectId) ||
-    (isEncryptedProject(projectId) && request.consentedProjectId !== projectId)
-  ) {
-    throw new AssistantStreamError(
-      'AI_E2EE_PROJECT',
-      ENCRYPTED_PROJECT_ASSISTANT_NOTICE
-    );
+  const block = assistantSendBlock(projectId, request.consent);
+  if (block !== null) {
+    throw new AssistantStreamError('AI_E2EE_PROJECT', blockMessage(block));
   }
   let response: Response;
   try {
@@ -368,23 +377,27 @@ async function streamAssistantReplyAttempt(
     // pinned meanwhile.
     response = await desktopFetch(
       '/api/assistant/proposals',
-      assistantProjectRequest(projectId, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          prompt: request.prompt,
-          digest: request.digest,
-          history: request.history ?? [],
-          attachments: request.attachments ?? [],
-          retryAttempt,
-          operations: CAD_PATCH_OPERATION_KINDS,
-          // This device's own: an account whose library is encrypted keeps
-          // them sealed, so the Worker no longer reads them from its settings.
-          customInstructions:
-            loadLocalAppSettings().assistant.customInstructions
-        }),
-        signal: options.signal
-      })
+      assistantProjectRequest(
+        projectId,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            prompt: request.prompt,
+            digest: request.digest,
+            history: request.history ?? [],
+            attachments: request.attachments ?? [],
+            retryAttempt,
+            operations: CAD_PATCH_OPERATION_KINDS,
+            // This device's own: an account whose library is encrypted keeps
+            // them sealed, so the Worker no longer reads them from its settings.
+            customInstructions:
+              loadLocalAppSettings().assistant.customInstructions
+          }),
+          signal: options.signal
+        },
+        request.consent
+      )
     );
   } catch (error) {
     if (
@@ -392,9 +405,10 @@ async function streamAssistantReplyAttempt(
       (error.code === E2EE_PLAINTEXT_REFUSED_CODE ||
         error.code === E2EE_CUTOVER_UNRESOLVED_CODE)
     ) {
+      // Refused at the send: say why, as the gate sees it now.
       throw new AssistantStreamError(
         'AI_E2EE_PROJECT',
-        ENCRYPTED_PROJECT_ASSISTANT_NOTICE
+        blockMessage(assistantSendBlock(projectId, request.consent))
       );
     }
     throw error;

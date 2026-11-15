@@ -336,6 +336,54 @@ describe('assistant consent on encrypted projects (ADR-024 6-1)', () => {
     ).toBe(409);
   });
 
+  // The browser's Stop runs while an Allow may still be in flight, both
+  // numbered from the same floor: whichever the account stores first, the
+  // other gets the stale answer, and the Stop is retried past an Allow
+  // stored meanwhile (`consentGate.ts`). The account then ends revoked.
+  it('keeps a Stop that races an Allow in flight: the late Allow is stale, a late Stop goes past it', async () => {
+    const { call, projectId } = await seed(FLAGS_ON);
+    const upstream = stubProvider();
+    const put = async (body: unknown) =>
+      call('PUT', `/api/e2ee/assistant-consents/${projectId}`, { body });
+    expect((await put(await consentBody(projectId, 1))).status).toBe(200);
+
+    // The Stop landed first: the Allow numbered from the same floor is
+    // refused as stale and names the Stop it lost to.
+    expect(
+      (await put(await consentBody(projectId, 2, { allowed: false }))).status
+    ).toBe(200);
+    const lateAllow = await put(await consentBody(projectId, 2));
+    expect(lateAllow.status).toBe(409);
+    expect(await lateAllow.json()).toMatchObject({
+      code: 'E2EE_ASSISTANT_CONSENT_STALE',
+      consent: { allowed: false, sequence: 2 }
+    });
+
+    // The Allow landed first: the Stop's first try is stale, and its retry
+    // past the stored Allow revokes it.
+    expect((await put(await consentBody(projectId, 3))).status).toBe(200);
+    const firstStop = await put(
+      await consentBody(projectId, 3, { allowed: false })
+    );
+    expect(firstStop.status).toBe(409);
+    expect(await codeOf(firstStop)).toBe('E2EE_ASSISTANT_CONSENT_STALE');
+    const retried = await put(
+      await consentBody(projectId, 4, { allowed: false })
+    );
+    expect(retried.status).toBe(200);
+    expect(await retried.json()).toMatchObject({
+      consent: { allowed: false, sequence: 4 }
+    });
+    const after = await call('POST', '/api/assistant/proposals', {
+      body: proposal(projectId)
+    });
+    expect(after.status).toBe(409);
+    expect(await codeOf(after)).toBe(
+      ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE
+    );
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
   it('honours only the caller’s own consent, for its project, route and copy', async () => {
     const { call, projectId, plaintextId } = await seed(FLAGS_ON);
     const upstream = stubProvider();

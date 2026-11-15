@@ -446,11 +446,11 @@ import {
   accountSettingsAdopted,
   ApiError,
   api,
+  assistantHeldUnsettled,
   carryEncryptionRequirement,
   encryptedPinProblem,
   encryptedPinsResetElsewhere,
   encryptedProjectResetElsewhere,
-  encryptionRequired,
   encryptsAccountLibrary,
   encryptsNewProjects,
   isEncryptedPinProblemError,
@@ -469,7 +469,7 @@ import { saveShareLinkCopy } from './lib/shareLinkCopy';
 import { createCloudConfigurationReads } from './lib/cloudConfigurationReads';
 import {
   assistantDisabledReason,
-  ENCRYPTED_PROJECT_ASSISTANT_NOTICE
+  UNSETTLED_ENCRYPTED_PROJECT_ASSISTANT_NOTICE
 } from './lib/assistant/encryptedProject';
 import {
   refreshEncryptedMemberRole,
@@ -9216,13 +9216,16 @@ export function App() {
         }
       : projects.find((project) => project.projectId === doc.projectId)
     : undefined;
-  // PR #1418: the assistant is off for every project this device holds as
-  // encrypted (pinned, switch unresolved, or carrying an encryption
-  // requirement), whatever consent the account holds. No consent gate is
-  // mounted for it, so nothing asks; the send gate refuses it as well.
-  // Re-read on every render, which `useEncryptedPins` triggers on change.
+  // PR #1418: the assistant is off for a project this device holds as
+  // encrypted unless it is pinned and settled as encrypted here: not while
+  // its switch is unresolved, another tab reset it, the pins are degraded,
+  // or it only carries an encryption requirement. No consent gate is
+  // mounted for such a project, so nothing asks; the send gate refuses it
+  // as well. A settled one gets the gate, and sends only with this
+  // device's grant of its verified consent. Re-read on every render, which
+  // `useEncryptedPins` triggers on change.
   const assistantHeldEncrypted = doc
-    ? encryptionRequired(doc.projectId)
+    ? assistantHeldUnsettled(doc.projectId)
     : false;
   const assistantConsent = useAssistantConsentGate(
     session?.userId ?? null,
@@ -36168,7 +36171,7 @@ export function App() {
               onActivity={setAssistantActivity}
               disabledReason={
                 assistantHeldEncrypted
-                  ? ENCRYPTED_PROJECT_ASSISTANT_NOTICE
+                  ? UNSETTLED_ENCRYPTED_PROJECT_ASSISTANT_NOTICE
                   : assistantDisabledReason(assistantProject, assistantConsent)
               }
               consent={assistantHeldEncrypted ? null : assistantConsent}

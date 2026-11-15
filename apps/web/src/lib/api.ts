@@ -82,9 +82,11 @@ import {
   contentFreeCreate,
   installProjectWriteGate,
   projectRequest,
+  type AssistantSendConsent,
   type ProjectRequestContext,
   type ProjectWriteCheck
 } from './projectWriteGate';
+import { assistantGrantCurrent } from './e2ee/assistantConsentGrants';
 import {
   localStorageEncryptedProjectPins,
   type EncryptedProjectPinStore
@@ -629,6 +631,71 @@ export function plaintextRefusedError(
 }
 
 /**
+ * Whether the project is pinned and settled as encrypted on this device:
+ * pinned, with pins that can be read and saved, its switch to encryption
+ * seen to finish here, not reset in another tab or reset unconfirmed, and
+ * the account's latest listing not disagreeing. Only such a project may
+ * reach the assistant, and only with this device's grant
+ * (`assistantSendBlock`). Every other state that holds a project as
+ * encrypted (an unresolved cutover, a reset elsewhere, a degraded store, a
+ * requirement carried to a project the account does not hold encrypted)
+ * is not settled. Read from this device's pins only, never lifted by an
+ * answer from the account; synchronous.
+ */
+export function encryptedProjectSettled(
+  projectId: string | null | undefined
+): boolean {
+  if (!projectId) return false;
+  const pins = encryptedProjectPins();
+  // `has` holds every project while degraded: ask that first.
+  if (pins.degraded) return false;
+  if (pins.resetElsewhere(projectId) || pins.resetUnconfirmed(projectId)) {
+    return false;
+  }
+  if (pins.cutoverUnresolved(projectId)) return false;
+  if (formatMismatchIds.has(projectId)) return false;
+  if (!pins.has(projectId)) return false;
+  // Read again: a read above that failed degrades the store.
+  return !pins.degraded;
+}
+
+/**
+ * Whether the assistant stays off for the project with no consent asked:
+ * this device holds it as encrypted, but not as a settled encrypted
+ * project (`encryptedProjectSettled`). The panel shows why, and no consent
+ * gate is mounted for it.
+ */
+export function assistantHeldUnsettled(
+  projectId: string | null | undefined
+): boolean {
+  return encryptionRequired(projectId) && !encryptedProjectSettled(projectId);
+}
+
+/**
+ * Why an assistant request about the project may not leave now, or null:
+ * - `reset`: another tab reset it, so this tab must reload first;
+ * - `unsettled`: this device holds it as encrypted, but not as a settled
+ *   encrypted project (`encryptedProjectSettled`);
+ * - `consent`: a settled encrypted project, but the request carries no
+ *   consent for exactly this project that is still this device's grant
+ *   (`e2ee/assistantConsentGrants.ts`): never made here, or stopped since.
+ * A project this device does not hold as encrypted needs no consent.
+ * Synchronous: the send gate asks it immediately before the send.
+ */
+export type AssistantSendBlock = 'reset' | 'unsettled' | 'consent';
+
+export function assistantSendBlock(
+  projectId: string,
+  consent: AssistantSendConsent | undefined
+): AssistantSendBlock | null {
+  if (encryptedProjectPins().resetElsewhere(projectId)) return 'reset';
+  if (!encryptionRequired(projectId)) return null;
+  if (!encryptedProjectSettled(projectId)) return 'unsettled';
+  if (!consent || consent.projectId !== projectId) return 'consent';
+  return assistantGrantCurrent(consent) ? null : 'consent';
+}
+
+/**
  * The gate's check, run synchronously immediately before each request or
  * room frame is sent (`projectWriteGate.ts`): no write of a project this
  * tab may not write, and no plaintext of a project this device holds as
@@ -636,23 +703,23 @@ export function plaintextRefusedError(
  * This device's own decrypt run stages plaintext before its cutover.
  *
  * An assistant request is not a write of its project, but carries its
- * content in plaintext: refused for any project this device holds as
- * encrypted (pinned, switch to encryption not seen to finish here, or
- * carrying an encryption requirement), whatever consent exists, and in a
- * tab that must reload first. The assistant is off for end-to-end
- * encrypted projects on this device for now.
+ * content in plaintext: refused in a tab that must reload first, and for
+ * any project this device holds as encrypted unless it is pinned and
+ * settled as encrypted here and the request's consent is still this
+ * device's grant for it (`assistantSendBlock`).
  */
 const checkProjectSend: ProjectWriteCheck = ({
   projectId,
   payload,
   migration,
-  assistant
+  assistant,
+  assistantConsent
 }) => {
   if (assistant) {
-    const pins = encryptedProjectPins();
-    if (pins.resetElsewhere(projectId)) throw pinsResetElsewhere({ projectId });
-    if (!encryptionRequired(projectId)) return;
-    throw plaintextRefusedError({ projectId });
+    const block = assistantSendBlock(projectId, assistantConsent);
+    if (block === 'reset') throw pinsResetElsewhere({ projectId });
+    if (block !== null) throw plaintextRefusedError({ projectId });
+    return;
   }
   requireProjectWritable(projectId);
   if (

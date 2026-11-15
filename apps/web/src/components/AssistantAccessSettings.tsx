@@ -16,6 +16,7 @@ import {
   type AssistantConsentState,
   type ConsentPinStore
 } from '../lib/e2ee/assistantConsent';
+import { stopAssistantGrant } from '../lib/e2ee/assistantConsentGrants';
 import { Group, Notice, SettingRow, Status } from './settingsControls';
 
 interface Listed {
@@ -138,6 +139,10 @@ export function AssistantAccessSettings({
   const revoke = async (entry: Listed) => {
     const ctx = context();
     if (!ctx) return;
+    // This device stops sending first, before anything is awaited, and
+    // stays stopped whatever the account answers (a panel's Allow still in
+    // flight included).
+    stopAssistantGrant(ctx.userId, entry.projectId);
     setBusy(entry.projectId);
     setError(null);
     try {

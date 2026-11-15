@@ -17,8 +17,19 @@ import {
   type ProjectId
 } from '@openzcad/shared';
 import * as consentModule from '../../lib/e2ee/assistantConsent';
+import {
+  ASSISTANT_ALLOW_PENDING_PREFIX,
+  ASSISTANT_GRANT_PREFIX,
+  assistantGrant,
+  resetAssistantGrantMemoryForTests,
+  stopAssistantGrant
+} from '../../lib/e2ee/assistantConsentGrants';
+import { localStorageEncryptedProjectPins } from '../../lib/e2ee/encryptedProjectPins';
 import { E2eeApiError } from '../../lib/e2ee/e2eeApi';
-import { useAssistantConsentGate } from '../../lib/assistant/consentGate';
+import {
+  ASSISTANT_CONSENT_STOPPED_NOTICE,
+  useAssistantConsentGate
+} from '../../lib/assistant/consentGate';
 import {
   ASSISTANT_CONSENT_REQUEST_FIELDS,
   assistantConsentRoute
@@ -124,11 +135,13 @@ function Harness({
   pins,
   project,
   request,
-  status = configured
+  status = configured,
+  document = doc
 }: {
   server: Server;
   pins: consentModule.ConsentPinStore;
   project: { projectId: ProjectId; storageFormat: 1 | 2 };
+  document?: typeof doc;
   request?: { id: number; text: string } | null;
   status?:
     typeof configured | (Omit<typeof configured, 'model'> & { model: string });
@@ -144,7 +157,7 @@ function Harness({
   });
   return (
     <AssistantPanel
-      document={doc}
+      document={document}
       selection={{ bodyIds: [], featureIds: [], topologies: [] }}
       onApply={vi.fn().mockResolvedValue(true)}
       onPreview={vi.fn().mockResolvedValue({ ok: true })}
@@ -166,6 +179,7 @@ let hold: Promise<void> | null;
 
 beforeEach(() => {
   window.localStorage.clear();
+  resetAssistantGrantMemoryForTests();
   proposals = [];
   hold = null;
   vi.stubGlobal(
@@ -444,5 +458,219 @@ describe('assistant consent on an encrypted project (ADR-024 6-1)', () => {
     expect(Object.keys(proposals[0]!.body).sort()).toEqual([
       ...ASSISTANT_CONSENT_REQUEST_FIELDS
     ]);
+  });
+});
+
+/**
+ * A project pinned and settled as encrypted on this device: the real send
+ * gate (`api.ts`) checks every request against this device's grant, so
+ * these run the whole path from the dialog to the network.
+ */
+describe('assistant consent on a pinned, settled encrypted project', () => {
+  let count = 0;
+  function pinnedProject() {
+    count += 1;
+    const document = createProjectDocument(
+      `Pinned bracket ${count}`,
+      toUserId(USER)
+    );
+    expect(
+      localStorageEncryptedProjectPins(window.localStorage).pin(
+        document.projectId
+      )
+    ).toBe(true);
+    return {
+      document,
+      project: { projectId: document.projectId, storageFormat: 2 } as const
+    };
+  }
+
+  it('asks without consent, then sends with this device’s grant', async () => {
+    const user = userEvent.setup();
+    const server = consentServer();
+    const { document, project } = pinnedProject();
+    const props = {
+      server,
+      pins: consentModule.memoryConsentPins(),
+      project,
+      document
+    };
+    const { rerender } = render(<Harness {...props} />);
+    await act(async () => {});
+    await ask(rerender, props, 1);
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Let the assistant read this encrypted project?'
+    });
+    await user.click(within(dialog).getByRole('button', { name: 'Not now' }));
+    expect(await screen.findByText(ASSISTANT_CONSENT_NOT_GIVEN)).toBeTruthy();
+    expect(proposals).toEqual([]);
+
+    await ask(rerender, props, 2);
+    await user.click(
+      await screen.findByRole('button', { name: 'Allow for this project' })
+    );
+    await waitFor(() => expect(proposals).toHaveLength(1));
+    expect((proposals[0]!.body.digest as { projectId: string }).projectId).toBe(
+      document.projectId
+    );
+    expect(assistantGrant(USER, document.projectId)).toMatchObject({
+      sequence: 1,
+      route: ROUTE,
+      copyVersion: ASSISTANT_CONSENT_COPY_VERSION
+    });
+    await ask(rerender, props, 3, 'And the boss?');
+    await waitFor(() => expect(proposals).toHaveLength(2));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('asks on this device for an Allow made on another, and grants that record without writing another', async () => {
+    const user = userEvent.setup();
+    const server = consentServer();
+    const { document, project } = pinnedProject();
+    // Another device's Allow: genuine, MAC'd under the account key.
+    await consentModule.saveAssistantConsent(
+      {
+        userId: USER,
+        accountKey: ACCOUNT_KEY,
+        api: server.api,
+        pins: consentModule.memoryConsentPins()
+      },
+      document.projectId,
+      { allowed: true, route: ROUTE },
+      0
+    );
+    const save = vi.spyOn(server.api, 'save');
+    const props = {
+      server,
+      pins: consentModule.memoryConsentPins(),
+      project,
+      document
+    };
+    const { rerender } = render(<Harness {...props} />);
+    await act(async () => {});
+    // Verified, but not granted here: nothing is sent until asked.
+    expect(screen.queryByText('Allowed for this project')).toBeNull();
+    await ask(rerender, props, 1);
+    await user.click(
+      await screen.findByRole('button', { name: 'Allow for this project' })
+    );
+    await waitFor(() => expect(proposals).toHaveLength(1));
+    expect(save).not.toHaveBeenCalled();
+    expect(server.rows.get(document.projectId)?.sequence).toBe(1);
+    expect(assistantGrant(USER, document.projectId)?.sequence).toBe(1);
+  });
+
+  it.each([
+    [
+      'in this tab (Settings › Encryption)',
+      (projectId: string) => stopAssistantGrant(USER, projectId)
+    ],
+    [
+      'in another tab',
+      (projectId: string) => {
+        // Another tab's Stop reaches this page only through storage.
+        window.localStorage.removeItem(
+          `${ASSISTANT_ALLOW_PENDING_PREFIX}${USER}:${projectId}`
+        );
+        window.localStorage.removeItem(
+          `${ASSISTANT_GRANT_PREFIX}${USER}:${projectId}`
+        );
+      }
+    ]
+  ])(
+    'a Stop %s wins over an Allow still in flight',
+    async (_where, stopElsewhere) => {
+      const user = userEvent.setup();
+      const server = consentServer();
+      const { document, project } = pinnedProject();
+      // The Allow's save is held until the Stop has happened.
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const save = server.api.save;
+      let saving!: () => void;
+      const saveStarted = new Promise<void>((resolve) => {
+        saving = resolve;
+      });
+      let first = true;
+      server.api.save = async (projectId, request) => {
+        if (first) {
+          first = false;
+          saving();
+          await held;
+        }
+        return save(projectId, request);
+      };
+      const props = {
+        server,
+        pins: consentModule.memoryConsentPins(),
+        project,
+        document
+      };
+      const { rerender } = render(<Harness {...props} />);
+      await act(async () => {});
+      await ask(rerender, props, 1);
+      await user.click(
+        await screen.findByRole('button', { name: 'Allow for this project' })
+      );
+      await saveStarted;
+      stopElsewhere(document.projectId);
+      release();
+      expect(
+        await screen.findByText(ASSISTANT_CONSENT_STOPPED_NOTICE)
+      ).toBeTruthy();
+      // No grant was made, so nothing was sent; the account's record the
+      // Allow stored is revoked past it.
+      expect(assistantGrant(USER, document.projectId)).toBeNull();
+      await waitFor(() =>
+        expect(server.rows.get(document.projectId)).toMatchObject({
+          allowed: false,
+          sequence: 2
+        })
+      );
+      expect(proposals).toEqual([]);
+      expect(screen.queryByText('Allowed for this project')).toBeNull();
+    }
+  );
+
+  it('ends the request in flight when another tab stops', async () => {
+    const user = userEvent.setup();
+    const server = consentServer();
+    const { document, project } = pinnedProject();
+    const props = {
+      server,
+      pins: consentModule.memoryConsentPins(),
+      project,
+      document
+    };
+    const { rerender } = render(<Harness {...props} />);
+    await act(async () => {});
+    await ask(rerender, props, 1);
+    await user.click(
+      await screen.findByRole('button', { name: 'Allow for this project' })
+    );
+    await waitFor(() => expect(proposals).toHaveLength(1));
+
+    let release!: () => void;
+    hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await ask(rerender, props, 2, 'Make it thicker');
+    await waitFor(() => expect(proposals).toHaveLength(2));
+    const inFlight = proposals[1]!.signal!;
+    const key = `${ASSISTANT_GRANT_PREFIX}${USER}:${document.projectId}`;
+    window.localStorage.removeItem(key);
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', { key }));
+    });
+    await waitFor(() => expect(inFlight.aborted).toBe(true));
+    release();
+    hold = null;
+    expect(screen.queryByText('Allowed for this project')).toBeNull();
+    // The next ask asks again; nothing more is sent.
+    await ask(rerender, props, 3, 'Try again');
+    expect(await screen.findByRole('dialog')).toBeTruthy();
+    expect(proposals).toHaveLength(2);
   });
 });
