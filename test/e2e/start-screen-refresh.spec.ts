@@ -192,6 +192,41 @@ test('a failed account listing clears once the library poll reaches the account'
   );
 });
 
+test('Retry on Account unavailable lists the account again', async ({
+  page
+}) => {
+  await stubApi(page);
+  await createProject(page, 'Retried part');
+  await page.getByTitle('Back to projects').click();
+  await expect(
+    page.locator('.start-tile-open', { hasText: 'Retried part' })
+  ).toBeVisible();
+  const failing = (route: Route) =>
+    route.fulfill({ status: 503, json: { error: 'Temporarily unavailable' } });
+  await page.route('**/api/projects', failing);
+  await page.reload();
+  await expect(page.getByText('Account unavailable')).toBeVisible();
+  const retry = page.getByRole('button', {
+    name: 'Retry reaching the account'
+  });
+
+  // Still unreachable: the card stays, and says so.
+  await retry.click();
+  await expect(
+    page
+      .getByText('Your account still could not be reached.', { exact: false })
+      .first()
+  ).toBeVisible();
+  await expect(page.getByText('Account unavailable')).toBeVisible();
+
+  await page.unroute('**/api/projects', failing);
+  await retry.click();
+  await expect(page.getByText('Account unavailable')).toHaveCount(0);
+  await expect(page.locator('.start-account')).toContainText(
+    '1 on this device only'
+  );
+});
+
 for (const layout of ['grid', 'list']) {
   for (const width of [1440, 390]) {
     test(`reload preserves pinned sections and ${layout} geometry at ${width}px`, async ({

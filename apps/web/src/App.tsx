@@ -7596,6 +7596,12 @@ export function App() {
    * over a navigation; the next one picks the change up instead.
    */
   const libraryShown = doc === null && !shareSession;
+  /**
+   * The shelf's re-list, for the account card's Retry: true when the
+   * account answered, false when it still could not be reached, null when
+   * the shelf was busy (a navigation or a shelf edit) and nothing was asked.
+   */
+  const relistLibraryRef = useRef<(() => Promise<boolean | null>) | null>(null);
   useEffect(() => {
     const accountId = session?.userId ?? null;
     if (!libraryShown || !cloudFunctionsEnabled || accountId === null) return;
@@ -7605,19 +7611,20 @@ export function App() {
       navigationBusyRef.current === null &&
       pendingOrganizations.current.size === 0 &&
       sessionRef.current?.userId === accountId;
-    const refresh = async () => {
-      if (!settled()) return;
+    const refresh = async (): Promise<boolean | null> => {
+      if (!settled()) return null;
       const before = latestProjects.current;
       // A listing read while a card upload finalizes names the card it
       // replaced; read after it instead (see thumbnailUploads).
       await settleThumbnailUploads();
-      if (!settled() || latestProjects.current !== before) return;
+      if (!settled() || latestProjects.current !== before) return null;
       // Expiry purging stays with the explicit listings.
       const listed = await loadProjectSummaries(accountId, false);
+      if (!settled()) return null;
       // An unreachable account keeps the shelf as it was rather than
       // dropping it to device-only between polls.
-      if (!listed.remoteReached || !settled()) return;
-      if (latestProjects.current !== before) return;
+      if (!listed.remoteReached) return false;
+      if (latestProjects.current !== before) return null;
       // The account answered, whether or not the shelf changed: a listing
       // that failed earlier can show the very projects this one does (the
       // device holds them all), and must not leave "Account unavailable"
@@ -7633,10 +7640,14 @@ export function App() {
       setCloudAvailable(true);
       // An unchanged listing leaves the shelf alone so it (and its thumbnail
       // loads) does not re-render every poll.
-      if (JSON.stringify(listed.projects) === JSON.stringify(before)) return;
-      setProjects(listed.projects);
+      if (JSON.stringify(listed.projects) !== JSON.stringify(before))
+        setProjects(listed.projects);
+      return true;
     };
-    const stop = watchLibraryFreshness(refresh);
+    relistLibraryRef.current = refresh;
+    const stop = watchLibraryFreshness(async () => {
+      await refresh();
+    });
     // A sealed shelf sync changed the account's agreed pins, order or
     // archive: list them now rather than at the next poll.
     const applied = (event: Event) => {
@@ -7649,6 +7660,7 @@ export function App() {
     window.addEventListener(SEALED_SHELF_APPLIED_EVENT, applied);
     return () => {
       cancelled = true;
+      if (relistLibraryRef.current === refresh) relistLibraryRef.current = null;
       stop();
       window.removeEventListener(SEALED_SHELF_APPLIED_EVENT, applied);
     };
@@ -15376,6 +15388,21 @@ export function App() {
     setStatus(plain.message, plain.detail ? { detail: plain.detail } : {});
     if (onStartScreenRef.current) {
       announce(plain.message, undefined, { tone: 'warning' });
+    }
+  }
+
+  /**
+   * The account card's Retry for a project list that could not be read. A
+   * shelf busy with a navigation or an edit asks nothing; its next poll does.
+   */
+  async function handleRetryAccountListing() {
+    const reached = await relistLibraryRef.current?.();
+    if (reached === false) {
+      announce(
+        'Your account still could not be reached. Your projects remain saved on this device.',
+        undefined,
+        { tone: 'warning' }
+      );
     }
   }
 
@@ -32025,6 +32052,7 @@ export function App() {
             cloudFunctionsEnabled && authConfigStatus === 'unavailable'
           }
           onRetryCloud={() => void handleRefreshAuthConfig()}
+          onRetryAccountListing={() => void handleRetryAccountListing()}
           onSaveToAccount={(project) => void handleSaveToAccount(project)}
           onSaveAllToAccount={(candidates) =>
             void handleSaveAllToAccount(candidates)
