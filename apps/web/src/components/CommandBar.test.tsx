@@ -404,7 +404,7 @@ describe('CommandBar', () => {
     const search = searchField();
     expect(search).toHaveAttribute(
       'placeholder',
-      'Search commands or ask about the model'
+      'Search commands or ask'
     );
     // A sentence names no one command, so nothing lists over the stream.
     await userEvent.type(search, '  fillet the top edges 2 mm  ');
@@ -899,5 +899,52 @@ describe('CommandBar pointer and empty states', () => {
     await userEvent.click(search);
     await userEvent.type(search, 'add a cube{Enter}');
     expect(onAsk).toHaveBeenCalledWith('add a cube');
+  });
+});
+
+describe('the newest reply on the closed bar', () => {
+  const failure = {
+    tone: 'error' as const,
+    text: 'Fillet could not be created on 126 selected edges with radius 2.'
+  };
+
+  function renderBar(props: { unread: boolean; open?: boolean }) {
+    const onResult = vi.fn();
+    render(
+      <CommandBar
+        commands={[]}
+        open={props.open ?? false}
+        onOpenChange={() => {}}
+        onAsk={() => {}}
+        searchKey={{ glyph: '⌘K', accessible: 'Cmd+K' }}
+        unread={props.unread}
+        result={failure}
+        onResult={onResult}
+      />
+    );
+    return onResult;
+  }
+
+  it('shows an unread failure in the bar, and opens the conversation on a press', async () => {
+    const onResult = renderBar({ unread: true });
+    const chip = screen.getByRole('button', {
+      name: `${failure.text}. Open the assistant`
+    });
+    expect(chip).toHaveTextContent(failure.text);
+    expect(chip).toHaveClass('command-bar-result', 'error');
+    // The dot on the glyph gives way to it.
+    expect(chip.closest('.command-bar')).toHaveClass('unread', 'has-result');
+    await userEvent.click(chip);
+    expect(onResult).toHaveBeenCalledTimes(1);
+  });
+
+  it('says nothing once it is read', () => {
+    renderBar({ unread: false });
+    expect(document.querySelector('.command-bar-result')).toBeNull();
+  });
+
+  it('leaves the open bar to the field', () => {
+    renderBar({ unread: true, open: true });
+    expect(document.querySelector('.command-bar-result')).toBeNull();
   });
 });

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Paperclip } from 'lucide-react';
+import { Check, CircleHelp, Paperclip, X } from 'lucide-react';
 import {
   platformShortcutLabel,
   type PlatformShortcutCopy
@@ -109,7 +109,26 @@ interface CommandBarProps {
    * holds only the commands that act on it.
    */
   pick?: string | null;
+  /**
+   * The newest reply in a few words, shown in the closed bar while it is
+   * unread so a failure or a change waiting is seen without opening the
+   * conversation. Pressing it opens the conversation.
+   */
+  result?: CommandBarResult | null;
+  onResult?(): void;
 }
+
+export interface CommandBarResult {
+  tone: 'error' | 'proposal' | 'questions' | 'reply';
+  text: string;
+}
+
+const RESULT_ICON = {
+  error: X,
+  proposal: Check,
+  questions: CircleHelp,
+  reply: Check
+} as const;
 
 /**
  * The rest of the highlighted command's name, when what is typed is its
@@ -161,7 +180,9 @@ export function CommandBar({
   unread = false,
   context = null,
   draft = null,
-  pick = null
+  pick = null,
+  result = null,
+  onResult
 }: CommandBarProps) {
   const [query, setQuery] = useState('');
   // The empty field's list of commands, asked for with ArrowDown or by the
@@ -333,10 +354,14 @@ export function CommandBar({
     if (context) {
       return `Ask about ${context}…`;
     }
-    return 'Search commands or ask about the model';
+    return 'Search commands or ask';
   }
 
   const empty = query.length === 0;
+  // Only while the bar is closed and the reply unread: open, the bar is the
+  // field, and a read reply needs no second telling.
+  const resultShown = Boolean(result && unread && !open && onResult);
+  const ResultIcon = result ? RESULT_ICON[result.tone] : null;
 
   return (
     // Marked for the stream's click-off check (ASSISTANT_PROMPT_SELECTOR).
@@ -346,7 +371,7 @@ export function CommandBar({
           commandMode ? ' command' : ''
         }${listShown ? ' listing' : ''}${busy ? ' busy' : ''}${
           unread ? ' unread' : ''
-        }`}
+        }${resultShown ? ' has-result' : ''}`}
         onMouseDown={(event) => {
           // The glyph and the key badge are part of the field: a press on
           // them focuses it rather than whatever lies behind.
@@ -693,6 +718,18 @@ export function CommandBar({
               }}
             />
           </span>
+        )}
+        {resultShown && result && ResultIcon && (
+          <button
+            type="button"
+            className={`command-bar-result ${result.tone}`}
+            title={result.text}
+            aria-label={`${result.text}. Open the assistant`}
+            onClick={() => onResult?.()}
+          >
+            <ResultIcon size={12} aria-hidden="true" />
+            <span className="command-bar-result-text">{result.text}</span>
+          </button>
         )}
         {searchKey && (
           <kbd>

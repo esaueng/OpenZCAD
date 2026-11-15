@@ -87,6 +87,14 @@ import {
 } from '../../lib/assistant/promptKeys';
 import { unconfiguredAssistantMessage } from '../../lib/assistant/unconfigured';
 import {
+  failureParts,
+  isPreflightFailure,
+  latestReplySummary,
+  smallerFilletRetry,
+  unitLabel,
+  type AssistantLatest
+} from '../../lib/assistant/failure';
+import {
   assistantConsentRoute,
   describeAssistantRoute
 } from '../../lib/assistant/consentCopy';
@@ -132,6 +140,11 @@ export interface AssistantActivity {
    * prompt line offers no pick, which would only be turned away.
    */
   canAttach: boolean;
+  /**
+   * The newest reply in a few words, for the closed prompt line to show
+   * beside its field while it is unread ("Fillet could not be created…").
+   */
+  latest?: AssistantLatest | null;
 }
 
 interface AssistantPanelProps {
@@ -645,15 +658,28 @@ export function AssistantPanel({
   // The same conditions promptFilesRef takes a file on, plus room for it.
   const canAttach =
     configured && !hidden && pending.length < MAX_ASSISTANT_ATTACHMENTS;
+  const latest = useMemo(
+    () => latestReplySummary(entries, unitLabel(doc.units)),
+    [entries, doc.units]
+  );
   useEffect(() => {
     onActivity?.({
       thinking,
       unread,
       context: selectionSummary,
       unavailable,
-      canAttach
+      canAttach,
+      latest
     });
-  }, [onActivity, thinking, unread, selectionSummary, unavailable, canAttach]);
+  }, [
+    onActivity,
+    thinking,
+    unread,
+    selectionSummary,
+    unavailable,
+    canAttach,
+    latest
+  ]);
 
   useEffect(() => {
     if (collapsed) {
@@ -1437,6 +1463,47 @@ export function AssistantPanel({
     };
   }, []);
 
+  /**
+   * A failed all-edge fillet offers the same ask at a radius that builds:
+   * the one the kernel proved, else half. Only for a preflight failure of a
+   * plain-words ask (answers and drawings retry as they were).
+   */
+  function smallerRetryFor(failure: string) {
+    if (
+      !lastAsk ||
+      lastAsk.answers.length > 0 ||
+      lastAsk.attachments.length > 0 ||
+      !isPreflightFailure(failure)
+    ) {
+      return null;
+    }
+    return smallerFilletRetry(lastAsk.text, doc.units, failure);
+  }
+
+  /**
+   * A failure reads as one line saying what failed, its reason quieter
+   * under it: the kernel's long explanation opened with "Failed" and a
+   * preamble naming the gate rather than the problem.
+   */
+  function renderFailure(text: string) {
+    const { headline, detail } = failureParts(text, unitLabel(doc.units));
+    return (
+      <>
+        <div className="assistant-failure-head">
+          <X size={13} aria-hidden="true" />
+          <span className="visually-hidden">Failed: </span>
+          <RichText text={headline} className="assistant-failure-title" />
+        </div>
+        {detail && (
+          <RichText
+            text={detail}
+            className="assistant-card-copy assistant-failure-detail"
+          />
+        )}
+      </>
+    );
+  }
+
   function renderEntry(entry: AssistantEntry) {
     if (entry.kind === 'user') {
       return (
@@ -1521,25 +1588,37 @@ export function AssistantPanel({
         </Turn>
       );
     }
+    // Only the newest failure offers remedies: an older one failed a
+    // different ask, and would resend the wrong thing.
+    const remedies =
+      entry.tone === 'error' && entry === entries.at(-1) ? lastAsk : null;
+    const smallerRetry = remedies ? smallerRetryFor(entry.text) : null;
     return (
       <Turn role="assistant" at={entry.at} key={entry.id}>
         <div className={`assistant-card message ${entry.tone}`}>
-          {entry.tone === 'error' && (
-            <span className="assistant-card-label">
-              <X size={12} aria-hidden="true" />
-              Failed
-            </span>
+          {entry.tone === 'error' ? (
+            renderFailure(entry.text)
+          ) : (
+            <RichText text={entry.text} className="assistant-card-copy" />
           )}
-          <RichText text={entry.text} className="assistant-card-copy" />
-          {/* Only the newest failure repeats the last ask: an older one
-              failed a different ask, and would resend the wrong thing. */}
-          {entry.tone === 'error' && entry === entries.at(-1) && lastAsk && (
+          {remedies && (
             <div className="assistant-card-actions">
+              {smallerRetry && (
+                <button
+                  type="button"
+                  className="assistant-primary"
+                  disabled={thinking}
+                  title={`Send "${smallerRetry.text}"`}
+                  onClick={() => void send(smallerRetry.text, [])}
+                >
+                  {smallerRetry.label}
+                </button>
+              )}
               <button
                 type="button"
                 disabled={thinking}
-                title={`Send "${lastAsk.text}" again`}
-                onClick={() => retry(lastAsk)}
+                title={`Send "${remedies.text}" again`}
+                onClick={() => retry(remedies)}
               >
                 <RotateCcw size={12} aria-hidden="true" />
                 Try again
@@ -1796,81 +1875,96 @@ export function AssistantPanel({
             </span>
           </div>
         )}
-        {onAnalyze && (
-          <div className="assistant-actions-row">
-            <button
-              type="button"
-              className="assistant-verified-action"
-              disabled={thinking || analysisBusy || applyingEntryId !== null}
-              onClick={() => {
-                void analyzeSelection();
-              }}
-            >
-              {analysisBusy
-                ? 'Analyzing selected geometry…'
-                : 'Analyze selected geometry'}
-            </button>
-          </div>
-        )}
-        {/* Once a thread exists the recipes fold under one line: listed
+        {(onAnalyze ||
+          (entries.length > 0 && verifiedSuggestions.length > 0) ||
+          editCatalog.candidates.length > 0 ||
+          editCatalog.measuredOnly.length > 0) && (
+          // One line of tools rather than three stacked rows: the analysis,
+          // then the two folded lists, each opening below the line.
+          <div className="assistant-tools">
+            {onAnalyze && (
+              <div className="assistant-actions-row">
+                <button
+                  type="button"
+                  className="assistant-verified-action"
+                  disabled={
+                    thinking || analysisBusy || applyingEntryId !== null
+                  }
+                  onClick={() => {
+                    void analyzeSelection();
+                  }}
+                >
+                  {analysisBusy
+                    ? 'Analyzing selected geometry…'
+                    : 'Analyze selected geometry'}
+                </button>
+              </div>
+            )}
+            {/* Once a thread exists the recipes fold under one line: listed
             whole, they stood under every conversation however long
             (13 November review, I72). One click still opens them. */}
-        {entries.length > 0 && verifiedSuggestions.length > 0 && (
-          <details className="assistant-edit-catalog">
-            <summary>Verified recipes ({verifiedSuggestions.length})</summary>
-            {verifiedSuggestions.map((suggestion) => (
-              <button
-                key={suggestion.id}
-                type="button"
-                className="assistant-verified-action"
-                disabled={thinking || applyingEntryId !== null}
-                onClick={() => applySuggestion(suggestion)}
-              >
-                <Sparkles size={12} aria-hidden="true" />
-                <span>{suggestion.label}</span>
-                <span className="assistant-suggestion-badge">
-                  {suggestion.previewOnly ? 'Preview' : 'Verified'}
-                </span>
-              </button>
-            ))}
-          </details>
-        )}
-        {(editCatalog.candidates.length > 0 ||
-          editCatalog.measuredOnly.length > 0) && (
-          <details className="assistant-edit-catalog">
-            <summary>Measured edits ({editCatalog.candidates.length})</summary>
-            {editCatalog.candidates.map((candidate) => (
-              <button
-                key={candidate.id}
-                type="button"
-                className="assistant-verified-action"
-                title={candidate.description}
-                disabled={thinking || applyingEntryId !== null}
-                onClick={() =>
-                  applySuggestion({
-                    id: candidate.id,
-                    label: candidate.label,
-                    proposal: proposalForEditCandidate(candidate)
-                  })
-                }
-              >
-                <span>{candidate.label}</span>
-                <span className="assistant-suggestion-badge">Preview</span>
-              </button>
-            ))}
-            {editCatalog.measuredOnly.map((measurement, index) => (
-              <p key={`${measurement.bodyId}:${index}`}>
-                {measurement.label}: {measurement.value} {measurement.unit} —
-                measured only. {measurement.reason}
-              </p>
-            ))}
-            {!editCatalog.complete && (
-              <p>
-                This list may not include every editable feature. Select
-                specific faces to refine the analysis.
-              </p>
+            {entries.length > 0 && verifiedSuggestions.length > 0 && (
+              <details className="assistant-edit-catalog">
+                <summary>
+                  Verified recipes ({verifiedSuggestions.length})
+                </summary>
+                {verifiedSuggestions.map((suggestion) => (
+                  <button
+                    key={suggestion.id}
+                    type="button"
+                    className="assistant-verified-action"
+                    disabled={thinking || applyingEntryId !== null}
+                    onClick={() => applySuggestion(suggestion)}
+                  >
+                    <Sparkles size={12} aria-hidden="true" />
+                    <span>{suggestion.label}</span>
+                    <span className="assistant-suggestion-badge">
+                      {suggestion.previewOnly ? 'Preview' : 'Verified'}
+                    </span>
+                  </button>
+                ))}
+              </details>
             )}
-          </details>
+            {(editCatalog.candidates.length > 0 ||
+              editCatalog.measuredOnly.length > 0) && (
+              <details className="assistant-edit-catalog">
+                <summary>
+                  Measured edits ({editCatalog.candidates.length})
+                </summary>
+                {editCatalog.candidates.map((candidate) => (
+                  <button
+                    key={candidate.id}
+                    type="button"
+                    className="assistant-verified-action"
+                    title={candidate.description}
+                    disabled={thinking || applyingEntryId !== null}
+                    onClick={() =>
+                      applySuggestion({
+                        id: candidate.id,
+                        label: candidate.label,
+                        proposal: proposalForEditCandidate(candidate)
+                      })
+                    }
+                  >
+                    <span>{candidate.label}</span>
+                    <span className="assistant-suggestion-badge">Preview</span>
+                  </button>
+                ))}
+                {editCatalog.measuredOnly.map((measurement, index) => (
+                  <p key={`${measurement.bodyId}:${index}`}>
+                    {measurement.label}: {measurement.value} {measurement.unit}{' '}
+                    — measured only. {measurement.reason}
+                  </p>
+                ))}
+                {!editCatalog.complete && (
+                  <p>
+                    This list may not include every editable feature. Select
+                    specific faces to refine the analysis.
+                  </p>
+                )}
+              </details>
+            )}
+          </div>
         )}
       </footer>
       <p className="visually-hidden" aria-live="polite" aria-atomic="true">

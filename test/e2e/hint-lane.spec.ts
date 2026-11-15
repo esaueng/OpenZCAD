@@ -84,92 +84,102 @@ for (const size of SIZES) {
     // These two are the smoke set's: a line cut short (Build's, and Draw's
     // long one) and a line that is not true of its state (Draw with no
     // views), at both widths.
-    test('Build guidance and the picked name read in full', { tag: '@ci-smoke' }, async ({
-      page
-    }) => {
-      test.setTimeout(180_000);
-      await openDemo(page, size);
+    test(
+      'Build guidance and the picked name read in full',
+      { tag: '@ci-smoke' },
+      async ({ page }) => {
+        test.setTimeout(180_000);
+        await openDemo(page, size);
 
-      await expectWholeGuidance(
-        page,
-        'Click a body, face, or edge · Shift+Click adds to selection'
-      );
-      // Too long for the field at either width, it stands over the bar, and
-      // the bar under it is the search field again.
-      const bar = page.locator('.command-bar');
-      const [hintBox, barBox] = await Promise.all([
-        hint(page).boundingBox(),
-        bar.boundingBox()
-      ]);
-      expect(hintBox!.y + hintBox!.height).toBeLessThanOrEqual(barBox!.y);
-      await expect
-        .poll(() =>
-          page
-            .locator('.command-bar-input')
-            .evaluate(
-              (element) => getComputedStyle(element, '::placeholder').color
-            )
-        )
-        .not.toBe('rgba(0, 0, 0, 0)');
+        // Nothing picked, no tool: the bar rests under its own name, folded
+        // to its short width. The old default ("Click a body, face, or edge ·
+        // Shift+Click adds to selection") was too long for the field at either
+        // width and stood on a card over the bar while nothing was happening.
+        await expectWholeGuidance(page, 'Search commands · ? shortcuts');
+        const bar = page.locator('.command-bar');
+        await expect(page.locator('.command-bar-lane')).toHaveClass(
+          /\bis-resting\b/
+        );
+        const [hintBox, barBox] = await Promise.all([
+          hint(page).boundingBox(),
+          bar.boundingBox()
+        ]);
+        // In the field, on the bar's own row, and no card over it.
+        expect(Math.abs(hintBox!.y - barBox!.y)).toBeLessThan(2);
+        await expect
+          .poll(async () => (await bar.boundingBox())!.width)
+          .toBeLessThanOrEqual(361);
+        if (size.width >= 1440) {
+          // Focus widens it to the full measure for typing. (At 1024px the
+          // full measure is already under the resting width.)
+          await page.locator('.command-bar-input').focus();
+          await expect
+            .poll(async () => (await bar.boundingBox())!.width)
+            .toBeGreaterThan(361);
+          await page.keyboard.press('Escape');
+        }
 
-      // A face: its name leads the card, and gives way only when the name
-      // and the measurement fill the row.
-      expect(await pickPlanarFace(page, { x: 0, y: 0, z: 1 })).not.toBeNull();
-      const name = page.locator('.selection-readout .selection-callout-name');
-      await expect(name).toContainText('Mounting Bracket · ');
-      await expectWholeGuidance(page, /Esc clears the selection/);
-      const fit = await name.evaluate((element) => {
-        const chip = element.closest<HTMLElement>('.selection-readout')!;
-        const row = element.closest<HTMLElement>('.workspace-hint')!;
-        const style = getComputedStyle(row);
-        return {
-          cut: element.scrollWidth > element.clientWidth,
-          title: element.getAttribute('title'),
-          text: element.textContent,
-          chip: chip.getBoundingClientRect().width,
-          row:
-            row.clientWidth -
-            parseFloat(style.paddingLeft) -
-            parseFloat(style.paddingRight)
-        };
-      });
-      if (fit.cut) {
-        // Cut only at the row's end, and then the whole name is its tooltip.
-        expect(fit.chip).toBeGreaterThan(fit.row - 1);
-        expect(fit.title).toBe(fit.text);
-      } else {
-        expect(fit.title).toBeNull();
+        // A face: its name leads the card, and gives way only when the name
+        // and the measurement fill the row.
+        expect(await pickPlanarFace(page, { x: 0, y: 0, z: 1 })).not.toBeNull();
+        const name = page.locator('.selection-readout .selection-callout-name');
+        await expect(name).toContainText('Mounting Bracket · ');
+        await expectWholeGuidance(page, /Esc clears the selection/);
+        const fit = await name.evaluate((element) => {
+          const chip = element.closest<HTMLElement>('.selection-readout')!;
+          const row = element.closest<HTMLElement>('.workspace-hint')!;
+          const style = getComputedStyle(row);
+          return {
+            cut: element.scrollWidth > element.clientWidth,
+            title: element.getAttribute('title'),
+            text: element.textContent,
+            chip: chip.getBoundingClientRect().width,
+            row:
+              row.clientWidth -
+              parseFloat(style.paddingLeft) -
+              parseFloat(style.paddingRight)
+          };
+        });
+        if (fit.cut) {
+          // Cut only at the row's end, and then the whole name is its tooltip.
+          expect(fit.chip).toBeGreaterThan(fit.row - 1);
+          expect(fit.title).toBe(fit.text);
+        } else {
+          expect(fit.title).toBeNull();
+        }
+        if (size.width >= 1440) {
+          // "Mounting Bracket · Front fa…" with a hundred pixels of the row
+          // unused: at this width the name fits.
+          expect(fit.cut).toBe(false);
+        }
       }
-      if (size.width >= 1440) {
-        // "Mounting Bracket · Front fa…" with a hundred pixels of the row
-        // unused: at this width the name fits.
-        expect(fit.cut).toBe(false);
+    );
+
+    test(
+      'Draw points at views only once a sheet has them',
+      { tag: '@ci-smoke' },
+      async ({ page }) => {
+        test.setTimeout(180_000);
+        await openDemo(page, size);
+        await switchMode(page, 'Draw');
+        const start = page.getByRole('button', { name: 'New drawing sheet' });
+        await expect(start).toBeVisible({ timeout: 30_000 });
+        // No sheet, no views to drag: the stage's own start says what to do,
+        // and the lane rests.
+        await expect(hint(page)).toHaveText('Search commands · ? shortcuts', {
+          timeout: 20_000
+        });
+        await expect(
+          page.getByRole('group', { name: 'Workspace status' })
+        ).not.toContainText('Drag a view');
+
+        await start.click();
+        await expectWholeGuidance(
+          page,
+          'Drag a view to place it · arrow keys nudge it · Update redraws a stale sheet'
+        );
       }
-    });
-
-    test('Draw points at views only once a sheet has them', { tag: '@ci-smoke' }, async ({
-      page
-    }) => {
-      test.setTimeout(180_000);
-      await openDemo(page, size);
-      await switchMode(page, 'Draw');
-      const start = page.getByRole('button', { name: 'New drawing sheet' });
-      await expect(start).toBeVisible({ timeout: 30_000 });
-      // No sheet, no views to drag: the stage's own start says what to do,
-      // and the lane rests.
-      await expect(hint(page)).toHaveText('Search commands · ? shortcuts', {
-        timeout: 20_000
-      });
-      await expect(
-        page.getByRole('group', { name: 'Workspace status' })
-      ).not.toContainText('Drag a view');
-
-      await start.click();
-      await expectWholeGuidance(
-        page,
-        'Drag a view to place it · arrow keys nudge it · Update redraws a stale sheet'
-      );
-    });
+    );
 
     test('Assemble leaves its guidance to its panel', async ({ page }) => {
       test.setTimeout(180_000);
