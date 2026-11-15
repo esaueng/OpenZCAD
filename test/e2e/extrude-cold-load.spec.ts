@@ -119,6 +119,45 @@ async function pickProfile(canvas: Locator, index: number) {
   await canvas.page().waitForTimeout(750);
 }
 
+/** The first body's world box, and `points` projected to client pixels. */
+async function viewerState(
+  canvas: Locator,
+  points: [number, number, number][] = []
+): Promise<{
+  box: { min: number[]; max: number[] } | null;
+  points: { x: number; y: number }[];
+}> {
+  return canvas.evaluate(
+    (element, requested) =>
+      new Promise((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-project-points', {
+            detail: { points: requested, resolve }
+          })
+        );
+      }),
+    points
+  );
+}
+
+/** Animation frames requested in the next `ms`, counted by a wrapper. */
+async function framesRequestedIn(page: Page, ms: number): Promise<number> {
+  return page.evaluate(async (wait) => {
+    const scope = window as Window & { __ozFrameRequests?: number };
+    if (scope.__ozFrameRequests === undefined) {
+      scope.__ozFrameRequests = 0;
+      const request = window.requestAnimationFrame.bind(window);
+      window.requestAnimationFrame = (callback) => {
+        scope.__ozFrameRequests! += 1;
+        return request(callback);
+      };
+    }
+    const before = scope.__ozFrameRequests;
+    await new Promise((done) => setTimeout(done, wait));
+    return scope.__ozFrameRequests - before;
+  }, ms);
+}
+
 const keypad = (page: Page) => page.locator('.numeric-keypad');
 const chip = (page: Page) => page.getByTestId('direct-manipulation-value');
 
@@ -201,3 +240,56 @@ test(
     await expect(keypad(page)).toBeVisible();
   }
 );
+
+test(
+  'a press made while the bar loads never resizes the body under the region',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    const bar = await holdExtrudeBar(page);
+    const canvas = await openTwoRegions(page);
+    await pickProfile(canvas, 0);
+    const before = (await viewerState(canvas)).box!;
+    // The plate's top face between the two pockets.
+    const centre: [number, number, number] = [
+      (before.min[0]! + before.max[0]!) / 2,
+      (before.min[1]! + before.max[1]!) / 2,
+      before.max[2]!
+    ];
+    const [press] = (await viewerState(canvas, [centre])).points;
+    await page.mouse.move(press!.x, press!.y);
+    await page.mouse.down();
+    // The bar (and the region's arrow) arrives while the press is held.
+    await bar.release();
+    await expect(extrudeBar(page)).toBeVisible();
+    await page.mouse.move(press!.x, press!.y - 65, { steps: 10 });
+    await page.mouse.up();
+    // The armed Extrude owned the gesture: the plate kept its 8 mm.
+    await page.waitForTimeout(2_000);
+    const after = (await viewerState(canvas)).box!;
+    expect(after.max[2]! - after.min[2]!).toBeCloseTo(
+      before.max[2]! - before.min[2]!,
+      6
+    );
+    await expectBodyCount(page, 1);
+  }
+);
+
+test('a bar that cannot load leaves typed entry nothing to wait for', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await page.route('**/assets/ExtrudeCommand-*.js', (route) => route.abort());
+  const canvas = await openTwoRegions(page);
+  await pickProfile(canvas, 0);
+  await expect(page.getByText('Extrude did not load.')).toBeVisible();
+  const idle = await framesRequestedIn(page, 600);
+  await page.keyboard.press('Enter');
+  // Said why, and nothing left retrying for an arrow that will not come.
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Extrude did not load, so its distance cannot be typed.'
+  );
+  const afterEnter = await framesRequestedIn(page, 600);
+  expect(afterEnter - idle).toBeLessThan(10);
+  await expect(keypad(page)).toHaveCount(0);
+});

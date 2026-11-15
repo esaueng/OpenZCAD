@@ -381,6 +381,7 @@ import { useOnline } from './hooks/useOnline';
 import {
   lazyWithStaleChunkNotice,
   isOffline,
+  loadRetryingOnReconnect,
   loadWhenOnline,
   OFFLINE_CHUNK_MESSAGE,
   preloadableLazy,
@@ -1182,6 +1183,9 @@ const InPlaceCommandBar = preloadableSlot(
 // bar above leave the entry chunk at all. Warmed with the keypad as soon as a
 // sketch or command is up, and with the idle warm-up. Until it is ready the
 // region offers nothing the bar would have to answer (`extrudeBarReady`).
+/** Why a region's distance cannot be typed once its bar failed to load. */
+const EXTRUDE_ENTRY_UNAVAILABLE =
+  'Extrude did not load, so its distance cannot be typed. Reload to try again.';
 const ExtrudeCommand = preloadableSlot(
   'Extrude',
   () =>
@@ -4309,6 +4313,12 @@ export function App() {
   } | null>(null);
   const workspaceModeRef = useRef<WorkspaceMode | null>(null);
   const exactEntryInputEnabledRef = useRef(false);
+  /**
+   * The in-place Extrude's bar could not load (online: its chunk is gone).
+   * A region's typed entry then has no arrow ever to open on, so it is not
+   * queued to retry for one.
+   */
+  const extrudeBarFailedRef = useRef(false);
   const exactEntryQueue = useRef(
     new DeferredExactEntry<{
       interaction: InteractionState;
@@ -4324,6 +4334,10 @@ export function App() {
         owner.tool === toolRef.current &&
         owner.workspaceMode === workspaceModeRef.current &&
         workspaceModeRef.current === 'build' &&
+        !(
+          extrudeBarFailedRef.current &&
+          interactionRef.current.mode === 'region'
+        ) &&
         exactEntryInputEnabledRef.current &&
         keypadRef.current === null &&
         !isTypingTarget(document.activeElement as HTMLElement | null),
@@ -8518,17 +8532,25 @@ export function App() {
   useEffect(() => {
     if (extrudeBarReady || !extrudeBarWanted) return;
     let current = true;
-    ExtrudeCommand.preload().then(
+    // Offline it waits for the connection; a failure online is final for
+    // this deploy, and the bar's own slot says it did not load.
+    loadRetryingOnReconnect(() => ExtrudeCommand.preload()).then(
       () => {
+        extrudeBarFailedRef.current = false;
         if (current) setExtrudeBarArrived(true);
       },
-      // The bar's own slot says it did not load; the region stays bare.
-      () => undefined
+      () => {
+        if (!current) return;
+        extrudeBarFailedRef.current = true;
+        // An entry typed while it loaded will never find its arrow: stop
+        // waiting for it rather than retry every frame.
+        exactEntryQueue.cancel();
+      }
     );
     return () => {
       current = false;
     };
-  }, [extrudeBarReady, extrudeBarWanted]);
+  }, [extrudeBarReady, extrudeBarWanted, exactEntryQueue]);
   /** What it opens on: memoized, so its to-face target keeps its identity. */
   const extrudeEditInitialDraft = useMemo(
     () => (extrudeEditFeature ? extrudeEditInitial(extrudeEditFeature) : null),
@@ -30861,6 +30883,10 @@ export function App() {
       );
       if (exactEntry) {
         event.preventDefault();
+        if (interaction.mode === 'region' && extrudeBarFailedRef.current) {
+          setStatus(EXTRUDE_ENTRY_UNAVAILABLE);
+          return;
+        }
         exactEntryQueue.push(
           {
             interaction,
@@ -33449,6 +33475,9 @@ export function App() {
             editableBodyIds={
               parameterPreview ? EMPTY_BODY_IDS : viewerEditableBodyIds
             }
+            // The armed Extrude owns dragging from the moment it is armed,
+            // not from when its bar (and with it, its handles) has loaded.
+            dragsHeldByCommand={extrudeBarWanted}
             movePreview={movePreview}
             moveCommitHold={moveCommitHold}
             appearancePreview={bodyAppearancePreview}
