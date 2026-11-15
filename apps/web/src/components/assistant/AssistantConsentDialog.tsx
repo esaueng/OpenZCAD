@@ -4,6 +4,7 @@ import { Lock } from 'lucide-react';
 import {
   ASSISTANT_CONSENT_FINALITY,
   ASSISTANT_CONSENT_ITEMS,
+  ASSISTANT_CONSENT_RETENTION,
   ASSISTANT_CONSENT_TRANSIT
 } from '../../lib/assistant/consentCopy';
 import { useModalFocus } from '../../lib/useModalFocus';
@@ -69,7 +70,9 @@ export function AssistantConsentDialog({
             </li>
           ))}
         </ul>
-        <p>{ASSISTANT_CONSENT_TRANSIT}</p>
+        <p>
+          {ASSISTANT_CONSENT_TRANSIT} {ASSISTANT_CONSENT_RETENTION}
+        </p>
         <p>
           {ASSISTANT_CONSENT_FINALITY} This choice is for you, on this project
           only; you can stop it from the assistant, the project’s properties or

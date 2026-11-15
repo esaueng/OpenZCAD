@@ -331,6 +331,12 @@
   backdrop-filter: blur(2px);
 }
 
+/* The shared confirm opens over the start screen and Settings as well as the
+   workspace; see --z-confirm. */
+.modal-backdrop.confirm-backdrop {
+  z-index: var(--z-confirm);
+}
+
 /* A title that wraps (Delete “a long feature name”?) squeezed its icon. */
 .modal-backdrop h2 > svg {
   flex: none;
