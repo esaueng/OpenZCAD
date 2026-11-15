@@ -733,7 +733,7 @@ export async function drainPendingObjects(
   const cutoff = Date.now() - (options.olderThanMs ?? 0);
   const { results } = await db
     .prepare(
-      `SELECT object_key, attempt, bucket FROM r2_pending_objects
+      `SELECT object_key, attempt, bucket, created_at FROM r2_pending_objects
        WHERE ${projectId === null ? '?1 IS NULL' : 'project_id = ?1'}
          AND created_at <= ?2${
            options.ownerUserId === undefined ? '' : ' AND owner_user_id = ?4'
@@ -750,6 +750,7 @@ export async function drainPendingObjects(
       object_key: string;
       attempt: string;
       bucket: PendingObjectBucket;
+      created_at: number;
     }>();
   const rows = (results ?? []).slice(0, limit);
   if (!rows.length) return false;
@@ -803,27 +804,60 @@ export async function drainPendingObjects(
           !claim.contended.has(row.object_key))
     );
     if (done.length) {
-      await db
-        .prepare(
-          // By primary key: each listed (key, attempt) is one index lookup,
-          // never a scan of every pending record.
-          `DELETE FROM r2_pending_objects
-           WHERE (object_key, attempt) IN (
-             SELECT json_extract(d.value, '$[0]'), json_extract(d.value, '$[1]')
-             FROM json_each(?) d)${
-               options.fence ? ` AND ${options.fence.sql}` : ''
-             }`
+      await db.batch(
+        settlePendingRecords(
+          db,
+          done.map((row) => [row.object_key, row.attempt, row.created_at]),
+          options.fence
         )
-        .bind(
-          JSON.stringify(done.map((row) => [row.object_key, row.attempt])),
-          ...(options.fence?.binds ?? [])
-        )
-        .run();
+      );
     }
     return (results ?? []).length > limit || done.length < rows.length;
   } finally {
     await claim.release();
   }
+}
+
+/**
+ * The project a pending record left behind by a removed project is filed
+ * under: no project id is empty, so no project's listing, cap or cleanup
+ * reaches it again, and only the scheduled sweep (which lists every
+ * project's records by age) reclaims it.
+ */
+export const DETACHED_PENDING_PROJECT = '';
+
+/**
+ * Settles pending records whose objects a cleanup reclaimed, by primary
+ * key (one index lookup each, never a scan): records old enough that no
+ * write can still be in flight (`PENDING_OBJECT_GRACE_MS`) go; younger ones
+ * stay, detached from their project. A delete that overtook a put still
+ * in flight proves nothing: the put may land after it and store the bytes
+ * again, so the record keeps tracking the key until the sweep finds it
+ * aged, claims the key and deletes it once more.
+ */
+function settlePendingRecords(
+  db: D1Database,
+  records: readonly (readonly [string, string, number])[],
+  fence?: { sql: string; binds: readonly unknown[] }
+): D1PreparedStatement[] {
+  const cutoff = Date.now() - PENDING_OBJECT_GRACE_MS;
+  const pairs = (aged: boolean) =>
+    JSON.stringify(
+      records
+        .filter(([, , createdAt]) => createdAt <= cutoff === aged)
+        .map(([key, attempt]) => [key, attempt])
+    );
+  const listed = `(object_key, attempt) IN (
+      SELECT json_extract(d.value, '$[0]'), json_extract(d.value, '$[1]')
+      FROM json_each(?) d)${fence ? ` AND ${fence.sql}` : ''}`;
+  return [
+    db
+      .prepare(`DELETE FROM r2_pending_objects WHERE ${listed}`)
+      .bind(pairs(true), ...(fence?.binds ?? [])),
+    db
+      .prepare(`UPDATE r2_pending_objects SET project_id = ? WHERE ${listed}`)
+      .bind(DETACHED_PENDING_PROJECT, pairs(false), ...(fence?.binds ?? []))
+  ];
 }
 
 /** Whether migration 0050's R2 key tombstones are installed. */
@@ -8500,7 +8534,7 @@ export class D1R2PersistenceService implements PersistenceService {
     // is visible, retryable, and cannot strand unreferenced user data.
     const claims: ObjectKeyClaim[] = [];
     // The pending records (key, attempt) whose objects this deletion swept.
-    const sweptPending: [string, string][] = [];
+    const sweptPending: [string, string, number][] = [];
     try {
       for (const projectId of projectIds) {
         const keysOf = async (sql: string) =>
@@ -8542,14 +8576,18 @@ export class D1R2PersistenceService implements PersistenceService {
             (
               await this.env
                 .DB!.prepare(
-                  `SELECT object_key, attempt FROM r2_pending_objects
+                  `SELECT object_key, attempt, created_at FROM r2_pending_objects
                    WHERE project_id = ? AND bucket = ?`
                 )
                 .bind(projectId, bucket)
-                .all<{ object_key: string; attempt: string }>()
+                .all<{
+                  object_key: string;
+                  attempt: string;
+                  created_at: number;
+                }>()
             ).results ?? [];
           for (const row of listed) {
-            sweptPending.push([row.object_key, row.attempt]);
+            sweptPending.push([row.object_key, row.attempt, row.created_at]);
           }
           return listed.map((row) => row.object_key);
         };
@@ -8740,20 +8778,13 @@ export class D1R2PersistenceService implements PersistenceService {
           'DELETE FROM project_adoptions WHERE cloud_project_id IN',
           ...migrationTables
         ].map(fenced),
-        // Only the swept records, by primary key.
+        // Only the swept records: aged ones go, and ones a write may still
+        // be putting stay, detached, for the scheduled sweep.
         ...(pendingReady && sweptPending.length
-          ? [
-              this.env
-                .DB!.prepare(
-                  `DELETE FROM r2_pending_objects
-                   WHERE (object_key, attempt) IN (
-                     SELECT json_extract(d.value, '$[0]'),
-                            json_extract(d.value, '$[1]')
-                     FROM json_each(?) d)
-                     AND project_id IN ${fencedIds}`
-                )
-                .bind(JSON.stringify(sweptPending), generationIds)
-            ]
+          ? settlePendingRecords(this.env.DB!, sweptPending, {
+              sql: `project_id IN ${fencedIds}`,
+              binds: [generationIds]
+            })
           : []),
         fenced('DELETE FROM projects WHERE id IN'),
         fenced('DELETE FROM project_copy_cleanup_claims WHERE project_id IN')

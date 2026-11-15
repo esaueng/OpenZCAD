@@ -2389,7 +2389,11 @@ describe('bodies a failed save could not remove (PR #1477 review, round 2)', () 
       (await srv.call('DELETE', `/api/projects/${projectId}`)).status
     ).toBe(204);
     expect(srv.bucket.objects.has(orphan)).toBe(false);
-    expect(rows(srv, 'SELECT object_key FROM r2_pending_objects')).toEqual([]);
+    // Its record is young enough that a put could still be landing: it
+    // stays, filed under no project, until the sweep finds it aged.
+    expect(
+      rows(srv, 'SELECT object_key, project_id FROM r2_pending_objects')
+    ).toEqual([{ object_key: orphan, project_id: '' }]);
   });
 
   it('removes such a body once it is old enough that no save can still commit it', async () => {
@@ -2589,4 +2593,122 @@ describe('bodies of refused and failed saves stay bounded (PR #1477 review, roun
     // And the save goes through.
     expect((await putVersion(srv, projectId, hand)).status).toBe(200);
   });
+});
+
+describe('a body whose put a project deletion overtook (PR #1477 review, round 6)', () => {
+  it('keeps a body tracked when deletion overtakes its pending put and blocks rollback, until the sweep removes it', async () => {
+    const {
+      D1R2PersistenceService,
+      drainPendingObjects,
+      PENDING_OBJECT_GRACE_MS
+    } = await import('@openzcad/cloudflare-adapters');
+    const worker = (await import('../apps/web/worker/index')).default;
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const head = rows<{ version_hash: string }>(
+      srv,
+      'SELECT version_hash FROM e2ee_project_versions WHERE project_id = ?',
+      projectId
+    )[0]!;
+    // Large enough to be stored in R2 rather than inline.
+    const payload = new Uint8Array(400_000);
+    for (let n = 0; n < payload.length; n += 65536) {
+      crypto.getRandomValues(
+        payload.subarray(n, Math.min(payload.length, n + 65536))
+      );
+    }
+    const hand = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: v1.version + 1,
+        keyEpoch: 0,
+        previousVersionHash: fromHex(head.version_hash)
+      },
+      { expectedVersion: v1.version, plaintext: payload }
+    );
+    // The save records its body and starts the put, which pauses.
+    const putMock = srv.bucket.put as unknown as Mock<
+      (key: string, body: ArrayBuffer | Uint8Array) => Promise<void>
+    >;
+    const put = putMock.getMockImplementation()!;
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => (enter = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let key = '';
+    putMock.mockImplementationOnce(async (written, body) => {
+      key = written;
+      enter();
+      await released;
+      return put(written, body);
+    });
+    const save = putVersion(srv, projectId, hand);
+    await entered;
+    expect(rows(srv, 'SELECT object_key FROM r2_pending_objects')).toEqual([
+      { object_key: key }
+    ]);
+    // The project's deletion lists and deletes the key before the bytes
+    // land, then pauses before its final batch, still holding its claim.
+    const d1 = srv.env.DB as D1Database;
+    const batch = d1.batch.bind(d1);
+    let atFinal!: () => void;
+    let finish!: () => void;
+    const finalEntered = new Promise<void>((resolve) => (atFinal = resolve));
+    const finalReleased = new Promise<void>((resolve) => (finish = resolve));
+    d1.batch = async (statements) => {
+      if (
+        statements.some((statement) =>
+          (statement as unknown as { sql: string }).sql.includes(
+            'DELETE FROM projects WHERE id IN'
+          )
+        )
+      ) {
+        atFinal();
+        await finalReleased;
+      }
+      return batch(statements);
+    };
+    const deletion = new D1R2PersistenceService(srv.env).deleteProject(
+      OWNER as never,
+      projectId
+    );
+    await finalEntered;
+    expect(srv.bucket.objects.has(key)).toBe(false);
+    // The put lands after that delete; the save is refused, and its
+    // rollback cannot claim the key the deletion holds.
+    release();
+    const response = await save;
+    expect(response.ok).toBe(false);
+    expect(srv.bucket.objects.has(key)).toBe(true);
+    finish();
+    await deletion;
+    d1.batch = batch;
+    expect(
+      rows(srv, 'SELECT id FROM projects WHERE id = ?', projectId)
+    ).toEqual([]);
+    // The body is still tracked: its record outlives the project, filed
+    // under no project, and no sweep reclaims it while a put could be in
+    // flight.
+    expect(
+      rows(srv, 'SELECT object_key, project_id FROM r2_pending_objects')
+    ).toEqual([{ object_key: key, project_id: '' }]);
+    await drainPendingObjects(
+      d1,
+      { 'project-storage': srv.bucket as never },
+      null,
+      { olderThanMs: PENDING_OBJECT_GRACE_MS }
+    );
+    expect(srv.bucket.objects.has(key)).toBe(true);
+    // Once it is old enough, the scheduled sweep deletes the body and then
+    // its record.
+    srv.db
+      .prepare('UPDATE r2_pending_objects SET created_at = ?')
+      .run(Date.now() - 2 * PENDING_OBJECT_GRACE_MS);
+    await worker.scheduled({}, srv.env);
+    expect(srv.bucket.objects.has(key)).toBe(false);
+    expect(rows(srv, 'SELECT * FROM r2_pending_objects')).toEqual([]);
+  }, 30_000);
 });

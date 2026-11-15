@@ -96,9 +96,12 @@ Pending objects count against an account-wide budget: one account's records
 may not exceed its storage allowance in bytes, nor 2,400 records, and a
 project holds at most 8 pending document bodies, so a save or copy is refused
 with `STORAGE_CLEANUP_BUSY` (after reclaiming what it can) while earlier
-failures are still waiting. Without the cron, those refusals and project
-deletion, retention and the encrypted-data drop still reclaim pending objects
-on demand, but an account with no further activity keeps its leftovers. You
+failures are still waiting. Project deletion and the encrypted-data drop
+delete pending objects at once, but keep any record younger than the hour
+(its write may still be putting the bytes) for the sweep, filed under no
+project. Without the cron, those refusals, retention and deletion still
+reclaim pending objects on demand, but such records and the leftovers of an
+account with no further activity stay. You
 may change the schedule, but keep a schedule if uploads or encrypted projects
 are enabled. Cron schedules are UTC.
 

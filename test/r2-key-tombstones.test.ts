@@ -1695,10 +1695,18 @@ describe('pending records that outlive a failed write (PR #1477 review, round 5)
     await deletion;
     expect(db.prepare('SELECT id FROM projects').all()).toEqual([]);
     expect(bucket.objects.has(early)).toBe(false);
-    // The late body is still recorded, so the sweep reclaims it.
+    // The late body is still recorded, so the sweep reclaims it; the early
+    // record, young enough that its put could still land, stays detached.
     expect(
-      db.prepare('SELECT object_key, attempt FROM r2_pending_objects').all()
-    ).toEqual([{ object_key: late, attempt: 'late' }]);
+      db
+        .prepare(
+          'SELECT object_key, attempt, project_id FROM r2_pending_objects ORDER BY attempt'
+        )
+        .all()
+    ).toEqual([
+      { object_key: early, attempt: 'early', project_id: '' },
+      { object_key: late, attempt: 'late', project_id: 'p1' }
+    ]);
     db.prepare('UPDATE r2_pending_objects SET created_at = 0').run();
     await drainPendingObjects(
       d1,
@@ -1709,6 +1717,60 @@ describe('pending records that outlive a failed write (PR #1477 review, round 5)
       }
     );
     expect(bucket.objects.has(late)).toBe(false);
+    expect(db.prepare('SELECT * FROM r2_pending_objects').all()).toEqual([]);
+  });
+});
+
+describe('a forced drain of writes that may still be putting (PR #1477 review, round 6)', () => {
+  it('deletes the objects but keeps young records, detached, so its loop ends and the sweep reclaims a late put', async () => {
+    const { drainPendingObjects, recordPendingObject } =
+      await import('@openzcad/cloudflare-adapters');
+    const { objectBucket } = await import('./support/e2ee-documents');
+    const db = database();
+    const d1 = sqliteD1(db);
+    const bucket = objectBucket();
+    const key = 'e2ee/p1/v/hash.inflight';
+    expect(
+      await recordPendingObject(d1, {
+        key,
+        attempt: 'inflight',
+        projectId: 'p1',
+        ownerUserId: OWNER,
+        bytes: 3,
+        bucket: 'project-storage'
+      })
+    ).toBe('recorded');
+    // The encrypted-data drop reclaims every pending write of its project,
+    // however young: done in one pass, nothing left for this project.
+    expect(
+      await drainPendingObjects(
+        d1,
+        { 'project-storage': bucket as never },
+        'p1'
+      )
+    ).toBe(false);
+    expect(
+      await drainPendingObjects(
+        d1,
+        { 'project-storage': bucket as never },
+        'p1'
+      )
+    ).toBe(false);
+    // The write's put lands after that delete: its record still tracks it.
+    bucket.objects.set(key, new Uint8Array([1, 2, 3]).buffer);
+    expect(
+      db.prepare('SELECT object_key, project_id FROM r2_pending_objects').all()
+    ).toEqual([{ object_key: key, project_id: '' }]);
+    db.prepare('UPDATE r2_pending_objects SET created_at = 0').run();
+    await drainPendingObjects(
+      d1,
+      { 'project-storage': bucket as never },
+      null,
+      {
+        olderThanMs: 60 * 60 * 1000
+      }
+    );
+    expect(bucket.objects.has(key)).toBe(false);
     expect(db.prepare('SELECT * FROM r2_pending_objects').all()).toEqual([]);
   });
 });
