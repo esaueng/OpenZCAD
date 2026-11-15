@@ -2,7 +2,7 @@
 row: L09
 ---
 
-Maker slice 1, per-body names and colours in 3MF (PR #PRNUM): each 3MF
+Maker slice 1, per-body names and colours in 3MF (PR #1558): each 3MF
 object is named after its body and coloured in its display colour through one
 core `basematerials` group (`object pid/pindex`, no extension required). Read
 from the slicers' public 3MF importers: Bambu Studio (colour import shipped in
