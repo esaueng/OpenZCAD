@@ -163,6 +163,71 @@ test('renames a body and files bodies in folders, through undo and a reload (U06
     .toEqual(['Hardware', 'Lug', 'Pin', 'Frame base']);
 });
 
+test('a folder click replaces the pick, toggles with Shift, and feeds an open Union', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await openDocument(page, threeBoxes('Folder picks'));
+  const list = objectsList(page);
+  const folder = (name: string) => row(page, name).locator('[data-folder-row]');
+  const selected = (name: string) => row(page, name);
+
+  async function makeFolder(name: string) {
+    await page.getByRole('button', { name: 'New folder' }).click();
+    const field = list.getByRole('textbox', { name: /^Rename folder / });
+    await expect(field).toBeFocused();
+    await field.fill(name);
+    await field.press('Enter');
+  }
+
+  // An empty folder, then one holding Lug and Pin.
+  await makeFolder('Empty');
+  await list.getByRole('button', { name: 'Lug', exact: true }).click();
+  await list
+    .getByRole('button', { name: 'Pin', exact: true })
+    .click({ modifiers: ['Shift'] });
+  await makeFolder('Hardware');
+  await expect
+    .poll(() => rowNames(page))
+    .toEqual(['Empty', 'Hardware', 'Lug', 'Pin', 'Base']);
+
+  // A plain click on an empty folder leaves nothing picked, not the old pick.
+  await list.getByRole('button', { name: 'Base', exact: true }).click();
+  await expect(selected('Base')).toHaveClass(/\bselected\b/);
+  await folder('Empty').click();
+  await expect(selected('Base')).not.toHaveClass(/\bselected\b/);
+
+  // A folder picks its bodies; Shift on a wholly picked folder takes them out.
+  await folder('Hardware').click();
+  await expect(folder('Hardware')).toHaveAttribute('aria-pressed', 'true');
+  await expect(selected('Lug')).toHaveClass(/\bselected\b/);
+  await folder('Hardware').click({ modifiers: ['Shift'] });
+  await expect(folder('Hardware')).toHaveAttribute('aria-pressed', 'false');
+  await expect(selected('Lug')).not.toHaveClass(/\bselected\b/);
+  await expect(selected('Pin')).not.toHaveClass(/\bselected\b/);
+
+  // With Union open, the folder goes to the command's operands: in, then out,
+  // so Done cannot commit bodies the list no longer shows as picked.
+  await list.getByRole('button', { name: 'Base', exact: true }).click();
+  await promptField(page).fill('/');
+  await page
+    .getByRole('listbox', { name: 'Commands' })
+    .getByRole('option')
+    .filter({ has: page.locator('.palette-label', { hasText: /^Union$/ }) })
+    .click();
+  const bar = page.getByRole('group', { name: 'Union command' });
+  await expect(bar).toBeVisible();
+  await revealModelPanel(page, 'Objects');
+  await folder('Hardware').click();
+  await expect(bar).toContainText('3 bodies');
+  await expect(selected('Pin')).toHaveClass(/\bselected\b/);
+  await folder('Hardware').click({ modifiers: ['Shift'] });
+  await expect(bar).toContainText('Click the next body');
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeDisabled();
+  await expect(selected('Lug')).not.toHaveClass(/\bselected\b/);
+  await expect(selected('Base')).toHaveClass(/\bselected\b/);
+});
+
 for (const operation of ['Union', 'Subtract', 'Intersect'] as const) {
   test(`single-body command browsing keeps ${operation} and seeds its first operand`, async ({
     page

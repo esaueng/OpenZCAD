@@ -930,7 +930,10 @@ import {
 } from './lib/topologyResolution';
 import { useLineageDemand } from './lib/lineageDemand';
 import { persistsKernelSession } from './lib/kernelSessionPolicy';
-import { folderClickSelection } from './lib/objectFolderView';
+import {
+  folderClickSelection,
+  folderCommandPicks
+} from './lib/objectFolderView';
 import {
   objectPolylines,
   displayObjectsWithTextBudget
@@ -28837,6 +28840,29 @@ export function App() {
       });
     },
     selectBodies(bodyIds, additive) {
+      // An open body command owns the picks: the folder goes to its slots,
+      // as a body row's click does, and the selection follows them.
+      const command = inPlaceRef.current;
+      if (command.active && command.spec?.bodyMode) {
+        const plan = folderCommandPicks(
+          command.slots.bodies.map((body) => body.bodyId),
+          bodyIds.filter((bodyId) => inPlaceEditTakesBody(bodyId)),
+          command.spec.bodyMode
+        );
+        if (plan.kind === 'too-many') {
+          setStatus(
+            `${command.spec.title} takes one body; pick it in the list or the view.`
+          );
+          return;
+        }
+        if (plan.kind === 'toggle') {
+          for (const bodyId of plan.bodies) {
+            const body = inPlaceBodyPick(bodyId);
+            if (body) command.pickBody(body);
+          }
+        }
+        return;
+      }
       // ⌘/Shift on an empty folder adds nothing; a plain click on one still
       // replaces the selection, so the old pick does not linger.
       if (additive && bodyIds.length === 0) return;
