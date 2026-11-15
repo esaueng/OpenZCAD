@@ -121,6 +121,47 @@ test(
   }
 );
 
+// 15 Nov 2026 screen recording: a list row's actions menu opened under the
+// rows after it. The pointer that opened it kept the row lifted (a hover
+// transform), which trapped the menu's z-index inside the row, so the rows
+// below painted through the menu and took the pointer from its items.
+test(
+  'a list row’s actions menu stays above the rows under it',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openLibrary(page);
+    await page.getByRole('button', { name: 'List' }).click();
+    // A folder over the folder below it, and the lone pinned part over the
+    // next group's rows.
+    for (const name of ['Actions for folder Brackets', 'Actions for Lid']) {
+      // The click leaves the pointer on the row, as a person's does.
+      await page.getByRole('button', { name, exact: true }).click();
+      const menu = page.getByRole('menu', { name, exact: true });
+      await expect(menu).toBeVisible();
+      const items = menu.getByRole('menuitem');
+      expect(await items.count()).toBeGreaterThan(1);
+      for (const item of await items.all()) {
+        const label = await item.textContent();
+        // Each item is what the pointer meets at its centre.
+        expect(
+          await item.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            const hit = document.elementFromPoint(
+              box.left + box.width / 2,
+              box.top + box.height / 2
+            );
+            return hit !== null && element.contains(hit);
+          }),
+          `${name}: ${label}`
+        ).toBe(true);
+      }
+      await page.keyboard.press('Escape');
+      await expect(menu).toBeHidden();
+    }
+  }
+);
+
 test('the shelf header holds still between Projects, Archive and Trash', async ({
   page
 }) => {
