@@ -3,7 +3,7 @@ import type {
   AppSettingsResponse,
   UpdateAppSettingsRequest
 } from '@openzcad/shared';
-import { ApiError } from './api';
+import { accountSettingsAdopted, ApiError } from './api';
 
 export const SETTINGS_AUTOSAVE_DELAY_MS = 450;
 export const SETTINGS_AUTOSAVE_RETRY_DELAY_MS = 2_000;
@@ -171,6 +171,7 @@ export class CloudSettingsAutosave {
     this.#syncedRevision = account.revision;
     this.#automaticRetries = 0;
     this.#lastFailedEditEpoch = null;
+    if (this.#session) accountSettingsAdopted(this.#session.userId, account);
     if (this.#session) {
       this.#session = {
         userId: this.#session.userId,

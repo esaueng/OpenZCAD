@@ -360,6 +360,15 @@ export {
   type LibraryFoldersHeader
 } from './library-folders';
 export {
+  ACCOUNT_SETTINGS_RECORD,
+  openRecord,
+  readSealedRecordHeader,
+  sealRecord,
+  SEALED_RECORD_VERSION_1,
+  type SealedRecordHeader,
+  type SealedRecordKind
+} from './sealed-records';
+export {
   MAX_DELEGATED_DEVICES,
   MAX_SHARE_AUTHORITY_BYTES,
   MAX_SHARE_AUTHORITY_LIFETIME_MS,

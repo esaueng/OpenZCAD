@@ -439,6 +439,7 @@ import { DeferredExactEntry } from './lib/deferredExactEntry';
 import type { SketchSolveStatus } from './components/SketchToolRail';
 import type { SharedLinkCopyDestination } from './components/SharedLinkCopyDialog';
 import {
+  accountSettingsAdopted,
   ApiError,
   api,
   carryEncryptionRequirement,
@@ -7919,6 +7920,10 @@ export function App() {
           ) {
             appSettingsRef.current = remoteSettings.settings;
             setAppSettings(remoteSettings.settings);
+            // Whether or not the autosave has connected yet: the page now
+            // shows an account copy (ADR-024 amendment 2026-11-14).
+            if (activeSession)
+              accountSettingsAdopted(activeSession.userId, remoteSettings);
             const controller = cloudSettingsAutosaveRef.current;
             if (controller) {
               controller.adoptSyncedSettings(
@@ -13804,6 +13809,7 @@ export function App() {
     ) {
       appSettingsRef.current = remoteSettings.settings;
       setAppSettings(remoteSettings.settings);
+      accountSettingsAdopted(activeSession.userId, remoteSettings);
       cloudSettingsAutosaveRef.current?.adoptSyncedSettings(
         remoteSettings.settings,
         remoteSettings

@@ -128,7 +128,17 @@ export interface AssistantProposalRequest {
    * built before negotiation existed; see `assistantEnvForClient`.
    */
   operations?: readonly string[];
+  /**
+   * The user's custom assistant instructions, sent by the browser with each
+   * request (ADR-024 amendment 2026-11-14): an account whose library is
+   * encrypted keeps them sealed, so the Worker cannot read them from its
+   * settings. Absent from older clients, which leave the stored ones.
+   */
+  customInstructions?: string;
 }
+
+/** The settings field's own cap (`settings.assistant.customInstructions`). */
+const MAX_CUSTOM_INSTRUCTIONS_LENGTH = 4_000;
 
 function badRequest(message: string): HttpError {
   return new HttpError(400, message);
@@ -860,12 +870,23 @@ export function parseAssistantProposalRequest(
   ) {
     throw badRequest('"operations" must be a list of operation kinds.');
   }
+  const customInstructions = record.customInstructions;
+  if (
+    customInstructions !== undefined &&
+    (typeof customInstructions !== 'string' ||
+      customInstructions.length > MAX_CUSTOM_INSTRUCTIONS_LENGTH)
+  ) {
+    throw badRequest(
+      `"customInstructions" must be text of at most ${MAX_CUSTOM_INSTRUCTIONS_LENGTH} characters.`
+    );
+  }
   return {
     prompt,
     digest: digest as unknown as CadDocumentDigest,
     history: parseAssistantHistory(record.history),
     attachments: parseAssistantAttachments(record.attachments),
     retryAttempt: record.retryAttempt === 1 ? 1 : 0,
-    ...(operations ? { operations: operations as string[] } : {})
+    ...(operations ? { operations: operations as string[] } : {}),
+    ...(customInstructions === undefined ? {} : { customInstructions })
   };
 }

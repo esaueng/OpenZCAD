@@ -107,7 +107,7 @@ def load_sql(data: bytes):
 
 
 # Migrations above 0050 reviewed one by one (other numbers are still in review).
-REVIEWED_AFTER_0050 = frozenset({53, 54, 55, 56})
+REVIEWED_AFTER_0050 = frozenset({53, 54, 55, 56, 57})
 
 
 def required_objects(db):
@@ -133,6 +133,8 @@ def required_objects(db):
     # r2_pending_objects (keys of objects being written): no committed objects.
     # 0056 adds project_instances (a random id per project row) and
     # account_erasure_requests.request_token: no objects.
+    # 0057 adds only user_settings.sealed_settings (an account's settings
+    # sealed under its account key, base64url text): no stored objects or keys.
     # 0051-0052 are intentionally unused.
     if any(int(name[:4]) > 50 and int(name[:4]) not in REVIEWED_AFTER_0050
            for name in migrations):
