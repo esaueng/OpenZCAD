@@ -1668,7 +1668,9 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     let response: Response;
     try {
       response = await streamAssistantProposal(
-        payload,
+        // Only an encrypted project needs consent: its model goes only to
+        // providers that do not collect it.
+        { ...payload, encryptedProject: consentedRoute !== null },
         env,
         assistantSafetyIdentifier(providerIdentity, payload.retryAttempt),
         assistant.runtime ?? undefined
