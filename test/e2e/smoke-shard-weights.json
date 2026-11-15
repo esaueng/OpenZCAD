@@ -30,7 +30,7 @@
   "encryption-device-approval.spec.ts": 7,
   "encryption-passkeys.spec.ts": 4,
   "encryption-pins.spec.ts": 3,
-  "extrude-cold-load.spec.ts": 8,
+  "extrude-cold-load.spec.ts": 15,
   "extrude-edit-in-place.spec.ts": 11,
   "extrude-in-place.spec.ts": 42,
   "extrude-through-all.spec.ts": 9,
