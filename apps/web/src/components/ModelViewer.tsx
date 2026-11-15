@@ -1073,6 +1073,13 @@ export interface ModelViewerProps {
   units: string;
   /** Primitive box bodies whose planar faces can drive document dimensions. */
   editableBodyIds: string[];
+  /**
+   * A command is armed that owns dragging (an in-place Extrude's region or
+   * edit), whether or not its handles are drawn yet: a press on a body then
+   * never starts the legacy face resize. Its handles load with its bar, so
+   * without this a press before they arrive resized the body underneath.
+   */
+  dragsHeldByCommand?: boolean;
   movePreview: MovePreview | null;
   /**
    * A committed Move whose rebuild is still in flight. The body stays posed
@@ -2340,6 +2347,7 @@ export function ModelViewer({
   normalToFaceRequest,
   units,
   editableBodyIds,
+  dragsHeldByCommand = false,
   movePreview,
   moveCommitHold,
   appearancePreview,
@@ -2612,6 +2620,8 @@ export function ModelViewer({
   pencilDrawsOnlyRef.current = pencilDrawsOnly;
   const editableBodyIdsRef = useRef(new Set(editableBodyIds));
   editableBodyIdsRef.current = new Set(editableBodyIds);
+  const dragsHeldByCommandRef = useRef(dragsHeldByCommand);
+  dragsHeldByCommandRef.current = dragsHeldByCommand;
   const unitsRef = useRef(units);
   unitsRef.current = units;
   // What an overlay prints after a number: `inch` is the document's unit
@@ -11092,8 +11102,10 @@ export function ModelViewer({
         }
       }
       // While any direct-manipulation handle is armed, the handles own
-      // dragging — the legacy box resize would fight the gesture.
+      // dragging — the legacy box resize would fight the gesture. So does an
+      // armed command whose handles have not been drawn yet.
       if (
+        dragsHeldByCommandRef.current ||
         cylinderRadiusRigRef.current ||
         offsetRigRef.current ||
         edgeRigRef.current

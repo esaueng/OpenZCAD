@@ -286,12 +286,16 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
   );
 
   it(
-    'keeps the plain fuse topology on a stepped cylinder union',
+    'ships the merged topology on a stepped cylinder union',
     async () => {
-      // The evolution fuse returns five faces for this union where the plain
-      // fuse returns six. Whichever is the nicer body, the stored face hashes
-      // of every such union move if the shipped topology changes, so the
-      // shipped one stays the plain one.
+      // This case once pinned six faces as "the plain fuse" topology against
+      // the evolution fuse's five. The six were not a different body but a
+      // defective one: `fuseAll` joined the two cylinders cap to cap without
+      // a boolean, keeping the base's full top disc and the post's bottom
+      // disc as an internal wall (QA 2026-11-14 finding #1). The union gate
+      // now refolds that result with the pairwise fuse, so the shipped body
+      // is the merged one: base bottom, base wall, the top annulus, the post
+      // wall and the post top. See `test/touching-cylinder-union.test.ts`.
       const { document, bodyId } = operandDocument(
         'Stepped shaft',
         [
@@ -308,8 +312,17 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
       expect(derived.warnings).toEqual([]);
       const body = derived.bodyRepresentations[bodyId];
       expect(body, 'the union body').toBeDefined();
-      expect(body!.faceCount).toBe(6);
+      expect(body!.faceCount).toBe(5);
       expect(body!.volume).toBeCloseTo(7853.981634, 4);
+      const planes = body!.topology!.faces
+        .filter((face) => face.geometry?.surfaceType === 'plane')
+        .map((face) => face.geometry!.area)
+        .sort((left, right) => left - right);
+      // Post top π·5², base top annulus π·(20² − 5²), base bottom π·20².
+      expect(planes).toHaveLength(3);
+      expect(planes[0]).toBeCloseTo(25 * Math.PI, 6);
+      expect(planes[1]).toBeCloseTo(375 * Math.PI, 6);
+      expect(planes[2]).toBeCloseTo(400 * Math.PI, 6);
     },
     120_000
   );

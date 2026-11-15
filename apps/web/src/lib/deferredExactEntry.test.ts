@@ -43,6 +43,19 @@ function setup() {
 }
 
 describe('deferred exact entry', () => {
+  it('says whether Escape had a waiting entry to close', () => {
+    const h = setup();
+    expect(h.queue.cancel()).toBe(false);
+    h.queue.push('extrude:first');
+    expect(h.queue.cancel()).toBe(true);
+    expect(h.pendingFrames()).toBe(0);
+    expect(h.queue.cancel()).toBe(false);
+    h.ready();
+    h.queue.push('extrude:first');
+    // Opened at once: nothing is left waiting.
+    expect(h.queue.cancel()).toBe(false);
+  });
+
   it('retains all signed digits until the current rig accepts entry', () => {
     const h = setup();
     h.queue.push('extrude:first', '-');

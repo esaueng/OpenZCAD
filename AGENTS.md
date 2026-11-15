@@ -234,14 +234,14 @@ unmergeable.
 
 ## Merge gate
 
-Main uses the active `Bounded merge queue` ruleset: two concurrent queue
-builds, `SQUASH`, `ALLGREEN`, one or two PRs per merge, no minimum-group wait,
+Main uses the active `Bounded merge queue` ruleset: five concurrent queue
+builds, `SQUASH`, `ALLGREEN`, one to five PRs per merge, no minimum-group wait,
 a 180-minute check timeout, and no bypass actors. Squash is the only enabled
 merge method; commit titles use the PR title and bodies use its description.
 See [.github/merge-queue.md](.github/merge-queue.md) for the enqueue procedure.
 
 Branch protection requires `checks / validate`, `checks / e2e`,
-`commit-privacy`, `history-privacy`, and Cloudflare `verify` (the `verify` job in the
+`commit-privacy`, `history-privacy`, `dependency-review`, and Cloudflare `verify` (the `verify` job in the
 `Cloudflare version` workflow), with both privacy checks bound to the dedicated Esau History Privacy App and
 the other checks bound to GitHub Actions. Review
 requirements remain unchanged (currently zero required approvals), and
@@ -275,7 +275,7 @@ rerun checks on any changed PR head.
   head; read the individual runs when reporting.
 - **Verify the separate queue run.** Match the `merge_group` run’s head SHA
   to the candidate reported by the queue, not the original PR head. The
-  five required checks, including Cloudflare `verify`, must pass on that
+  six required checks, including Cloudflare `verify`, must pass on that
   candidate before GitHub merges it. A pending or failing `verify` blocks
   the queue merge. Confirm Cloudflare `upload` is skipped. Verify
   the final merged PR and squash commit; do not report enqueueing as a

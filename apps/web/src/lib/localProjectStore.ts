@@ -1462,10 +1462,24 @@ export function listPendingOrganizationMirrors(): Promise<Set<string>> {
   );
 }
 
+/** A thumbnail write whose caller said, at the last moment, not to. */
+export class ThumbnailWriteCancelledError extends Error {
+  constructor() {
+    super('The project card was not saved: its caller stopped.');
+    this.name = 'AbortError';
+  }
+}
+
 /**
  * Stores a project's card preview. Called while the project is open, where the
  * meshes are already in memory — the shelf itself never renders one, because
- * doing so would mean loading the document.
+ * doing so would mean loading the document. Settings' Regenerate project
+ * thumbnails is the one other writer.
+ *
+ * `shouldWrite` is asked inside the transaction, after the store has opened
+ * and the project's id has resolved and immediately before the put, so a
+ * caller whose session ended during those waits writes nothing; it rejects
+ * with {@link ThumbnailWriteCancelledError} instead.
  */
 export function saveProjectThumbnail(
   projectId: string,
@@ -1474,14 +1488,20 @@ export function saveProjectThumbnail(
     artifactId?: ArtifactId;
     version: number;
     updatedAt: string;
-  }
+  },
+  options: { shouldWrite?: () => boolean } = {}
 ): Promise<void> {
   const record: ProjectThumbnailRecord = { projectId, ...thumbnail };
   return projectTransaction(
     'readwrite',
     projectId,
     THUMBNAIL_STORE_NAME,
-    (store) => store.put(record)
+    (store) => {
+      if (options.shouldWrite && !options.shouldWrite()) {
+        throw new ThumbnailWriteCancelledError();
+      }
+      return store.put(record);
+    }
   ).then(() => undefined);
 }
 

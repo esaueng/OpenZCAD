@@ -381,6 +381,7 @@ import { useOnline } from './hooks/useOnline';
 import {
   lazyWithStaleChunkNotice,
   isOffline,
+  loadRetryingOnReconnect,
   loadWhenOnline,
   OFFLINE_CHUNK_MESSAGE,
   preloadableLazy,
@@ -974,13 +975,14 @@ import type {
   ExtrudeFormValue,
   ExtrudeToFacePicking
 } from './lib/extrudeDraft';
-import {
-  ExtrudeCommand,
-  extrudeShownValues,
-  type ExtrudeCommandHandle,
-  type ExtrudeCommandState,
-  type ExtrudeValueId
+import type {
+  ExtrudeCommandHandle,
+  ExtrudeCommandState
 } from './components/ExtrudeCommand';
+import {
+  extrudeShownValues,
+  type ExtrudeValueId
+} from './lib/extrudeShownValues';
 import { DRAFT_DRAG_LIMIT_DEG, extrudeHandles } from './lib/inPlace/extrude';
 import {
   extrudeToFaceRepair,
@@ -1164,12 +1166,33 @@ const LazyNumericKeypad = preloadableLazy(() =>
 const NumericKeypad = withSuspense(LazyNumericKeypad);
 // U09: an in-place command's Cancel / Done bar. Lazy, like the keypad: only
 // a running command needs it, and the entry chunk runs at its budget.
-const InPlaceCommandBar = withSuspense(
-  lazyWithStaleChunkNotice(() =>
+// Preloadable, so the first command after the idle warm-up opens its bar in
+// the same frame instead of suspending for one; behind its own boundary, so
+// a chunk that cannot load leaves the workspace standing (Escape and Enter
+// still cancel and finish the command).
+const InPlaceCommandBar = preloadableSlot(
+  'Command bar',
+  () =>
     import('./components/InPlaceCommandBar').then((module) => ({
       default: module.InPlaceCommandBar
-    }))
-  )
+    })),
+  { pending: <WorkspacePending /> }
+);
+// The in-place Extrude bar (region extrude and editing a stored extrude).
+// It shares the command bar's chunk, so loading it on demand is what lets the
+// bar above leave the entry chunk at all. Warmed with the keypad as soon as a
+// sketch or command is up, and with the idle warm-up. Until it is ready the
+// region offers nothing the bar would have to answer (`extrudeBarReady`).
+/** Why a region's distance cannot be typed once its bar failed to load. */
+const EXTRUDE_ENTRY_UNAVAILABLE =
+  'Extrude did not load, so its distance cannot be typed. Reload to try again.';
+const ExtrudeCommand = preloadableSlot(
+  'Extrude',
+  () =>
+    import('./components/ExtrudeCommand').then((module) => ({
+      default: module.ExtrudeCommand
+    })),
+  { pending: <WorkspacePending /> }
 );
 
 const LazyViewerShell = preloadableLazy(() =>
@@ -1429,7 +1452,9 @@ const LazySettingsPage = preloadableLazy(() =>
 const FIRST_USE_SURFACES = [
   LazySettingsPage,
   LazyMoveOverlay,
-  LazyNumericKeypad
+  LazyNumericKeypad,
+  InPlaceCommandBar,
+  ExtrudeCommand
 ];
 const LazyProjectSharingDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ProjectSharingDialog').then((module) => ({
@@ -1669,6 +1694,10 @@ import {
 } from './components/PartThumbnail';
 import { folderStorageKey, readLibraryFolders } from './lib/libraryFolders';
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
+import {
+  settleThumbnailUploads,
+  trackThumbnailUpload
+} from './lib/thumbnailUploads';
 import {
   cachedShelfNames,
   forgetShelfProjectNames,
@@ -1966,6 +1995,7 @@ const AssemblyPlayer = createAssemblyPlayer(() =>
   }))
 );
 import { createAssemblyPlayer } from './components/assembly/AssemblyPlayerSlot';
+import { preloadableSlot } from './components/PreloadableSlot';
 import {
   assembleKeyFor,
   runAssembleKey,
@@ -4287,6 +4317,12 @@ export function App() {
   } | null>(null);
   const workspaceModeRef = useRef<WorkspaceMode | null>(null);
   const exactEntryInputEnabledRef = useRef(false);
+  /**
+   * The in-place Extrude's bar could not load (online: its chunk is gone).
+   * A region's typed entry then has no arrow ever to open on, so it is not
+   * queued to retry for one.
+   */
+  const extrudeBarFailedRef = useRef(false);
   const exactEntryQueue = useRef(
     new DeferredExactEntry<{
       interaction: InteractionState;
@@ -4302,6 +4338,10 @@ export function App() {
         owner.tool === toolRef.current &&
         owner.workspaceMode === workspaceModeRef.current &&
         workspaceModeRef.current === 'build' &&
+        !(
+          extrudeBarFailedRef.current &&
+          interactionRef.current.mode === 'region'
+        ) &&
         exactEntryInputEnabledRef.current &&
         keypadRef.current === null &&
         !isTypingTarget(document.activeElement as HTMLElement | null),
@@ -4322,7 +4362,12 @@ export function App() {
       }
     })
   ).current;
-  useEffect(() => () => exactEntryQueue.cancel(), [exactEntryQueue]);
+  useEffect(
+    () => () => {
+      exactEntryQueue.cancel();
+    },
+    [exactEntryQueue]
+  );
   useEffect(
     () => () => {
       ++parameterEditRequest.current;
@@ -4608,6 +4653,131 @@ export function App() {
       ),
     [thumbnailAccountUserId]
   );
+  // Settings › Advanced › Regenerate project thumbnails: progress while it
+  // runs, and what the last run did.
+  const [thumbnailRegeneration, setThumbnailRegeneration] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const [thumbnailRegenerationNote, setThumbnailRegenerationNote] =
+    useState('');
+  // The run in progress and the session it belongs to. It stops — and its
+  // rebuild is cancelled — the moment a project opens or the account
+  // changes; a key session locking stops it at its next step.
+  const thumbnailRegenerationRun = useRef<{
+    accountId: string | null;
+    keyRevision: number;
+    controller: AbortController;
+  } | null>(null);
+  useEffect(() => {
+    const run = thumbnailRegenerationRun.current;
+    if (run && (doc !== null || run.accountId !== (session?.userId ?? null))) {
+      run.controller.abort();
+    }
+  }, [doc, session?.userId]);
+  useEffect(
+    () => () => thumbnailRegenerationRun.current?.controller.abort(),
+    []
+  );
+  /**
+   * Redraws every project's card on this device from its model, on request
+   * only. The shelf never loads a model to draw a card (see `loadThumbnail`);
+   * this is the deliberate exception, offered from the library so no open
+   * project's rebuild competes with it. It publishes nothing: the shelf's
+   * backfill sends a redrawn card the account lacks, as it does any other.
+   */
+  async function handleRegenerateThumbnails() {
+    if (thumbnailRegeneration || doc) return;
+    const list = projects;
+    const accountId = session?.userId ?? null;
+    const cloudIds = cloudProjectIds;
+    const run = {
+      accountId,
+      keyRevision: getKeySessionRevision(),
+      controller: new AbortController()
+    };
+    thumbnailRegenerationRun.current = run;
+    // One signal for every way the run ends, so the rebuild in flight is
+    // cancelled whichever way that was.
+    const active = () => {
+      if (
+        thumbnailRegenerationRun.current !== run ||
+        !isCurrentKeySession(run.keyRevision)
+      ) {
+        run.controller.abort();
+      }
+      return !run.controller.signal.aborted;
+    };
+    let done = 0;
+    setThumbnailRegeneration({ done: 0, total: list.length });
+    try {
+      const [
+        { regenerateProjectThumbnails, ThumbnailRegenerationStopped },
+        { renderPartThumbnail }
+      ] = await Promise.all([
+        import('./lib/projectThumbnailRegeneration'),
+        import('./lib/partThumbnail')
+      ]);
+      const result = await regenerateProjectThumbnails(list, {
+        active,
+        loadLocal: loadLocalProject,
+        ...(session
+          ? {
+              loadAccount: (projectId: string) =>
+                cloudIds.has(projectId)
+                  ? api.loadProject(projectId)
+                  : Promise.reject(new Error('Not stored in the account.'))
+            }
+          : {}),
+        rebuild: (document) =>
+          geometry.syncOnce(document, undefined, undefined, {
+            signal: run.controller.signal
+          }),
+        render: renderPartThumbnail,
+        // Fenced inside the store's transaction, after its waits.
+        save: (projectId, thumbnail) =>
+          saveProjectThumbnail(projectId, thumbnail, { shouldWrite: active }),
+        drawn: (project, source) =>
+          rememberCapturedThumbnail({
+            projectId: project.projectId,
+            source,
+            accountId,
+            protected: isEncryptedProject(project.projectId)
+          }),
+        progress: (count, total) => {
+          done = count;
+          if (active()) setThumbnailRegeneration({ done: count, total });
+        }
+      }).catch((error: unknown) => {
+        if (error instanceof ThumbnailRegenerationStopped) return null;
+        throw error;
+      });
+      if (!result) {
+        const note = `Stopped after ${done} of ${list.length} project cards: a project was opened, the account changed, or encrypted projects were locked.`;
+        setThumbnailRegenerationNote(note);
+        return;
+      }
+      const note = [
+        `Redrew ${result.redrawn} ${result.redrawn === 1 ? 'project card' : 'project cards'}.`,
+        ...(result.skipped > 0
+          ? [
+              `${result.skipped} kept ${result.skipped === 1 ? 'its' : 'their'} card: unreadable here, not rebuilt, or unchanged.`
+            ]
+          : [])
+      ].join(' ');
+      setThumbnailRegenerationNote(note);
+      setStatus(note);
+    } catch (error) {
+      const note = errorMessage(error, 'Could not redraw the project cards.');
+      setThumbnailRegenerationNote(note);
+      setStatus(note);
+    } finally {
+      if (thumbnailRegenerationRun.current === run) {
+        thumbnailRegenerationRun.current = null;
+      }
+      setThumbnailRegeneration(null);
+    }
+  }
   const loadProperties = useCallback(
     async (project: ProjectSummary) => {
       const { loadProjectProperties } = await import('./lib/projectProperties');
@@ -4647,7 +4817,7 @@ export function App() {
               }) => {
                 const { uploadCloudThumbnail } =
                   await import('./lib/cloudThumbnail');
-                return uploadCloudThumbnail(api, input);
+                return trackThumbnailUpload(uploadCloudThumbnail(api, input));
               }
             }
           : {}),
@@ -7200,6 +7370,10 @@ export function App() {
     const stop = watchLibraryFreshness(async () => {
       if (!settled()) return;
       const before = latestProjects.current;
+      // A listing read while a card upload finalizes names the card it
+      // replaced; read after it instead (see thumbnailUploads).
+      await settleThumbnailUploads();
+      if (!settled() || latestProjects.current !== before) return;
       // Expiry purging stays with the explicit listings.
       const listed = await loadProjectSummaries(accountId, false);
       // An unreachable account keeps the shelf as it was rather than
@@ -8479,6 +8653,37 @@ export function App() {
       doc && extrudeEdit ? findFeature(doc, extrudeEdit.featureId) : null;
     return feature?.data.featureKind === 'extrude' ? feature : null;
   }, [doc, extrudeEdit]);
+  // The in-place Extrude's bar loads on demand. Until it is there, a picked
+  // region shows no arrow, chip or handle: a drag, a chip tap or a handle
+  // has no bar to set yet, and holding one for it could reach the wrong
+  // region. Typed entry waits on the arrow as it always has (the deferred
+  // exact entry retries), and Escape closes that waiting entry first.
+  const [extrudeBarArrived, setExtrudeBarArrived] = useState(false);
+  const extrudeBarReady = extrudeBarArrived || ExtrudeCommand.isLoaded();
+  const extrudeBarWanted =
+    interaction.mode === 'region' || extrudeEditFeature !== null;
+  useEffect(() => {
+    if (extrudeBarReady || !extrudeBarWanted) return;
+    let current = true;
+    // Offline it waits for the connection; a failure online is final for
+    // this deploy, and the bar's own slot says it did not load.
+    loadRetryingOnReconnect(() => ExtrudeCommand.preload()).then(
+      () => {
+        extrudeBarFailedRef.current = false;
+        if (current) setExtrudeBarArrived(true);
+      },
+      () => {
+        if (!current) return;
+        extrudeBarFailedRef.current = true;
+        // An entry typed while it loaded will never find its arrow: stop
+        // waiting for it rather than retry every frame.
+        exactEntryQueue.cancel();
+      }
+    );
+    return () => {
+      current = false;
+    };
+  }, [extrudeBarReady, extrudeBarWanted, exactEntryQueue]);
   /** What it opens on: memoized, so its to-face target keeps its identity. */
   const extrudeEditInitialDraft = useMemo(
     () => (extrudeEditFeature ? extrudeEditInitial(extrudeEditFeature) : null),
@@ -14744,6 +14949,11 @@ export function App() {
     setSelectedProfiles([]);
     setTool(null);
     try {
+      // The flush above just started this project's card upload. The shelf
+      // already shows the card; the listing behind it is read once the upload
+      // settles, so it names that card rather than the one it replaced.
+      await settleThumbnailUploads();
+      if (!isCurrent()) return;
       const listed = await loadProjectSummaries(
         sessionRef.current?.userId ?? null
       );
@@ -23585,6 +23795,9 @@ export function App() {
   useEffect(() => {
     if (!keypadWithinReach || prefersSavingData()) return;
     LazyNumericKeypad.preload().catch(() => undefined);
+    // The command bars a sketch region or running command opens next.
+    InPlaceCommandBar.preload().catch(() => undefined);
+    ExtrudeCommand.preload().catch(() => undefined);
   }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
@@ -24228,7 +24441,7 @@ export function App() {
   const regionExtrudeLastValue =
     interaction.mode === 'region' ? (interaction.lastValue ?? 0) : 0;
   const regionExtrudeHandles = useMemo(() => {
-    if (inPlace.active) return [];
+    if (inPlace.active || !extrudeBarReady) return [];
     // An edit's region is its stored profile (the sketch's first region for
     // one stored before profiles); a new extrude's, the one its arrow is on.
     const edited =
@@ -24321,6 +24534,7 @@ export function App() {
     regionExtrudeState,
     extrudeEditFeature,
     inPlace.active,
+    extrudeBarReady,
     availableSketchViews,
     inPlaceUnits
   ]);
@@ -30369,7 +30583,17 @@ export function App() {
       if (!doc) {
         return;
       }
-      if (event.key === 'Escape') exactEntryQueue.cancel();
+      // An exact entry still waiting for its arrow (the Extrude bar loading)
+      // is the entry Escape closes first, as an open one is: the armed
+      // region stays.
+      if (
+        event.key === 'Escape' &&
+        exactEntryQueue.cancel() &&
+        interaction.mode === 'region'
+      ) {
+        event.preventDefault();
+        return;
+      }
       // Hide all keeps the layout; the panels are Build's, so View and
       // Tweak leave it as it is.
       if (global === 'panels-hide-all') {
@@ -30797,6 +31021,10 @@ export function App() {
       );
       if (exactEntry) {
         event.preventDefault();
+        if (interaction.mode === 'region' && extrudeBarFailedRef.current) {
+          setStatus(EXTRUDE_ENTRY_UNAVAILABLE);
+          return;
+        }
         exactEntryQueue.push(
           {
             interaction,
@@ -31341,6 +31569,9 @@ export function App() {
           onApplyViewportDefaults={applyViewportDefaults}
           onExportDiagnostics={handleExportDiagnostics}
           onExportInteractionLog={() => void handleExportInteractionLog()}
+          onRegenerateThumbnails={() => void handleRegenerateThumbnails()}
+          thumbnailRegeneration={thumbnailRegeneration}
+          thumbnailRegenerationNote={thumbnailRegenerationNote}
           onDismissProjectInvitation={dismissProjectInvitation}
           onClose={closeSettings}
         />
@@ -33385,6 +33616,9 @@ export function App() {
             editableBodyIds={
               parameterPreview ? EMPTY_BODY_IDS : viewerEditableBodyIds
             }
+            // The armed Extrude owns dragging from the moment it is armed,
+            // not from when its bar (and with it, its handles) has loaded.
+            dragsHeldByCommand={extrudeBarWanted}
             movePreview={movePreview}
             moveCommitHold={moveCommitHold}
             appearancePreview={bodyAppearancePreview}
@@ -33871,7 +34105,9 @@ export function App() {
             }
             onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
-            regionHandle={modelingLocked ? null : regionHandleTarget}
+            regionHandle={
+              modelingLocked || !extrudeBarReady ? null : regionHandleTarget
+            }
             modelPanelsHidden={panelsHidden}
             axisPicker={modelingLocked ? null : inPlaceAxisPicker}
             onPickAxis={inPlace.pickAxis}

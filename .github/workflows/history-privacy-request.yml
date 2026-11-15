@@ -1,11 +1,14 @@
 name: History privacy request
 
 on:
+  # Pull-request heads are audited once, by History privacy's own
+  # pull_request_target run. Requesting a second audit for every branch push
+  # repeated it on the same commit, so only main, tags and queue candidates
+  # ask here. A branch with no pull request is covered when one opens and by
+  # the daily all-refs audit.
   push:
-    branches: ["**"]
+    branches: [main]
     tags: ["**"]
-  # No pull_request trigger: the push run already tests the same commit, and
-  # History privacy ignores pull_request requests.
   merge_group:
 
 permissions:

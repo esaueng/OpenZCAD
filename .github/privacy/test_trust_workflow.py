@@ -28,6 +28,10 @@ class WorkflowTrustTests(unittest.TestCase):
         self.assertNotRegex(text, r':\s*write\b')
         for event in ('push:', 'merge_group:'):
             self.assertIn(event, text)
+        # Pull-request heads are audited by pull_request_target alone; main,
+        # tags and queue candidates must keep requesting the all-refs audit.
+        self.assertIn('  push:\n    branches: [main]\n    tags: ["**"]\n  merge_group:\n', text)
+        self.assertNotRegex(text, r'(?m)^  pull_request')
 
     def test_metadata_convenience_workflow_cannot_publish_a_required_check(self):
         text = (Path(__file__).parents[1] / 'workflows' / 'commit-privacy.yml').read_text()

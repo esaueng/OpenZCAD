@@ -3530,7 +3530,9 @@ export interface FeatureWarning {
      * The kernel's cause code, for a refusal whose `code` covers several
      * causes. A refused cylindrical-face resize (`unsupported_move_face`)
      * says `unsupported_neighbor`, `partial_reversed_wall` or `unclassified`
-     * here. A string for the same reason `category` is one.
+     * here; a refused diameter (`cylinder-diameter-unbuildable`) says
+     * `wall_meets_face` or `group_reblend_failed` on a kernel that sends it.
+     * A string for the same reason `category` is one.
      */
     reason?: string;
     /** The surface type of the neighbour that blocked the edit, if named. */

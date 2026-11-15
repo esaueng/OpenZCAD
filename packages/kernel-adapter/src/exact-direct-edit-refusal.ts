@@ -33,11 +33,30 @@ type ResizeTwin = (
  * A cylindrical-face resize the kernel refused, as a typed error.
  *
  * `kernelReason` is the kernel's `details.reason` — `unsupported_neighbor`,
- * `partial_reversed_wall` or `unclassified` on the pin — and
+ * `partial_reversed_wall` or `unclassified` on the pin, and for
+ * `cylinder-diameter-unbuildable` `wall_meets_face` or
+ * `group_reblend_failed` from a kernel with esaueng/remus#1747 — and
  * `neighborSurfaceType` is present only for the neighbour case.
  */
 export class DirectEditRefusal extends KernelRefusal {
   readonly operation = 'resize-cylindrical-face';
+}
+
+/**
+ * The sentence for a `cylinder-diameter-unbuildable` refusal, chosen by the
+ * kernel's cause rather than its prose.
+ *
+ * `wall_meets_face` is a size limit — the sharp wall would meet another face
+ * at that diameter — so a smaller one can help. `group_reblend_failed` means
+ * the fillets around the wall did not re-fillet on the resized body; that may
+ * hold at every diameter, so advising a smaller one would be false, and the
+ * way out is the fillets themselves. A kernel that predates the cause
+ * (esaueng/remus#1747) sends none and keeps the size-limit sentence.
+ */
+function diameterUnbuildableSentence(kernelReason: string | null): string {
+  return kernelReason === 'group_reblend_failed'
+    ? "The fillets around this wall can't be rebuilt at that diameter. Change or remove those fillets in History, then resize the wall."
+    : 'That diameter does not fit the existing supports and fillets. Try a smaller diameter.';
 }
 
 /**
@@ -85,7 +104,7 @@ export function resizeCylindricalFaceTyped(
   const kernelReason = kernelDetailString(details, 'reason');
   const message =
     kernelCode === 'cylinder-diameter-unbuildable'
-      ? 'That diameter does not fit the existing supports and fillets. Try a smaller diameter.'
+      ? diameterUnbuildableSentence(kernelReason)
       : kernelMessage;
   const neighborSurfaceType = kernelDetailString(
     details,
