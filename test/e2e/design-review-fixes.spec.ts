@@ -282,8 +282,9 @@ test('a drawing follows a finishing body on explicit Update and saves from Draw'
   await page.keyboard.press('ControlOrMeta+Shift+z');
   await expect(outdated).toHaveCount(0);
   await page.keyboard.press('ControlOrMeta+s');
+  // An explicit save also makes a save point, and says so (#1453, I22).
   await expect(page.getByRole('contentinfo')).toContainText(
-    'Saved on this device'
+    'Made a save point on this device'
   );
   await expect(page.locator('.save-state')).toHaveClass(/is-local\b/);
   await page.reload();
