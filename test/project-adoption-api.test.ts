@@ -20,6 +20,22 @@ vi.mock('../apps/web/src/lib/desktopBridge', () => ({
 
 const owner = toUserId('user_account');
 
+/**
+ * Since #1517 an adoption first asks whether the account's library is
+ * encrypted (`encryptsAccountLibrary`). These cases adopt into a plaintext
+ * account, so the preferences route answers as a current Worker does for
+ * one: no opt-in and no encrypted projects. Every other request goes to
+ * `handler`.
+ */
+function plaintextAccount(
+  handler: (input: unknown, init?: RequestInit) => Promise<Response>
+) {
+  return async (input: unknown, init?: RequestInit): Promise<Response> =>
+    input === '/api/e2ee/project-preferences'
+      ? Response.json({ encryptNewProjects: false, libraryEncrypted: false })
+      : handler(input, init);
+}
+
 function legacyDocument(): ProjectDocument {
   const manager = new CommandManager(
     createProjectDocument('Original', toUserId('user_local'))
@@ -50,17 +66,20 @@ describe('account adoption from an unopened device snapshot', () => {
     const local = legacyDocument();
     const original = structuredClone(local);
     const store = new InMemoryPersistenceService();
-    vi.mocked(desktopFetch).mockImplementation(async (input, init) => {
-      expect(input).toBe('/api/projects');
-      expect(init?.method).toBe('POST');
-      if (typeof init?.body !== 'string') throw new Error('Expected JSON body');
-      const payload: unknown = JSON.parse(init.body);
-      const request = parseCreateProjectRequest(payload);
-      expect(request.document?.schemaVersion).toBe(
-        PROJECT_DOCUMENT_SCHEMA_VERSION
-      );
-      return Response.json(await store.createProject(owner, request));
-    });
+    vi.mocked(desktopFetch).mockImplementation(
+      plaintextAccount(async (input, init) => {
+        expect(input).toBe('/api/projects');
+        expect(init?.method).toBe('POST');
+        if (typeof init?.body !== 'string')
+          throw new Error('Expected JSON body');
+        const payload: unknown = JSON.parse(init.body);
+        const request = parseCreateProjectRequest(payload);
+        expect(request.document?.schemaVersion).toBe(
+          PROJECT_DOCUMENT_SCHEMA_VERSION
+        );
+        return Response.json(await store.createProject(owner, request));
+      })
+    );
 
     // ADR-024 Phase 1: the account no longer reads the schema of undo
     // history, so it would store the raw shelf snapshot unread; the browser
@@ -131,15 +150,18 @@ describe('account adoption from an unopened device snapshot', () => {
     Object.assign(local, { schemaVersion: 3 });
     const original = structuredClone(local);
     const store = new InMemoryPersistenceService();
-    vi.mocked(desktopFetch).mockImplementation(async (_input, init) => {
-      if (typeof init?.body !== 'string') throw new Error('Expected JSON body');
-      return Response.json(
-        await store.createProject(
-          owner,
-          parseCreateProjectRequest(JSON.parse(init.body) as unknown)
-        )
-      );
-    });
+    vi.mocked(desktopFetch).mockImplementation(
+      plaintextAccount(async (_input, init) => {
+        if (typeof init?.body !== 'string')
+          throw new Error('Expected JSON body');
+        return Response.json(
+          await store.createProject(
+            owner,
+            parseCreateProjectRequest(JSON.parse(init.body) as unknown)
+          )
+        );
+      })
+    );
     const adopted = await api.adoptProject(local, owner);
     expect(local).toEqual(original);
     const reopened = new CommandManager(
@@ -174,13 +196,16 @@ describe('account adoption from an unopened device snapshot', () => {
     const corrupt = legacyDocument();
     corrupt.editHistory!.cursor = -1;
     const store = new InMemoryPersistenceService();
-    vi.mocked(desktopFetch).mockImplementation(async (_input, init) => {
-      if (typeof init?.body !== 'string') throw new Error('Expected JSON body');
-      const request = parseCreateProjectRequest(JSON.parse(init.body));
-      // The corrupt history never reaches the account.
-      expect(request.document?.editHistory).toBeUndefined();
-      return Response.json(await store.createProject(owner, request));
-    });
+    vi.mocked(desktopFetch).mockImplementation(
+      plaintextAccount(async (_input, init) => {
+        if (typeof init?.body !== 'string')
+          throw new Error('Expected JSON body');
+        const request = parseCreateProjectRequest(JSON.parse(init.body));
+        // The corrupt history never reaches the account.
+        expect(request.document?.editHistory).toBeUndefined();
+        return Response.json(await store.createProject(owner, request));
+      })
+    );
     const adopted = await api.adoptProject(corrupt, owner);
     const saved = (await store.loadProject(owner, adopted.document.projectId))!;
     expect(saved.name).toBe(corrupt.name);
