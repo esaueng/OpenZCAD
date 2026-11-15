@@ -144,13 +144,22 @@ export const PROJECT_DOCUMENT_UNAVAILABLE_CODE = 'PROJECT_DOCUMENT_UNAVAILABLE';
 export const PROJECT_STORAGE_CLEANUP_PENDING_CODE =
   'PROJECT_STORAGE_CLEANUP_PENDING';
 
+/**
+ * An encrypted save or copy held back while stored files of earlier failed
+ * writes are still being removed (migration 0055). It is refused before
+ * anything is written and each refusal reclaims more, so it is presented
+ * and retried like PROJECT_STORAGE_CLEANUP_PENDING.
+ */
+export const STORAGE_CLEANUP_BUSY_CODE = 'STORAGE_CLEANUP_BUSY';
+
 export function isProjectStorageCleanupPendingError(
   error: unknown
 ): error is ApiError {
   return (
     error instanceof ApiError &&
     error.status === 503 &&
-    error.code === PROJECT_STORAGE_CLEANUP_PENDING_CODE
+    (error.code === PROJECT_STORAGE_CLEANUP_PENDING_CODE ||
+      error.code === STORAGE_CLEANUP_BUSY_CODE)
   );
 }
 

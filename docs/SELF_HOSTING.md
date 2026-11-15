@@ -85,8 +85,26 @@ its `v1` SQLite migration; Wrangler applies that class migration on the first
 Worker deployment. Keep the binding name, class name, and migration tag.
 
 The hourly cron in the example runs the existing expired-upload cleanup and
-reclaims expired rate-limit and sign-in rows from D1. You may change its schedule, but
-keep a schedule if uploads are enabled. Cron schedules are UTC.
+reclaims expired rate-limit and sign-in rows from D1. It also sweeps pending
+encrypted objects (migration 0055): an encrypted save or copy records each R2
+object in `r2_pending_objects` before it puts the bytes, and its committed row
+clears the record. A record left behind is a write that failed and could not
+remove its own object. Each run deletes up to 200 such objects whose record is
+at least an hour old (younger ones may still belong to a write in flight),
+then their records; a backlog or a failed R2 delete waits for the next run.
+Pending objects count against an account-wide budget: one account's records
+may not exceed its storage allowance in bytes, nor 2,400 records, and a
+project holds at most 8 pending document bodies, so a save or copy is refused
+with `STORAGE_CLEANUP_BUSY` (after reclaiming what it can) while earlier
+failures are still waiting. Project deletion and the encrypted-data drop
+delete pending objects at once, but keep any record younger than the hour
+(its write may still be putting the bytes) for the sweep, filed under no
+project; such a record lets no write commit. Deleting all of an account's
+cloud data also clears the account id from its kept records. Without the cron, those refusals, retention and deletion still
+reclaim pending objects on demand, but such records and the leftovers of an
+account with no further activity stay. You
+may change the schedule, but keep a schedule if uploads or encrypted projects
+are enabled. Cron schedules are UTC.
 
 The example's `ratelimits` entries are Workers rate-limit bindings that the
 Worker checks before any D1 work: sign-in verification and desktop refresh
@@ -252,7 +270,11 @@ and insert guards. Cleanups that delete R2 objects under reusable keys
 (content-addressed source assets, encrypted blobs) claim each key there
 first, so a cleanup that resumes late can never delete bytes a newer row
 stores under the same key. Claims expire after an hour, and nothing needs
-operator attention. Migration numbers can have gaps.
+operator attention. Migration `0055_r2_key_tombstone_version_bodies.sql`
+extends the same guard to encrypted document version bodies, and
+`0056_project_instances.sql` gives every project row a random instance id, so
+a deletion never touches a project created again under the same id.
+Migration numbers can have gaps.
 
 **Upgrading across migration 0049** (`0049_unified_account_storage.sql`):
 account storage becomes one allowance. Projects, save states and source assets

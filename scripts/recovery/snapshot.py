@@ -35,6 +35,9 @@ OBJECT_COLUMNS = {
     'artifact_mesh_discards': {'object_key'},
     # Migration 0050: a cleanup's claim on a key it is deleting.
     'r2_key_tombstones': {'object_key'},
+    # Migration 0055: an object being written, or one a failed write left
+    # to cleanup; never a committed object a restore needs.
+    'r2_pending_objects': {'object_key'},
 }
 
 
@@ -104,7 +107,7 @@ def load_sql(data: bytes):
 
 
 # Migrations above 0050 reviewed one by one (other numbers are still in review).
-REVIEWED_AFTER_0050 = frozenset({53, 54})
+REVIEWED_AFTER_0050 = frozenset({53, 54, 55, 56})
 
 
 def required_objects(db):
@@ -126,7 +129,11 @@ def required_objects(db):
     # objects or keys.
     # 0054 adds only e2ee_invitations.acceptance_statement and
     # acceptance_signature (signed public statements): no stored objects or keys.
-    # 0051-0052 are not reviewed.
+    # 0055 adds an index and insert guards on e2ee_project_versions and
+    # r2_pending_objects (keys of objects being written): no committed objects.
+    # 0056 adds project_instances (a random id per project row) and
+    # account_erasure_requests.request_token: no objects.
+    # 0051-0052 are intentionally unused.
     if any(int(name[:4]) > 50 and int(name[:4]) not in REVIEWED_AFTER_0050
            for name in migrations):
         raise SnapshotError('Review new migrations before using this snapshot tool.')

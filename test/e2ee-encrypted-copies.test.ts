@@ -7,7 +7,15 @@
  * migration applied unless a case says otherwise.
  */
 import { createHash } from 'node:crypto';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock
+} from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { fromBase64Url, parseEnvelope, toHex } from '@openzcad/crypto';
 import {
@@ -1112,5 +1120,419 @@ describe('plaintext projects', () => {
     )) {
       expect(sql, sql).toMatch(/FROM sqlite_master/);
     }
+  });
+});
+
+describe('copied objects under reused keys (migration 0050)', () => {
+  it('a copy rollback never deletes the bytes a same-id copy commits meanwhile', async () => {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { projectId, blobId } = await projectWithImport(srv, laptop);
+    const request = await buildCopy(laptop, projectId, 'Bracket');
+    const copyId = request.document!.projectId;
+    const key = `e2ee/${copyId}/${blobId}`;
+    // Rollback A of a failed copy found no row naming the key, claimed it
+    // and is about to delete it.
+    srv.bucket.objects.set(key, text('copy A').slice().buffer);
+    const deleteMock = srv.bucket.delete as unknown as Mock<
+      (key: string) => Promise<void>
+    >;
+    const remove = deleteMock.getMockImplementation()!;
+    let entered!: () => void;
+    let release!: () => void;
+    const atDelete = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    deleteMock.mockImplementationOnce(async (deleted: string) => {
+      entered();
+      await released;
+      return remove(deleted);
+    });
+    const stale = discardCopiedObjects(
+      srv.env.DB as D1Database,
+      srv.bucket as never,
+      [key]
+    );
+    await atDelete;
+    // A retry of the same copy, meanwhile, is refused while A holds the
+    // key: no copied-blob row can come to name bytes A is removing.
+    await refusedWith(
+      laptop.store.copyProject({
+        sourceProjectId: projectId,
+        document: request.document!
+      }),
+      503,
+      'STORAGE_CLEANUP_BUSY'
+    );
+    release();
+    await stale;
+    // Once A is done the retry lands, and its bytes stay.
+    const { document } = await laptop.store.copyProject({
+      sourceProjectId: projectId,
+      document: request.document!
+    });
+    expect(document.projectId).toBe(copyId);
+    expect(objectKeys(srv, copyId)).toEqual([key]);
+    expect(rows(srv, 'SELECT object_key FROM r2_key_tombstones')).toEqual([]);
+  });
+});
+
+describe('a copy whose source goes away (PR #1477 review, round 3)', () => {
+  it('a rollback cannot remove a copy’s bytes before its rows land, so deleting the source afterwards loses nothing', async () => {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { projectId, blobId, step } = await projectWithImport(srv, laptop);
+    const request = await buildCopy(laptop, projectId, 'Bracket');
+    const copyId = request.document!.projectId;
+    const key = `e2ee/${copyId}/${blobId}`;
+    const putMock = srv.bucket.put as unknown as Mock<
+      (key: string, body: ArrayBuffer | Uint8Array) => Promise<void>
+    >;
+    const put = putMock.getMockImplementation()!;
+    let once = true;
+    putMock.mockImplementation(async (written, body) => {
+      await put(written, body);
+      // Another attempt's rollback runs right after this copy's put,
+      // before its rows land.
+      if (written === key && once) {
+        once = false;
+        await discardCopiedObjects(
+          srv.env.DB as D1Database,
+          srv.bucket as never,
+          [key],
+          'another-attempt'
+        );
+      }
+    });
+    // The source is deleted as soon as the copy's rows commit.
+    const db = srv.env.DB as D1Database;
+    const batch = db.batch.bind(db);
+    let sourceDeleted = false;
+    db.batch = async (statements: D1PreparedStatement[]) => {
+      const result = await batch(statements);
+      if (
+        !sourceDeleted &&
+        statements.some((statement) =>
+          (statement as unknown as { sql?: string }).sql?.includes(
+            'INSERT INTO projects'
+          )
+        )
+      ) {
+        sourceDeleted = true;
+        expect(
+          (await srv.call('DELETE', `/api/projects/${projectId}`)).status
+        ).toBe(204);
+      }
+      return result;
+    };
+    const { document } = await laptop.store.copyProject({
+      sourceProjectId: projectId,
+      document: request.document!
+    });
+    db.batch = batch;
+    expect(sourceDeleted).toBe(true);
+    expect(document.projectId).toBe(copyId);
+    expect(srv.bucket.objects.has(key)).toBe(true);
+    expect(
+      rows(
+        srv,
+        'SELECT object_key FROM r2_pending_objects WHERE object_key = ?',
+        key
+      )
+    ).toEqual([]);
+    const desktop = device(srv, owner, 'owner_desktop');
+    await desktop.store.loadProject(copyId);
+    expect(await desktop.blobs.read(copyId, blobId)).toEqual(step);
+  });
+
+  it('refuses a copy retryably, committing nothing, when a copied object is missing before its rows land', async () => {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { projectId, blobId } = await projectWithImport(srv, laptop);
+    const request = await buildCopy(laptop, projectId, 'Bracket');
+    const copyId = request.document!.projectId;
+    const key = `e2ee/${copyId}/${blobId}`;
+    const putMock = srv.bucket.put as unknown as Mock<
+      (key: string, body: ArrayBuffer | Uint8Array) => Promise<void>
+    >;
+    const put = putMock.getMockImplementation()!;
+    let lost = true;
+    putMock.mockImplementation(async (written, body) => {
+      // The put is lost.
+      if (written === key && lost) {
+        lost = false;
+        return;
+      }
+      return put(written, body);
+    });
+    await refusedWith(
+      laptop.store.copyProject({
+        sourceProjectId: projectId,
+        document: request.document!
+      }),
+      503,
+      'E2EE_COPY_SOURCE_UNAVAILABLE'
+    );
+    expect(projectIds(srv)).not.toContain(copyId);
+    // The retry copies and commits it.
+    await laptop.store.copyProject({
+      sourceProjectId: projectId,
+      document: request.document!
+    });
+    expect(srv.bucket.objects.has(key)).toBe(true);
+  });
+});
+
+describe('a copy retry and a rollback of the same key (PR #1477 review, round 4)', () => {
+  it('a copy starting after a rollback claimed its key is refused retryably, and commits nothing on bytes that rollback removes', async () => {
+    const { recordPendingObject } =
+      await import('@openzcad/cloudflare-adapters');
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { projectId, blobId, step } = await projectWithImport(srv, laptop);
+    const request = await buildCopy(laptop, projectId, 'Bracket');
+    const copyId = request.document!.projectId;
+    const key = `e2ee/${copyId}/${blobId}`;
+    const db = srv.env.DB as D1Database;
+    // An earlier attempt of the same copy failed after its put; its
+    // rollback claims the key and pauses at the R2 delete.
+    srv.bucket.objects.set(key, text('failed attempt').slice().buffer);
+    expect(
+      await recordPendingObject(db, {
+        key,
+        attempt: 'old-attempt',
+        projectId: copyId,
+        ownerUserId: OWNER,
+        bytes: 14,
+        bucket: 'artifacts'
+      })
+    ).toBe('recorded');
+    const deleteMock = srv.bucket.delete as unknown as Mock<
+      (key: string) => Promise<void>
+    >;
+    const remove = deleteMock.getMockImplementation()!;
+    let entered!: () => void;
+    let releaseDelete!: () => void;
+    const atDelete = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (releaseDelete = resolve));
+    let first = true;
+    deleteMock.mockImplementation(async (deleted) => {
+      if (deleted === key && first) {
+        first = false;
+        entered();
+        await released;
+      }
+      return remove(deleted);
+    });
+    const rollback = discardCopiedObjects(
+      db,
+      srv.bucket as never,
+      [key],
+      'old-attempt'
+    );
+    await atDelete;
+    // Without the admission guard the retry would record, put and verify
+    // its bytes, and the rollback would delete them just before its rows
+    // land: let the rollback finish right as a create batch starts.
+    const batch = db.batch.bind(db);
+    let reachedBatch = false;
+    db.batch = async (statements: D1PreparedStatement[]) => {
+      if (
+        !reachedBatch &&
+        statements.some((statement) =>
+          (statement as unknown as { sql?: string }).sql?.includes(
+            'INSERT INTO projects'
+          )
+        )
+      ) {
+        reachedBatch = true;
+        releaseDelete();
+        await rollback;
+      }
+      return batch(statements);
+    };
+    try {
+      // The retry may not put under the key the rollback is deleting.
+      await refusedWith(
+        laptop.store.copyProject({
+          sourceProjectId: projectId,
+          document: request.document!
+        }),
+        503,
+        'STORAGE_CLEANUP_BUSY'
+      );
+      expect(reachedBatch).toBe(false);
+      expect(projectIds(srv)).not.toContain(copyId);
+      expect(blobRows(srv, copyId)).toEqual([]);
+    } finally {
+      releaseDelete();
+      await rollback;
+      db.batch = batch;
+    }
+    expect(srv.bucket.objects.has(key)).toBe(false);
+    // Once the rollback is done, the retry copies and commits its bytes.
+    await laptop.store.copyProject({
+      sourceProjectId: projectId,
+      document: request.document!
+    });
+    expect(srv.bucket.objects.has(key)).toBe(true);
+    expect(rows(srv, 'SELECT object_key FROM r2_pending_objects')).toEqual([]);
+    const desktop = device(srv, owner, 'owner_desktop');
+    await desktop.store.loadProject(copyId);
+    expect(await desktop.blobs.read(copyId, blobId)).toEqual(step);
+  });
+
+  it('counts a copy’s pending objects against the account’s budget, reclaiming aged ones on refusal', async () => {
+    const { PENDING_OBJECTS_PER_ACCOUNT } =
+      await import('@openzcad/cloudflare-adapters');
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { projectId, blobId } = await projectWithImport(srv, laptop);
+    const request = await buildCopy(laptop, projectId, 'Bracket');
+    const copyId = request.document!.projectId;
+    // Failed writes elsewhere in the account fill its pending budget.
+    const insert = srv.db.prepare(
+      `INSERT INTO r2_pending_objects
+         (object_key, attempt, project_id, owner_user_id, object_bytes,
+          bucket, created_at)
+       VALUES (?, 'failed', 'proj_elsewhere', ?, 0, 'artifacts', ?)`
+    );
+    for (let index = 0; index < PENDING_OBJECTS_PER_ACCOUNT; index += 1) {
+      insert.run(`e2ee/proj_elsewhere/b${index}`, OWNER, Date.now());
+    }
+    const copy = () =>
+      laptop.store.copyProject({
+        sourceProjectId: projectId,
+        document: request.document!
+      });
+    await refusedWith(copy(), 503, 'STORAGE_CLEANUP_BUSY');
+    expect(projectIds(srv)).not.toContain(copyId);
+    expect(srv.bucket.objects.has(`e2ee/${copyId}/${blobId}`)).toBe(false);
+    // Once those records are old enough to belong to no write in flight,
+    // the next refusal reclaims a batch of them, and the copy then fits.
+    srv.db.prepare('UPDATE r2_pending_objects SET created_at = 0').run();
+    await refusedWith(copy(), 503, 'STORAGE_CLEANUP_BUSY');
+    expect(
+      rows<{ n: number }>(
+        srv,
+        'SELECT COUNT(*) AS n FROM r2_pending_objects'
+      )[0]!.n
+    ).toBeLessThan(PENDING_OBJECTS_PER_ACCOUNT);
+    await copy();
+    expect(projectIds(srv)).toContain(copyId);
+  });
+});
+
+describe('a copy whose verified objects were taken from it before it commits (PR #1477 review, round 5)', () => {
+  /**
+   * Starts a copy that pauses as its create batch starts, after it copied
+   * and verified its objects; `meanwhile` runs, then the copy resumes.
+   */
+  async function stalledCopy(
+    meanwhile: (context: {
+      srv: Server;
+      laptop: Device;
+      projectId: string;
+      copyId: string;
+      key: string;
+      copy: () => Promise<unknown>;
+    }) => Promise<void>
+  ) {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { projectId, blobId, step } = await projectWithImport(srv, laptop);
+    const request = await buildCopy(laptop, projectId, 'Bracket');
+    const copyId = request.document!.projectId;
+    const key = `e2ee/${copyId}/${blobId}`;
+    const copy = () =>
+      laptop.store.copyProject({
+        sourceProjectId: projectId,
+        document: request.document!
+      });
+    const db = srv.env.DB as D1Database;
+    const batch = db.batch.bind(db);
+    let entered!: () => void;
+    let release!: () => void;
+    const atBatch = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let first = true;
+    db.batch = async (statements: D1PreparedStatement[]) => {
+      if (
+        first &&
+        statements.some((statement) =>
+          (statement as unknown as { sql?: string }).sql?.includes(
+            'INSERT INTO projects'
+          )
+        )
+      ) {
+        first = false;
+        entered();
+        await released;
+      }
+      return batch(statements);
+    };
+    const stalled = copy();
+    stalled.catch(() => undefined);
+    await atBatch;
+    try {
+      await meanwhile({ srv, laptop, projectId, copyId, key, copy });
+    } finally {
+      release();
+    }
+    return { srv, laptop, stalled, copyId, key, blobId, step, copy, db, batch };
+  }
+
+  it('a copy resuming after an identical copy committed and was purged commits nothing', async () => {
+    const { srv, stalled, copyId, key, db, batch } = await stalledCopy(
+      async ({ srv, copyId, key, copy }) => {
+        // The identical retry commits, clearing every record of its keys.
+        await copy();
+        expect(srv.bucket.objects.has(key)).toBe(true);
+        // The user deletes it for good, with its object.
+        srv.db
+          .prepare(
+            "UPDATE projects SET status = 'deleted', deleted_at = '2000-01-01T00:00:00.000Z' WHERE id = ?"
+          )
+          .run(copyId);
+        const purged = await srv.call('POST', '/api/projects/purge');
+        expect(await purged.json()).toEqual({ purgedProjectIds: [copyId] });
+        expect(srv.bucket.objects.has(key)).toBe(false);
+      }
+    );
+    await refusedWith(stalled, 503, 'PROJECT_STORAGE_UNAVAILABLE');
+    db.batch = batch;
+    expect(projectIds(srv)).not.toContain(copyId);
+    expect(e2eeRowsOf(srv, copyId)).toEqual(nothingLeft);
+    // Nothing names the purged copy's key, so nothing is charged for it.
+    expect(
+      rows(
+        srv,
+        'SELECT object_key FROM e2ee_content_blobs WHERE object_key = ?',
+        key
+      )
+    ).toEqual([]);
+  });
+
+  it('a copy resuming after the sweep reclaimed its aged objects commits nothing, and a retry stores usable bytes', async () => {
+    const { drainPendingObjects } =
+      await import('@openzcad/cloudflare-adapters');
+    const { srv, stalled, copyId, key, copy, db, batch } = await stalledCopy(
+      async ({ srv, key }) => {
+        // The copy's record outlives the grace: the sweep reclaims it.
+        srv.db.prepare('UPDATE r2_pending_objects SET created_at = 0').run();
+        await drainPendingObjects(
+          srv.env.DB as D1Database,
+          { artifacts: srv.bucket as never },
+          null,
+          { olderThanMs: 60 * 60 * 1000 }
+        );
+        expect(srv.bucket.objects.has(key)).toBe(false);
+      }
+    );
+    await refusedWith(stalled, 503, 'PROJECT_STORAGE_UNAVAILABLE');
+    db.batch = batch;
+    expect(projectIds(srv)).not.toContain(copyId);
+    expect(e2eeRowsOf(srv, copyId)).toEqual(nothingLeft);
+    await copy();
+    expect(srv.bucket.objects.has(key)).toBe(true);
   });
 });

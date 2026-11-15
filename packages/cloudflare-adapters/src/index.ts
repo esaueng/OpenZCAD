@@ -186,6 +186,7 @@ import {
   sha256Hex,
   type ClientProjectStorage,
   type PreparedProjectStorageSnapshot,
+  type OwnedProjectInstance,
   type ProjectStorageAssetObject,
   type ProjectStorageAssetReference
 } from '@openzcad/persistence';
@@ -569,6 +570,355 @@ export function cachedSchemaProbe(
   };
 }
 
+/** Whether migration 0056's project instances are installed. */
+export const isProjectInstanceReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM sqlite_master
+   WHERE type = 'table' AND name = 'project_instances'`,
+  (row) => row?.ready === 1
+);
+
+/**
+ * The instance (migration 0056) of the project now stored under `projectId`:
+ * which generation of a client-minted id it is. Null when the project is
+ * gone or the migration is not installed.
+ */
+export async function projectInstanceId(
+  db: D1Database,
+  projectId: string
+): Promise<string | null> {
+  if (!(await isProjectInstanceReady(db))) return null;
+  const row = await db
+    .prepare('SELECT instance_id FROM project_instances WHERE project_id = ?')
+    .bind(projectId)
+    .first<{ instance_id: string }>();
+  return row?.instance_id ?? null;
+}
+
+/** Whether migration 0055's pending R2 objects are installed. */
+export const isPendingObjectStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM sqlite_master
+   WHERE type = 'table' AND name = 'r2_pending_objects'`,
+  (row) => row?.ready === 1
+);
+
+/** Which bucket a pending object (migration 0055) lives in. */
+export type PendingObjectBucket = 'project-storage' | 'artifacts';
+
+/** The buckets a drain of pending objects deletes from. */
+export type PendingObjectBuckets = Partial<
+  Record<PendingObjectBucket, { delete(key: string): Promise<unknown> } | null>
+>;
+
+/** Pending objects one project may hold at once (each write admits one). */
+export const PENDING_OBJECTS_PER_PROJECT = 8;
+
+/**
+ * Pending objects one account may hold at once, across its projects and
+ * copies (migration 0055's admission trigger holds the same number): two
+ * copies of the most files one copy may list.
+ */
+export const PENDING_OBJECTS_PER_ACCOUNT = 2_400;
+
+/**
+ * Whether `recordPendingObject` recorded the key, or why not:
+ * - `project-full`: the project already holds `cap` pending objects;
+ * - `account-full`: the account's pending objects would exceed its storage
+ *   allowance in bytes, or `PENDING_OBJECTS_PER_ACCOUNT` records;
+ * - `too-large`: this attempt's own objects would exceed the allowance, so
+ *   its rows could never commit;
+ * - `key-deleting`: a cleanup holds a fresh claim on the key and may be
+ *   about to delete it (retry once it is done);
+ * - `owner-gone`: the account it is charged to no longer exists (its full
+ *   erasure completed after this write was admitted);
+ * - `revoked`: the write's own authority (`authority`) no longer holds:
+ *   its session ended, or an erasure of its account began or completed.
+ */
+export type PendingObjectAdmission =
+  | 'recorded'
+  | 'project-full'
+  | 'account-full'
+  | 'too-large'
+  | 'key-deleting'
+  | 'owner-gone'
+  | 'revoked';
+
+/**
+ * Records that `attempt` is about to put `key` (migration 0055), before the
+ * put: from then on no cleanup can claim the key while the record stands,
+ * and the row that names the key clears it. The record is charged to
+ * `ownerUserId` for `bytes`. Migration 0055's trigger refuses it in the
+ * same statement while a cleanup holds a fresh claim on the key, or once
+ * the account's pending objects would exceed its allowance; with `cap`,
+ * it is also refused once the project already holds that many pending
+ * objects in `bucket`, so failed writes cannot accumulate stored bytes
+ * without bound. Only `recorded` lets the caller put the object.
+ */
+export async function recordPendingObject(
+  db: D1Database,
+  input: {
+    key: string;
+    attempt: string;
+    projectId: string;
+    ownerUserId: string;
+    bytes: number;
+    bucket: PendingObjectBucket;
+    cap?: number;
+    /**
+     * The write's own authority (its session and erasure fence): one SQL
+     * condition with `?` placeholders. The record is admitted only while
+     * it holds, in the INSERT itself, so a write whose session an erasure
+     * revoked admits nothing, even once the account is created again
+     * under the same id.
+     */
+    authority?: { sql: string; binds: readonly unknown[] };
+  }
+): Promise<PendingObjectAdmission> {
+  let result: Awaited<ReturnType<D1PreparedStatement['run']>>;
+  try {
+    result = await db
+      .prepare(
+        `INSERT INTO r2_pending_objects
+           (object_key, attempt, project_id, owner_user_id, object_bytes,
+            bucket, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?
+         WHERE (SELECT COUNT(*) FROM r2_pending_objects
+                WHERE project_id = ? AND bucket = ?) < ?
+           AND ${input.authority?.sql ?? '1'}`
+      )
+      .bind(
+        input.key,
+        input.attempt,
+        input.projectId,
+        input.ownerUserId,
+        input.bytes,
+        input.bucket,
+        Date.now(),
+        input.projectId,
+        input.bucket,
+        input.cap ?? Number.MAX_SAFE_INTEGER,
+        ...(input.authority?.binds ?? [])
+      )
+      .run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('r2_pending_owner_gone')) return 'owner-gone';
+    if (message.includes('r2_key_deleting')) return 'key-deleting';
+    if (message.includes('r2_pending_attempt_quota')) return 'too-large';
+    if (message.includes('r2_pending_account_limit')) return 'account-full';
+    throw error;
+  }
+  if ((result.meta?.changes ?? 0) >= 1) return 'recorded';
+  // Refused by the cap or by the write's authority: which one only shapes
+  // the answer; the INSERT itself admitted nothing either way.
+  if (
+    input.authority &&
+    !(await db
+      .prepare(`SELECT 1 AS held WHERE ${input.authority.sql}`)
+      .bind(...input.authority.binds)
+      .first<{ held: number }>())
+  ) {
+    return 'revoked';
+  }
+  return 'project-full';
+}
+
+/** Drops `attempt`'s records of `keys` once their objects are gone. */
+export async function forgetPendingObjects(
+  db: D1Database,
+  attempt: string,
+  keys: readonly string[]
+): Promise<void> {
+  if (!keys.length || !(await isPendingObjectStorageReady(db))) return;
+  await db
+    .prepare(
+      `DELETE FROM r2_pending_objects WHERE attempt = ?
+         AND object_key IN (SELECT value FROM json_each(?))`
+    )
+    .bind(attempt, JSON.stringify(keys))
+    .run();
+}
+
+/** Pending objects older than this belong to no write still in flight. */
+export const PENDING_OBJECT_GRACE_MS = 60 * 60 * 1000;
+
+/**
+ * Deletes the R2 objects that failed writes left recorded as pending
+ * (migration 0055), each under a key claim (fenced on `fence` when given),
+ * then their records: those of `projectId`, or with null the oldest of any
+ * project (the scheduled sweep). Only records at least `olderThanMs` old: a
+ * younger one may belong to a write still in flight. True while more are
+ * left.
+ */
+export async function drainPendingObjects(
+  db: D1Database,
+  buckets: PendingObjectBuckets,
+  projectId: string | null,
+  options: {
+    olderThanMs?: number;
+    fence?: { sql: string; binds: readonly unknown[] };
+    limit?: number;
+    /** Only records charged to this account. */
+    ownerUserId?: string;
+  } = {}
+): Promise<boolean> {
+  if (!(await isPendingObjectStorageReady(db))) return false;
+  const limit = options.limit ?? 64;
+  const cutoff = Date.now() - (options.olderThanMs ?? 0);
+  const { results } = await db
+    .prepare(
+      `SELECT object_key, attempt, bucket, created_at FROM r2_pending_objects
+       WHERE ${projectId === null ? '?1 IS NULL' : 'project_id = ?1'}
+         AND created_at <= ?2${
+           options.ownerUserId === undefined ? '' : ' AND owner_user_id = ?4'
+         }
+       ORDER BY created_at LIMIT ?3`
+    )
+    .bind(
+      projectId,
+      cutoff,
+      limit + 1,
+      ...(options.ownerUserId === undefined ? [] : [options.ownerUserId])
+    )
+    .all<{
+      object_key: string;
+      attempt: string;
+      bucket: PendingObjectBucket;
+      created_at: number;
+    }>();
+  const rows = (results ?? []).slice(0, limit);
+  if (!rows.length) return false;
+  // Every attempt abandoned as long as these on the same keys (two failed
+  // rollbacks of one copy each left a record, and each blocked the other's
+  // claim): none of them keeps a key alive against this drain.
+  const { results: abandoned } = await db
+    .prepare(
+      `SELECT DISTINCT attempt FROM r2_pending_objects
+       WHERE object_key IN (SELECT value FROM json_each(?1))
+         AND created_at <= ?2`
+    )
+    .bind(
+      JSON.stringify([...new Set(rows.map((row) => row.object_key))]),
+      cutoff
+    )
+    .all<{ attempt: string }>();
+  const claim = await claimObjectKeysForDelete(
+    db,
+    rows.map((row) => row.object_key),
+    {
+      pending: [
+        ...new Set([
+          ...rows.map((row) => row.attempt),
+          ...(abandoned ?? []).map((row) => row.attempt)
+        ])
+      ]
+    },
+    options.fence
+  );
+  try {
+    const deleted = new Set<string>();
+    for (const bucket of ['project-storage', 'artifacts'] as const) {
+      const target = buckets[bucket];
+      const keys = rows
+        .filter((row) => row.bucket === bucket)
+        .map((row) => row.object_key);
+      if (!target || !keys.length) continue;
+      for (const key of (await claim.deleteObjects(target, keys)).deleted) {
+        deleted.add(key);
+      }
+    }
+    // Deleted, or not claimable for a reason that keeps the object
+    // tracked: a row names it (a committed row cleared its records with
+    // its commit), or a younger attempt's record still does. Contended
+    // keys and failed or lapsed deletes keep their records for a retry.
+    const done = rows.filter(
+      (row) =>
+        deleted.has(row.object_key) ||
+        (!claim.keys.has(row.object_key) &&
+          !claim.contended.has(row.object_key))
+    );
+    if (done.length) {
+      await db.batch(
+        settlePendingRecords(
+          db,
+          done.map((row) => [row.object_key, row.attempt, row.created_at]),
+          options.fence
+        )
+      );
+    }
+    return (results ?? []).length > limit || done.length < rows.length;
+  } finally {
+    await claim.release();
+  }
+}
+
+/**
+ * The project a pending record left behind by a removed project is filed
+ * under: no project id is empty, so no project's listing, cap or cleanup
+ * reaches it again, and only the scheduled sweep (which lists every
+ * project's records by age) reclaims it.
+ */
+export const DETACHED_PENDING_PROJECT = '';
+
+/**
+ * The account a pending record is charged to once its account was erased:
+ * no account's id, so the record (kept, detached, until the sweep reclaims
+ * its key) names no erased account.
+ */
+export const ERASED_PENDING_OWNER = '';
+
+/**
+ * For an account's full erasure, inside its final batch: every pending
+ * record charged to `userId` is detached (no write of the erased account
+ * may commit any longer) and stops naming the account. Each still tracks
+ * its key, so the scheduled sweep reclaims bytes a write still putting
+ * them may yet store.
+ */
+export function erasePendingObjectOwnerStatement(
+  db: D1Database,
+  userId: string
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE r2_pending_objects SET project_id = ?, owner_user_id = ?
+       WHERE owner_user_id = ?`
+    )
+    .bind(DETACHED_PENDING_PROJECT, ERASED_PENDING_OWNER, userId);
+}
+
+/**
+ * Settles pending records whose objects a cleanup reclaimed, by primary
+ * key (one index lookup each, never a scan): records old enough that no
+ * write can still be in flight (`PENDING_OBJECT_GRACE_MS`) go; younger ones
+ * stay, detached from their project. A delete that overtook a put still
+ * in flight proves nothing: the put may land after it and store the bytes
+ * again, so the record keeps tracking the key until the sweep finds it
+ * aged, claims the key and deletes it once more.
+ */
+function settlePendingRecords(
+  db: D1Database,
+  records: readonly (readonly [string, string, number])[],
+  fence?: { sql: string; binds: readonly unknown[] }
+): D1PreparedStatement[] {
+  const cutoff = Date.now() - PENDING_OBJECT_GRACE_MS;
+  const pairs = (aged: boolean) =>
+    JSON.stringify(
+      records
+        .filter(([, , createdAt]) => createdAt <= cutoff === aged)
+        .map(([key, attempt]) => [key, attempt])
+    );
+  const listed = `(object_key, attempt) IN (
+      SELECT json_extract(d.value, '$[0]'), json_extract(d.value, '$[1]')
+      FROM json_each(?) d)${fence ? ` AND ${fence.sql}` : ''}`;
+  return [
+    db
+      .prepare(`DELETE FROM r2_pending_objects WHERE ${listed}`)
+      .bind(pairs(true), ...(fence?.binds ?? [])),
+    db
+      .prepare(`UPDATE r2_pending_objects SET project_id = ? WHERE ${listed}`)
+      .bind(DETACHED_PENDING_PROJECT, pairs(false), ...(fence?.binds ?? []))
+  ];
+}
+
 /** Whether migration 0050's R2 key tombstones are installed. */
 export const isR2KeyTombstoneReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM sqlite_master
@@ -610,6 +960,25 @@ export interface OwnObjectRows {
   readonly assets?: readonly string[];
   readonly artifacts?: readonly string[];
   readonly documentObjects?: readonly string[];
+  /** Encrypted versions whose bodies are being dropped, by row key. */
+  readonly versions?: readonly {
+    readonly projectId: string;
+    readonly documentVersion: number;
+  }[];
+  /**
+   * Whole projects being destroyed: every row of theirs is exempt. Pass
+   * only with a fence that holds just while that very generation of each
+   * project is being destroyed (its cleanup claim), so the rows of a
+   * project recreated under the same id are never treated as the
+   * deleter's own.
+   */
+  readonly projects?: readonly string[];
+  /**
+   * Write attempts whose pending records (migration 0055) the deleter is
+   * removing: their records do not keep their keys alive. Any other
+   * attempt's record does, for the write is still in flight.
+   */
+  readonly pending?: readonly string[];
 }
 
 /** What `ObjectKeyClaim.deleteObjects` did, key by key. */
@@ -656,7 +1025,7 @@ export interface ObjectKeyClaim {
 }
 
 /** A claimed R2 delete that failed or could not run yet: retry later. */
-export class ObjectKeyDeleteRetryError extends Error {
+export class ObjectKeyDeleteRetryError extends ProjectObjectStorageError {
   constructor(
     message = 'Stored objects are still being removed. Try again later.'
   ) {
@@ -759,6 +1128,7 @@ export async function claimObjectKeysForDelete(
     );
   }
   const token = crypto.randomUUID();
+  const pendingReady = await isPendingObjectStorageReady(db);
   const listed = JSON.stringify(unique);
   const ids = (values?: readonly string[]) => JSON.stringify(values ?? []);
   // A claim that outlived its deleter blocks nothing; it is dropped here
@@ -776,23 +1146,43 @@ export async function claimObjectKeysForDelete(
        SELECT k.value, ?1, ?2 FROM json_each(?3) k
        WHERE NOT EXISTS (SELECT 1 FROM upload_sessions s
                          WHERE s.object_key = k.value
-                           AND s.id NOT IN (SELECT value FROM json_each(?4)))
+                           AND s.id NOT IN (SELECT value FROM json_each(?4))
+                           AND s.project_id NOT IN (SELECT value FROM json_each(?11)))
          AND NOT EXISTS (SELECT 1 FROM e2ee_content_blobs b
                          WHERE b.object_key = k.value
                            AND b.blob_id NOT IN (SELECT value FROM json_each(?5))
+                           AND b.project_id NOT IN (SELECT value FROM json_each(?11))
                            AND NOT (b.state = 'deleting' AND EXISTS (
                              SELECT 1 FROM json_each(?9) d
                              WHERE json_extract(d.value, '$[0]') = b.blob_id
                                AND json_extract(d.value, '$[1]') = b.created_at)))
          AND NOT EXISTS (SELECT 1 FROM project_storage_assets a
                          WHERE a.object_key = k.value
-                           AND a.id NOT IN (SELECT value FROM json_each(?6)))
+                           AND a.id NOT IN (SELECT value FROM json_each(?6))
+                           AND a.project_id NOT IN (SELECT value FROM json_each(?11)))
          AND NOT EXISTS (SELECT 1 FROM artifacts f
                          WHERE f.object_key = k.value
-                           AND f.id NOT IN (SELECT value FROM json_each(?7)))
+                           AND f.id NOT IN (SELECT value FROM json_each(?7))
+                           AND f.project_id NOT IN (SELECT value FROM json_each(?11)))
          AND NOT EXISTS (SELECT 1 FROM project_document_objects o
                          WHERE o.object_key = k.value
-                           AND o.id NOT IN (SELECT value FROM json_each(?8)))
+                           AND o.id NOT IN (SELECT value FROM json_each(?8))
+                           AND o.project_id NOT IN (SELECT value FROM json_each(?11)))
+         AND NOT EXISTS (SELECT 1 FROM e2ee_project_versions v
+                         WHERE v.envelope_key = k.value
+                           AND v.project_id NOT IN (SELECT value FROM json_each(?11))
+                           AND NOT EXISTS (
+                             SELECT 1 FROM json_each(?10) w
+                             WHERE json_extract(w.value, '$[0]') = v.project_id
+                               AND json_extract(w.value, '$[1]') = v.document_version))
+         ${
+           pendingReady
+             ? `AND NOT EXISTS (SELECT 1 FROM r2_pending_objects q
+                         WHERE q.object_key = k.value
+                           AND q.project_id NOT IN (SELECT value FROM json_each(?11))
+                           AND q.attempt NOT IN (SELECT value FROM json_each(?12)))`
+             : ''
+         }
          AND ${fence ? fence.sql : '1'}
        ON CONFLICT (object_key) DO UPDATE
          SET token = excluded.token, created_at = excluded.created_at
@@ -810,6 +1200,11 @@ export async function claimObjectKeysForDelete(
       JSON.stringify(
         (own.deletingBlobs ?? []).map((row) => [row.blobId, row.createdAt])
       ),
+      JSON.stringify(
+        (own.versions ?? []).map((row) => [row.projectId, row.documentVersion])
+      ),
+      ids(own.projects),
+      ...(pendingReady ? [ids(own.pending)] : []),
       ...(fence?.binds ?? [])
     )
     .run();
@@ -1404,6 +1799,17 @@ export { projectCopyDocumentDigest };
 const OBJECT_PRUNE_LIMIT = 32;
 /** The smaller bound for the prune that runs before a save is measured. */
 const PRE_SAVE_OBJECT_PRUNE_LIMIT = 8;
+
+/**
+ * A project to destroy: its id and the instance (migration 0056) the
+ * caller's owner check or listing saw (`''` for a project stored before
+ * that migration). Without `instance` the caller already holds the
+ * project's cleanup claim, which names its generation.
+ */
+interface DestroyTarget {
+  id: string;
+  instance?: string;
+}
 
 export class D1R2PersistenceService implements PersistenceService {
   constructor(private readonly env: CloudflareEnv) {}
@@ -2926,7 +3332,8 @@ export class D1R2PersistenceService implements PersistenceService {
       throw conflict;
     }
     await afterClaim?.();
-    await this.destroyProjects([document.projectId]);
+    // The claim just taken names this very project: destroy its generation.
+    await this.destroyProjects([{ id: document.projectId }]);
   }
 
   private async recordVerifiedCopiedImportArchive(
@@ -3295,21 +3702,70 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().deleteProject(userId, projectId);
     }
     await this.assertProjectOwner(userId, projectId);
-    await this.destroyProjects([projectId]);
+    // The instance (migration 0056) this owner check saw: only that very
+    // project is destroyed, never one created again under its id meanwhile.
+    const [target] = await this.ownedDestroyTargets(
+      `SELECT p.id, ${await this.instanceColumn()} AS instance_id
+       FROM projects p WHERE p.id = ? AND p.user_id = ?`,
+      [projectId, userId]
+    );
+    if (!target) return;
+    await this.destroyProjects([target]);
   }
 
-  async deleteOwnedProjects(userId: UserId): Promise<ProjectId[]> {
+  /** `instance_id` of `projects p`, or NULL before migration 0056. */
+  private async instanceColumn(): Promise<string> {
+    return (await isProjectInstanceReady(this.env.DB))
+      ? `(SELECT i.instance_id FROM project_instances i WHERE i.project_id = p.id)`
+      : 'NULL';
+  }
+
+  /** Projects to destroy, each with the instance its listing saw. */
+  private async ownedDestroyTargets(
+    sql: string,
+    binds: readonly unknown[]
+  ): Promise<DestroyTarget[]> {
+    const rows = await this.env
+      .DB!.prepare(sql)
+      .bind(...binds)
+      .all<{ id: string; instance_id: string | null }>();
+    return (rows.results ?? []).map((row) => ({
+      id: row.id,
+      instance: row.instance_id ?? ''
+    }));
+  }
+
+  async deleteOwnedProjects(
+    userId: UserId,
+    instances?: readonly OwnedProjectInstance[]
+  ): Promise<ProjectId[]> {
     if (!this.env.DB) {
       return getInMemoryPersistence().deleteOwnedProjects(userId);
     }
-    const rows = await this.env.DB.prepare(
-      `SELECT id FROM projects WHERE user_id = ? ORDER BY id`
-    )
-      .bind(userId)
-      .all<{ id: string }>();
-    const projectIds = (rows.results ?? []).map((row) => row.id);
-    await this.destroyProjectsInBatches(projectIds);
-    return projectIds.map(toProjectId);
+    // With `instances` (the account-erasure coordinator), exactly the
+    // projects it listed, as the instances it listed: never one created
+    // again under an id since, and never one listed anew here.
+    const targets = instances
+      ? (
+          await this.ownedDestroyTargets(
+            `SELECT p.id, ${await this.instanceColumn()} AS instance_id
+             FROM projects p WHERE p.user_id = ?
+               AND p.id IN (SELECT value FROM json_each(?)) ORDER BY p.id`,
+            [userId, JSON.stringify(instances.map((row) => row.projectId))]
+          )
+        ).flatMap((row) => {
+          const listed = instances.find((item) => item.projectId === row.id);
+          return listed && (listed.instance ?? '') === row.instance
+            ? [{ id: row.id, instance: listed.instance ?? '' }]
+            : [];
+        })
+      : await this.ownedDestroyTargets(
+          `SELECT p.id, ${await this.instanceColumn()} AS instance_id
+           FROM projects p WHERE p.user_id = ? ORDER BY p.id`,
+          [userId]
+        );
+    await this.destroyProjectsInBatches(targets);
+    return targets.map((target) => toProjectId(target.id));
   }
 
   async purgeExpiredProjects(userId: UserId): Promise<ProjectId[]> {
@@ -3317,17 +3773,17 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().purgeExpiredProjects(userId);
     }
     const cutoff = new Date(Date.now() - TRASH_RETENTION_MS).toISOString();
-    const expired = await this.env.DB.prepare(
-      `SELECT id FROM projects WHERE user_id = ? AND status = 'deleted' AND deleted_at IS NOT NULL AND deleted_at <= ? LIMIT 100`
-    )
-      .bind(userId, cutoff)
-      .all<{ id: string }>();
-    const projectIds = (expired.results ?? []).map((row) => row.id);
+    const targets = await this.ownedDestroyTargets(
+      `SELECT p.id, ${await this.instanceColumn()} AS instance_id
+       FROM projects p WHERE p.user_id = ? AND p.status = 'deleted'
+         AND p.deleted_at IS NOT NULL AND p.deleted_at <= ? LIMIT 100`,
+      [userId, cutoff]
+    );
     // Up to 100 ids, so batched like account deletion: in one call, 51 expired
     // projects bound 102 parameters, D1 refused the statement, and because the
     // same rows were selected again next time the purge could never succeed.
-    await this.destroyProjectsInBatches(projectIds);
-    return projectIds.map(toProjectId);
+    await this.destroyProjectsInBatches(targets);
+    return targets.map((target) => toProjectId(target.id));
   }
 
   async loadProject(
@@ -7871,7 +8327,12 @@ export class D1R2PersistenceService implements PersistenceService {
           ...this.projectAssetStatements(document.projectId, write),
           ...adoptionStatements
         ]);
-        if (discardGuard.bindings.length && inserted[0]?.meta?.changes !== 1)
+        // At least one: D1 counts trigger writes too (the project's
+        // instance, migration 0056), and a refused guard inserts nothing.
+        if (
+          discardGuard.bindings.length &&
+          (inserted[0]?.meta?.changes ?? 0) < 1
+        )
           throw new ArtifactStorageError(
             'An imported mesh payload was discarded.'
           );
@@ -7928,13 +8389,16 @@ export class D1R2PersistenceService implements PersistenceService {
           insert,
           ...adoptionStatements
         ]);
-        if (discardGuard.bindings.length && inserted[0]?.meta?.changes !== 1)
+        if (
+          discardGuard.bindings.length &&
+          (inserted[0]?.meta?.changes ?? 0) < 1
+        )
           throw new ArtifactStorageError(
             'An imported mesh payload was discarded.'
           );
       } else {
         const inserted = await insert.run();
-        if (discardGuard.bindings.length && inserted.meta?.changes !== 1)
+        if (discardGuard.bindings.length && (inserted.meta?.changes ?? 0) < 1)
           throw new ArtifactStorageError(
             'An imported mesh payload was discarded.'
           );
@@ -7966,14 +8430,16 @@ export class D1R2PersistenceService implements PersistenceService {
   }
 
   /** Keeps statement sizes, bound parameters and object-deletion fanout small. */
-  private async destroyProjectsInBatches(projectIds: string[]): Promise<void> {
+  private async destroyProjectsInBatches(
+    targets: DestroyTarget[]
+  ): Promise<void> {
     for (
       let start = 0;
-      start < projectIds.length;
+      start < targets.length;
       start += PROJECT_DESTROY_BATCH_SIZE
     ) {
       await this.destroyProjects(
-        projectIds.slice(start, start + PROJECT_DESTROY_BATCH_SIZE)
+        targets.slice(start, start + PROJECT_DESTROY_BATCH_SIZE)
       );
     }
   }
@@ -7984,25 +8450,118 @@ export class D1R2PersistenceService implements PersistenceService {
    * user data. Child rows are then removed explicitly so correctness does not
    * depend on D1 foreign-key enforcement being enabled on this connection.
    *
+   * Every step is fenced on the generation of each project it set out to
+   * destroy: the project's cleanup claim, by its `claimed_at`. A deletion
+   * that stalls while another one finishes, after which a project is
+   * created again under the same id, touches nothing of the new project:
+   * its listings, its R2 key claims (migration 0050) and its final D1 batch
+   * all hold only while that very claim does.
+   *
    * Takes at most {@link PROJECT_DESTROY_BATCH_SIZE} ids; larger sets go
    * through {@link destroyProjectsInBatches}.
    */
-  private async destroyProjects(projectIds: string[]): Promise<void> {
-    if (projectIds.length === 0) {
+  private async destroyProjects(targets: DestroyTarget[]): Promise<void> {
+    if (targets.length === 0) {
       return;
     }
-    const placeholders = projectIds.map(() => '?').join(', ');
+    let projectIds = targets.map((target) => target.id);
+    const instancesReady = await isProjectInstanceReady(this.env.DB);
+    // Each target as [id, instance]: the instance (migration 0056) its
+    // caller saw with its owner check or listing, or null for a caller that
+    // already holds the project's cleanup claim.
+    const requested = JSON.stringify(
+      targets.map((target) => [
+        target.id,
+        instancesReady ? (target.instance ?? null) : null
+      ])
+    );
+    const sameInstance = instancesReady
+      ? `(json_extract(g.value, '$[1]') IS NULL
+          OR COALESCE((SELECT i.instance_id FROM project_instances i
+                       WHERE i.project_id = p.id), '')
+             = json_extract(g.value, '$[1]'))`
+      : '1';
     // The existing durable cleanup claim fences restoration and writers.
     // Shelf status alone is reversible while object cleanup is in flight.
+    // Its `claimed_at` names the generation of the project being destroyed.
+    // It is taken, and read back, only for the very instance requested: a
+    // project created again under the id after another deletion finished is
+    // never claimed here.
+    let generations:
+      { projectId: string; claimedAt: string; instance: string }[] | null =
+      null;
     if (await isE2eeShareLinkStorageReady(this.env.DB)) {
       await this.env
         .DB!.prepare(
           `INSERT OR IGNORE INTO project_copy_cleanup_claims (project_id, claimed_at)
-           SELECT id, ? FROM projects WHERE id IN (${placeholders})`
+           SELECT p.id, ? FROM json_each(?) g
+           JOIN projects p ON p.id = json_extract(g.value, '$[0]')
+           WHERE ${sameInstance}`
         )
-        .bind(new Date().toISOString(), ...projectIds)
+        .bind(new Date().toISOString(), requested)
         .run();
+      const claimed = await this.env
+        .DB!.prepare(
+          `SELECT c.project_id, c.claimed_at,
+                  ${
+                    instancesReady
+                      ? `COALESCE((SELECT i.instance_id FROM project_instances i
+                                   WHERE i.project_id = p.id), '')`
+                      : `''`
+                  } AS instance_id
+           FROM json_each(?) g
+           JOIN projects p ON p.id = json_extract(g.value, '$[0]')
+           JOIN project_copy_cleanup_claims c ON c.project_id = p.id
+           WHERE ${sameInstance}
+           ORDER BY c.project_id`
+        )
+        .bind(requested)
+        .all<{ project_id: string; claimed_at: string; instance_id: string }>();
+      generations = (claimed.results ?? []).map((row) => ({
+        projectId: row.project_id,
+        claimedAt: row.claimed_at,
+        instance: row.instance_id
+      }));
+      projectIds = generations.map((row) => row.projectId);
+      if (projectIds.length === 0) return;
     }
+    const generationOf = new Map(
+      (generations ?? []).map((row) => [row.projectId, row.claimedAt])
+    );
+    const instanceOf = new Map(
+      (generations ?? []).map((row) => [row.projectId, row.instance])
+    );
+    /** One project's generation, as a fence of one condition. */
+    const generationFence = (projectId: string) =>
+      generations
+        ? {
+            sql: `EXISTS (SELECT 1 FROM project_copy_cleanup_claims
+                  WHERE project_id = ? AND claimed_at = ?)`,
+            binds: [projectId, generationOf.get(projectId)] as const
+          }
+        : undefined;
+    const stillCurrent = async (projectId: string) => {
+      const fence = generationFence(projectId);
+      if (!fence) return true;
+      return !!(await this.env
+        .DB!.prepare(`SELECT 1 AS current WHERE ${fence.sql}`)
+        .bind(...fence.binds)
+        .first<{ current: number }>());
+    };
+    // The projects (of the generations being destroyed) a statement may
+    // touch: `IN (…)` with a single JSON bind.
+    const generationIds = JSON.stringify(
+      generations
+        ? generations.map((row) => [row.projectId, row.claimedAt])
+        : projectIds.map((id) => [id, null])
+    );
+    const fencedIds = generations
+      ? `(SELECT json_extract(g.value, '$[0]') FROM json_each(?) g
+          WHERE EXISTS (
+            SELECT 1 FROM project_copy_cleanup_claims c
+            WHERE c.project_id = json_extract(g.value, '$[0]')
+              AND c.claimed_at = json_extract(g.value, '$[1]')))`
+      : `(SELECT json_extract(g.value, '$[0]') FROM json_each(?) g)`;
     // Collaboration rooms keep the latest document and bounded snapshot
     // history in Durable Object storage that no D1/R2 sweep reaches. Erase
     // them before anything else: a failure keeps every database row, so the
@@ -8011,12 +8570,24 @@ export class D1R2PersistenceService implements PersistenceService {
     // erasing the same room first) is harmless.
     if (this.env.PROJECT_ROOM) {
       for (const projectId of projectIds) {
+        // A project recreated under this id has a room of its own.
+        if (!(await stillCurrent(projectId))) continue;
         const response = await this.env.PROJECT_ROOM.getByName(projectId).fetch(
           new Request(
             `https://project-room.internal/?projectId=${encodeURIComponent(projectId)}`,
             {
               method: 'DELETE',
-              headers: { 'x-openzcad-internal-project-erasure': 'v1' }
+              headers: {
+                'x-openzcad-internal-project-erasure': 'v1',
+                // The room erases only while it serves this very instance
+                // (migration 0056): a delayed erasure of this generation
+                // leaves the room of a project created again untouched.
+                ...(instanceOf.get(projectId)
+                  ? {
+                      'x-openzcad-project-instance': instanceOf.get(projectId)!
+                    }
+                  : {})
+              }
             }
           )
         );
@@ -8026,11 +8597,14 @@ export class D1R2PersistenceService implements PersistenceService {
       }
     }
     if (this.env.ARTIFACTS) {
+      // Listed only while the generation holds: writers cannot open a
+      // session on a project with a cleanup claim, so each listed session
+      // belongs to the generation being destroyed.
       const uploads = await this.env
         .DB!.prepare(
-          `SELECT id FROM upload_sessions WHERE project_id IN (${placeholders})`
+          `SELECT id FROM upload_sessions WHERE project_id IN ${fencedIds}`
         )
-        .bind(...projectIds)
+        .bind(generationIds)
         .all<{ id: string }>();
       for (const row of uploads.results ?? []) {
         const upload = await this.loadUploadSession(row.id);
@@ -8040,216 +8614,276 @@ export class D1R2PersistenceService implements PersistenceService {
           );
         }
       }
-      const objects = await this.env
-        .DB!.prepare(
-          `SELECT object_key FROM artifacts WHERE project_id IN (${placeholders})`
-        )
-        .bind(...projectIds)
-        .all<{ object_key: string }>();
-      // Keep the database rows when object deletion fails so the operation is
-      // visible, retryable, and cannot strand unreferenced user data in R2.
-      await Promise.all(
-        (objects.results ?? []).map((row) =>
-          this.env.ARTIFACTS!.delete(row.object_key)
-        )
-      );
     }
+    const versionsReady = await isE2eeProjectVersionStorageReady(this.env.DB);
+    const pendingReady = await isPendingObjectStorageReady(this.env.DB);
+    const blobsReady = await isE2eeContentBlobStorageReady(this.env.DB);
     const projectBucket = this.projectStorageBucket();
-    if (projectBucket) {
-      const objects = await this.env
-        .DB!.prepare(
-          `SELECT object_key FROM project_document_objects WHERE project_id IN (${placeholders})
-           UNION
-           SELECT object_key FROM project_storage_assets WHERE project_id IN (${placeholders})`
-        )
-        .bind(...projectIds, ...projectIds)
-        .all<{ object_key: string }>();
-      await Promise.all(
-        (objects.results ?? []).map((row) =>
-          projectBucket.delete(row.object_key)
-        )
-      );
-    }
-    // Encrypted projects' MLS group rows (migration 0032), only once the
-    // tables exist: no statement may name a table the database lacks.
-    const groupTables = (await isE2eeProjectGroupStorageReady(this.env.DB))
-      ? E2EE_PROJECT_GROUP_TABLES.map(
-          (table) => `DELETE FROM ${table} WHERE project_id IN`
-        )
-      : [];
-    // Encrypted document versions (migration 0033): their R2 bodies first,
-    // kept like every other object above so a failed delete stays retryable.
-    if (await isE2eeProjectVersionStorageReady(this.env.DB)) {
-      const bodies = await this.env
-        .DB!.prepare(
-          `SELECT envelope_key FROM e2ee_project_versions
-           WHERE project_id IN (${placeholders}) AND envelope_key IS NOT NULL`
-        )
-        .bind(...projectIds)
-        .all<{ envelope_key: string }>();
-      const bucket = this.projectStorageBucket();
-      if ((bodies.results ?? []).length && !bucket) {
-        throw new ProjectObjectStorageError(
-          'Encrypted project storage is unavailable.'
-        );
-      }
-      await Promise.all(
-        (bodies.results ?? []).map((row) => bucket!.delete(row.envelope_key))
-      );
-      groupTables.unshift(
-        ...E2EE_PROJECT_VERSION_TABLES.map(
-          (table) => `DELETE FROM ${table} WHERE project_id IN`
-        )
-      );
-    }
-    // Solo group resets (migration 0036), only once the table exists.
-    if (await isE2eeDeviceRemovalStorageReady(this.env.DB)) {
-      groupTables.push('DELETE FROM e2ee_group_resets WHERE project_id IN');
-    }
-    // Migration state (migration 0042), only once the table exists. It
-    // goes last: since migration 0043 a decrypting project's staged files
-    // are exempt from artifact usage while its row says so, so their rows
-    // must go while it still does.
-    const migrationTables = (await isE2eeProjectMigrationStorageReady(
-      this.env.DB
-    ))
-      ? ['DELETE FROM e2ee_project_migrations WHERE project_id IN']
-      : [];
-    // Encrypted content blobs (migration 0034): their objects first, the
-    // same way. Their rows then go references first, through the claim
-    // migration 0034 requires of every committed blob, before the project
-    // row their accounting trigger reads.
-    if (await isE2eeContentBlobStorageReady(this.env.DB)) {
-      const blobs = await this.env
-        .DB!.prepare(
-          `SELECT object_key FROM e2ee_content_blobs
-           WHERE project_id IN (${placeholders})`
-        )
-        .bind(...projectIds)
-        .all<{ object_key: string }>();
-      if ((blobs.results ?? []).length && !this.env.ARTIFACTS) {
-        throw new ArtifactStorageError(
-          'Encrypted project storage is unavailable.'
-        );
-      }
-      await Promise.all(
-        (blobs.results ?? []).map((row) =>
-          this.env.ARTIFACTS!.delete(row.object_key)
-        )
-      );
-      groupTables.unshift(
-        'DELETE FROM e2ee_version_blobs WHERE project_id IN',
-        `UPDATE e2ee_content_blobs SET state = 'deleting'
-         WHERE state = 'committed' AND project_id IN`,
-        'DELETE FROM e2ee_content_blobs WHERE project_id IN'
-      );
-    }
-    // Assistant consents on encrypted projects (migration 0041).
-    if (await isE2eeAssistantConsentStorageReady(this.env.DB)) {
-      groupTables.push(
-        'DELETE FROM e2ee_assistant_consents WHERE project_id IN'
-      );
-    }
-    // Stored MLS proposals (migration 0039).
-    if (await isE2eeMlsProposalStorageReady(this.env.DB)) {
-      groupTables.push('DELETE FROM e2ee_mls_proposals WHERE project_id IN');
-    }
-    // Encrypted share links (migration 0040): their R2 snapshot bodies
-    // first, kept like every other object above so a failed delete stays
-    // retryable, then the rows, children first.
-    if (await isE2eeShareLinkStorageReady(this.env.DB)) {
-      const snapshots = await this.env
-        .DB!.prepare(
-          `SELECT envelope_key FROM e2ee_share_snapshots
-           WHERE project_id IN (${placeholders}) AND envelope_key IS NOT NULL`
-        )
-        .bind(...projectIds)
-        .all<{ envelope_key: string }>();
-      const bucket = this.projectStorageBucket();
-      if ((snapshots.results ?? []).length && !bucket) {
-        throw new ProjectObjectStorageError(
-          'Encrypted project storage is unavailable.'
-        );
-      }
-      await Promise.all(
-        (snapshots.results ?? []).map((row) => bucket!.delete(row.envelope_key))
-      );
-      if (bucket) {
-        for (const projectId of projectIds) {
-          const prefix = e2eeShareSnapshotPrefix(projectId);
-          // Restart each page after deletion: a storage cursor can otherwise
-          // skip keys when the preceding page has just disappeared. Bound
-          // one request's work; keep D1 rows on failure so a retry continues.
-          let complete = false;
-          for (let page = 0; page < 10; page += 1) {
-            const listed = await bucket.list({ prefix, limit: 1000 });
-            const keys = listed.objects.map((object) => object.key);
-            if (keys.some((key) => !key.startsWith(prefix))) {
-              throw new ProjectObjectStorageError(
-                'Snapshot storage returned an invalid prefix.'
-              );
-            }
-            if (keys.length) await bucket.delete(keys);
-            if (!listed.truncated) {
-              complete = true;
-              break;
-            }
+    // Every key a project's rows name, claimed (migration 0050) under its
+    // generation: rows of this project are its own, any other row keeps
+    // its key alive, and while the claims hold no new row can name a key.
+    // Keep the database rows when object deletion fails so the operation
+    // is visible, retryable, and cannot strand unreferenced user data.
+    const claims: ObjectKeyClaim[] = [];
+    // The pending records (key, attempt) whose objects this deletion swept.
+    const sweptPending: [string, string, number][] = [];
+    try {
+      for (const projectId of projectIds) {
+        const keysOf = async (sql: string) =>
+          (
+            (
+              await this.env
+                .DB!.prepare(sql)
+                .bind(projectId)
+                .all<{ object_key: string }>()
+            ).results ?? []
+          ).map((row) => row.object_key);
+        const artifactKeys = this.env.ARTIFACTS
+          ? await keysOf(
+              'SELECT object_key FROM artifacts WHERE project_id = ?'
+            )
+          : [];
+        const storageKeys = projectBucket
+          ? await keysOf(
+              `SELECT object_key FROM project_document_objects WHERE project_id = ?1
+               UNION
+               SELECT object_key FROM project_storage_assets WHERE project_id = ?1`
+            )
+          : [];
+        // Encrypted document versions (migration 0033): their R2 bodies.
+        const bodyKeys = versionsReady
+          ? await keysOf(
+              `SELECT envelope_key AS object_key FROM e2ee_project_versions
+               WHERE project_id = ? AND envelope_key IS NOT NULL`
+            )
+          : [];
+        // Objects failed writes left pending (migration 0055), each record
+        // kept by (key, attempt): the final batch removes only the records
+        // this deletion swept. One a write admitted after this listing
+        // names an object no delete here reaches, so it outlives the
+        // project for the scheduled sweep.
+        const pendingOf = async (bucket: PendingObjectBucket) => {
+          if (!pendingReady) return [];
+          const listed =
+            (
+              await this.env
+                .DB!.prepare(
+                  `SELECT object_key, attempt, created_at FROM r2_pending_objects
+                   WHERE project_id = ? AND bucket = ?`
+                )
+                .bind(projectId, bucket)
+                .all<{
+                  object_key: string;
+                  attempt: string;
+                  created_at: number;
+                }>()
+            ).results ?? [];
+          for (const row of listed) {
+            sweptPending.push([row.object_key, row.attempt, row.created_at]);
           }
-          if (!complete) {
-            throw new ProjectObjectStorageError(
-              'Snapshot cleanup must be retried.'
-            );
-          }
+          return listed.map((row) => row.object_key);
+        };
+        bodyKeys.push(...(await pendingOf('project-storage')));
+        if (bodyKeys.length && !projectBucket) {
+          throw new ProjectObjectStorageError(
+            'Encrypted project storage is unavailable.'
+          );
+        }
+        // Encrypted content blobs (migration 0034): their objects.
+        const blobKeys = blobsReady
+          ? await keysOf(
+              'SELECT object_key FROM e2ee_content_blobs WHERE project_id = ?'
+            )
+          : [];
+        blobKeys.push(...(await pendingOf('artifacts')));
+        if (blobKeys.length && !this.env.ARTIFACTS) {
+          throw new ArtifactStorageError(
+            'Encrypted project storage is unavailable.'
+          );
+        }
+        const claim = await claimObjectKeysForDelete(
+          this.env.DB!,
+          [...artifactKeys, ...blobKeys, ...storageKeys, ...bodyKeys],
+          { projects: [projectId] },
+          generationFence(projectId)
+        );
+        claims.push(claim);
+        const outcomes = await Promise.all([
+          this.env.ARTIFACTS
+            ? claim.deleteObjects(this.env.ARTIFACTS, [
+                ...artifactKeys,
+                ...blobKeys
+              ])
+            : null,
+          projectBucket
+            ? claim.deleteObjects(projectBucket, [...storageKeys, ...bodyKeys])
+            : null
+        ]);
+        for (const outcome of outcomes) {
+          if (outcome) assertClaimedDeleteComplete(claim, outcome);
         }
       }
-      groupTables.unshift(
-        ...E2EE_SHARE_LINK_TABLES.map(
-          (table) => `DELETE FROM ${table} WHERE project_id IN`
-        )
-      );
+      // Encrypted projects' MLS group rows (migration 0032), only once the
+      // tables exist: no statement may name a table the database lacks.
+      const groupTables = (await isE2eeProjectGroupStorageReady(this.env.DB))
+        ? E2EE_PROJECT_GROUP_TABLES.map(
+            (table) => `DELETE FROM ${table} WHERE project_id IN`
+          )
+        : [];
+      if (versionsReady) {
+        groupTables.unshift(
+          ...E2EE_PROJECT_VERSION_TABLES.map(
+            (table) => `DELETE FROM ${table} WHERE project_id IN`
+          )
+        );
+      }
+      // Solo group resets (migration 0036), only once the table exists.
+      if (await isE2eeDeviceRemovalStorageReady(this.env.DB)) {
+        groupTables.push('DELETE FROM e2ee_group_resets WHERE project_id IN');
+      }
+      // Migration state (migration 0042), only once the table exists. It
+      // goes last: since migration 0043 a decrypting project's staged files
+      // are exempt from artifact usage while its row says so, so their rows
+      // must go while it still does.
+      const migrationTables = (await isE2eeProjectMigrationStorageReady(
+        this.env.DB
+      ))
+        ? ['DELETE FROM e2ee_project_migrations WHERE project_id IN']
+        : [];
+      // Encrypted content blobs: their rows go references first, through
+      // the claim migration 0034 requires of every committed blob, before
+      // the project row their accounting trigger reads.
+      if (blobsReady) {
+        groupTables.unshift(
+          'DELETE FROM e2ee_version_blobs WHERE project_id IN',
+          `UPDATE e2ee_content_blobs SET state = 'deleting'
+           WHERE state = 'committed' AND project_id IN`,
+          'DELETE FROM e2ee_content_blobs WHERE project_id IN'
+        );
+      }
+      // Assistant consents on encrypted projects (migration 0041).
+      if (await isE2eeAssistantConsentStorageReady(this.env.DB)) {
+        groupTables.push(
+          'DELETE FROM e2ee_assistant_consents WHERE project_id IN'
+        );
+      }
+      // Stored MLS proposals (migration 0039).
+      if (await isE2eeMlsProposalStorageReady(this.env.DB)) {
+        groupTables.push('DELETE FROM e2ee_mls_proposals WHERE project_id IN');
+      }
+      // Encrypted share links (migration 0040): their R2 snapshot bodies
+      // first, kept like every other object above so a failed delete stays
+      // retryable, then the rows, children first. Snapshot keys carry a
+      // per-write nonce: listed while the generation holds, they can only
+      // be that generation's.
+      if (await isE2eeShareLinkStorageReady(this.env.DB)) {
+        const snapshots = await this.env
+          .DB!.prepare(
+            `SELECT envelope_key FROM e2ee_share_snapshots
+             WHERE project_id IN ${fencedIds} AND envelope_key IS NOT NULL`
+          )
+          .bind(generationIds)
+          .all<{ envelope_key: string }>();
+        const bucket = projectBucket;
+        if ((snapshots.results ?? []).length && !bucket) {
+          throw new ProjectObjectStorageError(
+            'Encrypted project storage is unavailable.'
+          );
+        }
+        await Promise.all(
+          (snapshots.results ?? []).map((row) =>
+            bucket!.delete(row.envelope_key)
+          )
+        );
+        if (bucket) {
+          for (const projectId of projectIds) {
+            const prefix = e2eeShareSnapshotPrefix(projectId);
+            // Restart each page after deletion: a storage cursor can
+            // otherwise skip keys when the preceding page has just
+            // disappeared. Bound one request's work; keep D1 rows on
+            // failure so a retry continues.
+            let complete = false;
+            for (let page = 0; page < 10; page += 1) {
+              const listed = await bucket.list({ prefix, limit: 1000 });
+              const keys = listed.objects.map((object) => object.key);
+              if (keys.some((key) => !key.startsWith(prefix))) {
+                throw new ProjectObjectStorageError(
+                  'Snapshot storage returned an invalid prefix.'
+                );
+              }
+              // Listed while the generation still held: no project created
+              // again under this id can have written any of them yet.
+              if (!(await stillCurrent(projectId))) {
+                complete = true;
+                break;
+              }
+              if (keys.length) await bucket.delete(keys);
+              if (!listed.truncated) {
+                complete = true;
+                break;
+              }
+            }
+            if (!complete) {
+              throw new ProjectObjectStorageError(
+                'Snapshot cleanup must be retried.'
+              );
+            }
+          }
+        }
+        groupTables.unshift(
+          ...E2EE_SHARE_LINK_TABLES.map(
+            (table) => `DELETE FROM ${table} WHERE project_id IN`
+          )
+        );
+      }
+      // Encrypted invitations, KeyPackages and Welcomes (migration 0038).
+      if (await isE2eeInvitationStorageReady(this.env.DB)) {
+        groupTables.push(
+          ...E2EE_INVITATION_TABLES.map(
+            (table) => `DELETE FROM ${table} WHERE project_id IN`
+          )
+        );
+      }
+      // The child rows declare ON DELETE CASCADE, but foreign-key enforcement
+      // is a per-connection pragma; deleting them explicitly means a purge
+      // cannot leave orphaned revisions behind if it is ever off. Every
+      // statement is fenced on the generations being destroyed, and their
+      // cleanup claims go last, so the fence holds to the end of the batch.
+      const fenced = (statement: string) =>
+        this.env.DB!.prepare(`${statement} ${fencedIds}`).bind(generationIds);
+      await this.env.DB!.batch([
+        ...[
+          ...groupTables,
+          'DELETE FROM project_access_events WHERE project_id IN',
+          'DELETE FROM project_share_links WHERE project_id IN',
+          'DELETE FROM project_invitations WHERE project_id IN',
+          'DELETE FROM project_members WHERE project_id IN',
+          'DELETE FROM upload_sessions WHERE project_id IN',
+          'DELETE FROM project_copy_source_archives WHERE project_id IN',
+          'DELETE FROM artifacts WHERE project_id IN',
+          'DELETE FROM artifact_mesh_discards WHERE project_id IN',
+          'DELETE FROM project_measurements WHERE project_id IN',
+          'DELETE FROM project_workspace_sessions WHERE project_id IN',
+          'DELETE FROM revisions WHERE project_id IN',
+          'DELETE FROM project_document_objects WHERE project_id IN',
+          'DELETE FROM project_storage_assets WHERE project_id IN',
+          'DELETE FROM project_adoptions WHERE cloud_project_id IN',
+          ...migrationTables
+        ].map(fenced),
+        // Only the swept records: aged ones go, and ones a write may still
+        // be putting stay, detached, for the scheduled sweep.
+        ...(pendingReady && sweptPending.length
+          ? settlePendingRecords(this.env.DB!, sweptPending, {
+              sql: `project_id IN ${fencedIds}`,
+              binds: [generationIds]
+            })
+          : []),
+        fenced('DELETE FROM projects WHERE id IN'),
+        fenced('DELETE FROM project_copy_cleanup_claims WHERE project_id IN')
+      ]);
+    } finally {
+      for (const claim of claims) await claim.release();
     }
-    // Encrypted invitations, KeyPackages and Welcomes (migration 0038).
-    if (await isE2eeInvitationStorageReady(this.env.DB)) {
-      groupTables.push(
-        ...E2EE_INVITATION_TABLES.map(
-          (table) => `DELETE FROM ${table} WHERE project_id IN`
-        )
-      );
-    }
-    // The child rows declare ON DELETE CASCADE, but foreign-key enforcement is
-    // a per-connection pragma; deleting them explicitly means a purge cannot
-    // leave orphaned revisions behind if it is ever off.
-    await this.env.DB!.batch(
-      [
-        ...groupTables,
-        'DELETE FROM project_access_events WHERE project_id IN',
-        'DELETE FROM project_share_links WHERE project_id IN',
-        'DELETE FROM project_invitations WHERE project_id IN',
-        'DELETE FROM project_members WHERE project_id IN',
-        'DELETE FROM upload_sessions WHERE project_id IN',
-        'DELETE FROM project_copy_source_archives WHERE project_id IN',
-        'DELETE FROM artifacts WHERE project_id IN',
-        'DELETE FROM artifact_mesh_discards WHERE project_id IN',
-        'DELETE FROM project_copy_cleanup_claims WHERE project_id IN',
-        'DELETE FROM project_measurements WHERE project_id IN',
-        'DELETE FROM project_workspace_sessions WHERE project_id IN',
-        'DELETE FROM revisions WHERE project_id IN',
-        'DELETE FROM project_document_objects WHERE project_id IN',
-        'DELETE FROM project_storage_assets WHERE project_id IN',
-        'DELETE FROM project_adoptions WHERE cloud_project_id IN',
-        ...migrationTables
-      ]
-        .map((statement) =>
-          this.env
-            .DB!.prepare(`${statement} (${placeholders})`)
-            .bind(...projectIds)
-        )
-        .concat(
-          this.env
-            .DB!.prepare(`DELETE FROM projects WHERE id IN (${placeholders})`)
-            .bind(...projectIds)
-        )
-    );
   }
 
   private async assertProjectOwner(
@@ -9117,6 +9751,8 @@ async function readSnapshotBody(
 interface RoomMeta {
   schema: number;
   projectId: string | null;
+  /** The project instance (migration 0056) whose state this room holds. */
+  instanceId?: string;
   latestVersion: number | null;
   historyVersions: number[];
   /** Present only on an encrypted project's room, whose versions live apart. */
@@ -9196,6 +9832,8 @@ export class ProjectCollaborationRoom extends DurableObject {
    * plaintext keys, and plaintext requests are refused. Null otherwise.
    */
   private roomFormat: 2 | null = null;
+  /** The project instance (migration 0056) whose state this room holds. */
+  private instanceId: string | null = null;
   private e2eeLedgerState: E2eeRoomLedger | null = null;
   private e2eeAccountState: E2eeRoomAccount | null | undefined;
 
@@ -9252,6 +9890,7 @@ export class ProjectCollaborationRoom extends DurableObject {
           'Copied project identity could not be restored.'
         );
       this.projectId = meta.projectId ?? this.projectId;
+      this.instanceId = meta.instanceId ?? null;
       this.roomFormat = meta.format === 2 ? 2 : null;
       this.historyVersions = meta.historyVersions ?? [];
       this.latestDocument =
@@ -9564,8 +10203,32 @@ export class ProjectCollaborationRoom extends DurableObject {
     ) {
       return new Response('Invalid project erasure request.', { status: 403 });
     }
+    const expectedInstance = request.headers.get('x-openzcad-project-instance');
     return this.roomContext.blockConcurrencyWhile(() =>
       this.enqueueLeaseOperation(async () => {
+        // Decided inside the room's queue, so no write of the room can come
+        // between: a room holding another instance's state (the project was
+        // created again under its id) is not this deletion's to erase.
+        if (expectedInstance) {
+          let held = this.instanceId;
+          if (!held && this.projectId && this.roomEnv.DB) {
+            // State stored before the room recorded an instance: attribute
+            // it to the instance D1 now holds under this id, or refuse (the
+            // deletion retries) when that cannot be read.
+            try {
+              held = (await isProjectInstanceReady(this.roomEnv.DB))
+                ? await projectInstanceId(this.roomEnv.DB, this.projectId)
+                : null;
+            } catch {
+              return new Response('Project identity is unavailable.', {
+                status: 503
+              });
+            }
+          }
+          if (held && held !== expectedInstance) {
+            return new Response(null, { status: 204 });
+          }
+        }
         await this.eraseRoomState();
         return new Response(null, { status: 204 });
       })
@@ -9587,6 +10250,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     this.sourceCopyPublicationStarted = false;
     this.historyVersions = [];
     this.projectId = null;
+    this.instanceId = null;
     this.roomFormat = null;
     this.e2eeLedgerState = null;
     await this.roomContext.storage.deleteAll();
@@ -11762,6 +12426,24 @@ export class ProjectCollaborationRoom extends DurableObject {
       await this.ensureDocumentHistory();
     }
     const evicted = this.trimHistory();
+    // The first state stored for a project records which instance of it
+    // (migration 0056) the room serves. Fail closed: state is never stored,
+    // or acknowledged, without its instance once instances exist, since a
+    // delayed erasure of an earlier instance could not tell it apart.
+    if (this.projectId && !this.instanceId && this.roomEnv.DB) {
+      if (await isProjectInstanceReady(this.roomEnv.DB)) {
+        const instance = await projectInstanceId(
+          this.roomEnv.DB,
+          this.projectId
+        );
+        if (!instance) {
+          throw new ArtifactStorageError(
+            'This project could not be identified; its room keeps no state.'
+          );
+        }
+        this.instanceId = instance;
+      }
+    }
     const entries: Record<string, unknown> = {};
     for (const version of dirtyHistoryVersions) {
       const document = this.documentHistory.get(version);
@@ -11775,6 +12457,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     entries[ROOM_META_KEY] = {
       schema: ROOM_STORAGE_SCHEMA,
       projectId: this.projectId,
+      ...(this.instanceId ? { instanceId: this.instanceId } : {}),
       latestVersion: this.latestDocument?.version ?? null,
       historyVersions: Array.from(this.documentHistory.keys()).sort(
         (left, right) => left - right
