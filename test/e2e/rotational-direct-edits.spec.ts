@@ -12,7 +12,8 @@ import {
   expect,
   stubApi,
   MODEL_ONLY,
-  clickWorldPoint
+  clickWorldPoint,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 async function selectWall(canvas: Locator, radius: number) {
@@ -150,9 +151,15 @@ test(
     await expect
       .poll(async () => {
         await clickWorldPoint(page, [0, 0, 16.5]);
+        // A face starts on Offset; this reads and types its Total.
+        const tag = page.getByTestId('direct-manipulation-mode');
+        if (/^Offset/.test(await tag.innerText().catch(() => ''))) {
+          await tag.click().catch(() => undefined);
+        }
         return chip.innerText().catch(() => '');
       })
       .toContain('16.5');
+    await switchFaceOffsetToTotal(page);
     await chip.click();
     let pad = page.getByRole('dialog', { name: 'Total value' });
     await pad.getByRole('textbox').fill('30.5');
@@ -170,6 +177,7 @@ test(
         })
       )
     );
+    await switchFaceOffsetToTotal(page);
     await chip.click();
     pad = page.getByRole('dialog', { name: 'Total value' });
     // Total measures from the nearest opposing plane, the raised bore floor.
@@ -182,6 +190,7 @@ test(
     await expect(chip).not.toHaveAttribute('data-state', 'warning');
     await pad.getByRole('button', { name: 'Apply total' }).click();
     await featureCount(page, 6);
+    await switchFaceOffsetToTotal(page);
     await chip.click();
     pad = page.getByRole('dialog', { name: 'Total value' });
     await pad.getByRole('textbox').fill('47.5');

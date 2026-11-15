@@ -294,7 +294,9 @@ import {
   offsetTotalReading,
   rearmedChipMode,
   regionChipState,
-  type OffsetChipMode
+  sameOffsetFace,
+  type OffsetChipMode,
+  type OffsetFaceIdentity
 } from '../lib/offsetChip';
 import { chipLeader, separateChips } from '../lib/commandChipLayout';
 import { faceLift } from '../lib/faceDepthBehind';
@@ -3037,6 +3039,10 @@ export function ModelViewer({
   const offsetExtentRef = useRef<number | null>(null);
   /** Which number the offset chip shows: the drag delta, or the whole span. */
   const offsetChipModeRef = useRef<OffsetChipMode>('offset');
+  /** The reading last chosen with the Total/Offset switch, for the face below. */
+  const offsetChipChosenRef = useRef<OffsetChipMode>('offset');
+  /** The face that switch was made on; null once a region took the chip. */
+  const offsetChipFaceRef = useRef<OffsetFaceIdentity | null>(null);
   /** Cylindrical radius has its own non-translating affordance and lifecycle. */
   const cylinderRadiusRigRef = useRef<DragRig | null>(null);
   const cylinderRadiusDragActiveRef = useRef(false);
@@ -5413,6 +5419,16 @@ export function ModelViewer({
         if (span !== null && span !== undefined) {
           offsetChipModeRef.current =
             offsetChipModeRef.current === 'total' ? 'offset' : 'total';
+          // The switch belongs to the face it was made on.
+          const handle = offsetHandleRef.current;
+          offsetChipChosenRef.current = offsetChipModeRef.current;
+          offsetChipFaceRef.current = handle
+            ? {
+                bodyId: handle.bodyId,
+                topologyId: handle.topologyId,
+                normal: handle.normal
+              }
+            : null;
           // Open exact entry edits what the chip shows, so it switches with
           // it: left alone it kept the other mode's label and prefill, and
           // its Apply read the number in that mode.
@@ -14589,12 +14605,9 @@ export function ModelViewer({
     offsetExtentRef.current = chipState.extent;
     offsetChipModeRef.current = rearmedChipMode(
       chipState,
-      offsetChipModeRef.current,
-      previous !== null &&
-        previous !== regionRigRef.current &&
-        built !== null &&
-        built.handle.bodyId === offsetHandle.bodyId &&
-        built.handle.topologyId === offsetHandle.topologyId
+      offsetChipChosenRef.current,
+      offsetChipFaceRef.current !== null &&
+        sameOffsetFace(offsetChipFaceRef.current, offsetHandle)
     );
     const rig = buildOffsetFaceHandle({
       ...placement,
@@ -15056,6 +15069,8 @@ export function ModelViewer({
     const chipState = regionChipState();
     offsetExtentRef.current = chipState.extent;
     offsetChipModeRef.current = chipState.mode;
+    offsetChipChosenRef.current = chipState.mode;
+    offsetChipFaceRef.current = null;
     context.scene.add(rig.group);
     context.scene.add(rig.worldGroup);
     offsetRigRef.current = rig;

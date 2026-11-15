@@ -11,7 +11,8 @@ import {
   expect,
   stubApi,
   expectBodyCount,
-  MODEL_ONLY
+  MODEL_ONLY,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 type WorldBounds = { min: number[]; max: number[] };
@@ -117,9 +118,8 @@ for (const fixture of [
         return canvas.getAttribute('data-e2e-handle-x');
       })
       .not.toBeNull();
-    await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
-      /^Total/
-    );
+    // A face starts on Offset; this spec reads and types its Total.
+    await switchFaceOffsetToTotal(page);
     await page.getByTestId('direct-manipulation-value').click();
     const keypad = page.getByRole('dialog', { name: 'Total value' });
     await keypad.getByRole('textbox').fill(String(fixture.total));

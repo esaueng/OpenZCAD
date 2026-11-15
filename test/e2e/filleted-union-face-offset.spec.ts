@@ -7,7 +7,8 @@ import {
   expect,
   stubApi,
   expectBodyCount,
-  waitForStillViewport
+  waitForStillViewport,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 for (const longHistory of [false, true])
@@ -114,6 +115,8 @@ for (const longHistory of [false, true])
       await expect(
         page.getByRole('region', { name: 'Resize Body operation' })
       ).toBeVisible();
+      // A face starts on Offset; this spec reads and types the end's Total.
+      await switchFaceOffsetToTotal(page);
       await expect(page.getByTestId('direct-manipulation-value')).toContainText(
         '30'
       );
@@ -349,7 +352,9 @@ test(
       }));
     const contentinfo = page.getByRole('contentinfo');
     const drag = async (from: number, delta: number) => {
-      // The re-armed handle, on the moved side and at rest.
+      // The re-armed handle, on the moved side and at rest, read as its
+      // Total (a face starts on Offset).
+      await switchFaceOffsetToTotal(page);
       await expect(value).toContainText(String(from));
       await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
       await waitForStillViewport(page);
@@ -512,6 +517,8 @@ test(
      * the viewport keeps drawing that check, so it is never still.
      */
     const press = async (from: number, delta: number, checking = false) => {
+      // Read as its Total (a face starts on Offset).
+      await switchFaceOffsetToTotal(page);
       await expect(value).toContainText(String(from));
       await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
       if (!checking) await waitForStillViewport(page);

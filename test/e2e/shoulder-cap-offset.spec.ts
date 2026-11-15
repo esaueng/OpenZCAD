@@ -12,7 +12,8 @@ import {
   MODEL_ONLY,
   clickWorldPoint,
   setSelectionFilter,
-  waitForStillViewport
+  waitForStillViewport,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 async function importShoulder(
@@ -67,6 +68,8 @@ async function selectPlane(
       { timeout: 30_000 }
     )
     .toBe(true);
+  // A face starts on Offset; this spec reads and types each plane's Total.
+  await switchFaceOffsetToTotal(page);
   await expect
     .poll(async () => parseFloat(await chip.innerText()))
     .toBeCloseTo(height, 2);

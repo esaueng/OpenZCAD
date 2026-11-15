@@ -95,9 +95,10 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
   await checkShape(24);
   await selectSide();
   await page.getByTestId('direct-manipulation-value').click();
-  const keypad = page.getByRole('dialog', { name: 'Total value' });
-  await keypad.getByRole('textbox').fill('28');
-  await keypad.getByRole('button', { name: 'Apply total' }).click();
+  // The field takes the signed Offset by default: +4 makes the 24 mm side 28.
+  const keypad = page.getByRole('dialog', { name: 'Offset value' });
+  await keypad.getByRole('textbox').fill('4');
+  await keypad.getByRole('button', { name: 'Apply offset' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
     'depth set to 28 mm'
   );
@@ -130,8 +131,9 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
     );
   const count = await syncs();
   await drag(2);
-  await expect(page.getByTestId('direct-manipulation-value')).toContainText(
-    '30'
+  // The chip reads the signed change the hand has made.
+  await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
+    '+2 mm'
   );
   await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '2');
   // The viewport carries no "exact on release" badge over the part.
@@ -161,8 +163,8 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
   await checkShape(30);
   await selectSide();
   await drag(2);
-  await expect(page.getByTestId('direct-manipulation-value')).toContainText(
-    '32'
+  await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
+    '+2 mm'
   );
   await page.keyboard.press('Escape');
   await page.mouse.up();
@@ -220,12 +222,7 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toBeVisible();
-  // Moving a face reads the whole span by default, like Resize body; the tag
-  // beside the value switches it to the change.
-  await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
-    /^Total/
-  );
-  await page.getByTestId('direct-manipulation-mode').click();
+  // A face starts on Offset, the signed move (QA 2026-11-14 finding #9).
   await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
     /^Offset/
   );

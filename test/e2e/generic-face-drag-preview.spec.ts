@@ -6,7 +6,8 @@ import {
   expect,
   stubApi,
   expectBodyCount,
-  MODEL_ONLY
+  MODEL_ONLY,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 function camera(canvas: Locator): Promise<ViewportCameraState> {
@@ -95,6 +96,8 @@ test('a generic imported side drags the whole body and stays selected after the 
 
   // The 80 mm side meets R5 corner rounds and a top with a hole in it: no
   // primitive or cap profile applies, and the whole body still follows.
+  // Read as Total (the face starts on Offset), the commit names both.
+  await switchFaceOffsetToTotal(page);
   const box = (await canvas.boundingBox())!;
   const start = { x: box.x + handle.x, y: box.y + handle.y };
   await page.mouse.move(start.x, start.y);
@@ -171,8 +174,7 @@ test('a typed offset previews over the ghost too, until it is applied', async ({
       return canvas.getAttribute('data-e2e-handle-x');
     })
     .not.toBeNull();
-  // The chip reads the whole span by default; this types the change.
-  await page.getByTestId('direct-manipulation-mode').click();
+  // A face starts on Offset, the signed move (QA 2026-11-14 finding #9).
   await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
     /^Offset/
   );

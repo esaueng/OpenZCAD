@@ -10,40 +10,101 @@ import {
   offsetTotalReading,
   rearmedChipMode,
   regionChipState,
-  valueInsideLimit
+  sameOffsetFace,
+  valueInsideLimit,
+  type OffsetChipState
 } from './offsetChip';
 
 describe('offset chip', () => {
-  it('reads any face with a span as its total, and only a spanless one as the change', () => {
-    expect(faceOffsetChipState(20, 10)).toEqual({ mode: 'total', extent: 10 });
+  // Owner decision 2026-11-14, after QA finding #9: a face offset starts on
+  // the signed move, so a typed 5 moves the face 5. Total stays one switch
+  // away wherever there is a span to read.
+  it('starts every face on the signed offset, offering Total where a span is known', () => {
+    expect(faceOffsetChipState(20, 10)).toEqual({
+      mode: 'offset',
+      extent: 10,
+      totalAvailable: true
+    });
     // A face that is not a primitive's own still reads the span to the plane
-    // opposite it: Total is the default, not just a primitive resize's.
+    // opposite it, so Total is offered there too.
     expect(faceOffsetChipState(undefined, 10)).toEqual({
-      mode: 'total',
-      extent: 10
+      mode: 'offset',
+      extent: 10,
+      totalAvailable: true
     });
     expect(faceOffsetChipState(20, null)).toEqual({
-      mode: 'total',
-      extent: null
+      mode: 'offset',
+      extent: null,
+      totalAvailable: true
     });
     expect(faceOffsetChipState(undefined, null)).toEqual({
       mode: 'offset',
-      extent: null
+      extent: null,
+      totalAvailable: false
     });
   });
 
-  it('keeps the chosen reading while the same face re-arms', () => {
+  it('reads a typed 5 on a 24 mm top face as a 5 mm move, not a 5 mm total', () => {
+    // QA 2026-11-14 finding #9: the Total default turned 5 into a −19 move.
+    const state = faceOffsetChipState(24, null);
+    expect(
+      offsetChipText({
+        rawValue: 5,
+        mode: state.mode,
+        span: 24,
+        sense: 1,
+        units: 'mm'
+      })
+    ).toBe('+5 mm');
+    expect(
+      offsetTotalReading({ rawValue: 5, mode: state.mode, span: 24, sense: 1 })
+    ).toBeNull();
+  });
+
+  it('reads the switch on the face it was made on, and the default elsewhere', () => {
     // The defect: opening exact entry re-derives the handle, and the re-armed
-    // rig reset a switched-to Offset back to Total under an Offset keypad.
+    // rig reset a switched mode back to the default under an open keypad.
     const fresh = faceOffsetChipState(undefined, 17);
     expect(rearmedChipMode(fresh, 'offset', true)).toBe('offset');
     expect(rearmedChipMode(fresh, 'total', true)).toBe('total');
-    // Another face starts from its own default.
-    expect(rearmedChipMode(fresh, 'offset', false)).toBe('total');
-    // Nothing to read Total from: the change, whatever was chosen.
+    // Another face starts from its own default, whatever was chosen.
+    expect(rearmedChipMode(fresh, 'total', false)).toBe('offset');
+    // A primitive's own dimension is a span to keep Total for, too.
+    expect(rearmedChipMode(faceOffsetChipState(24, null), 'total', true)).toBe(
+      'total'
+    );
+    // Nothing to read Total from (the analysis catching up): the change. The
+    // choice is not consumed, so the next re-arm with a span reads it again.
     expect(
       rearmedChipMode(faceOffsetChipState(undefined, null), 'total', true)
     ).toBe('offset');
+  });
+
+  it('knows the moved face again after its commit renumbers it', () => {
+    const top = {
+      bodyId: 'body-1',
+      topologyId: 'face:7',
+      normal: { x: 0, y: 0, z: 1 }
+    };
+    expect(sameOffsetFace(top, top)).toBe(true);
+    // The commit renumbers the face it moved: same body, same facing.
+    expect(sameOffsetFace(top, { ...top, topologyId: 'face:12' })).toBe(true);
+    // Another face of the body, or the same facing on another body, is not.
+    expect(
+      sameOffsetFace(top, {
+        ...top,
+        topologyId: 'face:3',
+        normal: { x: 1, y: 0, z: 0 }
+      })
+    ).toBe(false);
+    expect(
+      sameOffsetFace(top, {
+        ...top,
+        topologyId: 'face:3',
+        normal: { x: 0, y: 0, z: -1 }
+      })
+    ).toBe(false);
+    expect(sameOffsetFace(top, { ...top, bodyId: 'body-2' })).toBe(false);
   });
 
   it('reads Total as the span plus the signed offset', () => {
@@ -71,9 +132,16 @@ describe('offset chip', () => {
     // The defect: a region rig reused the face rig's chip refs, so after a
     // face offset left Total mode and a 10 mm span behind, a −5 mm region
     // drag read "5 mm" under a Total tag.
-    const stale = faceOffsetChipState(20, 10);
+    const stale: OffsetChipState = {
+      ...faceOffsetChipState(20, 10),
+      mode: 'total'
+    };
     const region = regionChipState();
-    expect(region).toEqual({ mode: 'offset', extent: null });
+    expect(region).toEqual({
+      mode: 'offset',
+      extent: null,
+      totalAvailable: false
+    });
     const reading = (state: typeof stale) =>
       offsetChipText({
         rawValue: -5,

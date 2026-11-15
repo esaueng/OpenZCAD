@@ -10,7 +10,8 @@ import {
   expect,
   test,
   stubApi,
-  blendEdgesInPlace
+  blendEdgesInPlace,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 /**
@@ -193,6 +194,8 @@ test('cap height under chamfers: Enter commits the chip value, Escape leaves his
         return canvas.getAttribute('data-e2e-handle-x');
       }, READ_TIMEOUT)
       .not.toBeNull();
+    // A face starts on Offset; this contract types the cap's Total.
+    await switchFaceOffsetToTotal(page);
   };
   await proveContract(page, canvas, {
     arm,
@@ -438,6 +441,7 @@ test('one Escape clears a refused offset: card, preview, handle and selection', 
     }, READ_TIMEOUT)
     .not.toBeNull();
   const chip = page.getByTestId('direct-manipulation-value');
+  await switchFaceOffsetToTotal(page);
   await expect(chip).toHaveText('28 mm');
   // The selection's inspector stands in the right lane, inside the docked
   // panels, over the right of a model framed before it opened. Fit frames
@@ -508,6 +512,7 @@ test('one Escape clears a refused offset: card, preview, handle and selection', 
       return canvas.getAttribute('data-e2e-handle-x');
     }, READ_TIMEOUT)
     .not.toBeNull();
+  await switchFaceOffsetToTotal(page);
   await expect(chip).toHaveText('28 mm');
   await expect(chip).toHaveAttribute('data-state', 'ready');
   await expect(operationChip).toBeVisible();

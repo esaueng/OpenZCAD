@@ -123,9 +123,9 @@ test('a typed offset keeps naming the face while its exact preview is up', async
   );
   await sampleCard(page, '.selection-readout');
   await page.getByTestId('direct-manipulation-value').click();
-  // The box side reads its whole span (Total, 18 mm deep): 21 is a 3 mm pull.
-  const keypad = page.getByRole('dialog', { name: 'Total value' });
-  await keypad.getByRole('textbox').fill('21');
+  // The field takes the signed Offset by default: 3 is a 3 mm pull.
+  const keypad = page.getByRole('dialog', { name: 'Offset value' });
+  await keypad.getByRole('textbox').fill('3');
   // Long enough for the typed value's exact preview to land and show.
   await page.waitForTimeout(1500);
   await keypad.getByRole('textbox').press('Enter');

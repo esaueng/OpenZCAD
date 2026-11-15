@@ -11,7 +11,8 @@ import {
   MODEL_ONLY,
   expectBodyCount,
   pickPlanarFace,
-  waitForStillViewport
+  waitForStillViewport,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 test(
@@ -56,9 +57,8 @@ test(
     await expect
       .poll(() => pickPlanarFace(page, { x: 0, y: 0, z: 1 }))
       .not.toBeNull();
-    await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
-      /^Total/
-    );
+    // A face starts on Offset; this spec reads and types its Total.
+    await switchFaceOffsetToTotal(page);
     await expect(page.getByTestId('direct-manipulation-value')).toContainText(
       '40'
     );
@@ -66,6 +66,7 @@ test(
     const keypad = page.getByRole('dialog', { name: 'Total value' });
     await keypad.getByRole('textbox').fill('25');
     await keypad.getByRole('button', { name: 'Apply total' }).click();
+    await switchFaceOffsetToTotal(page);
     await expect(page.getByTestId('direct-manipulation-value')).toContainText(
       '25',
       { timeout: 30_000 }
