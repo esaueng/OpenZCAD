@@ -21,19 +21,35 @@ vi.mock('../apps/web/src/lib/desktopBridge', () => ({
 const owner = toUserId('user_account');
 
 /**
- * Since #1517 an adoption first asks whether the account's library is
- * encrypted (`encryptsAccountLibrary`). These cases adopt into a plaintext
- * account, so the preferences route answers as a current Worker does for
- * one: no opt-in and no encrypted projects. Every other request goes to
- * `handler`.
+ * Since #1517 an adoption first decides whether the account's library is
+ * encrypted. These cases adopt into a plaintext account on a Worker with
+ * encryption enabled and the account key locked, so the routes answer as the
+ * current Worker does there: a session, encryption available but not on by
+ * default, no stored preference and no encrypted projects
+ * (`handleProjectPreferenceRequest`). Every other request goes to `handler`;
+ * `paths` records the order the browser asked in.
  */
 function plaintextAccount(
-  handler: (input: unknown, init?: RequestInit) => Promise<Response>
+  handler: (input: unknown, init?: RequestInit) => Promise<Response>,
+  paths: unknown[] = []
 ) {
-  return async (input: unknown, init?: RequestInit): Promise<Response> =>
-    input === '/api/e2ee/project-preferences'
-      ? Response.json({ encryptNewProjects: false, libraryEncrypted: false })
-      : handler(input, init);
+  return async (input: unknown, init?: RequestInit): Promise<Response> => {
+    paths.push(input);
+    switch (input) {
+      case '/api/session':
+        return Response.json({ userId: owner });
+      case '/api/e2ee/config':
+        return Response.json({
+          enabled: true,
+          projectsEnabled: true,
+          defaultOn: false
+        });
+      case '/api/e2ee/project-preferences':
+        return Response.json({ preference: null, libraryEncrypted: false });
+      default:
+        return handler(input, init);
+    }
+  };
 }
 
 function legacyDocument(): ProjectDocument {
@@ -66,6 +82,7 @@ describe('account adoption from an unopened device snapshot', () => {
     const local = legacyDocument();
     const original = structuredClone(local);
     const store = new InMemoryPersistenceService();
+    const paths: unknown[] = [];
     vi.mocked(desktopFetch).mockImplementation(
       plaintextAccount(async (input, init) => {
         expect(input).toBe('/api/projects');
@@ -78,7 +95,7 @@ describe('account adoption from an unopened device snapshot', () => {
           PROJECT_DOCUMENT_SCHEMA_VERSION
         );
         return Response.json(await store.createProject(owner, request));
-      })
+      }, paths)
     );
 
     // ADR-024 Phase 1: the account no longer reads the schema of undo
@@ -93,6 +110,15 @@ describe('account adoption from an unopened device snapshot', () => {
       }).document?.schemaVersion
     ).toBe(14);
     const adopted = await api.adoptProject(local, owner);
+    // The same requests production makes for a plaintext account with the
+    // key locked: the opt-in check, the library check, then the create.
+    expect(paths).toEqual([
+      '/api/session',
+      '/api/e2ee/config',
+      '/api/e2ee/project-preferences',
+      '/api/e2ee/project-preferences',
+      '/api/projects'
+    ]);
     expect(local).toEqual(original);
     const saved = (await store.loadProject(owner, adopted.document.projectId))!;
     expect(saved.projectId).not.toBe(local.projectId);
