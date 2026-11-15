@@ -423,20 +423,28 @@ export function localStorageEncryptedProjectPins(
     storeStale = current !== storeReset;
     return storeStale;
   };
+  /**
+   * Whether `generation`, just read, is not the one this tab first saw of
+   * the project: another tab reset it, and this tab is stale for it until
+   * a reload. The first generation read is the one this tab saw.
+   */
+  const movedSinceSeen = (projectId: string, generation: string): boolean => {
+    if (!seenResets.has(projectId)) {
+      // First seen now: what this tab holds of it starts here.
+      seenResets.set(projectId, generation);
+      return false;
+    }
+    if (seenResets.get(projectId) === generation) return false;
+    // Until a reload: this tab's memory of it is out of date.
+    staleProjects.add(projectId);
+    return true;
+  };
   const resetElsewhere = (projectId: string): boolean => {
     if (storeResetElsewhere()) return true;
     if (staleProjects.has(projectId)) return true;
     const current = generationOf(projectId);
     if (current === undefined) return false;
-    if (!seenResets.has(projectId)) {
-      // First seen now: what this tab holds of it starts here.
-      seenResets.set(projectId, current);
-      return false;
-    }
-    if (seenResets.get(projectId) === current) return false;
-    // Until a reload: this tab's memory of it is out of date.
-    staleProjects.add(projectId);
-    return true;
+    return movedSinceSeen(projectId, current);
   };
   /** Projects whose reset this tab saved but could not confirm. */
   const unconfirmed = new Set<string>();
@@ -546,15 +554,20 @@ export function localStorageEncryptedProjectPins(
    * still write one, and it changes nothing.
    */
   const current = (prefix: string, projectId: string): boolean | undefined => {
-    // A reset in another tab between reading the generation and reading
-    // its record would look up the wrong generation's record, so the
-    // generation is read again after the record and a moved one is retried.
+    // Only the generation this tab saw is read. One that another tab's
+    // reset moved, before the record is read or while it is, is never
+    // read in its place (its records may be empty): this tab goes stale
+    // for the project, and a stale project is held, so `true`.
+    if (staleProjects.has(projectId)) return true;
     for (let attempt = 0; attempt < STABLE_READ_ATTEMPTS; attempt += 1) {
       const generation = generationOf(projectId);
       if (generation === undefined) return undefined;
+      if (movedSinceSeen(projectId, generation)) return true;
       const held = recordUnder(prefix, projectId, generation);
       if (held === undefined) return undefined;
-      if (generationOf(projectId) === generation) return held;
+      const after = generationOf(projectId);
+      if (after === generation) return held;
+      if (after !== undefined && movedSinceSeen(projectId, after)) return true;
     }
     return undefined;
   };
@@ -673,7 +686,10 @@ export function localStorageEncryptedProjectPins(
       // replaced generation, so nobody reads it; not lost, so this tab
       // only goes stale (whatever was pinned since stays as it is).
       if (resetElsewhere(projectId)) return false;
-      if (stored(projectId)) return true;
+      const saved = stored(projectId);
+      // Reset in another tab during the read-back: stale, not a failure.
+      if (resetElsewhere(projectId)) return false;
+      if (saved) return true;
     }
     // Not saved, so a reload would not know it: hold everything as
     // encrypted, here, in other tabs and after a reload.
@@ -792,9 +808,10 @@ export function localStorageEncryptedProjectPins(
           // Fall through to the read-back.
         }
         if (resetElsewhere(projectId)) return false;
-        if (current(ENCRYPTED_PROJECT_UNRESOLVED_PREFIX, projectId)) {
-          return true;
-        }
+        const saved = current(ENCRYPTED_PROJECT_UNRESOLVED_PREFIX, projectId);
+        // Reset in another tab during the read-back: stale, not a failure.
+        if (resetElsewhere(projectId)) return false;
+        if (saved) return true;
       }
       recordFailure();
       return false;
@@ -812,7 +829,10 @@ export function localStorageEncryptedProjectPins(
           // Fall through to the read-back.
         }
         if (resetElsewhere(projectId)) return false;
-        if (current(ENCRYPTION_REQUIRED_PREFIX, projectId)) return true;
+        const saved = current(ENCRYPTION_REQUIRED_PREFIX, projectId);
+        // Reset in another tab during the read-back: stale, not a failure.
+        if (resetElsewhere(projectId)) return false;
+        if (saved) return true;
       }
       recordFailure();
       return false;

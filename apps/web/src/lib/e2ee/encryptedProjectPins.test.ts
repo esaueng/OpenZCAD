@@ -571,6 +571,85 @@ describe('encrypted project pins', () => {
     }
   });
 
+  describe("a check that another tab's confirmed reset lands in", () => {
+    const projectId = 'proj_reset_mid_read';
+
+    // Runs `act` on a tab that noted the project before the reset, with
+    // another tab's confirmed reset landing after its `at`-th storage read.
+    function withResetAt(
+      at: number,
+      act: (pins: EncryptedProjectPinStore) => boolean,
+      seed: (pins: EncryptedProjectPinStore) => void
+    ) {
+      const storage = memoryStorage();
+      seed(localStorageEncryptedProjectPins(storage));
+      const reader = localStorageEncryptedProjectPins(storage);
+      expect(reader.resetElsewhere(projectId)).toBe(false);
+      const getItem = storage.getItem;
+      let reads = 0;
+      let landed = false;
+      const counting = (key: string) => {
+        const value = getItem(key);
+        reads += 1;
+        if (reads === at && !landed) {
+          landed = true;
+          storage.getItem = getItem;
+          expect(
+            localStorageEncryptedProjectPins(storage).resetProject(projectId)
+          ).toBe(true);
+          storage.getItem = counting;
+        }
+        return value;
+      };
+      storage.getItem = counting;
+      const result = act(reader);
+      storage.getItem = getItem;
+      return { storage, reader, result, landed, reads };
+    }
+
+    const checks: [string, (pins: EncryptedProjectPinStore) => boolean][] = [
+      ['the pin', (pins) => pins.has(projectId)],
+      ['the unfinished switch', (pins) => pins.cutoverUnresolved(projectId)],
+      ['the requirement', (pins) => pins.encryptionRequired(projectId)]
+    ];
+
+    for (const [name, check] of checks) {
+      it(`holds ${name} and goes stale, never reading the new generation's empty records`, () => {
+        for (let at = 1; at <= 24; at += 1) {
+          const { reader, result, landed } = withResetAt(at, check, (pins) => {
+            pins.pin(projectId);
+            pins.markCutoverUnresolved(projectId);
+            pins.requireEncryption(projectId);
+          });
+          expect(result).toBe(true);
+          if (landed) expect(reader.resetElsewhere(projectId)).toBe(true);
+        }
+      });
+    }
+
+    const writers: [string, (pins: EncryptedProjectPinStore) => boolean][] = [
+      ['a pin', (pins) => pins.pin(projectId)],
+      ['an unfinished switch', (pins) => pins.markCutoverUnresolved(projectId)],
+      ['a requirement', (pins) => pins.requireEncryption(projectId)]
+    ];
+
+    for (const [name, write] of writers) {
+      it(`reads a reset during ${name}'s read-back as stale, not as storage failing`, () => {
+        for (let at = 1; at <= 24; at += 1) {
+          const { storage, reader, landed } = withResetAt(at, write, () => {});
+          if (!landed) continue;
+          expect(storage.values.has(ENCRYPTED_PROJECT_PIN_FAILED_KEY)).toBe(
+            false
+          );
+          expect(reader.degraded).toBe(false);
+          expect(localStorageEncryptedProjectPins(storage).degraded).toBe(
+            false
+          );
+        }
+      });
+    }
+  });
+
   describe('resets made in another tab', () => {
     it('keeps a tab that opened with a saved pin encrypted and stops it once another tab resets it', () => {
       const storage = memoryStorage();
