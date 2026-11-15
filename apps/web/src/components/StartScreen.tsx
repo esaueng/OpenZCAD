@@ -1006,9 +1006,16 @@ export function StartScreen({
   const filterable = shelf === 'active';
   // "This device only" means something only against an account listing;
   // signed out, or with the listing unreachable, it would hide every project.
+  // Inside a folder, Pinned means nothing of its own: a pinned folder counts
+  // every project in it, so it repeated All, and the folder lists its
+  // projects in its own order with no pinned group. The tab is not offered
+  // there, and a Pinned filter chosen on the shelf waits until the folder
+  // closes.
+  const pinnedFilterShown = !openFolder;
   const activeFilter: ShelfFilter =
     !filterable ||
-    (filter === 'local' && !(signedIn && accountProjectListReached))
+    (filter === 'local' && !(signedIn && accountProjectListReached)) ||
+    (filter === 'pinned' && !pinnedFilterShown)
       ? 'all'
       : filter;
   const filterCounts = Object.fromEntries(
@@ -3481,7 +3488,8 @@ export function StartScreen({
                   (entry) =>
                     entry.id === 'all' ||
                     entry.id === activeFilter ||
-                    layoutCounts[entry.id] > 0
+                    (layoutCounts[entry.id] > 0 &&
+                      (entry.id !== 'pinned' || pinnedFilterShown))
                 ).map((entry) => (
                   <button
                     key={entry.id}
