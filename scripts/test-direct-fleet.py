@@ -242,7 +242,9 @@ class DirectFleetTests(unittest.TestCase):
 
     def test_queue_checks_have_triggers_and_independent_verdicts(self):
         cloudflare = (ROOT / ".github/workflows/cloudflare.yml").read_text()
-        privacy = (ROOT / ".github/workflows/commit-privacy.yml").read_text()
+        # The App-bound commit and history verdicts for a queue candidate are
+        # requested by this workflow; the read-only duplicate was removed.
+        privacy = (ROOT / ".github/workflows/history-privacy-request.yml").read_text()
         for workflow in (CALLER, cloudflare, privacy):
             self.assertRegex(workflow, r"(?m)^  merge_group:")
         for workflow in (CALLER, cloudflare):

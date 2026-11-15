@@ -6,16 +6,11 @@ describe('workflow runner policy', () => {
   it('keeps ordinary workflows hosted with a restricted trusted workflow', () => {
     const workflowDirectory = '.github/workflows';
     const expectedRunners: Record<string, string[]> = {
-      'commit-privacy.yml': ['ubuntu-24.04'],
       'history-privacy.yml': ['ubuntu-24.04'],
       'history-privacy-request.yml': ['ubuntu-24.04'],
       'ci.yml': [],
       'ci-recovery.yml': ['ubuntu-24.04'],
       'public-commit-metadata.yml': ['ubuntu-24.04'],
-      'fleet-ci-v7.yml': [
-        'ubuntu-24.04',
-        ...Array<string>(8).fill('*fleet-runner')
-      ],
       'fleet-ci-v8.yml': [
         'ubuntu-24.04',
         ...Array<string>(8).fill('*fleet-runner')
@@ -25,7 +20,6 @@ describe('workflow runner policy', () => {
         ...Array<string>(8).fill('*fleet-runner')
       ],
       'daily-validation.yml': Array(5).fill('ubuntu-24.04'),
-      'kernel-pin.yml': ['ubuntu-24.04'],
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'codeql.yml': ['ubuntu-24.04'],
       'macos-desktop.yml': ['macos-26'],
