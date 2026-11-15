@@ -136,7 +136,12 @@ describe('I01 slot', () => {
     const fixture = sketchFixture();
     const commit = addSlot(fixture);
     const sketchId = fixture.sketchId;
-    const [line0, arc1, , arc3] = commit.edgeIds;
+    const [line0, arc1, , arc3] = commit.edgeIds as [
+      EntityId,
+      EntityId,
+      EntityId,
+      EntityId
+    ];
     const centreLine = commit.helperIds[0]!;
     for (const constraint of [
       { constraintKind: 'radius', objectId: arc1, value: 4 },

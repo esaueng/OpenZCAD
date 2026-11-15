@@ -90,7 +90,9 @@ export function addSketchComposite(
       : null;
     if (sideKind && node.objectKind !== sideKind) {
       throw new Error(
-        `Side ${index + 1} of a ${composite.compositeKind} must be ${sideKind === 'line' ? 'a line' : 'an arc'}, not a ${node.objectKind}.`
+        sideKind === 'line'
+          ? `A composite's sides must be lines, not a ${node.objectKind}.`
+          : `Side ${index + 1} of a ${composite.compositeKind} must be an arc, not a ${node.objectKind}.`
       );
     }
     if (!side && !node.data.construction) {
