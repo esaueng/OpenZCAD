@@ -1,4 +1,5 @@
 import { test, expect, stubApi, createProject } from './openzcad-fixtures';
+import type { Route } from '@playwright/test';
 
 for (const viewport of [
   { width: 1440, height: 900 },
@@ -154,6 +155,140 @@ test('failed account listing finishes refresh with the saved device library', as
     page.getByRole('status', { name: 'Loading library' })
   ).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'New project' })).toBeEnabled();
+});
+
+test('a failed account listing clears once the library poll reaches the account', async ({
+  page
+}) => {
+  // The poll waits ten seconds after the shelf opens before it may run.
+  test.setTimeout(60_000);
+  await stubApi(page);
+  await createProject(page, 'Recovering part');
+  await page.getByTitle('Back to projects').click();
+  await expect(
+    page.locator('.start-tile-open', { hasText: 'Recovering part' })
+  ).toBeVisible();
+  const failing = (route: Route) =>
+    route.fulfill({ status: 503, json: { error: 'Temporarily unavailable' } });
+  await page.route('**/api/projects', failing);
+  await page.reload();
+  await expect(page.getByText('Account unavailable')).toBeVisible();
+
+  // The account answers again with the same projects the device already
+  // showed: the shelf is unchanged, but the account is reachable.
+  await page.unroute('**/api/projects', failing);
+  const listed = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/projects' &&
+      response.request().method() === 'GET' &&
+      response.ok()
+  );
+  await page.waitForTimeout(10_500);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await listed;
+  await expect(page.getByText('Account unavailable')).toHaveCount(0);
+  await expect(page.locator('.start-account')).toContainText(
+    '1 on this device only'
+  );
+});
+
+test('Retry on Account unavailable lists the account again', async ({
+  page
+}) => {
+  await stubApi(page);
+  await createProject(page, 'Retried part');
+  await page.getByTitle('Back to projects').click();
+  await expect(
+    page.locator('.start-tile-open', { hasText: 'Retried part' })
+  ).toBeVisible();
+  const failing = (route: Route) =>
+    route.fulfill({ status: 503, json: { error: 'Temporarily unavailable' } });
+  await page.route('**/api/projects', failing);
+  await page.reload();
+  await expect(page.getByText('Account unavailable')).toBeVisible();
+  const retry = page.getByRole('button', {
+    name: 'Retry reaching the account'
+  });
+
+  // Still unreachable: the card stays, and says so.
+  await retry.click();
+  await expect(
+    page
+      .getByText('Your account still could not be reached.', { exact: false })
+      .first()
+  ).toBeVisible();
+  await expect(page.getByText('Account unavailable')).toBeVisible();
+
+  await page.unroute('**/api/projects', failing);
+  await retry.click();
+  await expect(page.getByText('Account unavailable')).toHaveCount(0);
+  await expect(page.locator('.start-account')).toContainText(
+    '1 on this device only'
+  );
+});
+
+test('Retry warns in a toast only while the account stays unreachable', async ({
+  page
+}) => {
+  await stubApi(page);
+  await createProject(page, 'Toasted part');
+  await page.getByTitle('Back to projects').click();
+  await expect(
+    page.locator('.start-tile-open', { hasText: 'Toasted part' })
+  ).toBeVisible();
+  let listings = 0;
+  const failing = (route: Route) => {
+    listings += 1;
+    return route.fulfill({
+      status: 503,
+      json: { error: 'Temporarily unavailable' }
+    });
+  };
+  await page.route('**/api/projects', failing);
+  await page.reload();
+  await expect(page.getByText('Account unavailable')).toBeVisible();
+  const retry = page.getByRole('button', {
+    name: 'Retry reaching the account'
+  });
+  const toast = page.locator('.toast');
+
+  // Nothing is announced before Retry asks.
+  await expect(toast).toHaveCount(0);
+  const asked = listings;
+  await retry.click();
+  await expect(toast).toHaveClass(/\bwarning\b/);
+  await expect(toast.locator('.toast-message')).toHaveText(
+    'Your account still could not be reached. Your projects remain saved on this device.'
+  );
+  // Retry listed again rather than repeating what it already knew.
+  expect(listings).toBeGreaterThan(asked);
+  // Screen readers hear it through the toast's live region.
+  await expect(
+    page.getByRole('status').filter({
+      hasText: 'Your account still could not be reached.'
+    })
+  ).toHaveCount(1);
+});
+
+test('Retry that reaches the account shows no toast', async ({ page }) => {
+  await stubApi(page);
+  await createProject(page, 'Quiet part');
+  await page.getByTitle('Back to projects').click();
+  await expect(
+    page.locator('.start-tile-open', { hasText: 'Quiet part' })
+  ).toBeVisible();
+  const failing = (route: Route) =>
+    route.fulfill({ status: 503, json: { error: 'Temporarily unavailable' } });
+  await page.route('**/api/projects', failing);
+  await page.reload();
+  await expect(page.getByText('Account unavailable')).toBeVisible();
+
+  await page.unroute('**/api/projects', failing);
+  await page
+    .getByRole('button', { name: 'Retry reaching the account' })
+    .click();
+  await expect(page.getByText('Account unavailable')).toHaveCount(0);
+  await expect(page.locator('.toast')).toHaveCount(0);
 });
 
 for (const layout of ['grid', 'list']) {
