@@ -126,45 +126,49 @@ test.beforeEach(async ({ page }) => {
   await stubApi(page, { panelLayout: MODEL_ONLY });
 });
 
-test('a region picked while the bar loads offers no arrow, and the next region opens clean @ci-smoke', async ({
-  page
-}) => {
-  test.setTimeout(90_000);
-  const bar = await holdExtrudeBar(page);
-  const canvas = await openTwoRegions(page);
-  await pickProfile(canvas, 0);
-  // Nothing to drag: a distance set now would have no bar, and holding it
-  // let it land on whichever region was picked next.
-  expect(await regionHandles(canvas)).toEqual([]);
-  await expect(chip(page)).toBeHidden();
-  await pickProfile(canvas, 1);
-  await bar.release();
-  const editor = extrudeBar(page);
-  await expect(editor).toBeVisible();
-  await expect.poll(async () => (await regionHandles(canvas)).length).toBe(1);
-  expect((await regionHandles(canvas))[0]!.value).toBe(0);
-  await expect(editor.getByRole('button', { name: 'Done' })).toBeDisabled();
-});
+test(
+  'a region picked while the bar loads offers no arrow, and the next region opens clean',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    const bar = await holdExtrudeBar(page);
+    const canvas = await openTwoRegions(page);
+    await pickProfile(canvas, 0);
+    // Nothing to drag: a distance set now would have no bar, and holding it
+    // let it land on whichever region was picked next.
+    expect(await regionHandles(canvas)).toEqual([]);
+    await expect(chip(page)).toBeHidden();
+    await pickProfile(canvas, 1);
+    await bar.release();
+    const editor = extrudeBar(page);
+    await expect(editor).toBeVisible();
+    await expect.poll(async () => (await regionHandles(canvas)).length).toBe(1);
+    expect((await regionHandles(canvas))[0]!.value).toBe(0);
+    await expect(editor.getByRole('button', { name: 'Done' })).toBeDisabled();
+  }
+);
 
-test('Escape after Enter while the bar loads closes the waiting entry and keeps the region @ci-smoke', async ({
-  page
-}) => {
-  test.setTimeout(90_000);
-  const bar = await holdExtrudeBar(page);
-  const canvas = await openTwoRegions(page);
-  await pickProfile(canvas, 0);
-  await page.keyboard.press('Enter');
-  await page.keyboard.press('Escape');
-  await bar.release();
-  // The region is still armed: its bar opens, and no entry with it.
-  const editor = extrudeBar(page);
-  await expect(editor).toBeVisible();
-  await expect.poll(async () => (await regionHandles(canvas)).length).toBe(1);
-  await expect(keypad(page)).toHaveCount(0);
-  // The next Escape is the command's, as with the bar loaded.
-  await page.keyboard.press('Escape');
-  await expect(editor).toBeHidden();
-});
+test(
+  'Escape after Enter while the bar loads closes the waiting entry and keeps the region',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    const bar = await holdExtrudeBar(page);
+    const canvas = await openTwoRegions(page);
+    await pickProfile(canvas, 0);
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Escape');
+    await bar.release();
+    // The region is still armed: its bar opens, and no entry with it.
+    const editor = extrudeBar(page);
+    await expect(editor).toBeVisible();
+    await expect.poll(async () => (await regionHandles(canvas)).length).toBe(1);
+    await expect(keypad(page)).toHaveCount(0);
+    // The next Escape is the command's, as with the bar loaded.
+    await page.keyboard.press('Escape');
+    await expect(editor).toBeHidden();
+  }
+);
 
 test('Enter while the bar loads opens the distance entry once it is ready', async ({
   page
@@ -180,18 +184,20 @@ test('Enter while the bar loads opens the distance entry once it is ready', asyn
   await expect(keypad(page)).toBeVisible();
 });
 
-test('the distance chip is not offered until the bar is ready, then opens its entry @ci-smoke', async ({
-  page
-}) => {
-  test.setTimeout(90_000);
-  const bar = await holdExtrudeBar(page);
-  const canvas = await openTwoRegions(page);
-  await pickProfile(canvas, 0);
-  // No chip to tap while loading, so no tap is silently dropped.
-  await expect(chip(page)).toBeHidden();
-  await bar.release();
-  await expect(extrudeBar(page)).toBeVisible();
-  await expect(chip(page)).toBeVisible();
-  await chip(page).click();
-  await expect(keypad(page)).toBeVisible();
-});
+test(
+  'the distance chip is not offered until the bar is ready, then opens its entry',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    const bar = await holdExtrudeBar(page);
+    const canvas = await openTwoRegions(page);
+    await pickProfile(canvas, 0);
+    // No chip to tap while loading, so no tap is silently dropped.
+    await expect(chip(page)).toBeHidden();
+    await bar.release();
+    await expect(extrudeBar(page)).toBeVisible();
+    await expect(chip(page)).toBeVisible();
+    await chip(page).click();
+    await expect(keypad(page)).toBeVisible();
+  }
+);
