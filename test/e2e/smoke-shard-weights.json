@@ -80,6 +80,7 @@
   "save-state-history.spec.ts": 17,
   "settings-reload-cover.spec.ts": 4,
   "settings.spec.ts": 8,
+  "sheet-metal-flat-pattern.spec.ts": 8,
   "shoulder-cap-offset.spec.ts": 668,
   "sketch-inference.spec.ts": 18,
   "sketch-modify-tools.spec.ts": 12,

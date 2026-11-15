@@ -298,7 +298,8 @@ function textBoxCorners(
   return box.map(([x, y]) => [x0 + x * cos - y * sin, y0 + x * sin + y * cos]);
 }
 
-function element(entity: DxfEntity): string {
+/** One entity as its SVG element, v negated (shared by the flat-pattern SVG). */
+export function sketchSvgElement(entity: DxfEntity): string {
   switch (entity.kind) {
     case 'text': {
       const anchor =
@@ -439,7 +440,7 @@ export function writeSketchSvg(
     `<g fill="none" stroke="#000000" stroke-width="${num(stroke)}" stroke-linecap="round" stroke-linejoin="round">`
   );
   for (const entity of entities) {
-    lines.push(element(entity));
+    lines.push(sketchSvgElement(entity));
   }
   lines.push('</g>', '</svg>', '');
   return lines.join('\n');

@@ -25,6 +25,7 @@ import { prefersSavingData } from '../lib/saveData';
 import type {
   BodyId,
   FaceRecognitionSummary,
+  FeatureId,
   ProjectDocument,
   SketchId,
   UnitSystem
@@ -40,6 +41,7 @@ import type {
   MeshQualityReport,
   MassPropertiesRead,
   SectionOutlineReport,
+  SheetMetalFlatPattern,
   SketchPlanarOperation,
   SketchPlanarResult,
   SketchSolveAnchor,
@@ -366,6 +368,14 @@ export interface GeometryWorkerApi {
     faceHash: number;
     topologyId?: string;
   }): Promise<FaceRecognitionSummary>;
+  /**
+   * M16: a sheet-metal feature's flat pattern, rebuilt from `document` —
+   * display and export only, never a document edit.
+   */
+  sheetMetalFlatPattern(
+    document: ProjectDocument,
+    featureId: FeatureId
+  ): Promise<SheetMetalFlatPattern>;
   /** Forces the next `sync` to post even if the version has not changed. */
   invalidate(): void;
   /** Retains a completed exact result across a bookkeeping-only adoption. */
@@ -437,6 +447,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   );
   const recognizeImportedFaceRequests = useRef(
     new Map<string, PendingRequest<FaceRecognitionSummary>>()
+  );
+  const flatPatternRequests = useRef(
+    new Map<string, PendingRequest<SheetMetalFlatPattern>>()
   );
   const syncRequests = useRef(new Map<string, PendingRequest<DerivedState>>());
   const geometryPreviewRequests = useRef(
@@ -513,6 +526,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       sectionRequests.current,
       sketchPlanarRequests.current,
       recognizeImportedFaceRequests.current,
+      flatPatternRequests.current,
       syncRequests.current,
       geometryPreviewRequests.current
     ],
@@ -1013,6 +1027,19 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           recognizeImportedFaceRequests.current.delete(message.requestId);
           if (message.ok) {
             pending.resolve(message.summary);
+          } else {
+            pending.reject(new Error(message.error));
+          }
+          return;
+        }
+        if (message.type === 'sheet-metal-flat-pattern') {
+          const pending = flatPatternRequests.current.get(message.requestId);
+          if (!pending) {
+            return;
+          }
+          flatPatternRequests.current.delete(message.requestId);
+          if (message.ok) {
+            pending.resolve(message.pattern);
           } else {
             pending.reject(new Error(message.error));
           }
@@ -1553,6 +1580,16 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         ...(input.topologyId !== undefined
           ? { topologyId: input.topologyId }
           : {})
+      });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker is unavailable.'));
+    },
+    sheetMetalFlatPattern(document, featureId) {
+      const posted = postRequest(flatPatternRequests.current, {
+        type: 'sheet-metal-flat-pattern',
+        document: documentForWorker(document),
+        featureId
       });
       return posted.ok
         ? posted.promise

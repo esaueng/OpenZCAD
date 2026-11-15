@@ -96,6 +96,12 @@ export default defineConfig({
           import.meta.url
         )
       ),
+      '@openzcad/kernel-adapter/sheet-metal-flat-pattern': fileURLToPath(
+        new URL(
+          './packages/kernel-adapter/src/sheet-metal-flat-pattern.ts',
+          import.meta.url
+        )
+      ),
       '@openzcad/ai-contracts/auto-parameterize': fileURLToPath(
         new URL(
           './packages/ai-contracts/src/auto-parameterize.ts',
