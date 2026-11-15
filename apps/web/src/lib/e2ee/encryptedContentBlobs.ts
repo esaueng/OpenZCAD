@@ -66,6 +66,7 @@ import {
   type ArtifactUploadTransport
 } from '../artifactUpload';
 import { desktopFetch } from '../desktopBridge';
+import { projectRequest } from '../projectWriteGate';
 import {
   decodeContentBlobJob,
   type ContentBlobDecodeJob,
@@ -208,60 +209,79 @@ export function uploadTransport(
   };
   const uploads = (id: string) => `/api/uploads/${encodeURIComponent(id)}`;
   return {
-    async uploadArtifact(uploadUrl, body) {
+    async uploadArtifact(uploadUrl, body, context) {
       if (!uploadUrl.startsWith('/api/uploads/')) {
         throw new Error('Artifact upload URL must use the application origin.');
       }
       await check(
-        await fetcher(uploadUrl, {
-          method: 'PUT',
-          credentials: 'same-origin',
-          headers: { 'content-type': 'application/octet-stream' },
-          body
-        })
-      );
-    },
-    createMultipartUpload: async (uploadSessionId) =>
-      (await (
-        await check(
-          await fetcher(`${uploads(uploadSessionId)}/multipart`, {
-            method: 'POST',
-            credentials: 'same-origin'
+        await fetcher(
+          uploadUrl,
+          projectRequest(context, {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/octet-stream' },
+            body
           })
         )
+      );
+    },
+    createMultipartUpload: async (uploadSessionId, context) =>
+      (await (
+        await check(
+          await fetcher(
+            `${uploads(uploadSessionId)}/multipart`,
+            projectRequest(context, {
+              method: 'POST',
+              credentials: 'same-origin'
+            })
+          )
+        )
       ).json()) as { uploadId: string },
-    uploadArtifactPart: async (uploadSessionId, uploadId, partNumber, body) =>
+    uploadArtifactPart: async (
+      uploadSessionId,
+      uploadId,
+      partNumber,
+      body,
+      context
+    ) =>
       (await (
         await check(
           await fetcher(
             `${uploads(uploadSessionId)}/parts/${partNumber}?uploadId=${encodeURIComponent(uploadId)}`,
-            {
+            projectRequest(context, {
               method: 'PUT',
               credentials: 'same-origin',
               headers: { 'content-type': 'application/octet-stream' },
               body
-            }
+            })
           )
         )
       ).json()) as UploadedArtifactPart,
     async completeMultipartUpload(
       uploadSessionId,
-      payload: CompleteMultipartUploadRequest
+      payload: CompleteMultipartUploadRequest,
+      context
     ) {
       await check(
-        await fetcher(`${uploads(uploadSessionId)}/multipart/complete`, {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(payload)
-        })
+        await fetcher(
+          `${uploads(uploadSessionId)}/multipart/complete`,
+          projectRequest(context, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload)
+          })
+        )
       );
     },
-    async abortMultipartUpload(uploadSessionId, uploadId) {
+    async abortMultipartUpload(uploadSessionId, uploadId, context) {
       await check(
         await fetcher(
           `${uploads(uploadSessionId)}/multipart?uploadId=${encodeURIComponent(uploadId)}`,
-          { method: 'DELETE', credentials: 'same-origin' }
+          projectRequest(context, {
+            method: 'DELETE',
+            credentials: 'same-origin'
+          })
         )
       );
     }
@@ -527,19 +547,24 @@ export function createEncryptedContentBlobs(
       if (!started.committed) {
         // The writer's output through the ordinary single-part or multipart
         // session: part boundaries need no alignment with chunks.
-        await uploadArtifactBody(transport, started.session, envelope, {
-          ...(ctx.partBytes ? { partBytes: ctx.partBytes } : {}),
-          ...(input.onUploadProgress
-            ? {
-                onProgress: (uploaded: number, total: number) =>
-                  input.onUploadProgress!(
-                    Math.round((uploaded / total) * input.body.size),
-                    input.body.size
-                  )
-              }
-            : {}),
-          ...(input.signal ? { signal: input.signal } : {})
-        });
+        await uploadArtifactBody(
+          transport,
+          { ...started.session, projectId, payload: 'encrypted' },
+          envelope,
+          {
+            ...(ctx.partBytes ? { partBytes: ctx.partBytes } : {}),
+            ...(input.onUploadProgress
+              ? {
+                  onProgress: (uploaded: number, total: number) =>
+                    input.onUploadProgress!(
+                      Math.round((uploaded / total) * input.body.size),
+                      input.body.size
+                    )
+                }
+              : {}),
+            ...(input.signal ? { signal: input.signal } : {})
+          }
+        );
         input.signal?.throwIfAborted();
         const finalized = await api.finalize(projectId, reference.blobId, {
           uploadSessionId: started.session.uploadSessionId,
@@ -587,9 +612,12 @@ export function createEncryptedContentBlobs(
         // Committed meanwhile by someone else, under a key this page does
         // not hold: never name it with this reference.
         if (started.committed) missing();
-        await uploadArtifactBody(transport, started.session, envelope, {
-          ...(ctx.partBytes ? { partBytes: ctx.partBytes } : {})
-        });
+        await uploadArtifactBody(
+          transport,
+          { ...started.session, projectId, payload: 'encrypted' },
+          envelope,
+          { ...(ctx.partBytes ? { partBytes: ctx.partBytes } : {}) }
+        );
         const tag = await assetDedupeHash(
           await dedupeKeyOf(projectId),
           plaintext

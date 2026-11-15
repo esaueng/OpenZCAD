@@ -31,7 +31,8 @@ import {
   barChoice,
   editExtrudeFromHistory,
   setBarValues,
-  pressTool
+  pressTool,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 test('suppresses features and rolls the timeline back as one undoable edit', { tag: '@ci-smoke' }, async ({
@@ -267,6 +268,8 @@ test('resizes a cylinder wall concentrically with one undoable radius edit', { t
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toBeVisible();
   await expect(radiusOperation).toHaveCount(0);
+  // A face starts on Offset; this sets the cap's Total height.
+  await switchFaceOffsetToTotal(page);
   await page.getByTestId('direct-manipulation-value').click();
   const offsetKeypad = page.getByRole('dialog', { name: 'Total value' });
   await offsetKeypad.getByRole('textbox').fill('23.5');
@@ -616,10 +619,13 @@ test('keeps face sketching available after a primitive direct edit', async ({
     .getByRole('region', { name: 'Resize Body operation' })
     .getByRole('button', { name: 'Selection: Offset', exact: true })
     .click();
-  // Moving a face reads the whole span by default, like Resize body; the tag
-  // beside the value is the switch to the change alone.
+  // Moving a face reads the signed change by default (QA 2026-11-14 finding
+  // #9); the tag beside the value is the switch to the whole span, Total.
   const modeTag = page.getByTestId('direct-manipulation-mode');
   const valueChip = page.getByTestId('direct-manipulation-value');
+  await expect(modeTag).toHaveText(/^Offset/);
+  await expect(valueChip).toHaveText('+0 mm');
+  await modeTag.click();
   await expect(modeTag).toHaveText(/^Total/);
   const span = Number.parseFloat((await valueChip.textContent()) ?? '');
   expect(span).toBeGreaterThan(0);
@@ -1329,6 +1335,7 @@ test('radius drag resizes a cylinder after bottom adjustment and filleting', asy
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toBeVisible();
+  await switchFaceOffsetToTotal(page);
   await page.getByTestId('direct-manipulation-value').click();
   const offsetKeypad = page.getByRole('dialog', { name: 'Total value' });
   await offsetKeypad.getByRole('textbox').fill('32');

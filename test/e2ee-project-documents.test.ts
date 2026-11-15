@@ -5,8 +5,17 @@
  * Worker routes over SQLite, with every migration applied unless a case
  * says otherwise.
  */
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock
+} from 'vitest';
 import { createSavedRevision } from '@openzcad/document-core';
 import {
   EnvelopeKey,
@@ -934,7 +943,11 @@ describe('version integrity', () => {
       const captured = createSavedRevision(first, 'Captured point');
       const revisionId = captured.revisions.at(-1)!.revisionId;
       const current = advance
-        ? await save(laptop, edited(first, 'Subsequent autosave'), first.version)
+        ? await save(
+            laptop,
+            edited(first, 'Subsequent autosave'),
+            first.version
+          )
         : first;
       const named = await laptop.store.saveRevision({
         projectId: first.projectId,
@@ -1427,7 +1440,8 @@ describe('writes', () => {
       projectId
     );
     expect(keys.at(-1)!.envelope_key).toMatch(
-      new RegExp(`^e2ee/${projectId}/v/[0-9a-f]{64}$`)
+      // The version hash, then this write attempt's nonce (migration 0055).
+      new RegExp(`^e2ee/${projectId}/v/[0-9a-f]{64}\\.[0-9a-f-]{36}$`)
     );
     const key = keys.at(-1)!.envelope_key!;
     expect(srv.bucket.objects.has(key)).toBe(true);
@@ -2060,4 +2074,1136 @@ describe('heads the Worker accepts but the browser does not trust', () => {
       'content'
     );
   });
+});
+
+describe('version bodies under reused keys (migration 0055)', () => {
+  /** A large next version of a fresh project, so its body goes to R2. */
+  async function largeNext(srv: Server) {
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const head = rows<{ version_hash: string }>(
+      srv,
+      'SELECT version_hash FROM e2ee_project_versions WHERE project_id = ?',
+      projectId
+    )[0]!;
+    const payload = new Uint8Array(400_000);
+    for (let offset = 0; offset < payload.length; offset += 65_536) {
+      crypto.getRandomValues(
+        payload.subarray(offset, Math.min(payload.length, offset + 65_536))
+      );
+    }
+    const hand = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: v1.version + 1,
+        keyEpoch: 0,
+        previousVersionHash: fromHex(head.version_hash)
+      },
+      { expectedVersion: v1.version, plaintext: payload }
+    );
+    return {
+      projectId,
+      version: v1.version + 1,
+      hand,
+      prefix: `e2ee/${projectId}/v/${hand.hash}`
+    };
+  }
+
+  const bodyKeyAt = (srv: Server, projectId: string, version: number) =>
+    rows<{ envelope_key: string | null }>(
+      srv,
+      `SELECT envelope_key FROM e2ee_project_versions
+       WHERE project_id = ? AND document_version = ?`,
+      projectId,
+      version
+    )[0]?.envelope_key ?? null;
+
+  it('never lets a failed save’s rollback delete the body an identical retry committed', async () => {
+    const srv = server();
+    const { projectId, version, hand, prefix } = await largeNext(srv);
+    const db = srv.env.DB as D1Database;
+    const batch = db.batch.bind(db);
+    let fail = true;
+    db.batch = async (statements: D1PreparedStatement[]) => {
+      if (
+        fail &&
+        statements.some((statement) =>
+          (statement as unknown as { sql?: string }).sql?.includes(
+            'UPDATE projects SET document_version'
+          )
+        )
+      ) {
+        fail = false;
+        throw new Error('simulated D1 failure before commit');
+      }
+      return batch(statements);
+    };
+    const deleteMock = srv.bucket.delete as unknown as Mock<
+      (key: string) => Promise<void>
+    >;
+    const remove = deleteMock.getMockImplementation()!;
+    let entered!: () => void;
+    let release!: () => void;
+    const atDelete = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let staleKey = '';
+    deleteMock.mockImplementationOnce(async (deleted: string) => {
+      staleKey = deleted;
+      entered();
+      await released;
+      return remove(deleted);
+    });
+    // Save A fails before its commit and its rollback starts deleting the
+    // body it stored.
+    const failed = putVersion(srv, projectId, hand);
+    await atDelete;
+    db.batch = batch;
+    expect(staleKey.startsWith(`${prefix}.`)).toBe(true);
+    // An identical retry stores its own body under its own key and commits.
+    expect((await putVersion(srv, projectId, hand)).status).toBe(200);
+    const committed = bodyKeyAt(srv, projectId, version)!;
+    expect(committed.startsWith(`${prefix}.`)).toBe(true);
+    expect(committed).not.toBe(staleKey);
+    // A's delayed rollback removes only A's own object.
+    release();
+    await failed;
+    expect(srv.bucket.objects.has(staleKey)).toBe(false);
+    expect(new Uint8Array(srv.bucket.objects.get(committed)!)).toEqual(
+      new Uint8Array(hand.envelope)
+    );
+    expect(rows(srv, 'SELECT object_key FROM r2_key_tombstones')).toEqual([]);
+  });
+
+  it('commits no save state whose body is missing: a lost put fails retryably, and the retry stores and keeps it', async () => {
+    const srv = server();
+    const { projectId, version, hand, prefix } = await largeNext(srv);
+    const putMock = srv.bucket.put as unknown as Mock<
+      (key: string, body: ArrayBuffer | Uint8Array) => Promise<void>
+    >;
+    const put = putMock.getMockImplementation()!;
+    let writes = 0;
+    putMock.mockImplementation(async (written, body) => {
+      if (written.startsWith(`${prefix}.`)) {
+        writes++;
+        // The first put is lost (as if removed before the row landed)...
+        if (writes === 1) return;
+        // ...and the next one fails outright.
+        if (writes === 2) throw new Error('transient R2 outage');
+      }
+      return put(written, body);
+    });
+    const metadata = {
+      version: { ...hand.upload, revisionId: 'saved-before-change' }
+    };
+    const call = () =>
+      srv.call('POST', `/api/e2ee/projects/${projectId}/revisions`, {
+        raw: encodeE2eeFrame(metadata, hand.envelope),
+        contentType: FRAME
+      });
+    for (const attempt of [await call(), await call()]) {
+      expect(attempt.status).toBe(503);
+      expect(await attempt.json()).toMatchObject({
+        code: 'PROJECT_STORAGE_UNAVAILABLE'
+      });
+    }
+    // Nothing committed: the head did not move, so the same save can retry.
+    expect(bodyKeyAt(srv, projectId, version)).toBeNull();
+    expect(
+      rows(
+        srv,
+        'SELECT revision_id FROM e2ee_project_revisions WHERE project_id = ?',
+        projectId
+      )
+    ).toEqual([]);
+    expect((await call()).status).toBe(201);
+    const committed = bodyKeyAt(srv, projectId, version)!;
+    expect(new Uint8Array(srv.bucket.objects.get(committed)!)).toEqual(
+      new Uint8Array(hand.envelope)
+    );
+    expect(
+      rows(
+        srv,
+        'SELECT revision_id FROM e2ee_project_revisions WHERE project_id = ?',
+        projectId
+      )
+    ).toEqual([{ revision_id: 'saved-before-change' }]);
+    expect(
+      (await srv.call('GET', `/api/e2ee/projects/${projectId}/document`)).status
+    ).toBe(200);
+  });
+
+  it('lets the real client retry a named save whose body put was lost, and opens it afterwards', async () => {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    // A storable document large enough that its body goes to R2.
+    const {
+      addPrimitiveFeature,
+      assertStorableDocument,
+      withoutDerivedProjection
+    } = await import('@openzcad/document-core');
+    let big = structuredClone(v1);
+    for (let index = 0; index < 4000; index++) {
+      const one = addPrimitiveFeature(v1, {
+        name: `Block ${index}`,
+        primitiveKind: 'box',
+        dimensions: {
+          width: Math.random() * 100 + 1,
+          height: Math.random() * 100 + 1,
+          depth: Math.random() * 100 + 1
+        }
+      });
+      for (const [id, node] of Object.entries(one.nodes)) {
+        if (!v1.nodes[id]) big.nodes[id] = node;
+      }
+      big.featureOrder.push(...one.featureOrder);
+      big.bodyOrder.push(...one.bodyOrder);
+      (
+        big.nodes[big.activePartId] as unknown as { childIds: string[] }
+      ).childIds.push(
+        ...(
+          one.nodes[one.activePartId] as unknown as { childIds: string[] }
+        ).childIds.filter((id) => !v1.nodes[id])
+      );
+    }
+    big.version = v1.version + 1;
+    big = withoutDerivedProjection(big);
+    assertStorableDocument(big);
+    const putMock = srv.bucket.put as unknown as Mock<
+      (key: string, body: ArrayBuffer | Uint8Array) => Promise<void>
+    >;
+    const put = putMock.getMockImplementation()!;
+    let writes = 0;
+    putMock.mockImplementation(async (written, body) => {
+      if (written.includes('/v/')) {
+        writes++;
+        if (writes === 1) return;
+        if (writes === 2) throw new Error('transient R2 outage');
+      }
+      return put(written, body);
+    });
+    const input = {
+      projectId,
+      expectedVersion: v1.version,
+      reason: 'Before removing blocks',
+      document: big
+    };
+    const outcomes: (number | null)[] = [];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await laptop.store.saveRevision(input);
+        outcomes.push(null);
+        break;
+      } catch (error) {
+        outcomes.push((error as { status?: number }).status ?? -1);
+      }
+    }
+    // Refused retryably until a body is stored, then saved.
+    expect(outcomes.at(-1)).toBeNull();
+    expect(outcomes.slice(0, -1).every((status) => status === 503)).toBe(true);
+    expect(writes).toBeGreaterThanOrEqual(2);
+    const desktop = reload(srv, device(srv, owner, 'owner_desktop'));
+    expect((await desktop.store.loadProject(projectId)).version).toBe(
+      v1.version + 1
+    );
+    const key = rows<{ envelope_key: string | null }>(
+      srv,
+      `SELECT envelope_key FROM e2ee_project_versions
+       WHERE project_id = ? ORDER BY document_version DESC LIMIT 1`,
+      projectId
+    )[0]!.envelope_key;
+    expect(key).not.toBeNull();
+    expect(srv.bucket.objects.has(key!)).toBe(true);
+  });
+});
+
+describe('bodies a failed save could not remove (PR #1477 review, round 2)', () => {
+  async function failedBody(srv: Server) {
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const head = rows<{ version_hash: string }>(
+      srv,
+      'SELECT version_hash FROM e2ee_project_versions WHERE project_id = ?',
+      projectId
+    )[0]!;
+    const payload = new Uint8Array(400_000);
+    for (let offset = 0; offset < payload.length; offset += 65_536) {
+      crypto.getRandomValues(
+        payload.subarray(offset, Math.min(payload.length, offset + 65_536))
+      );
+    }
+    const hand = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: v1.version + 1,
+        keyEpoch: 0,
+        previousVersionHash: fromHex(head.version_hash)
+      },
+      { expectedVersion: v1.version, plaintext: payload }
+    );
+    const prefix = `e2ee/${projectId}/v/${hand.hash}.`;
+    // The put lands, then confirming it and removing it both fail.
+    const bucket = srv.bucket as unknown as {
+      head?: (key: string) => Promise<unknown>;
+    };
+    const head0 = bucket.head;
+    bucket.head = async (key: string) => {
+      if (key.startsWith(prefix)) throw new Error('transient head outage');
+      return head0 ? head0(key) : null;
+    };
+    const deleteMock = srv.bucket.delete as unknown as Mock<
+      (key: string) => Promise<void>
+    >;
+    const remove = deleteMock.getMockImplementation()!;
+    let orphan = '';
+    deleteMock.mockImplementation(async (key: string) => {
+      if (key.startsWith(prefix)) {
+        orphan = key;
+        throw new Error('transient delete outage');
+      }
+      return remove(key);
+    });
+    const failed = await putVersion(srv, projectId, hand);
+    expect(failed.status).toBe(503);
+    expect(srv.bucket.objects.has(orphan)).toBe(true);
+    // The failed attempt's body stays recorded, so it can be found again.
+    expect(rows(srv, 'SELECT object_key FROM r2_pending_objects')).toEqual([
+      { object_key: orphan }
+    ]);
+    deleteMock.mockImplementation(remove);
+    bucket.head = head0;
+    // The same save succeeds with its own new body.
+    expect((await putVersion(srv, projectId, hand)).status).toBe(200);
+    expect(srv.bucket.objects.has(orphan)).toBe(true);
+    return { projectId, orphan };
+  }
+
+  it('removes such a body with its project', async () => {
+    const srv = server();
+    const { projectId, orphan } = await failedBody(srv);
+    expect(
+      (await srv.call('DELETE', `/api/projects/${projectId}`)).status
+    ).toBe(204);
+    expect(srv.bucket.objects.has(orphan)).toBe(false);
+    // Its record is young enough that a put could still be landing: it
+    // stays, filed under no project, until the sweep finds it aged.
+    expect(
+      rows(srv, 'SELECT object_key, project_id FROM r2_pending_objects')
+    ).toEqual([{ object_key: orphan, project_id: '' }]);
+  });
+
+  it('removes such a body once it is old enough that no save can still commit it', async () => {
+    const srv = server();
+    const { projectId, orphan } = await failedBody(srv);
+    srv.db
+      .prepare('UPDATE r2_pending_objects SET created_at = ?')
+      .run(Date.now() - 2 * 60 * 60 * 1000);
+    // The next save's retention drains it.
+    const laptop = device(srv, owner, 'owner_laptop');
+    const current = rows<{ version_hash: string; document_version: number }>(
+      srv,
+      `SELECT version_hash, document_version FROM e2ee_project_versions
+       WHERE project_id = ? ORDER BY document_version DESC LIMIT 1`,
+      projectId
+    )[0]!;
+    const next = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: current.document_version + 1,
+        keyEpoch: 0,
+        previousVersionHash: fromHex(current.version_hash)
+      },
+      {
+        expectedVersion: current.document_version,
+        plaintext: new TextEncoder().encode('after the failed save')
+      }
+    );
+    expect((await putVersion(srv, projectId, next)).status).toBe(200);
+    expect(srv.bucket.objects.has(orphan)).toBe(false);
+    expect(rows(srv, 'SELECT object_key FROM r2_pending_objects')).toEqual([]);
+    // A drained body can never be committed afterwards.
+    expect(() =>
+      srv.db
+        .prepare(
+          `INSERT INTO e2ee_project_versions
+             (project_id, document_version, version_hash, key_epoch, prefix,
+              signature, signer_device_id, envelope_key, envelope_bytes,
+              wrapped_version_key, created_at)
+           VALUES (?, 99, ?, 0, ?, ?, 'device', ?, 10, ?, 'now')`
+        )
+        .run(
+          projectId,
+          'f'.repeat(64),
+          'p'.repeat(11),
+          's'.repeat(98),
+          orphan,
+          'w'.repeat(55)
+        )
+    ).toThrow('r2_object_not_pending');
+  });
+});
+
+describe('bodies of refused and failed saves stay bounded (PR #1477 review, round 3)', () => {
+  const large = () => {
+    const payload = new Uint8Array(400_000);
+    for (let offset = 0; offset < payload.length; offset += 65_536) {
+      crypto.getRandomValues(
+        payload.subarray(offset, Math.min(payload.length, offset + 65_536))
+      );
+    }
+    return payload;
+  };
+
+  it('stores no body for a save a pending member rotation refuses, however often it is repeated', async () => {
+    const account = await makeAccount(OWNER, ['dev_a', 'dev_b']);
+    const srv = newServer([account]);
+    const laptop = device(srv, account, 'dev_a');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const head = headOf(srv, projectId);
+    const hand = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: v1.version + 1,
+        keyEpoch: 0,
+        previousVersionHash: fromHex(head.version_hash)
+      },
+      { expectedVersion: v1.version, plaintext: large() }
+    );
+    // A device is revoked and its signed cutoff stored; the project's key
+    // rotation has not happened yet.
+    await account.revoke(srv.db, 'dev_b');
+    const entry = account.list.entries.at(-1)!;
+    const signed = await signRevocationCutoffs(account.identityPrivateKey, {
+      userId: OWNER,
+      generation: 1,
+      entrySequence: entry.entry.sequence,
+      entryHash: entry.hash,
+      issuedAt: Date.now(),
+      cutoffs: [
+        {
+          projectId,
+          cutoffEpoch: 1,
+          head: {
+            documentVersion: v1.version,
+            versionHash: fromHex(head.version_hash)
+          }
+        }
+      ]
+    });
+    expect(
+      (
+        await srv.call('PUT', '/api/e2ee/revocation-cutoffs', {
+          body: {
+            generation: 1,
+            entrySequence: entry.entry.sequence,
+            statement: toBase64Url(signed.statement),
+            signature: toBase64Url(signed.signature)
+          }
+        })
+      ).status
+    ).toBe(200);
+    const putsBefore = srv.bucket.put.mock.calls.length;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const save = await putVersion(srv, projectId, hand);
+      expect(save.status).toBe(409);
+      expect(await save.json()).toMatchObject({
+        code: 'E2EE_MEMBER_ROTATION_PENDING'
+      });
+    }
+    // Refused before any body was stored.
+    expect(
+      srv.bucket.put.mock.calls
+        .slice(putsBefore)
+        .filter(([key]) => String(key).includes('/v/'))
+    ).toEqual([]);
+    expect(rows(srv, 'SELECT object_key FROM r2_pending_objects')).toEqual([]);
+  });
+
+  it('holds at most a few failed bodies per project, and the scheduled sweep reclaims them without another save', async () => {
+    const worker = (await import('../apps/web/worker/index')).default;
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const head = headOf(srv, projectId);
+    const hand = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: v1.version + 1,
+        keyEpoch: 0,
+        previousVersionHash: fromHex(head.version_hash)
+      },
+      { expectedVersion: v1.version, plaintext: large() }
+    );
+    // Every body's confirmation and removal fail: each save leaves one.
+    const bucket = srv.bucket as unknown as {
+      head?: (key: string) => Promise<unknown>;
+    };
+    const head0 = bucket.head;
+    bucket.head = async (key: string) => {
+      if (key.includes('/v/')) throw new Error('transient head outage');
+      return head0 ? head0(key) : null;
+    };
+    const deleteMock = srv.bucket.delete as unknown as Mock<
+      (key: string) => Promise<void>
+    >;
+    const remove = deleteMock.getMockImplementation()!;
+    deleteMock.mockImplementation(async (key: string) => {
+      if (key.includes('/v/')) throw new Error('transient delete outage');
+      return remove(key);
+    });
+    const codes: string[] = [];
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const save = await putVersion(srv, projectId, hand);
+      expect(save.status).toBe(503);
+      codes.push(((await save.json()) as { code: string }).code);
+    }
+    // Eight left behind, then no new body is stored at all.
+    expect(codes.slice(0, 8)).toEqual(
+      Array(8).fill('PROJECT_STORAGE_UNAVAILABLE')
+    );
+    expect(codes.slice(8)).toEqual([
+      'STORAGE_CLEANUP_BUSY',
+      'STORAGE_CLEANUP_BUSY'
+    ]);
+    const pending = rows<{ object_key: string }>(
+      srv,
+      'SELECT object_key FROM r2_pending_objects'
+    );
+    expect(pending).toHaveLength(8);
+    deleteMock.mockImplementation(remove);
+    bucket.head = head0;
+    // An hour on, the scheduled sweep removes them with no save at all.
+    srv.db
+      .prepare('UPDATE r2_pending_objects SET created_at = ?')
+      .run(Date.now() - 2 * 60 * 60 * 1000);
+    await worker.scheduled({}, srv.env);
+    expect(rows(srv, 'SELECT object_key FROM r2_pending_objects')).toEqual([]);
+    for (const { object_key } of pending) {
+      expect(srv.bucket.objects.has(object_key)).toBe(false);
+    }
+    // And the save goes through.
+    expect((await putVersion(srv, projectId, hand)).status).toBe(200);
+  });
+});
+
+describe('a body whose put a project deletion overtook (PR #1477 review, round 6)', () => {
+  it('keeps a body tracked when deletion overtakes its pending put and blocks rollback, until the sweep removes it', async () => {
+    const {
+      D1R2PersistenceService,
+      drainPendingObjects,
+      PENDING_OBJECT_GRACE_MS
+    } = await import('@openzcad/cloudflare-adapters');
+    const worker = (await import('../apps/web/worker/index')).default;
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const head = rows<{ version_hash: string }>(
+      srv,
+      'SELECT version_hash FROM e2ee_project_versions WHERE project_id = ?',
+      projectId
+    )[0]!;
+    // Large enough to be stored in R2 rather than inline.
+    const payload = new Uint8Array(400_000);
+    for (let n = 0; n < payload.length; n += 65536) {
+      crypto.getRandomValues(
+        payload.subarray(n, Math.min(payload.length, n + 65536))
+      );
+    }
+    const hand = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: v1.version + 1,
+        keyEpoch: 0,
+        previousVersionHash: fromHex(head.version_hash)
+      },
+      { expectedVersion: v1.version, plaintext: payload }
+    );
+    // The save records its body and starts the put, which pauses.
+    const putMock = srv.bucket.put as unknown as Mock<
+      (key: string, body: ArrayBuffer | Uint8Array) => Promise<void>
+    >;
+    const put = putMock.getMockImplementation()!;
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => (enter = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let key = '';
+    putMock.mockImplementationOnce(async (written, body) => {
+      key = written;
+      enter();
+      await released;
+      return put(written, body);
+    });
+    const save = putVersion(srv, projectId, hand);
+    await entered;
+    expect(rows(srv, 'SELECT object_key FROM r2_pending_objects')).toEqual([
+      { object_key: key }
+    ]);
+    // The project's deletion lists and deletes the key before the bytes
+    // land, then pauses before its final batch, still holding its claim.
+    const d1 = srv.env.DB as D1Database;
+    const batch = d1.batch.bind(d1);
+    let atFinal!: () => void;
+    let finish!: () => void;
+    const finalEntered = new Promise<void>((resolve) => (atFinal = resolve));
+    const finalReleased = new Promise<void>((resolve) => (finish = resolve));
+    d1.batch = async (statements) => {
+      if (
+        statements.some((statement) =>
+          (statement as unknown as { sql: string }).sql.includes(
+            'DELETE FROM projects WHERE id IN'
+          )
+        )
+      ) {
+        atFinal();
+        await finalReleased;
+      }
+      return batch(statements);
+    };
+    const deletion = new D1R2PersistenceService(srv.env).deleteProject(
+      OWNER as never,
+      projectId
+    );
+    await finalEntered;
+    expect(srv.bucket.objects.has(key)).toBe(false);
+    // The put lands after that delete; the save is refused, and its
+    // rollback cannot claim the key the deletion holds.
+    release();
+    const response = await save;
+    expect(response.ok).toBe(false);
+    expect(srv.bucket.objects.has(key)).toBe(true);
+    finish();
+    await deletion;
+    d1.batch = batch;
+    expect(
+      rows(srv, 'SELECT id FROM projects WHERE id = ?', projectId)
+    ).toEqual([]);
+    // The body is still tracked: its record outlives the project, filed
+    // under no project, and no sweep reclaims it while a put could be in
+    // flight.
+    expect(
+      rows(srv, 'SELECT object_key, project_id FROM r2_pending_objects')
+    ).toEqual([{ object_key: key, project_id: '' }]);
+    await drainPendingObjects(
+      d1,
+      { 'project-storage': srv.bucket as never },
+      null,
+      { olderThanMs: PENDING_OBJECT_GRACE_MS }
+    );
+    expect(srv.bucket.objects.has(key)).toBe(true);
+    // Once it is old enough, the scheduled sweep deletes the body and then
+    // its record.
+    srv.db
+      .prepare('UPDATE r2_pending_objects SET created_at = ?')
+      .run(Date.now() - 2 * PENDING_OBJECT_GRACE_MS);
+    await worker.scheduled({}, srv.env);
+    expect(srv.bucket.objects.has(key)).toBe(false);
+    expect(rows(srv, 'SELECT * FROM r2_pending_objects')).toEqual([]);
+  }, 30_000);
+});
+
+describe('detached pending records (PR #1477 review, round 7)', () => {
+  it('does not commit a body deleted and detached after verification', async () => {
+    const { D1R2PersistenceService } =
+      await import('@openzcad/cloudflare-adapters');
+    const {
+      addPrimitiveFeature,
+      assertStorableDocument,
+      withoutDerivedProjection
+    } = await import('@openzcad/document-core');
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    // A valid document large enough that its body is stored in R2.
+    const original = initialDocument('Race');
+    let document = structuredClone(original);
+    for (let index = 0; index < 4000; index++) {
+      const one = addPrimitiveFeature(original, {
+        name: `Block ${index}`,
+        primitiveKind: 'box',
+        dimensions: { width: index + 1, height: 10, depth: 10 }
+      });
+      for (const [id, node] of Object.entries(one.nodes)) {
+        if (!original.nodes[id]) document.nodes[id] = node;
+      }
+      document.featureOrder.push(...one.featureOrder);
+      document.bodyOrder.push(...one.bodyOrder);
+      (
+        document.nodes[document.activePartId] as unknown as {
+          childIds: string[];
+        }
+      ).childIds.push(
+        ...(
+          one.nodes[one.activePartId] as unknown as { childIds: string[] }
+        ).childIds.filter((id) => !original.nodes[id])
+      );
+    }
+    document = withoutDerivedProjection(document);
+    assertStorableDocument(document);
+    let raw: Uint8Array<ArrayBuffer> | undefined;
+    laptop.before = async (path, init) => {
+      if (path === '/api/e2ee/projects' && init.method === 'POST') {
+        raw = new Uint8Array(await new Response(init.body).arrayBuffer());
+      }
+    };
+    // Create A stores and verifies its body, then pauses before its batch.
+    const db = srv.env.DB as D1Database;
+    const batch = db.batch.bind(db);
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => (enter = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let first = true;
+    db.batch = async (statements) => {
+      if (
+        first &&
+        statements.some((statement) =>
+          (statement as unknown as { sql: string }).sql.includes(
+            'INSERT INTO projects'
+          )
+        )
+      ) {
+        first = false;
+        enter();
+        await released;
+      }
+      return batch(statements);
+    };
+    const stalled = laptop.store.createProject({
+      name: 'Race',
+      initialDocument: document
+    });
+    stalled.catch(() => undefined);
+    await entered;
+    const early = rows<{ object_key: string }>(
+      srv,
+      'SELECT object_key FROM r2_pending_objects'
+    )[0]!;
+    expect(early).toBeTruthy();
+    // An identical create commits, and the project is deleted for good:
+    // A's body is reclaimed and its record detached.
+    const winner = await srv.call('POST', '/api/e2ee/projects', {
+      raw: raw!,
+      contentType: FRAME
+    });
+    expect(winner.status).toBe(201);
+    await new D1R2PersistenceService(srv.env).deleteProject(
+      OWNER as never,
+      document.projectId
+    );
+    expect(srv.bucket.objects.has(early.object_key)).toBe(false);
+    expect(
+      rows(srv, 'SELECT object_key, project_id FROM r2_pending_objects')
+    ).toEqual([{ object_key: early.object_key, project_id: '' }]);
+    // A resumes: its detached record authorizes nothing, so it creates no
+    // project whose version names the missing body.
+    release();
+    db.batch = batch;
+    await expect(stalled).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof ApiError &&
+        error.status === 503 &&
+        error.code === 'PROJECT_STORAGE_UNAVAILABLE'
+    );
+    expect(rows(srv, 'SELECT envelope_key FROM e2ee_project_versions')).toEqual(
+      []
+    );
+    expect(
+      (
+        await srv.call(
+          'GET',
+          `/api/e2ee/projects/${document.projectId}/document`
+        )
+      ).status
+    ).toBe(404);
+    // A's own rollback, its put long done, removed the body and its record.
+    expect(srv.bucket.objects.has(early.object_key)).toBe(false);
+    expect(rows(srv, 'SELECT * FROM r2_pending_objects')).toEqual([]);
+  }, 60_000);
+
+  it('a full account erasure keeps tracking its pending objects without naming the account, and the sweep reclaims them', async () => {
+    const { recordPendingObject, PENDING_OBJECT_GRACE_MS } =
+      await import('@openzcad/cloudflare-adapters');
+    const worker = (await import('../apps/web/worker/index')).default;
+    const srv = server();
+    srv.db.exec('PRAGMA foreign_keys=ON');
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document } = await createEncrypted(laptop);
+    // A write of the account is still putting this body.
+    const key = `e2ee/${document.projectId}/v/pending.nonce`;
+    expect(
+      await recordPendingObject(srv.env.DB as D1Database, {
+        key,
+        attempt: 'pending',
+        projectId: document.projectId,
+        ownerUserId: OWNER,
+        bytes: 3,
+        bucket: 'project-storage'
+      })
+    ).toBe('recorded');
+    // So is a copy whose project does not exist yet.
+    expect(
+      await recordPendingObject(srv.env.DB as D1Database, {
+        key: 'e2ee/proj_not_created/blob',
+        attempt: 'copying',
+        projectId: 'proj_not_created',
+        ownerUserId: OWNER,
+        bytes: 3,
+        bucket: 'artifacts'
+      })
+    ).toBe('recorded');
+    const response = await srv.call('POST', '/api/account/delete-data', {
+      body: { scope: 'all', confirmation: 'DELETE ALL CLOUD DATA' }
+    });
+    expect(response.status).toBe(200);
+    expect(rows(srv, 'SELECT id FROM users WHERE id = ?', OWNER)).toEqual([]);
+    // Both records stay for the sweep, detached, naming no account.
+    expect(
+      rows(
+        srv,
+        `SELECT object_key, project_id, owner_user_id FROM r2_pending_objects
+         ORDER BY attempt`
+      )
+    ).toEqual([
+      {
+        object_key: 'e2ee/proj_not_created/blob',
+        project_id: '',
+        owner_user_id: ''
+      },
+      { object_key: key, project_id: '', owner_user_id: '' }
+    ]);
+    expect(
+      rows(
+        srv,
+        'SELECT 1 FROM r2_pending_objects WHERE owner_user_id = ?',
+        OWNER
+      )
+    ).toEqual([]);
+    // A put still in flight lands; the sweep removes it once aged.
+    srv.bucket.objects.set(key, new Uint8Array([1, 2, 3]).buffer);
+    srv.db
+      .prepare('UPDATE r2_pending_objects SET created_at = ?')
+      .run(Date.now() - 2 * PENDING_OBJECT_GRACE_MS);
+    await worker.scheduled({}, srv.env);
+    expect(rows(srv, 'SELECT * FROM r2_pending_objects')).toEqual([]);
+    expect(srv.bucket.objects.has(key)).toBe(false);
+  });
+});
+
+describe('pending admission after a full account erasure (PR #1477 review, round 8)', () => {
+  it('a save admitted before the erasure records nothing and puts nothing once it completed', async () => {
+    const srv = server();
+    srv.db.exec('PRAGMA foreign_keys=ON');
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const head = rows<{ version_hash: string }>(
+      srv,
+      'SELECT version_hash FROM e2ee_project_versions WHERE project_id = ?',
+      projectId
+    )[0]!;
+    // Large enough that its body goes to R2 through a pending record.
+    const payload = new Uint8Array(400_000);
+    for (let n = 0; n < payload.length; n += 65536) {
+      crypto.getRandomValues(
+        payload.subarray(n, Math.min(payload.length, n + 65536))
+      );
+    }
+    const hand = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: v1.version + 1,
+        keyEpoch: 0,
+        previousVersionHash: fromHex(head.version_hash)
+      },
+      { expectedVersion: v1.version, plaintext: payload }
+    );
+    // The save passed its checks and pauses right before its pending
+    // record's INSERT.
+    const db = srv.env.DB as D1Database;
+    const prepare = db.prepare.bind(db);
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => (enter = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let once = true;
+    const pass = <T extends object>(target: T, property: PropertyKey) => {
+      const value = Reflect.get(target, property) as unknown;
+      return typeof value === 'function'
+        ? (value as (...args: unknown[]) => unknown).bind(target)
+        : value;
+    };
+    db.prepare = (sql: string) => {
+      const wrap = (statement: D1PreparedStatement): D1PreparedStatement =>
+        new Proxy(statement, {
+          get(target, property) {
+            if (property === 'bind') {
+              return (...args: unknown[]) => wrap(target.bind(...args));
+            }
+            if (
+              property === 'run' &&
+              once &&
+              sql.includes('INSERT INTO r2_pending_objects')
+            ) {
+              return async () => {
+                once = false;
+                enter();
+                await released;
+                return target.run();
+              };
+            }
+            return pass(target, property);
+          }
+        });
+      return wrap(prepare(sql));
+    };
+    const stale = putVersion(srv, projectId, hand);
+    await entered;
+    // The account's full erasure completes meanwhile.
+    const erased = await srv.call('POST', '/api/account/delete-data', {
+      body: { scope: 'all', confirmation: 'DELETE ALL CLOUD DATA' }
+    });
+    expect(erased.status).toBe(200);
+    expect(rows(srv, 'SELECT * FROM users WHERE id = ?', OWNER)).toEqual([]);
+    const objectsBefore = new Set(srv.bucket.objects.keys());
+    // Storage misbehaves, so a save that did put could not clean up.
+    (
+      srv.bucket.head as unknown as Mock<(key: string) => Promise<unknown>>
+    ).mockImplementation(async () => {
+      throw new Error('temporary R2 head outage');
+    });
+    (
+      srv.bucket.delete as unknown as Mock<(key: string) => Promise<void>>
+    ).mockImplementation(async () => {
+      throw new Error('temporary R2 delete outage');
+    });
+    release();
+    const result = await stale;
+    db.prepare = prepare;
+    // Refused at admission, as a session the erasure ended, not a retry.
+    expect(result.status).toBe(401);
+    expect(((await result.json()) as { code: string }).code).toBe(
+      'E2EE_SESSION_REQUIRED'
+    );
+    expect(rows(srv, 'SELECT * FROM r2_pending_objects')).toEqual([]);
+    expect(new Set(srv.bucket.objects.keys())).toEqual(objectsBefore);
+    expect(
+      [...srv.bucket.objects.keys()].filter((key) =>
+        key.startsWith(`e2ee/${projectId}/`)
+      )
+    ).toEqual([]);
+  });
+});
+
+describe('pending admission bound to the write’s own session (PR #1477 review, round 9)', () => {
+  const EMAIL = 'hosted@example.test';
+  // Hosted sign-in derives a stable user id from the email address.
+  const HOSTED = `user_${createHash('sha256').update(EMAIL).digest('hex').slice(0, 24)}`;
+  let hostedOwner: Account;
+
+  beforeAll(async () => {
+    hostedOwner = await makeAccount(HOSTED, ['hosted_laptop']);
+  });
+
+  it.each([false, true])(
+    'a save paused before its pending record admits nothing once a full erasure ended its session (signed in again: %s)',
+    async (signInAgain) => {
+      const worker = (await import('../apps/web/worker/index')).default;
+      const { verifyEmailLogin, hashLoginCode } =
+        await import('../apps/web/worker/auth');
+      const srv = newServer([hostedOwner]);
+      srv.db.exec('PRAGMA foreign_keys=ON');
+      const laptop = device(srv, hostedOwner, 'hosted_laptop');
+      const { document: v1 } = await createEncrypted(laptop);
+      const projectId = v1.projectId;
+      const head = rows<{ version_hash: string }>(
+        srv,
+        'SELECT version_hash FROM e2ee_project_versions WHERE project_id = ?',
+        projectId
+      )[0]!;
+      // Large enough that its body goes to R2 through a pending record.
+      const payload = new Uint8Array(400_000);
+      for (let n = 0; n < payload.length; n += 65536) {
+        crypto.getRandomValues(
+          payload.subarray(n, Math.min(payload.length, n + 65536))
+        );
+      }
+      const hand = await handVersion(
+        laptop,
+        projectId,
+        {
+          documentVersion: v1.version + 1,
+          keyEpoch: 0,
+          previousVersionHash: fromHex(head.version_hash)
+        },
+        { expectedVersion: v1.version, plaintext: payload }
+      );
+      // Hosted email-code sign-in; challenges are seeded, nothing is sent.
+      const hosted = {
+        ...srv.env,
+        AUTH_MODE: 'email-code',
+        AUTH_OTP_PEPPER: 'test-only-pepper',
+        AUTH_EMAIL_FROM: EMAIL,
+        TURNSTILE_SITE_KEY: 'test',
+        TURNSTILE_SECRET_KEY: 'test',
+        EMAIL: {
+          send: async () => {
+            throw new Error('not used');
+          }
+        }
+      };
+      const signIn = async () => {
+        const challengeId = crypto.randomUUID();
+        const code = '123456';
+        const now = Math.floor(Date.now() / 1000);
+        srv.db
+          .prepare(
+            `INSERT INTO auth_email_challenges
+               (id, email, code_hash, attempts, created_at, expires_at)
+             VALUES (?, ?, ?, 0, ?, ?)`
+          )
+          .run(
+            challengeId,
+            EMAIL,
+            await hashLoginCode(
+              challengeId,
+              EMAIL,
+              code,
+              hosted.AUTH_OTP_PEPPER
+            ),
+            now,
+            now + 600
+          );
+        const signed = await verifyEmailLogin(
+          { challengeId, code },
+          hosted as never
+        );
+        expect(signed.session.userId).toBe(HOSTED);
+        return signed.cookie.split(';')[0]!;
+      };
+      let cookie = await signIn();
+      const call = (
+        method: string,
+        path: string,
+        body?: unknown,
+        raw?: Uint8Array<ArrayBuffer>
+      ) =>
+        worker.fetch(
+          new Request(`https://example.com${path}`, {
+            method,
+            headers: {
+              cookie,
+              origin: 'https://example.com',
+              ...(raw
+                ? { 'content-type': FRAME }
+                : body === undefined
+                  ? {}
+                  : { 'content-type': 'application/json' })
+            },
+            body: raw ?? (body === undefined ? undefined : JSON.stringify(body))
+          }),
+          hosted as never
+        );
+      // The save passed its checks and pauses right before its pending
+      // record's INSERT.
+      const db = srv.env.DB as D1Database;
+      const prepare = db.prepare.bind(db);
+      let enter!: () => void;
+      let release!: () => void;
+      const entered = new Promise<void>((resolve) => (enter = resolve));
+      const released = new Promise<void>((resolve) => (release = resolve));
+      let once = true;
+      const pass = <T extends object>(target: T, property: PropertyKey) => {
+        const value = Reflect.get(target, property) as unknown;
+        return typeof value === 'function'
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      };
+      db.prepare = (sql: string) => {
+        const wrap = (statement: D1PreparedStatement): D1PreparedStatement =>
+          new Proxy(statement, {
+            get(target, property) {
+              if (property === 'bind') {
+                return (...args: unknown[]) => wrap(target.bind(...args));
+              }
+              if (
+                property === 'run' &&
+                once &&
+                sql.includes('INSERT INTO r2_pending_objects')
+              ) {
+                return async () => {
+                  once = false;
+                  enter();
+                  await released;
+                  return target.run();
+                };
+              }
+              return pass(target, property);
+            }
+          });
+        return wrap(prepare(sql));
+      };
+      const stale = call(
+        'PUT',
+        `/api/e2ee/projects/${projectId}/document`,
+        undefined,
+        encodeE2eeFrame({ version: hand.upload }, hand.envelope)
+      );
+      await entered;
+      // The account's full erasure completes meanwhile...
+      const erased = await call('POST', '/api/account/delete-data', {
+        scope: 'all',
+        confirmation: EMAIL
+      });
+      expect(erased.status).toBe(200);
+      expect(rows(srv, 'SELECT * FROM users WHERE id = ?', HOSTED)).toEqual([]);
+      // ...and the same person may sign in again, under the same user id.
+      if (signInAgain) {
+        cookie = await signIn();
+        expect(rows(srv, 'SELECT id FROM users WHERE id = ?', HOSTED)).toEqual([
+          { id: HOSTED }
+        ]);
+      }
+      const objectsBefore = new Set(srv.bucket.objects.keys());
+      // Storage misbehaves, so a save that did put could not clean up.
+      (
+        srv.bucket.head as unknown as Mock<(key: string) => Promise<unknown>>
+      ).mockImplementation(async () => {
+        throw new Error('temporary R2 head outage');
+      });
+      (
+        srv.bucket.delete as unknown as Mock<(key: string) => Promise<void>>
+      ).mockImplementation(async () => {
+        throw new Error('temporary R2 delete outage');
+      });
+      release();
+      const result = await stale;
+      db.prepare = prepare;
+      // Its own session ended with the erasure: refused at admission.
+      expect(result.status).toBe(401);
+      expect(((await result.json()) as { code: string }).code).toBe(
+        'E2EE_SESSION_REQUIRED'
+      );
+      expect(rows(srv, 'SELECT * FROM r2_pending_objects')).toEqual([]);
+      expect(new Set(srv.bucket.objects.keys())).toEqual(objectsBefore);
+      expect(
+        [...srv.bucket.objects.keys()].filter((key) =>
+          key.startsWith(`e2ee/${projectId}/`)
+        )
+      ).toEqual([]);
+    },
+    60_000
+  );
 });

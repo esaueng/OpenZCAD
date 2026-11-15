@@ -12,7 +12,7 @@ import { toUserId } from '@openzcad/shared';
 import { describeProject } from '../lib/projectProperties';
 import { DEMO_DEFINITIONS } from '../lib/demoDefinitions';
 import type { ComponentProps } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   PROJECT_STORAGE_FORMAT_E2EE_V1,
   toProjectId,
@@ -22,10 +22,16 @@ import {
 import {
   formatLastEdited,
   formatRecoveryDate,
+  LibrarySelectionBar,
   recoveryCopyOf,
   StartScreen
 } from './StartScreen';
+import { localStorageEncryptedProjectPins } from '../lib/e2ee/encryptedProjectPins';
 import { useAccountStorageUsage } from './StorageUsagePanel';
+
+// The selection bar loads on demand; the library warms it once idle. Load it
+// up front so a selection here draws it in the same render, as warmed.
+beforeAll(() => LibrarySelectionBar.preload());
 
 // An encrypted project's properties check the assistant consent against the
 // account; nothing here signs in, so the check would reach for a server.
@@ -1062,6 +1068,42 @@ describe('StartScreen library shell', () => {
       within(card).getByRole('button', { name: 'Save it to my account' })
     ).toHaveTextContent('Save');
     expect(container.querySelector('footer')).toBeNull();
+  });
+
+  it('never offers a project this device holds as encrypted as device only', () => {
+    // PR #1418: an account listing that leaves out an encrypted project
+    // made its cached copy look device only, and "Save to my account"
+    // would have sent it to the account as a new project.
+    const pinned: ProjectSummary = {
+      ...localProject,
+      projectId: toProjectId('project_pinned_shelf'),
+      name: 'Encrypted flange'
+    };
+    localStorageEncryptedProjectPins(window.localStorage).pin(pinned.projectId);
+    try {
+      renderStartScreen({
+        projects: [pinned, localProject],
+        cloudProjectIds: new Set()
+      });
+      // Only the truly device-only project is counted and offered.
+      expect(screen.getByText('1 on this device only')).toBeInTheDocument();
+      fireEvent.click(
+        screen.getByRole('button', { name: `Actions for ${pinned.name}` })
+      );
+      expect(
+        screen.queryByRole('menuitem', { name: 'Save to my account' })
+      ).toBeNull();
+      fireEvent.click(
+        screen.getByRole('button', { name: `Actions for ${localProject.name}` })
+      );
+      expect(
+        screen.getByRole('menuitem', { name: 'Save to my account' })
+      ).toBeInTheDocument();
+    } finally {
+      localStorageEncryptedProjectPins(window.localStorage).resetProject(
+        pinned.projectId
+      );
+    }
   });
 
   it('counts every part once they are all in the account', () => {

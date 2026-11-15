@@ -175,6 +175,8 @@ interface ViewerShellProps {
   normalToFaceRequest: NormalToFaceRequest | null;
   units: string;
   editableBodyIds: string[];
+  /** See `ModelViewerProps.dragsHeldByCommand`. */
+  dragsHeldByCommand?: ModelViewerProps['dragsHeldByCommand'];
   movePreview: MovePreview | null;
   /** Committed Move awaiting its rebuild; forwarded to the viewer's pose hold. */
   moveCommitHold: MovePreview | null;
@@ -468,6 +470,7 @@ export function ViewerShell({
   normalToFaceRequest,
   units,
   editableBodyIds,
+  dragsHeldByCommand,
   movePreview,
   moveCommitHold,
   appearancePreview,
@@ -816,6 +819,7 @@ export function ViewerShell({
         normalToFaceRequest={normalToFaceRequest}
         units={units}
         editableBodyIds={editableBodyIds}
+        dragsHeldByCommand={dragsHeldByCommand}
         movePreview={movePreview}
         moveCommitHold={moveCommitHold}
         appearancePreview={appearancePreview}

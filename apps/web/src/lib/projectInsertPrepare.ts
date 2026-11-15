@@ -37,6 +37,12 @@ export interface ProjectInsertBody {
 /** The other project, reduced to what inserting it needs. */
 export interface PreparedProjectInsert {
   projectName: string;
+  /**
+   * The project the backup was exported from. The insert rekeys it, so the
+   * run checks this id for an encryption requirement this device keeps
+   * before any of its content lands in the open project (PR #1418).
+   */
+  sourceProjectId: string;
   /** Millimetre STEP of every written body, named and coloured. */
   stepText: string;
   bodies: ProjectInsertBody[];
@@ -53,10 +59,9 @@ export async function prepareProjectInsert(
   file: Blob,
   ownerUserId: UserId
 ): Promise<PreparedProjectInsert> {
-  const backup = importProjectCopy(
-    await parseProjectBackup(await readProjectBackupText(file)),
-    ownerUserId
-  );
+  const parsed = await parseProjectBackup(await readProjectBackupText(file));
+  const sourceProjectId: string = parsed.document.projectId;
+  const backup = importProjectCopy(parsed, ownerUserId);
   const document = backup.document;
   const sources = new Map(
     (backup.sources ?? []).map((source) => [
@@ -93,6 +98,7 @@ export async function prepareProjectInsert(
     );
     return {
       projectName: document.name,
+      sourceProjectId,
       stepText: exported.text,
       bodies: exported.bodies.map(({ bodyId, solidCount }) => {
         const node = bodyNodes.get(bodyId);

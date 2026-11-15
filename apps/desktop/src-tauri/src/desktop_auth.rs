@@ -6,7 +6,10 @@ use std::{
     collections::HashMap,
     future::Future,
     process::Command,
-    sync::{Arc, Mutex, Weak},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, Weak,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::State;
@@ -52,6 +55,9 @@ const NATIVE_BLOB_IDLE: Duration = Duration::from_secs(30);
 const BLOB_STREAM_TOO_LARGE: &str = "The OpenZCAD cloud download is too large.";
 const BLOB_STREAM_STOPPED: &str = "The OpenZCAD cloud download stopped.";
 const TOKEN_REFRESH_SKEW_SECONDS: u64 = 30;
+// Credentials readied for project requests and not yet sent; past this the
+// oldest is dropped, and its request is answered locally with a 401.
+const MAX_PREPARED_ACCESS: usize = 64;
 #[cfg(target_os = "macos")]
 const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 
@@ -69,6 +75,20 @@ struct AccessCredential {
     expires_at: u64,
 }
 
+/// One credential readied for one project request (`desktop_prepare_access`),
+/// immutable once readied: the request is sent with exactly this token, or
+/// answered locally with a 401 when the signed-in session it was readied in
+/// has ended or it expired. Never the credential the state holds at the send.
+#[derive(Clone, Debug, PartialEq)]
+struct PreparedAccess {
+    token: String,
+    expires_at: u64,
+    /// `DesktopAuthState::session` when it was readied.
+    session: u64,
+    /// Readying order, so a full table drops its oldest entry.
+    issued: u64,
+}
+
 pub struct DesktopAuthState {
     client: Client,
     // No total timeout: a 168 MiB blob on a slow link outlasts any fixed one.
@@ -78,6 +98,14 @@ pub struct DesktopAuthState {
     access: Mutex<Option<AccessCredential>>,
     refresh_guard: AsyncMutex<()>,
     blob_streams: Arc<Mutex<HashMap<String, BlobStream>>>,
+    /// The signed-in session's generation: moved on every sign-in, sign-out,
+    /// refused refresh and profile deletion, never by a refresh of the same
+    /// session. A readied credential from an earlier generation is not sent.
+    session: AtomicU64,
+    /// Credentials readied for project requests, by opaque handle; each is
+    /// taken (removed) by the one send it was readied for.
+    prepared: Mutex<HashMap<String, PreparedAccess>>,
+    prepared_issued: AtomicU64,
 }
 
 impl DesktopAuthState {
@@ -100,8 +128,28 @@ impl DesktopAuthState {
             access: Mutex::new(None),
             refresh_guard: AsyncMutex::new(()),
             blob_streams,
+            session: AtomicU64::new(0),
+            prepared: Mutex::new(HashMap::new()),
+            prepared_issued: AtomicU64::new(0),
         }
     }
+}
+
+/// Ends the signed-in session here: drops the credential, moves the session
+/// generation, and drops every credential readied in the session that ended,
+/// so no project request readied before is sent with it or a later one's.
+fn end_session(state: &DesktopAuthState) -> Result<(), String> {
+    *state
+        .access
+        .lock()
+        .map_err(|_| "Desktop auth state is unavailable.")? = None;
+    state.session.fetch_add(1, Ordering::SeqCst);
+    state
+        .prepared
+        .lock()
+        .map_err(|_| "Desktop auth state is unavailable.")?
+        .clear();
+    Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -174,6 +222,15 @@ pub struct NativeApiRequest {
     /// A share link's capability token for a token-free share read, sent as
     /// `SHARE_TOKEN_HEADER` rather than in the URL (`share_link_destination`).
     share_token: Option<String>,
+    /// A project request (`sendNativeProjectRequest` in `desktopBridge.ts`):
+    /// the handle `desktop_prepare_access` returned for it. Sent with that
+    /// readied credential only, or answered locally with a 401 when the
+    /// handle is unknown (empty: none was readied), used, expired or from a
+    /// session that has ended; a 401 is handed back to the renderer instead
+    /// of being refreshed and replayed here, so the renderer checks its
+    /// project gate before every send.
+    #[serde(default)]
+    prepared: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -576,10 +633,7 @@ async fn refresh_access(state: &DesktopAuthState) -> Result<Option<String>, Stri
         response.status(),
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
     ) {
-        *state
-            .access
-            .lock()
-            .map_err(|_| "Desktop auth state is unavailable.")? = None;
+        end_session(state)?;
         delete_refresh_credential()?;
         return Ok(None);
     }
@@ -607,6 +661,198 @@ async fn current_access(state: &DesktopAuthState) -> Result<Option<String>, Stri
         }
     }
     refresh_access(state).await
+}
+
+/// Readies the credential for one project request: refreshed first if it
+/// is about to expire, then recorded, as it is now, under a new opaque
+/// handle bound to the signed-in session. None when signed out, or when the
+/// session changed while it was being readied.
+async fn prepare_access(state: &DesktopAuthState) -> Result<Option<String>, String> {
+    let session = state.session.load(Ordering::SeqCst);
+    let Some(token) = current_access(state).await? else {
+        return Ok(None);
+    };
+    let Some(expires_at) = state
+        .access
+        .lock()
+        .map_err(|_| "Desktop auth state is unavailable.")?
+        .as_ref()
+        .filter(|access| access.token == token)
+        .map(|access| access.expires_at)
+    else {
+        return Ok(None);
+    };
+    let handle = random_secret()?;
+    let now = now_seconds()?;
+    let mut prepared = state
+        .prepared
+        .lock()
+        .map_err(|_| "Desktop auth state is unavailable.")?;
+    // Checked under the table's lock, which `end_session` clears after it
+    // moves the session: an entry is never added for a session that ended.
+    if state.session.load(Ordering::SeqCst) != session {
+        return Ok(None);
+    }
+    admit_prepared(
+        &mut prepared,
+        handle.clone(),
+        PreparedAccess {
+            token,
+            expires_at,
+            session,
+            issued: state.prepared_issued.fetch_add(1, Ordering::SeqCst),
+        },
+        now,
+    );
+    Ok(Some(handle))
+}
+
+/// Adds a readied credential, dropping expired ones and, past
+/// `MAX_PREPARED_ACCESS`, the oldest: a request whose credential was
+/// dropped is answered locally with a 401 and readies another.
+fn admit_prepared(
+    prepared: &mut HashMap<String, PreparedAccess>,
+    handle: String,
+    access: PreparedAccess,
+    now: u64,
+) {
+    prepared.retain(|_, entry| entry.expires_at > now);
+    while prepared.len() >= MAX_PREPARED_ACCESS {
+        let Some(oldest) = prepared
+            .iter()
+            .min_by_key(|(_, entry)| entry.issued)
+            .map(|(handle, _)| handle.clone())
+        else {
+            break;
+        };
+        prepared.remove(&oldest);
+    }
+    prepared.insert(handle, access);
+}
+
+/// The credential readied under `handle`, taken so it is sent once: exactly
+/// that token, never the one the state holds now, and only while it has not
+/// expired and its session has not ended. Never refreshed, so taking it
+/// sends nothing.
+fn take_prepared_access(state: &DesktopAuthState, handle: &str) -> Result<Option<String>, String> {
+    let now = now_seconds()?;
+    let Some(access) = state
+        .prepared
+        .lock()
+        .map_err(|_| "Desktop auth state is unavailable.")?
+        .remove(handle)
+    else {
+        return Ok(None);
+    };
+    if access.session != state.session.load(Ordering::SeqCst) || access.expires_at <= now {
+        return Ok(None);
+    }
+    Ok(Some(access.token))
+}
+
+/// Drops the credential the account refused, unless another has replaced it
+/// meanwhile.
+fn forget_access(state: &DesktopAuthState, token: &str) -> Result<(), String> {
+    let mut access = state
+        .access
+        .lock()
+        .map_err(|_| "Desktop auth state is unavailable.")?;
+    if access.as_ref().is_some_and(|access| access.token == token) {
+        *access = None;
+    }
+    Ok(())
+}
+
+/// Where an authenticated renderer request's credential comes from.
+trait AccessSource {
+    /// The credential readied earlier under `handle`, without refreshing it.
+    fn prepared(&self, handle: &str) -> Result<Option<String>, String>;
+    /// The credential, refreshed first when it is about to expire.
+    fn current(&self) -> impl Future<Output = Result<Option<String>, String>> + Send;
+    /// A fresh credential, after the account refused the one sent.
+    fn refreshed(&self) -> impl Future<Output = Result<Option<String>, String>> + Send;
+    /// Drops the credential the account refused.
+    fn forget(&self, token: &str) -> Result<(), String>;
+}
+
+impl AccessSource for DesktopAuthState {
+    fn prepared(&self, handle: &str) -> Result<Option<String>, String> {
+        take_prepared_access(self, handle)
+    }
+
+    async fn current(&self) -> Result<Option<String>, String> {
+        current_access(self).await
+    }
+
+    async fn refreshed(&self) -> Result<Option<String>, String> {
+        refresh_access(self).await
+    }
+
+    fn forget(&self, token: &str) -> Result<(), String> {
+        forget_access(self, token)
+    }
+}
+
+/// What an authenticated send came to.
+#[derive(Debug, PartialEq)]
+enum Authenticated<R> {
+    Sent(R),
+    /// No credential: nothing was sent.
+    SignedOut,
+}
+
+/// Sends a request that needs the account's credential. A `prepared` one
+/// (a project request) uses exactly the credential readied for it under its
+/// handle, and is sent at most once here: without one (unknown, used,
+/// expired, or from a session that ended) nothing is sent, and a 401 drops
+/// that credential; either goes back to the renderer as a 401, and the
+/// renderer readies another and checks its project gate again before any
+/// retry. Any other request refreshes an expiring credential first and,
+/// after a 401, refreshes it and is sent once more.
+async fn send_authenticated<A, R, F, Fut>(
+    access: &A,
+    prepared: Option<&str>,
+    mut send: F,
+    status: fn(&R) -> StatusCode,
+) -> Result<Authenticated<R>, String>
+where
+    A: AccessSource,
+    F: FnMut(String) -> Fut,
+    Fut: Future<Output = Result<R, String>>,
+{
+    let token = match prepared {
+        Some(handle) => access.prepared(handle)?,
+        None => access.current().await?,
+    };
+    let Some(token) = token else {
+        return Ok(Authenticated::SignedOut);
+    };
+    let response = send(token.clone()).await?;
+    if status(&response) != StatusCode::UNAUTHORIZED {
+        return Ok(Authenticated::Sent(response));
+    }
+    access.forget(&token)?;
+    if prepared.is_some() {
+        return Ok(Authenticated::Sent(response));
+    }
+    match access.refreshed().await? {
+        Some(token) => Ok(Authenticated::Sent(send(token).await?)),
+        None => Ok(Authenticated::Sent(response)),
+    }
+}
+
+/// Readies the credential one project request is then sent with
+/// (`desktop_api_request` with `prepared` set to the handle returned here),
+/// refreshing it first if it is about to expire. A refresh is a request of
+/// its own, so it happens here, before the renderer's last check of the
+/// project request, never between that check and the send. The handle
+/// names this credential as it is now, for this signed-in session, for one
+/// send; null when signed out.
+#[tauri::command]
+pub async fn desktop_prepare_access(
+    state: State<'_, DesktopAuthState>,
+) -> Result<Option<String>, String> {
+    prepare_access(&state).await
 }
 
 #[tauri::command]
@@ -710,6 +956,8 @@ pub async fn poll_desktop_sign_in(
         .json::<TokenResponse>()
         .await
         .map_err(|_| "The desktop sign-in response was invalid.".to_string())?;
+    // A new session: nothing readied in an earlier one is sent with it.
+    end_session(&state)?;
     install_token_response(&state, &tokens)?;
     *state
         .pending
@@ -878,41 +1126,33 @@ async fn renderer_api_request(
                 .ok(),
             Ok(None) | Err(_) => None,
         };
-        *state
-            .access
-            .lock()
-            .map_err(|_| "Desktop auth state is unavailable.")? = None;
+        end_session(state)?;
         delete_refresh_credential()?;
         return match response {
             Some(response) => buffer_api_response(response).await,
             None => Ok(local_signed_out_response()),
         };
     }
-    let public = destination.public;
-    let mut access = if public {
-        None
+    let response = if destination.public {
+        send_api_request(state, &request, url, None).await?
     } else {
-        current_access(state).await?
-    };
-    if !public && access.is_none() {
-        return Ok(local_unauthorized_response());
-    }
-    let mut response = send_api_request(state, &request, url, access.as_deref()).await?;
-    if !public && response.status() == StatusCode::UNAUTHORIZED {
-        *state
-            .access
-            .lock()
-            .map_err(|_| "Desktop auth state is unavailable.")? = None;
-        access = refresh_access(state).await?;
-        if let Some(token) = access.as_deref() {
-            response = send_api_request(state, &request, url, Some(token)).await?;
+        let request = &request;
+        let sent = send_authenticated(
+            state,
+            request.prepared.as_deref(),
+            |token: String| async move {
+                send_api_request(state, request, url, Some(&token)).await
+            },
+            reqwest::Response::status,
+        )
+        .await?;
+        match sent {
+            Authenticated::Sent(response) => response,
+            Authenticated::SignedOut => return Ok(local_unauthorized_response()),
         }
-    }
+    };
     if response.status().is_success() && request_deletes_cloud_profile(&request) {
-        *state
-            .access
-            .lock()
-            .map_err(|_| "Desktop auth state is unavailable.")? = None;
+        end_session(state)?;
         delete_refresh_credential()?;
     }
     buffer_api_response(response).await
@@ -1259,6 +1499,7 @@ pub async fn desktop_collaboration_url(
         content_type: None,
         body: None,
         share_token: None,
+        prepared: None,
     };
     let mut access = current_access(&state)
         .await?
@@ -1295,13 +1536,17 @@ mod tests {
     use super::{
         admit_blob_stream, api_request_builder, api_url, approved_browser_url,
         blob_request_builder, blob_stream_destination, cancel_blob_stream, collaboration_api_url,
-        collaboration_socket_url, pkce_challenge, pump_blob_stream, read_blob_stream,
-        renderer_api_destination, renderer_api_request, request_deletes_cloud_profile,
-        request_destination, share_link_blob_stream_destination, BlobChunkSource, BlobStream,
+        collaboration_socket_url, end_session, forget_access, now_seconds, pkce_challenge,
+        prepare_access, pump_blob_stream, read_blob_stream, renderer_api_destination,
+        renderer_api_request, request_deletes_cloud_profile, request_destination,
+        send_authenticated, share_link_blob_stream_destination, take_prepared_access,
+        AccessCredential, AccessSource, Authenticated, BlobChunkSource, BlobStream,
         BlobStreamEvent, BlobStreamReader, DesktopAuthState, NativeApiRequest, BLOB_STREAM_STOPPED,
-        BLOB_STREAM_TOO_LARGE, MAX_NATIVE_BLOB_STREAMS, NATIVE_BLOB_BUFFERED_CHUNKS,
-        NATIVE_BLOB_READ_BYTES, NATIVE_BLOB_STREAM_UNREAD, SHARE_TOKEN_HEADER,
+        BLOB_STREAM_TOO_LARGE, MAX_NATIVE_BLOB_STREAMS, MAX_PREPARED_ACCESS,
+        NATIVE_BLOB_BUFFERED_CHUNKS, NATIVE_BLOB_READ_BYTES, NATIVE_BLOB_STREAM_UNREAD,
+        SHARE_TOKEN_HEADER,
     };
+    use reqwest::StatusCode;
     use std::{
         collections::{HashMap, VecDeque},
         sync::{
@@ -1357,6 +1602,7 @@ mod tests {
                     content_type: None,
                     body: None,
                     share_token: None,
+                    prepared: None,
                 },
             ));
             assert_eq!(
@@ -1378,6 +1624,7 @@ mod tests {
                 content_type: None,
                 body: None,
                 share_token: None,
+                prepared: None,
             },
         ));
         assert_eq!(
@@ -1535,6 +1782,7 @@ mod tests {
             content_type: Some("application/json".to_string()),
             body: Some(format!(r#"{{"scope":"{scope}"}}"#).into_bytes()),
             share_token: None,
+            prepared: None,
         };
         assert!(request_deletes_cloud_profile(&request("profile")));
         assert!(request_deletes_cloud_profile(&request("all")));
@@ -1618,6 +1866,7 @@ mod tests {
             content_type: None,
             body: None,
             share_token: Some(token.to_string()),
+            prepared: None,
         }
     }
 
@@ -1692,6 +1941,7 @@ mod tests {
         // Without a token, the token-free routes stay ordinary requests.
         let plain = request_destination(&NativeApiRequest {
             share_token: None,
+            prepared: None,
             ..share_request("GET", "/api/share", "unused")
         })
         .unwrap();
@@ -2156,5 +2406,272 @@ mod tests {
         assert!(!open("cancelled"));
         assert!(aborted(&mut observer));
         assert!(cancel_blob_stream(&state, "cancelled").is_ok());
+    }
+
+    /// A credential source that counts how it was asked.
+    struct ScriptedAccess {
+        prepared: Option<String>,
+        current: Option<String>,
+        refreshed: Option<String>,
+        currents: AtomicUsize,
+        refreshes: AtomicUsize,
+        forgotten: AtomicUsize,
+    }
+
+    impl ScriptedAccess {
+        fn new(prepared: Option<&str>, current: Option<&str>, refreshed: Option<&str>) -> Self {
+            Self {
+                prepared: prepared.map(str::to_string),
+                current: current.map(str::to_string),
+                refreshed: refreshed.map(str::to_string),
+                currents: AtomicUsize::new(0),
+                refreshes: AtomicUsize::new(0),
+                forgotten: AtomicUsize::new(0),
+            }
+        }
+
+        fn counts(&self) -> (usize, usize, usize) {
+            (
+                self.currents.load(Ordering::SeqCst),
+                self.refreshes.load(Ordering::SeqCst),
+                self.forgotten.load(Ordering::SeqCst),
+            )
+        }
+    }
+
+    impl AccessSource for ScriptedAccess {
+        fn prepared(&self, _handle: &str) -> Result<Option<String>, String> {
+            Ok(self.prepared.clone())
+        }
+
+        async fn current(&self) -> Result<Option<String>, String> {
+            self.currents.fetch_add(1, Ordering::SeqCst);
+            Ok(self.current.clone())
+        }
+
+        async fn refreshed(&self) -> Result<Option<String>, String> {
+            self.refreshes.fetch_add(1, Ordering::SeqCst);
+            Ok(self.refreshed.clone())
+        }
+
+        fn forget(&self, _token: &str) -> Result<(), String> {
+            self.forgotten.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// Sends through `access`, the account answering `statuses` in turn;
+    /// the outcome and the credential each send carried.
+    fn authenticate(
+        access: &ScriptedAccess,
+        prepared: Option<&str>,
+        statuses: &[u16],
+    ) -> (Result<Authenticated<StatusCode>, String>, Vec<String>) {
+        let sent = std::sync::Mutex::new(Vec::new());
+        let mut answers: VecDeque<u16> = statuses.iter().copied().collect();
+        let result = runtime().block_on(send_authenticated(
+            access,
+            prepared,
+            |token: String| {
+                sent.lock().unwrap().push(token);
+                let status = answers.pop_front().expect("an answer for every send");
+                std::future::ready(Ok(StatusCode::from_u16(status).unwrap()))
+            },
+            |status: &StatusCode| *status,
+        ));
+        (result, sent.into_inner().unwrap())
+    }
+
+    #[test]
+    fn sends_a_project_request_once_with_the_readied_credential() {
+        let access = ScriptedAccess::new(Some("ready"), Some("current"), Some("fresh"));
+        let (result, sent) = authenticate(&access, Some("handle"), &[401]);
+        // The 401 goes back to the renderer, which checks its project gate
+        // before it readies another credential and retries.
+        assert_eq!(result, Ok(Authenticated::Sent(StatusCode::UNAUTHORIZED)));
+        assert_eq!(sent, ["ready"]);
+        // Neither refreshed before the send nor after the 401; the refused
+        // credential is dropped, so the next readying refreshes it.
+        assert_eq!(access.counts(), (0, 0, 1));
+
+        let access = ScriptedAccess::new(Some("ready"), Some("current"), Some("fresh"));
+        let (result, sent) = authenticate(&access, Some("handle"), &[200]);
+        assert_eq!(result, Ok(Authenticated::Sent(StatusCode::OK)));
+        assert_eq!(sent, ["ready"]);
+        assert_eq!(access.counts(), (0, 0, 0));
+    }
+
+    #[test]
+    fn sends_nothing_for_a_project_request_without_a_readied_credential() {
+        // Expired since it was readied, or never readied: not refreshed here.
+        let access = ScriptedAccess::new(None, Some("current"), Some("fresh"));
+        let (result, sent) = authenticate(&access, Some("handle"), &[]);
+        assert_eq!(result, Ok(Authenticated::SignedOut));
+        assert!(sent.is_empty());
+        assert_eq!(access.counts(), (0, 0, 0));
+    }
+
+    #[test]
+    fn keeps_refreshing_and_retrying_other_requests_once() {
+        let access = ScriptedAccess::new(None, Some("current"), Some("fresh"));
+        let (result, sent) = authenticate(&access, None, &[401, 200]);
+        assert_eq!(result, Ok(Authenticated::Sent(StatusCode::OK)));
+        assert_eq!(sent, ["current", "fresh"]);
+        assert_eq!(access.counts(), (1, 1, 1));
+
+        // A refresh the account refuses leaves its 401 as the answer.
+        let access = ScriptedAccess::new(None, Some("current"), None);
+        let (result, sent) = authenticate(&access, None, &[401]);
+        assert_eq!(result, Ok(Authenticated::Sent(StatusCode::UNAUTHORIZED)));
+        assert_eq!(sent, ["current"]);
+        assert_eq!(access.counts(), (1, 1, 1));
+
+        let access = ScriptedAccess::new(None, None, Some("fresh"));
+        let (result, sent) = authenticate(&access, None, &[]);
+        assert_eq!(result, Ok(Authenticated::SignedOut));
+        assert!(sent.is_empty());
+        assert_eq!(access.counts(), (1, 0, 0));
+    }
+
+    /// A signed-in state whose credential `token` expires in an hour.
+    fn signed_in(token: &str) -> DesktopAuthState {
+        let state = DesktopAuthState::new();
+        *state.access.lock().unwrap() = Some(AccessCredential {
+            token: token.to_string(),
+            expires_at: now_seconds().unwrap() + 3_600,
+        });
+        state
+    }
+
+    fn project_write(prepared: Option<&str>) -> NativeApiRequest {
+        NativeApiRequest {
+            method: "PUT".to_string(),
+            path: "/api/projects/proj_1/document".to_string(),
+            content_type: Some("application/json".to_string()),
+            body: Some(b"{}".to_vec()),
+            share_token: None,
+            prepared: prepared.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn answers_a_project_request_with_an_expired_credential_locally() {
+        let state = signed_in("expired");
+        let handle = runtime().block_on(prepare_access(&state)).unwrap().unwrap();
+        // Expired after it was readied.
+        state
+            .prepared
+            .lock()
+            .unwrap()
+            .get_mut(&handle)
+            .unwrap()
+            .expires_at = 0;
+        let result = runtime().block_on(renderer_api_request(&state, project_write(Some(&handle))));
+        // The local 401: nothing refreshed, nothing sent.
+        assert_eq!(result.map(|response| response.status), Ok(401));
+        assert_eq!(
+            state
+                .access
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|access| access.token.clone()),
+            Some("expired".to_string())
+        );
+    }
+
+    #[test]
+    fn sends_a_project_request_with_exactly_the_credential_readied_for_it() {
+        let state = signed_in("readied");
+        let handle = runtime().block_on(prepare_access(&state)).unwrap().unwrap();
+        // Another request refreshed the shared credential meanwhile.
+        *state.access.lock().unwrap() = Some(AccessCredential {
+            token: "replaced".to_string(),
+            expires_at: now_seconds().unwrap() + 3_600,
+        });
+        assert_eq!(
+            take_prepared_access(&state, &handle),
+            Ok(Some("readied".to_string()))
+        );
+        // Readied for one send: never sent again.
+        assert_eq!(take_prepared_access(&state, &handle), Ok(None));
+        // A handle nothing readied (the renderer's empty one) sends nothing.
+        assert_eq!(take_prepared_access(&state, ""), Ok(None));
+        assert_eq!(take_prepared_access(&state, "guessed"), Ok(None));
+    }
+
+    #[test]
+    fn sends_nothing_with_a_credential_readied_in_a_session_that_ended() {
+        let state = signed_in("first-account");
+        let handle = runtime().block_on(prepare_access(&state)).unwrap().unwrap();
+        // Signed out, then signed in to another account.
+        end_session(&state).unwrap();
+        *state.access.lock().unwrap() = Some(AccessCredential {
+            token: "second-account".to_string(),
+            expires_at: now_seconds().unwrap() + 3_600,
+        });
+        assert!(state.prepared.lock().unwrap().is_empty());
+        let result = runtime().block_on(renderer_api_request(&state, project_write(Some(&handle))));
+        // Answered locally: neither the first account's credential nor the
+        // second's is sent, and the renderer re-checks before readying again.
+        assert_eq!(result.map(|response| response.status), Ok(401));
+
+        // A preparation from before the session moved is refused even if it
+        // is still in the table.
+        let state = signed_in("first-account");
+        let handle = runtime().block_on(prepare_access(&state)).unwrap().unwrap();
+        state.session.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(take_prepared_access(&state, &handle), Ok(None));
+    }
+
+    #[test]
+    fn readies_nothing_when_signed_out() {
+        let state = DesktopAuthState::new();
+        // Off macOS there is no Keychain refresh credential to fall back on.
+        if let Ok(prepared) = runtime().block_on(prepare_access(&state)) {
+            assert_eq!(prepared, None);
+        }
+        assert!(state.prepared.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn bounds_readied_credentials_dropping_expired_then_oldest() {
+        let state = signed_in("readied");
+        let handles: Vec<String> = (0..MAX_PREPARED_ACCESS + 1)
+            .map(|_| runtime().block_on(prepare_access(&state)).unwrap().unwrap())
+            .collect();
+        assert_eq!(state.prepared.lock().unwrap().len(), MAX_PREPARED_ACCESS);
+        // The oldest was dropped: its request is answered locally.
+        assert_eq!(take_prepared_access(&state, &handles[0]), Ok(None));
+        assert_eq!(
+            take_prepared_access(&state, &handles[MAX_PREPARED_ACCESS]),
+            Ok(Some("readied".to_string()))
+        );
+    }
+
+    #[test]
+    fn forgets_only_the_credential_the_account_refused() {
+        let state = signed_in("current");
+        forget_access(&state, "older").unwrap();
+        assert!(state.access.lock().unwrap().is_some());
+        forget_access(&state, "current").unwrap();
+        assert!(state.access.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn reads_the_handle_the_renderer_readied() {
+        let prepared: NativeApiRequest = serde_json::from_str(
+            r#"{"method":"PUT","path":"/api/projects/proj_1/document","prepared":"h1"}"#,
+        )
+        .unwrap();
+        assert_eq!(prepared.prepared.as_deref(), Some("h1"));
+        let ordinary: NativeApiRequest =
+            serde_json::from_str(r#"{"method":"GET","path":"/api/session"}"#).unwrap();
+        assert_eq!(ordinary.prepared, None);
+        // The renderer's old boolean is not a handle: refused, not sent.
+        assert!(serde_json::from_str::<NativeApiRequest>(
+            r#"{"method":"PUT","path":"/api/projects/proj_1/document","prepared":true}"#,
+        )
+        .is_err());
     }
 }

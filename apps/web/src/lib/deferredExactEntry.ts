@@ -24,10 +24,13 @@ export class DeferredExactEntry<Owner> {
     this.retry();
   }
 
-  cancel(): void {
+  /** Drops a waiting entry; true when there was one to drop. */
+  cancel(): boolean {
+    const dropped = this.pending !== null;
     this.cancelRetry?.();
     this.cancelRetry = null;
     this.pending = null;
+    return dropped;
   }
 
   private retry(): void {

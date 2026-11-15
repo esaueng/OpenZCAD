@@ -58,6 +58,12 @@ export interface FaceTarget extends FaceCapabilityTarget {
   resizeBodyFeatureId?: string;
   /** Explicit local extrusion instead of the default source-body resize. */
   localFaceOffset?: boolean;
+  /**
+   * The face this one is, moved: set only when a committed face offset
+   * re-selects the face it moved (which renumbers it), so what the chip was
+   * switched to on that face carries over to it, and to no other face.
+   */
+  movedFrom?: string;
   blendSurfaceClass?: 'torus' | 'cylinder';
   blendCenter?: [number, number, number];
   blendAxis?: [number, number, number];

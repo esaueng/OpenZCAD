@@ -1128,6 +1128,53 @@ describe('the validated commit lock', () => {
     );
   });
 
+  it('asks beforeCommit after finalize, and commits nothing when it refuses', async () => {
+    // The seam Insert project uses to settle its source's encryption
+    // synchronously with the commit (PR #1418).
+    const manager = new CommandManager(
+      createProjectDocument('Insert', toUserId('user_before_commit'))
+    );
+    const imported = importCommand('Frame', 'artifact_local_preflight');
+    const commit = vi.fn(() => true);
+    const onStatus = vi.fn();
+    const order: string[] = [];
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit({
+        manager: () => manager,
+        derive: async (candidate: ProjectDocument) =>
+          derivedWith(imported.ids.bodyId, candidate),
+        commit,
+        commitTransaction: () => true,
+        onBusy: vi.fn(),
+        onStatus
+      })
+    );
+
+    let outcome: ValidatedFeatureOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.run(imported.command, {
+        featureName: 'Frame',
+        resultBodyId: imported.ids.bodyId,
+        finalize: async () => {
+          order.push('finalize');
+          return imported.command;
+        },
+        beforeCommit: () => {
+          order.push('beforeCommit');
+          throw new Error('The project changed while inserting.');
+        },
+        successMessage: () => 'imported'
+      });
+    });
+
+    expect(order).toEqual(['finalize', 'beforeCommit']);
+    expect(outcome).toBe('rejected');
+    expect(commit).not.toHaveBeenCalled();
+    expect(onStatus).toHaveBeenLastCalledWith(
+      'The project changed while inserting.'
+    );
+  });
+
   it('refuses to land an import in a project that was opened meanwhile', async () => {
     const manager = new CommandManager(
       createProjectDocument('Original', toUserId('user_project_switch'))

@@ -33,7 +33,9 @@ function fixture(legacyArtifact = false, upTo = '9999') {
   db.exec(
     "INSERT INTO glimpse_account_consent(user_id,expires_at) VALUES('yes','2999-01-01'),('expired','2000-01-01'),('erasing','2999-01-01')"
   );
-  db.exec("INSERT INTO account_erasure_requests VALUES('erasing','all',1,1)");
+  db.exec(
+    "INSERT INTO account_erasure_requests (user_id, scope, started_at, updated_at) VALUES('erasing','all',1,1)"
+  );
   db.exec('UPDATE glimpse_census_clock SET generation=1');
   return db;
 }

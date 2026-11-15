@@ -29,6 +29,8 @@ import {
   useCollaboration
 } from './useCollaboration';
 import { parseServerMessage } from './useCollaboration';
+import { installProjectWriteGate } from './projectWriteGate';
+import { expectDeclaredProjectContext } from '../test/projectRequestContext';
 
 vi.mock('react', async (importOriginal) => {
   const actual = await importOriginal<typeof React>();
@@ -427,6 +429,11 @@ describe('HTTP collaboration response ownership', () => {
         (error: unknown) => error
       );
       expect(fetch).toHaveBeenCalledOnce();
+      // Keep my version's HTTP submission carries its plaintext context.
+      expectDeclaredProjectContext(
+        fetch.mock.calls as unknown as [string, RequestInit][],
+        { projectId: base.projectId, payload: 'plaintext' }
+      );
       if (outcome === 'body') {
         await act(async () =>
           resolve({
@@ -895,6 +902,11 @@ describe('useCollaboration lease ordering', () => {
     ]);
     expect(onConflict).not.toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledTimes(2);
+    // Both submissions carry their plaintext context to the send.
+    expectDeclaredProjectContext(fetch.mock.calls, {
+      projectId: base.projectId,
+      payload: 'plaintext'
+    });
     const body = JSON.parse(fetch.mock.calls[1]![1]!.body as string) as {
       baseVersion: number;
       document: ProjectDocument;
@@ -1667,6 +1679,66 @@ describe('useCollaboration lease ordering', () => {
     expect(confirmed).toHaveBeenCalledOnce();
     expect(result.current.conflict).toBeNull();
     expect(readUnresolvedConflict(base.projectId, 'room')).toBeNull();
+    unmount();
+  });
+});
+
+describe('a room write the project write gate refuses', () => {
+  afterEach(() => installProjectWriteGate(null));
+
+  it('keeps a refused Keep my version in its dialog, sending nothing', async () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const owner = toUserId('user_keep_gated');
+    const base = createProjectDocument('Keep gated', owner);
+    const local = addPrimitiveFeature(base, {
+      name: 'Local box',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 2, depth: 3 }
+    });
+    const remote = addPrimitiveFeature(base, {
+      name: 'Room sphere',
+      primitiveKind: 'sphere',
+      dimensions: { radius: 4 }
+    });
+    const { result, unmount } = renderHook(() =>
+      useCollaboration({
+        enabled: true,
+        document: local,
+        session: session(owner),
+        onRemoteDocument: vi.fn(),
+        onConflict: vi.fn()
+      })
+    );
+    const socket = FakeWebSocket.instances[0]!;
+    act(() => {
+      socket.open();
+      socket.receive({ type: 'conflict', document: remote });
+      grantLease(socket, remote);
+    });
+    expect(result.current.conflict).not.toBeNull();
+    const sentBefore = socket.sent.length;
+    // Refused once the choice is made: an unfinished switch to
+    // encryption, or a reset in another tab, noted after the dialog opened.
+    let confirmation!: Promise<void>;
+    act(() => {
+      confirmation = result.current.keepLocalVersion(remote.version);
+    });
+    const settled = confirmation.then(
+      () => null,
+      (error: unknown) => error
+    );
+    installProjectWriteGate(({ projectId }) => {
+      throw new Error(`Refused for ${projectId}.`);
+    });
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    expect(((await settled) as Error | null)?.message).toBe(
+      `Refused for ${base.projectId}.`
+    );
+    expect(socket.sent.slice(sentBefore)).toEqual([]);
+    expect(result.current.status).toBe('conflict');
+    expect(result.current.conflict).not.toBeNull();
     unmount();
   });
 });

@@ -92,41 +92,35 @@ describe('required validation gate', () => {
       '      contents: read\n      pull-requests: read\n'
     );
     expect(ci).toContain(
-      'needs: [queue-trust, quality, unit, validation]\n    if: always()'
+      'needs: [queue-trust, plan, quality, typecheck, unit, validation]\n    if: always()'
     );
   });
 
-  it.each([
-    ['success', 'success', 'success', 0],
-    ['failure', 'success', 'success', 1],
-    ['cancelled', 'success', 'success', 1],
-    ['skipped', 'success', 'success', 1],
-    ['success', 'failure', 'success', 1],
-    ['success', 'cancelled', 'success', 1],
-    ['success', 'skipped', 'success', 1],
-    ['success', 'success', 'failure', 1],
-    ['success', 'success', 'cancelled', 1],
-    ['success', 'success', 'skipped', 1]
-  ])(
-    'requires quality %s, unit %s and validation %s',
-    (quality, unit, validation, status) => {
-      const result = spawnSync(
+  const gates = ['PLAN', 'QUALITY', 'TYPECHECK', 'UNIT', 'VALIDATION'];
+  const gateCases: [string, string, number][] = [
+    ['all', 'success', 0],
+    ...gates.flatMap((gate) =>
+      ['failure', 'cancelled', 'skipped'].map(
+        (result): [string, string, number] => [gate, result, 1]
+      )
+    )
+  ];
+  it.each(gateCases)(
+    'requires validation gates: %s %s',
+    (gate, result, status) => {
+      const env: NodeJS.ProcessEnv = { ...process.env };
+      for (const name of gates) env[`${name}_RESULT`] = 'success';
+      if (gate !== 'all') env[`${gate}_RESULT`] = result;
+      const run = spawnSync(
         bashExecutable(),
         ['-e', '-c', stepScript('Require all validation checks', ci)],
-        {
-          env: {
-            ...process.env,
-            QUALITY_RESULT: String(quality),
-            UNIT_RESULT: String(unit),
-            VALIDATION_RESULT: String(validation)
-          }
-        }
+        { env }
       );
-      expect(result.status).toBe(status);
+      expect(run.status).toBe(status);
     }
   );
 
-  it('starts pull-request shards beside quality and runs none for queue candidates', () => {
+  it('starts pull-request shards beside quality and runs only combined-tree canaries for queue candidates', () => {
     const job = (name: string) => {
       const start = ci.indexOf(`\n  ${name}:\n`);
       expect(start).toBeGreaterThan(-1);
@@ -135,18 +129,24 @@ describe('required validation gate', () => {
     };
     const direct = job('e2e-tests');
     const pr = job('e2e-tests-pr');
-    // Auto-merge enqueues a PR only once `checks / e2e` passed on its head, so
-    // queue candidates run no shards; dispatches still run the direct set.
+    const queue = job('e2e-queue');
+    // Queue candidates run five tagged canaries against the combined tree,
+    // or the full shard set when the plan asks for it; dispatches run the
+    // direct set.
     expect(direct).toContain(
-      "if: ${{ !cancelled() && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}\n"
+      "if: ${{ !cancelled() && needs.plan.result == 'success' && github.event_name != 'pull_request' && (github.event_name != 'merge_group' || needs.plan.outputs.e2e == 'full') }}\n"
     );
-    expect(direct).toContain('needs: queue-trust\n');
-    // Pull-request shards no longer wait for lint and typecheck: on the Team
+    expect(direct).toContain('needs: [queue-trust, plan]\n');
+    expect(queue).toContain(
+      "if: ${{ !cancelled() && needs.plan.result == 'success' && github.event_name == 'merge_group' && needs.plan.outputs.e2e != 'full' }}\n"
+    );
+    expect(queue).toContain('needs: [queue-trust, plan]\n');
+    // Pull-request shards do not wait for lint and typecheck: on the Team
     // plan's 60 runners the wait cost more than the runners it saved.
     expect(pr).toContain(
-      "if: ${{ !cancelled() && (github.event_name == 'pull_request') }}\n"
+      "if: ${{ !cancelled() && needs.plan.result == 'success' && (github.event_name == 'pull_request') }}\n"
     );
-    expect(pr).toContain('needs: queue-trust\n');
+    expect(pr).toContain('needs: [queue-trust, plan]\n');
     expect(pr).not.toContain('quality');
     // Both shard sets run the same matrix and steps, not drifting copies.
     expect(direct).toContain('strategy: &e2e-strategy\n');
@@ -154,29 +154,35 @@ describe('required validation gate', () => {
     expect(pr).toContain('strategy: *e2e-strategy\n');
     expect(pr).toContain('steps: *e2e-steps\n');
     expect(job('e2e')).toContain(
-      'needs: [queue-trust, e2e-tests, e2e-tests-pr]\n    if: always()'
+      'needs: [queue-trust, plan, e2e-tests, e2e-tests-pr, e2e-queue]\n    if: always()'
     );
   });
 
   it.each([
-    ['pull_request', 'skipped', 'success', 0],
-    ['pull_request', 'skipped', 'skipped', 1],
-    ['pull_request', 'skipped', 'failure', 1],
-    ['pull_request', 'skipped', 'cancelled', 1],
-    ['pull_request', 'success', 'success', 1],
-    ['pull_request', 'success', 'failure', 1],
-    ['workflow_dispatch', 'success', 'skipped', 0],
-    ['workflow_dispatch', 'skipped', 'skipped', 1],
-    ['workflow_dispatch', 'failure', 'skipped', 1],
-    ['workflow_dispatch', 'cancelled', 'skipped', 1],
-    ['merge_group', 'skipped', 'skipped', 0],
-    ['merge_group', 'failure', 'skipped', 1],
-    ['merge_group', 'cancelled', 'skipped', 1],
-    ['merge_group', 'skipped', 'failure', 1],
-    ['', 'skipped', 'skipped', 1]
+    ['pull_request', 'skipped', 'success', 'skipped', 0],
+    ['pull_request', 'skipped', 'skipped', 'skipped', 1],
+    ['pull_request', 'skipped', 'failure', 'skipped', 1],
+    ['pull_request', 'skipped', 'cancelled', 'skipped', 1],
+    ['pull_request', 'success', 'success', 'skipped', 1],
+    ['pull_request', 'success', 'failure', 'skipped', 1],
+    ['workflow_dispatch', 'success', 'skipped', 'skipped', 0],
+    ['workflow_dispatch', 'skipped', 'skipped', 'skipped', 1],
+    ['workflow_dispatch', 'failure', 'skipped', 'skipped', 1],
+    ['workflow_dispatch', 'cancelled', 'skipped', 'skipped', 1],
+    // A candidate needs executed browser coverage of the combined tree:
+    // prior PR success no longer stands in for it.
+    ['merge_group', 'skipped', 'skipped', 'success', 0],
+    ['merge_group', 'success', 'skipped', 'skipped', 0],
+    ['merge_group', 'skipped', 'skipped', 'skipped', 1],
+    ['merge_group', 'skipped', 'skipped', 'failure', 1],
+    ['merge_group', 'skipped', 'skipped', 'cancelled', 1],
+    ['merge_group', 'failure', 'skipped', 'skipped', 1],
+    ['merge_group', 'cancelled', 'skipped', 'skipped', 1],
+    ['merge_group', 'skipped', 'failure', 'skipped', 1],
+    ['', 'skipped', 'skipped', 'skipped', 1]
   ])(
-    'requires one green shard set on %s: direct %s, pull request %s',
-    (event, direct, pr, status) => {
+    'requires one green shard set on %s: direct %s, pull request %s, queue %s',
+    (event, direct, pr, queue, status) => {
       const result = spawnSync(
         bashExecutable(),
         ['-e', '-c', stepScript('Require one green shard set', ci)],
@@ -184,14 +190,34 @@ describe('required validation gate', () => {
           env: {
             ...process.env,
             EVENT_NAME: String(event),
+            PLAN_RESULT: 'success',
             DIRECT_RESULT: String(direct),
-            PR_RESULT: String(pr)
+            PR_RESULT: String(pr),
+            QUEUE_RESULT: String(queue)
           }
         }
       );
       expect(result.status).toBe(status);
     }
   );
+
+  it('fails the browser gate when the plan did not succeed', () => {
+    const result = spawnSync(
+      bashExecutable(),
+      ['-e', '-c', stepScript('Require one green shard set', ci)],
+      {
+        env: {
+          ...process.env,
+          EVENT_NAME: 'pull_request',
+          PLAN_RESULT: 'failure',
+          DIRECT_RESULT: 'skipped',
+          PR_RESULT: 'success',
+          QUEUE_RESULT: 'skipped'
+        }
+      }
+    );
+    expect(result.status).not.toBe(0);
+  });
 
   it('runs both halves of `pnpm test` across the unit and validation jobs', () => {
     // `pnpm test` is the root project followed by the web project; the jobs
@@ -204,8 +230,11 @@ describe('required validation gate', () => {
       ci.indexOf('\n  validation:\n'),
       ci.indexOf('\n  unit:\n')
     );
-    expect(unit).toContain('- run: pnpm exec vitest run\n');
-    expect(validation).toContain('- run: pnpm test:web\n');
+    expect(unit).toContain(
+      'run: node scripts/run-ci-units.mjs root --shard=${{ matrix.shard }}/2\n'
+    );
+    expect(unit).toContain('shard: [1, 2]\n');
+    expect(validation).toContain('run: node scripts/run-ci-units.mjs web\n');
     expect(validation).toContain('- run: pnpm test:parity-corpus\n');
     expect(validation).toContain('run: pnpm build\n');
   });

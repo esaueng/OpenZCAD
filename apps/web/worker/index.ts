@@ -61,6 +61,8 @@ import { serveAssetFallback } from './assetFallback';
 import { JsonComplexityGuard } from '@openzcad/shared';
 import {
   accountEntitlements,
+  drainPendingObjects,
+  PENDING_OBJECT_GRACE_MS,
   syncStoredAccountLimits
 } from '@openzcad/cloudflare-adapters';
 import {
@@ -225,6 +227,7 @@ import {
 import {
   assistantConsentRoute,
   E2EE_DEFAULT_ON_CODE,
+  PROJECT_SHELF_STATE_SEALED_CODE,
   E2EE_MIGRATION_CODES,
   ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
   ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE,
@@ -332,6 +335,7 @@ function assertEditorLeaseEligible(
 
 const PROJECT_ROUTE = /^\/api\/projects\/([^/]+)$/;
 const PROJECT_DUPLICATE_ROUTE = /^\/api\/projects\/([^/]+)\/duplicate$/;
+const PROJECT_SHELF_RESET_ROUTE = /^\/api\/projects\/([^/]+)\/shelf\/reset$/;
 const PROJECT_REVISIONS_ROUTE = /^\/api\/projects\/([^/]+)\/revisions$/;
 const PROJECT_REVISION_ROUTE = /^\/api\/projects\/([^/]+)\/revisions\/([^/]+)$/;
 const PROJECT_DOCUMENT_ROUTE = /^\/api\/projects\/([^/]+)\/document$/;
@@ -833,6 +837,35 @@ async function assertPlaintextCreationAllowed(
   ) {
     throw new EncryptedProjectsRequiredError();
   }
+}
+
+/**
+ * ADR-024 amendment 2026-11-14: an account whose library is encrypted keeps
+ * its pins, manual order and archive sealed in its library record. The
+ * Worker stores the defaults for it (unpinned, order 0, active unless in the
+ * trash, no archive time) and refuses any other value. Trash stays readable:
+ * sharing, purging and quotas act on it. Behind the library rule's flags.
+ */
+async function accountSealsShelfState(
+  env: Env,
+  session: { userId: string; email?: string | null }
+): Promise<boolean> {
+  return (
+    isE2eeDefaultOn(env, session.email ?? undefined) ||
+    (isE2eeProjectsEnabled(env, session.email ?? undefined) &&
+      (await accountRequiresEncryptedLibrary(env.DB, session.userId)))
+  );
+}
+
+function shelfStateSealedRefusal(): Response {
+  return json(
+    {
+      error:
+        'This account encrypts its library, so pins, order and the archive are stored encrypted. Update OpenZCAD to organize projects.',
+      code: PROJECT_SHELF_STATE_SEALED_CODE
+    },
+    409
+  );
 }
 
 /**
@@ -2345,6 +2378,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   // "reorder" as a project id.
   if (request.method === 'POST' && pathname === '/api/projects/reorder') {
     const payload = parseReorderProjectsRequest(await readJsonBody(request));
+    // Positions after the first are a manual order, sealed for such an account.
+    if (
+      payload.projectIds.length > 1 &&
+      (await accountSealsShelfState(env, session))
+    ) {
+      return shelfStateSealedRefusal();
+    }
     return json(await persistence.reorderProjects(userId, payload));
   }
 
@@ -2388,6 +2428,20 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       .fetch(new Request(roomUrl, { method: 'PUT', headers }));
   }
 
+  // The sealed shelf migration's reset (ADR-024 amendment 2026-11-14): pin
+  // and order back to the defaults, the archive cleared only while the row
+  // is still archived, the trash never touched. It discloses nothing, so it
+  // needs no library rule; only the owner's row changes.
+  const shelfResetMatch = PROJECT_SHELF_RESET_ROUTE.exec(pathname);
+  if (request.method === 'POST' && shelfResetMatch) {
+    return json({
+      project: await persistence.resetProjectShelfState(
+        userId,
+        shelfResetMatch[1]!
+      )
+    });
+  }
+
   const duplicateMatch = PROJECT_DUPLICATE_ROUTE.exec(pathname);
   if (request.method === 'POST' && duplicateMatch) {
     await assertPlaintextCreationAllowed(env, session);
@@ -2400,7 +2454,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     );
     return json(
       await persistence.duplicateProject(userId, payload, {
-        storage: opened.storage
+        storage: opened.storage,
+        sealedShelfState: await accountSealsShelfState(env, session)
       }),
       201
     );
@@ -2553,6 +2608,16 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       await readJsonBody(request),
       projectMatch[1]!
     );
+    // Trash, restore and the defaults pass; a pin, a manual position or the
+    // archive is sealed shelf state for an account whose library is encrypted.
+    if (
+      (payload.pinned === true ||
+        (payload.sortOrder !== undefined && payload.sortOrder !== 0) ||
+        payload.status === 'archived') &&
+      (await accountSealsShelfState(env, session))
+    ) {
+      return shelfStateSealedRefusal();
+    }
     return json({ project: await persistence.updateProject(userId, payload) });
   }
 
@@ -2891,6 +2956,23 @@ export default {
   async scheduled(_controller: unknown, env: Env): Promise<void> {
     assertSafeRuntimeConfiguration(env);
     await createPersistenceService(env).purgeExpiredUploadSessions();
+    // Objects failed writes left pending (migration 0055), however their
+    // project fares otherwise: reclaimed once no write can still need them.
+    if (env.DB) {
+      try {
+        await drainPendingObjects(
+          env.DB,
+          {
+            'project-storage': env.PROJECT_STORAGE ?? env.ARTIFACTS ?? null,
+            artifacts: env.ARTIFACTS ?? null
+          },
+          null,
+          { olderThanMs: PENDING_OBJECT_GRACE_MS, limit: 200 }
+        );
+      } catch (error) {
+        console.error('Pending object sweep failed.', error);
+      }
+    }
     // Request-path limiters no longer reclaim stale windows themselves.
     await purgeStaleRateLimitBuckets(env);
     // Nor does desktop sign-in start reclaim expired sign-in rows.

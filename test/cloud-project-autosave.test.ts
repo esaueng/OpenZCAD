@@ -2308,6 +2308,23 @@ describe('retryWhileStorageCleanupPending', () => {
     expect(write).toHaveBeenCalledTimes(3);
   });
 
+  it('retries an encrypted write held back while failed writes are cleaned up (STORAGE_CLEANUP_BUSY) the same way', async () => {
+    const write = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(
+        new ApiError(
+          503,
+          'Earlier failed saves of this project are still being cleaned up. Try again later.',
+          'STORAGE_CLEANUP_BUSY'
+        )
+      )
+      .mockResolvedValue('saved');
+    const result = retryWhileStorageCleanupPending(write, () => true);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(result).resolves.toBe('saved');
+    expect(write).toHaveBeenCalledTimes(2);
+  });
+
   it('stops without writing again once the save no longer applies', async () => {
     const write = vi.fn<() => Promise<string>>().mockRejectedValue(pending());
     let wanted = true;

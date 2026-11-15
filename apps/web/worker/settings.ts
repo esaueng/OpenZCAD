@@ -47,7 +47,7 @@ interface SettingsRow {
 }
 
 /**
- * Whether migration 0055 added the sealed settings column (ADR-024
+ * Whether migration 0057 added the sealed settings column (ADR-024
  * amendment 2026-11-14). Without it an account's settings stay as they
  * were stored, and an account whose library is encrypted cannot save them.
  */

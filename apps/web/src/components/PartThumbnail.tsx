@@ -59,6 +59,13 @@ const latestRequest = new Map<string, string>();
  * when the shelf asks again under the same listing key.
  */
 const generations = new Map<string, number>();
+/**
+ * Tiles on screen, told when a project's card is replaced. A mounted tile
+ * holds the image it loaded, so without this a card redrawn while the shelf
+ * stays mounted (Settings › Regenerate project thumbnails) kept showing the
+ * old one until the tile remounted.
+ */
+const capturedListeners = new Set<(projectId: string) => void>();
 const MAX_RETAINED_THUMBNAILS = 256;
 subscribeKeySession(() => {
   for (const [id, value] of thumbnails)
@@ -203,6 +210,7 @@ export function rememberCapturedThumbnail(input: {
     // Nothing may be shown for it here; drop the superseded card instead.
     thumbnails.delete(projectId);
     latestRequest.delete(projectId);
+    for (const listener of capturedListeners) listener(projectId);
     return;
   }
   const authorization = input.protected
@@ -225,6 +233,7 @@ export function rememberCapturedThumbnail(input: {
   // Inserted synchronously so a shelf mounting right after the leave flush
   // reads it; the decode only warms the image the tile is about to show.
   if (source) void decodeThumbnail(source).catch(() => undefined);
+  for (const listener of capturedListeners) listener(projectId);
 }
 
 /** Prime a bounded first screen from device images before mounting its tiles.
@@ -359,6 +368,27 @@ export function PartThumbnail({
   projectRef.current = project;
   const authorizationRef = useRef(authorization);
   authorizationRef.current = authorization;
+  const protectedRef = useRef(protectedImage);
+  protectedRef.current = protectedImage;
+
+  // A card replaced while this tile is mounted: show the new one now.
+  useEffect(() => {
+    const projectId = project.projectId;
+    const listener = (replaced: string) => {
+      if (replaced !== projectId) return;
+      setResult(
+        cachedThumbnail(
+          projectId,
+          authorizationRef.current,
+          protectedRef.current
+        )
+      );
+    };
+    capturedListeners.add(listener);
+    return () => {
+      capturedListeners.delete(listener);
+    };
+  }, [project.projectId]);
 
   useEffect(() => {
     let active = true;

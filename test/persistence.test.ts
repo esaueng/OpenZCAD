@@ -40,6 +40,39 @@ describe('in-memory persistence', () => {
     ).rejects.toThrow(ProjectNotFoundError);
   });
 
+  it('resets shelf state without touching the trash', async () => {
+    const service = new InMemoryPersistenceService();
+    const archived = (await service.createProject(userId, { name: 'A' }))
+      .document.projectId;
+    const trashed = (await service.createProject(userId, { name: 'T' }))
+      .document.projectId;
+    for (const projectId of [archived, trashed])
+      await service.updateProject(userId, {
+        projectId,
+        status: 'archived',
+        pinned: true,
+        sortOrder: 4
+      });
+    // Trashed elsewhere after a listing saw it archived.
+    const deletedAt = projectOrganization(
+      await service.updateProject(userId, {
+        projectId: trashed,
+        status: 'deleted'
+      })
+    ).deletedAt;
+    expect(
+      projectOrganization(await service.resetProjectShelfState(userId, trashed))
+    ).toEqual({ status: 'deleted', pinned: false, sortOrder: 0, deletedAt });
+    expect(
+      projectOrganization(
+        await service.resetProjectShelfState(userId, archived)
+      )
+    ).toEqual({ status: 'active', pinned: false, sortOrder: 0 });
+    await expect(
+      service.resetProjectShelfState(toUserId('user_other'), archived)
+    ).rejects.toThrow(ProjectNotFoundError);
+  });
+
   it('round-trips a created project through save and load', async () => {
     const service = new InMemoryPersistenceService();
     const created = await service.createProject(userId, { name: 'Round Trip' });

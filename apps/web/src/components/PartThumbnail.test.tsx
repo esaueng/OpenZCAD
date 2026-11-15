@@ -233,6 +233,39 @@ describe('PartThumbnail', () => {
     expect(load).toHaveBeenCalledTimes(1);
   });
 
+  it('replaces the image a mounted tile shows when its card is redrawn', async () => {
+    // Review of Settings' Regenerate project thumbnails: the shelf stays
+    // mounted under Settings, and a tile kept the stale image it had loaded.
+    const project = summary({ documentVersion: 3 });
+    const view = render(
+      <PartThumbnail
+        project={project}
+        loadThumbnail={vi.fn().mockResolvedValue('data:image/webp;base64,OLD')}
+        publishThumbnail={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+    await waitFor(() =>
+      expect(view.container.querySelector('img')).toHaveAttribute(
+        'src',
+        'data:image/webp;base64,OLD'
+      )
+    );
+
+    act(() =>
+      rememberCapturedThumbnail({
+        projectId: project.projectId,
+        source: 'data:image/webp;base64,REDRAWN',
+        accountId: null,
+        protected: false
+      })
+    );
+
+    expect(view.container.querySelector('img')).toHaveAttribute(
+      'src',
+      'data:image/webp;base64,REDRAWN'
+    );
+  });
+
   it('shows the card the workspace just captured before the listing refreshes', async () => {
     // The shelf first renders the listing from before the project was opened.
     // Its tile used to answer that stale key from memory with the old card

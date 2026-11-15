@@ -870,7 +870,9 @@ Project names, checkpoint names, revision reasons,
 upload file names, thumbnails, measurements, workspace view state, archived
 exports, library folders and the contacts list are encrypted (the list's
 entry count and write times stay visible; see the amendment of 2026-11-14).
-R2 keys use opaque ids only.
+R2 keys use opaque ids only. Which projects are in the trash, and since
+when, stays readable; pins, manual order and the archive of an account whose
+library is encrypted do not (amendment 2026-11-14, shelf state).
 
 ### AI assistant
 
@@ -1481,7 +1483,7 @@ account whose library is encrypted (the rule above) stores them sealed.
   provider. `settings_json` holds only those (`accountServerSettings`),
   every other field at its default.
 - **Sealed record.** The whole settings are one record in
-  `user_settings.sealed_settings` (migration 0055), with the library-folder
+  `user_settings.sealed_settings` (migration 0057), with the library-folder
   layout under its own key: HKDF-SHA-256 of the account key, empty salt, info
   `OpenZCAD E2EE v1 account settings key`, additional-data label
   `OpenZCAD E2EE v1 account settings`. Plaintext is at most 32 KiB. The
@@ -1544,6 +1546,125 @@ account whose library is encrypted (the rule above) stores them sealed.
   adds them from settings.
 - **What the server sees.** The readable part, the record's length, write
   times, revision and the account-key commitment in its header.
+
+### Shelf state
+
+An audit found the shelf state of every project (pinned, manual order,
+archived and when, in the trash and when) stored readable on the account's
+project rows, written by the shelf's organization route and its reorder
+route and read back in every listing, although "Plaintext metadata" never
+listed it. For an account whose library is encrypted (the rule above), pins,
+manual order and the archive are now sealed; the trash stays readable.
+
+- **What is sealed.** The sealed library record (format 2) carries each
+  project's pin, manual order, archived flag and archive time beside the
+  folders, keyed by project id with one merge stamp per field, so a pin on
+  one device and a reorder on another both survive. The folder set's own
+  version moves from 2 to 3 for it. Version 2 sets stay readable and read
+  as carrying no shelf state; the plaintext record (format 1) stays
+  version 2, since a plaintext library keeps its shelf state on its rows.
+  A client that predates version 3 reads a version 3 record as
+  unsupported and stops syncing folders rather than overwriting it.
+- **What stays readable, and why.** Whether a project is in the trash and
+  since when. The server acts on it: members, collaboration rooms and share
+  links lose access to a trashed project, the purge deletes it once the
+  retention window ends, and the account's quotas count it.
+- **The Worker.** For such an account the project rows hold the defaults
+  (unpinned, order 0, active unless in the trash, no archive time). Behind
+  the library rule's flags, the organization route refuses a pin, a
+  non-zero position or the archive with 409 `PROJECT_SHELF_STATE_SEALED`,
+  the reorder route refuses more than one project, and copies start at
+  order 0 instead of beside their source. Trash, restore and the defaults
+  pass. An encrypted copy always starts at order 0: its owner holds an
+  encrypted project.
+- **The browser.** Shelf edits are noted per account until a sealed sync
+  takes them, and the shelf's account writes carry only moves into and out
+  of the trash. A pin, an order or an archive is sent readable only after
+  the library rule answered, for that write, that the account's library is
+  plaintext: another tab may have encrypted a project or accepted an
+  encrypted invitation, and a refusal from the Worker would come after it
+  had read the value. When the rule cannot answer, the trash move is still
+  sent and the rest stays on the device (its row pending, its edit noted)
+  until it can. Listings take the trash from the account's rows, and pins,
+  order and archive from the account's unsynced edits on this device, then
+  its agreed sealed record, then (once, to migrate) readable state its rows
+  still hold. With locked keys a device sends nothing readable; a fresh
+  device takes the sealed record once its keys unlock. A sync records only
+  edits made on the shelf, never a row as it stands, so a row the listing
+  wrote cannot overrule the account.
+- **Accounts sharing a device.** This device's project organization rows
+  are shared by every account signed in on it, so they are attributable to
+  none. An account's sealed record is seeded only from that account's own
+  edits and its own listed rows, and its sync never writes the device rows;
+  the listing lays the agreed record over the account's rows instead. A
+  device row still pending a mirror may hold another account's choices, so
+  a sealed library's listing takes only an unmirrored move into or out of
+  the trash from it, and an edit is noted as the fields it changed over the
+  account's own state (its edit, its record, its listed row, else the
+  defaults), never over what the shelf showed. The same holds when the
+  account's listing fails and its library is encrypted or cannot be
+  checked: the projects the account is known to hold here (listed on this
+  device before, this visit or an earlier one, or present in its edits or
+  record) take their pin, order and archive from that account's state, and
+  only a project the account knows nothing of keeps this device's row, as
+  a project of this device alone would. An edit is noted under the account
+  signed in when it was made, read before the edit waits for earlier shelf
+  writes or for storage, so ending the session or signing in another
+  account meanwhile neither drops it nor files it under the other account.
+  A second account signing in therefore never sees the first one's pending
+  pins, order or archive on a project it is known to hold, never seals its
+  private project ids, pins or archive (not even by editing a project the
+  first one left pending, from a listing that reached the account or not),
+  nor overwrites them on the device; the first account finds its noted
+  edits when it returns. Known limit: device rows carry no account, so an
+  edit a plaintext library left pending on the device is settled by the
+  next account's shelf mirror: an encrypted library's mirror sends none of
+  it and drops it there, and a plaintext library's mirror still writes it
+  to its own rows, as before. Attributing device rows to their writer would
+  fix this only by leaving a row another account wrote pending under the
+  current one, which keeps it retried and its local model protected from
+  expiry until that account returns (perhaps never); the case needs a
+  project both accounts hold, edited by the plaintext one while its mirror
+  could not run, so it stays a documented limit.
+- **What the device keeps per account.** Two localStorage entries: the
+  journal of unsynced edits (`openzcad.library.shelf.edits.v1:<account>`)
+  and the account's rows as last listed
+  (`openzcad.library.shelf.rows.v1:<account>`), kept for a listing that
+  cannot reach the account. The rows hold only what differs from the
+  defaults, at most 1,000 of them, rows with shelf state first; a project
+  left out counts as one the account knows nothing of. An edit's starting
+  point reads the stored row when this visit has not listed the account
+  yet, so a pin made from a failed listing after a reload keeps the
+  readable archive and order still waiting to migrate, instead of sealing
+  the defaults over them where no later migration could replace them. If
+  localStorage refuses the journal (full or blocked) after the device row
+  was written, the edit is kept in memory for the visit. Listings and the
+  sealed sync read it from there, and it is stored with the next journal
+  write that succeeds. The shelf warns that the change is lost if the tab
+  closes before the library syncs, since the device row no longer speaks
+  for an encrypted library's pin, order or archive. Signing out forgets
+  the stored rows, as it forgets cached project titles, but keeps the
+  journal, so an edit the sealed record has not taken still reaches it
+  when the account returns. Until that account lists again, a failed
+  listing knows its projects only from its journal and record. Erasing the
+  account forgets both entries. The agreed folder record is the folder
+  sync's own state and is unchanged here.
+- **Migration.** Rows that still hold readable shelf state are shown once
+  and seeded into the sealed record wherever it holds nothing for the
+  project, stamped below every real edit. Only after that record is saved,
+  and only for an account the Worker or the preference route confirmed is
+  encrypted, are the rows reset, through a route of its own
+  (`POST /api/projects/:id/shelf/reset`) that the Worker applies as one
+  conditional write to the row as it stands: pin and order to the
+  defaults, the archive cleared only while the row is still archived, and
+  the trash (status and time) never touched, so a project trashed on
+  another device after the listing stays in the trash. Only the owner's
+  row changes; a project another account owns is never reset.
+- **Members.** Only an owner writes a project's row. A member used to see
+  the owner's pins and archive; a member whose library is encrypted now
+  keeps its own shelf state for shared projects in its own sealed record,
+  seeded once from whatever the owner's row still shows. A member of a
+  project whose owner's library is encrypted sees the defaults there.
 
 ## Amendment 2026-11-14: sealed contacts list
 

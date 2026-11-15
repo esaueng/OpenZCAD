@@ -28,6 +28,7 @@ import {
   EyeOff,
   ExternalLink,
   HardDrive,
+  ImageUp,
   LockKeyhole,
   LogIn,
   LogOut,
@@ -215,6 +216,15 @@ interface SettingsPageProps {
    */
   onExportDiagnostics(): void;
   onExportInteractionLog(): void;
+  /**
+   * Redraws every project's card from its model, one at a time. Absent where
+   * the host offers no library (tests, a shared link).
+   */
+  onRegenerateThumbnails?(): void;
+  /** Progress while cards are being redrawn; null when idle. */
+  thumbnailRegeneration?: { done: number; total: number } | null;
+  /** What the last redraw did, shown under the button until the next. */
+  thumbnailRegenerationNote?: string;
   onDismissProjectInvitation(): void;
   onClose(): void;
 }
@@ -774,6 +784,9 @@ export function SettingsPage({
   onApplyViewportDefaults,
   onExportDiagnostics,
   onExportInteractionLog,
+  onRegenerateThumbnails,
+  thumbnailRegeneration = null,
+  thumbnailRegenerationNote = '',
   onDismissProjectInvitation,
   onClose
 }: SettingsPageProps) {
@@ -2849,7 +2862,7 @@ export function SettingsPage({
           {active === 'advanced' && anyMatch && (
             <Section
               title="Advanced"
-              intro="Editing fallback, diagnostics, build details, and reset."
+              intro="Editing fallback, project thumbnails, diagnostics, build details, and reset."
             >
               <Group title="Editing">
                 <SettingRow
@@ -2870,6 +2883,35 @@ export function SettingsPage({
                   />
                 </SettingRow>
               </Group>
+              {onRegenerateThumbnails && (
+                <Group title="Library">
+                  <SettingRow
+                    title="Regenerate project thumbnails"
+                    hint={
+                      // Announced as it changes: progress, then the result.
+                      <span role="status">
+                        {thumbnailRegeneration
+                          ? `Redrawing ${thumbnailRegeneration.done} of ${thumbnailRegeneration.total}…`
+                          : workspaceOpen
+                            ? 'Go back to your projects to redraw every project card.'
+                            : thumbnailRegenerationNote ||
+                              'Redraws every project card from its model, one at a time. Large projects can take a while.'}
+                      </span>
+                    }
+                  >
+                    <button
+                      className="secondary"
+                      type="button"
+                      disabled={workspaceOpen || thumbnailRegeneration !== null}
+                      aria-busy={thumbnailRegeneration !== null}
+                      onClick={onRegenerateThumbnails}
+                    >
+                      <ImageUp size={14} aria-hidden="true" />
+                      {thumbnailRegeneration ? 'Redrawing…' : 'Regenerate'}
+                    </button>
+                  </SettingRow>
+                </Group>
+              )}
               <Group title="Diagnostics">
                 <SettingRow
                   title="Frame rate overlay"

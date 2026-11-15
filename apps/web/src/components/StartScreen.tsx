@@ -57,6 +57,8 @@ import {
   lazyWithStaleChunkNotice,
   STALE_CHUNK_MESSAGE
 } from '../lib/staleChunk';
+import { preloadableSlot } from './PreloadableSlot';
+import { prefersSavingData } from '../lib/saveData';
 import {
   daysUntilPurge,
   MAX_PROJECT_NAME_LENGTH,
@@ -93,7 +95,6 @@ import {
   type LibraryFolder
 } from '../lib/libraryFolders';
 import { useLibraryFolderCloudSync } from '../lib/useLibraryFolderCloudSync';
-import { LibrarySelectionBar } from './LibrarySelectionBar';
 import {
   bucketProjectsByShelf,
   moveItem,
@@ -102,6 +103,8 @@ import {
 } from '../lib/projectShelf';
 import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
 import { useMigrationLockedProjects } from '../lib/migrationStatus';
+import { encryptedPinProblem, encryptionHeldHere } from '../lib/api';
+import { pinProblemText, useEncryptedPins } from './encryptedPinsState';
 import type { DemoDefinition } from '../lib/demoDefinitions';
 import { BrandMark } from './BrandMark';
 import { DemoModelIcon } from './DemoModelIcon';
@@ -127,6 +130,20 @@ const FileDropTarget = lazyWithStaleChunkNotice(async () => ({
 const FolderCoverDialog = lazyWithStaleChunkNotice(async () => ({
   default: (await import('./FolderCoverDialog')).FolderCoverDialog
 }));
+/**
+ * The bar that acts on several selected projects. Only a multi-select draws
+ * it, so it loads apart from the library; the library warms it once idle, so
+ * the first selection usually shows it in the same frame. A selection that
+ * beats the warm-up (or Save-Data, which skips it) shows the bar once its
+ * chunk arrives, and a chunk that cannot load leaves the library standing
+ * with the bar's own "did not load" line in its place.
+ */
+export const LibrarySelectionBar = preloadableSlot(
+  'Selection actions',
+  async () => ({
+    default: (await import('./LibrarySelectionBar')).LibrarySelectionBar
+  })
+);
 
 interface StartScreenProps {
   projects: ProjectSummary[];
@@ -641,6 +658,19 @@ export function StartScreen({
     initialDraft?.units ?? defaultUnits
   );
   const unitsEdited = useRef(initialDraft !== null);
+  // Warm the selection bar once the library is idle; Save-Data asks for
+  // nothing speculative, and there it loads on the first selection.
+  useEffect(() => {
+    if (LibrarySelectionBar.isLoaded() || prefersSavingData()) return;
+    const warm = () =>
+      void LibrarySelectionBar.preload().catch(() => undefined);
+    if (typeof window.requestIdleCallback === 'function') {
+      const idle = window.requestIdleCallback(warm, { timeout: 5_000 });
+      return () => window.cancelIdleCallback(idle);
+    }
+    const timer = window.setTimeout(warm, 2_000);
+    return () => window.clearTimeout(timer);
+  }, []);
   // The suggested name is selected when the field takes focus, so typing a
   // real one replaces it rather than landing inside "Lucky Quokka". Once
   // anything is typed the field behaves as any other, and a click places
@@ -894,12 +924,15 @@ export function StartScreen({
   // Demos are rebuilt from their definitions on any device, so they are not
   // work to rescue and would only pad the offer. Trashed projects are excluded
   // for the same reason in reverse: uploading something on its way out is not
-  // what "save my work" means.
+  // what "save my work" means. A project this device holds as encrypted is
+  // never device only, whatever the account's listing leaves out (PR #1418):
+  // saving its cached copy would send it to the account as a new project.
   const localOnlyProjects =
     signedIn && accountProjectListReached
       ? userProjects.filter(
           (project) =>
             !cloudProjectIds.has(project.projectId) &&
+            !encryptionHeldHere(project.projectId) &&
             projectOrganization(project).status !== 'deleted'
         )
       : [];
@@ -907,6 +940,9 @@ export function StartScreen({
   // Being encrypted in this tab, or paused or stopped with its plaintext
   // still locked: badged, and opened read-only (App.tsx).
   const migratingProjectIds = useMigrationLockedProjects();
+  // Held as encrypted on this device while the switch to encryption did
+  // not finish here, or while the account lists it otherwise (PR #1418).
+  useEncryptedPins();
   // Encryption is opt-in during the beta (ADR-024). Where the account's own
   // projects are encrypted, encrypted is the norm and goes unmarked; the
   // exception, an account project still stored as plaintext, is what a card
@@ -2074,7 +2110,8 @@ export function StartScreen({
     const localOnly =
       signedIn &&
       accountProjectListReached &&
-      !cloudProjectIds.has(project.projectId);
+      !cloudProjectIds.has(project.projectId) &&
+      !encryptionHeldHere(project.projectId);
     const conflicted = conflictedProjectIds.has(project.projectId);
     const syncEntry = syncEntryById.get(project.projectId);
     const recoveryOf = recoveryCopyOf(project.name);
@@ -2088,6 +2125,7 @@ export function StartScreen({
     const encrypted = project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1;
     // Being encrypted in this tab (ADR-024 Phase 7): it opens read-only.
     const migrating = migratingProjectIds.has(project.projectId);
+    const pinProblem = encryptedPinProblem(project.projectId);
     // In an account whose projects are encrypted, one that is not.
     const plaintext =
       accountEncrypts &&
@@ -2153,6 +2191,20 @@ export function StartScreen({
                     <LockOpen size={11} aria-hidden="true" />
                   </span>
                 )
+              )}
+              {pinProblem && !migrating && !trashed && (
+                <span
+                  className="start-tile-mark"
+                  role="img"
+                  aria-label={
+                    pinProblem === 'unresolved'
+                      ? 'Encryption didn’t finish on this device'
+                      : 'Kept encrypted on this device'
+                  }
+                  title={`${pinProblemText(pinProblem)} See Settings › Encryption.`}
+                >
+                  <TriangleAlert size={11} aria-hidden="true" />
+                </span>
               )}
               {recoveryOf !== null && !trashed && (
                 <span

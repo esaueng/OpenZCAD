@@ -4,6 +4,7 @@ import {
 } from './measurementRecord';
 export { measurementRecordContentKey } from './measurementRecord';
 import { desktopFetch } from './desktopBridge';
+import { projectRequest } from './projectWriteGate';
 import { isEncryptedProject } from './api';
 
 export interface ProjectMeasurementSnapshot {
@@ -97,10 +98,14 @@ export const projectMeasurementCloudApi: ProjectMeasurementCloudApi = {
         })
       : requestProjectMeasurements<ProjectMeasurementSnapshot>(
           `/api/projects/${encodeURIComponent(projectId)}/measurements`,
-          {
-            method: 'PUT',
-            body: JSON.stringify({ expectedRevision, record })
-          }
+          // Checked again at its send: refused if pinned meanwhile.
+          projectRequest(
+            { projectId, payload: 'plaintext' },
+            {
+              method: 'PUT',
+              body: JSON.stringify({ expectedRevision, record })
+            }
+          )
         )
 };
 

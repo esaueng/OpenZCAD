@@ -290,6 +290,7 @@ pub fn run() {
             poll_desktop_sign_in,
             cancel_desktop_sign_in,
             desktop_api_request,
+            desktop_auth::desktop_prepare_access,
             desktop_auth::desktop_blob_stream_open,
             desktop_auth::desktop_blob_stream_read,
             desktop_auth::desktop_blob_stream_cancel,

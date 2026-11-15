@@ -3,6 +3,7 @@ import {
   type ProjectWorkspaceSession
 } from '@openzcad/shared';
 import { desktopFetch } from './desktopBridge';
+import { projectRequest } from './projectWriteGate';
 import { ApiError, isEncryptedProject } from './api';
 
 export interface WorkspaceResumeFailure {
@@ -110,12 +111,16 @@ export const workspaceSessionApi = {
     }
     const response = await desktopFetch(
       `/api/projects/${encodeURIComponent(session.projectId)}/workspace-sessions`,
-      {
-        method: 'PUT',
-        credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(session)
-      }
+      // Checked again at its send: refused if pinned meanwhile.
+      projectRequest(
+        { projectId: session.projectId, payload: 'plaintext' },
+        {
+          method: 'PUT',
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(session)
+        }
+      )
     );
     if (!response.ok) throw await refusal(response);
   }
