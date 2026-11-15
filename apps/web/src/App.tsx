@@ -4653,6 +4653,131 @@ export function App() {
       ),
     [thumbnailAccountUserId]
   );
+  // Settings › Advanced › Regenerate project thumbnails: progress while it
+  // runs, and what the last run did.
+  const [thumbnailRegeneration, setThumbnailRegeneration] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const [thumbnailRegenerationNote, setThumbnailRegenerationNote] =
+    useState('');
+  // The run in progress and the session it belongs to. It stops — and its
+  // rebuild is cancelled — the moment a project opens or the account
+  // changes; a key session locking stops it at its next step.
+  const thumbnailRegenerationRun = useRef<{
+    accountId: string | null;
+    keyRevision: number;
+    controller: AbortController;
+  } | null>(null);
+  useEffect(() => {
+    const run = thumbnailRegenerationRun.current;
+    if (run && (doc !== null || run.accountId !== (session?.userId ?? null))) {
+      run.controller.abort();
+    }
+  }, [doc, session?.userId]);
+  useEffect(
+    () => () => thumbnailRegenerationRun.current?.controller.abort(),
+    []
+  );
+  /**
+   * Redraws every project's card on this device from its model, on request
+   * only. The shelf never loads a model to draw a card (see `loadThumbnail`);
+   * this is the deliberate exception, offered from the library so no open
+   * project's rebuild competes with it. It publishes nothing: the shelf's
+   * backfill sends a redrawn card the account lacks, as it does any other.
+   */
+  async function handleRegenerateThumbnails() {
+    if (thumbnailRegeneration || doc) return;
+    const list = projects;
+    const accountId = session?.userId ?? null;
+    const cloudIds = cloudProjectIds;
+    const run = {
+      accountId,
+      keyRevision: getKeySessionRevision(),
+      controller: new AbortController()
+    };
+    thumbnailRegenerationRun.current = run;
+    // One signal for every way the run ends, so the rebuild in flight is
+    // cancelled whichever way that was.
+    const active = () => {
+      if (
+        thumbnailRegenerationRun.current !== run ||
+        !isCurrentKeySession(run.keyRevision)
+      ) {
+        run.controller.abort();
+      }
+      return !run.controller.signal.aborted;
+    };
+    let done = 0;
+    setThumbnailRegeneration({ done: 0, total: list.length });
+    try {
+      const [
+        { regenerateProjectThumbnails, ThumbnailRegenerationStopped },
+        { renderPartThumbnail }
+      ] = await Promise.all([
+        import('./lib/projectThumbnailRegeneration'),
+        import('./lib/partThumbnail')
+      ]);
+      const result = await regenerateProjectThumbnails(list, {
+        active,
+        loadLocal: loadLocalProject,
+        ...(session
+          ? {
+              loadAccount: (projectId: string) =>
+                cloudIds.has(projectId)
+                  ? api.loadProject(projectId)
+                  : Promise.reject(new Error('Not stored in the account.'))
+            }
+          : {}),
+        rebuild: (document) =>
+          geometry.syncOnce(document, undefined, undefined, {
+            signal: run.controller.signal
+          }),
+        render: renderPartThumbnail,
+        // Fenced inside the store's transaction, after its waits.
+        save: (projectId, thumbnail) =>
+          saveProjectThumbnail(projectId, thumbnail, { shouldWrite: active }),
+        drawn: (project, source) =>
+          rememberCapturedThumbnail({
+            projectId: project.projectId,
+            source,
+            accountId,
+            protected: isEncryptedProject(project.projectId)
+          }),
+        progress: (count, total) => {
+          done = count;
+          if (active()) setThumbnailRegeneration({ done: count, total });
+        }
+      }).catch((error: unknown) => {
+        if (error instanceof ThumbnailRegenerationStopped) return null;
+        throw error;
+      });
+      if (!result) {
+        const note = `Stopped after ${done} of ${list.length} project cards: a project was opened, the account changed, or encrypted projects were locked.`;
+        setThumbnailRegenerationNote(note);
+        return;
+      }
+      const note = [
+        `Redrew ${result.redrawn} ${result.redrawn === 1 ? 'project card' : 'project cards'}.`,
+        ...(result.skipped > 0
+          ? [
+              `${result.skipped} kept ${result.skipped === 1 ? 'its' : 'their'} card: unreadable here, not rebuilt, or unchanged.`
+            ]
+          : [])
+      ].join(' ');
+      setThumbnailRegenerationNote(note);
+      setStatus(note);
+    } catch (error) {
+      const note = errorMessage(error, 'Could not redraw the project cards.');
+      setThumbnailRegenerationNote(note);
+      setStatus(note);
+    } finally {
+      if (thumbnailRegenerationRun.current === run) {
+        thumbnailRegenerationRun.current = null;
+      }
+      setThumbnailRegeneration(null);
+    }
+  }
   const loadProperties = useCallback(
     async (project: ProjectSummary) => {
       const { loadProjectProperties } = await import('./lib/projectProperties');
@@ -31444,6 +31569,9 @@ export function App() {
           onApplyViewportDefaults={applyViewportDefaults}
           onExportDiagnostics={handleExportDiagnostics}
           onExportInteractionLog={() => void handleExportInteractionLog()}
+          onRegenerateThumbnails={() => void handleRegenerateThumbnails()}
+          thumbnailRegeneration={thumbnailRegeneration}
+          thumbnailRegenerationNote={thumbnailRegenerationNote}
           onDismissProjectInvitation={dismissProjectInvitation}
           onClose={closeSettings}
         />
