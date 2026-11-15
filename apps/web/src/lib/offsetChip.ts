@@ -12,40 +12,90 @@ export interface OffsetChipState {
   mode: OffsetChipMode;
   /** The span to the plane opposing the armed face, for "Total". */
   extent: number | null;
+  /** Whether the chip can switch to Total: a span is known to read. */
+  totalAvailable: boolean;
 }
 
 /**
- * A face offset reads the whole span by default — a primitive's own
- * dimension, or the distance to the flat face opposing any other face — since
- * that is the size the gesture leaves; the change alone is one click away.
- * Only a face with no span to read (nothing flat across from it) starts on,
- * and stays on, the change.
+ * A face offset reads, and a typed number means, the signed distance the face
+ * moves (+ out, − in) — the change the edit records. Total, the whole span
+ * the face sets (a primitive's own dimension, or the distance to the flat
+ * face opposing any other face), is one click away on the chip's tag when
+ * there is a span to read. Starting on Total made a typed 5 on a 24 mm
+ * body's top face move it −19 (QA 2026-11-14 finding #9).
  */
 export function faceOffsetChipState(
   totalBaseline: number | undefined,
   extentBehind: number | null
 ): OffsetChipState {
   return {
-    mode:
-      totalBaseline === undefined && extentBehind === null ? 'offset' : 'total',
-    extent: extentBehind
+    mode: 'offset',
+    extent: extentBehind,
+    totalAvailable: totalBaseline !== undefined || extentBehind !== null
   };
 }
 
 /**
- * The mode a re-armed face rig's chip reads. The workspace re-derives the
+ * The reading a re-armed face rig's chip shows. The workspace re-derives the
  * handle whenever the interaction changes — opening exact entry, a preview
- * landing — so the same face re-arms many times while it stays selected, and
- * resetting each time undid the user's Total/Offset switch under an open
- * keypad. The same face keeps the reading chosen for it; a different face,
- * or one left with no span, starts from its own default.
+ * landing, an edit on another body landing — so the same face re-arms many
+ * times while it stays selected, and resetting each time undid the user's
+ * Total/Offset switch under an open keypad. The face the switch was made on
+ * (see `continuesOffsetFace`) reads what was chosen for it whenever it has a span
+ * to read; any other face, or a moment without a span (the body's analysis
+ * catching up), reads the default, Offset, without forgetting the choice.
+ * The choice is never stored beyond that face: no setting, no session
+ * storage.
  */
 export function rearmedChipMode(
   fresh: OffsetChipState,
-  current: OffsetChipMode,
-  sameFace: boolean
+  chosen: OffsetChipMode,
+  chosenHere: boolean
 ): OffsetChipMode {
-  return sameFace && fresh.mode === 'total' ? current : fresh.mode;
+  return chosenHere && fresh.totalAvailable ? chosen : fresh.mode;
+}
+
+/** The face a Total/Offset switch was made on, as `continuesOffsetFace` reads it. */
+export interface OffsetFaceIdentity {
+  bodyId: string;
+  topologyId: string;
+  point: { x: number; y: number; z: number };
+  normal: { x: number; y: number; z: number };
+}
+
+/** An armed face handle: its identity, and the face a commit moved into it. */
+export interface OffsetFaceHandle extends OffsetFaceIdentity {
+  movedFrom?: string;
+}
+
+/**
+ * Whether a re-armed face handle is the face the chip's switch was made on,
+ * proven, never guessed: the same face id on the same plane (an id reused
+ * for another face after the topology changed lies elsewhere), or the face
+ * a committed offset moved it to, as the commit itself names it
+ * (`movedFrom`). Facing the same way proves nothing — a shoulder and the cap
+ * above it, or two coplanar faces of one part, are different faces — and
+ * anything unproven reads the default, Offset.
+ */
+export function continuesOffsetFace(
+  chosen: OffsetFaceIdentity,
+  next: OffsetFaceHandle
+): boolean {
+  // Face normals are unit vectors; points are in document units.
+  const n = chosen.normal;
+  const m = next.normal;
+  const p = chosen.point;
+  const q = next.point;
+  return (
+    chosen.bodyId === next.bodyId &&
+    n.x * m.x + n.y * m.y + n.z * m.z > 1 - 1e-6 &&
+    // The moved face keeps naming the face it came from after the switch
+    // has followed it, so its own id on its own plane still counts.
+    (next.movedFrom === chosen.topologyId ||
+      (next.topologyId === chosen.topologyId &&
+        Math.abs(n.x * (q.x - p.x) + n.y * (q.y - p.y) + n.z * (q.z - p.z)) <
+          1e-5))
+  );
 }
 
 /**
@@ -55,7 +105,7 @@ export function rearmedChipMode(
  * face's Total mode and span (a −5 drag read "Total 5").
  */
 export function regionChipState(): OffsetChipState {
-  return { mode: 'offset', extent: null };
+  return { mode: 'offset', extent: null, totalAvailable: false };
 }
 
 /**
@@ -98,9 +148,10 @@ function signedHundredths(value: number): string {
 
 /**
  * What a committed face offset reports. History records the change (the
- * edit's own parameter, "+10.25 mm"), while the chip defaults to the Total
- * the face leaves ("15.65 mm"): released from a Total reading, the message
- * names both, so the two numbers are seen to be one edit.
+ * edit's own parameter, "+10.25 mm"), which the chip reads by default; when
+ * the chip was switched to the Total the face leaves ("15.65 mm"), released
+ * from that reading, the message names both, so the two numbers are seen to
+ * be one edit.
  */
 export function offsetFaceCommitMessage(
   offset: number,

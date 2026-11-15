@@ -4,7 +4,8 @@ import {
   stubApi,
   blendEdgesInPlace,
   createPrimitiveInPlace,
-  featureCardFromHistory
+  featureCardFromHistory,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 test('resizes a rounded box from its minimum side with exact entry, drag, cancel and undo', async ({
@@ -94,6 +95,24 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
   };
   await checkShape(24);
   await selectSide();
+  // The field takes the signed Offset by default: +2 makes the 24 mm side 26.
+  await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+    /^Offset/
+  );
+  await page.getByTestId('direct-manipulation-value').click();
+  const offsetKeypad = page.getByRole('dialog', { name: 'Offset value' });
+  await offsetKeypad.getByRole('textbox').fill('2');
+  await offsetKeypad.getByRole('button', { name: 'Apply offset' }).click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'depth set to 26 mm'
+  );
+  await checkShape(26);
+  // The tag's Total takes the size the minimum side sets: 28.
+  await selectSide();
+  await switchFaceOffsetToTotal(page);
+  await expect(page.getByTestId('direct-manipulation-value')).toContainText(
+    '26'
+  );
   await page.getByTestId('direct-manipulation-value').click();
   const keypad = page.getByRole('dialog', { name: 'Total value' });
   await keypad.getByRole('textbox').fill('28');
@@ -129,6 +148,10 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
       () => (window as typeof window & { editSyncs: number }).editSyncs
     );
   const count = await syncs();
+  // The side was switched to Total and keeps it; the drag reads the size.
+  await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+    /^Total/
+  );
   await drag(2);
   await expect(page.getByTestId('direct-manipulation-value')).toContainText(
     '30'
@@ -160,6 +183,7 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
   await page.getByRole('button', { name: 'Redo', exact: true }).click();
   await checkShape(30);
   await selectSide();
+  await switchFaceOffsetToTotal(page);
   await drag(2);
   await expect(page.getByTestId('direct-manipulation-value')).toContainText(
     '32'
@@ -220,8 +244,8 @@ test('resizes a rounded box from its minimum side with exact entry, drag, cancel
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toBeVisible();
-  // Moving a face reads the whole span by default, like Resize body; the tag
-  // beside the value switches it to the change.
+  // The side keeps the Total chosen on it; the tag beside the value switches
+  // it back to the change.
   await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
     /^Total/
   );

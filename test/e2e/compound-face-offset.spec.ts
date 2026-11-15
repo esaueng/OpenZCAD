@@ -164,15 +164,15 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
   await page.evaluate(() => {
     (window as typeof window & { holdFaceEdit?: boolean }).holdFaceEdit = true;
   });
-  // The chip reads the cap's total reach by default; the drag's delta is
-  // the difference from this resting reading.
+  // The chip reads the signed change by default (resting at +0); the drag's
+  // delta is the difference from this resting reading.
   const readChip = async () =>
     Number(
       (await page.getByTestId('direct-manipulation-value').innerText()).match(
         /([+-]?[\d.]+) mm/
       )?.[1]
     );
-  const restingTotal = await readChip();
+  const resting = await readChip();
   await page.mouse.move(bounds.x + handle.x, bounds.y + handle.y);
   await page.mouse.down();
   await page.mouse.move(
@@ -194,7 +194,7 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
   expect(await worldBounds()).toEqual(before);
   // Screen-space drags are grid-snapped. Commit must match the displayed
   // requested delta, independently of the current camera's snap interval.
-  const requestedOffset = (await readChip()) - restingTotal;
+  const requestedOffset = (await readChip()) - resting;
   expect(requestedOffset).toBeGreaterThan(0);
   await page.mouse.up();
   await expect(
@@ -217,12 +217,7 @@ test('previews and commits a compound STEP cap offset, then undoes, redoes and r
       return canvas.getAttribute('data-e2e-handle-x');
     })
     .not.toBeNull();
-  // Moving a face reads the whole span by default; the tag beside the value
-  // switches it to the change this spec types.
-  await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
-    /^Total/
-  );
-  await page.getByTestId('direct-manipulation-mode').click();
+  // A face starts on Offset, the signed move (QA 2026-11-14 finding #9).
   await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
     /^Offset/
   );
