@@ -88,25 +88,26 @@ pnpm test:parity-corpus
 pnpm build
 ```
 
-They run as three parallel jobs: `quality` (lint, typecheck), `unit` (the root
-Vitest project, `pnpm exec vitest run`) and `validation` (the web Vitest
-project via `pnpm test:web`, the parity corpus, the build). Together `unit`
-and `validation` are `pnpm test`. Root and web Vitest use the focused smoke
-selection in CI; local runs remain full. `pnpm test:full` explicitly runs both
+A required `plan` preflight runs the kernel-pin declaration and selects the
+tests; then `quality` (lint), `typecheck`, `unit` (the root Vitest project in
+two partitions) and `validation` (the web Vitest project, the parity corpus,
+the build) run in parallel. Together `unit` and `validation` are `pnpm test`.
+Root and web Vitest run the critical manifest plus the files a change affects;
+unknown inputs, dependency or configuration changes and kernel (Remus)
+updates select the complete suites. Local runs remain full. `pnpm test:full` explicitly runs both
 complete projects even with `CI` set (`test:unit:full` and `test:web:full` run
 either one). See [Unit test suites](docs/unit-test-suites.md) for the manifest,
 coverage tradeoff and pre-worker Git fixture preparation. The separate parity
 corpus and policy assertions remain required. The tagged Playwright smoke suite
 runs as six shards on pull requests, started beside those jobs (`e2e-tests-pr`); a newer push
 cancels a superseded run's shards, and manual dispatches run the same set
-(`e2e-tests`). Merge-queue candidates run no shards: auto-merge enqueues
-a PR only after `checks / e2e` passed on its head, so a candidate runs only
-`quality`, `unit` and `validation`, and two PRs that break e2e only together
-are caught by the next PR's run rather than before merge. Each shard takes the
+(`e2e-tests`). Merge-queue candidates run five tagged save/history canaries
+against the combined tree (`e2e-queue`), or the full shard set when the plan
+asks for it; prior PR success does not stand in for them. Each shard takes the
 spec files `scripts/e2e-shards.mjs` assigns it (every shard runs
 `pnpm exec playwright install chromium` first, browser binaries only), and an
-`e2e` gate job aggregates the shards for branch protection; on a queue
-candidate it passes with no shard run. Shards are balanced by the
+`e2e` gate job aggregates the shards for branch protection and fails when no
+selected browser set ran and passed. Shards are balanced by the
 per-file seconds in `test/e2e/smoke-shard-weights.json`. CI selects only
 `@ci-smoke` cases; an untagged new regression runs only in the full suite.
 Each shard uploads its Playwright JSON report as an `e2e-report-N` artifact.
