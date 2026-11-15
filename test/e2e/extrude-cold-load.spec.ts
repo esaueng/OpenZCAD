@@ -285,11 +285,12 @@ test('a bar that cannot load leaves typed entry nothing to wait for', async ({
   await expect(page.getByText('Extrude did not load.')).toBeVisible();
   const idle = await framesRequestedIn(page, 600);
   await page.keyboard.press('Enter');
-  // Said why, and nothing left retrying for an arrow that will not come.
+  // Nothing left retrying every frame for an arrow that will not come...
+  const afterEnter = await framesRequestedIn(page, 600);
+  expect(afterEnter - idle).toBeLessThan(10);
+  // ...and the workspace says why the entry did not open.
   await expect(page.getByRole('contentinfo')).toContainText(
     'Extrude did not load, so its distance cannot be typed.'
   );
-  const afterEnter = await framesRequestedIn(page, 600);
-  expect(afterEnter - idle).toBeLessThan(10);
   await expect(keypad(page)).toHaveCount(0);
 });
