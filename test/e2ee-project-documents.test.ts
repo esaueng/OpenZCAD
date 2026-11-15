@@ -2899,3 +2899,109 @@ describe('detached pending records (PR #1477 review, round 7)', () => {
     expect(srv.bucket.objects.has(key)).toBe(false);
   });
 });
+
+describe('pending admission after a full account erasure (PR #1477 review, round 8)', () => {
+  it('a save admitted before the erasure records nothing and puts nothing once it completed', async () => {
+    const srv = server();
+    srv.db.exec('PRAGMA foreign_keys=ON');
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const head = rows<{ version_hash: string }>(
+      srv,
+      'SELECT version_hash FROM e2ee_project_versions WHERE project_id = ?',
+      projectId
+    )[0]!;
+    // Large enough that its body goes to R2 through a pending record.
+    const payload = new Uint8Array(400_000);
+    for (let n = 0; n < payload.length; n += 65536) {
+      crypto.getRandomValues(
+        payload.subarray(n, Math.min(payload.length, n + 65536))
+      );
+    }
+    const hand = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: v1.version + 1,
+        keyEpoch: 0,
+        previousVersionHash: fromHex(head.version_hash)
+      },
+      { expectedVersion: v1.version, plaintext: payload }
+    );
+    // The save passed its checks and pauses right before its pending
+    // record's INSERT.
+    const db = srv.env.DB as D1Database;
+    const prepare = db.prepare.bind(db);
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => (enter = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let once = true;
+    const pass = <T extends object>(target: T, property: PropertyKey) => {
+      const value = Reflect.get(target, property) as unknown;
+      return typeof value === 'function'
+        ? (value as (...args: unknown[]) => unknown).bind(target)
+        : value;
+    };
+    db.prepare = (sql: string) => {
+      const wrap = (statement: D1PreparedStatement): D1PreparedStatement =>
+        new Proxy(statement, {
+          get(target, property) {
+            if (property === 'bind') {
+              return (...args: unknown[]) => wrap(target.bind(...args));
+            }
+            if (
+              property === 'run' &&
+              once &&
+              sql.includes('INSERT INTO r2_pending_objects')
+            ) {
+              return async () => {
+                once = false;
+                enter();
+                await released;
+                return target.run();
+              };
+            }
+            return pass(target, property);
+          }
+        });
+      return wrap(prepare(sql));
+    };
+    const stale = putVersion(srv, projectId, hand);
+    await entered;
+    // The account's full erasure completes meanwhile.
+    const erased = await srv.call('POST', '/api/account/delete-data', {
+      body: { scope: 'all', confirmation: 'DELETE ALL CLOUD DATA' }
+    });
+    expect(erased.status).toBe(200);
+    expect(rows(srv, 'SELECT * FROM users WHERE id = ?', OWNER)).toEqual([]);
+    const objectsBefore = new Set(srv.bucket.objects.keys());
+    // Storage misbehaves, so a save that did put could not clean up.
+    (
+      srv.bucket.head as unknown as Mock<(key: string) => Promise<unknown>>
+    ).mockImplementation(async () => {
+      throw new Error('temporary R2 head outage');
+    });
+    (
+      srv.bucket.delete as unknown as Mock<(key: string) => Promise<void>>
+    ).mockImplementation(async () => {
+      throw new Error('temporary R2 delete outage');
+    });
+    release();
+    const result = await stale;
+    db.prepare = prepare;
+    // Refused at admission, as a session the erasure ended, not a retry.
+    expect(result.status).toBe(401);
+    expect(((await result.json()) as { code: string }).code).toBe(
+      'E2EE_SESSION_REQUIRED'
+    );
+    expect(rows(srv, 'SELECT * FROM r2_pending_objects')).toEqual([]);
+    expect(new Set(srv.bucket.objects.keys())).toEqual(objectsBefore);
+    expect(
+      [...srv.bucket.objects.keys()].filter((key) =>
+        key.startsWith(`e2ee/${projectId}/`)
+      )
+    ).toEqual([]);
+  });
+});

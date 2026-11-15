@@ -27,6 +27,12 @@ function database() {
     'dev@example.test',
     CREATED
   );
+  // Another account, which pending objects may be charged to.
+  db.prepare('INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)').run(
+    'someone_else',
+    'else@example.test',
+    CREATED
+  );
   db.prepare(
     `INSERT INTO projects (id, user_id, name, document_json, updated_at)
      VALUES ('p1', ?, 'Project', '{}', ?)`
@@ -1837,5 +1843,32 @@ describe('detached pending records (PR #1477 review, round 7)', () => {
     );
     expect(removed).toEqual([]);
     expect(db.prepare('SELECT * FROM r2_pending_objects').all()).toEqual([]);
+  });
+});
+
+describe('pending admission for an erased account (PR #1477 review, round 8)', () => {
+  it('refuses a record charged to an account that no longer exists, or to none', async () => {
+    const { recordPendingObject } =
+      await import('@openzcad/cloudflare-adapters');
+    const db = database();
+    const d1 = sqliteD1(db);
+    const input = (ownerUserId: string) => ({
+      key: `e2ee/proj_new/${ownerUserId || 'none'}`,
+      attempt: 'copy',
+      projectId: 'proj_new',
+      ownerUserId,
+      bytes: 3,
+      bucket: 'artifacts' as const
+    });
+    // A copy records under a project not created yet: the owner suffices.
+    expect(await recordPendingObject(d1, input(OWNER))).toBe('recorded');
+    db.prepare('DELETE FROM users WHERE id = ?').run('someone_else');
+    expect(await recordPendingObject(d1, input('someone_else'))).toBe(
+      'owner-gone'
+    );
+    expect(await recordPendingObject(d1, input(''))).toBe('owner-gone');
+    expect(
+      db.prepare('SELECT owner_user_id FROM r2_pending_objects').all()
+    ).toEqual([{ owner_user_id: OWNER }]);
   });
 });

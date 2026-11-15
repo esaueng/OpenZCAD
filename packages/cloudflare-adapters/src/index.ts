@@ -627,10 +627,17 @@ export const PENDING_OBJECTS_PER_ACCOUNT = 2_400;
  * - `too-large`: this attempt's own objects would exceed the allowance, so
  *   its rows could never commit;
  * - `key-deleting`: a cleanup holds a fresh claim on the key and may be
- *   about to delete it (retry once it is done).
+ *   about to delete it (retry once it is done);
+ * - `owner-gone`: the account it is charged to no longer exists (its full
+ *   erasure completed after this write was admitted).
  */
 export type PendingObjectAdmission =
-  'recorded' | 'project-full' | 'account-full' | 'too-large' | 'key-deleting';
+  | 'recorded'
+  | 'project-full'
+  | 'account-full'
+  | 'too-large'
+  | 'key-deleting'
+  | 'owner-gone';
 
 /**
  * Records that `attempt` is about to put `key` (migration 0055), before the
@@ -681,6 +688,7 @@ export async function recordPendingObject(
       .run();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('r2_pending_owner_gone')) return 'owner-gone';
     if (message.includes('r2_key_deleting')) return 'key-deleting';
     if (message.includes('r2_pending_attempt_quota')) return 'too-large';
     if (message.includes('r2_pending_account_limit')) return 'account-full';

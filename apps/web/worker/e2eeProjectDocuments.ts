@@ -735,6 +735,17 @@ async function pendingAdmissionRefusal(
   admission: Exclude<PendingObjectAdmission, 'recorded'>,
   write: 'save' | 'copy'
 ): Promise<never> {
+  // The account was erased after this write was admitted: nothing was put,
+  // and the session that admitted it is gone with the account.
+  if (admission === 'owner-gone') {
+    refuse(
+      401,
+      'E2EE_SESSION_REQUIRED',
+      write === 'copy'
+        ? 'Sign in again before creating an encrypted project.'
+        : 'Sign in again before saving this encrypted project.'
+    );
+  }
   if (admission === 'key-deleting') {
     refuse(
       503,

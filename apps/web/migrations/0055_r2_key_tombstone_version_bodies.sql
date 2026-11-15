@@ -83,6 +83,12 @@ CREATE INDEX IF NOT EXISTS r2_pending_objects_owner
 -- Admission of a pending record, enforced in the INSERT itself so no two
 -- concurrent requests can both pass:
 --
+-- * Refused unless the account it is charged to still exists. A full
+--   account erasure deletes the users row in the very batch that detaches
+--   and anonymizes the account's records, so a write admitted to the
+--   account before then and recording its object only afterwards is
+--   refused before it puts anything: no record naming the erased account
+--   can appear once the erasure completed.
 -- * Refused while a cleanup holds a fresh claim on the key (migration
 --   0050): that cleanup may be about to delete the key, and a writer that
 --   recorded the key afterwards would put bytes the delete then removes.
@@ -100,6 +106,9 @@ DROP TRIGGER IF EXISTS r2_pending_object_admission;
 CREATE TRIGGER r2_pending_object_admission
 BEFORE INSERT ON r2_pending_objects
 BEGIN
+  SELECT RAISE(ABORT, 'r2_pending_owner_gone')
+  WHERE NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.owner_user_id);
+
   SELECT RAISE(ABORT, 'r2_key_deleting')
   WHERE EXISTS (
     SELECT 1 FROM r2_key_tombstones
