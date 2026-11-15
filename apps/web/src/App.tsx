@@ -1666,6 +1666,13 @@ import {
 import { folderStorageKey, readLibraryFolders } from './lib/libraryFolders';
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import {
+  beginListingRead,
+  notePublishedThumbnail,
+  subscribePublishedThumbnails,
+  withPublishedThumbnail,
+  withPublishedThumbnails
+} from './lib/thumbnailPublications';
+import {
   cachedShelfNames,
   forgetShelfProjectNames,
   rememberVerifiedShelfName,
@@ -2233,6 +2240,9 @@ async function loadProjectSummaries(
   cloudProjectIds: Set<string>;
 }> {
   const keySessionRevision = getKeySessionRevision();
+  // Before the account is asked, so a card this tab publishes while the read
+  // is in flight counts as newer than whatever the read returns.
+  const readStartedAt = beginListingRead();
   const signedIn = accountId !== null;
   const scope = organizationBackground.begin(accountId);
   const unavailableAs =
@@ -2283,7 +2293,9 @@ async function loadProjectSummaries(
                     )
                       return;
                     rememberVerifiedShelfName(accountId, project);
-                    progress.onVerified(project);
+                    progress.onVerified(
+                      withPublishedThumbnail(project, readStartedAt)
+                    );
                   }
                 }
               : undefined
@@ -2372,7 +2384,7 @@ async function loadProjectSummaries(
       !purged.has(project.projectId) || remoteIds.has(project.projectId)
   );
   return {
-    projects,
+    projects: withPublishedThumbnails(projects, readStartedAt),
     remoteReached: Boolean(remote),
     cloudProjectIds: remoteIds
   };
@@ -4604,6 +4616,27 @@ export function App() {
       ),
     [thumbnailAccountUserId]
   );
+  // Listings already applied were all read before this publish finished, so
+  // the account's current card for that project is the one just published.
+  useEffect(
+    () =>
+      subscribePublishedThumbnails((projectId, artifactId) =>
+        setProjects((current) =>
+          current.some(
+            (project) =>
+              project.projectId === projectId &&
+              project.thumbnailArtifactId !== artifactId
+          )
+            ? current.map((project) =>
+                project.projectId === projectId
+                  ? { ...project, thumbnailArtifactId: artifactId }
+                  : project
+              )
+            : current
+        )
+      ),
+    []
+  );
   const loadProperties = useCallback(
     async (project: ProjectSummary) => {
       const { loadProjectProperties } = await import('./lib/projectProperties');
@@ -4657,6 +4690,11 @@ export function App() {
               : candidate
           )
         );
+      }
+      // Only a fresh upload is news to a listing read in flight; an id the
+      // record already carried was published before it.
+      if (result.published && result.artifactId) {
+        notePublishedThumbnail(project.projectId, result.artifactId);
       }
       return result.source;
     },

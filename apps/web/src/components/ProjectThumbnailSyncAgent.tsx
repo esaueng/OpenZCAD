@@ -12,6 +12,7 @@ import {
 import { queuePartThumbnail, renderThumbnailFrame } from '../lib/partThumbnail';
 import type { ThumbnailCapture } from '../lib/projectThumbnailCapture';
 import { sharedThumbnailCapture } from '../lib/sharedThumbnailCapture';
+import { notePublishedThumbnail } from '../lib/thumbnailPublications';
 
 interface ProjectThumbnailSyncAgentProps {
   projectId: ProjectId;
@@ -74,9 +75,17 @@ export function ProjectThumbnailSyncAgent({
         updatedAt,
         source
       })
-        .then((artifactId) =>
-          saveThumbnail(projectId, { source, artifactId, version, updatedAt })
-        )
+        .then(async (artifactId) => {
+          await saveThumbnail(projectId, {
+            source,
+            artifactId,
+            version,
+            updatedAt
+          }).catch(() => undefined);
+          // The account now lists this card; a listing read before this
+          // point names the one it replaced (see thumbnailPublications).
+          notePublishedThumbnail(projectId, artifactId);
+        })
         .catch(() => undefined);
     });
     capture.stage(

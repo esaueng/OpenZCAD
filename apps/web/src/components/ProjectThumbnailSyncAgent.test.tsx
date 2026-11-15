@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { toArtifactId, toProjectId } from '@openzcad/shared';
 import { ProjectThumbnailSyncAgent } from './ProjectThumbnailSyncAgent';
 import { createThumbnailCapture } from '../lib/projectThumbnailCapture';
+import { subscribePublishedThumbnails } from '../lib/thumbnailPublications';
 
 function transportPublishing(artifactId: ReturnType<typeof toArtifactId>) {
   return {
@@ -24,6 +25,8 @@ describe('ProjectThumbnailSyncAgent', () => {
     const saveThumbnail = vi.fn().mockResolvedValue(undefined);
     const transport = transportPublishing(artifactId);
     const capture = createThumbnailCapture({ idleMs: 0 });
+    const published = vi.fn();
+    const unsubscribe = subscribePublishedThumbnails(published);
 
     render(
       <ProjectThumbnailSyncAgent
@@ -54,6 +57,15 @@ describe('ProjectThumbnailSyncAgent', () => {
       })
     );
     expect(transport.uploadArtifact).toHaveBeenCalledTimes(1);
+    // Announced once the record carries it, so the shelf's listing can
+    // name this card rather than the one it replaced.
+    await vi.waitFor(() =>
+      expect(published).toHaveBeenCalledWith('project_thumbnail', artifactId)
+    );
+    expect(published.mock.invocationCallOrder[0]).toBeGreaterThan(
+      saveThumbnail.mock.invocationCallOrder[0]!
+    );
+    unsubscribe();
   });
 
   it('stages the ready geometry so a leave flush can write the card', async () => {
