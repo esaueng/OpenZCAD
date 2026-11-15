@@ -67,7 +67,9 @@ describe('AssemblyPanel (one left sidebar)', () => {
     const joints = screen.getByRole('region', { name: 'Joints' });
     expect(within(joints).getByText('Pivot')).toBeInTheDocument();
     expect(within(joints).getByText('12.0°')).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Animations' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('region', { name: 'Animations' })
+    ).toBeInTheDocument();
   });
 
   it('lists the bill of materials and downloads it as CSV (AS03)', () => {
@@ -75,13 +77,13 @@ describe('AssemblyPanel (one left sidebar)', () => {
     const saveBomCsv = vi.fn();
     const { onStatus } = renderPanel(fixture, { saveBomCsv });
     const section = screen.getByRole('region', { name: 'Bill of materials' });
-    expect(within(section).getByText('2')).toHaveClass('assembly-count');
+    expect(section.querySelector('.assembly-count')).toHaveTextContent('2');
     const rows = within(
       within(section).getByRole('list', { name: 'Bill of materials' })
     ).getAllByRole('listitem');
     expect(rows.map((row) => row.textContent)).toEqual([
-      'Blade A Body×1',
-      'Blade B Body×1'
+      '1Blade A Body×1',
+      '2Blade B Body×1'
     ]);
     // A body outside the assembly is not a part of it.
     expect(within(section).queryByText(/Pivot screw/)).toBeNull();
@@ -104,6 +106,30 @@ describe('AssemblyPanel (one left sidebar)', () => {
     );
   });
 
+  it('picks a BOM row’s parts and lights the row of a part picked elsewhere (AS03)', () => {
+    const fixture = scissorsManager({ joint: true });
+    const { rerender } = renderPanel(fixture);
+    const section = screen.getByRole('region', { name: 'Bill of materials' });
+    const rowButton = (name: RegExp) =>
+      within(section).getByRole('button', { name });
+    const bladeB = rowButton(/^Item 2: Blade B Body, quantity 1$/);
+    expect(bladeB).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(bladeB);
+    rerender();
+    expect(getAssemblyRuntime().selectedComponentIds).toEqual(['comp_b']);
+    expect(rowButton(/^Item 2:/)).toHaveAttribute('aria-pressed', 'true');
+    expect(rowButton(/^Item 2:/).closest('li')).toHaveClass('is-selected');
+    // A second click on the picked row clears the pick.
+    fireEvent.click(rowButton(/^Item 2:/));
+    rerender();
+    expect(getAssemblyRuntime().selectedComponentIds).toEqual([]);
+    // A part picked on the model (or in Parts) lights up its BOM row.
+    select(() => assemblyRuntime.selectComponent('comp_a'));
+    rerender();
+    expect(rowButton(/^Item 1:/).closest('li')).toHaveClass('is-selected');
+    expect(rowButton(/^Item 2:/).closest('li')).not.toHaveClass('is-selected');
+  });
+
   it('keeps a missing part in the BOM and warns that the exported CSV includes it', () => {
     const fixture = scissorsManager({ components: true });
     const document = fixture.live();
@@ -123,7 +149,7 @@ describe('AssemblyPanel (one left sidebar)', () => {
     expect(within(section).getByText('Missing')).toBeInTheDocument();
     const rows = within(section).getAllByRole('listitem');
     expect(rows).toHaveLength(2);
-    expect(rows[1]).toHaveTextContent('Blade B BodyMissing×1');
+    expect(rows[1]).toHaveTextContent('2Blade B BodyMissing×1');
     fireEvent.click(
       within(section).getByRole('button', {
         name: 'Download bill of materials as CSV'

@@ -153,26 +153,100 @@ export function deriveAssemblyBom(
   };
 }
 
-export const ASSEMBLY_BOM_CSV_HEADER =
-  'item,quantity,part,instances,source_body,status';
+/**
+ * The BOM as a table: the one shape every reader of the BOM takes it in.
+ * The Assemble sidebar, the CSV export and later drawing rows (a parts list
+ * on a sheet, balloons pointing at a part's item number) read the same
+ * columns, the same text and the same item numbers, so a part never has one
+ * number on screen and another on paper.
+ *
+ * Cells are plain text, already formatted, with no locale: a table reader
+ * lays them out and never reformats them. Column order is the CSV order;
+ * `key` is the CSV header name and stays stable, `label` is what a person
+ * reads. `numeric` cells align to the end.
+ */
+export type AssemblyBomColumnKey =
+  'item' | 'quantity' | 'part' | 'instances' | 'source_body' | 'status';
+
+export interface AssemblyBomColumn {
+  key: AssemblyBomColumnKey;
+  label: string;
+  numeric: boolean;
+}
+
+export interface AssemblyBomTableRow {
+  item: number;
+  status: AssemblyBomRow['status'];
+  /** Components this row counts, in display order. */
+  componentIds: string[];
+  cells: Record<AssemblyBomColumnKey, string>;
+}
+
+export interface AssemblyBomTable {
+  columns: readonly AssemblyBomColumn[];
+  rows: AssemblyBomTableRow[];
+  totalQuantity: number;
+  /** Item number of each component's row: what a balloon on a part shows. */
+  itemByComponent: ReadonlyMap<string, number>;
+}
+
+export const ASSEMBLY_BOM_COLUMNS: readonly AssemblyBomColumn[] = [
+  { key: 'item', label: 'Item', numeric: true },
+  { key: 'quantity', label: 'Qty', numeric: true },
+  { key: 'part', label: 'Part', numeric: false },
+  { key: 'instances', label: 'Instances', numeric: false },
+  { key: 'source_body', label: 'Source body', numeric: false },
+  { key: 'status', label: 'Status', numeric: false }
+];
+
+export const ASSEMBLY_BOM_CSV_HEADER = ASSEMBLY_BOM_COLUMNS.map(
+  (column) => column.key
+).join(',');
+
+export function assemblyBomTable(bom: AssemblyBom): AssemblyBomTable {
+  const itemByComponent = new Map<string, number>();
+  const rows = bom.rows.map((row) => {
+    for (const instance of row.instances)
+      itemByComponent.set(instance.componentId, row.item);
+    return {
+      item: row.item,
+      status: row.status,
+      componentIds: row.instances.map((instance) => instance.componentId),
+      cells: {
+        item: String(row.item),
+        quantity: String(row.quantity),
+        part: row.name,
+        instances: row.instances.map((instance) => instance.name).join('; '),
+        source_body: row.bodyId,
+        status: row.status
+      }
+    };
+  });
+  return {
+    columns: ASSEMBLY_BOM_COLUMNS,
+    rows,
+    totalQuantity: bom.totalQuantity,
+    itemByComponent
+  };
+}
 
 /**
  * The BOM as CSV, one line per row after the header, `\n` line ends and no
  * trailing newline. Cells that a spreadsheet would read as a formula are
  * prefixed with an apostrophe, the same guard the measurement CSV uses.
  */
-export function assemblyBomToCsv(bom: AssemblyBom): string {
+export function assemblyBomToCsv(bom: AssemblyBom | AssemblyBomTable): string {
+  const table = 'itemByComponent' in bom ? bom : assemblyBomTable(bom);
   return [
     ASSEMBLY_BOM_CSV_HEADER,
-    ...bom.rows.map((row) =>
-      [
-        String(row.item),
-        String(row.quantity),
-        csvCell(row.name),
-        csvCell(row.instances.map((instance) => instance.name).join('; ')),
-        csvCell(row.bodyId),
-        row.status
-      ].join(',')
+    ...table.rows.map((row) =>
+      table.columns
+        .map((column) =>
+          column.numeric || column.key === 'status'
+            ? row.cells[column.key]
+            : csvCell(row.cells[column.key])
+        )
+        .join(',')
     )
   ].join('\n');
 }

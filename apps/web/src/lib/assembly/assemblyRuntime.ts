@@ -255,6 +255,15 @@ export const assemblyRuntime = {
       selectedJointId: componentId ? null : state.selectedJointId
     });
   },
+  /** Selects exactly these parts (a BOM row's instances); [] clears. */
+  selectComponents(componentIds: readonly string[]): void {
+    const ids = [...new Set(componentIds)];
+    patch({
+      selectedComponentIds: ids,
+      selectedComponentId: ids.at(-1) ?? null,
+      selectedJointId: ids.length > 0 ? null : state.selectedJointId
+    });
+  },
   selectJoint(jointId: string | null): void {
     patch({
       selectedJointId: jointId,
