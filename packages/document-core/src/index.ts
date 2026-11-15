@@ -63,6 +63,7 @@ export * from './object-folders';
 export * from './assembly';
 export * from './assembly-bom';
 export * from './gear-mesh';
+export * from './print-clearance';
 export * from './reference-images';
 export * from './body-consumption';
 export {
@@ -1108,6 +1109,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // Opening older content never converts it or invents source witnesses.
   // Schema v56 -> v57 thread runouts and pipe threads are optional fields on
   // a thread; absent keeps the v53 thread, so nothing is rewritten.
+  // Schema v60 adds the optional document print clearance. Never fill one in:
+  // absent keeps every thread and gear as it was built.
   // Schema v16 -> v17 allows reference-form mesh payloads. Keep existing
   // embedded triangles and pre-release references as written; the version
   // boundary prevents older clients from accepting meshes they cannot rebuild.
@@ -4316,6 +4319,10 @@ export function renameParameter(
       rewriteNodeExpressions(node, rewrite);
     }
   }
+  // L09: the document's print clearance is an expression too.
+  if (typeof next.printClearance === 'string') {
+    next.printClearance = rewrite(next.printClearance);
+  }
   parameter.name = newName;
   refreshParameterValues(next);
   assertSketchBoundaryTopologyPreserved(document, next);
@@ -6931,6 +6938,18 @@ export function findParameterReferences(
       });
     }
   }
+  // L09: the document's print clearance can read a parameter as well.
+  const clearance = document.printClearance;
+  if (
+    typeof clearance === 'string' &&
+    readsParameter(clearance, name, scope, document.units)
+  ) {
+    references.push({
+      nodeId: document.rootNodeId,
+      label: 'The print clearance',
+      expressions: [clearance]
+    });
+  }
   return references;
 }
 
@@ -6985,6 +7004,21 @@ export function parameterQuantityRefusal(
       return expression;
     });
     if (refusal) return refusal;
+  }
+  // L09: the print clearance is a length field of the document itself.
+  const clearance = candidate.printClearance;
+  if (
+    typeof clearance === 'string' &&
+    expressionIdentifiers(clearance).includes(name)
+  ) {
+    try {
+      requireFieldDimension(
+        parseExpressionQuantity(clearance, scope, candidate.units),
+        'length'
+      );
+    } catch (error) {
+      return `The print clearance uses "${clearance}": ${error instanceof Error ? error.message : 'it no longer evaluates.'}`;
+    }
   }
   return null;
 }

@@ -17,9 +17,11 @@ import {
   type LocalHistoryAppend
 } from './lib/localHistoryAppend';
 import {
+  documentPrintClearance,
   repairLegacyBracketModel,
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
+import type { PrintClearanceState } from './components/PrintClearanceRow';
 import {
   noteProjectMigrating,
   registerProjectFlush,
@@ -521,9 +523,11 @@ import {
 } from './lib/collaborationCheckpointFallback';
 import {
   cancelDesktopSignIn,
+  DESKTOP_SLICERS,
   isDesktopApp,
   listenForDesktopMenu,
   openDesktopCadFile,
+  openInDesktopSlicer,
   pollDesktopSignIn,
   protectDesktopClose,
   saveCadBinaryFile,
@@ -698,7 +702,8 @@ import {
 } from './lib/projectShareLink';
 import type {
   ExportProgress,
-  MeshExportDialogFormat
+  MeshExportDialogFormat,
+  SlicerTarget
 } from './components/ExportDialog';
 import type {
   PngExportOptions,
@@ -733,6 +738,29 @@ const STL_EXPORT_FILE_INFO = {
   kind: 'stl-export' as const,
   binaryFormat: 'stl' as const
 };
+/**
+ * L09 "Open in slicer": where a 3MF goes from the mesh dialog. The desktop
+ * app hands a local file to an installed slicer. The browser has no route
+ * that reaches a slicer with a local file (the slicers' URL schemes only
+ * download an http(s) URL), so it downloads the 3MF to be opened from there.
+ * Neither uploads anything.
+ */
+function slicerTargets(desktop: boolean): SlicerTarget[] {
+  return desktop
+    ? DESKTOP_SLICERS.map(({ id, label }) => ({
+        id,
+        label,
+        hint: `Opens the 3MF, each body named and coloured, in ${label} on this Mac. Nothing is uploaded.`
+      }))
+    : [
+        {
+          id: 'download',
+          label: 'Download for slicer',
+          hint: 'Downloads the 3MF, each body named and coloured, to open from your browser’s downloads in your slicer. Nothing is uploaded.'
+        }
+      ];
+}
+
 const MESH_EXPORT_FILE_INFO: Record<
   MeshExportDialogFormat,
   {
@@ -8364,6 +8392,23 @@ export function App() {
     () => requiredValueResolver(parameterScope.scope, doc?.units),
     [parameterScope.scope, doc?.units]
   );
+  // L09: the document's print clearance, as the Parameters panel shows it.
+  const printClearance = useMemo((): PrintClearanceState | undefined => {
+    if (!doc) return undefined;
+    try {
+      return {
+        stored: doc.printClearance,
+        value: documentPrintClearance(doc, parameterScope.scope) ?? null,
+        error: null
+      };
+    } catch (error) {
+      return {
+        stored: doc.printClearance,
+        value: null,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }, [doc, parameterScope.scope]);
 
   // Text profiles resolve faces synchronously on this thread as well as in the
   // worker, so the faces this document names have to be parsed here too.
@@ -18870,6 +18915,13 @@ export function App() {
       signal: AbortSignal;
       onState(state: GeometryWorkerState): void;
     }): Promise<{ body: Blob; save(): Promise<boolean>; warnings: number }>;
+    /**
+     * Keeps a copy in the project's export archive; on by default. A slicer
+     * hand-off (L09) is local only and keeps none.
+     */
+    archive?: boolean;
+    /** The status once the file is saved, when not the export's own. */
+    completed?(bodies: string): string;
   }) {
     if (!doc || exportBodyIds.length === 0) {
       setStatus(emptyExportReason);
@@ -18923,21 +18975,23 @@ export function App() {
       trackUsage('export_completed');
       sink.update({ phase: 'archiving', fraction: null });
       let archived = false;
-      try {
-        await archiveArtifact({
-          fileName: input.fileName,
-          contentType: input.contentType,
-          kind: input.kind,
-          body: produced.body,
-          // Cancel is honoured by the two awaits above; without it here the
-          // archive kept uploading the file the user had just stopped
-          // exporting, and finalized it into the File menu.
-          signal,
-          metadata: input.metadata
-        });
-        archived = true;
-      } catch {
-        // The local download has already completed successfully.
+      if (input.archive !== false) {
+        try {
+          await archiveArtifact({
+            fileName: input.fileName,
+            contentType: input.contentType,
+            kind: input.kind,
+            body: produced.body,
+            // Cancel is honoured by the two awaits above; without it here the
+            // archive kept uploading the file the user had just stopped
+            // exporting, and finalized it into the File menu.
+            signal,
+            metadata: input.metadata
+          });
+          archived = true;
+        } catch {
+          // The local download has already completed successfully.
+        }
       }
       if (signal.aborted) {
         // The file is on disk; only the copy was stopped.
@@ -18956,7 +19010,9 @@ export function App() {
       const outcome =
         produced.warnings > 0
           ? `Exported ${input.label} with ${countLabel(produced.warnings, 'warning', 'warnings')}.`
-          : `Exported ${bodies} to ${input.fileName}${archived ? ' and archived it' : ''}.`;
+          : input.completed
+            ? input.completed(bodies)
+            : `Exported ${bodies} to ${input.fileName}${archived ? ' and archived it' : ''}.`;
       setStatus(
         exportWithheldMessage ? `${outcome} ${exportWithheldMessage}` : outcome
       );
@@ -18964,7 +19020,9 @@ export function App() {
       // signed-out or local-only session was never going to keep a copy,
       // and flagging every export there would teach people to dismiss it.
       const archiveExpected =
-        Boolean(session) && cloudProjectIds.has(doc.projectId);
+        input.archive !== false &&
+        Boolean(session) &&
+        cloudProjectIds.has(doc.projectId);
       sink.finish(
         archived || !archiveExpected
           ? { tone: 'ok', message: bodies, landed: true }
@@ -19089,6 +19147,71 @@ export function App() {
               save: () => saveCadTextFile(fileName, 'stl', result.text),
               warnings: result.warnings.length
             };
+      }
+    });
+  }
+
+  /**
+   * L09 "Open in slicer": the 3MF the dialog would export, handed to a
+   * slicer on this Mac, or downloaded in the browser. Local only: it is never
+   * uploaded or archived, which keeps an encrypted project's file off the
+   * server too.
+   */
+  function handleOpenInSlicer(
+    target: string,
+    deflection: number,
+    tolerances: { angularTolerance?: number } = {}
+  ) {
+    if (currentGeometrySnapshot !== null) {
+      setStatus('The model is still updating. Try again when it finishes.');
+      return;
+    }
+    if (!doc || exportBodyIds.length === 0) {
+      setStatus(emptyExportReason);
+      return;
+    }
+    const slicer = DESKTOP_SLICERS.find((entry) => entry.id === target);
+    if (!slicer && target !== 'download') return;
+    const info = MESH_EXPORT_FILE_INFO['3mf'];
+    const fileName = `${exportFileStem(doc.name)}.${info.extension}`;
+    void runExportJob({
+      fileName,
+      label: slicer ? `3MF for ${slicer.label}` : '3MF for your slicer',
+      kind: info.kind,
+      contentType: info.contentType,
+      metadata: {
+        bodyIds: exportBodyIds.join(','),
+        documentVersion: doc.version,
+        units: doc.units,
+        format: '3mf',
+        deflectionMm: deflection
+      },
+      archive: false,
+      completed: (bodies) =>
+        slicer
+          ? `Opened ${bodies} in ${slicer.label} as ${fileName}.`
+          : `Downloaded ${bodies} as ${fileName}. Open it from your browser’s downloads in your slicer.`,
+      produce: async (options) => {
+        const result = await geometry.exportModel('3mf', doc, exportBodyIds, {
+          deflection,
+          ...tolerances,
+          units: resolveExportUnits(
+            appSettingsRef.current.files.exportUnits,
+            doc.units
+          ),
+          ...options
+        });
+        if (!('data' in result)) {
+          throw new Error('The 3MF export returned no file.');
+        }
+        return {
+          body: new Blob([result.data], { type: info.contentType }),
+          save: () =>
+            slicer
+              ? openInDesktopSlicer(slicer.id, fileName, result.data)
+              : saveCadBinaryFile(fileName, '3mf', result.data),
+          warnings: result.warnings.length
+        };
       }
     });
   }
@@ -23321,6 +23444,23 @@ export function App() {
    * real. An assistant patch already landing is awaited first, since its
    * commit is what the edit must be checked against.
    */
+  /** L09: sets or clears the print clearance; answers with a refusal. */
+  function handleSetPrintClearance(value: ParamValue | null): string | null {
+    const manager = managerRef.current;
+    if (!manager) return 'Editing is unavailable.';
+    const command = commandFactories.setPrintClearance({ value });
+    try {
+      command.apply(manager.document);
+    } catch (error) {
+      return error instanceof Error
+        ? error.message
+        : 'The print clearance could not be changed.';
+    }
+    return executeCommand(command)
+      ? null
+      : 'The print clearance was not changed.';
+  }
+
   async function handleSetParameter(
     name: string,
     expression: string,
@@ -34051,6 +34191,10 @@ export function App() {
       onSetParameter={(name, expression) =>
         handleSetParameter(name, expression)
       }
+      printClearance={printClearance}
+      onSetPrintClearance={
+        editDisabledReason ? undefined : handleSetPrintClearance
+      }
       onParameterAddRefused={(name, message) =>
         setStatus(`Parameter ${name} was not added.`, { detail: message })
       }
@@ -36980,6 +37124,8 @@ export function App() {
                 revision={doc.version}
                 onClose={() => setMeshExportOpen(false)}
                 onExport={handleExportMesh}
+                slicerTargets={slicerTargets(isDesktopApp())}
+                onOpenInSlicer={handleOpenInSlicer}
                 onCheckQuality={handleCheckMeshQuality}
                 exportUnits={appSettings.files.exportUnits}
                 documentUnits={doc.units}

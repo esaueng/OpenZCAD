@@ -592,4 +592,68 @@ describe('ExportDialog', () => {
       screen.getByRole('button', { name: /^Fine/ }).getAttribute('aria-pressed')
     ).toBe('true');
   });
+
+  describe('Open in slicer (L09)', () => {
+    const SLICERS = [
+      { id: 'bambu-studio', label: 'Bambu Studio', hint: 'Bambu hint' },
+      { id: 'orcaslicer', label: 'OrcaSlicer', hint: 'Orca hint' }
+    ];
+
+    it('offers no hand-off without a route, or for a format other than 3MF', async () => {
+      const user = userEvent.setup();
+      renderDialog();
+      expect(
+        screen.queryByRole('region', { name: 'Open in slicer' })
+      ).toBeNull();
+      renderDialog({ slicerTargets: SLICERS, onOpenInSlicer: vi.fn() });
+      expect(
+        screen.getByRole('region', { name: 'Open in slicer' })
+      ).toBeInTheDocument();
+      await user.click(screen.getByRole('radio', { name: 'OBJ' }));
+      expect(
+        screen.queryByRole('region', { name: 'Open in slicer' })
+      ).toBeNull();
+    });
+
+    it('hands the 3MF to the chosen slicer at the dialog’s quality and closes', async () => {
+      const user = userEvent.setup();
+      const onOpenInSlicer = vi.fn();
+      const props = renderDialog({ slicerTargets: SLICERS, onOpenInSlicer });
+      const region = screen.getByRole('region', { name: 'Open in slicer' });
+      expect(region).toHaveTextContent('Bambu hint');
+      await user.selectOptions(
+        screen.getByRole('combobox', { name: 'Slicer' }),
+        'orcaslicer'
+      );
+      expect(region).toHaveTextContent('Orca hint');
+      await user.selectOptions(
+        screen.getByRole('combobox', { name: 'Max facet angle' }),
+        '5'
+      );
+      await user.click(
+        screen.getByRole('button', { name: 'Open in OrcaSlicer' })
+      );
+      expect(onOpenInSlicer).toHaveBeenCalledWith('orcaslicer', 0.08, {
+        angularTolerance: (5 * Math.PI) / 180
+      });
+      expect(props.onExport).not.toHaveBeenCalled();
+      expect(props.onClose).toHaveBeenCalledOnce();
+    });
+
+    it('names a lone route by what it does', async () => {
+      const user = userEvent.setup();
+      const onOpenInSlicer = vi.fn();
+      renderDialog({
+        slicerTargets: [
+          { id: 'download', label: 'Download for slicer', hint: 'Downloads' }
+        ],
+        onOpenInSlicer
+      });
+      expect(screen.queryByRole('combobox', { name: 'Slicer' })).toBeNull();
+      await user.click(
+        screen.getByRole('button', { name: 'Download for slicer' })
+      );
+      expect(onOpenInSlicer).toHaveBeenCalledWith('download', 0.08);
+    });
+  });
 });

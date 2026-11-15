@@ -7,6 +7,7 @@ import type {
   FeatureNode,
   ParameterKind,
   ParameterNode,
+  ParamValue,
   ProjectCheckpoint,
   ProjectDocument,
   UnitSystem
@@ -16,6 +17,7 @@ import type { HistoryRowActions } from '../HistoryTimeline';
 import type { ObjectFolderActions } from './ObjectsPanel';
 import type { BodyAppearancePreview } from '../ModelViewer';
 import type { BodyAppearancePatch } from './BodyAppearanceEditor';
+import type { PrintClearanceState } from '../PrintClearanceRow';
 
 /**
  * Everything the five model panels read from the open document and the
@@ -125,6 +127,12 @@ export interface ModelPanelSource {
     name: string,
     expression: string
   ): void | Promise<string | null>;
+  /** L09: the document's print clearance, as stored and as it resolves. */
+  printClearance?: PrintClearanceState;
+  /** L09: sets or clears the print clearance; answers with a refusal. */
+  onSetPrintClearance?(
+    value: ParamValue | null
+  ): string | null | Promise<string | null>;
   /** A new parameter the add row refused before setting it (a taken name). */
   onParameterAddRefused?(name: string, message: string): void;
   /** F05: retypes a parameter; answers with a refusal. */

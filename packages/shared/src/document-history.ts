@@ -1,6 +1,7 @@
 import type { ProjectDocument, UserId } from './index';
 import { drawingSetError } from './drawings';
 import { objectFolderSetError } from './object-folders';
+import { printClearanceError } from './print-clearance';
 import { assemblySetError } from './assembly';
 import {
   documentFeatureKinds,
@@ -36,7 +37,8 @@ export const HISTORY_FIELDS = [
   'drawings',
   'objectFolders',
   'referenceImages',
-  'assembly'
+  'assembly',
+  'printClearance'
 ] as const;
 export type HistoryField = (typeof HISTORY_FIELDS)[number];
 
@@ -205,6 +207,15 @@ export function isDocumentHistory(
             [change.before, change.after].some(
               (side) =>
                 side !== undefined && referenceImageSetError(side) !== null
+            ))
+        )
+          return false;
+        // The same holds for the print clearance (L09): one value, no key.
+        if (
+          change.field === 'printClearance' &&
+          (change.key !== undefined ||
+            [change.before, change.after].some(
+              (side) => side !== undefined && printClearanceError(side) !== null
             ))
         )
           return false;

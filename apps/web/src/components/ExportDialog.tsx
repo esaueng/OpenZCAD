@@ -3,6 +3,7 @@ import {
   CircleCheck,
   Download,
   LoaderCircle,
+  Printer,
   ShieldCheck,
   TriangleAlert
 } from 'lucide-react';
@@ -172,6 +173,27 @@ export interface ExportDialogProps {
   exportUnits?: ExportUnits;
   documentUnits?: UnitSystem;
   onExportUnitsChange?(units: ExportUnits): void;
+  /**
+   * L09 "Open in slicer": where a 3MF can be handed to a slicer from here —
+   * the slicers the desktop app can open, or the browser's download. Absent
+   * or empty, the dialog offers no hand-off.
+   */
+  slicerTargets?: readonly SlicerTarget[];
+  /** Hands the 3MF to `target`; the dialog closes as it does for an export. */
+  onOpenInSlicer?(
+    target: string,
+    deflection: number,
+    options?: { angularTolerance?: number }
+  ): void;
+}
+
+/** One place a 3MF can be handed to a slicer from (L09). */
+export interface SlicerTarget {
+  id: string;
+  /** The slicer's name, or what the route does when it is not one. */
+  label: string;
+  /** One line on what happens, shown under the control. */
+  hint: string;
 }
 
 /**
@@ -188,7 +210,9 @@ export function ExportDialog({
   onCheckQuality,
   exportUnits = 'mm',
   documentUnits = 'mm',
-  onExportUnitsChange
+  onExportUnitsChange,
+  slicerTargets = [],
+  onOpenInSlicer
 }: ExportDialogProps) {
   const dialogRef = useRef<HTMLFormElement>(null);
   // Escape must still close the dialog when focus has fallen out of it (a
@@ -205,6 +229,9 @@ export function ExportDialog({
   const [preset, setPreset] = useState<QualityPresetId>('standard');
   const [customDeflection, setCustomDeflection] = useState('0.05');
   const [angle, setAngle] = useState<AngleOption>(20);
+  const [slicerId, setSlicerId] = useState(slicerTargets[0]?.id ?? '');
+  const slicerTarget =
+    slicerTargets.find((target) => target.id === slicerId) ?? slicerTargets[0];
   const [phase, setPhase] = useState<'idle' | 'checking'>('idle');
   const [progress, setProgress] = useState<ExportProgress | null>(null);
   // A failed check is not a failed export: it says so, and keeps the
@@ -313,6 +340,23 @@ export function ExportDialog({
       setPhase('idle');
       setProgress(null);
     }
+  }
+
+  function runOpenInSlicer() {
+    if (
+      !onOpenInSlicer ||
+      !slicerTarget ||
+      deflection === null ||
+      phase !== 'idle' ||
+      bodies.length === 0
+    ) {
+      return;
+    }
+    const angularTolerance = angularToleranceFor(angle);
+    if (angularTolerance === undefined)
+      onOpenInSlicer(slicerTarget.id, deflection);
+    else onOpenInSlicer(slicerTarget.id, deflection, { angularTolerance });
+    onClose();
   }
 
   function runExport() {
@@ -562,6 +606,43 @@ export function ExportDialog({
             </p>
           )}
         </section>
+
+        {format === '3mf' && onOpenInSlicer && slicerTarget ? (
+          <section className="export-dialog-group" aria-label="Open in slicer">
+            <header>
+              <strong>Open in slicer</strong>
+              {slicerTargets.length > 1 ? (
+                <label className="export-dialog-custom">
+                  <span>Slicer</span>
+                  <select
+                    value={slicerTarget.id}
+                    onChange={(event) => setSlicerId(event.target.value)}
+                  >
+                    {slicerTargets.map((target) => (
+                      <option key={target.id} value={target.id}>
+                        {target.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <button
+                type="button"
+                className="secondary"
+                disabled={
+                  deflection === null || phase !== 'idle' || bodies.length === 0
+                }
+                onClick={runOpenInSlicer}
+              >
+                <Printer size={13} aria-hidden="true" />
+                {slicerTargets.length > 1
+                  ? `Open in ${slicerTarget.label}`
+                  : slicerTarget.label}
+              </button>
+            </header>
+            <p className="export-dialog-hint">{slicerTarget.hint}</p>
+          </section>
+        ) : null}
 
         {/* One slot with a reserved line: a progress or error row that
             appeared here pushed the buttons down under the pointer. */}
