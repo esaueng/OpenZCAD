@@ -1770,7 +1770,6 @@ async function createProject(
   // This create's pending records of the objects it copies (migration 0055).
   const copyAttempt = crypto.randomUUID();
   const pendingReady = await isPendingObjectStorageReady(ctx.db);
-  let sortOrder: number;
   try {
     if (copy && objects) {
       await copyBlobObjects(objects, projectId, copy.rows, copied, undefined, {
@@ -1781,15 +1780,6 @@ async function createProject(
       });
       await verifyCopiedObjects(objects, copied);
     }
-    // A copy lands next to its source on the shelf, as a plaintext one does.
-    sortOrder = copy
-      ? ((
-          await ctx.db
-            .prepare('SELECT sort_order FROM projects WHERE id = ?')
-            .bind(copy.sourceProjectId)
-            .first<{ sort_order: number | null }>()
-        )?.sort_order ?? 0)
-      : 0;
   } catch (error) {
     await discardBody(ctx, body);
     await discardCopiedObjects(ctx.db, objects, copied, copyAttempt);
@@ -1798,6 +1788,10 @@ async function createProject(
     }
     throw error;
   }
+  // An account that stores an encrypted project encrypts its library, so its
+  // shelf order is sealed (ADR-024 amendment 2026-11-14): the row holds the
+  // default and the browser places a copy beside its source in that record.
+  const sortOrder = 0;
   const now = new Date().toISOString();
   const db = ctx.db;
   // The version and the info were checked against this same list.

@@ -4,6 +4,7 @@ import {
   expect,
   stubApi,
   expectBodyCount,
+  createPrimitiveInPlace,
   MODEL_ONLY
 } from './openzcad-fixtures';
 
@@ -34,6 +35,7 @@ for (const units of ['mm', 'inch'] as const) {
       await expectBodyCount(page, 1);
       const canvas = page.locator('.viewer-host canvas');
       const value = page.getByTestId('direct-manipulation-value');
+      const mode = page.getByTestId('direct-manipulation-mode');
       const count = async () =>
         Number(
           (
@@ -43,7 +45,19 @@ for (const units of ['mm', 'inch'] as const) {
           )?.match(/(\d+) features?/)?.[1]
         );
       const read = async () => parseFloat(await value.innerText());
-      const pick = async (x: number, y: number, expected: number) => {
+      /**
+       * Picks the plate's right face at (x, y) and reads its Total. `reads`
+       * is the reading the chip must show before anything is clicked: a
+       * fresh face starts on Offset (owner decision after QA 2026-11-14
+       * finding #9) and takes the switch; a Total chosen on this face
+       * (through its own commit, too) must already be there.
+       */
+      const pick = async (
+        x: number,
+        y: number,
+        expected: number,
+        reads: 'Offset' | 'Total'
+      ) => {
         await expect
           .poll(async () => {
             await canvas.evaluate(
@@ -58,6 +72,12 @@ for (const units of ['mm', 'inch'] as const) {
             return canvas.getAttribute('data-e2e-handle-x');
           })
           .not.toBeNull();
+        await expect(mode).toHaveText(new RegExp(`^${reads}`));
+        if (reads === 'Offset') {
+          await expect(value).toHaveText(/^\+0 /);
+          await mode.click();
+        }
+        await expect(mode).toHaveText(/^Total/);
         await expect.poll(read).toBeCloseTo(expected * scale, 2);
       };
       const span = () =>
@@ -96,11 +116,12 @@ for (const units of ['mm', 'inch'] as const) {
       // plane, to the flat face across the plate: the line from y=20 crosses
       // the hole's wall, which is not the reference, and still reads 80, the
       // same as y=8 beside the hole.
-      await pick(80, 20, 80);
+      await pick(80, 20, 80, 'Offset');
       const initial = await count();
-      await pick(80, 8, 80);
+      // The switch stays with the face it was made on.
+      await pick(80, 8, 80, 'Total');
       expect(await count()).toBe(initial);
-      await pick(80, 20, 80);
+      await pick(80, 20, 80, 'Total');
       // Accepting the rounded prefill must not subtract it from a more precise
       // mesh baseline and accidentally create a microscopic offset feature.
       await value.click();
@@ -114,19 +135,22 @@ for (const units of ['mm', 'inch'] as const) {
       await expect.poll(count).toBe(initial + 1);
       await expect.poll(span).toBeCloseTo(75 * scale, 4);
       const grown = await span();
+      // The moved face is armed again and keeps the Total chosen for it
+      // through its own commit: no click, it reads the new width.
+      await expect(mode).toHaveText(/^Total/);
       await expect.poll(read).toBeCloseTo(75 * scale, 2);
-      await pick(grown / scale, 8, 75);
-      await pick(grown / scale, 20, 75);
+      await pick(grown / scale, 8, 75, 'Total');
+      await pick(grown / scale, 20, 75, 'Total');
       await page.getByRole('button', { name: 'Undo', exact: true }).click();
       await expect.poll(span).toBeCloseTo(80 * scale, 4);
-      await pick(80, 20, 80);
+      // Undo and Redo put back faces nothing proves are the one switched:
+      // they read the default.
+      await pick(80, 20, 80, 'Offset');
       await page.getByRole('button', { name: 'Redo', exact: true }).click();
       await expect.poll(span).toBeCloseTo(grown, 4);
-      await pick(grown / scale, 20, 75);
-      await page.getByTestId('direct-manipulation-mode').click();
-      await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
-        /^Offset/
-      );
+      await pick(grown / scale, 20, 75, 'Offset');
+      await mode.click();
+      await expect(mode).toHaveText(/^Offset/);
       await enter(units === 'mm' ? '5' : '5 / 25.4', 'Offset');
       await expect.poll(count).toBe(initial + 2);
       const restored = grown + 5 * scale;
@@ -175,7 +199,8 @@ for (const units of ['mm', 'inch'] as const) {
         .toBe(true);
       await page.reload({ waitUntil: 'domcontentloaded' });
       await expectBodyCount(page, 1);
-      await pick(restored / scale, 20, 80);
+      // The switch is not stored: a reloaded pick starts on Offset.
+      await pick(restored / scale, 20, 80, 'Offset');
       await expect.poll(span).toBeCloseTo(restored, 4);
       expect(await count()).toBe(initial + 2);
       await page.getByLabel('Operation instructions', { exact: true }).click();
@@ -196,3 +221,91 @@ for (const units of ['mm', 'inch'] as const) {
     }
   );
 }
+
+// QA 2026-11-14 finding #9: typing 5 on a 24 mm box's top face moved it by
+// −19, because the field started on Total. Owner decision: it starts on
+// Offset, the signed move; Total stays one switch away on the chip's tag.
+test(
+  'a typed face value is an Offset by default; Total is one switch away',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    await stubApi(page, { panelLayout: MODEL_ONLY });
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Offset default');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(page, 'box', { sizes: { height: 24 } });
+    await expectBodyCount(page, 1);
+    const canvas = page.locator('.viewer-host canvas');
+    const value = page.getByTestId('direct-manipulation-value');
+    const mode = page.getByTestId('direct-manipulation-mode');
+    const height = () =>
+      canvas.evaluate(
+        (element) =>
+          new Promise<number>((resolve) => {
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-render-policy', {
+                detail: {
+                  resolve: (state: {
+                    bodyFaces: {
+                      worldBounds: { min: number[]; max: number[] };
+                    }[];
+                  }) => {
+                    const bounds = state.bodyFaces[0]!.worldBounds;
+                    resolve(bounds.max[2]! - bounds.min[2]!);
+                  }
+                }
+              })
+            );
+          })
+      );
+    const pickTop = async () => {
+      await expect
+        .poll(async () => {
+          await canvas.evaluate((element) =>
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-select-planar-face', {
+                detail: { normal: { x: 0, y: 0, z: 1 } }
+              })
+            )
+          );
+          return canvas.getAttribute('data-e2e-handle-x');
+        })
+        .not.toBeNull();
+    };
+    await expect.poll(height).toBeCloseTo(24, 4);
+
+    await pickTop();
+    await expect(mode).toHaveText(/^Offset/);
+    await expect(value).toHaveText('+0 mm');
+    await value.click();
+    const offsetKeypad = page.getByRole('dialog', { name: 'Offset value' });
+    await expect(offsetKeypad.getByRole('textbox')).toHaveAccessibleDescription(
+      'Offset: how far the face moves, + out, − in'
+    );
+    await offsetKeypad.getByRole('textbox').fill('5');
+    await offsetKeypad.getByRole('button', { name: 'Apply offset' }).click();
+    await expect(offsetKeypad).toBeHidden();
+    // +5, not the −19 a Total of 5 made.
+    await expect.poll(height).toBeCloseTo(29, 4);
+
+    // Switched to Total, the same 5 is the size the face sets.
+    await pickTop();
+    await expect(mode).toHaveText(/^Offset/);
+    await mode.click();
+    await expect(mode).toHaveText(/^Total/);
+    await expect(value).toHaveText('29 mm');
+    await value.click();
+    const totalKeypad = page.getByRole('dialog', { name: 'Total value' });
+    // Opening entry re-arms the handle; the switch holds for this face.
+    await expect(mode).toHaveText(/^Total/);
+    await expect(totalKeypad.getByRole('textbox')).toHaveValue('29');
+    await totalKeypad.getByRole('textbox').fill('5');
+    await expect(totalKeypad.getByRole('textbox')).toHaveAccessibleDescription(
+      'Total: the size this face sets, 29 mm before this edit · moves the face −24 mm'
+    );
+    await totalKeypad.getByRole('button', { name: 'Apply total' }).click();
+    await expect(totalKeypad).toBeHidden();
+    await expect.poll(height).toBeCloseTo(5, 4);
+  }
+);

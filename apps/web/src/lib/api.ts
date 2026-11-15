@@ -542,6 +542,10 @@ export async function encryptsNewProjects(): Promise<boolean> {
  */
 export async function encryptsAccountLibrary(): Promise<boolean> {
   if (await encryptsNewProjects()) return true;
+  // The preferences route answers first, and a yes from it always stands:
+  // the general config can only decide when that route gives no answer. The
+  // Worker answers it (with the library rule) even while encrypted projects
+  // are closed to the account, so asking logs no failed request.
   const stored = await readJsonAnswer('/api/e2ee/project-preferences');
   if (stored.kind === 'ok') return stored.body.libraryEncrypted === true;
   const config = await readJsonAnswer('/api/e2ee/config');
@@ -1059,6 +1063,17 @@ export const api = {
         ...(signal ? { signal } : {}),
         body: JSON.stringify(payload)
       }
+    ),
+  /**
+   * Clears a project's readable pin, order and archive once the account's
+   * sealed library record holds them (ADR-024 amendment 2026-11-14). The
+   * Worker clears the archive only while the row is still archived and
+   * never changes the trash.
+   */
+  resetProjectShelf: (projectId: string, signal?: AbortSignal) =>
+    requestJson<UpdateProjectResponse>(
+      `/api/projects/${encodeURIComponent(projectId)}/shelf/reset`,
+      { method: 'POST', ...(signal ? { signal } : {}) }
     ),
   reorderProjects: (payload: ReorderProjectsRequest, signal?: AbortSignal) =>
     requestJson<ReorderProjectsResponse>('/api/projects/reorder', {

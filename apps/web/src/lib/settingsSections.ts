@@ -348,6 +348,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     detail: 'Editing mode, diagnostics, and reset',
     settings: [
       'Direct manipulation',
+      'Regenerate project thumbnails',
       'Frame rate overlay',
       'Export diagnostics',
       'Export interaction log',
@@ -360,6 +361,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Reset application settings'
     ],
     searchTerms: [
+      'thumbnails',
+      'previews',
+      'project cards',
+      'missing picture',
       'STEP',
       'STL',
       '3MF',

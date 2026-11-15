@@ -43,6 +43,9 @@ const METADATA_ROUTES: ReadonlyArray<{ method: string; rest: RegExp }> = [
   // Shelf organization (archive, trash, pin) and permanent deletion.
   { method: 'PATCH', rest: /^$/ },
   { method: 'DELETE', rest: /^$/ },
+  // Clearing readable shelf state once the sealed library record holds it
+  // (ADR-024 amendment 2026-11-14).
+  { method: 'POST', rest: /^\/shelf\/reset$/ },
   // Reading and revoking existing access stays possible on any project.
   { method: 'GET', rest: /^\/sharing$/ },
   { method: 'GET', rest: /^\/share-links$/ },

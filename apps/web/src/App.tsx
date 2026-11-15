@@ -303,7 +303,6 @@ import {
   isFeatureSuppressed,
   projectBranchPoint,
   projectOrganization,
-  toProjectId,
   TRASH_RETENTION_DAYS
 } from '@openzcad/shared';
 import type {
@@ -381,6 +380,7 @@ import { useOnline } from './hooks/useOnline';
 import {
   lazyWithStaleChunkNotice,
   isOffline,
+  loadRetryingOnReconnect,
   loadWhenOnline,
   OFFLINE_CHUNK_MESSAGE,
   preloadableLazy,
@@ -441,6 +441,7 @@ import type { SharedLinkCopyDestination } from './components/SharedLinkCopyDialo
 import {
   ApiError,
   api,
+  encryptsAccountLibrary,
   encryptsNewProjects,
   isEncryptedProject,
   isProjectDocumentUnavailableError,
@@ -974,13 +975,14 @@ import type {
   ExtrudeFormValue,
   ExtrudeToFacePicking
 } from './lib/extrudeDraft';
-import {
-  ExtrudeCommand,
-  extrudeShownValues,
-  type ExtrudeCommandHandle,
-  type ExtrudeCommandState,
-  type ExtrudeValueId
+import type {
+  ExtrudeCommandHandle,
+  ExtrudeCommandState
 } from './components/ExtrudeCommand';
+import {
+  extrudeShownValues,
+  type ExtrudeValueId
+} from './lib/extrudeShownValues';
 import { DRAFT_DRAG_LIMIT_DEG, extrudeHandles } from './lib/inPlace/extrude';
 import {
   extrudeToFaceRepair,
@@ -1164,12 +1166,33 @@ const LazyNumericKeypad = preloadableLazy(() =>
 const NumericKeypad = withSuspense(LazyNumericKeypad);
 // U09: an in-place command's Cancel / Done bar. Lazy, like the keypad: only
 // a running command needs it, and the entry chunk runs at its budget.
-const InPlaceCommandBar = withSuspense(
-  lazyWithStaleChunkNotice(() =>
+// Preloadable, so the first command after the idle warm-up opens its bar in
+// the same frame instead of suspending for one; behind its own boundary, so
+// a chunk that cannot load leaves the workspace standing (Escape and Enter
+// still cancel and finish the command).
+const InPlaceCommandBar = preloadableSlot(
+  'Command bar',
+  () =>
     import('./components/InPlaceCommandBar').then((module) => ({
       default: module.InPlaceCommandBar
-    }))
-  )
+    })),
+  { pending: <WorkspacePending /> }
+);
+// The in-place Extrude bar (region extrude and editing a stored extrude).
+// It shares the command bar's chunk, so loading it on demand is what lets the
+// bar above leave the entry chunk at all. Warmed with the keypad as soon as a
+// sketch or command is up, and with the idle warm-up. Until it is ready the
+// region offers nothing the bar would have to answer (`extrudeBarReady`).
+/** Why a region's distance cannot be typed once its bar failed to load. */
+const EXTRUDE_ENTRY_UNAVAILABLE =
+  'Extrude did not load, so its distance cannot be typed. Reload to try again.';
+const ExtrudeCommand = preloadableSlot(
+  'Extrude',
+  () =>
+    import('./components/ExtrudeCommand').then((module) => ({
+      default: module.ExtrudeCommand
+    })),
+  { pending: <WorkspacePending /> }
 );
 
 const LazyViewerShell = preloadableLazy(() =>
@@ -1429,7 +1452,9 @@ const LazySettingsPage = preloadableLazy(() =>
 const FIRST_USE_SURFACES = [
   LazySettingsPage,
   LazyMoveOverlay,
-  LazyNumericKeypad
+  LazyNumericKeypad,
+  InPlaceCommandBar,
+  ExtrudeCommand
 ];
 const LazyProjectSharingDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ProjectSharingDialog').then((module) => ({
@@ -1663,6 +1688,8 @@ import {
   summarizeLocalDocument,
   withSavedVersion
 } from './lib/projectShelf';
+import { SEALED_SHELF_APPLIED_EVENT } from './lib/sealedShelfCore';
+import type * as SealedShelf from './lib/sealedShelfState';
 import {
   preparePartThumbnails,
   rememberCapturedThumbnail
@@ -1970,6 +1997,7 @@ const AssemblyPlayer = createAssemblyPlayer(() =>
   }))
 );
 import { createAssemblyPlayer } from './components/assembly/AssemblyPlayerSlot';
+import { preloadableSlot } from './components/PreloadableSlot';
 import {
   assembleKeyFor,
   runAssembleKey,
@@ -2199,21 +2227,37 @@ interface HydrateOptions {
   activeProjectSince?: ActiveProjectSnapshot;
 }
 
+/**
+ * The sealed shelf (ADR-024 amendment 2026-11-14), loaded on first use so
+ * the entry chunk does not carry it: only shelf listings, edits and their
+ * mirrors of a signed-in account need it.
+ */
+function loadSealedShelf(): Promise<typeof SealedShelf> {
+  return import('./lib/sealedShelfState');
+}
+
+/** The account the shelf currently lists, which the shelf's mirror writes for. */
+let shelfListingAccount: string | null = null;
+
 const organizationMirrorHost: OrganizationMirrorHost = {
   readLocal: loadLocalProjectOrganizationSnapshot,
   saveLocal: saveLocalProjectOrganizationIfCurrent,
-  updateRemote: (projectId, organization, signal) =>
-    api
-      .updateProject(
-        {
-          projectId: toProjectId(projectId),
-          status: organization.status,
-          pinned: organization.pinned,
-          sortOrder: organization.sortOrder
-        },
-        signal
-      )
-      .then(() => undefined)
+  // An account whose library is encrypted sends only trash moves; its pins,
+  // order and archive go to the sealed library record (sealedShelfState.ts).
+  // Any other account's are sent only after its library rule says plaintext.
+  updateRemote: async (projectId, organization, signal) => {
+    // The account is read when the mirror runs, not after the load.
+    const accountId = shelfListingAccount;
+    const shelf = await loadSealedShelf();
+    return shelf.mirrorShelfToAccount(
+      api,
+      accountId,
+      projectId,
+      organization,
+      encryptsAccountLibrary,
+      signal
+    );
+  }
 };
 const organizationBackground = new OrganizationMirrorBackground();
 
@@ -2243,6 +2287,20 @@ async function loadProjectSummaries(
   const keySessionRevision = getKeySessionRevision();
   const signedIn = accountId !== null;
   const scope = organizationBackground.begin(accountId);
+  shelfListingAccount = accountId;
+  // Whether this account's shelf state is sealed, asked beside the listing.
+  // Unanswerable reads as sealed here: the listing then shows the account's
+  // own edits, record and rows, and sends nothing readable on a guess.
+  const sealedShelfModule = accountId === null ? null : loadSealedShelf();
+  const sealedShelf =
+    accountId === null || sealedShelfModule === null
+      ? Promise.resolve(false)
+      : sealedShelfModule.then((shelf) =>
+          shelf.shelfSealedOrSafe(accountId, encryptsAccountLibrary)
+        );
+  // Awaited below; a listing that fails before then must not leave it
+  // rejected and unobserved.
+  void sealedShelf.catch(() => undefined);
   const unavailableAs =
     <T,>(fallback: T) =>
     (error: unknown): T => {
@@ -2305,7 +2363,33 @@ async function loadProjectSummaries(
       snapshot.organization
     ])
   );
-  const remoteProjects = remote?.projects ?? [];
+  let remoteProjects = remote?.projects ?? [];
+  let legacyShelf: ReadonlyMap<string, ProjectOrganization> = new Map();
+  let sealedListing = false;
+  const shelf = sealedShelfModule ? await sealedShelfModule : null;
+  if (accountId && !remote) {
+    // Unreached, the account still owns its shelf state: an encrypted (or
+    // unanswerable) library lists its known projects from its own edits,
+    // record and last-listed rows, never from this device's rows.
+    sealedListing = await sealedShelf;
+  } else if (accountId && remote && shelf) {
+    shelf.rememberAccountRows(accountId, remoteProjects);
+    if (await sealedShelf) {
+      sealedListing = true;
+      // The account's rows speak for the trash only (ADR-024 amendment
+      // 2026-11-14): pins, order and archive come from this account's
+      // unsynced edits, its sealed record, and once from readable state
+      // still on the rows, to migrate. Never from this device's rows, which
+      // every account signed in here shares.
+      const overlaid = shelf.overlaySealedShelf(
+        remoteProjects,
+        shelf.agreedShelfState(accountId),
+        shelf.readShelfEdits(accountId)
+      );
+      remoteProjects = overlaid.projects;
+      legacyShelf = overlaid.legacy;
+    }
+  }
   const remoteIds = new Set<string>(
     remoteProjects.map((project) => project.projectId)
   );
@@ -2341,6 +2425,10 @@ async function loadProjectSummaries(
         unavailableAs(localOrganizations)
       )
     : localOrganizations;
+  // Readable shelf state goes into the sealed record with the next folder
+  // sync, which then resets those account rows.
+  if (accountId && remote && sealedListing && shelf)
+    shelf.noteLegacyShelfRows(accountId, legacyShelf);
   const pendingEncryptedProjectIds = isCurrentKeySession(keySessionRevision)
     ? remote?.pendingEncryptedProjectIds
     : undefined;
@@ -2371,7 +2459,16 @@ async function loadProjectSummaries(
         pendingEncryptedProjectIds,
         local
       ),
-      settledOrganizations
+      // A sealed library's projects take only the trash from this device's
+      // rows, which another account signed in here may have left pending,
+      // whether or not the account's listing came back.
+      accountId && sealedListing && shelf
+        ? shelf.accountListingOrganizations(
+            accountId,
+            settledOrganizations,
+            remote ? remoteProjects : null
+          )
+        : settledOrganizations
     ),
     local,
     pendingEncryptedProjectIds
@@ -4291,6 +4388,12 @@ export function App() {
   } | null>(null);
   const workspaceModeRef = useRef<WorkspaceMode | null>(null);
   const exactEntryInputEnabledRef = useRef(false);
+  /**
+   * The in-place Extrude's bar could not load (online: its chunk is gone).
+   * A region's typed entry then has no arrow ever to open on, so it is not
+   * queued to retry for one.
+   */
+  const extrudeBarFailedRef = useRef(false);
   const exactEntryQueue = useRef(
     new DeferredExactEntry<{
       interaction: InteractionState;
@@ -4306,6 +4409,10 @@ export function App() {
         owner.tool === toolRef.current &&
         owner.workspaceMode === workspaceModeRef.current &&
         workspaceModeRef.current === 'build' &&
+        !(
+          extrudeBarFailedRef.current &&
+          interactionRef.current.mode === 'region'
+        ) &&
         exactEntryInputEnabledRef.current &&
         keypadRef.current === null &&
         !isTypingTarget(document.activeElement as HTMLElement | null),
@@ -4326,7 +4433,12 @@ export function App() {
       }
     })
   ).current;
-  useEffect(() => () => exactEntryQueue.cancel(), [exactEntryQueue]);
+  useEffect(
+    () => () => {
+      exactEntryQueue.cancel();
+    },
+    [exactEntryQueue]
+  );
   useEffect(
     () => () => {
       ++parameterEditRequest.current;
@@ -4612,6 +4724,131 @@ export function App() {
       ),
     [thumbnailAccountUserId]
   );
+  // Settings › Advanced › Regenerate project thumbnails: progress while it
+  // runs, and what the last run did.
+  const [thumbnailRegeneration, setThumbnailRegeneration] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const [thumbnailRegenerationNote, setThumbnailRegenerationNote] =
+    useState('');
+  // The run in progress and the session it belongs to. It stops — and its
+  // rebuild is cancelled — the moment a project opens or the account
+  // changes; a key session locking stops it at its next step.
+  const thumbnailRegenerationRun = useRef<{
+    accountId: string | null;
+    keyRevision: number;
+    controller: AbortController;
+  } | null>(null);
+  useEffect(() => {
+    const run = thumbnailRegenerationRun.current;
+    if (run && (doc !== null || run.accountId !== (session?.userId ?? null))) {
+      run.controller.abort();
+    }
+  }, [doc, session?.userId]);
+  useEffect(
+    () => () => thumbnailRegenerationRun.current?.controller.abort(),
+    []
+  );
+  /**
+   * Redraws every project's card on this device from its model, on request
+   * only. The shelf never loads a model to draw a card (see `loadThumbnail`);
+   * this is the deliberate exception, offered from the library so no open
+   * project's rebuild competes with it. It publishes nothing: the shelf's
+   * backfill sends a redrawn card the account lacks, as it does any other.
+   */
+  async function handleRegenerateThumbnails() {
+    if (thumbnailRegeneration || doc) return;
+    const list = projects;
+    const accountId = session?.userId ?? null;
+    const cloudIds = cloudProjectIds;
+    const run = {
+      accountId,
+      keyRevision: getKeySessionRevision(),
+      controller: new AbortController()
+    };
+    thumbnailRegenerationRun.current = run;
+    // One signal for every way the run ends, so the rebuild in flight is
+    // cancelled whichever way that was.
+    const active = () => {
+      if (
+        thumbnailRegenerationRun.current !== run ||
+        !isCurrentKeySession(run.keyRevision)
+      ) {
+        run.controller.abort();
+      }
+      return !run.controller.signal.aborted;
+    };
+    let done = 0;
+    setThumbnailRegeneration({ done: 0, total: list.length });
+    try {
+      const [
+        { regenerateProjectThumbnails, ThumbnailRegenerationStopped },
+        { renderPartThumbnail }
+      ] = await Promise.all([
+        import('./lib/projectThumbnailRegeneration'),
+        import('./lib/partThumbnail')
+      ]);
+      const result = await regenerateProjectThumbnails(list, {
+        active,
+        loadLocal: loadLocalProject,
+        ...(session
+          ? {
+              loadAccount: (projectId: string) =>
+                cloudIds.has(projectId)
+                  ? api.loadProject(projectId)
+                  : Promise.reject(new Error('Not stored in the account.'))
+            }
+          : {}),
+        rebuild: (document) =>
+          geometry.syncOnce(document, undefined, undefined, {
+            signal: run.controller.signal
+          }),
+        render: renderPartThumbnail,
+        // Fenced inside the store's transaction, after its waits.
+        save: (projectId, thumbnail) =>
+          saveProjectThumbnail(projectId, thumbnail, { shouldWrite: active }),
+        drawn: (project, source) =>
+          rememberCapturedThumbnail({
+            projectId: project.projectId,
+            source,
+            accountId,
+            protected: isEncryptedProject(project.projectId)
+          }),
+        progress: (count, total) => {
+          done = count;
+          if (active()) setThumbnailRegeneration({ done: count, total });
+        }
+      }).catch((error: unknown) => {
+        if (error instanceof ThumbnailRegenerationStopped) return null;
+        throw error;
+      });
+      if (!result) {
+        const note = `Stopped after ${done} of ${list.length} project cards: a project was opened, the account changed, or encrypted projects were locked.`;
+        setThumbnailRegenerationNote(note);
+        return;
+      }
+      const note = [
+        `Redrew ${result.redrawn} ${result.redrawn === 1 ? 'project card' : 'project cards'}.`,
+        ...(result.skipped > 0
+          ? [
+              `${result.skipped} kept ${result.skipped === 1 ? 'its' : 'their'} card: unreadable here, not rebuilt, or unchanged.`
+            ]
+          : [])
+      ].join(' ');
+      setThumbnailRegenerationNote(note);
+      setStatus(note);
+    } catch (error) {
+      const note = errorMessage(error, 'Could not redraw the project cards.');
+      setThumbnailRegenerationNote(note);
+      setStatus(note);
+    } finally {
+      if (thumbnailRegenerationRun.current === run) {
+        thumbnailRegenerationRun.current = null;
+      }
+      setThumbnailRegeneration(null);
+    }
+  }
   const loadProperties = useCallback(
     async (project: ProjectSummary) => {
       const { loadProjectProperties } = await import('./lib/projectProperties');
@@ -7201,7 +7438,7 @@ export function App() {
       navigationBusyRef.current === null &&
       pendingOrganizations.current.size === 0 &&
       sessionRef.current?.userId === accountId;
-    const stop = watchLibraryFreshness(async () => {
+    const refresh = async () => {
       if (!settled()) return;
       const before = latestProjects.current;
       // A listing read while a card upload finalizes names the card it
@@ -7221,10 +7458,22 @@ export function App() {
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(true);
       setCloudAvailable(true);
-    });
+    };
+    const stop = watchLibraryFreshness(refresh);
+    // A sealed shelf sync changed the account's agreed pins, order or
+    // archive: list them now rather than at the next poll.
+    const applied = (event: Event) => {
+      if (
+        (event as CustomEvent<{ accountId?: string }>).detail?.accountId ===
+        accountId
+      )
+        void refresh();
+    };
+    window.addEventListener(SEALED_SHELF_APPLIED_EVENT, applied);
     return () => {
       cancelled = true;
       stop();
+      window.removeEventListener(SEALED_SHELF_APPLIED_EVENT, applied);
     };
   }, [cloudFunctionsEnabled, libraryShown, session?.userId]);
 
@@ -8487,6 +8736,37 @@ export function App() {
       doc && extrudeEdit ? findFeature(doc, extrudeEdit.featureId) : null;
     return feature?.data.featureKind === 'extrude' ? feature : null;
   }, [doc, extrudeEdit]);
+  // The in-place Extrude's bar loads on demand. Until it is there, a picked
+  // region shows no arrow, chip or handle: a drag, a chip tap or a handle
+  // has no bar to set yet, and holding one for it could reach the wrong
+  // region. Typed entry waits on the arrow as it always has (the deferred
+  // exact entry retries), and Escape closes that waiting entry first.
+  const [extrudeBarArrived, setExtrudeBarArrived] = useState(false);
+  const extrudeBarReady = extrudeBarArrived || ExtrudeCommand.isLoaded();
+  const extrudeBarWanted =
+    interaction.mode === 'region' || extrudeEditFeature !== null;
+  useEffect(() => {
+    if (extrudeBarReady || !extrudeBarWanted) return;
+    let current = true;
+    // Offline it waits for the connection; a failure online is final for
+    // this deploy, and the bar's own slot says it did not load.
+    loadRetryingOnReconnect(() => ExtrudeCommand.preload()).then(
+      () => {
+        extrudeBarFailedRef.current = false;
+        if (current) setExtrudeBarArrived(true);
+      },
+      () => {
+        if (!current) return;
+        extrudeBarFailedRef.current = true;
+        // An entry typed while it loaded will never find its arrow: stop
+        // waiting for it rather than retry every frame.
+        exactEntryQueue.cancel();
+      }
+    );
+    return () => {
+      current = false;
+    };
+  }, [extrudeBarReady, extrudeBarWanted, exactEntryQueue]);
   /** What it opens on: memoized, so its to-face target keeps its identity. */
   const extrudeEditInitialDraft = useMemo(
     () => (extrudeEditFeature ? extrudeEditInitial(extrudeEditFeature) : null),
@@ -14786,6 +15066,8 @@ export function App() {
     projectId: string,
     update: (current: ProjectOrganization) => ProjectOrganization
   ): Promise<ProjectOrganization> {
+    // The account that made the edit, read before it waits for anything.
+    const editAccount = sessionRef.current?.userId ?? null;
     const organization = await queueShelfWrite(async () => {
       const project = latestProjects.current.find(
         (entry) => entry.projectId === projectId
@@ -14798,7 +15080,7 @@ export function App() {
       // reconcile pushes a flagged row and adopts the account's otherwise,
       // so the flag is what keeps a change alive across a failed mirror
       // without letting this device overrule every other one forever.
-      await saveShelfRows(new Map([[projectId, next]]));
+      await saveShelfRows(new Map([[projectId, next]]), editAccount);
       return next;
     });
     if (session) {
@@ -14824,26 +15106,50 @@ export function App() {
    * write, so no other shelf write is in flight: a failure drops just these
    * rows, and the rows before them are already on the shelf.
    */
-  async function saveShelfRows(rows: Map<string, ProjectOrganization>) {
+  async function saveShelfRows(
+    rows: Map<string, ProjectOrganization>,
+    editAccount: string | null
+  ) {
+    // Loaded before anything changes, so a failed load leaves the shelf as
+    // it was, like a failed write.
+    const shelf = await loadSealedShelf();
+    const edit = shelf.beginShelfEdit(() => editAccount);
+    const before = new Map(
+      [...rows.keys()].map((projectId) => [
+        projectId,
+        pendingOrganizations.current.get(projectId) ??
+          projectOrganization(
+            latestProjects.current.find(
+              (project) => project.projectId === projectId
+            ) ?? {}
+          )
+      ])
+    );
     for (const [projectId, organization] of rows) {
       pendingOrganizations.current.set(projectId, organization);
     }
-    try {
-      await Promise.all(
-        [...rows].map(([projectId, organization]) =>
-          saveLocalProjectOrganization(projectId, organization, {
-            mirrorPending: true
-          })
-        )
-      );
-    } catch (error) {
-      for (const [projectId, organization] of rows) {
-        if (pendingOrganizations.current.get(projectId) === organization) {
-          pendingOrganizations.current.delete(projectId);
+    // The edit also waits for the account's sealed library record, which
+    // carries pins, order and archive of an account whose library is
+    // encrypted; a plaintext library's sync forgets it again. It is the
+    // account that made the edit, even if the session changed meanwhile.
+    const journaled = await edit.persist(before, rows, async () => {
+      try {
+        await Promise.all(
+          [...rows].map(([projectId, organization]) =>
+            saveLocalProjectOrganization(projectId, organization, {
+              mirrorPending: true
+            })
+          )
+        );
+      } catch (error) {
+        for (const [projectId, organization] of rows) {
+          if (pendingOrganizations.current.get(projectId) === organization) {
+            pendingOrganizations.current.delete(projectId);
+          }
         }
+        throw error;
       }
-      throw error;
-    }
+    });
     setProjects((current) =>
       current
         .map((project) => {
@@ -14852,6 +15158,18 @@ export function App() {
         })
         .sort(compareProjectSummaries)
     );
+    // An encrypted library's pin, order and archive reach the account only
+    // through the journal. Storage refused it, so the edit lasts until the
+    // tab closes unless the library syncs first: say so instead of letting
+    // the next listing quietly restore the old shelf.
+    if (!journaled && shelf.isShelfSealed(edit.accountId)) {
+      const message =
+        'Saved for now only: this browser would not store the change, so keep this tab open until your library syncs, or it will be lost.';
+      setStatus(message);
+      if (onStartScreenRef.current) {
+        announce(message, undefined, { tone: 'warning' });
+      }
+    }
   }
 
   /**
@@ -15101,6 +15419,7 @@ export function App() {
     pin?: { projectId: string; pinned: boolean }
   ): Promise<void> {
     const positions = new Map(projectIds.map((id, index) => [id, index]));
+    const editAccount = sessionRef.current?.userId ?? null;
     let pinnedName: string | undefined;
     try {
       pinnedName = await queueShelfWrite(async () => {
@@ -15122,7 +15441,7 @@ export function App() {
               ];
             })
         );
-        await saveShelfRows(rows);
+        await saveShelfRows(rows, editAccount);
         return pin
           ? latestProjects.current.find(
               (project) => project.projectId === pin.projectId
@@ -15147,12 +15466,13 @@ export function App() {
         projectIds,
         organizationMirrorHost,
         async (ids) =>
-          (
-            await api.reorderProjects(
-              { projectIds: ids.map(toProjectId) },
-              organizationScope.signal
-            )
-          ).projects,
+          (await loadSealedShelf()).reorderShelfOnAccount(
+            api,
+            session.userId,
+            ids,
+            encryptsAccountLibrary,
+            organizationScope.signal
+          ),
         undefined,
         organizationScope
       ).catch(() => undefined);
@@ -15307,17 +15627,47 @@ export function App() {
           if (!isEncryptedProject(project.projectId)) {
             await copyDuplicateSaveStates(project.projectId, localCopy);
           }
-          if (response.project.organization) {
+          // A sealed shelf keeps the copy beside its source on this device
+          // (and in the sealed record); the account row holds the default.
+          const shelf =
+            response.project.organization && session
+              ? await loadSealedShelf().catch(() => null)
+              : null;
+          const copyOrganization =
+            response.project.organization &&
+            shelf?.isShelfSealed(session?.userId)
+              ? {
+                  ...response.project.organization,
+                  sortOrder: projectOrganization(project).sortOrder
+                }
+              : response.project.organization;
+          if (copyOrganization) {
             await saveLocalProjectOrganization(
               response.project.projectId,
-              response.project.organization
+              copyOrganization
             ).catch(() => undefined);
+            if (
+              session &&
+              shelf &&
+              copyOrganization !== response.project.organization
+            )
+              shelf.journalShelfEdit(
+                session.userId,
+                response.project.projectId,
+                DEFAULT_PROJECT_ORGANIZATION,
+                copyOrganization
+              );
           }
           await seedCopyThumbnail(localSource ?? localCopy, localCopy);
           // Measured on what the account now holds: uploading the copy's
           // images saves a version after the one the response describes, and
           // an encrypted account's response carries no size at all.
-          const copyRow = withSavedVersion(response.project, copied);
+          const copyRow = withSavedVersion(
+            copyOrganization
+              ? { ...response.project, organization: copyOrganization }
+              : response.project,
+            copied
+          );
           setProjects((current) =>
             [...current, copyRow].sort(compareProjectSummaries)
           );
@@ -23598,6 +23948,9 @@ export function App() {
   useEffect(() => {
     if (!keypadWithinReach || prefersSavingData()) return;
     LazyNumericKeypad.preload().catch(() => undefined);
+    // The command bars a sketch region or running command opens next.
+    InPlaceCommandBar.preload().catch(() => undefined);
+    ExtrudeCommand.preload().catch(() => undefined);
   }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
@@ -24241,7 +24594,7 @@ export function App() {
   const regionExtrudeLastValue =
     interaction.mode === 'region' ? (interaction.lastValue ?? 0) : 0;
   const regionExtrudeHandles = useMemo(() => {
-    if (inPlace.active) return [];
+    if (inPlace.active || !extrudeBarReady) return [];
     // An edit's region is its stored profile (the sketch's first region for
     // one stored before profiles); a new extrude's, the one its arrow is on.
     const edited =
@@ -24334,6 +24687,7 @@ export function App() {
     regionExtrudeState,
     extrudeEditFeature,
     inPlace.active,
+    extrudeBarReady,
     availableSketchViews,
     inPlaceUnits
   ]);
@@ -27754,6 +28108,7 @@ export function App() {
     const nextTarget: FaceTarget = {
       ...stableTarget,
       topologyId: moved.topologyId,
+      movedFrom: target.topologyId,
       hash: moved.hash,
       ...(moved.reference ? { reference: moved.reference } : {}),
       point: shift(target.point),
@@ -30382,7 +30737,17 @@ export function App() {
       if (!doc) {
         return;
       }
-      if (event.key === 'Escape') exactEntryQueue.cancel();
+      // An exact entry still waiting for its arrow (the Extrude bar loading)
+      // is the entry Escape closes first, as an open one is: the armed
+      // region stays.
+      if (
+        event.key === 'Escape' &&
+        exactEntryQueue.cancel() &&
+        interaction.mode === 'region'
+      ) {
+        event.preventDefault();
+        return;
+      }
       // Hide all keeps the layout; the panels are Build's, so View and
       // Tweak leave it as it is.
       if (global === 'panels-hide-all') {
@@ -30810,6 +31175,10 @@ export function App() {
       );
       if (exactEntry) {
         event.preventDefault();
+        if (interaction.mode === 'region' && extrudeBarFailedRef.current) {
+          setStatus(EXTRUDE_ENTRY_UNAVAILABLE);
+          return;
+        }
         exactEntryQueue.push(
           {
             interaction,
@@ -31354,6 +31723,9 @@ export function App() {
           onApplyViewportDefaults={applyViewportDefaults}
           onExportDiagnostics={handleExportDiagnostics}
           onExportInteractionLog={() => void handleExportInteractionLog()}
+          onRegenerateThumbnails={() => void handleRegenerateThumbnails()}
+          thumbnailRegeneration={thumbnailRegeneration}
+          thumbnailRegenerationNote={thumbnailRegenerationNote}
           onDismissProjectInvitation={dismissProjectInvitation}
           onClose={closeSettings}
         />
@@ -33398,6 +33770,9 @@ export function App() {
             editableBodyIds={
               parameterPreview ? EMPTY_BODY_IDS : viewerEditableBodyIds
             }
+            // The armed Extrude owns dragging from the moment it is armed,
+            // not from when its bar (and with it, its handles) has loaded.
+            dragsHeldByCommand={extrudeBarWanted}
             movePreview={movePreview}
             moveCommitHold={moveCommitHold}
             appearancePreview={bodyAppearancePreview}
@@ -33884,7 +34259,9 @@ export function App() {
             }
             onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
-            regionHandle={modelingLocked ? null : regionHandleTarget}
+            regionHandle={
+              modelingLocked || !extrudeBarReady ? null : regionHandleTarget
+            }
             modelPanelsHidden={panelsHidden}
             axisPicker={modelingLocked ? null : inPlaceAxisPicker}
             onPickAxis={inPlace.pickAxis}
@@ -34984,9 +35361,11 @@ export function App() {
             promptResting={workspacePrompt === idleHint}
             instructionDetails={
               displayedGeometryComplete && offsetHandleTarget
-                ? offsetHandleTarget.totalBaseline === undefined
-                  ? 'Total measures from this face to the flat face opposite it behind the picked point. Holes, fillets and chamfers are not counted; a stepped face can read differently where you pick. Offset shows only the signed distance of this edit.'
-                  : 'Total shows the feature dimension. Offset shows only the signed distance of this edit.'
+                ? `Offset is how far this edit moves the face, + out, − in. ${
+                    offsetHandleTarget.totalBaseline === undefined
+                      ? 'Where a flat face lies opposite, the tag switches to Total: the distance from this face to that face behind the picked point. Holes, fillets and chamfers are not counted; a stepped face can read differently where you pick.'
+                      : 'Switch the tag to Total to read the feature dimension.'
+                  }`
                 : null
             }
             pick={

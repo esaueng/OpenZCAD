@@ -293,8 +293,11 @@ describe('copies', () => {
       projectId: copyId,
       name: 'Secret bracket (copy)',
       storageFormat: 2,
-      // Next to its source on the shelf, as a plaintext copy lands.
-      organization: { status: 'active', sortOrder: 7 }
+      // The account holds an encrypted project, so its shelf order is
+      // sealed (ADR-024 amendment 2026-11-14): the row keeps the default
+      // even though the source's row still holds a readable 7, and the
+      // browser places the copy beside its source in the sealed record.
+      organization: { status: 'active', sortOrder: 0 }
     });
     // Nothing was encrypted or uploaded again: no upload session, no blob
     // upload, only the create.

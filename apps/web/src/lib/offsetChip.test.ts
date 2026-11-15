@@ -10,40 +10,182 @@ import {
   offsetTotalReading,
   rearmedChipMode,
   regionChipState,
-  valueInsideLimit
+  continuesOffsetFace,
+  valueInsideLimit,
+  type OffsetChipState
 } from './offsetChip';
 
 describe('offset chip', () => {
-  it('reads any face with a span as its total, and only a spanless one as the change', () => {
-    expect(faceOffsetChipState(20, 10)).toEqual({ mode: 'total', extent: 10 });
+  // Owner decision 2026-11-14, after QA finding #9: a face offset starts on
+  // the signed move, so a typed 5 moves the face 5. Total stays one switch
+  // away wherever there is a span to read.
+  it('starts every face on the signed offset, offering Total where a span is known', () => {
+    expect(faceOffsetChipState(20, 10)).toEqual({
+      mode: 'offset',
+      extent: 10,
+      totalAvailable: true
+    });
     // A face that is not a primitive's own still reads the span to the plane
-    // opposite it: Total is the default, not just a primitive resize's.
+    // opposite it, so Total is offered there too.
     expect(faceOffsetChipState(undefined, 10)).toEqual({
-      mode: 'total',
-      extent: 10
+      mode: 'offset',
+      extent: 10,
+      totalAvailable: true
     });
     expect(faceOffsetChipState(20, null)).toEqual({
-      mode: 'total',
-      extent: null
+      mode: 'offset',
+      extent: null,
+      totalAvailable: true
     });
     expect(faceOffsetChipState(undefined, null)).toEqual({
       mode: 'offset',
-      extent: null
+      extent: null,
+      totalAvailable: false
     });
   });
 
-  it('keeps the chosen reading while the same face re-arms', () => {
+  it('reads a typed 5 on a 24 mm top face as a 5 mm move, not a 5 mm total', () => {
+    // QA 2026-11-14 finding #9: the Total default turned 5 into a −19 move.
+    const state = faceOffsetChipState(24, null);
+    expect(
+      offsetChipText({
+        rawValue: 5,
+        mode: state.mode,
+        span: 24,
+        sense: 1,
+        units: 'mm'
+      })
+    ).toBe('+5 mm');
+    expect(
+      offsetTotalReading({ rawValue: 5, mode: state.mode, span: 24, sense: 1 })
+    ).toBeNull();
+  });
+
+  it('reads the switch on the face it was made on, and the default elsewhere', () => {
     // The defect: opening exact entry re-derives the handle, and the re-armed
-    // rig reset a switched-to Offset back to Total under an Offset keypad.
+    // rig reset a switched mode back to the default under an open keypad.
     const fresh = faceOffsetChipState(undefined, 17);
     expect(rearmedChipMode(fresh, 'offset', true)).toBe('offset');
     expect(rearmedChipMode(fresh, 'total', true)).toBe('total');
-    // Another face starts from its own default.
-    expect(rearmedChipMode(fresh, 'offset', false)).toBe('total');
-    // Nothing to read Total from: the change, whatever was chosen.
+    // Another face starts from its own default, whatever was chosen.
+    expect(rearmedChipMode(fresh, 'total', false)).toBe('offset');
+    // A primitive's own dimension is a span to keep Total for, too.
+    expect(rearmedChipMode(faceOffsetChipState(24, null), 'total', true)).toBe(
+      'total'
+    );
+    // Nothing to read Total from (the analysis catching up): the change. The
+    // choice is not consumed, so the next re-arm with a span reads it again.
     expect(
       rearmedChipMode(faceOffsetChipState(undefined, null), 'total', true)
     ).toBe('offset');
+  });
+
+  describe('which face a Total switch belongs to', () => {
+    const up = { x: 0, y: 0, z: 1 };
+    // The shoulder fixture: a 26 mm shoulder and, above it, a 35 mm cap of
+    // the same body, both facing up.
+    const shoulder = {
+      bodyId: 'body-1',
+      topologyId: 'face:7',
+      point: { x: 20, y: 14, z: 26 },
+      normal: up
+    };
+
+    it('keeps it on the same face, wherever on it the pick lands', () => {
+      expect(continuesOffsetFace(shoulder, shoulder)).toBe(true);
+      expect(
+        continuesOffsetFace(shoulder, {
+          ...shoulder,
+          point: { x: 3, y: -8, z: 26 }
+        })
+      ).toBe(true);
+    });
+
+    it('does not carry it to another face that faces the same way', () => {
+      // Review of #1533: the 26 mm shoulder switched to Total, then the
+      // separate 35 mm cap read "Total 35 mm", so a typed 5 moved it −30.
+      expect(
+        continuesOffsetFace(shoulder, {
+          ...shoulder,
+          topologyId: 'face:9',
+          point: { x: 0, y: 0, z: 35 }
+        })
+      ).toBe(false);
+      // Two coplanar, disconnected faces of one part (the tops of a U's arms).
+      expect(
+        continuesOffsetFace(shoulder, {
+          ...shoulder,
+          topologyId: 'face:11',
+          point: { x: -20, y: 14, z: 26 }
+        })
+      ).toBe(false);
+      // Facing another way, or on another body.
+      expect(
+        continuesOffsetFace(shoulder, {
+          ...shoulder,
+          normal: { x: 0, y: 0, z: -1 }
+        })
+      ).toBe(false);
+      expect(
+        continuesOffsetFace(shoulder, { ...shoulder, bodyId: 'body-2' })
+      ).toBe(false);
+    });
+
+    it('does not trust a face id the topology handed to another face', () => {
+      expect(
+        continuesOffsetFace(shoulder, {
+          ...shoulder,
+          point: { x: 20, y: 14, z: 35 }
+        })
+      ).toBe(false);
+    });
+
+    it('follows the face only where the commit says it moved it', () => {
+      const moved = {
+        ...shoulder,
+        topologyId: 'face:12',
+        point: { x: 20, y: 14, z: 31 }
+      };
+      expect(
+        continuesOffsetFace(shoulder, { ...moved, movedFrom: 'face:7' })
+      ).toBe(true);
+      // Without the commit's word, a renumbered face on a new plane is not it.
+      expect(continuesOffsetFace(shoulder, moved)).toBe(false);
+      // Another face the commit moved is not this one either.
+      expect(
+        continuesOffsetFace(shoulder, { ...moved, movedFrom: 'face:9' })
+      ).toBe(false);
+    });
+
+    it('keeps it on the moved face once the switch has followed it there', () => {
+      // Review of #1533: after the commit the switch belongs to the moved
+      // face, whose target still names the face it came from; reopening
+      // entry and cancelling re-armed it and the chip fell back to Offset.
+      const moved = {
+        ...shoulder,
+        topologyId: 'face:12',
+        point: { x: 20, y: 14, z: 27 }
+      };
+      expect(
+        continuesOffsetFace(moved, { ...moved, movedFrom: 'face:7' })
+      ).toBe(true);
+      // Still not another face, nor the moved id on another plane.
+      expect(
+        continuesOffsetFace(moved, {
+          ...moved,
+          topologyId: 'face:9',
+          point: { x: 0, y: 0, z: 35 },
+          movedFrom: 'face:7'
+        })
+      ).toBe(false);
+      expect(
+        continuesOffsetFace(moved, {
+          ...moved,
+          point: { x: 20, y: 14, z: 35 },
+          movedFrom: 'face:7'
+        })
+      ).toBe(false);
+    });
   });
 
   it('reads Total as the span plus the signed offset', () => {
@@ -71,9 +213,16 @@ describe('offset chip', () => {
     // The defect: a region rig reused the face rig's chip refs, so after a
     // face offset left Total mode and a 10 mm span behind, a −5 mm region
     // drag read "5 mm" under a Total tag.
-    const stale = faceOffsetChipState(20, 10);
+    const stale: OffsetChipState = {
+      ...faceOffsetChipState(20, 10),
+      mode: 'total'
+    };
     const region = regionChipState();
-    expect(region).toEqual({ mode: 'offset', extent: null });
+    expect(region).toEqual({
+      mode: 'offset',
+      extent: null,
+      totalAvailable: false
+    });
     const reading = (state: typeof stale) =>
       offsetChipText({
         rawValue: -5,

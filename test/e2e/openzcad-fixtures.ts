@@ -1475,6 +1475,29 @@ export async function pickPlanarFace(
 }
 
 /**
+ * Switches an armed face offset's chip to Total, the size the face sets.
+ * A face starts on Offset, the signed move (owner decision after QA
+ * 2026-11-14 finding #9); a spec about the Total reading or a typed Total
+ * takes the tag's switch first, as a user does. A no-op once on Total.
+ */
+export async function switchFaceOffsetToTotal(page: Page) {
+  const tag = page.getByTestId('direct-manipulation-mode');
+  await expect(tag).toHaveText(/^(Total|Offset)/);
+  // The switch is offered once the face's span is read; a pick whose body
+  // analysis is still landing takes the click a moment later.
+  await expect(async () => {
+    if (/^Offset/.test(await tag.innerText())) await tag.click();
+    await expect(tag).toHaveText(/^Total/, { timeout: 1000 });
+    // A Total reads the span itself; "+0 mm" is the change, shown while
+    // there is no span to read yet.
+    await expect(page.getByTestId('direct-manipulation-value')).not.toHaveText(
+      /^\+/,
+      { timeout: 1000 }
+    );
+  }).toPass({ timeout: 15_000 });
+}
+
+/**
  * Types `value` into an in-place command's value through its chip's keypad
  * (U09): the only typing an in-place command takes.
  */
