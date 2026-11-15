@@ -37,11 +37,25 @@ separate merge-group run. Compare PR and queue timing cohorts by kernel and
 selection mode. A green PR run is not evidence that a queue candidate passed,
 and no specific merge-time improvement is guaranteed before measurement.
 
-CodeQL remains on default setup. A later language-routing migration must prove
-that advanced setup retains compatible JS overlay acceleration, source/query
-coverage, language-category annotations and update maintenance before changing
-the scanner setting. The sampled Rust work is only a candidate gross saving;
-CodeQL is advisory under the current required checks. Lint project-service
-tuning, full-suite coverage cadence and further baseline reductions likewise
-need their own measurements. No deployment or database migration is part of
+CodeQL runs from `codeql.yml` (advanced setup) on pushes to `main`, weekly and
+on manual dispatch; default setup is off. It is advisory, and on default setup
+it analysed every pull-request push: four language jobs at a median of ten
+minutes, competing with the required checks for hosted runners. The workflow
+keeps default setup's languages (`actions`, `javascript-typescript`, `python`,
+`rust`), default query suite and `/language:<name>` categories, so existing
+alerts stay matched; Dependabot's monthly `github-actions` update maintains the
+pinned action. The tradeoff is that a finding appears after its change lands on
+`main` rather than as a pull-request annotation. Pull-request overlay
+acceleration no longer applies. Re-enabling default setup while this workflow
+exists makes its uploads fail, so remove the workflow first.
+
+History privacy audits a pull-request head once, from `pull_request_target`.
+The unprivileged requester no longer asks for a second audit of the same
+commit on every branch push; it runs for `main`, tags and queue candidates
+(see [the privacy checks](../.github/privacy/README.md)).
+
+Lint project-service tuning, full-suite coverage cadence and further baseline
+reductions need their own measurements. Multi-threaded lint is not an option
+on hosted runners: one type-aware ESLint process peaks near 6 GB, and each
+thread builds its own program. No deployment or database migration is part of
 this update.

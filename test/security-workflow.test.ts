@@ -23,6 +23,7 @@ describe('workflow runner policy', () => {
       'daily-validation.yml': Array(4).fill('ubuntu-24.04'),
       'kernel-pin.yml': ['ubuntu-24.04'],
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
+      'codeql.yml': ['ubuntu-24.04'],
       'macos-desktop.yml': ['macos-26'],
       'desktop-native.yml': ['ubuntu-latest'],
       'mls-wasm.yml': ['ubuntu-latest'],
