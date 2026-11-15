@@ -106,6 +106,53 @@ describe('AssemblyPanel (one left sidebar)', () => {
     );
   });
 
+  it('toggles the exploded view and resets every offset in one step (AS03)', () => {
+    const fixture = scissorsManager({ joint: true });
+    const { commands, rerender, onStatus } = renderPanel(fixture);
+    const section = screen.getByRole('region', { name: 'Exploded view' });
+    const assembled = within(section).getByRole('button', {
+      name: 'Assembled'
+    });
+    const exploded = within(section).getByRole('button', { name: 'Exploded' });
+    expect(assembled).toHaveAttribute('aria-pressed', 'true');
+    expect(section).toHaveTextContent('No part is pulled out yet.');
+    expect(within(section).queryByRole('button', { name: 'Reset' })).toBeNull();
+    fireEvent.click(exploded);
+    expect(getAssemblyRuntime().exploded).toBe(true);
+    expect(exploded).toHaveAttribute('aria-pressed', 'true');
+    expect(section).toHaveTextContent(
+      'Drag a part to pull it out along X, Y or Z.'
+    );
+    expect(onStatus).toHaveBeenLastCalledWith(
+      'Exploded view · drag a part to pull it out along X, Y or Z.'
+    );
+
+    // A drag on the model commits through the runtime.
+    fixture.manager.execute(
+      commandFactories.setAssemblyExplode({
+        offsets: { comp_b: { x: 0, y: 0, z: 20 } }
+      })
+    );
+    rerender();
+    expect(section.querySelector('.assembly-count')).toHaveTextContent('1');
+    expect(section).toHaveTextContent('1 part pulled out; drag to move.');
+    fireEvent.click(within(section).getByRole('button', { name: 'Reset' }));
+    expect(commands.at(-1)).toEqual({
+      kind: 'assembly.explode.set',
+      payload: { reset: true, offsets: {} }
+    });
+    rerender();
+    expect(fixture.live().assembly?.explode).toBeUndefined();
+    expect(onStatus).toHaveBeenLastCalledWith('Every part is back in place.');
+    fixture.manager.undo();
+    rerender();
+    expect(fixture.live().assembly?.explode?.offsets).toEqual({
+      comp_b: { x: 0, y: 0, z: 20 }
+    });
+    fireEvent.click(within(section).getByRole('button', { name: 'Assembled' }));
+    expect(getAssemblyRuntime().exploded).toBe(false);
+  });
+
   it('picks a BOM row’s parts and lights the row of a part picked elsewhere (AS03)', () => {
     const fixture = scissorsManager({ joint: true });
     const { rerender } = renderPanel(fixture);

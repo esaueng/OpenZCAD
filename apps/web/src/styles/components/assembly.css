@@ -995,6 +995,20 @@
   gap: var(--sp-1);
 }
 
+/* ── Exploded view (AS03) ────────────────────────────── */
+
+.assembly-explode {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.assembly-explode > .assembly-muted {
+  flex: 1 1 100%;
+  margin: 0;
+}
+
 .assembly-segmented {
   display: inline-flex;
   padding: 2px;

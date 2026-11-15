@@ -77,6 +77,15 @@ function hasCouplings(assembly: unknown): boolean {
   return record(assembly) && assembly.couplings !== undefined;
 }
 
+/** AS03 exploded view: `assembly.explode` and its command. */
+export function assertAssemblyExplodeSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 61, 'Exploded views');
+}
+
+function hasExplode(assembly: unknown): boolean {
+  return record(assembly) && assembly.explode !== undefined;
+}
+
 export function assertSketchObjectContentSchema(
   data: SketchObjectData,
   version: unknown,
@@ -146,6 +155,8 @@ export function assertDocumentContentCommandSchema(
       command.kind.startsWith('assembly.coupling.')
     )
       assertAssemblyCouplingSchema(document.schemaVersion);
+    if (command.kind === 'assembly.explode.set')
+      assertAssemblyExplodeSchema(document.schemaVersion);
     if (command.kind === 'feature.sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
     if (command.kind === 'printClearance.set')
@@ -210,6 +221,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
     assertAssemblySchema(document.schemaVersion);
   if (hasCouplings(document.assembly))
     assertAssemblyCouplingSchema(document.schemaVersion);
+  if (hasExplode(document.assembly))
+    assertAssemblyExplodeSchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
     for (const change of entry.changes)
       if (change.field === 'assembly') {
@@ -217,6 +230,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
           assertAssemblySchema(document.schemaVersion);
         if (hasCouplings(change.before) || hasCouplings(change.after))
           assertAssemblyCouplingSchema(document.schemaVersion);
+        if (hasExplode(change.before) || hasExplode(change.after))
+          assertAssemblyExplodeSchema(document.schemaVersion);
       }
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch-object')

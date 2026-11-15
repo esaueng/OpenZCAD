@@ -19,6 +19,8 @@ export function useAssemblyView(
   const selectedJointId = useAssemblyRuntime((s) => s.selectedJointId);
   const jointTool = useAssemblyRuntime((s) => s.jointTool);
   const motionSetup = useAssemblyRuntime((s) => s.motionSetup);
+  const exploded = useAssemblyRuntime((s) => s.exploded);
+  const explodeOverrides = useAssemblyRuntime((s) => s.explodeOverrides);
   return useMemo(() => {
     if (!active || !document) return null;
     const representations = document.derived.bodyRepresentations;
@@ -35,7 +37,9 @@ export function useAssemblyView(
         placementOverrides,
         selectedJointId,
         jointTool,
-        motionSetup
+        motionSetup,
+        exploded,
+        explodeOverrides
       },
       isLive
     );
@@ -47,6 +51,8 @@ export function useAssemblyView(
     placementOverrides,
     selectedJointId,
     jointTool,
-    motionSetup
+    motionSetup,
+    exploded,
+    explodeOverrides
   ]);
 }

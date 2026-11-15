@@ -407,6 +407,11 @@ export function useAssembleWorkspace(
       },
       createJoint(tool) {
         createJointFromTool(latest.current, tool);
+      },
+      commitExplode(offsets) {
+        latest.current.execute(
+          commandFactories.setAssemblyExplode({ offsets })
+        );
       }
     });
     return () => registerAssemblyCommitHandlers(null);

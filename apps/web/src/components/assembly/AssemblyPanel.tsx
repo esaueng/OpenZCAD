@@ -59,6 +59,7 @@ import {
   ComponentDetails,
   JointDetails
 } from './AssemblyDetails';
+import { AssemblyExplodedSection } from './AssemblyExplodedSection';
 import { AssemblyNameField } from './AssemblyNameField';
 import {
   AddStudyButton,
@@ -778,6 +779,19 @@ function AssemblyLists({
               />
             </Section>
           ))}
+
+        {set.components.length > 0 ? (
+          <Section
+            title="Exploded view"
+            count={Object.keys(set.explode?.offsets ?? {}).length}
+          >
+            <AssemblyExplodedSection
+              set={set}
+              execute={execute}
+              onStatus={onStatus}
+            />
+          </Section>
+        ) : null}
 
         <Section
           title="Bill of materials"

@@ -1,7 +1,8 @@
 # Assemblies: components, joints, actuation and animation
 
 Owner rows: [AS01](../../ROADMAP.md#as01), [AS02](../../ROADMAP.md#as02),
-[AS06](../../ROADMAP.md#as06), [AS07](../../ROADMAP.md#as07), with
+[AS03](../../ROADMAP.md#as03), [AS06](../../ROADMAP.md#as06),
+[AS07](../../ROADMAP.md#as07), with
 [AS08](../../ROADMAP.md#as08) and [AS09](../../ROADMAP.md#as09) following.
 ROADMAP.md owns status; this document owns the contract.
 
@@ -172,6 +173,45 @@ relates values, it never closes a kinematic loop.
 Commands: `assembly.coupling.add` (without an offset it holds the current
 pose), `assembly.coupling.update`, `assembly.coupling.delete`.
 
+### Exploded view (schema v61)
+
+`assembly.explode?: { offsets: Record<componentId, Vector3> }`: absent
+means no part is pulled out, so every older assembly reads unchanged. An
+offset is a world translation in the placements' length unit, applied after
+the component's solved pose (`T(offset) · pose`), so a part slides straight
+out along the drag however its joints turned it.
+
+- **Presentation only.** Offsets never enter the joint solve, couplings,
+  playback, the BOM or any rebuild. Showing the assembly exploded is a view
+  toggle (Assembled / Exploded in the sidebar), never saved; leaving
+  Assemble, the joint tool, Set up motion and Place gears return to the
+  assembled view because they pick frames and place parts on the assembled
+  pose. Joint glyphs are hidden while exploded.
+- **Edited by dragging.** While exploded, a drag on any part (grounded or
+  not) slides it along the world axis X, Y or Z whose on-screen direction
+  best matches the pointer's first travel, snapped to the document's length
+  step (Shift for a free value, Escape cancels). The chip reads the axis and
+  the travel ("X +25.0 mm"). Release commits `assembly.explode.set` with that
+  part's new offset: one drag, one undo step. Reset in the sidebar clears
+  every offset as one undo step.
+- **Stored canonically.** A zero offset is not stored, offsets are kept in
+  the components' display order, and deleting a component removes its
+  offset. Validation refuses an offset for a component that is not in the
+  assembly, a non-finite or out-of-range vector, and reserved record keys.
+- **Merges per part.** The offsets are a record keyed by component, so once
+  the view has an offset the room's three-way merge keeps two devices'
+  edits to different parts, and an offset made on one device merges with a
+  pose made on the other. Two different offsets for the same part, an
+  offset on a part the other device removed, and the first offsets two
+  devices make at once (there is no record in the base to merge into) are
+  conflicts the submitter resolves; nothing is chosen silently.
+- **Not in this slice.** Several named exploded views, step-by-step
+  explode playback in motion studies (not asked for here), exploded drawing
+  views and trails.
+
+Command: `assembly.explode.set` (`offsets` per component, null or zero puts
+a part back; `reset` clears every offset first).
+
 Commands, each one undo step: `assembly.components.add`,
 `assembly.component.update`, `assembly.component.delete`,
 `assembly.joint.add`, `assembly.joint.update`, `assembly.joint.delete`,
@@ -233,7 +273,8 @@ joint graph changes.
 - Loops (AS09), couplings beyond gear pairs (a general ratio between any two
   joints with its own editor, screw couplings on one cylindrical joint) and
   video export (AS08), interference during motion (AS04, after kernel clash
-  support), exploded views and BOM (AS03).
+  support). The BOM and stored exploded offsets are AS03 (above); exploded
+  drawing views wait on D01/D02.
 - A coupling's ratio is fixed when the pair is placed: editing a gear's
   tooth count or moving a joint's frame afterwards does not update it. When
   a gear's teeth no longer give the stored ratio, the joint's details (and

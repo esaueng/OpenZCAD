@@ -257,7 +257,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // document builds unchanged and is never rewritten. An older client would
 // build those threads and gears without it, so it must refuse. Builds on
 // v59.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 60 as const;
+// v61 adds the AS03 exploded view (`assembly.explode`): one stored world
+// offset per component, shown on top of its pose when the view is exploded
+// and edited by dragging. Absent means none, so every older assembly loads
+// unchanged. An older client would drop the offsets on its next save, so it
+// must refuse. Builds on v60.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 61 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

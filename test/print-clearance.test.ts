@@ -108,18 +108,21 @@ describe('the stored print clearance', () => {
   });
 
   it('is refused on a document that declares an older schema', () => {
+    // v59 is the last schema before print clearance (v60); a later bump
+    // must not make "the current one minus one" a version that has it.
+    const beforePrintClearance = 59;
     const set = setPrintClearance(newDocument(), { value: 0.2 });
     expect(() =>
       normalizeDocument({
         ...set,
-        schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
+        schemaVersion: beforePrintClearance
       } as never)
     ).toThrow(/print clearance require project schema v60/);
     expect(() =>
       setPrintClearance(
         {
           ...newDocument(),
-          schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
+          schemaVersion: beforePrintClearance
         } as never,
         {
           value: 0.2
