@@ -11,6 +11,7 @@ import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import { describeProject } from '../lib/projectProperties';
 import { DEMO_DEFINITIONS } from '../lib/demoDefinitions';
+import { isCutePartName } from '../lib/cutePartName';
 import type { ComponentProps } from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
@@ -649,6 +650,50 @@ describe('StartScreen library discovery', () => {
     fireEvent.focus(field);
     expect(field.selectionEnd).toBe(suggestion.length);
     expect(field.selectionStart).toBe(0);
+  });
+
+  it('suggests a fresh name on reload but keeps the units', () => {
+    // 15 Nov 2026: a reload restored the same suggestion every time. A draft
+    // this page did not suggest stands in for one from before the reload.
+    sessionStorage.setItem(
+      'openzcad.start.draft',
+      JSON.stringify({ name: 'Gentle Panda', units: 'inch', suggested: true })
+    );
+    renderStartScreen({ projects: [] });
+    const field = screen.getByLabelText<HTMLInputElement>('Project name');
+    expect(field).not.toHaveValue('Gentle Panda');
+    expect(isCutePartName(field.value)).toBe(true);
+    expect(screen.getByLabelText('Units')).toHaveValue('inch');
+  });
+
+  it('moves a suggestion off a name the library turns out to use', () => {
+    const getRandomValues = vi
+      .spyOn(globalThis.crypto, 'getRandomValues')
+      .mockImplementation(<T extends ArrayBufferView | null>(array: T): T => {
+        if (array instanceof Uint32Array) array[0] = 0;
+        return array;
+      });
+    try {
+      // Every draw lands on the first pair until the library says it is
+      // taken; the suggestion then walks to a free one.
+      const { rerender } = renderStartScreen({ projects: [] });
+      const field = screen.getByLabelText<HTMLInputElement>('Project name');
+      const first = field.value;
+      rerender(
+        <StartScreen
+          {...startScreenProps({
+            projects: [{ ...localProject, name: first.toUpperCase() }]
+          })}
+        />
+      );
+      expect(field.value).not.toBe(first);
+      expect(isCutePartName(field.value)).toBe(true);
+      expect(
+        screen.queryByText(/You already have a project called/)
+      ).toBeNull();
+    } finally {
+      getRandomValues.mockRestore();
+    }
   });
 
   it('restores the unfinished project name and units on reload without adopting a later default', () => {

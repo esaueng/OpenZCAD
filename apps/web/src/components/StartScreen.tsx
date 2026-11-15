@@ -343,6 +343,16 @@ function writeShelfLayout(layout: ShelfLayout) {
 const LIBRARY_VIEW_KEY = 'openzcad.start.view';
 const LIBRARY_DRAFT_KEY = 'openzcad.start.draft';
 
+/**
+ * The name suggested since this page loaded. The draft in sessionStorage
+ * outlives a reload but this does not, which is how a remount tells the two
+ * apart.
+ */
+let pageSuggestion: string | null = null;
+
+/** One empty list, so effects keyed on the projects settle while pending. */
+const NO_PROJECTS: ProjectSummary[] = [];
+
 function readLibraryDraft(): {
   name: string;
   units: UnitSystem;
@@ -652,14 +662,26 @@ export function StartScreen({
   loadStorageUsage,
   onOpenAccountSettings
 }: StartScreenProps) {
-  const projects = scopePending ? [] : discoveredProjects;
+  const projects = scopePending ? NO_PROJECTS : discoveredProjects;
   const settingsKey = useKeymap().label('app-settings');
   // Prefixes the ids the shelf's tiles describe themselves by.
   const instanceId = useId();
   const [initialDraft] = useState(readLibraryDraft);
-  const [name, setName] = useState(
-    () => initialDraft?.name ?? generateCutePartName()
-  );
+  // A typed name survives a reload; a suggestion survives only a remount
+  // (back from a project), so each reload suggests a fresh name.
+  const [name, setName] = useState(() => {
+    if (
+      initialDraft &&
+      (!initialDraft.suggested || initialDraft.name === pageSuggestion)
+    ) {
+      return initialDraft.name;
+    }
+    pageSuggestion = generateCutePartName(
+      undefined,
+      projects.map((project) => project.name)
+    );
+    return pageSuggestion;
+  });
   const [units, setUnits] = useState<UnitSystem>(
     initialDraft?.units ?? defaultUnits
   );
@@ -831,6 +853,18 @@ export function StartScreen({
   // Names may repeat; a second "Bracket A" is allowed, but not unannounced.
   const nameTaken = sameNamedProject(trimmedName, projects);
   const canCreate = !busy && trimmedName.length > 0 && !nameTooLong;
+  // The library may arrive after the first suggestion was made; a suggestion
+  // nobody has typed over moves off a name already in use.
+  useEffect(() => {
+    if (!nameSuggested.current || !nameTaken) return;
+    const fresh = generateCutePartName(
+      undefined,
+      projects.map((project) => project.name)
+    );
+    if (sameNamedProject(fresh, projects)) return;
+    pageSuggestion = fresh;
+    setName(fresh);
+  }, [nameTaken, projects]);
 
   useEffect(() => {
     if (!unitsEdited.current) setUnits(defaultUnits);
@@ -3002,6 +3036,7 @@ export function StartScreen({
       } catch {
         /* optional */
       }
+      pageSuggestion = null;
       onCreate(trimmedName, units);
     }
   }
