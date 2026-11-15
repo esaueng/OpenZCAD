@@ -1065,6 +1065,33 @@ describe('Extend', () => {
     expect(f.sketch().constraints ?? []).toEqual([]);
   });
 
+  it('reaches a nearby boundary however far away an unrelated guide sits (review #1559)', () => {
+    const f = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 },
+      { objectKind: 'line', x1: 7, y1: -5, x2: 7, y2: 5 },
+      {
+        objectKind: 'line',
+        x1: 1e9,
+        y1: 100,
+        x2: 1e9,
+        y2: 101,
+        construction: true
+      }
+    ]);
+    const [line] = f.ids as [string, string, string];
+    f.commit(
+      planSketchExtend(
+        f.manager.document,
+        f.sketch(),
+        f.sketchId,
+        line,
+        { x: 3.9, y: 0 },
+        resolve
+      )
+    );
+    expect(Number((f.object(line) as { x2: number }).x2)).toBeCloseTo(7, 6);
+  });
+
   it('extends the start backwards when the click is nearer it', () => {
     const f = sketchWith([
       { objectKind: 'line', x1: 2, y1: 2, x2: 6, y2: 6 },

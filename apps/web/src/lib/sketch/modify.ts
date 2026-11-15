@@ -1246,7 +1246,10 @@ export function planSketchExtend(
         y: origin.y + (away.y / length) * reach
       }
     };
-    const eps = Math.max(PARAM_EPS, tol / reach);
+    // The extended end itself is excluded by model distance, not by ray
+    // parameter: a distant guide that lengthens the ray must not shrink a
+    // nearby boundary's parameter below a fixed epsilon (review #1559).
+    const beyondEnd = (param: number) => param * reach > tol;
     const nearest = crossingsOn(
       document,
       sketch,
@@ -1256,7 +1259,7 @@ export function planSketchExtend(
       tol,
       construction
     )
-      .filter((crossing) => crossing.param > eps)
+      .filter((crossing) => beyondEnd(crossing.param))
       .sort((a, b) => a.param - b.param)[0];
     if (!nearest) {
       return { status: 'refuse', reason: NOTHING_TO_EXTEND_TO };
