@@ -7618,13 +7618,23 @@ export function App() {
       // dropping it to device-only between polls.
       if (!listed.remoteReached || !settled()) return;
       if (latestProjects.current !== before) return;
-      // An unchanged listing leaves state alone so the shelf (and its
-      // thumbnail loads) does not re-render every poll.
-      if (JSON.stringify(listed.projects) === JSON.stringify(before)) return;
-      setProjects(listed.projects);
-      setCloudProjectIds(listed.cloudProjectIds);
+      // The account answered, whether or not the shelf changed: a listing
+      // that failed earlier can show the very projects this one does (the
+      // device holds them all), and must not leave "Account unavailable"
+      // standing. Unchanged values keep their identity, so an unchanged
+      // poll still renders nothing.
+      setCloudProjectIds((current) =>
+        current.size === listed.cloudProjectIds.size &&
+        [...current].every((id) => listed.cloudProjectIds.has(id))
+          ? current
+          : listed.cloudProjectIds
+      );
       setAccountProjectListReached(true);
       setCloudAvailable(true);
+      // An unchanged listing leaves the shelf alone so it (and its thumbnail
+      // loads) does not re-render every poll.
+      if (JSON.stringify(listed.projects) === JSON.stringify(before)) return;
+      setProjects(listed.projects);
     };
     const stop = watchLibraryFreshness(refresh);
     // A sealed shelf sync changed the account's agreed pins, order or
