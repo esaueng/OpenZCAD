@@ -35,6 +35,49 @@ describe('plainRefusal', () => {
       'That diameter does not fit the existing supports and fillets. Try a smaller diameter.'
     );
   });
+
+  // esaueng/remus#1747 adds the cause; the pinned kernel sends none.
+  it.each([
+    [
+      undefined,
+      'That diameter does not fit the existing supports and fillets. Try a smaller diameter.'
+    ],
+    [
+      'wall_meets_face',
+      'That diameter does not fit the existing supports and fillets. Try a smaller diameter.'
+    ],
+    [
+      'group_reblend_failed',
+      "The fillets around this wall can't be rebuilt at that diameter. Change or remove those fillets in History, then resize the wall."
+    ]
+  ])('words a refused diameter by its typed cause (%s)', (reason, sentence) => {
+    // As the adapter writes it: its sentence, then the kernel's.
+    const raw = `${sentence}\nblend cluster: diameter 60 mm cannot be built`;
+    expect(
+      plainRefusal(raw, {
+        category: 'internal',
+        code: 'cylinder-diameter-unbuildable',
+        ...(reason ? { reason } : {})
+      })
+    ).toEqual({
+      message: sentence,
+      headline: sentence,
+      // The kernel's words stay behind "Why?".
+      detail: raw,
+      category: 'internal',
+      code: 'cylinder-diameter-unbuildable'
+    });
+  });
+
+  it('does not advise a smaller diameter when the fillets cannot re-fillet', () => {
+    const plain = plainRefusal('opaque detail', {
+      category: 'internal',
+      code: 'cylinder-diameter-unbuildable',
+      reason: 'group_reblend_failed'
+    });
+    expect(plain.headline).not.toMatch(/smaller diameter/i);
+    expect(plain.message).not.toMatch(/smaller diameter/i);
+  });
   it.each(['__proto__', 'constructor', 'toString'])(
     'falls back for a category named "%s"',
     (category) => {
