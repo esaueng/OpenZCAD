@@ -348,8 +348,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     detail: 'Editing mode, diagnostics, and reset',
     settings: [
       'Direct manipulation',
-      'Frame rate overlay',
       'Regenerate project thumbnails',
+      'Frame rate overlay',
       'Export diagnostics',
       'Export interaction log',
       'Geometry kernel',
