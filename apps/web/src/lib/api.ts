@@ -601,7 +601,9 @@ async function sealedSettingsKeys(userId: string | null) {
     keys: {
       accountKey: account.accountKey,
       userId,
-      pins: sealing.localStorageSettingsSequencePins(userId)
+      pins: sealing.localStorageSettingsSequencePins(userId),
+      olderKey: (commitment: Uint8Array) =>
+        sealing.olderAccountKey(userId, commitment)
     }
   };
 }
@@ -619,20 +621,24 @@ function libraryEncryptedForRead(userId: string): Promise<boolean> {
 }
 
 /**
- * Where this device's settings stand against the account's sealed record
- * after it showed its own in place of a record it could not open (keys
- * locked). `base` is what the device showed then, or what it last sent;
- * `theirs` the account's settings once opened, else `record`, the sealed
- * record to open. While it exists every sealed save merges onto `theirs`:
- * fields changed since `base` keep the device's value, every other field
- * the account's, so neither the first save after unlocking nor an edit
- * queued behind it, nor a save after a reload, replaces the account's
- * settings with this device's untouched defaults. It ends once a save sends
- * exactly what the merge gives, the page having caught up. Kept per account
- * in device storage, like the settings it qualifies.
+ * What this device knows of the account's sealed settings, kept per account
+ * in device storage with the settings it qualifies.
+ *
+ * - `record`: the sealed record the account held when this device last read
+ *   or wrote it (null: none). A sealed save replaces it only once this
+ *   device has opened it, and the Worker's revision check makes sure it is
+ *   still the one being replaced.
+ * - `theirs`: that record's settings, or null while this device cannot open
+ *   it (keys locked; sealed under a key it cannot reach; behind its pin;
+ *   altered).
+ * - `base`: what this device showed instead, or last sent, while its
+ *   settings and the account's may differ. Every sealed save merges onto
+ *   `theirs`: fields changed since `base` keep the device's value, every
+ *   other field takes the account's. It clears once a save sends exactly
+ *   what the merge gives.
  */
 interface SettingsMergeState {
-  base: AppSettings;
+  base: AppSettings | null;
   theirs: AppSettings | null;
   record: string | null;
 }
@@ -649,9 +655,9 @@ function loadMergeState(userId: string): SettingsMergeState | null {
     );
     const parsed = raw ? (JSON.parse(raw) as SettingsMergeState) : null;
     const state =
-      parsed && typeof parsed === 'object' && parsed.base
+      parsed && typeof parsed === 'object'
         ? {
-            base: normalizeAppSettings(parsed.base),
+            base: parsed.base ? normalizeAppSettings(parsed.base) : null,
             theirs: parsed.theirs ? normalizeAppSettings(parsed.theirs) : null,
             record: typeof parsed.record === 'string' ? parsed.record : null
           }
@@ -664,10 +670,12 @@ function loadMergeState(userId: string): SettingsMergeState | null {
 }
 
 function saveMergeState(userId: string, state: SettingsMergeState | null) {
-  mergeStates.set(userId, state);
+  const kept =
+    state && (state.base || state.theirs || state.record) ? state : null;
+  mergeStates.set(userId, kept);
   try {
     const key = `${MERGE_STATE_PREFIX}:${userId}`;
-    if (state) globalThis.localStorage?.setItem(key, JSON.stringify(state));
+    if (kept) globalThis.localStorage?.setItem(key, JSON.stringify(kept));
     else globalThis.localStorage?.removeItem(key);
   } catch {
     // The visit's copy still protects this page.
@@ -677,9 +685,8 @@ function saveMergeState(userId: string, state: SettingsMergeState | null) {
 /**
  * The device keeps one copy of the settings, whichever account last used
  * it. Once another account reads or saves them here, an earlier account's
- * merge state describes a copy that is gone, and merging against it would
- * carry that other account's settings into it: drop every state but
- * `userId`'s.
+ * state describes a copy that is gone, and merging against it would carry
+ * that other account's settings into it: drop every state but `userId`'s.
  */
 function dropOtherMergeStates(userId: string): void {
   for (const other of [...mergeStates.keys()])
@@ -714,56 +721,71 @@ function noteAccountRecord(
   );
 }
 
+export const SETTINGS_SEAL_DEFERRED_CODE = 'SETTINGS_SEAL_DEFERRED';
+
+/**
+ * A save that stored the readable part only: the rest stays on this device
+ * until it can open the account's sealed record. Reported as a failure so
+ * the page keeps the edit pending and says it is not in the account yet.
+ */
+function sealDeferred(locked: boolean): ApiError {
+  return new ApiError(
+    423,
+    locked
+      ? 'Saved on this device · unlock encryption to save your private settings to your account.'
+      : 'Saved on this device · your account’s encrypted settings could not be opened here, so your private settings stay on this device.',
+    SETTINGS_SEAL_DEFERRED_CODE
+  );
+}
+
 /**
  * The account's settings. Where the library is encrypted the Worker holds
  * only what it acts on readable (`accountServerSettings`) and the rest in a
- * record sealed under the account key: this device opens it, and keeps its
- * own values for those fields while its keys are locked or the record is
- * one it cannot use. Readable settings left from before the account
- * encrypted are sealed on the first read that can, once per visit.
+ * record sealed under the account key: this device opens it, records what
+ * it saw, and keeps its own values for those fields while it cannot open
+ * it. Readable settings left from before the account encrypted are sealed
+ * on the first read that can, once per visit.
  */
 async function readAccountSettings(): Promise<AppSettingsResponse> {
   const response = await requestJson<AppSettingsResponse>('/api/settings');
   const userId = await sessionUserId();
   if (userId) dropOtherMergeStates(userId);
   if (response.sealedSettings) {
+    const local = loadLocalAppSettings();
+    if (!userId) return { ...response, settings: local };
     const sealed = await sealedSettingsKeys(userId);
-    if (userId) {
-      const { sealedSettingsSequence } =
-        sealed?.sealing ?? (await import('./e2ee/sealedSettings'));
-      noteAccountRecord(
-        userId,
-        sealedSettingsSequence(response.sealedSettings)
-      );
-    }
+    const { sealedSettingsSequence } =
+      sealed?.sealing ?? (await import('./e2ee/sealedSettings'));
+    noteAccountRecord(userId, sealedSettingsSequence(response.sealedSettings));
     const opened = sealed
       ? await sealed.sealing.openSettings(sealed.keys, response.sealedSettings)
       : null;
-    const local = loadLocalAppSettings();
-    let state = userId ? loadMergeState(userId) : null;
-    if (userId && !sealed) {
-      // Locked: show this device's own, and remember what it showed.
-      state = {
-        base: state?.base ?? local,
-        theirs: state?.record === response.sealedSettings ? state.theirs : null,
-        record: response.sealedSettings
-      };
-      saveMergeState(userId, state);
-    } else if (userId && state && opened) {
-      state = { ...state, theirs: opened, record: response.sealedSettings };
-      saveMergeState(userId, state);
-    }
+    const earlier = loadMergeState(userId);
+    // Whatever this device shows in place of a record it cannot open is its
+    // own; once open, any earlier base still decides what merges.
+    const base = opened ? (earlier?.base ?? null) : (earlier?.base ?? local);
+    saveMergeState(userId, {
+      base,
+      theirs: opened,
+      record: response.sealedSettings
+    });
     return {
       ...response,
       settings: withAccountServerSettings(
-        opened && state
-          ? mergeSettingsOntoAccount(state.base, local, opened)
-          : (opened ?? local),
+        opened
+          ? base
+            ? mergeSettingsOntoAccount(base, local, opened)
+            : opened
+          : local,
         response.settings
       )
     };
   }
-  if (!userId || !response.synced || response.revision === 0) return response;
+  if (!userId) return response;
+  const earlier = loadMergeState(userId);
+  if (earlier?.record)
+    saveMergeState(userId, { ...earlier, theirs: null, record: null });
+  if (!response.synced || response.revision === 0) return response;
   const readable = !holdsOnlyAccountServerSettings(response.settings);
   if (!(await libraryEncryptedForRead(userId))) return response;
   if (!readable) {
@@ -792,12 +814,13 @@ async function readAccountSettings(): Promise<AppSettingsResponse> {
  * Saves the account's settings. Where its library is encrypted only
  * `accountServerSettings` is sent readable, with the whole settings sealed
  * under the account key at a sequence above every record this page has
- * seen; a device whose keys are locked sends the readable part alone and
- * the Worker keeps the sealed record it has (or refuses, while settings
- * from before are still readable and unsealed). A device that read the
- * record locked merges its changes onto it first. An account whose library
- * rule cannot be read refuses (`E2EE_PREFERENCE_UNVERIFIED`) rather than
- * sending everything readable on a guess.
+ * seen, merged onto the account's record as `SettingsMergeState` says. A
+ * device that cannot open the record the account holds (keys locked, or a
+ * record it cannot reach) never seals over it: it saves the readable part
+ * and reports the rest as kept on this device (SETTINGS_SEAL_DEFERRED). An
+ * account whose library rule cannot be read refuses
+ * (`E2EE_PREFERENCE_UNVERIFIED`) rather than sending everything readable
+ * on a guess.
  */
 async function writeAccountSettings(
   payload: UpdateAppSettingsRequest,
@@ -825,71 +848,59 @@ async function writeAccountSettings(
     }
   }
   const userId = await sessionUserId();
+  if (userId) dropOtherMergeStates(userId);
   const sealed = await sealedSettingsKeys(userId);
-  let settings = payload.settings;
-  if (sealed) dropOtherMergeStates(sealed.keys.userId);
-  const state = sealed ? loadMergeState(sealed.keys.userId) : null;
-  // The account's record could not be opened to merge onto (sealed under
-  // another account key, older than this device's pin, or altered): keep it
-  // rather than seal this device's untouched values over it. The readable
-  // part still saves; the rest stays on this device, merged once a device
-  // seals a record this one can open.
-  let keepRecord = false;
-  if (sealed && state) {
-    const theirs =
-      state.theirs ??
-      (state.record
-        ? await sealed.sealing.openSettings(sealed.keys, state.record)
-        : null);
-    if (state.record) {
-      noteAccountRecord(
-        sealed.keys.userId,
-        sealed.sealing.sealedSettingsSequence(state.record)
-      );
-    }
-    if (theirs) {
-      settings = mergeSettingsOntoAccount(state.base, payload.settings, theirs);
-    } else {
-      keepRecord = true;
-    }
-  }
-  const sealing =
-    sealed && !keepRecord
-      ? await sealed.sealing.sealSettings(
-          sealed.keys,
-          settings,
-          accountRecordSequences.get(sealed.keys.userId) ?? 0
-        )
-      : null;
-  const response = await requestJson<AppSettingsResponse>('/api/settings', {
-    method: 'PATCH',
-    body: JSON.stringify({
-      settings: accountServerSettings(settings),
-      expectedRevision: payload.expectedRevision,
-      ...(sealing ? { sealedSettings: sealing.record } : {})
-    })
-  });
-  sealing?.commit();
-  if (sealed && sealing) {
-    const userId = sealed.keys.userId;
+  const state = userId ? loadMergeState(userId) : null;
+  let theirs: AppSettings | null = null;
+  if (sealed && state?.record) {
     noteAccountRecord(
-      userId,
-      sealed.sealing.sealedSettingsSequence(sealing.record)
+      sealed.keys.userId,
+      sealed.sealing.sealedSettingsSequence(state.record)
     );
-    if (state) {
-      const caughtUp = sameSettings(settings, payload.settings);
-      // Caught up: the page sent what the account holds. Otherwise what it
-      // sent is the new base, and what the account now holds the new
-      // theirs, so an edit already queued from what it sent merges too.
-      saveMergeState(
-        userId,
-        caughtUp
-          ? null
-          : { base: payload.settings, theirs: settings, record: sealing.record }
-      );
-      if (!caughtUp) accountSettingsMerged(userId, payload.settings, settings);
-    }
+    theirs =
+      state.theirs ??
+      (await sealed.sealing.openSettings(sealed.keys, state.record));
   }
+  // The account holds a record this device has not opened: keep it.
+  const keepRecord = !sealed || (Boolean(state?.record) && !theirs);
+  const readablePatch = (settings: AppSettings, sealedSettings?: string) =>
+    requestJson<AppSettingsResponse>('/api/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        settings: accountServerSettings(settings),
+        expectedRevision: payload.expectedRevision,
+        ...(sealedSettings ? { sealedSettings } : {})
+      })
+    });
+  if (keepRecord) {
+    await readablePatch(payload.settings);
+    throw sealDeferred(!sealed);
+  }
+  const settings =
+    theirs && state?.base
+      ? mergeSettingsOntoAccount(state.base, payload.settings, theirs)
+      : payload.settings;
+  const sealing = await sealed.sealing.sealSettings(
+    sealed.keys,
+    settings,
+    accountRecordSequences.get(sealed.keys.userId) ?? 0
+  );
+  const response = await readablePatch(settings, sealing.record);
+  sealing.commit();
+  const owner = sealed.keys.userId;
+  noteAccountRecord(
+    owner,
+    sealed.sealing.sealedSettingsSequence(sealing.record)
+  );
+  const caughtUp = sameSettings(settings, payload.settings);
+  saveMergeState(owner, {
+    // Caught up: the page sent what the account holds. Otherwise what it
+    // sent is the new base, so an edit already queued from it merges too.
+    base: caughtUp ? null : payload.settings,
+    theirs: settings,
+    record: sealing.record
+  });
+  if (!caughtUp) accountSettingsMerged(owner, payload.settings, settings);
   return {
     ...response,
     settings: withAccountServerSettings(settings, response.settings)

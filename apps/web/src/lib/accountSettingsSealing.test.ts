@@ -51,6 +51,30 @@ vi.mock('./e2ee/unlockedKeys', () => ({
 }));
 vi.mock('./e2ee/projectPreferences', () => preferences);
 
+// The account-key history: older keys this device can reach, by commitment.
+const history = vi.hoisted(() => ({
+  older: [] as { commitment: Uint8Array; key: Uint8Array }[]
+}));
+vi.mock('./e2ee/accountKeys', () => ({
+  loadEncryption: async () => ({
+    kind: 'ready',
+    account: {
+      unlocked: true,
+      list: {
+        entries: history.older.map(({ commitment }, sequence) => ({
+          entry: { sequence, accountKeyCommitment: commitment }
+        }))
+      }
+    }
+  }),
+  openAccountKeyChain: async (
+    _ctx: unknown,
+    _account: unknown,
+    sequence: number
+  ) => new Uint8Array(history.older[sequence]!.key)
+}));
+vi.mock('./e2ee/keychainDeviceKeys', () => ({ deviceKeyStore: () => ({}) }));
+
 const ACCOUNT_KEY = Uint8Array.from({ length: 32 }, (_, index) => index);
 const SECRET = 'Prefer 0.4 mm sliding clearances.';
 
@@ -131,6 +155,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  history.older = [];
   vi.clearAllMocks();
   state.optedIn = false;
   state.libraryEncrypted = false;
@@ -200,7 +225,10 @@ describe('settings of an account whose library is encrypted', () => {
     expect(read.settings.appearance.theme).toBe('light');
     expect(read.settings.assistant.customInstructions).toBe(SECRET);
 
-    await api.updateSettings({ settings: full, expectedRevision: 1 });
+    // The readable part saves; the save says the rest stayed here.
+    await expect(
+      api.updateSettings({ settings: full, expectedRevision: 1 })
+    ).rejects.toMatchObject({ code: 'SETTINGS_SEAL_DEFERRED' });
     expect(patches).toHaveLength(1);
     expect(patches[0]).not.toHaveProperty('sealedSettings');
     expect(JSON.stringify(patches[0])).not.toContain(SECRET);
@@ -437,13 +465,110 @@ describe('settings of an account whose library is encrypted', () => {
     state.account = { accountKey: ACCOUNT_KEY };
     const edited = structuredClone(read.settings);
     edited.general.defaultUnits = 'cm';
-    await api.updateSettings({ settings: edited, expectedRevision: 1 });
-    await api.updateSettings({ settings: edited, expectedRevision: 2 });
+    for (const expectedRevision of [1, 2])
+      await expect(
+        api.updateSettings({ settings: edited, expectedRevision })
+      ).rejects.toMatchObject({ code: 'SETTINGS_SEAL_DEFERRED' });
     // The readable part saves; the record the account holds is left alone,
     // every time, until a device can merge onto it.
     expect(patches).toHaveLength(2);
     for (const sent of patches)
       expect(sent).not.toHaveProperty('sealedSettings');
+  });
+
+  it('keeps a record it cannot open even when it first read it unlocked', async () => {
+    const otherKey = Uint8Array.from({ length: 32 }, (_, index) => 200 - index);
+    const { record } = await sealSettings(
+      {
+        accountKey: otherKey,
+        userId: state.userId,
+        pins: { read: () => 0, write: () => undefined }
+      },
+      privateSettings()
+    );
+    state.libraryEncrypted = true;
+    state.account = { accountKey: ACCOUNT_KEY };
+    const patches = worker(() =>
+      response(accountServerSettings(privateSettings()), {
+        sealedSettings: record
+      })
+    );
+    const read = await api.getSettings();
+    await expect(
+      api.updateSettings({ settings: read.settings, expectedRevision: 1 })
+    ).rejects.toMatchObject({ code: 'SETTINGS_SEAL_DEFERRED' });
+    expect(patches[0]).not.toHaveProperty('sealedSettings');
+  });
+
+  it('never seals an older merge target over a newer record it cannot open', async () => {
+    const keys = (accountKey: Uint8Array) => ({
+      accountKey,
+      userId: state.userId,
+      pins: { read: () => 0, write: () => undefined }
+    });
+    const first = await sealSettings(keys(ACCOUNT_KEY), privateSettings());
+    state.libraryEncrypted = true;
+    let current = first.record;
+    const patches = worker(() =>
+      response(accountServerSettings(privateSettings()), {
+        sealedSettings: current
+      })
+    );
+    await api.getSettings(); // locked: a merge base
+    state.account = { accountKey: ACCOUNT_KEY };
+    await api.getSettings(); // unlocked: the account's settings, opened
+    // Another device rotates the account key and replaces the record.
+    const rotated = Uint8Array.from({ length: 32 }, (_, index) => 100 + index);
+    current = (
+      await sealSettings(
+        { ...keys(rotated), pins: { read: () => 7, write: () => undefined } },
+        privateSettings()
+      )
+    ).record;
+    // A conflict refresh reads the replacement, which it cannot open.
+    const refreshed = await api.getSettings();
+    await expect(
+      api.updateSettings({ settings: refreshed.settings, expectedRevision: 2 })
+    ).rejects.toMatchObject({ code: 'SETTINGS_SEAL_DEFERRED' });
+    expect(patches.at(-1)).not.toHaveProperty('sealedSettings');
+  });
+
+  it('opens a record sealed before a rotation and reseals it under the current key', async () => {
+    const { accountKeyCommitment } = await import('@openzcad/crypto');
+    const formerKey = Uint8Array.from({ length: 32 }, (_, index) => 50 + index);
+    history.older = [
+      { commitment: await accountKeyCommitment(formerKey), key: formerKey }
+    ];
+    const { record } = await sealSettings(
+      {
+        accountKey: formerKey,
+        userId: state.userId,
+        pins: { read: () => 0, write: () => undefined }
+      },
+      privateSettings()
+    );
+    state.libraryEncrypted = true;
+    state.account = { accountKey: ACCOUNT_KEY };
+    const patches = worker(() =>
+      response(accountServerSettings(privateSettings()), {
+        sealedSettings: record
+      })
+    );
+    const read = await api.getSettings();
+    expect(read.settings.assistant.customInstructions).toBe(SECRET);
+    const edited = structuredClone(read.settings);
+    edited.general.defaultUnits = 'cm';
+    await api.updateSettings({ settings: edited, expectedRevision: 1 });
+    const stored = await openSettings(
+      {
+        accountKey: ACCOUNT_KEY,
+        userId: state.userId,
+        pins: { read: () => 0, write: () => undefined }
+      },
+      patches[0]!.sealedSettings as string
+    );
+    expect(stored?.assistant.customInstructions).toBe(SECRET);
+    expect(stored?.general.defaultUnits).toBe('cm');
   });
 
   it('refuses to save rather than guess when the library rule cannot be read', async () => {

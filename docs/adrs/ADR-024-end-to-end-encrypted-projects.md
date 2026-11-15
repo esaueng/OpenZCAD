@@ -1485,24 +1485,26 @@ account whose library is encrypted (the rule above) stores them sealed.
   that omits fields it would fill from the stored copy
   (`SETTINGS_ENCRYPTION_REQUIRED`); an account that stores settings readable
   drops any sealed record on its next write.
-- **Reading locked, saving unlocked.** A device that read the record while
-  locked showed its own values, and keeps that state per account in device
-  storage (what it showed, and the record or the account's settings once
-  opened). While it exists, every sealed save merges onto the account's
-  settings: each field changed since what the device showed or last sent
-  keeps the device's value, every other field takes the account's. A save
-  that merged becomes the new base, so an edit queued behind it merges too,
-  and the state survives a reload before the edit synced. The page folds the
-  merged result into what it shows, keeping edits made meanwhile. The state
-  ends with the first save that sends exactly what the merge gives. Without
-  it, a fresh device's first save would replace the account's settings with
-  its defaults. The device keeps one copy of the settings, so once another
-  account reads or saves them there, every other account's state is dropped
-  rather than merged against a copy that is no longer its own. If the record
-  to merge onto cannot be opened (sealed under another account key, behind
-  this device's pin, or altered), a save sends the readable part only and
-  leaves the record as it is; the device's private edits wait until a
-  device seals a record it can open.
+- **Never sealing over a record it has not opened.** Each device keeps,
+  per account in device storage, the record the account held when it last
+  read or wrote, that record's settings once opened, and what it showed in
+  their place while it could not open them. A sealed save replaces the
+  account's record only after this device opened it (the Worker's revision
+  check makes sure it is still the one replaced), and merges onto it: each
+  field changed since what the device showed or last sent keeps the
+  device's value, every other field takes the account's. A save that merged
+  becomes the new base, so an edit queued behind it merges too, and the
+  state survives a reload; the page folds the merged result into what it
+  shows, keeping edits made meanwhile. A record sealed before an account-key
+  rotation is opened with that older key through the account-key history
+  (each replaced key is wrapped under its successor) and resealed under the
+  current one. A device that cannot open the record (keys locked, behind its
+  pin, altered, or a key it cannot reach) saves the readable part only and
+  reports the rest as kept on this device (`SETTINGS_SEAL_DEFERRED`), so its
+  edit stays pending instead of reading as saved. The device keeps one copy
+  of the settings, so once another account reads or saves them there, every
+  other account's state is dropped rather than merged against a copy that is
+  no longer its own.
 - **Unanswered library rule.** Only a Worker without the encryption routes
   reads as "not encrypted"; one that cannot be reached or fails refuses the
   save (`E2EE_PREFERENCE_UNVERIFIED`), so settings never leave readable on a

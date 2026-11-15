@@ -1,6 +1,7 @@
 import {
   ACCOUNT_SETTINGS_RECORD,
   accountKeyCommitment,
+  accountKeySequences,
   fromBase64Url,
   isE2eeError,
   openRecord,
@@ -63,6 +64,8 @@ export interface SealedSettingsKeys {
   accountKey: Uint8Array;
   userId: string;
   pins: SettingsSequencePins;
+  /** An older account key by its commitment (`olderAccountKey`). */
+  olderKey?: (commitment: Uint8Array) => Promise<Uint8Array | null>;
 }
 
 /**
@@ -119,17 +122,25 @@ export async function openSettings(
 ): Promise<AppSettings | null> {
   let sealed: Uint8Array;
   let sequence: number;
+  let accountKey: Uint8Array = keys.accountKey;
+  let older: Uint8Array | null = null;
   try {
     sealed = fromBase64Url(record);
     const header = readSealedRecordHeader(ACCOUNT_SETTINGS_RECORD, sealed);
     if (
       toHex(header.commitment) !==
       toHex(await accountKeyCommitment(keys.accountKey))
-    )
-      return null;
+    ) {
+      // Sealed before an account-key rotation: open it with that older key,
+      // through the account-key history.
+      older = (await keys.olderKey?.(header.commitment)) ?? null;
+      if (!older) return null;
+      accountKey = older;
+    }
     if (header.sequence < keys.pins.read()) return null;
     sequence = header.sequence;
   } catch (error) {
+    older?.fill(0);
     if (isE2eeError(error) || error instanceof Error) return null;
     throw error;
   }
@@ -137,13 +148,15 @@ export async function openSettings(
   try {
     ({ plaintext } = await openRecord(
       ACCOUNT_SETTINGS_RECORD,
-      keys.accountKey,
+      accountKey,
       keys.userId,
       sealed
     ));
   } catch (error) {
     if (isE2eeError(error)) return null;
     throw error;
+  } finally {
+    older?.fill(0);
   }
   let settings: AppSettings;
   try {
@@ -155,4 +168,52 @@ export async function openSettings(
   }
   keys.pins.write(sequence);
   return settings;
+}
+
+/**
+ * The account key, older than the current one, whose commitment is
+ * `commitment`, opened through the account-key history (each replaced key
+ * is wrapped under its successor), or null when this device cannot: keys
+ * locked, another identity generation, or a history the server withholds.
+ * The caller zeroes the copy.
+ */
+export async function olderAccountKey(
+  userId: string,
+  commitment: Uint8Array
+): Promise<Uint8Array | null> {
+  try {
+    const [accountKeys, { createE2eeApi }, { deviceKeyStore }, keySession] =
+      await Promise.all([
+        import('./accountKeys'),
+        import('./e2eeApi'),
+        import('./keychainDeviceKeys'),
+        import('./keySession')
+      ]);
+    const revision = keySession.getKeySessionRevision();
+    const ctx = {
+      userId,
+      api: createE2eeApi(),
+      store: deviceKeyStore(),
+      isCurrent: () => keySession.getKeySessionRevision() === revision
+    };
+    const state = await accountKeys.loadEncryption(ctx);
+    if (state.kind !== 'ready' || !state.account.unlocked) return null;
+    const target = toHex(commitment);
+    const keySequence = accountKeySequences(state.account.list).find(
+      (sequence) =>
+        state.account.list.entries.some(
+          ({ entry }) =>
+            entry.sequence === sequence &&
+            toHex(entry.accountKeyCommitment) === target
+        )
+    );
+    if (keySequence === undefined) return null;
+    return await accountKeys.openAccountKeyChain(
+      ctx,
+      state.account,
+      keySequence
+    );
+  } catch {
+    return null;
+  }
 }
