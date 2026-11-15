@@ -1,6 +1,6 @@
 # Print clearance
 
-One document-level value for printed fits (L09, schema v59): the radial gap a
+One document-level value for printed fits (L09, schema v60): the radial gap a
 printed part leaves to the part it mates with. Set it under **Parameters →
 Print clearance**: a length such as `0.15`, or an expression with units or
 parameters such as `0.2 mm` or `2 * gap`. Blank means none.
@@ -27,7 +27,7 @@ thinning is approximate there; it is exact for spur gears and racks.
 
 A document without a print clearance builds exactly as before: threads and
 gears without their own value take no gap, and no stored document is
-rewritten when it opens. A document that sets one declares schema v59, so an
+rewritten when it opens. A document that sets one declares schema v60, so an
 older build refuses it rather than building those threads and gears without
 the gap.
 

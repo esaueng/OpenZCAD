@@ -1,7 +1,7 @@
 import { MAX_EXPRESSION_LENGTH } from './document-validation';
 
 /**
- * L09 document print clearance (schema v59): the stored shape, and how a
+ * L09 document print clearance (schema v60): the stored shape, and how a
  * gear turns it into tooth thinning. Resolving the stored value against the
  * parameters is document-core's `documentPrintClearance`.
  */

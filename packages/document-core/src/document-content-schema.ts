@@ -33,11 +33,11 @@ export function assertAssemblyCouplingSchema(version: unknown): void {
 }
 
 /**
- * L09 document print clearance (schema v59): `printClearance` and its
+ * L09 document print clearance (schema v60): `printClearance` and its
  * command. An older reader would build threads and gears without it.
  */
 export function assertPrintClearanceSchema(version: unknown): void {
-  assertMinimumProjectSchema(version, 59, 'A print clearance');
+  assertMinimumProjectSchema(version, 60, 'A print clearance');
 }
 
 /**

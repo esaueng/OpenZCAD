@@ -1094,7 +1094,7 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // Opening older content never converts it or invents source witnesses.
   // Schema v56 -> v57 thread runouts and pipe threads are optional fields on
   // a thread; absent keeps the v53 thread, so nothing is rewritten.
-  // Schema v59 adds the optional document print clearance. Never fill one in:
+  // Schema v60 adds the optional document print clearance. Never fill one in:
   // absent keeps every thread and gear as it was built.
   // Schema v16 -> v17 allows reference-form mesh payloads. Keep existing
   // embedded triangles and pre-release references as written; the version

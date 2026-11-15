@@ -241,13 +241,14 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // Every field is optional and absent keeps the v53 thread, so older
 // documents load unchanged. An older client would build a plain end or a
 // cylindrical thread in their place, so it must refuse.
-// v59 adds the L09 document print clearance (`printClearance`): one radial
+// v60 adds the L09 document print clearance (`printClearance`): one radial
 // allowance for printed fits that threads and gears read where they leave
 // their own clearance or backlash unset. Absent means none, so every older
 // document builds unchanged and is never rewritten. An older client would
 // build those threads and gears without it, so it must refuse. (v58 is
-// claimed by the M16 sheet-metal change.)
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 59 as const;
+// claimed by the M16 sheet-metal change and v59 by the I01 point and slot
+// entities.)
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 60 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -3722,7 +3723,7 @@ export interface ProjectDocument {
    */
   assembly?: AssemblySet;
   /**
-   * L09 print clearance (schema v59): the radial gap a printed part leaves
+   * L09 print clearance (schema v60): the radial gap a printed part leaves
    * to its mate, a length in document units (a number, or an expression that
    * may use units and parameters). Read by every thread that leaves its own
    * `clearance` unset (pipe threads excepted: they mate standard fittings)

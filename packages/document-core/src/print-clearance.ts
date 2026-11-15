@@ -12,7 +12,7 @@ import {
 } from './index';
 
 /**
- * L09 document print clearance (schema v59): one radial allowance for printed
+ * L09 document print clearance (schema v60): one radial allowance for printed
  * fits, stored on the document. Threads and gears that leave their own
  * clearance or backlash unset read it through {@link documentPrintClearance};
  * a future joint fit reads it the same way. Unset, nothing reads anything,

@@ -37,7 +37,7 @@ import {
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 
 /**
- * L09 document print clearance (schema v59): one radial allowance on the
+ * L09 document print clearance (schema v60): one radial allowance on the
  * document that threads and gears read where they leave their own unset.
  * Unset, nothing changes and nothing is rewritten.
  */
@@ -98,13 +98,22 @@ describe('the stored print clearance', () => {
   it('is refused on a document that declares an older schema', () => {
     const set = setPrintClearance(newDocument(), { value: 0.2 });
     expect(() =>
-      normalizeDocument({ ...set, schemaVersion: 58 } as never)
-    ).toThrow(/print clearance require project schema v59/);
+      normalizeDocument({
+        ...set,
+        schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
+      } as never)
+    ).toThrow(/print clearance require project schema v60/);
     expect(() =>
-      setPrintClearance({ ...newDocument(), schemaVersion: 58 } as never, {
-        value: 0.2
-      })
-    ).toThrow(/v59/);
+      setPrintClearance(
+        {
+          ...newDocument(),
+          schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
+        } as never,
+        {
+          value: 0.2
+        }
+      )
+    ).toThrow(/v60/);
     expect(assertStorableDocument(set).printClearance).toBe(0.2);
     for (const bad of [-1, '', {}, true])
       expect(() =>
