@@ -3,6 +3,7 @@ import {
   fileAccept,
   persistStorageForInstalledApp
 } from './lib/appleTouch';
+import { documentRevision } from './lib/documentRevision';
 import { registerOfflineShell } from './lib/offlineShell';
 import { spaceMouse } from './lib/spaceMouse';
 import {
@@ -36583,9 +36584,10 @@ export function App() {
               initialFeatureId={flatPatternFeatureId}
               units={doc.units}
               projectName={doc.name}
-              // Any edit, local or a collaborator's, is a new revision: the
-              // view rebuilds the pattern before it offers an export again.
-              revision={`${doc.projectId}:${doc.version}`}
+              // Any edit, local or a collaborator's, and any replacement of
+              // the document (even at the same version) is a new revision:
+              // the view rebuilds the pattern before it offers an export again.
+              revision={documentRevision(doc)}
               loadPattern={(featureId) => {
                 const current = managerRef.current?.document ?? doc;
                 return geometry.sheetMetalFlatPattern(current, featureId);
