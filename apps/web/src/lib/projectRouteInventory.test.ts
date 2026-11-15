@@ -242,6 +242,11 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
   [String.raw`/^\/api\/projects\/([^/]+)\/duplicate$/`]: [
     [`${P}/duplicate`, 'plaintext', ['POST']]
   ],
+  // The sealed shelf migration clears a project's readable pin, order and
+  // archive; the request has no body and carries no content.
+  [String.raw`/^\/api\/projects\/([^/]+)\/shelf\/reset$/`]: [
+    [`${P}/shelf/reset`, 'none']
+  ],
   [String.raw`/^\/api\/projects\/([^/]+)\/invitations$/`]: [
     [`${P}/invitations`, 'none']
   ],
