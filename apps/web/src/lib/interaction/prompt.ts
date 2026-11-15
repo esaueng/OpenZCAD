@@ -106,16 +106,16 @@ function armedStep(
         return 'Remove this proven imported blend, or pick another face';
       case 'offset-face':
         if (state.target.resizeBodyFeatureId && !state.target.localFaceOffset) {
-          return 'Drag the arrow to resize the body, or type its Total or Offset · The opposite side stays fixed';
+          return 'Drag the arrow to resize the body, or type its Offset or Total · The opposite side stays fixed';
         }
         // The key is the user's: a remap is named, an unbound one omitted.
         // Kept short: the lane is one line, and at a common bar width the
         // longer wording ellipsized the Escape rung off its end.
-        // A typed number is what the chip's tag names — the Total size the
-        // face leaves, or the signed Offset it moves — never "a distance"
-        // whatever the tag says (QA 2026-11-14 finding #9).
+        // A typed number is what the chip's tag names — the signed Offset
+        // the face moves (the default), or the Total size it leaves — never
+        // "a distance" whatever the tag says (QA 2026-11-14 finding #9).
         return [
-          'Drag to push or pull the face, or type its Total or Offset',
+          'Drag to push or pull the face, or type its Offset or Total',
           keyHint(activeKeymap(), 'view-normal-to-face', 'views it head-on')
         ]
           .filter(Boolean)

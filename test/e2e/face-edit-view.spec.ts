@@ -187,8 +187,7 @@ for (const projection of ['perspective', 'orthographic'] as const) {
       }),
       contentType: 'image/png'
     });
-    // The chip reads the whole span by default; this types the change.
-    await page.getByTestId('direct-manipulation-mode').click();
+    // A face starts on Offset, the signed move (QA 2026-11-14 finding #9).
     await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
       /^Offset/
     );

@@ -5,7 +5,8 @@ import {
   test,
   expect,
   stubApi,
-  finishInPlaceCommand
+  finishInPlaceCommand,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 /**
@@ -547,6 +548,8 @@ test(
       };
     });
     const { canvas, handle } = await armedBox(page);
+    // A face starts on Offset; this reads the box side as its Total.
+    await switchFaceOffsetToTotal(page);
     const anchor = () =>
       canvas.evaluate((element) => [
         Number(element.dataset.e2eChipAnchorWorldX),
@@ -601,6 +604,8 @@ for (const cancel of ['Escape', 'click-away', 'tool switch'] as const) {
         Number(element.dataset.e2eChipAnchorWorldZ)
       ]);
     const committedAnchor = await anchor();
+    // Typed as the tag's Total, the box side's span: 21 is a 3 mm pull.
+    await switchFaceOffsetToTotal(page);
     await page.getByTestId('direct-manipulation-value').click();
     const keypad = page.getByRole('dialog', { name: 'Total value' });
     await keypad.getByRole('textbox').fill('21');
@@ -630,6 +635,8 @@ test('a refused release retains the accepted face, handle and next pick', async 
     window.__openzcadE2EExactFaceDrag = true;
   });
   const { canvas, handle } = await armedBox(page);
+  // A face starts on Offset; this reads the box side as its Total.
+  await switchFaceOffsetToTotal(page);
   const chip = page.getByTestId('direct-manipulation-value');
   const at = (value: number) => ({
     x: handle.x - handle.dx * handle.pixels * value,
@@ -1338,8 +1345,10 @@ test('typing an offset keeps the ghost and handle while exact previews land', as
     window.__holdPreviews!.hold = true;
   });
   const held = () => page.evaluate(() => window.__holdPreviews!.held);
+  // Typed as the tag's Total: a box side reads its span, 18 mm deep, so 20
+  // is a 2 mm pull.
+  await switchFaceOffsetToTotal(page);
   await page.getByTestId('direct-manipulation-value').click();
-  // A box side reads its span: 18 mm deep, so 20 is a 2 mm pull.
   const keypad = page.getByRole('dialog', { name: 'Total value' });
   await expect(keypad).toBeVisible();
   const field = keypad.getByRole('textbox');

@@ -276,7 +276,7 @@ describe('the step describes the operation actually armed', () => {
   it('names the two readings a typed face value can have', () => {
     const armed = faceState('armed');
     expect(commandPrompt(armed)?.step).not.toMatch(/exact distance/);
-    expect(commandPrompt(armed)?.step).toContain('type its Total or Offset');
+    expect(commandPrompt(armed)?.step).toContain('type its Offset or Total');
     const resize = faceState('armed');
     if (resize.mode !== 'face') throw new Error('face state');
     const resizing: InteractionState = {
@@ -284,13 +284,13 @@ describe('the step describes the operation actually armed', () => {
       target: { ...resize.target, resizeBodyFeatureId: 'feature-box' }
     };
     expect(commandPrompt(resizing)?.step).toBe(
-      'Drag the arrow to resize the body, or type its Total or Offset · The opposite side stays fixed'
+      'Drag the arrow to resize the body, or type its Offset or Total · The opposite side stays fixed'
     );
   });
 
   it('reads as one line for the status bar', () => {
     expect(commandPromptText(faceState('armed'))).toBe(
-      'Drag to push or pull the face, or type its Total or Offset · Space views it head-on · Esc clears the selection'
+      'Drag to push or pull the face, or type its Offset or Total · Space views it head-on · Esc clears the selection'
     );
   });
 });
