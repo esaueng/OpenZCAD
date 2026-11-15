@@ -5901,3 +5901,4 @@ export * from './import-limits';
 export * from './mesh-buffer-equality';
 export * from './pipe-threads';
 export * from './thread-span';
+export * from './sheet-metal';
