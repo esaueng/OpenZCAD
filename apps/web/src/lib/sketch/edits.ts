@@ -26,6 +26,7 @@ import type {
 import {
   planSketchCircularPattern,
   planSketchLinearPattern,
+  planSketchExtend,
   planSketchMirror,
   planSketchTrim,
   resolvePatternPivot,
@@ -98,6 +99,12 @@ export const SKETCH_EDIT_TOOL_SPECS: readonly SketchEditToolSpec[] = [
     label: 'Trim',
     picks: 1,
     hint: 'Click the part of a line, arc or circle to remove. It is cut back to the nearest crossings; Escape finishes.'
+  },
+  {
+    kind: 'extend',
+    label: 'Extend',
+    picks: 1,
+    hint: 'Click a line or arc near the end to lengthen. It runs on to the first curve in its way; Escape finishes.'
   },
   {
     kind: 'mirror',
@@ -175,7 +182,8 @@ const COMPOSITE_REFUSALS: Partial<
   ellipse:
     'Modify tools work on lines, arcs and circles; they do not take an ellipse yet.',
   spline:
-    'Modify tools work on lines, arcs and circles; they do not take a spline yet.'
+    'Modify tools work on lines, arcs and circles; they do not take a spline yet.',
+  point: 'Modify tools work on lines, arcs and circles; a point has no curve.'
 };
 
 /**
@@ -672,6 +680,7 @@ export function sketchEditValueSteps(
   const spec = sketchEditToolSpec(kind);
   switch (kind) {
     case 'trim':
+    case 'extend':
     case 'mirror':
       return [];
     case 'linear-pattern': {
@@ -795,7 +804,7 @@ export function advanceSketchEditPick(
   ) {
     objectId = context.snapPoint.objectId;
   }
-  if (!objectId || (kind === 'trim' && !context.at)) {
+  if (!objectId || ((kind === 'trim' || kind === 'extend') && !context.at)) {
     return { status: 'hint', message: spec.hint };
   }
   const snapped =
@@ -887,6 +896,11 @@ export function planSketchEdit(
   if (kind === 'trim') {
     return at
       ? planSketchTrim(document, sketch, sketchId, picks[0]!, at, resolve)
+      : { status: 'refuse', reason: spec.hint };
+  }
+  if (kind === 'extend') {
+    return at
+      ? planSketchExtend(document, sketch, sketchId, picks[0]!, at, resolve)
       : { status: 'refuse', reason: spec.hint };
   }
   if (kind === 'mirror') {
@@ -1078,9 +1092,9 @@ export function advanceSketchEdit(
     return;
   }
   if (outcome.status === 'run') {
-    // Trim stays armed: each click is its own trim, and Escape puts it
-    // down. Mirror is one operation, like the kernel tools.
-    if (pending.kind !== 'trim') {
+    // Trim and Extend stay armed: each click is its own edit, and Escape
+    // puts them down. Mirror is one operation, like the kernel tools.
+    if (pending.kind !== 'trim' && pending.kind !== 'extend') {
       host.disarm();
     }
     void runSketchEdit(
@@ -1177,7 +1191,7 @@ export async function runSketchEdit(
       const commands = await settleOptionalRelations(
         document,
         sketch.sketchId,
-        kind === 'trim'
+        kind === 'trim' || kind === 'extend'
           ? [
               ...retainSketchGeometryCommands(document, sketch.sketchId),
               ...plan.commands

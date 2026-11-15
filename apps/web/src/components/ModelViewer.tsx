@@ -341,6 +341,19 @@ import {
   radiusFromRadialDelta
 } from '../lib/interaction/cylinderRadius';
 import {
+  lineDirectionLock,
+  tangentArcCenter,
+  type SketchSnapHint
+} from '../lib/sketch/inference';
+import {
+  extensionTargets,
+  modelGuideTargets,
+  tangentTargets,
+  viewIsOrthogonal,
+  type ModelGuidepoint,
+  type SketchGuideTarget
+} from '../lib/sketch/guides';
+import {
   arcDimension,
   arcObjectFromPoints,
   arcPreviewPoints,
@@ -410,6 +423,9 @@ import {
   inscribedPolygonShape,
   isCompositeShape,
   threePointRectangleShape,
+  slotPreviewPoints,
+  slotRadiusAt,
+  slotShape,
   typedRectangleShape,
   type CompositeShape
 } from '../lib/sketch/composites';
@@ -636,6 +652,8 @@ export interface SketchModeState {
   gridVisible: boolean;
   geometrySnapEnabled: boolean;
   inferenceEnabled: boolean;
+  /** S08: name the engaged snap in text beside its glyph. */
+  snapHints?: boolean;
   snapTolerancePx: number;
   /** True while a line chain (or drag) is in flight; cleared by Escape. */
   drawing: boolean;
@@ -1428,13 +1446,19 @@ export interface ModelViewerProps {
    * button reads it, so it places exactly what the outline shows.
    */
   sketchTextAnchorRef?: MutableRefObject<SketchPoint | null>;
-  /** A drawing gesture completed an entity. */
-  onSketchCommit(object: SketchObjectData): void;
+  /**
+   * A drawing gesture completed an entity. `hints` are the snaps its points
+   * were placed on (S08), so the host can infer relations from them.
+   */
+  onSketchCommit(object: SketchObjectData, hints?: SketchSnapHint[]): void;
   /**
    * A rectangle or polygon gesture completed a composite: lines held by
    * relations and named as one object (S04).
    */
-  onSketchCommitComposite(shape: CompositeShape): void;
+  onSketchCommitComposite(
+    shape: CompositeShape,
+    hints?: SketchSnapHint[]
+  ): void;
   onEditSketchDimension(id: string, anchor: { x: number; y: number }): void;
   onMoveSketchDimension(
     identity: SketchDimensionIdentity,
@@ -8690,18 +8714,24 @@ export function ModelViewer({
       sketchPointerOnCanvas = true;
       if (freeValue(event)) {
         activeSketchSnap = null;
+        activeSketchGuide = null;
         sketchSnapCycle = 0;
         hideSketchSnapMarker();
         latestSketchPoint = point;
         return point;
       }
+      activeSketchGuide = null;
       if (mode.geometrySnapEnabled) {
+        const tolerance =
+          mode.snapTolerancePx *
+          pointerSlack(event) *
+          sketchWorldPerPixel(mode.basis.origin);
         const resolved = resolveSketchSnap(
           point,
-          targets,
-          mode.snapTolerancePx *
-            pointerSlack(event) *
-            sketchWorldPerPixel(mode.basis.origin),
+          targets === snapTargetsRef.current
+            ? [...targets, ...sketchGuideTargets(mode, point, tolerance)]
+            : targets,
+          tolerance,
           {
             lockedId: activeSketchSnap?.id,
             cycle: sketchSnapCycle
@@ -8709,6 +8739,8 @@ export function ModelViewer({
         );
         if (resolved) {
           activeSketchSnap = resolved.target;
+          activeSketchGuide =
+            (resolved.target as SketchGuideTarget).guide ?? null;
           positionSketchSnapMarker(
             event,
             resolved.target.kind,
@@ -8732,6 +8764,80 @@ export function ModelViewer({
       }
       latestSketchPoint = point;
       return point;
+    }
+
+    /**
+     * S08 guidelines and guidepoints offered beside the sketch's own snaps:
+     * model points on the plane (and, while the view looks straight down
+     * its normal, those behind or in front of it), line extensions near the
+     * pointer, and the tangent points of circles and arcs from the end of
+     * the line being drawn.
+     */
+    let activeSketchGuide: SketchGuideTarget['guide'] | null = null;
+    let modelGuideCache: {
+      bodies: unknown;
+      points: ModelGuidepoint[];
+    } | null = null;
+    function modelGuidepoints(): ModelGuidepoint[] {
+      const bodies = bodiesRef.current;
+      if (modelGuideCache?.bodies === bodies) return modelGuideCache.points;
+      const points: ModelGuidepoint[] = [];
+      for (const body of bodies) {
+        if (body.consumed || !body.topology) continue;
+        for (const snap of snapsFromEdges(body.topology.edges, {
+          kinds: ['endpoint', 'midpoint', 'center']
+        })) {
+          if (
+            snap.kind === 'endpoint' ||
+            snap.kind === 'midpoint' ||
+            snap.kind === 'center'
+          ) {
+            points.push({ kind: snap.kind, point: snap.point });
+          }
+        }
+        for (const face of body.topology.faces) {
+          const centroid = face.geometry?.centroid;
+          if (centroid) {
+            points.push({
+              kind: 'center',
+              point: centroid,
+              role: 'face-center'
+            });
+          }
+        }
+      }
+      modelGuideCache = { bodies, points };
+      return points;
+    }
+    function sketchGuideTargets(
+      mode: SketchModeState,
+      point: SketchPoint,
+      tolerance: number
+    ): SnapTarget[] {
+      const view = context.activeCamera.getWorldDirection(new THREE.Vector3());
+      const targets: SnapTarget[] = modelGuideTargets(
+        modelGuidepoints(),
+        mode.basis,
+        {
+          orthogonal: viewIsOrthogonal(view, mode.basis.normal),
+          planeTolerance: 1e-4
+        }
+      );
+      if (
+        mode.inferenceEnabled &&
+        mode.tool !== 'select' &&
+        mode.tool !== 'project'
+      ) {
+        const resolve = sketchModeResolver(mode);
+        targets.push(
+          ...extensionTargets(point, mode.objects, resolve, tolerance)
+        );
+        const anchor = sketchGestureRef.current.chainAnchor;
+        if (mode.tool === 'line' && anchor) {
+          targets.push(...tangentTargets(anchor, mode.objects, resolve));
+        }
+      }
+      return targets;
     }
 
     /** Approximate world units per CSS pixel at the sketch plane. */
@@ -8767,7 +8873,8 @@ export function ModelViewer({
       label = SKETCH_SNAP_LABELS[kind]
     ) {
       sketchSnapMarker.dataset.kind = kind;
-      if (kind === 'grid') {
+      // S08: the text hint naming the snap is optional; the glyph stays.
+      if (kind === 'grid' || sketchModeRef.current?.snapHints === false) {
         delete sketchSnapMarker.dataset.label;
       } else {
         sketchSnapMarker.dataset.label = label;
@@ -8782,6 +8889,84 @@ export function ModelViewer({
       if (marker) {
         marker.hidden = true;
       }
+    }
+
+    /**
+     * S08: what each placed point snapped to. A commit hands these to the
+     * host, which proposes relations only for snaps the user aimed at (an
+     * intersection, the origin) rather than for any point that happens to
+     * line up.
+     */
+    let placedSnapHints: SketchSnapHint[] = [];
+    function rememberPlacedSnap(point: SketchPoint | null) {
+      const snap = activeSketchSnap;
+      if (!point || !snap || snap.x !== point.x || snap.y !== point.y) return;
+      placedSnapHints = [
+        ...placedSnapHints
+          .filter((hint) => hint.x !== snap.x || hint.y !== snap.y)
+          .slice(-15),
+        {
+          x: snap.x,
+          y: snap.y,
+          kind: snap.kind,
+          ...(snap.sourceId ? { sourceId: snap.sourceId } : {}),
+          ...(snap.sourceIds ? { sourceIds: snap.sourceIds } : {})
+        }
+      ];
+    }
+    function commitSketchObject(object: SketchObjectData) {
+      onSketchCommitRef.current(object, [...placedSnapHints]);
+    }
+    function commitSketchComposite(shape: CompositeShape) {
+      onSketchCommitCompositeRef.current(shape, [...placedSnapHints]);
+    }
+
+    /**
+     * The end of a line from `anchor`: an exact snap wins; otherwise, with
+     * inferencing on, the pointer locks to the axes, the perpendicular of a
+     * line ending at the anchor or the tangent of an arc ending there.
+     */
+    function lockSketchLine(
+      event: PointerEvent,
+      anchor: SketchPoint,
+      point: SketchPoint
+    ): ReturnType<typeof lineDirectionLock> {
+      const mode = sketchModeRef.current;
+      if (
+        !mode ||
+        !mode.inferenceEnabled ||
+        freeValue(event) ||
+        (activeSketchSnap &&
+          activeSketchSnap.x === point.x &&
+          activeSketchSnap.y === point.y)
+      ) {
+        return { point, lock: null };
+      }
+      return lineDirectionLock(
+        anchor,
+        point,
+        mode.objects,
+        sketchModeResolver(mode)
+      );
+    }
+
+    /** The arc tool's centre, slid onto a line's normal for a tangent start. */
+    function tangentSketchArcCenter(
+      event: PointerEvent | null,
+      center: SketchPoint,
+      start: SketchPoint
+    ): SketchPoint {
+      const mode = sketchModeRef.current;
+      if (!mode || !mode.inferenceEnabled || (event && freeValue(event))) {
+        return center;
+      }
+      return tangentArcCenter(
+        center,
+        [start],
+        mode.objects,
+        sketchModeResolver(mode),
+        placedSnapHints
+      ).center;
     }
 
     function positionSketchCenterTarget(target: SnapTarget, engaged: boolean) {
@@ -8934,7 +9119,7 @@ export function ModelViewer({
         if (!circle) {
           return false;
         }
-        onSketchCommitRef.current(circle);
+        commitSketchObject(circle);
         gesture.dragStart = null;
         gesture.awaitingSecondPoint = false;
         sketchRigRef.current?.setInProgress(null, false);
@@ -8968,7 +9153,7 @@ export function ModelViewer({
         if (!rectangle) {
           return false;
         }
-        onSketchCommitCompositeRef.current(rectangle);
+        commitSketchComposite(rectangle);
         gesture.dragStart = null;
         gesture.awaitingSecondPoint = false;
         sketchRigRef.current?.setInProgress(null, false);
@@ -8996,7 +9181,7 @@ export function ModelViewer({
         if (!polygon) {
           return false;
         }
-        onSketchCommitCompositeRef.current(polygon);
+        commitSketchComposite(polygon);
         gesture.dragStart = null;
         gesture.awaitingSecondPoint = false;
         sketchRigRef.current?.setInProgress(null, false);
@@ -9015,7 +9200,7 @@ export function ModelViewer({
         if (!line) {
           return false;
         }
-        onSketchCommitRef.current(line);
+        commitSketchObject(line);
         gesture.chainAnchor = end;
         finishSketchNumericEntry();
         requestRender();
@@ -9061,7 +9246,7 @@ export function ModelViewer({
         }
         return false;
       }
-      onSketchCommitRef.current(spline);
+      commitSketchObject(spline);
       resetSketchCurve();
       requestRender();
       return true;
@@ -9131,7 +9316,7 @@ export function ModelViewer({
       }
       if (!radiusPoint) {
         if (curveMode === 'ellipse') {
-          onSketchCommitRef.current(ellipse);
+          commitSketchObject(ellipse);
           resetSketchCurve();
         } else {
           points.push(point);
@@ -9144,7 +9329,7 @@ export function ModelViewer({
       }
       const arc = ellipticalArcObject(ellipse, arcStart, point);
       if (arc) {
-        onSketchCommitRef.current(arc);
+        commitSketchObject(arc);
         resetSketchCurve();
       }
     }
@@ -9363,7 +9548,7 @@ export function ModelViewer({
       if (!point) {
         return;
       }
-      rig.setInference(null);
+      rig.setInference(activeSketchGuide ? [activeSketchGuide] : null);
       sketchCenterTarget.hidden = true;
       if (
         mode.tool !== 'select' &&
@@ -9372,6 +9557,35 @@ export function ModelViewer({
         !freeValue(event)
       ) {
         showSketchCenterInference(point, snapTargetsRef.current);
+      }
+      if (mode.tool === 'slot' && gesture.circleFirst) {
+        // I01: the centre line, then the whole outline at the pointer's
+        // distance off it.
+        if (!gesture.circleSecond) {
+          rig.setInProgress([gesture.circleFirst, point], false);
+          positionSketchDimLabel(
+            event,
+            `${Math.round(Math.hypot(point.x - gesture.circleFirst.x, point.y - gesture.circleFirst.y) * 1000) / 1000} ${unitLabelRef.current} · centre 2 of 2`,
+            false
+          );
+        } else {
+          const shape = slotShape(
+            gesture.circleFirst,
+            gesture.circleSecond,
+            slotRadiusAt(gesture.circleFirst, gesture.circleSecond, point)
+          );
+          if (shape) {
+            rig.setInProgress(slotPreviewPoints(shape), true);
+            positionSketchDimLabel(event, compositeSizeLabel(shape), false);
+          } else {
+            rig.setInProgress(
+              [gesture.circleFirst, gesture.circleSecond],
+              false
+            );
+          }
+        }
+        requestRender();
+        return;
       }
       if (
         mode.tool === 'rectangle' &&
@@ -9503,16 +9717,11 @@ export function ModelViewer({
         return;
       }
       if (mode.tool === 'line' && gesture.chainAnchor) {
-        const locked =
-          mode.inferenceEnabled && !freeValue(event)
-            ? axisLockPoint(gesture.chainAnchor, point)
-            : { point, lockedAxis: null };
+        const locked = lockSketchLine(event, gesture.chainAnchor, point);
         rig.setInProgress([gesture.chainAnchor, locked.point], false);
-        if (locked.lockedAxis) {
+        if (locked.lock) {
           rig.setInference([[gesture.chainAnchor, locked.point]]);
-          if (!activeSketchSnap) {
-            positionSketchSnapMarker(event, locked.lockedAxis);
-          }
+          positionSketchSnapMarker(event, locked.lock);
         }
         positionSketchDimLabel(
           event,
@@ -9537,15 +9746,19 @@ export function ModelViewer({
             }`
           );
         } else {
+          const center = tangentSketchArcCenter(
+            event,
+            gesture.arcCenter,
+            gesture.arcStart
+          );
           rig.setInProgress(
-            arcPreviewPoints(gesture.arcCenter, gesture.arcStart, point),
+            arcPreviewPoints(center, gesture.arcStart, point),
             false
           );
-          const dimension = arcDimension(
-            gesture.arcCenter,
-            gesture.arcStart,
-            point
-          );
+          if (center !== gesture.arcCenter && !activeSketchSnap) {
+            positionSketchSnapMarker(event, 'tangent');
+          }
+          const dimension = arcDimension(center, gesture.arcStart, point);
           positionSketchDimLabel(
             event,
             `R ${Math.round(dimension.radius * 10) / 10} ${unitLabelRef.current} · ${Math.round(dimension.sweepDeg * 10) / 10}°`,
@@ -10861,6 +11074,7 @@ export function ModelViewer({
         const mode = sketchModeRef.current;
         const gesture = sketchGestureRef.current;
         const point = sketchPointAt(event);
+        rememberPlacedSnap(point);
         if (
           point &&
           ((mode.tool === 'rectangle' &&
@@ -10885,7 +11099,10 @@ export function ModelViewer({
             mode.tool === 'ellipse' ||
             mode.tool === 'spline' ||
             (mode.tool === 'circle' && mode.circleMode === 'three-point') ||
-            (mode.tool === 'rectangle' && mode.rectangleMode === 'three-point'))
+            (mode.tool === 'rectangle' &&
+              mode.rectangleMode === 'three-point') ||
+            mode.tool === 'slot' ||
+            mode.tool === 'point')
         ) {
           gesture.pointerId = event.pointerId;
           gesture.moved = false;
@@ -11025,6 +11242,11 @@ export function ModelViewer({
           curvePickThreshold(event)
         );
         if (curveId) {
+          // The press is the curve's, as an axis line's is: its release must
+          // not also land on what is under it (a bend's sheet, which takes a
+          // click as its fixed region).
+          lockedHandlePointerId = event.pointerId;
+          gestures.capture(event, null);
           event.preventDefault();
           onPickCurveRef.current?.(curveId, addsToSelection(event));
           requestRender();
@@ -11411,6 +11633,7 @@ export function ModelViewer({
         const rig = sketchRigRef.current;
         const gesture = sketchGestureRef.current;
         const point = sketchPointAt(event);
+        rememberPlacedSnap(point);
         const moved = gestures.hasMoved(event);
         gestures.release(event, null);
         // I01: the Project tool picks model edges and faces through the
@@ -11495,7 +11718,7 @@ export function ModelViewer({
                 ? circleObjectFromDiameter(gesture.dragStart, point)
                 : sketchObjectFromDrag(mode.tool, gesture.dragStart, point);
             if (object) {
-              onSketchCommitRef.current(object);
+              commitSketchObject(object);
             }
           }
           if (point && (mode.tool === 'rectangle' || mode.tool === 'polygon')) {
@@ -11507,7 +11730,7 @@ export function ModelViewer({
               point
             );
             if (shape) {
-              onSketchCommitCompositeRef.current(shape);
+              commitSketchComposite(shape);
             }
           }
           gesture.dragStart = null;
@@ -11515,6 +11738,53 @@ export function ModelViewer({
           rig?.setInProgress(null, false);
           finishSketchNumericEntry();
           onSketchDrawingChangeRef.current(false);
+          requestRender();
+          return;
+        }
+        if (mode.tool === 'point' && point && !moved) {
+          // I01: one click places a point where it snapped.
+          onSketchCommitRef.current({
+            objectKind: 'point',
+            x: point.x,
+            y: point.y
+          });
+          requestRender();
+          return;
+        }
+        if (mode.tool === 'slot' && point && !moved) {
+          if (!gesture.circleFirst) {
+            gesture.circleFirst = point;
+            onSketchDrawingChangeRef.current(true);
+          } else if (!gesture.circleSecond) {
+            if (
+              Math.hypot(
+                point.x - gesture.circleFirst.x,
+                point.y - gesture.circleFirst.y
+              ) >= 0.5
+            ) {
+              gesture.circleSecond = point;
+            }
+          } else {
+            const shape = slotShape(
+              gesture.circleFirst,
+              gesture.circleSecond,
+              slotRadiusAt(gesture.circleFirst, gesture.circleSecond, point)
+            );
+            if (shape) {
+              onSketchCommitCompositeRef.current(shape);
+              gesture.circleFirst = null;
+              gesture.circleSecond = null;
+              rig?.setInProgress(null, false);
+              hideSketchDimLabel();
+              onSketchDrawingChangeRef.current(false);
+            } else {
+              positionSketchDimLabel(
+                event,
+                'Move off the centre line to set the radius',
+                false
+              );
+            }
+          }
           requestRender();
           return;
         }
@@ -11543,7 +11813,7 @@ export function ModelViewer({
               point
             );
             if (isCompositeShape(shape)) {
-              onSketchCommitCompositeRef.current(shape);
+              commitSketchComposite(shape);
               gesture.circleFirst = null;
               gesture.circleSecond = null;
               rig?.setInProgress(null, false);
@@ -11581,7 +11851,7 @@ export function ModelViewer({
               point
             );
             if (circle) {
-              onSketchCommitRef.current(circle);
+              commitSketchObject(circle);
               gesture.circleFirst = null;
               gesture.circleSecond = null;
               rig?.setInProgress(null, false);
@@ -11617,7 +11887,7 @@ export function ModelViewer({
               mode.units
             )
           ) {
-            onSketchCommitRef.current(textObjectFromPoint(point, draft));
+            commitSketchObject(textObjectFromPoint(point, draft));
           }
           requestRender();
           return;
@@ -11626,14 +11896,11 @@ export function ModelViewer({
           // Press-and-drag draws one segment from the press to the release,
           // continuing a chain when one is open. Same locking as a click.
           const anchor = gesture.chainAnchor ?? gesture.pressPoint;
-          const locked =
-            mode.inferenceEnabled && !freeValue(event)
-              ? axisLockPoint(anchor, point)
-              : { point, lockedAxis: null };
+          const locked = lockSketchLine(event, anchor, point);
           const object = lineObjectFromPoints(anchor, locked.point);
           if (object) {
             finishSketchNumericEntry();
-            onSketchCommitRef.current(object);
+            commitSketchObject(object);
             gesture.chainAnchor = locked.point;
             onSketchDrawingChangeRef.current(true);
           }
@@ -11647,16 +11914,13 @@ export function ModelViewer({
             gesture.chainAnchor = point;
             onSketchDrawingChangeRef.current(true);
           } else {
-            const locked =
-              mode.inferenceEnabled && !freeValue(event)
-                ? axisLockPoint(gesture.chainAnchor, point)
-                : { point, lockedAxis: null };
+            const locked = lockSketchLine(event, gesture.chainAnchor, point);
             const object = lineObjectFromPoints(
               gesture.chainAnchor,
               locked.point
             );
             if (object) {
-              onSketchCommitRef.current(object);
+              commitSketchObject(object);
               gesture.chainAnchor = locked.point;
             }
           }
@@ -11686,12 +11950,16 @@ export function ModelViewer({
             }
           } else {
             const object = arcObjectFromPoints(
-              gesture.arcCenter,
+              tangentSketchArcCenter(
+                event,
+                gesture.arcCenter,
+                gesture.arcStart
+              ),
               gesture.arcStart,
               point
             );
             if (object) {
-              onSketchCommitRef.current(object);
+              commitSketchObject(object);
               gesture.arcCenter = null;
               gesture.arcStart = null;
               rig?.setInProgress(null, false);
@@ -15556,11 +15824,20 @@ export function ModelViewer({
     const rig = buildCurvePickerRig(curvePickerCandidatesRef.current);
     context.scene.add(rig.group);
     curvePickerRigRef.current = rig;
+    // E2E: how many curves a click can take now (a bend's lines, say).
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      context.renderer.domElement.dataset.e2eCurvePicker = String(
+        curvePickerCandidatesRef.current.length
+      );
+    }
     context.requestRender();
     return () => {
       context.scene.remove(rig.group);
       rig.dispose();
       if (curvePickerRigRef.current === rig) curvePickerRigRef.current = null;
+      if (E2E_CANVAS_HOOKS_ENABLED) {
+        delete context.renderer.domElement.dataset.e2eCurvePicker;
+      }
       context.requestRender();
     };
   }, [curvePickerKey]);

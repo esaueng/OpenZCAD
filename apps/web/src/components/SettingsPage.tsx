@@ -1778,6 +1778,34 @@ export function SettingsPage({
                     }
                   />
                 </SettingRow>
+                <SettingRow
+                  title="Auto-constrain"
+                  hint="Keep the relations a drawn entity lands on. Off keeps only joined ends and midpoints."
+                >
+                  <Toggle
+                    checked={settings.sketching.autoConstrain}
+                    label="Auto-constrain"
+                    onChange={(autoConstrain) =>
+                      patch({
+                        sketching: { ...settings.sketching, autoConstrain }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Snap hints"
+                  hint="Name the snap in text beside its marker."
+                >
+                  <Toggle
+                    checked={settings.sketching.snapHints}
+                    label="Snap hints"
+                    onChange={(snapHints) =>
+                      patch({
+                        sketching: { ...settings.sketching, snapHints }
+                      })
+                    }
+                  />
+                </SettingRow>
               </Group>
               <Group title="Relations">
                 <SettingRow

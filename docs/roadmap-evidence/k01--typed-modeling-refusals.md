@@ -1,0 +1,5 @@
+---
+row: K01
+---
+
+2026-11-15 typed refusals for modeling features whose kernel entry points throw prose: draft, shell, thicken, offset (through `remus-modeling-operations.ts`) and split now raise a `modeling` `KernelRefusal` whose category is read from the Remus `OperationsError` display form (`unsupported configuration`, `invalid input`, `exact-only policy`, …; anything else is `internal`) and whose code is `<operation>_refused`, with the sentence unchanged (`packages/kernel-adapter/src/remus-operation-refusal.ts`). Before, a draft refused next to a blend and a split across a curved edge reached the user untyped. The QA 2026-11-14 P1 regressions (`test/qa-2026-11-14-p1.test.ts`) cover findings 3–7 on any pin: draft × blend both orders, split of a 2 mm R5-rounded shell along four planes (halves partition the shell's volume when built), 5/6/8/24 patterned pins through a flat flange (exact N-hole volume), face offset beside blends, pocket-floor loops. With the typing removed, the draft and split cases fail as untyped. Remaining: those refusals are capability gaps tracked upstream (esaueng/remus#1743, #1744, #1745), not wrong results.

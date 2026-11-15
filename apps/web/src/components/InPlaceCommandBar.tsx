@@ -157,6 +157,11 @@ export interface InPlaceCommandBarProps {
   sections?: readonly InPlacePanelSectionView[];
   /** What the choices come to, read-only over the rows. */
   summary?: string | null;
+  /**
+   * A command's own standing panel over the bar (Bend's table), set aside
+   * while Options are open over the same place.
+   */
+  aside?: ReactNode;
   onDone(): void;
   onCancel(): void;
 }
@@ -196,6 +201,7 @@ export function InPlaceCommandBar({
   scope = EMPTY_SCOPE,
   sections,
   summary = null,
+  aside = null,
   onDone,
   onCancel
 }: InPlaceCommandBarProps) {
@@ -575,6 +581,7 @@ export function InPlaceCommandBar({
         Done
         <kbd aria-hidden="true">Enter</kbd>
       </button>
+      {aside}
     </div>
   );
 }

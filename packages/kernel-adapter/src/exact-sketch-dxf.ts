@@ -566,7 +566,9 @@ export function sketchDxfEntities(input: SketchDxfInput): SketchDxfOutcome {
           `Sketch object ${object.id} is missing or is not a sketch object.`
         );
       }
-      if (data.construction === true) {
+      // I01: a sketch point is a reference position like construction
+      // geometry: it draws no outline, so the export leaves it out.
+      if (data.construction === true || data.objectKind === 'point') {
         excludedConstructionCount += 1;
         continue;
       }

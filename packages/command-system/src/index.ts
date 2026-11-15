@@ -166,6 +166,8 @@ import {
   type HoleInput,
   gearBody,
   type GearInput,
+  sheetMetalBody,
+  type SheetMetalInput,
   threadBody,
   type ThreadInput,
   type ImportedMeshInput,
@@ -300,6 +302,14 @@ import {
   validateModelingPlane,
   documentIdentifierError
 } from '@openzcad/document-core';
+import {
+  SHEET_METAL_MAX_BEND_ANGLE_DEG,
+  SHEET_METAL_MOLD_LINE_MAX_ANGLE_DEG,
+  sheetMetalGaugeById,
+  sheetMetalMaterialById,
+  type SheetMetalBend,
+  type SheetMetalRelief
+} from '@openzcad/shared';
 import { drawingCommandInputs } from './drawing-annotations';
 import {
   createCadDocumentDigest,
@@ -356,6 +366,7 @@ export type CommandKind =
   | 'feature.datum-axis'
   | 'feature.hole'
   | 'feature.gear'
+  | 'feature.sheet-metal'
   | 'feature.thread'
   | 'feature.shell'
   | 'feature.solid-offset'
@@ -1213,6 +1224,220 @@ function validateHoleInput(document: ProjectDocument, input: HoleInput): void {
   }
 }
 
+/** M16: the most bends one sheet-metal feature holds. */
+const MAX_SHEET_METAL_BENDS = 64;
+/** M16: a bend id is part of its faces' names, so it stays a plain token. */
+const SHEET_METAL_BEND_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+const SHEET_METAL_RELIEF_SHAPES: ReadonlySet<string> = new Set([
+  'rectangular',
+  'obround',
+  'none'
+]);
+const SHEET_METAL_BEND_POSITIONS: ReadonlySet<string> = new Set([
+  'centerline',
+  'fixed-side',
+  'moving-side',
+  'outside-mold-line'
+]);
+
+/**
+ * M16: the rule fields and the bend table a sheet-metal edit replaces in one
+ * transaction. A rule field left out keeps its stored value, `clear` returns
+ * an optional one to its default, and `bends`, when given, is the whole new
+ * table. Values are stored as given, so an expression stays an expression.
+ */
+export interface SheetMetalUpdateInput {
+  featureId: FeatureId;
+  name?: string;
+  rule?: Partial<
+    Pick<
+      SheetMetalInput,
+      | 'profiles'
+      | 'thickness'
+      | 'thicknessSide'
+      | 'bendRadius'
+      | 'kFactor'
+      | 'kFactorMethod'
+      | 'relief'
+      | 'materialPresetId'
+      | 'gaugeId'
+      | 'fixedPoint'
+    >
+  >;
+  clear?: readonly (
+    | 'thicknessSide'
+    | 'kFactorMethod'
+    | 'relief'
+    | 'materialPresetId'
+    | 'gaugeId'
+    | 'fixedPoint'
+  )[];
+  bends?: SheetMetalBend[];
+}
+
+/**
+ * Structural checks for a sheet-metal feature (spec ranges, M16). Whether
+ * the bends fold (a zone that is not clear, a flange still attached beside
+ * its bend, a loop of bends) depends on the blank's geometry and surfaces as
+ * the builder's `sheet-metal:*` refusal at rebuild.
+ */
+function validateSheetMetalInput(
+  document: ProjectDocument,
+  input: SheetMetalInput
+): void {
+  if (!findSketch(document, input.sketchId)) {
+    throw new Error('Sheet metal needs an existing sketch for its blank.');
+  }
+  if (!Array.isArray(input.profiles) || input.profiles.length === 0) {
+    throw new Error('Sheet metal needs at least one sketch cell as its blank.');
+  }
+  const value = (label: string, param: ParamValue) =>
+    resolvedModelingValue(document, `sheet metal ${label}`, param);
+  const positive = (label: string, param: ParamValue) => {
+    const resolved = value(label, param);
+    if (!(resolved > 0) || !Number.isFinite(resolved)) {
+      throw new Error(`Sheet metal ${label} must be greater than 0.`);
+    }
+    return resolved;
+  };
+  const kFactor = (label: string, param: ParamValue) => {
+    const resolved = value(label, param);
+    if (!(resolved > 0 && resolved < 1)) {
+      throw new Error(
+        `Sheet metal ${label} must be greater than 0 and less than 1.`
+      );
+    }
+  };
+  const relief = (label: string, entry: SheetMetalRelief | undefined) => {
+    if (entry === undefined) return;
+    if (!SHEET_METAL_RELIEF_SHAPES.has(entry.shape)) {
+      throw new Error(`Unknown ${label} shape ${String(entry.shape)}.`);
+    }
+    if (entry.width !== undefined) positive(`${label} width`, entry.width);
+    if (entry.extension !== undefined) {
+      const extension = value(`${label} extension`, entry.extension);
+      if (!(extension >= 0) || !Number.isFinite(extension)) {
+        throw new Error(`Sheet metal ${label} extension must not be negative.`);
+      }
+    }
+  };
+  positive('thickness', input.thickness);
+  positive('inside bend radius', input.bendRadius);
+  kFactor('K-factor', input.kFactor);
+  if (
+    input.thicknessSide !== undefined &&
+    input.thicknessSide !== 'positive' &&
+    input.thicknessSide !== 'negative'
+  ) {
+    throw new Error(
+      `Unknown sheet metal thickness side ${String(input.thicknessSide)}.`
+    );
+  }
+  if (
+    input.kFactorMethod !== undefined &&
+    input.kFactorMethod !== 'value' &&
+    input.kFactorMethod !== 'din-6935'
+  ) {
+    throw new Error(
+      `Unknown sheet metal K-factor method ${String(input.kFactorMethod)}.`
+    );
+  }
+  relief('relief', input.relief);
+  if (
+    input.materialPresetId !== undefined &&
+    !sheetMetalMaterialById(input.materialPresetId)
+  ) {
+    throw new Error(
+      `Unknown sheet metal material ${String(input.materialPresetId)}.`
+    );
+  }
+  if (input.gaugeId !== undefined && !sheetMetalGaugeById(input.gaugeId)) {
+    throw new Error(`Unknown sheet metal gauge ${String(input.gaugeId)}.`);
+  }
+  if (
+    input.fixedPoint !== undefined &&
+    (!Array.isArray(input.fixedPoint) ||
+      input.fixedPoint.length !== 2 ||
+      !input.fixedPoint.every(
+        (coordinate) =>
+          typeof coordinate === 'number' && Number.isFinite(coordinate)
+      ))
+  ) {
+    throw new Error(
+      'The sheet metal fixed point needs two finite coordinates.'
+    );
+  }
+  if (!Array.isArray(input.bends)) {
+    throw new Error('Sheet metal needs a bend table (it may be empty).');
+  }
+  if (input.bends.length > MAX_SHEET_METAL_BENDS) {
+    throw new Error(
+      `Sheet metal holds at most ${MAX_SHEET_METAL_BENDS} bends.`
+    );
+  }
+  const ids = new Set<string>();
+  const lines = new Set<string>();
+  input.bends.forEach((bend, index) => {
+    const label = `bend ${index + 1}`;
+    if (typeof bend.id !== 'string' || !SHEET_METAL_BEND_ID.test(bend.id)) {
+      throw new Error(
+        `Sheet metal ${label} needs an id of letters, digits, "-" or "_".`
+      );
+    }
+    if (ids.has(bend.id)) {
+      throw new Error(`Sheet metal bend id ${bend.id} is used twice.`);
+    }
+    ids.add(bend.id);
+    const sketch = bend.line ? findSketch(document, bend.line.sketchId) : null;
+    const object = bend.line
+      ? ownEntry(document.nodes, bend.line.objectId)
+      : undefined;
+    if (
+      !sketch ||
+      !sketch.objectIds.includes(bend.line.objectId) ||
+      object?.kind !== 'sketch-object' ||
+      object.data.objectKind !== 'line'
+    ) {
+      throw new Error(`Sheet metal ${label} needs a straight sketch line.`);
+    }
+    if (lines.has(bend.line.objectId)) {
+      throw new Error(`Sheet metal ${label} reuses another bend's line.`);
+    }
+    lines.add(bend.line.objectId);
+    const angle = value(`${label} angle`, bend.angleDeg);
+    if (!(angle > 0 && angle <= SHEET_METAL_MAX_BEND_ANGLE_DEG)) {
+      throw new Error(
+        `Sheet metal ${label} angle must be greater than 0° and at most ${SHEET_METAL_MAX_BEND_ANGLE_DEG}°.`
+      );
+    }
+    if (bend.direction !== 'up' && bend.direction !== 'down') {
+      throw new Error(`Sheet metal ${label} direction must be up or down.`);
+    }
+    if (
+      bend.position !== undefined &&
+      !SHEET_METAL_BEND_POSITIONS.has(bend.position)
+    ) {
+      throw new Error(
+        `Unknown sheet metal ${label} position ${String(bend.position)}.`
+      );
+    }
+    if (
+      bend.position === 'outside-mold-line' &&
+      angle > SHEET_METAL_MOLD_LINE_MAX_ANGLE_DEG
+    ) {
+      throw new Error(
+        `Sheet metal ${label} is placed by its outside mold line, which needs an angle of at most ${SHEET_METAL_MOLD_LINE_MAX_ANGLE_DEG}°.`
+      );
+    }
+    if (bend.radius !== undefined) {
+      positive(`${label} inside radius`, bend.radius);
+    }
+    if (bend.kFactor !== undefined) kFactor(`${label} K-factor`, bend.kFactor);
+    relief(`${label} relief`, bend.relief);
+  });
+}
+
 /** Schema v53: the most thread starts the kernel's thread generator builds. */
 const MAX_THREAD_STARTS = 16;
 /** Schema v53: the steepest flank the kernel's thread generator builds. */
@@ -2017,6 +2242,11 @@ function validateModelingFeatureUpdate(
       validateThreadInput(preview, { name: feature.name, ...thread });
       break;
     }
+    case 'sheet-metal': {
+      const { featureKind: _kind, ...sheet } = feature.data;
+      validateSheetMetalInput(preview, { name: feature.name, ...sheet });
+      break;
+    }
     case 'shell':
       validateShellInput(preview, {
         name: feature.name,
@@ -2574,6 +2804,40 @@ export const commandFactories = {
       withIds,
       (document) => gearBody(document, withIds).document,
       (document) => validateGearInput(document, withIds)
+    );
+  },
+  /** M16: a sheet-metal part from sketch cells; `bends` may be empty. */
+  sheetMetalBody(payload: SheetMetalInput): CommandDefinition<SheetMetalInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.sheet-metal',
+      'Add sheet metal',
+      withIds,
+      (document) => sheetMetalBody(document, withIds).document,
+      (document) => validateSheetMetalInput(document, withIds)
+    );
+  },
+  /**
+   * M16: replaces a sheet-metal feature's rule fields and bend table in one
+   * transaction (one `feature.update` command, so one undo step).
+   */
+  updateSheetMetal(
+    payload: SheetMetalUpdateInput
+  ): CommandDefinition<FeatureUpdateInput> {
+    return commandFactories.updateFeature(
+      {
+        featureId: payload.featureId,
+        ...(payload.name === undefined ? {} : { name: payload.name }),
+        data: {
+          featureKind: 'sheet-metal',
+          ...payload.rule,
+          ...(payload.bends === undefined ? {} : { bends: payload.bends })
+        },
+        ...(payload.clear && payload.clear.length > 0
+          ? { clearData: [...payload.clear] }
+          : {})
+      },
+      'Edit sheet metal'
     );
   },
   threadBody(payload: ThreadInput): CommandDefinition<ThreadInput> {
@@ -5819,6 +6083,12 @@ export function replayCommands(
         break;
       case 'feature.hole':
         next = holeBody(next, command.payload as HoleInput).document;
+        break;
+      case 'feature.sheet-metal':
+        next = sheetMetalBody(
+          next,
+          command.payload as SheetMetalInput
+        ).document;
         break;
       case 'feature.gear':
         next = gearBody(next, command.payload as GearInput).document;

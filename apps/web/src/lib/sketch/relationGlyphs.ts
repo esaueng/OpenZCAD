@@ -77,6 +77,12 @@ export interface SketchRelationGlyphOptions {
   visibility: SketchRelationGlyphVisibility;
   /** With `selected`, only relations that mention this object are drawn. */
   selectedObjectId?: string | null;
+  /**
+   * S08: relations a drawing commit just inferred. With `selected` they are
+   * drawn whatever is selected, so an inferred relation is never added out
+   * of sight.
+   */
+  alsoShownConstraintIds?: ReadonlySet<string>;
   /** The relation picked from its glyph, drawn as selected. */
   selectedConstraintId?: string | null;
   /** Glyph kinds the per-kind filter hides. */
@@ -103,7 +109,9 @@ export function sketchRelationGlyphs(
 ): SketchRelationGlyphChip[] {
   if (options.visibility === 'hidden') return [];
   const selected = options.selectedObjectId ?? null;
-  if (options.visibility === 'selected' && !selected) return [];
+  const alsoShown = options.alsoShownConstraintIds;
+  if (options.visibility === 'selected' && !selected && !alsoShown?.size)
+    return [];
   const byId = new Map(objects.map((object) => [object.id, object.data]));
   const scalar = (value: number | string): number | undefined => {
     const result = resolve(value);
@@ -174,7 +182,8 @@ export function sketchRelationGlyphs(
     }
     if (
       options.visibility === 'selected' &&
-      !constraintReferencesObject(data, selected!)
+      !(selected && constraintReferencesObject(data, selected)) &&
+      !alsoShown?.has(String(constraint.constraintId))
     ) {
       continue;
     }

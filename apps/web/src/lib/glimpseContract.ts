@@ -55,6 +55,7 @@ export const CAD_OPERATIONS = [
   'feature.datum-axis',
   'feature.hole',
   'feature.gear',
+  'feature.sheet-metal',
   'feature.thread',
   'feature.shell',
   'feature.solid-offset',
@@ -157,6 +158,7 @@ export const REFUSAL_OPERATIONS = [
   'hole',
   'gear',
   'thread',
+  'sheet-metal',
   'direct-edit',
   'imported-step',
   'imported-mesh',
@@ -174,6 +176,7 @@ export const REFUSAL_FAMILIES = [
   'blend',
   'gear',
   'thread',
+  'sheet-metal',
   'reference',
   'other',
   'none'

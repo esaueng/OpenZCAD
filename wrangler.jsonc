@@ -14,8 +14,10 @@
   // Cloudflare does not generate Preview URLs for Workers that implement a DO.
   "preview_urls": false,
   "observability": {
+    "issues": { "enabled": true },
     "enabled": true,
-    "head_sampling_rate": 1
+    "head_sampling_rate": 1,
+    "logs": { "invocation_logs": false }
   },
   "triggers": {
     // Sweep expired D1 upload sessions only after their R2 state is gone.

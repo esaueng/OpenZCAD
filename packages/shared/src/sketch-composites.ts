@@ -38,9 +38,20 @@ function isIdList(value: unknown): value is string[] {
 export function sketchCompositeSideRange(
   kind: SketchComposite['compositeKind']
 ): { min: number; max: number } {
-  return kind === 'rectangle'
+  return kind === 'rectangle' || kind === 'slot'
     ? { min: 4, max: 4 }
     : { min: 3, max: MAX_SKETCH_POLYGON_SIDES };
+}
+
+/**
+ * The object kind side `index` of a composite must be: a line, except a
+ * slot's sides 1 and 3, which are its half-circle arcs (I01).
+ */
+export function sketchCompositeSideKind(
+  kind: SketchComposite['compositeKind'],
+  index: number
+): 'line' | 'arc' {
+  return kind === 'slot' && index % 2 === 1 ? 'arc' : 'line';
 }
 
 /**
@@ -60,7 +71,9 @@ export function isSketchComposite(value: unknown): value is SketchComposite {
       ? method === 'corner' || method === 'center' || method === 'three-point'
       : compositeKind === 'polygon'
         ? method === 'inscribed'
-        : false;
+        : compositeKind === 'slot'
+          ? method === 'center-to-center'
+          : false;
   if (!methodOk || !isIdList(edgeIds)) return false;
   if (helperIds !== undefined && !isIdList(helperIds)) return false;
   // Each method owns a fixed set of helpers, so a helper is never
@@ -71,7 +84,9 @@ export function isSketchComposite(value: unknown): value is SketchComposite {
   ) {
     return false;
   }
-  const range = sketchCompositeSideRange(compositeKind as 'rectangle');
+  const range = sketchCompositeSideRange(
+    compositeKind as SketchComposite['compositeKind']
+  );
   if (edgeIds.length < range.min || edgeIds.length > range.max) return false;
   const members = [...edgeIds, ...(helperIds ?? [])];
   if (new Set(members).size !== members.length) return false;
@@ -87,14 +102,17 @@ export function isSketchComposite(value: unknown): value is SketchComposite {
 
 /**
  * The construction helpers each method owns, in `helperIds` order: a centre
- * rectangle's two diagonals (corner 0 to 2, then 1 to 3) and a polygon's
- * circumcircle. The other methods own none.
+ * rectangle's two diagonals (corner 0 to 2, then 1 to 3), a polygon's
+ * circumcircle and a slot's centre line (first centre to second). The other
+ * methods own none.
  */
 export function sketchCompositeHelperKinds(
   method: SketchComposite['method']
 ): readonly ('line' | 'circle')[] {
-  return method === 'center'
-    ? ['line', 'line']
+  return method === 'center' || method === 'center-to-center'
+    ? method === 'center'
+      ? ['line', 'line']
+      : ['line']
     : method === 'inscribed'
       ? ['circle']
       : [];
@@ -158,13 +176,19 @@ export function resolveSketchComposite(
   const ends: [SketchCompositePoint, SketchCompositePoint][] = [];
   for (const [index, edgeId] of composite.edgeIds.entries()) {
     const data = objects.get(edgeId);
-    if (!data || data.objectKind !== 'line') {
+    const kind = sketchCompositeSideKind(composite.compositeKind, index);
+    if (!data || data.objectKind !== kind) {
       return {
         status: 'broken',
-        reason: `Side ${index + 1} of the ${composite.compositeKind} is no longer a line.`
+        reason: `Side ${index + 1} of the ${composite.compositeKind} is no longer ${kind === 'line' ? 'a line' : 'an arc'}.`
       };
     }
-    const values = [data.x1, data.y1, data.x2, data.y2].map(resolve);
+    const values =
+      data.objectKind === 'arc'
+        ? arcEnds(data, resolve)
+        : data.objectKind === 'line'
+          ? [data.x1, data.y1, data.x2, data.y2].map(resolve)
+          : [];
     if (
       values.some((value) => value === undefined || !Number.isFinite(value))
     ) {
@@ -199,6 +223,105 @@ export function resolveSketchComposite(
     : { status: 'resolved', corners, center };
 }
 
+/** An arc's start and end points, as `[x1, y1, x2, y2]`. */
+function arcEnds(
+  data: Extract<SketchObjectData, { objectKind: 'arc' }>,
+  resolve: (value: ParamValue) => number | undefined
+): (number | undefined)[] {
+  const [cx, cy, r, a, b] = [
+    data.centerX,
+    data.centerY,
+    data.radius,
+    data.startAngleDeg,
+    data.endAngleDeg
+  ].map(resolve);
+  if ([cx, cy, r, a, b].some((value) => value === undefined)) {
+    return [undefined, undefined, undefined, undefined];
+  }
+  const at = (degrees: number) => [
+    cx! + r! * Math.cos((degrees * Math.PI) / 180),
+    cy! + r! * Math.sin((degrees * Math.PI) / 180)
+  ];
+  return [...at(a!), ...at(b!)];
+}
+
+/**
+ * Why a slot's closed loop is no longer a slot, or null: its arcs must be
+ * equal half circles whose centres the helper joins, and its lines must run
+ * tangent to them (each line's ends on the radius through a centre, square
+ * to it).
+ */
+function slotLapse(
+  composite: SketchComposite,
+  corners: SketchCompositePoint[],
+  objects: ReadonlyMap<string, SketchObjectData>,
+  resolve: (value: ParamValue) => number | undefined
+): string | null {
+  const arcs = [composite.edgeIds[1]!, composite.edgeIds[3]!].map((id) => {
+    const data = objects.get(id);
+    if (data?.objectKind !== 'arc') return null;
+    const [cx, cy, r] = [data.centerX, data.centerY, data.radius].map(resolve);
+    return cx === undefined || cy === undefined || r === undefined
+      ? null
+      : { c: { x: cx, y: cy }, r };
+  });
+  if (!arcs[0] || !arcs[1]) return 'The slot’s ends no longer resolve.';
+  const [second, first] = arcs as [
+    { c: SketchCompositePoint; r: number },
+    { c: SketchCompositePoint; r: number }
+  ];
+  const spacing = Math.hypot(second.c.x - first.c.x, second.c.y - first.c.y);
+  const scale = Math.max(spacing, first.r, second.r);
+  const slack = Math.max(scale * 1e-6, 1e-9);
+  if (first.r <= slack || spacing <= slack) {
+    return 'The slot has collapsed.';
+  }
+  if (Math.abs(first.r - second.r) > slack) {
+    return 'The slot’s ends are no longer equal.';
+  }
+  // Corner i starts side i: side 0 runs from corner 0 (first end) to
+  // corner 1 (second end), side 2 from corner 2 (second) to corner 3
+  // (first). Each corner sits on its centre's radius square to the axis.
+  const u = {
+    x: (second.c.x - first.c.x) / spacing,
+    y: (second.c.y - first.c.y) / spacing
+  };
+  const n = { x: -u.y, y: u.x };
+  const expected = [
+    { c: first.c, side: -1 },
+    { c: second.c, side: -1 },
+    { c: second.c, side: 1 },
+    { c: first.c, side: 1 }
+  ].map(({ c, side }) => ({
+    x: c.x + n.x * first.r * side,
+    y: c.y + n.y * first.r * side
+  }));
+  if (
+    corners.some(
+      (corner, index) =>
+        Math.hypot(
+          corner.x - expected[index]!.x,
+          corner.y - expected[index]!.y
+        ) > slack
+    )
+  ) {
+    return 'The slot’s sides no longer run tangent to its ends.';
+  }
+  const helper = objects.get(composite.helperIds?.[0] ?? '');
+  if (helper?.objectKind !== 'line' || !helper.construction) {
+    return 'The slot’s centre line is missing.';
+  }
+  const ends = [helper.x1, helper.y1, helper.x2, helper.y2].map(resolve);
+  if (
+    ends.some((value) => value === undefined) ||
+    Math.hypot(ends[0]! - first.c.x, ends[1]! - first.c.y) > slack ||
+    Math.hypot(ends[2]! - second.c.x, ends[3]! - second.c.y) > slack
+  ) {
+    return 'The slot’s centre line no longer joins its centres.';
+  }
+  return null;
+}
+
 /**
  * Why the closed loop is no longer the shape its record names, or null.
  * Closure alone is not enough: with its relations deleted, a rectangle can
@@ -213,6 +336,9 @@ function shapeLapse(
   objects: ReadonlyMap<string, SketchObjectData>,
   resolve: (value: ParamValue) => number | undefined
 ): string | null {
+  if (composite.compositeKind === 'slot') {
+    return slotLapse(composite, corners, objects, resolve);
+  }
   const count = corners.length;
   const sides = corners.map((corner, index) => {
     const next = corners[(index + 1) % count]!;
@@ -319,12 +445,14 @@ function shapeLapse(
 }
 
 /** The sizes a composite's card can drive with an expression. */
-export type SketchCompositeSizeKey = 'width' | 'height' | 'circumradius';
+export type SketchCompositeSizeKey =
+  'width' | 'height' | 'circumradius' | 'length' | 'radius';
 
 /**
  * Where each size of a composite lives as a driving dimension: width is the
  * distance from corner 0 to corner 1, height from corner 0 to corner 3, and
- * a polygon's circumradius is its circumcircle's radius.
+ * a polygon's circumradius is its circumcircle's radius; a slot's length is
+ * its centre line's and its radius its arcs'.
  */
 export function sketchCompositeSizeDimension(
   composite: SketchComposite,
@@ -335,6 +463,27 @@ export function sketchCompositeSizeDimension(
     const circle = composite.helperIds?.[0];
     return composite.compositeKind === 'polygon' && circle
       ? { constraintKind: 'radius', objectId: circle, value }
+      : null;
+  }
+  if (key === 'length' || key === 'radius') {
+    // A slot's centre distance is its centre line's length (end to end);
+    // its radius is its second end's.
+    if (composite.compositeKind !== 'slot') return null;
+    const centreLine = composite.helperIds?.[0];
+    if (key === 'radius') {
+      return {
+        constraintKind: 'radius',
+        objectId: composite.edgeIds[1]!,
+        value
+      };
+    }
+    return centreLine
+      ? {
+          constraintKind: 'distance',
+          a: { objectId: centreLine, point: 'start' },
+          b: { objectId: centreLine, point: 'end' },
+          value
+        }
       : null;
   }
   if (composite.compositeKind !== 'rectangle') return null;
@@ -368,7 +517,13 @@ export function sketchCompositeSizeDimensions(
   constraints: readonly SketchConstraint[]
 ): Partial<Record<SketchCompositeSizeKey, SketchConstraint>> {
   const found: Partial<Record<SketchCompositeSizeKey, SketchConstraint>> = {};
-  for (const key of ['width', 'height', 'circumradius'] as const) {
+  for (const key of [
+    'width',
+    'height',
+    'circumradius',
+    'length',
+    'radius'
+  ] as const) {
     const wanted = sketchCompositeSizeDimension(composite, key, 0);
     const match =
       wanted && constraints.find((item) => sameSize(item.data, wanted));

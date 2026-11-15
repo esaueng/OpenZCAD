@@ -402,6 +402,7 @@ const KNOWN_FEATURE_KINDS: ReadonlySet<string> = new Set([
   'hole',
   'gear',
   'thread',
+  'sheet-metal',
   'direct-edit',
   'imported-step',
   'imported-mesh',

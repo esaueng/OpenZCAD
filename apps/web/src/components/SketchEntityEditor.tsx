@@ -177,6 +177,10 @@ const FIELDS: Record<
     { key: 'rotation', label: 'Rotation', fallback: '0', dimension: 'angle' },
     { key: 'x', label: 'X' },
     { key: 'y', label: 'Y' }
+  ],
+  point: [
+    { key: 'x', label: 'X' },
+    { key: 'y', label: 'Y' }
   ]
 };
 
@@ -352,6 +356,8 @@ function nextData(
         x: value('x'),
         y: value('y')
       };
+    case 'point':
+      return { ...data, objectKind: kind, x: value('x'), y: value('y') };
     case 'line':
       return {
         ...data,

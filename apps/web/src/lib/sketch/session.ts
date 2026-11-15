@@ -691,6 +691,9 @@ export type SnapTargetKind =
   | 'quadrant'
   | 'horizontal'
   | 'vertical'
+  | 'perpendicular'
+  | 'tangent'
+  | 'extension'
   | 'grid';
 
 export interface SnapTarget extends SketchPoint {
@@ -698,6 +701,8 @@ export interface SnapTarget extends SketchPoint {
   /** Stable within one evaluated sketch; used by hysteresis and Tab cycling. */
   id?: string;
   sourceId?: string;
+  /** The two objects an intersection lies on (S08 holds the point on both). */
+  sourceIds?: readonly [string, string];
   /**
    * The constraint-schema name of this snap point on its source object, set
    * only where `SketchPointRef` has one (line/arc start and end, circle and
@@ -733,6 +738,9 @@ export const SKETCH_SNAP_PRIORITY: Record<SnapTargetKind, number> = {
   quadrant: 5,
   horizontal: 6,
   vertical: 6,
+  perpendicular: 6,
+  tangent: 6,
+  extension: 6,
   grid: 7
 };
 
@@ -745,6 +753,9 @@ export const SKETCH_SNAP_LABELS: Record<SnapTargetKind, string> = {
   quadrant: 'Quadrant',
   horizontal: 'Horizontal',
   vertical: 'Vertical',
+  perpendicular: 'Perpendicular',
+  tangent: 'Tangent',
+  extension: 'Extension',
   grid: 'Grid'
 };
 
@@ -757,6 +768,9 @@ export const SKETCH_SNAP_GLYPHS: Record<SnapTargetKind, string> = {
   quadrant: '◇',
   horizontal: '—',
   vertical: '|',
+  perpendicular: '⊥',
+  tangent: '○',
+  extension: '+',
   grid: '•'
 };
 
@@ -908,6 +922,9 @@ export function snapTargetsForObject(
       // The baseline origin is the one point that exists without parsed font
       // data, and it is the handle a user drags, so it is the snap target.
       return [target('endpoint', resolve(data.x), resolve(data.y))];
+    case 'point':
+      // I01: the point itself, named `center` for the solver.
+      return [target('endpoint', resolve(data.x), resolve(data.y), 'center')];
   }
 }
 
@@ -1085,7 +1102,11 @@ export function collectSketchSnapTargets(
           {
             id: `intersection:${segments[first]!.id}:${segments[second]!.id}`,
             ...point,
-            kind: 'intersection'
+            kind: 'intersection',
+            sourceIds: [
+              segments[first]!.id.split(':')[0]!,
+              segments[second]!.id.split(':')[0]!
+            ]
           }
         ]);
       }
@@ -1313,6 +1334,7 @@ function positionFields(data: SketchObjectData): [string, string][] {
         ['x2', 'y2']
       ];
     case 'text':
+    case 'point':
       return [['x', 'y']];
     case 'spline':
       // A spline's position is its point list; callers move it point by point.
@@ -1372,6 +1394,7 @@ export function sketchObjectGrabPoint(
           ? { x: resolve(data.centerX), y: resolve(data.centerY) }
           : null;
       case 'text':
+      case 'point':
         return { x: resolve(data.x), y: resolve(data.y) };
       default:
         return null;
@@ -1443,6 +1466,7 @@ export function placeSketchObjectGrabPoint(
     case 'ellipse':
       return { ...data, centerX: target.x, centerY: target.y };
     case 'text':
+    case 'point':
       return { ...data, x: target.x, y: target.y };
     default:
       return data;

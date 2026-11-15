@@ -46,18 +46,34 @@ disabled. Show a body in the viewport to include it in the file.
 
 ## Solid formats
 
-| Format       | Keeps                                                                                                                                                                    | Drops                                                                                        |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| STEP (AP214) | Each body as its own solid named after the body and styled in its display colour, the document as the product, exact analytic faces, bounds, volume, closed shells, unit | History                                                                                      |
-| STL (binary) | Bounds and volume within the chord tolerance, a closed surface                                                                                                           | Body separation (one facet stream), exact faces, unit, names, colours                        |
-| STL (ASCII)  | Same as binary STL                                                                                                                                                       | Same as binary STL; every body shares one `solid` block                                      |
-| 3MF          | Bounds, volume, a closed surface, declared unit, one object per body in the package                                                                                      | Body separation **on reimport** (the import merges the objects), exact faces, names, colours |
-| OBJ          | Bounds, volume, a closed surface                                                                                                                                         | Body separation, exact faces, unit, names, colours (no MTL)                                  |
-| PLY (binary) | Bounds, volume, a closed surface                                                                                                                                         | Body separation, exact faces, unit, names, colours                                           |
-| glTF (GLB)   | Bounds, volume, a closed surface; metres and +Y up through its root node                                                                                                 | Body separation (one merged mesh), exact faces, export unit, names, colours                  |
+| Format       | Keeps                                                                                                                                                                    | Drops                                                                        |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| STEP (AP214) | Each body as its own solid named after the body and styled in its display colour, the document as the product, exact analytic faces, bounds, volume, closed shells, unit | History                                                                      |
+| STL (binary) | Bounds and volume within the chord tolerance, a closed surface                                                                                                           | Body separation (one facet stream), exact faces, unit, names, colours        |
+| STL (ASCII)  | Same as binary STL                                                                                                                                                       | Same as binary STL; every body shares one `solid` block                      |
+| 3MF          | Bounds, volume, a closed surface, declared unit, one object per body in the package, named after the body and coloured in its display colour                             | Body separation **on reimport** (the import merges the objects), exact faces |
+| OBJ          | Bounds, volume, a closed surface                                                                                                                                         | Body separation, exact faces, unit, names, colours (no MTL)                  |
+| PLY (binary) | Bounds, volume, a closed surface                                                                                                                                         | Body separation, exact faces, unit, names, colours                           |
+| glTF (GLB)   | Bounds, volume, a closed surface; metres and +Y up through its root node                                                                                                 | Body separation (one merged mesh), exact faces, export unit, names, colours  |
 
 STEP body names and colours are in the file for other CAD to read; OpenZCAD's
 own STEP import does not yet apply them to the bodies it creates (I02).
+
+3MF names and colours use only the 3MF core format: each `<object>` carries
+its body's `name`, and one core `<basematerials>` group holds a `<base>` per
+distinct display colour, which each object selects with `pid` and `pindex`.
+No extension is required, so any 3MF reader opens the file. What the common
+slicers do with it, read from their public 3MF importers (2026-11-15):
+
+| Slicer (source read)                                         | Parts                                                                                                                          | Colours                                                                                                                                  |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Bambu Studio (main 2026-11-10; colour import in 02.09.01.70) | One named object per body. Bodies resting at different heights load, without asking, as one object with a part per body.       | Each distinct colour becomes a filament. A file with colours first opens the colour import dialog, where _Skip_ loads the geometry only. |
+| OrcaSlicer (main 2026-11-14)                                 | One named object per body. Bodies resting at different heights prompt whether to load them as one object with a part per body. | Not read: Orca takes colours only from the Materials extension's `m:colorgroup`, so every body starts on filament 1.                     |
+| PrusaSlicer (main 2026-11-06)                                | One named object per body. With a multi-material printer it may offer to load them as one object with a part per body.         | Not read: it skips `basematerials` as an unknown resource without failing the import.                                                    |
+
+None of this was confirmed in a running slicer; it is what each importer's
+source does with these elements. OpenZCAD's own 3MF import still merges the
+objects into one body and does not read names or colours back.
 
 **Insert project…** (File menu) copies another project's shown bodies into
 the open one as one undoable step: each keeps its name, chosen colour and

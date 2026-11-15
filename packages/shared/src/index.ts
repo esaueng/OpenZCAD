@@ -29,6 +29,7 @@ import type {
   SketchCompositeSideTarget
 } from './sketch-composite-targets';
 import type { BoundaryProvenance } from './sketch-boundary-provenance';
+import type { SheetMetalFeatureFields } from './sheet-metal';
 import type { SketchPromotion } from './sketch-promotions';
 import type { ObjectFolderSet } from './object-folders';
 import type { AssemblySet } from './assembly';
@@ -241,13 +242,21 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // Every field is optional and absent keeps the v53 thread, so older
 // documents load unchanged. An older client would build a plain end or a
 // cylindrical thread in their place, so it must refuse.
+// v58 adds M16 sheet-metal features (`featureKind: 'sheet-metal'`): a flat
+// blank folded by a table of bends. An older client has no builder for the
+// kind and would drop the body on rebuild, so it must refuse.
+// v59 adds the I01 point and slot sketch entities: the `point` sketch object
+// (a position held by relations, bounding no profile) and the `slot`
+// composite (two lines and two half-circle arcs held tangent, named as one
+// shape with a construction centre line). An older client would refuse the
+// unknown object, or drop the composite record on its next save and leave
+// four unrelated curves, so it must refuse the document. Builds on v58.
 // v60 adds the L09 document print clearance (`printClearance`): one radial
 // allowance for printed fits that threads and gears read where they leave
 // their own clearance or backlash unset. Absent means none, so every older
 // document builds unchanged and is never rewritten. An older client would
-// build those threads and gears without it, so it must refuse. (v58 is
-// claimed by the M16 sheet-metal change and v59 by the I01 point and slot
-// entities.)
+// build those threads and gears without it, so it must refuse. Builds on
+// v59.
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 60 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
@@ -316,6 +325,7 @@ export type FeatureKind =
   | 'hole'
   | 'gear'
   | 'thread'
+  | 'sheet-metal'
   | 'direct-edit'
   | 'imported-step'
   | 'imported-mesh'
@@ -329,7 +339,8 @@ export type SketchObjectKind =
   | 'arc'
   | 'ellipse'
   | 'spline'
-  | 'text';
+  | 'text'
+  | 'point';
 /**
  * How a spline is defined (I01, schema v27): `fit` interpolates its points,
  * `control` treats them as the control polygon of a clamped B-spline.
@@ -1351,6 +1362,17 @@ export type SketchCompositeData =
       compositeKind: 'polygon';
       /** Vertices lie on the construction circle: its radius is the circumradius. */
       method: 'inscribed';
+    }
+  | {
+      /**
+       * I01 (schema v59): a straight slot, side 0 a line, side 1 the
+       * half-circle arc about the second centre, side 2 the opposite line
+       * and side 3 the arc about the first centre, counter-clockwise. Its
+       * one helper is the construction line from the first centre to the
+       * second: its length is the slot's centre distance.
+       */
+      compositeKind: 'slot';
+      method: 'center-to-center';
     };
 
 export type SketchCompositeKind = SketchCompositeData['compositeKind'];
@@ -1479,6 +1501,16 @@ export type SketchObjectData = (
       rotation?: ParamValue;
       /** Horizontal alignment of each line about `x`. Defaults to `'left'`. */
       align?: TextAlign;
+    }
+  | {
+      /**
+       * I01 (schema v59). A sketch point: a position relations can hold
+       * (its one solver point is named `center`) and other geometry can
+       * snap to. It bounds no profile and splits no curve.
+       */
+      objectKind: 'point';
+      x: ParamValue;
+      y: ParamValue;
     }
 ) & {
   /**
@@ -2170,6 +2202,17 @@ export type FeatureData =
        */
       pipeSize?: PipeThreadSize;
     }
+  /**
+   * M16 (schema v58): a sheet-metal part. The sketch cells in `profiles`
+   * are the flat blank, `thickness` thick; every bend in `bends` folds it
+   * about a line drawn on that blank. The feature owns one new body. See
+   * {@link SheetMetalFeatureFields} and `docs/plans/sheet-metal-plan.md`.
+   */
+  | ({ featureKind: 'sheet-metal' } & {
+      // Mapped, not the interface itself, so the member stays assignable to
+      // `Record<string, unknown>` like every other feature's data.
+      [K in keyof SheetMetalFeatureFields]: SheetMetalFeatureFields[K];
+    })
   | {
       featureKind: 'split';
       /** Consumed: the two halves replace the input body. */
@@ -3529,7 +3572,9 @@ export interface FeatureWarning {
       | 'blend'
       | 'gear'
       | 'thread'
+      | 'sheet-metal'
       | 'direct-edit'
+      | 'modeling'
       | 'reference';
     operation?: string;
     category: string;
@@ -4881,6 +4926,14 @@ export interface AppSettings {
     geometrySnapEnabled: boolean;
     /** Offer temporary horizontal/vertical relations while drawing. */
     inferenceEnabled: boolean;
+    /**
+     * S08: keep what a drawn entity's placement satisfies as relations
+     * (horizontal/vertical, perpendicular, tangent, coincident). Off keeps
+     * only connected endpoints and midpoints.
+     */
+    autoConstrain: boolean;
+    /** S08: name the engaged snap in text beside its glyph. */
+    snapHints: boolean;
     linearSnap: number;
     angleSnap: number;
     /** Screen-space radius used for sketch snap candidates. */
@@ -5036,6 +5089,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     snapEnabled: true,
     geometrySnapEnabled: true,
     inferenceEnabled: true,
+    autoConstrain: false,
+    snapHints: true,
     linearSnap: 1,
     angleSnap: 15,
     snapTolerancePx: 10,
@@ -5737,6 +5792,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   hole: '#fb923c',
   gear: '#c084fc',
   thread: '#84cc16',
+  'sheet-metal': '#94a3b8',
   'direct-edit': '#2dd4bf',
   'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff',

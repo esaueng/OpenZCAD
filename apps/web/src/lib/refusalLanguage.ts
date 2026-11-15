@@ -108,12 +108,30 @@ const FILLETS_NOT_REBUILT =
   "The fillets around this wall can't be rebuilt at that diameter. Change or remove those fillets in History, then resize the wall.";
 
 /**
+ * A refused fillet removal or resize (`resizeBlend`), by the kernel's code.
+ * Codes without an entry keep the prose table (`radius-too-large`) or the
+ * category sentence.
+ */
+const BLEND_RESIZE_SENTENCES: Readonly<Record<string, string>> = {
+  'unsupported-support-pair':
+    "This fillet joins faces that removing or resizing a fillet can't rebuild yet; that works for fillets between flat and cylindrical faces. Edit the fillet in History instead.",
+  'band-touches-freeform':
+    "This fillet touches a freeform surface, which removing or resizing a fillet can't follow yet. Edit the fillet in History instead.",
+  'blend-band-not-analytic':
+    "This fillet is not a constant-radius round, which removing or resizing a fillet can't rebuild yet. Edit the fillet in History instead."
+};
+
+/**
  * The sentence for a refused face move the kernel typed, read from its code
  * and cause rather than its prose. Null when the record does not name a cause
  * this table has a sentence for; the prose table below then still applies,
  * because untyped paths (move-faces, previews) reach the same sentences.
  */
 function typedSentence(typed: RefusalClassification): string | null {
+  const blendResize = typed.code ? BLEND_RESIZE_SENTENCES[typed.code] : null;
+  if (blendResize) {
+    return blendResize;
+  }
   if (typed.code === 'cylinder-diameter-unbuildable') {
     return typed.reason === 'group_reblend_failed'
       ? FILLETS_NOT_REBUILT

@@ -8,6 +8,7 @@ import type { EditAnalysisRequest } from '@openzcad/shared';
 import type {
   BodyId,
   FaceRecognitionSummary,
+  FeatureId,
   ProjectDocument,
   ProjectId,
   SketchId,
@@ -31,8 +32,10 @@ import type {
   PersistedHistorySession,
   RebuildProgress,
   SectionOutlineReport,
+  SheetMetalFlatPattern,
   SketchPlanarOperation,
   SketchPlanarResult,
+  SheetMetalFoldPreview,
   SketchSolveAnchor,
   SketchSolveOutcome
 } from '@openzcad/kernel-adapter/exact';
@@ -224,6 +227,17 @@ export type GeometryWorkerRequest =
       bodyId: BodyId;
     }
   | {
+      /**
+       * M16: a sheet-metal feature folded to a fraction of every bend, as a
+       * view-only mesh (the adapter's `sheetMetalFoldPreview`).
+       */
+      type: 'sheet-metal-fold';
+      requestId: string;
+      document: ProjectDocument;
+      featureId: FeatureId;
+      fraction: number;
+    }
+  | {
       type: 'solve-sketch';
       requestId: string;
       document: ProjectDocument;
@@ -236,6 +250,17 @@ export type GeometryWorkerRequest =
       requestId: string;
       document: ProjectDocument;
       operation: SketchPlanarOperation;
+    }
+  | {
+      /**
+       * M16: a sheet-metal feature's flat pattern (outline loops, bend
+       * centre lines and bend rows, in the blank's sketch coordinates and
+       * document units) for the flat-pattern view. Display and export only.
+       */
+      type: 'sheet-metal-flat-pattern';
+      requestId: string;
+      document: ProjectDocument;
+      featureId: FeatureId;
     }
   | {
       /**
@@ -401,6 +426,15 @@ export type GeometryMassPropertiesResult =
     }
   | { type: 'mass-properties'; ok: false; requestId: string; error: string };
 
+export type GeometrySheetMetalFoldResult =
+  | {
+      type: 'sheet-metal-fold';
+      ok: true;
+      requestId: string;
+      preview: SheetMetalFoldPreview;
+    }
+  | { type: 'sheet-metal-fold'; ok: false; requestId: string; error: string };
+
 export type GeometrySectionResult =
   | {
       type: 'section';
@@ -445,6 +479,20 @@ export type GeometryRecognizeImportedFaceResult =
     }
   | {
       type: 'recognize-imported-face';
+      ok: false;
+      requestId: string;
+      error: string;
+    };
+
+export type GeometrySheetMetalFlatPatternResult =
+  | {
+      type: 'sheet-metal-flat-pattern';
+      ok: true;
+      requestId: string;
+      pattern: SheetMetalFlatPattern;
+    }
+  | {
+      type: 'sheet-metal-flat-pattern';
       ok: false;
       requestId: string;
       error: string;
@@ -516,10 +564,12 @@ export type GeometryWorkerResult =
   | GeometryMeshQualityResult
   | GeometryDrawingTessellationResult
   | GeometryMassPropertiesResult
+  | GeometrySheetMetalFoldResult
   | GeometrySectionResult
   | GeometrySolveSketchResult
   | GeometrySketch2dOpResult
-  | GeometryRecognizeImportedFaceResult;
+  | GeometryRecognizeImportedFaceResult
+  | GeometrySheetMetalFlatPatternResult;
 
 type ExactKernel = Awaited<ReturnType<typeof createExactKernelAdapter>>;
 let exactKernelStatus: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
@@ -1155,7 +1205,9 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       request.type === 'section' ||
       request.type === 'solve-sketch' ||
       request.type === 'sketch-2d-op' ||
-      request.type === 'recognize-imported-face'
+      request.type === 'recognize-imported-face' ||
+      request.type === 'sheet-metal-fold' ||
+      request.type === 'sheet-metal-flat-pattern'
     ) {
       // 'failed' means the next load call retries, so it is a loading state
       // here too, not a terminal one.
@@ -1176,6 +1228,35 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           ok: true,
           requestId: request.requestId,
           result
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
+      if (request.type === 'sheet-metal-fold') {
+        const preview = await exact.sheetMetalFoldPreview(
+          document,
+          request.featureId,
+          request.fraction
+        );
+        post({
+          type: 'sheet-metal-fold',
+          ok: true,
+          requestId: request.requestId,
+          preview
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
+      if (request.type === 'sheet-metal-flat-pattern') {
+        const pattern = await exact.sheetMetalFlatPattern(
+          document,
+          request.featureId
+        );
+        post({
+          type: 'sheet-metal-flat-pattern',
+          ok: true,
+          requestId: request.requestId,
+          pattern
         });
         post(stateFor('ready', request, { stale: false }));
         return;
@@ -1664,6 +1745,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         requestId: request.requestId,
         error: message
       });
+    } else if (request.type === 'sheet-metal-fold') {
+      post({
+        type: 'sheet-metal-fold',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
     } else if (request.type === 'mesh-quality') {
       post({
         type: 'mesh-quality',
@@ -1702,6 +1790,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     } else if (request.type === 'recognize-imported-face') {
       post({
         type: 'recognize-imported-face',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'sheet-metal-flat-pattern') {
+      post({
+        type: 'sheet-metal-flat-pattern',
         ok: false,
         requestId: request.requestId,
         error: message

@@ -29,6 +29,9 @@
       "@openzcad/kernel-adapter/mesh-import-formats": [
         "./packages/kernel-adapter/src/mesh-import-formats.ts"
       ],
+      "@openzcad/kernel-adapter/sheet-metal-flat-pattern": [
+        "./packages/kernel-adapter/src/sheet-metal-flat-pattern.ts"
+      ],
       "@openzcad/ai-contracts": ["./packages/ai-contracts/src/index.ts"],
       "@openzcad/ai-contracts/auto-parameterize": [
         "./packages/ai-contracts/src/auto-parameterize.ts"

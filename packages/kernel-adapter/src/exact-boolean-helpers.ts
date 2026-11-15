@@ -27,7 +27,10 @@ import {
 import { type KernelUnifyReport, validationReport } from './kernel-validation';
 import { AdapterRefusal } from './adapter-refusal';
 import { exactBooleanOutcome, exactFuseAll } from './exact-boolean-refusal';
-import { analyzeUnionConnectivity, type UnionBounds } from './union-connectivity';
+import {
+  analyzeUnionConnectivity,
+  type UnionBounds
+} from './union-connectivity';
 import type { ExactShape } from './exact-types';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import {
@@ -1311,10 +1314,18 @@ interface ContactGroup {
 }
 
 /**
- * Fault injection for tests: when set, the repair's pairwise fuse calls this
- * instead of the kernel. The contact proof and every other fuse are
- * untouched, so a test can hand the repair a bad merge and watch the
- * preservation checks reject it. Never set outside tests.
+ * Fault injection for tests. Never set outside tests.
+ *
+ * - `pairwiseFuse`: the repair's pairwise fuse calls this instead of the
+ *   kernel, so a test can hand the repair a bad merge and watch the
+ *   preservation checks reject it.
+ * - `fuseAll`: the union and the repair's `fuseAll` attempts call this
+ *   instead of the kernel. Since esaueng/remus#1792 the pinned `fuseAll`
+ *   merges cap-to-cap contact itself, so a test stands in a kernel that
+ *   leaves touching operands in pieces (esaueng/remus#1738) to keep the
+ *   gate's repair and refusal paths covered.
+ *
+ * The contact proof always reaches the real kernel.
  */
 export const contactRepairFaults: {
   pairwiseFuse?: (
@@ -1322,6 +1333,7 @@ export const contactRepairFaults: {
     left: number,
     right: number
   ) => number | null;
+  fuseAll?: (kernel: RemusKernel, solids: Uint32Array) => number;
 } = {};
 
 interface RepairPart {
@@ -1490,7 +1502,10 @@ function regroupTouchingOperands(
   ): number | null => {
     try {
       if (strategy === 'fuseAll') {
-        return kernel.fuseAll(Uint32Array.from([left.solid, right.solid]));
+        const pair = Uint32Array.from([left.solid, right.solid]);
+        return contactRepairFaults.fuseAll
+          ? contactRepairFaults.fuseAll(kernel, pair)
+          : kernel.fuseAll(pair);
       }
       if (contactRepairFaults.pairwiseFuse) {
         return contactRepairFaults.pairwiseFuse(
@@ -1641,13 +1656,16 @@ function unmergedContactRefusal(): AdapterRefusal {
  * esaueng/remus#1738 (`fuseAll` leaves cap-to-cap cylinders unmerged) and
  * esaueng/remus#1742 (pairwise `fuse` refuses parallel cylinders overlapping
  * by 1 mm or less). `test/touching-cylinder-union.test.ts` holds the oracles
- * the plain `exactFuseAll` must then pass on its own.
+ * the plain `exactFuseAll` must then pass on its own. #1738 is fixed from
+ * Remus 2026.1.141 (esaueng/remus#1768, #1792), whose `fuseAll` merges the
+ * contact itself, so on the pin this gate now returns at step 1; it stays
+ * until #1742 is fixed too.
  *
- * `fuseAll` joins the groups it judges disjoint "directly without a boolean",
- * and on the pin that judgement misses planar contact between two cylinder
- * caps — a hub standing exactly on a flange — returning one valid-looking
- * solid that still holds both caps: an internal wall the viewport hides and
- * every later face pick, fillet and cut works on.
+ * Before that fix `fuseAll` joined the groups it judged disjoint "directly
+ * without a boolean", and that judgement missed planar contact between two
+ * cylinder caps — a hub standing exactly on a flange — returning one
+ * valid-looking solid that still held both caps: an internal wall the
+ * viewport hides and every later face pick, fillet and cut works on.
  *
  * The gate is NARROW and certifies per contact INTERFACE:
  *
@@ -1684,7 +1702,9 @@ export function fuseAllMergingFaceContacts(
   solids: readonly number[],
   labels?: readonly string[]
 ): number {
-  const fused = exactFuseAll(kernel, solids, labels);
+  const fused = contactRepairFaults.fuseAll
+    ? contactRepairFaults.fuseAll(kernel, Uint32Array.from(solids))
+    : exactFuseAll(kernel, solids, labels);
   if (solids.length < 2) return fused;
   const components = faceComponentsOf(kernel, fused);
   if (components === null || components.length <= 1) return fused;
@@ -2130,7 +2150,11 @@ export function solidsHavePositiveExactIntersection(
   } catch {
     return false;
   } finally {
-    if (commonSolid !== undefined && commonSolid !== left && commonSolid !== right) {
+    if (
+      commonSolid !== undefined &&
+      commonSolid !== left &&
+      commonSolid !== right
+    ) {
       kernel.deleteSolid(commonSolid);
     }
   }
@@ -2176,18 +2200,24 @@ export function solidsShareMaterialOrTouch(
       validationReport(kernel, fusedSolid).errorCount !== 0 ||
       !isFaceConnectedSolid(kernel, fusedSolid) ||
       !solidMeshIsClosed(kernel, fusedSolid)
-    ) return false;
+    )
+      return false;
     const box = kernel.boundingBox(fusedSolid);
     return operands.every(({ bounds }) =>
-      (['x', 'y', 'z'] as const).every((axis, index) =>
-        box[index]! <= bounds.min[axis] + connectivity.contactTolerance &&
-        box[index + 3]! >= bounds.max[axis] - connectivity.contactTolerance
+      (['x', 'y', 'z'] as const).every(
+        (axis, index) =>
+          box[index]! <= bounds.min[axis] + connectivity.contactTolerance &&
+          box[index + 3]! >= bounds.max[axis] - connectivity.contactTolerance
       )
     );
   } catch {
     return false;
   } finally {
-    if (fusedSolid !== undefined && fusedSolid !== left && fusedSolid !== right) {
+    if (
+      fusedSolid !== undefined &&
+      fusedSolid !== left &&
+      fusedSolid !== right
+    ) {
       kernel.deleteSolid(fusedSolid);
     }
   }

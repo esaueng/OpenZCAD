@@ -27,6 +27,7 @@ import { featureHistory, featureResultBodyIds } from '../featureHistory';
 import { holePositionAxes } from '../holePositionAxes';
 import type { RevolveAxisCandidate } from './revolve';
 import { threadEditOptions } from './thread';
+import { sheetMetalCleared, sheetMetalEditOptions } from './sheetMetal';
 import {
   IN_PLACE_TOOL_SPECS,
   type BodyPick,
@@ -183,6 +184,9 @@ export function inPlaceToolForFeature(data: FeatureData): InPlaceToolId | null {
       return data.featureKind;
     case 'gear':
       return data.targetBodyId === undefined ? 'gear' : 'gear-teeth';
+    // M16: Bend edits the whole feature, its rule and its bend table.
+    case 'sheet-metal':
+      return 'bend';
     case 'boolean':
       return data.operation;
     case 'pattern':
@@ -559,6 +563,26 @@ export function inPlaceEditSeed(
       value('offset', data.offset);
       value('phaseDeg', data.phaseDeg);
       value('chamferAngleDeg', data.chamferAngleDeg);
+      break;
+    }
+    case 'sheet-metal': {
+      Object.assign(seed.options, sheetMetalEditOptions(data));
+      value('thickness', data.thickness);
+      value('bendRadius', data.bendRadius);
+      value('kFactor', data.kFactor);
+      value('reliefWidth', data.relief?.width);
+      value('reliefExtension', data.relief?.extension);
+      // Every bend's line, in table order. One whose line is gone stays a
+      // row (its rebuild says so) so it is removed on purpose, not lost.
+      for (const bend of data.bends) {
+        seed.slots.path.push({
+          sketchId: bend.line.sketchId,
+          entityId: bend.line.objectId
+        });
+        if (!ctx.curve(bend.line.sketchId, bend.line.objectId)) {
+          missing.push('bend line');
+        }
+      }
       break;
     }
     case 'shell':
@@ -1057,6 +1081,17 @@ export function inPlaceFeatureUpdate(
         ...(clear.length > 0 ? { clearData: [...clear] } : {})
       };
     }
+    case 'sheet-metal': {
+      if (saved.featureKind !== 'sheet-metal') return null;
+      // Optional fields the edit no longer sets go back to their defaults.
+      const clear = sheetMetalCleared(saved, request.sheet);
+      return {
+        featureId,
+        name,
+        data: { featureKind: 'sheet-metal', ...request.sheet },
+        ...(clear.length > 0 ? { clearData: [...clear] } : {})
+      };
+    }
     case 'thread': {
       if (saved.featureKind !== 'thread') return null;
       // Optional fields the edit no longer sets go back to the face or their
@@ -1224,6 +1259,14 @@ export function inPlaceEditSourceSketchIds(data: FeatureData): SketchId[] {
       ];
     case 'helical-sweep':
       return [data.profile.sketchId];
+    // M16: the blank's sketch, and each bend line's.
+    case 'sheet-metal':
+      return [
+        ...new Set([
+          data.sketchId,
+          ...data.bends.map((bend) => bend.line.sketchId)
+        ])
+      ];
     // The in-place Extrude edits an extrude (U09): its profile's sketch.
     case 'extrude':
       return [data.sketchId];
@@ -1358,6 +1401,26 @@ export function keptInOrder<T>(entries: readonly (T | null)[]): {
     return { kept: [], cleared: true };
   }
   return { kept: entries.slice(0, gap) as T[], cleared: false };
+}
+
+/**
+ * An edit's path picks re-checked against the model. A path or guide is
+ * ordered, so one lost before a kept one clears the list ({@link
+ * keptInOrder}). A bend table is not a path (M16): each row stands alone, so
+ * every row is kept and one whose line is gone stays for the user to remove
+ * (its rebuild refuses until then); `missing` names those.
+ */
+export function recheckedCurvePicks(
+  picks: readonly CurvePick[],
+  exists: (pick: CurvePick) => boolean,
+  rowsStandAlone: boolean
+): { kept: CurvePick[]; cleared: boolean; missing: CurvePick[] } {
+  const missing = picks.filter((pick) => !exists(pick));
+  if (rowsStandAlone) return { kept: [...picks], cleared: false, missing };
+  const { kept, cleared } = keptInOrder(
+    picks.map((pick) => (exists(pick) ? pick : null))
+  );
+  return { kept, cleared, missing };
 }
 
 /**

@@ -44,6 +44,12 @@ export function sketchPointPosition(
   scalar: (value: number | string) => number | undefined
 ): Point | null {
   if (!data) return null;
+  if (data.objectKind === 'point') {
+    if (pointName !== 'center') return null;
+    const x = scalar(data.x);
+    const y = scalar(data.y);
+    return x === undefined || y === undefined ? null : { x, y };
+  }
   if (data.objectKind === 'line') {
     if (pointName === 'center') return null;
     const x = scalar(pointName === 'start' ? data.x1 : data.x2);

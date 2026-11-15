@@ -1,0 +1,155 @@
+/* M16 Bend: the bend table and fold slider, standing over the command bar's
+   right end (Options open from its left). It steps aside while Options are
+   open over the same strip of model. */
+.sheet-bend-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: min(400px, calc(100vw - 32px));
+  max-height: max(
+    0px,
+    calc(
+      100dvh - var(--stage-top, 0px) - var(--island-gap, 8px) * 2 -
+        var(--command-bar-h, 48px) - var(--in-place-command-h, 64px) - 8px
+    )
+  );
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
+  padding: 8px 10px 10px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 24%);
+  font-size: var(--fs-sm);
+}
+
+.in-place-command:has(.in-place-command-options[open]) .sheet-bend-panel {
+  display: none;
+}
+
+.sheet-bend-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sheet-bend-title {
+  font-weight: 600;
+}
+
+.sheet-bend-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-subtle);
+}
+
+.sheet-bend-fold input[type='range'] {
+  width: 120px;
+}
+
+.sheet-bend-fold-value {
+  min-width: 4ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.sheet-bend-fixed,
+.sheet-bend-note {
+  margin: 6px 0 0;
+  color: var(--color-text-subtle);
+}
+
+.sheet-bend-note {
+  font-size: var(--fs-xs);
+}
+
+.sheet-bend-link {
+  margin-left: 6px;
+  padding: 0;
+  color: var(--color-accent);
+  background: none;
+  border: none;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.sheet-bend-rows {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sheet-bend-rows > li {
+  padding: 6px 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.sheet-bend-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sheet-bend-row-more {
+  margin-top: 4px;
+  padding-left: 22px;
+}
+
+.sheet-bend-index {
+  width: 16px;
+  color: var(--color-text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.sheet-bend-field {
+  width: 64px;
+  min-height: 26px;
+  padding: 0 6px;
+  box-sizing: border-box;
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.sheet-bend-field.is-refused {
+  border-color: var(--color-warning);
+}
+
+.sheet-bend-unit {
+  color: var(--color-text-subtle);
+}
+
+.sheet-bend-direction {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.sheet-bend-direction > .in-place-option-choice[aria-pressed='true'] {
+  color: var(--color-bg);
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.sheet-bend-select {
+  min-height: 26px;
+  max-width: 150px;
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+}
+
+.sheet-bend-missing {
+  margin: 0 0 4px;
+  color: var(--color-warning);
+}
