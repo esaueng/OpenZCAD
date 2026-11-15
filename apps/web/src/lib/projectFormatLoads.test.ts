@@ -553,6 +553,30 @@ describe('an account that holds encrypted projects without the opt-in', () => {
       code: 'E2EE_PREFERENCE_UNVERIFIED'
     });
   });
+
+  it.each([
+    ['encryption is closed', { enabled: false, projectsEnabled: false }],
+    ['encrypted projects are closed', { enabled: true, projectsEnabled: false }]
+  ] as const)(
+    'reads as not encrypted without asking the refusing preferences route when %s',
+    async (_, config) => {
+      // The Worker answers 501 there, which the browser logs on every
+      // listing and shelf write that asks.
+      vi.mocked(desktopFetch).mockImplementation(async (input) => {
+        if (input === '/api/session') return json({ userId: 'user_1' });
+        if (input === '/api/e2ee/config') return json(config);
+        return json({ error: 'Not available' }, 501);
+      });
+      await expect(encryptsAccountLibrary()).resolves.toBe(false);
+      expect(
+        vi
+          .mocked(desktopFetch)
+          .mock.calls.some(
+            ([input]) => input === '/api/e2ee/project-preferences'
+          )
+      ).toBe(false);
+    }
+  );
 });
 
 describe('the encrypt-new-projects decision fails closed (D2)', () => {

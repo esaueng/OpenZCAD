@@ -7,7 +7,7 @@ import { confirmApprovalCancellation } from './approvalCancellation';
 import { shareWorkStore } from './shareWorkStore';
 import { projectAuthorityStore } from './projectAuthorityStore';
 import { forgetShelfNames } from '../projectShelfNames';
-import { forgetAccountShelf } from '../sealedShelfState';
+import { forgetAccountShelf } from '../sealedShelfCore';
 import {
   beginKeySessionTeardown,
   finishKeySessionTeardown

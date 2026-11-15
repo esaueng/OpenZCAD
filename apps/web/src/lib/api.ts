@@ -533,19 +533,21 @@ export async function encryptsNewProjects(): Promise<boolean> {
  */
 export async function encryptsAccountLibrary(): Promise<boolean> {
   if (await encryptsNewProjects()) return true;
-  const stored = await readJsonAnswer('/api/e2ee/project-preferences');
-  if (stored.kind === 'ok') return stored.body.libraryEncrypted === true;
   const config = await readJsonAnswer('/api/e2ee/config');
-  if (config.kind === 'ok') {
-    if (config.body.enabled === true && config.body.projectsEnabled === true) {
-      throw preferenceUnverified();
-    }
-    return false;
-  }
   // Only a Worker that has no encryption routes at all reads as no. One that
   // cannot be reached, errors or answers something else could be hiding an
   // encrypted library, and `encryptsNewProjects` reads it as no too.
   if (config.kind === 'absent') return false;
+  const projectsOpen =
+    config.kind === 'ok' &&
+    config.body.enabled === true &&
+    config.body.projectsEnabled === true;
+  // Closed encrypted projects: the preferences route refuses (501) and no
+  // encrypted project can be stored, so the library is plaintext. Asking
+  // anyway would only log a failed request on every listing.
+  if (config.kind === 'ok' && !projectsOpen) return false;
+  const stored = await readJsonAnswer('/api/e2ee/project-preferences');
+  if (stored.kind === 'ok') return stored.body.libraryEncrypted === true;
   throw preferenceUnverified();
 }
 

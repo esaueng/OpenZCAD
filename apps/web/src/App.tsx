@@ -1663,23 +1663,8 @@ import {
   summarizeLocalDocument,
   withSavedVersion
 } from './lib/projectShelf';
-import {
-  accountListingOrganizations,
-  agreedShelfState,
-  beginShelfEdit,
-  isShelfSealed,
-  journalShelfEdit,
-  mirrorShelfToAccount,
-  noteLegacyShelfRows,
-  overlaySealedShelf,
-  readShelfEdits,
-  rememberAccountRows,
-  reorderShelfOnAccount,
-  SEALED_SHELF_APPLIED_EVENT,
-  setShelfAccount,
-  shelfAccount,
-  shelfSealedOrSafe
-} from './lib/sealedShelfState';
+import { SEALED_SHELF_APPLIED_EVENT } from './lib/sealedShelfCore';
+import type * as SealedShelf from './lib/sealedShelfState';
 import {
   preparePartThumbnails,
   rememberCapturedThumbnail
@@ -2212,21 +2197,37 @@ interface HydrateOptions {
   activeProjectSince?: ActiveProjectSnapshot;
 }
 
+/**
+ * The sealed shelf (ADR-024 amendment 2026-11-14), loaded on first use so
+ * the entry chunk does not carry it: only shelf listings, edits and their
+ * mirrors of a signed-in account need it.
+ */
+function loadSealedShelf(): Promise<typeof SealedShelf> {
+  return import('./lib/sealedShelfState');
+}
+
+/** The account the shelf currently lists, which the shelf's mirror writes for. */
+let shelfListingAccount: string | null = null;
+
 const organizationMirrorHost: OrganizationMirrorHost = {
   readLocal: loadLocalProjectOrganizationSnapshot,
   saveLocal: saveLocalProjectOrganizationIfCurrent,
   // An account whose library is encrypted sends only trash moves; its pins,
   // order and archive go to the sealed library record (sealedShelfState.ts).
   // Any other account's are sent only after its library rule says plaintext.
-  updateRemote: (projectId, organization, signal) =>
-    mirrorShelfToAccount(
+  updateRemote: async (projectId, organization, signal) => {
+    // The account is read when the mirror runs, not after the load.
+    const accountId = shelfListingAccount;
+    const shelf = await loadSealedShelf();
+    return shelf.mirrorShelfToAccount(
       api,
-      shelfAccount(),
+      accountId,
       projectId,
       organization,
       encryptsAccountLibrary,
       signal
-    )
+    );
+  }
 };
 const organizationBackground = new OrganizationMirrorBackground();
 
@@ -2256,13 +2257,20 @@ async function loadProjectSummaries(
   const keySessionRevision = getKeySessionRevision();
   const signedIn = accountId !== null;
   const scope = organizationBackground.begin(accountId);
-  setShelfAccount(accountId);
+  shelfListingAccount = accountId;
   // Whether this account's shelf state is sealed, asked beside the listing.
   // Unanswerable reads as sealed here: the listing then shows the account's
   // own edits, record and rows, and sends nothing readable on a guess.
-  const sealedShelf = signedIn
-    ? shelfSealedOrSafe(accountId, encryptsAccountLibrary)
-    : Promise.resolve(false);
+  const sealedShelfModule = accountId === null ? null : loadSealedShelf();
+  const sealedShelf =
+    accountId === null || sealedShelfModule === null
+      ? Promise.resolve(false)
+      : sealedShelfModule.then((shelf) =>
+          shelf.shelfSealedOrSafe(accountId, encryptsAccountLibrary)
+        );
+  // Awaited below; a listing that fails before then must not leave it
+  // rejected and unobserved.
+  void sealedShelf.catch(() => undefined);
   const unavailableAs =
     <T,>(fallback: T) =>
     (error: unknown): T => {
@@ -2328,13 +2336,14 @@ async function loadProjectSummaries(
   let remoteProjects = remote?.projects ?? [];
   let legacyShelf: ReadonlyMap<string, ProjectOrganization> = new Map();
   let sealedListing = false;
+  const shelf = sealedShelfModule ? await sealedShelfModule : null;
   if (accountId && !remote) {
     // Unreached, the account still owns its shelf state: an encrypted (or
     // unanswerable) library lists its known projects from its own edits,
     // record and last-listed rows, never from this device's rows.
     sealedListing = await sealedShelf;
-  } else if (accountId && remote) {
-    rememberAccountRows(accountId, remoteProjects);
+  } else if (accountId && remote && shelf) {
+    shelf.rememberAccountRows(accountId, remoteProjects);
     if (await sealedShelf) {
       sealedListing = true;
       // The account's rows speak for the trash only (ADR-024 amendment
@@ -2342,10 +2351,10 @@ async function loadProjectSummaries(
       // unsynced edits, its sealed record, and once from readable state
       // still on the rows, to migrate. Never from this device's rows, which
       // every account signed in here shares.
-      const overlaid = overlaySealedShelf(
+      const overlaid = shelf.overlaySealedShelf(
         remoteProjects,
-        agreedShelfState(accountId),
-        readShelfEdits(accountId)
+        shelf.agreedShelfState(accountId),
+        shelf.readShelfEdits(accountId)
       );
       remoteProjects = overlaid.projects;
       legacyShelf = overlaid.legacy;
@@ -2388,8 +2397,8 @@ async function loadProjectSummaries(
     : localOrganizations;
   // Readable shelf state goes into the sealed record with the next folder
   // sync, which then resets those account rows.
-  if (accountId && remote && sealedListing)
-    noteLegacyShelfRows(accountId, legacyShelf);
+  if (accountId && remote && sealedListing && shelf)
+    shelf.noteLegacyShelfRows(accountId, legacyShelf);
   const pendingEncryptedProjectIds = isCurrentKeySession(keySessionRevision)
     ? remote?.pendingEncryptedProjectIds
     : undefined;
@@ -2423,8 +2432,8 @@ async function loadProjectSummaries(
       // A sealed library's projects take only the trash from this device's
       // rows, which another account signed in here may have left pending,
       // whether or not the account's listing came back.
-      accountId && sealedListing
-        ? accountListingOrganizations(
+      accountId && sealedListing && shelf
+        ? shelf.accountListingOrganizations(
             accountId,
             settledOrganizations,
             remote ? remoteProjects : null
@@ -14848,7 +14857,7 @@ export function App() {
     update: (current: ProjectOrganization) => ProjectOrganization
   ): Promise<ProjectOrganization> {
     // The account that made the edit, read before it waits for anything.
-    const edit = beginShelfEdit(() => sessionRef.current?.userId ?? null);
+    const editAccount = sessionRef.current?.userId ?? null;
     const organization = await queueShelfWrite(async () => {
       const project = latestProjects.current.find(
         (entry) => entry.projectId === projectId
@@ -14861,7 +14870,7 @@ export function App() {
       // reconcile pushes a flagged row and adopts the account's otherwise,
       // so the flag is what keeps a change alive across a failed mirror
       // without letting this device overrule every other one forever.
-      await saveShelfRows(new Map([[projectId, next]]), edit);
+      await saveShelfRows(new Map([[projectId, next]]), editAccount);
       return next;
     });
     if (session) {
@@ -14889,8 +14898,12 @@ export function App() {
    */
   async function saveShelfRows(
     rows: Map<string, ProjectOrganization>,
-    edit: ReturnType<typeof beginShelfEdit>
+    editAccount: string | null
   ) {
+    // Loaded before anything changes, so a failed load leaves the shelf as
+    // it was, like a failed write.
+    const shelf = await loadSealedShelf();
+    const edit = shelf.beginShelfEdit(() => editAccount);
     const before = new Map(
       [...rows.keys()].map((projectId) => [
         projectId,
@@ -14939,7 +14952,7 @@ export function App() {
     // through the journal. Storage refused it, so the edit lasts until the
     // tab closes unless the library syncs first: say so instead of letting
     // the next listing quietly restore the old shelf.
-    if (!journaled && isShelfSealed(edit.accountId)) {
+    if (!journaled && shelf.isShelfSealed(edit.accountId)) {
       const message =
         'Saved for now only: this browser would not store the change, so keep this tab open until your library syncs, or it will be lost.';
       setStatus(message);
@@ -15196,7 +15209,7 @@ export function App() {
     pin?: { projectId: string; pinned: boolean }
   ): Promise<void> {
     const positions = new Map(projectIds.map((id, index) => [id, index]));
-    const edit = beginShelfEdit(() => sessionRef.current?.userId ?? null);
+    const editAccount = sessionRef.current?.userId ?? null;
     let pinnedName: string | undefined;
     try {
       pinnedName = await queueShelfWrite(async () => {
@@ -15218,7 +15231,7 @@ export function App() {
               ];
             })
         );
-        await saveShelfRows(rows, edit);
+        await saveShelfRows(rows, editAccount);
         return pin
           ? latestProjects.current.find(
               (project) => project.projectId === pin.projectId
@@ -15242,8 +15255,8 @@ export function App() {
       void mirrorPendingReorder(
         projectIds,
         organizationMirrorHost,
-        (ids) =>
-          reorderShelfOnAccount(
+        async (ids) =>
+          (await loadSealedShelf()).reorderShelfOnAccount(
             api,
             session.userId,
             ids,
@@ -15406,8 +15419,13 @@ export function App() {
           }
           // A sealed shelf keeps the copy beside its source on this device
           // (and in the sealed record); the account row holds the default.
+          const shelf =
+            response.project.organization && session
+              ? await loadSealedShelf().catch(() => null)
+              : null;
           const copyOrganization =
-            response.project.organization && isShelfSealed(session?.userId)
+            response.project.organization &&
+            shelf?.isShelfSealed(session?.userId)
               ? {
                   ...response.project.organization,
                   sortOrder: projectOrganization(project).sortOrder
@@ -15418,8 +15436,12 @@ export function App() {
               response.project.projectId,
               copyOrganization
             ).catch(() => undefined);
-            if (session && copyOrganization !== response.project.organization)
-              journalShelfEdit(
+            if (
+              session &&
+              shelf &&
+              copyOrganization !== response.project.organization
+            )
+              shelf.journalShelfEdit(
                 session.userId,
                 response.project.projectId,
                 DEFAULT_PROJECT_ORGANIZATION,

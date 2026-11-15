@@ -6,7 +6,7 @@ import { confirmKeySessionEnded } from './keySession';
 import { shareWorkStore } from './shareWorkStore';
 import { projectAuthorityStore } from './projectAuthorityStore';
 import { forgetShelfNames } from '../projectShelfNames';
-import { forgetAccountShelf } from '../sealedShelfState';
+import { forgetAccountShelf } from '../sealedShelfCore';
 
 /** Only the successful, explicitly requested erasure may reset local trust. */
 export async function eraseAccountWithKeyCleanup<

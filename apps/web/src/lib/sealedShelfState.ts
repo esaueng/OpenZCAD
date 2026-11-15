@@ -17,6 +17,20 @@ import {
   type ProjectShelf,
   type ShelfEdit
 } from './libraryFolderSync';
+import {
+  accountRowsKey,
+  forgetAccountShelf,
+  registerShelfMemoryForget,
+  SEALED_SHELF_APPLIED_EVENT,
+  shelfEditsKey
+} from './sealedShelfCore';
+
+export {
+  accountRowsKey,
+  forgetAccountShelf,
+  SEALED_SHELF_APPLIED_EVENT,
+  shelfEditsKey
+};
 
 /**
  * Shelf state (pin, manual order, archive) of an account whose library is
@@ -63,7 +77,6 @@ interface AccountShelf {
 }
 
 const accounts = new Map<string, AccountShelf>();
-let listingAccount: string | null = null;
 
 function account(accountId: string): AccountShelf {
   let state = accounts.get(accountId);
@@ -82,15 +95,6 @@ function errorCode(error: unknown): string | undefined {
 function errorStatus(error: unknown): number | undefined {
   const status = (error as { status?: unknown } | null)?.status;
   return typeof status === 'number' ? status : undefined;
-}
-
-/** The account the shelf currently lists, which the shelf's mirror writes for. */
-export function setShelfAccount(accountId: string | null): void {
-  listingAccount = accountId;
-}
-
-export function shelfAccount(): string | null {
-  return listingAccount;
 }
 
 /** True only once the account (or a Worker refusal) said so. */
@@ -167,12 +171,6 @@ export function agreedShelfState(
 }
 
 // ── Shelf edits waiting for the sealed record ─────────────────────────────
-
-const EDITS_PREFIX = 'openzcad.library.shelf.edits.v1';
-
-export function shelfEditsKey(accountId: string): string {
-  return `${EDITS_PREFIX}:${accountId}`;
-}
 
 function parseShelf(value: unknown): ProjectShelf | null {
   if (!value || typeof value !== 'object') return null;
@@ -408,12 +406,6 @@ export function consumeShelfEdits(
 
 // ── Listings ──────────────────────────────────────────────────────────────
 
-const ROWS_PREFIX = 'openzcad.library.shelf.rows.v1';
-
-export function accountRowsKey(accountId: string): string {
-  return `${ROWS_PREFIX}:${accountId}`;
-}
-
 /**
  * At most this many rows are kept per account: a failed listing and an
  * edit's starting point need them, but they must not crowd the journal out
@@ -574,33 +566,13 @@ export function rememberAccountRows(
   }
 }
 
-/**
- * Forgets what this device keeps of the account's projects, at sign-out
- * (`erased` false) and after the account was erased (`erased` true): its
- * rows as last listed, and this visit's answers. The journal of unsynced
- * edits is kept at sign-out, so an edit the sealed record has not taken
- * yet still reaches it when the account signs in again; an erased account
- * has no record left to take it, so its journal goes too. The agreed
- * folder record (`folderSyncRecordKey`) belongs to the folder sync.
- */
-export function forgetAccountShelf(
-  accountId: string,
-  { erased }: { erased: boolean }
-): void {
+// Sign-out and erasure forget the account through `sealedShelfCore.ts`,
+// which may run before this module ever loaded; once loaded, it also
+// forgets what this visit holds in memory.
+registerShelfMemoryForget((accountId, erased) => {
   accounts.delete(accountId);
-  try {
-    globalThis.localStorage?.removeItem(accountRowsKey(accountId));
-  } catch {
-    // Storage is blocked; nothing was kept.
-  }
-  if (!erased) return;
-  unstoredEdits.delete(accountId);
-  try {
-    globalThis.localStorage?.removeItem(shelfEditsKey(accountId));
-  } catch {
-    // Storage is blocked; nothing was kept.
-  }
-}
+  if (erased) unstoredEdits.delete(accountId);
+});
 
 function shelfOf(entry: ProjectShelf): ProjectShelf {
   return {
@@ -974,12 +946,6 @@ export async function resetLegacyShelfRows(
   }
 }
 
-/**
- * Fired after a sealed sync changed the account's agreed shelf state, so
- * the shelf re-lists and lays it over the account's rows.
- */
-export const SEALED_SHELF_APPLIED_EVENT = 'openzcad:sealed-shelf-applied';
-
 export function notifySealedShelfApplied(accountId: string): void {
   try {
     globalThis.dispatchEvent?.(
@@ -997,5 +963,4 @@ export function notifySealedShelfApplied(accountId: string): void {
 export function resetShelfStateMemory(): void {
   accounts.clear();
   unstoredEdits.clear();
-  listingAccount = null;
 }
