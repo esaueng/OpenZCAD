@@ -5,6 +5,7 @@ import {
 import { edgeSelectionKey } from './exact-edge-selection-transport';
 import { upstreamSnapshot } from './exact-carry-edit-gate';
 import { buildGearFeature } from './exact-gear';
+import { buildSheetMetalFeature } from './exact-sheet-metal';
 import { buildThreadFeature } from './exact-thread';
 import { requireValidSolid } from './kernel-validation';
 import {
@@ -3744,6 +3745,9 @@ function buildFeatureByKind(
       break;
     case 'thread':
       buildThreadFeature(ctx, feature, feature.data);
+      break;
+    case 'sheet-metal':
+      buildSheetMetalFeature(ctx, feature, feature.data);
       break;
     case 'split':
       buildSplitFeature(ctx, feature, feature.data);

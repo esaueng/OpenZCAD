@@ -4,6 +4,7 @@ import {
   addPrimitiveFeature,
   addSketchFeature,
   createProjectDocument,
+  setNodeMetadata,
   transformBody
 } from '@openzcad/document-core';
 import {
@@ -11,6 +12,9 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import {
+  BODY_COLOR_CHOSEN_METADATA_KEY,
+  BODY_COLOR_METADATA_KEY,
+  DEFAULT_BODY_COLOR,
   toUserId,
   type ProjectDocument,
   type SketchId,
@@ -31,6 +35,7 @@ import {
   type SolidExchangeFormat,
   type SolidMeasure
 } from './support/exchange-harness';
+import { threeMfObjectLabels } from './support/three-mf-export';
 
 /**
  * Every exchange format against its written loss contract (ZC-202): export
@@ -228,6 +233,48 @@ describe(
       );
       expect(measure.fileObjects).toBe(2);
       expect(measure.bodyCount).toBe(1);
+    });
+
+    it('names each 3MF object after its body and colours it in its display colour', async () => {
+      const { document, bodyIds, bodyNames } = await referenceModel();
+      const body = Object.values(document.nodes).find(
+        (node) => node.kind === 'body' && node.bodyId === bodyIds[1]
+      )!;
+      const coloured = setNodeMetadata(document, {
+        nodeId: body.id,
+        metadata: {
+          [BODY_COLOR_METADATA_KEY]: '#12abef',
+          [BODY_COLOR_CHOSEN_METADATA_KEY]: true
+        }
+      });
+      const expected = [
+        { name: bodyNames[0], color: DEFAULT_BODY_COLOR.toUpperCase() },
+        { name: bodyNames[1], color: '#12ABEF' }
+      ];
+      // The default writer, and the re-meshed path an explicit facet angle
+      // takes, label every object in body order.
+      for (const angularTolerance of [undefined, 0.2]) {
+        const bytes = await adapter.exportMesh(coloured, bodyIds, {
+          format: '3mf',
+          deflection: DEFLECTION,
+          ...(angularTolerance === undefined ? {} : { angularTolerance })
+        });
+        expect(threeMfObjectLabels(bytes)).toEqual(expected);
+        // Labelling leaves the geometry, the unit and the placements alone.
+        const measure = await reimportSolids('3mf', bytes);
+        expect(measure.fileObjects).toBe(2);
+        expect(measure.declaredUnits).toBe('mm');
+        expectBounds(measure, DEFLECTION + 1e-4);
+      }
+      // A body order the caller chose is the order the objects are written.
+      expect(
+        threeMfObjectLabels(
+          await adapter.exportMesh(coloured, [...bodyIds].reverse(), {
+            format: '3mf',
+            deflection: DEFLECTION
+          })
+        )
+      ).toEqual([...expected].reverse());
     });
 
     it('writes the same physical part from an inch project as from a millimetre one', async () => {

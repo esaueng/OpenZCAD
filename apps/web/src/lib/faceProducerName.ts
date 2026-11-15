@@ -41,6 +41,7 @@ function startsBody(feature: FeatureNode): boolean {
     case 'helical-sweep':
     case 'imported-step':
     case 'imported-mesh':
+    case 'sheet-metal':
       return true;
     case 'extrude':
       return (

@@ -89,6 +89,10 @@ export function featureHistory(document: ProjectDocument) {
           body(data.definition.source.bodyId);
         datumOwners.add(feature.featureId);
         break;
+      case 'sheet-metal':
+        sketch(data.sketchId);
+        for (const bend of data.bends) sketch(bend.line.sketchId);
+        break;
       case 'extrude':
         sketch(data.sketchId);
         body(data.targetBodyId);

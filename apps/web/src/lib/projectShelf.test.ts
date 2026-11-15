@@ -6,6 +6,7 @@ import {
 } from '@openzcad/document-core';
 import { persistedDocumentBytes, toUserId } from '@openzcad/shared';
 import {
+  ACCOUNT_THUMBNAIL_VERSION,
   cachedThumbnailSource,
   mergeProjectSummaries,
   summarizeLocalDocument,
@@ -397,6 +398,89 @@ describe('resolveShelfThumbnail', () => {
       }
     );
     expect(source).toBeUndefined();
+  });
+
+  it('keeps a downloaded account image so the next load does not download it again', async () => {
+    // Regression: the shelf downloaded every card from the account on every
+    // load in a browser that had not drawn the cards itself, because nothing
+    // ever wrote the download back to the device cache.
+    const project = {
+      ...summary(LISTED),
+      documentVersion: 4,
+      thumbnailArtifactId: artifactId
+    };
+    const store = new Map<string, ProjectThumbnailRecord>();
+    const download = vi.fn(async () => 'data:image/webp;base64,CLOUD');
+    const remember = vi.fn(
+      async (
+        projectId: string,
+        thumbnail: Omit<ProjectThumbnailRecord, 'projectId'>,
+        replaces: ProjectThumbnailRecord | null
+      ) => {
+        expect(replaces).toBe(store.get(projectId) ?? null);
+        store.set(projectId, { projectId, ...thumbnail });
+      }
+    );
+    const host = {
+      loadCached: async (projectId: string) => store.get(projectId) ?? null,
+      download,
+      remember
+    };
+
+    await expect(resolveShelfThumbnail(project, host)).resolves.toBe(
+      'data:image/webp;base64,CLOUD'
+    );
+    await vi.waitFor(() => expect(remember).toHaveBeenCalledTimes(1));
+    const kept = store.get(project.projectId)!;
+    expect(kept).toEqual({
+      projectId: project.projectId,
+      source: 'data:image/webp;base64,CLOUD',
+      artifactId,
+      version: ACCOUNT_THUMBNAIL_VERSION,
+      updatedAt: LISTED
+    });
+
+    await expect(resolveShelfThumbnail(project, host)).resolves.toBe(
+      'data:image/webp;base64,CLOUD'
+    );
+    expect(download).toHaveBeenCalledTimes(1);
+    // Not a render of the listed version: the workspace still draws its own
+    // card, and the publisher does not send this one back as current.
+    expect(thumbnailRecordDescribes(kept, project)).toBe(false);
+  });
+
+  it('downloads again once the account names a newer image', async () => {
+    const kept = {
+      ...record('data:image/webp;base64,OLD', LISTED),
+      artifactId,
+      version: ACCOUNT_THUMBNAIL_VERSION
+    };
+    const download = vi.fn(async () => 'data:image/webp;base64,NEW');
+    const source = await resolveShelfThumbnail(
+      {
+        ...summary(LISTED),
+        thumbnailArtifactId: toArtifactId('artifact_newer')
+      },
+      { loadCached: async () => kept, download }
+    );
+    expect(source).toBe('data:image/webp;base64,NEW');
+    expect(download).toHaveBeenCalledWith('artifact_newer');
+  });
+
+  it('keeps nothing when the account image cannot be fetched', async () => {
+    const remember = vi.fn(async () => undefined);
+    await resolveShelfThumbnail(
+      { ...summary(LISTED), thumbnailArtifactId: artifactId },
+      {
+        loadCached: async () => null,
+        download: async () => {
+          throw new Error('offline');
+        },
+        remember
+      }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(remember).not.toHaveBeenCalled();
   });
 
   it('does not touch the network for a device-only project', async () => {

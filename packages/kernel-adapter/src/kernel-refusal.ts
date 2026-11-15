@@ -78,6 +78,7 @@ export type KernelRefusalFamily =
   | 'blend'
   | 'gear'
   | 'thread'
+  | 'sheet-metal'
   | 'direct-edit'
   /** A saved edge or face selection that no longer resolves (adapter). */
   | 'reference';

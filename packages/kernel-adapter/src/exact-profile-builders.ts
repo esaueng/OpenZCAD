@@ -939,6 +939,82 @@ function addRegionSideRoles(input: {
   }
 }
 
+/** One boundary curve of a selected region and the name its side face takes. */
+export type RegionSideSource =
+  | { token: string; kind: 'line'; a: Vec2Like; b: Vec2Like }
+  | { token: string; kind: 'arc'; center: Vec2Like; radius: number };
+
+/**
+ * The boundary curves of the one connected region a selection of sketch
+ * cells merges into, in sketch coordinates, each with the
+ * `<source object>.<segment>` suffix {@link addRegionSideRoles} names its
+ * side face by. A curve with no analytic side (a spline) or no segment
+ * identity is left out. Null when the selection is not one connected region.
+ *
+ * M16 sheet metal names its edge faces from these: unlike a carrier match,
+ * each curve keeps its own extent, so two edges drawn on one line (either
+ * side of a tab) are told apart.
+ */
+export function regionSideSources(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  data: Pick<
+    Extract<FeatureNode['data'], { featureKind: 'extrude' }>,
+    'profile' | 'profiles'
+  >,
+  scope: Record<string, number>
+): RegionSideSource[] | null {
+  const groups = connectedRegionGroups(
+    resolveRegionProfiles(document, sketch, data, scope)
+  );
+  if (groups.length !== 1) return null;
+  const merged = mergeAdjacentProfiles(groups[0]!);
+  const objectsById = new Map<string, SketchObjectData>(
+    sketch.objectIds.flatMap((objectId) => {
+      const node = document.nodes[objectId];
+      return node?.kind === 'sketch-object'
+        ? [[objectId, node.data] as const]
+        : [];
+    })
+  );
+  const sources: RegionSideSource[] = [];
+  for (const loop of [merged.outer, ...merged.holes]) {
+    for (const curve of loop.curves) {
+      const data = objectsById.get(curve.sourceObjectId);
+      const boundary = parseSketchBoundaryToken(curve.boundaryToken);
+      const sourceId = boundary?.objectId ?? curve.sourceObjectId;
+      if (curve.kind === 'line') {
+        const index =
+          boundary?.kind === 'composite'
+            ? boundary.edgeIndex
+            : sourceSegmentIndex(curve, data, scope, document.units);
+        const key =
+          index !== null
+            ? `${index}`
+            : data?.objectKind === 'line'
+              ? 'line'
+              : null;
+        if (key !== null) {
+          sources.push({
+            token: `${sourceId}.${key}`,
+            kind: 'line',
+            a: curve.a,
+            b: curve.b
+          });
+        }
+      } else if (curve.kind === 'arc') {
+        sources.push({
+          token: `${sourceId}.${data?.objectKind === 'circle' ? 'circle' : 'arc'}`,
+          kind: 'arc',
+          center: curve.center,
+          radius: curve.radius
+        });
+      }
+    }
+  }
+  return sources;
+}
+
 /** Extrude one or more explicitly selected bounded sketch cells. */
 export function buildRegionExtrude(
   kernel: RemusKernel,
