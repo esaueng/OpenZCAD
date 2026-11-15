@@ -126,6 +126,8 @@ export interface InspectorCallbacks {
    * in-place command that made it.
    */
   onEditModelingFeature?(feature: FeatureNode): void;
+  /** M16: opens a sheet-metal feature's flat-pattern view. */
+  onOpenFlatPattern?(featureId: FeatureId): void;
   onApplyTransform(feature: FeatureNode, value: TransformFormValue): void;
   onResizeThroughHole(
     selection: TopologySelection,
@@ -1634,6 +1636,15 @@ export function Inspector(props: InspectorProps) {
                 Edit {TOOL_META[data.featureKind].label.toLowerCase()}
               </button>
             )}
+        {data.featureKind === 'sheet-metal' && props.onOpenFlatPattern && (
+          <button
+            type="button"
+            className="secondary feature-edit-launch"
+            onClick={() => props.onOpenFlatPattern?.(selectedFeature.featureId)}
+          >
+            Flat pattern…
+          </button>
+        )}
         {form}
         {selectedTopology?.kind === 'face' &&
           selectedBody?.source === 'imported-step' && (

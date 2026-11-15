@@ -120,6 +120,13 @@ export function solvedSketchCommands(
           y2: solved.y2
         };
       }
+    } else if (solved.kind === 'point' && data.objectKind === 'point') {
+      if (
+        movedField(data.x, solved.x, resolve) ||
+        movedField(data.y, solved.y, resolve)
+      ) {
+        next = { ...data, x: solved.x, y: solved.y };
+      }
     } else if (solved.kind === 'circle' && data.objectKind === 'circle') {
       if (
         movedField(data.centerX, solved.centerX, resolve) ||

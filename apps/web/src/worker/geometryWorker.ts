@@ -32,6 +32,7 @@ import type {
   PersistedHistorySession,
   RebuildProgress,
   SectionOutlineReport,
+  SheetMetalFlatPattern,
   SketchPlanarOperation,
   SketchPlanarResult,
   SheetMetalFoldPreview,
@@ -249,6 +250,17 @@ export type GeometryWorkerRequest =
       requestId: string;
       document: ProjectDocument;
       operation: SketchPlanarOperation;
+    }
+  | {
+      /**
+       * M16: a sheet-metal feature's flat pattern (outline loops, bend
+       * centre lines and bend rows, in the blank's sketch coordinates and
+       * document units) for the flat-pattern view. Display and export only.
+       */
+      type: 'sheet-metal-flat-pattern';
+      requestId: string;
+      document: ProjectDocument;
+      featureId: FeatureId;
     }
   | {
       /**
@@ -472,6 +484,20 @@ export type GeometryRecognizeImportedFaceResult =
       error: string;
     };
 
+export type GeometrySheetMetalFlatPatternResult =
+  | {
+      type: 'sheet-metal-flat-pattern';
+      ok: true;
+      requestId: string;
+      pattern: SheetMetalFlatPattern;
+    }
+  | {
+      type: 'sheet-metal-flat-pattern';
+      ok: false;
+      requestId: string;
+      error: string;
+    };
+
 export type GeometryWorkerResult =
   | {
       type: 'direct-edit-profile';
@@ -542,7 +568,8 @@ export type GeometryWorkerResult =
   | GeometrySectionResult
   | GeometrySolveSketchResult
   | GeometrySketch2dOpResult
-  | GeometryRecognizeImportedFaceResult;
+  | GeometryRecognizeImportedFaceResult
+  | GeometrySheetMetalFlatPatternResult;
 
 type ExactKernel = Awaited<ReturnType<typeof createExactKernelAdapter>>;
 let exactKernelStatus: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
@@ -1179,7 +1206,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       request.type === 'solve-sketch' ||
       request.type === 'sketch-2d-op' ||
       request.type === 'recognize-imported-face' ||
-      request.type === 'sheet-metal-fold'
+      request.type === 'sheet-metal-fold' ||
+      request.type === 'sheet-metal-flat-pattern'
     ) {
       // 'failed' means the next load call retries, so it is a loading state
       // here too, not a terminal one.
@@ -1215,6 +1243,20 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           ok: true,
           requestId: request.requestId,
           preview
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
+      if (request.type === 'sheet-metal-flat-pattern') {
+        const pattern = await exact.sheetMetalFlatPattern(
+          document,
+          request.featureId
+        );
+        post({
+          type: 'sheet-metal-flat-pattern',
+          ok: true,
+          requestId: request.requestId,
+          pattern
         });
         post(stateFor('ready', request, { stale: false }));
         return;
@@ -1748,6 +1790,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     } else if (request.type === 'recognize-imported-face') {
       post({
         type: 'recognize-imported-face',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'sheet-metal-flat-pattern') {
+      post({
+        type: 'sheet-metal-flat-pattern',
         ok: false,
         requestId: request.requestId,
         error: message

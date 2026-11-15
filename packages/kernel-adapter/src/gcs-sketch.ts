@@ -94,6 +94,13 @@ export type ResolvedSketchObject =
       kind: 'spline';
       points: { x: number; y: number }[];
       closed: boolean;
+    }
+  | {
+      /** I01 (schema v59). A lone solver point, named `center`. */
+      objectId: EntityId;
+      kind: 'point';
+      x: number;
+      y: number;
     };
 
 /** Solved geometry read back from the kernel, same shapes as the input. */
@@ -135,8 +142,8 @@ export interface SketchSolveAnchor {
 }
 
 interface ObjectHandles {
-  kind: 'line' | 'circle' | 'arc' | 'ellipse' | 'spline';
-  /** The solver entity; −1 for a spline, which is points only. */
+  kind: 'line' | 'circle' | 'arc' | 'ellipse' | 'spline' | 'point';
+  /** The solver entity; −1 for a spline or a point, which are points only. */
   entity: number;
   points: Partial<Record<'start' | 'end' | 'center', number>>;
   /** A spline's every point, in order. */
@@ -178,6 +185,9 @@ function solvedEntitySize(object: ResolvedSketchObject): number {
       return object.radius;
     case 'ellipse':
       return Math.min(object.radiusX, object.radiusY);
+    case 'point':
+      // A point has no size to collapse.
+      return 1;
     case 'spline': {
       const first = object.points[0];
       return first
@@ -269,6 +279,19 @@ export function solveSketchWithGcs(
           object.rotationDeg * RADIANS_PER_DEGREE
         ),
         points: { center }
+      });
+    } else if (object.kind === 'point') {
+      handles.set(object.objectId, {
+        kind: 'point',
+        entity: -1,
+        points: {
+          center: kernel.gcsAddPoint(
+            sketch,
+            object.x,
+            object.y,
+            held(object.objectId, 'center')
+          )
+        }
       });
     } else if (object.kind === 'spline') {
       const pointList = object.points.map((point) =>
@@ -682,6 +705,10 @@ export function solveSketchWithGcs(
         radiusY: params[3] ?? 0,
         rotationDeg: (params[4] ?? 0) / RADIANS_PER_DEGREE
       };
+    }
+    if (entry.kind === 'point') {
+      const at = readPoint(entry.points.center!);
+      return { objectId: object.objectId, kind: 'point', x: at.x, y: at.y };
     }
     if (entry.kind === 'spline') {
       return {

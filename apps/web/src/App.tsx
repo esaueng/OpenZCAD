@@ -3,6 +3,7 @@ import {
   fileAccept,
   persistStorageForInstalledApp
 } from './lib/appleTouch';
+import { documentRevision } from './lib/documentRevision';
 import { registerOfflineShell } from './lib/offlineShell';
 import { spaceMouse } from './lib/spaceMouse';
 import {
@@ -186,6 +187,7 @@ import {
   Scissors,
   SquareSplitVertical,
   SlidersHorizontal,
+  SquareDashed,
   ListOrdered,
   Spline,
   Trash2,
@@ -367,6 +369,8 @@ import {
   type UnreferencedSnap
 } from './lib/sketch/session';
 import type { CompositeShape } from './lib/sketch/composites';
+import type { SketchSnapHint } from './lib/sketch/inference';
+import type { DrawnEntity } from './lib/sketch/inferenceCommit';
 import { resolvedSketchPlaneBasis } from './lib/sketch/planeBasis';
 import { sketchEntityEditTarget } from './lib/sketch/editTarget';
 import {
@@ -570,6 +574,11 @@ import {
   inferContentType,
   previewExpression
 } from './lib/model';
+import {
+  flatPatternTarget,
+  sheetMetalFeatureForBody,
+  sheetMetalFeatureOptions
+} from './lib/sheetMetalFeatures';
 import {
   sketchValueResolver,
   requiredValueResolver
@@ -1514,6 +1523,11 @@ const LazyImageExportDialog = lazyWithStaleChunkNotice(() =>
     default: module.ImageExportDialog
   }))
 );
+const LazyFlatPatternDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/FlatPatternDialog').then((module) => ({
+    default: module.FlatPatternDialog
+  }))
+);
 // Off the entry chunk: nothing shows for the first 600 ms of a run anyway,
 // and most sessions never move a file at all.
 const LazyActivityPill = lazyWithStaleChunkNotice(() =>
@@ -1640,6 +1654,18 @@ function ImageExportDialog(
     <ExportDialogBoundary onClose={props.onClose}>
       <Suspense fallback={null}>
         <LazyImageExportDialog {...props} />
+      </Suspense>
+    </ExportDialogBoundary>
+  );
+}
+
+function FlatPatternDialog(
+  props: ComponentProps<typeof LazyFlatPatternDialog>
+) {
+  return (
+    <ExportDialogBoundary onClose={props.onClose}>
+      <Suspense fallback={null}>
+        <LazyFlatPatternDialog {...props} />
       </Suspense>
     </ExportDialogBoundary>
   );
@@ -3030,6 +3056,9 @@ export function App() {
     height: number;
     maxSide: number;
   } | null>(null);
+  /** M16: the sheet-metal feature the flat-pattern view opened on. */
+  const [flatPatternFeatureId, setFlatPatternFeatureId] =
+    useState<FeatureId | null>(null);
   const viewportImageRef = useRef<ViewportImageSource | null>(null);
   const [pendingShaprImport, setPendingShaprImport] =
     useState<PendingShaprImport | null>(null);
@@ -3340,6 +3369,14 @@ export function App() {
     featureId: string | undefined;
   } | null>(null);
   const [sketchConstruction, setSketchConstruction] = useState(false);
+  /**
+   * S08: the relations the latest drawing commit inferred. Their glyphs are
+   * drawn even when relation glyphs show only the selection's, so nothing a
+   * commit adds is out of sight; the next commit or leaving the sketch
+   * replaces them.
+   */
+  const [recentInferredConstraintIds, setRecentInferredConstraintIds] =
+    useState<readonly string[]>([]);
   /** When a first Escape armed leaving the sketch (I43), or null. */
   const sketchExitArmedAtRef = useRef<number | null>(null);
   /**
@@ -4271,6 +4308,18 @@ export function App() {
   // `idle` render it was constructed during.
   const interactionRef = useRef(interaction);
   interactionRef.current = interaction;
+  // S08: which sketch session this is. Leaving sketch mode starts a new
+  // generation, so work planned in one session never lands in the next one,
+  // even on the same plane. Counted here, with `interactionRef`, so async
+  // work that reads one sees the other in step.
+  const sketchSessionGenerationRef = useRef(0);
+  const lastInteractionModeRef = useRef(interaction.mode);
+  if (interaction.mode !== lastInteractionModeRef.current) {
+    if (lastInteractionModeRef.current === 'sketch') {
+      sketchSessionGenerationRef.current += 1;
+    }
+    lastInteractionModeRef.current = interaction.mode;
+  }
   // An armed relation's or modify tool's instruction retires once the tool
   // is put down, and the live hint takes the bar back. A message set with
   // the disarm itself ("constraint added") is younger than the settle time
@@ -9061,6 +9110,32 @@ export function App() {
   const selectedBody = selectedFeatureBodyId
     ? (renderedRepresentations[selectedFeatureBodyId] ?? null)
     : null;
+  // M16: whether the flat-pattern view has a sheet to show, and the one the
+  // current selection belongs to (the File menu opens on it).
+  const sheetMetalOptions = useMemo(
+    () => (doc ? sheetMetalFeatureOptions(doc) : []),
+    [doc]
+  );
+  const hasSheetMetal = sheetMetalOptions.length > 0;
+  const selectedSheetMetal = useMemo(
+    () =>
+      doc && hasSheetMetal
+        ? selectedFeature?.data.featureKind === 'sheet-metal'
+          ? (sheetMetalOptions.find(
+              (option) => option.featureId === selectedFeature.featureId
+            ) ?? null)
+          : selectedFeatureBodyId
+            ? sheetMetalFeatureForBody(doc, selectedFeatureBodyId)
+            : null
+        : null,
+    [
+      doc,
+      hasSheetMetal,
+      sheetMetalOptions,
+      selectedFeature,
+      selectedFeatureBodyId
+    ]
+  );
 
   /**
    * On-demand recognition of the selected imported STEP face (Phase D of the
@@ -9521,7 +9596,8 @@ export function App() {
       if (
         data.objectKind === 'text' ||
         data.objectKind === 'ellipse' ||
-        data.objectKind === 'spline'
+        data.objectKind === 'spline' ||
+        data.objectKind === 'point'
       ) {
         // Text has no single closed profile — it is many regions with holes,
         // and the region overlay renders it. I01 curves fill through region
@@ -18458,6 +18534,21 @@ export function App() {
     }
   }
 
+  /**
+   * M16: the flat-pattern view, on the requested sheet-metal feature (or
+   * why it has none), or with none requested on the first that builds.
+   */
+  function openFlatPattern(featureId?: FeatureId) {
+    const current = managerRef.current?.document;
+    if (!current) return;
+    const target = flatPatternTarget(current, featureId);
+    if ('error' in target) {
+      setStatus(target.error);
+      return;
+    }
+    setFlatPatternFeatureId(target.featureId);
+  }
+
   function openImageExport() {
     const source = viewportImageRef.current;
     const size = source?.viewSize();
@@ -20869,9 +20960,159 @@ export function App() {
     }
   }, [interaction, projectionRepair]);
 
+  /**
+   * S08: drawing commits run one at a time, in order, each against the
+   * document the previous one left: the next segment of a chain is joined to
+   * the segment before it, which a settle solve may still be committing.
+   */
+  const sketchDrawQueueRef = useRef<Promise<void>>(Promise.resolve());
+  /**
+   * The sketch a drawing commit just started, until the session learns its
+   * id: a queued second segment lands in it instead of starting another.
+   */
+  const startedSketchRef = useRef<{
+    plane: unknown;
+    sketchId: SketchId;
+  } | null>(null);
+
+  function queueDrawnEntity(
+    drawn: DrawnEntity,
+    hints: SketchSnapHint[] | undefined
+  ) {
+    setSketchDiagnosticPoints([]);
+    const next = sketchDrawQueueRef.current
+      .then(() => commitDrawnEntity(drawn, hints))
+      .catch((error: unknown) => {
+        setStatus(errorMessage(error, 'The sketch entity could not be added.'));
+      });
+    sketchDrawQueueRef.current = next;
+  }
+
+  /**
+   * Commits a drawn entity with the relations its placement satisfies
+   * (S08), in one undo step. Optional relations are kept only where a solve
+   * says they add rank, so inference never makes a sketch redundant; every
+   * kept relation is named on the status line and its glyph is shown.
+   */
+  async function commitDrawnEntity(
+    drawn: DrawnEntity,
+    hints: SketchSnapHint[] | undefined
+  ) {
+    const current = interactionRef.current;
+    const generation = sketchSessionGenerationRef.current;
+    const manager = managerRef.current;
+    const base = manager?.document;
+    if (current.mode !== 'sketch' || !manager || !base) return;
+    const session = current.session;
+    const started = startedSketchRef.current;
+    const sketchId =
+      (session.sketchId as SketchId | null) ??
+      (started &&
+      started.plane === session.plane &&
+      findSketch(base, started.sketchId)
+        ? started.sketchId
+        : null);
+    const sketch = sketchId ? findSketch(base, sketchId) : null;
+    const name = `Sketch ${String(sketchOptions.length + 1).padStart(2, '0')}`;
+    const settings = appSettingsRef.current.sketching;
+    const [
+      { drawnEntityCommands, addedConstraintIds, drawingSessionStillOpen },
+      { describeInferredRelations },
+      { settleOptionalRelations }
+    ] = await Promise.all([
+      import('./lib/sketch/inferenceCommit'),
+      import('./lib/sketch/inference'),
+      import('./lib/sketch/modify')
+    ]);
+    const resolve = sketchValueResolver(parameterScope.scope, base.units);
+    const existing = (sketch?.objectIds ?? []).flatMap((id) => {
+      const node = ownEntry(base.nodes, id);
+      return node?.kind === 'sketch-object'
+        ? [{ id: String(id), data: node.data }]
+        : [];
+    });
+    const plan = drawnEntityCommands(
+      drawn,
+      sketchId
+        ? { kind: 'sketch', sketchId }
+        : { kind: 'new-sketch', name, planeRef: session.plane },
+      existing,
+      {
+        autoConstrain: settings.autoConstrain,
+        hints,
+        resolve,
+        construction: sketchConstruction
+      }
+    );
+    const commands =
+      plan.optional.length === 0
+        ? plan.commands
+        : await settleOptionalRelations(
+            base,
+            plan.sketchId,
+            plan.commands,
+            plan.optional,
+            (document, id) => geometry.solveSketch(document, id)
+          );
+    // Another project took over while the relations were settled: what was
+    // drawn belonged to the one that left.
+    if (managerRef.current !== manager) return;
+    // The sketch closed (or another opened) meanwhile: nothing lands unseen.
+    if (
+      !drawingSessionStillOpen(
+        { sketchId: sketchId ?? null, plane: session.plane, generation },
+        interactionRef.current,
+        sketchSessionGenerationRef.current
+      )
+    ) {
+      setStatus(
+        'The sketch closed before the drawn entity was added; nothing changed.'
+      );
+      return;
+    }
+    if (manager.document.version !== base.version) {
+      // Something else changed the document meanwhile: plan again against
+      // what is there now.
+      await commitDrawnEntity(drawn, hints);
+      return;
+    }
+    if (!executeTransaction(plan.label, commands)) return;
+    const inferred = commands.flatMap((command) => {
+      const kind = plan.kinds.get(command);
+      return kind ? [kind] : [];
+    });
+    setRecentInferredConstraintIds(
+      addedConstraintIds(commands.filter((command) => plan.kinds.has(command)))
+    );
+    if (!sketchId) {
+      startedSketchRef.current = {
+        plane: session.plane,
+        sketchId: plan.sketchId
+      };
+      dispatchInteraction({ type: 'sketch-created', sketchId: plan.sketchId });
+      setStatus(describeInferredRelations(`${name} started`, inferred));
+      return;
+    }
+    if (inferred.length > 0) {
+      setStatus(
+        describeInferredRelations(
+          commandOutcomeMessage(plan.label).replace(/\.$/, ''),
+          inferred
+        )
+      );
+    }
+  }
+
   /** A drawing gesture finished: commit the entity as a real command. */
-  function handleSketchCommit(object: SketchObjectData) {
+  function handleSketchCommit(
+    object: SketchObjectData,
+    hints?: SketchSnapHint[]
+  ) {
     if (interaction.mode !== 'sketch') {
+      return;
+    }
+    if (object.objectKind !== 'text') {
+      queueDrawnEntity({ kind: 'object', data: object }, hints);
       return;
     }
     setSketchDiagnosticPoints([]);
@@ -21161,32 +21402,14 @@ export function App() {
    * hold them and the record that names them commit as one transaction
    * (S04), so one undo removes the whole shape.
    */
-  async function handleSketchCommitComposite(shape: CompositeShape) {
+  function handleSketchCommitComposite(
+    shape: CompositeShape,
+    hints?: SketchSnapHint[]
+  ) {
     if (interaction.mode !== 'sketch') {
       return;
     }
-    setSketchDiagnosticPoints([]);
-    const session = interaction.session;
-    const construction = sketchConstruction;
-    const name = `Sketch ${String(sketchOptions.length + 1).padStart(2, '0')}`;
-    const { compositeCommands } = await import('./lib/sketch/composites');
-    const commit = compositeCommands(
-      shape,
-      session.sketchId
-        ? { kind: 'sketch', sketchId: session.sketchId as SketchId }
-        : { kind: 'new-sketch', name, planeRef: session.plane },
-      { construction }
-    );
-    if (!executeTransaction(commit.label, commit.commands)) {
-      return;
-    }
-    if (!session.sketchId) {
-      dispatchInteraction({
-        type: 'sketch-created',
-        sketchId: commit.sketchId
-      });
-      setStatus(`${name} started.`);
-    }
+    queueDrawnEntity({ kind: 'composite', shape }, hints);
   }
 
   function showProfileDiagnostics() {
@@ -21868,6 +22091,8 @@ export function App() {
     if (interaction.mode !== 'sketch') {
       // A first Escape armed in one sketch never confirms leaving the next.
       sketchExitArmedAtRef.current = null;
+      startedSketchRef.current = null;
+      setRecentInferredConstraintIds([]);
       setSketchSolveStatus(null);
       setSketchSolving(false);
       setSketchDimensionDraft(null);
@@ -21903,6 +22128,7 @@ export function App() {
               selectedObjectId: sketchModeState.selectedObjectId,
               selectedConstraintId: selectedSketchConstraintId,
               hiddenKinds: new Set(appSettings.sketching.hiddenRelationGlyphs),
+              alsoShownConstraintIds: new Set(recentInferredConstraintIds),
               conflictingConstraintIds: new Set(
                 sketchSolveStatus?.conflictingConstraintIds ?? []
               )
@@ -21917,7 +22143,8 @@ export function App() {
       appSettings.sketching.relationGlyphs,
       appSettings.sketching.hiddenRelationGlyphs,
       selectedSketchConstraintId,
-      sketchSolveStatus
+      sketchSolveStatus,
+      recentInferredConstraintIds
     ]
   );
   // A relation is picked from its glyph, so the pick lasts only while that
@@ -22137,7 +22364,10 @@ export function App() {
       selectedSketchEntity.id
     );
     const side = composite?.edgeIds.indexOf(selectedSketchEntity.id) ?? -1;
-    if (!composite || side < 0) return null;
+    // I01: a slot's sizes are driven by ordinary dimensions on its centre
+    // line and arcs; its card has no resize yet.
+    if (!composite || side < 0 || composite.compositeKind === 'slot')
+      return null;
     const objects = new Map(
       editingSketchNode.objectIds.flatMap((id) => {
         const node = sketchReadDocument?.nodes[id];
@@ -30402,6 +30632,9 @@ export function App() {
       selection.bodyId
     );
     const feature = selectionFeature(current, body, selection);
+    // M16: a sheet-metal body (or one a later feature carried on) offers
+    // its flat pattern.
+    const sheetSource = sheetMetalFeatureForBody(current, selection.bodyId);
     const edge = selection.kind === 'edge';
     // Union and Subtract say why they are greyed out, as the rail does.
     const combineReason =
@@ -30495,6 +30728,19 @@ export function App() {
           },
           run: () => setFitSignal((value) => value + 1)
         },
+        ...(sheetSource
+          ? [
+              {
+                item: {
+                  id: 'flat-pattern',
+                  label: 'Flat pattern…',
+                  icon: <SquareDashed size={13} aria-hidden="true" />,
+                  section: true
+                },
+                run: () => openFlatPattern(sheetSource.featureId)
+              }
+            ]
+          : []),
         ...(feature
           ? [
               {
@@ -31549,10 +31795,16 @@ export function App() {
         }
         if (
           sketchCommand === 'sketch-trim' ||
+          sketchCommand === 'sketch-extend' ||
           sketchCommand === 'sketch-offset'
         ) {
           event.preventDefault();
-          const editKind = sketchCommand === 'sketch-trim' ? 'trim' : 'offset';
+          const editKind =
+            sketchCommand === 'sketch-trim'
+              ? 'trim'
+              : sketchCommand === 'sketch-extend'
+                ? 'extend'
+                : 'offset';
           dispatchInteraction({
             type: 'sketch-edit-tool',
             kind:
@@ -32942,6 +33194,16 @@ export function App() {
       }
     },
     {
+      // M16: the sheet-metal flat pattern, its layered DXF and bend table.
+      id: 'file-export-flat-pattern',
+      label: 'Flat pattern…',
+      group: 'File',
+      keywords: ['sheet metal', 'dxf', 'bend', 'unfold', 'laser', 'brake'],
+      icon: <SquareDashed size={16} aria-hidden="true" />,
+      disabledReason: hasSheetMetal ? null : 'Needs a sheet-metal part',
+      run: () => openFlatPattern(selectedSheetMetal?.featureId)
+    },
+    {
       id: 'file-export-step',
       label: 'Export STEP',
       group: 'File',
@@ -34088,6 +34350,12 @@ export function App() {
           onExportStep={() => void handleExportStep()}
           onOpenMeshExport={() => setMeshExportOpen(true)}
           onOpenImageExport={openImageExport}
+          {...(hasSheetMetal
+            ? {
+                onOpenFlatPattern: () =>
+                  openFlatPattern(selectedSheetMetal?.featureId)
+              }
+            : {})}
           onArchiveLocalSources={() => void handleArchiveLocalSources()}
           onRenameProject={(name) =>
             executeCommand(
@@ -34541,9 +34809,7 @@ export function App() {
             sketchMode={modelingLocked ? null : sketchModeForViewer}
             sketchTextAnchorRef={sketchTextAnchorRef}
             onSketchCommit={handleSketchCommit}
-            onSketchCommitComposite={(shape) => {
-              void handleSketchCommitComposite(shape);
-            }}
+            onSketchCommitComposite={handleSketchCommitComposite}
             onEditSketchDimension={handleEditSketchDimension}
             onMoveSketchDimension={handleMoveSketchDimension}
             onSelectSketchConstraint={handleSelectSketchConstraint}
@@ -35711,6 +35977,7 @@ export function App() {
                   );
                 }}
                 onEditModelingFeature={openModelingFeatureEditor}
+                onOpenFlatPattern={openFlatPattern}
                 onEditSketchInViewport={editSketchFeatureInViewport}
                 onApplyTransform={(feature, value) =>
                   applyValidatedFeature(
@@ -36752,6 +37019,27 @@ export function App() {
               onClose={() => setImageExportView(null)}
               onExportPng={(options) => void handleExportViewportPng(options)}
               onExportSvg={(options) => void handleExportSketchSvg(options)}
+            />
+          )}
+          {flatPatternFeatureId && doc && sheetMetalOptions.length > 0 && (
+            <FlatPatternDialog
+              features={sheetMetalOptions}
+              initialFeatureId={flatPatternFeatureId}
+              units={doc.units}
+              projectName={doc.name}
+              // Any edit, local or a collaborator's, and any replacement of
+              // the document (even at the same version) is a new revision:
+              // the view rebuilds the pattern before it offers an export again.
+              revision={documentRevision(doc)}
+              loadPattern={(featureId) => {
+                const current = managerRef.current?.document ?? doc;
+                return geometry.sheetMetalFlatPattern(current, featureId);
+              }}
+              onSave={({ fileName, format, text }) =>
+                saveCadTextFile(fileName, format, text)
+              }
+              onCopy={(text) => navigator.clipboard.writeText(text)}
+              onClose={() => setFlatPatternFeatureId(null)}
             />
           )}
           {pendingShaprImport && (

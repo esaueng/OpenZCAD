@@ -1766,10 +1766,11 @@ export function translateSketch(
           };
           break;
         case 'text':
+        case 'point':
           node.data = {
             ...data,
-            x: shift(data.x, du, 'text X'),
-            y: shift(data.y, dv, 'text Y')
+            x: shift(data.x, du, `${data.objectKind} X`),
+            y: shift(data.y, dv, `${data.objectKind} Y`)
           };
           break;
         default:
@@ -1923,7 +1924,8 @@ function constraintObjectIds(data: SketchConstraintData): EntityId[] {
   }
 }
 
-type ConstrainableKind = 'line' | 'arc' | 'circle' | 'ellipse' | 'spline';
+type ConstrainableKind =
+  'line' | 'arc' | 'circle' | 'ellipse' | 'spline' | 'point';
 
 function requireConstrainableObject(
   document: ProjectDocument,
@@ -1964,7 +1966,8 @@ function requireConstraintPoint(
     'arc',
     'circle',
     'ellipse',
-    'spline'
+    'spline',
+    'point'
   ]);
   // I01: an ellipse (or elliptical arc) is held by its centre; an open
   // spline by its two end points, which the curve passes through. A closed
@@ -1977,7 +1980,7 @@ function requireConstraintPoint(
   const legal =
     kind === 'line'
       ? ref.point === 'start' || ref.point === 'end'
-      : kind === 'circle' || kind === 'ellipse'
+      : kind === 'circle' || kind === 'ellipse' || kind === 'point'
         ? ref.point === 'center'
         : kind === 'spline'
           ? !closedSpline && (ref.point === 'start' || ref.point === 'end')

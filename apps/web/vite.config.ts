@@ -441,6 +441,14 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
             import.meta.url
           )
         ),
+        // The flat-pattern DXF/SVG writers are pure; the lazy flat-pattern
+        // dialog reaches them as a leaf module, by the rule above.
+        '@openzcad/kernel-adapter/sheet-metal-flat-pattern': fileURLToPath(
+          new URL(
+            '../../packages/kernel-adapter/src/sheet-metal-flat-pattern.ts',
+            import.meta.url
+          )
+        ),
         '@openzcad/kernel-adapter/topology-lineage': fileURLToPath(
           new URL(
             '../../packages/kernel-adapter/src/topology-lineage.ts',

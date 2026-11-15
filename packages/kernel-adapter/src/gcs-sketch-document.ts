@@ -104,6 +104,13 @@ export function solveDocumentSketchWithGcs(
         radiusY: value(data.radiusY, 'radiusY'),
         rotationDeg: value(data.rotationDeg, 'rotationDeg')
       });
+    } else if (data.objectKind === 'point') {
+      objects.push({
+        objectId,
+        kind: 'point',
+        x: resolveParamValue(data.x, scope, 'x', document.units),
+        y: resolveParamValue(data.y, scope, 'y', document.units)
+      });
     } else if (data.objectKind === 'spline') {
       objects.push({
         objectId,
