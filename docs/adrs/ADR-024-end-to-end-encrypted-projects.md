@@ -1428,6 +1428,29 @@ changes.
 - **Review.** This is a new account-key derivation and record format, so the
   Phase 8 outside review covers it with the other account records.
 
+## Amendment 2026-11-14: the account library rule
+
+Encrypting existing projects and accepting an encrypted invitation need no
+"Encrypt new projects" opt-in. Keying the library on the opt-in alone let
+such an account keep storing plaintext beside its encrypted projects:
+folder records that name them, and device projects saved to the account
+that may be "Keep both" or recovery copies of them.
+
+- **Rule.** An account's library is encrypted when it opted in, or owns or
+  is a member of a project stored encrypted (format 2). New blank projects
+  still follow the opt-in alone.
+- **What it covers.** Library folder records are stored sealed only, and a
+  device project saved to the account is adopted encrypted. The Worker
+  refuses a plaintext folder record (`LIBRARY_FOLDERS_ENCRYPTION_REQUIRED`)
+  and a plaintext adoption (`ENCRYPTED_PROJECTS_REQUIRED`) for such an
+  account, and reports `libraryEncrypted` with the stored preference.
+- **The browser decides before sending.** It asks the opt-in exactly as
+  before, with every guarantee of decision D2, then the Worker's
+  `libraryEncrypted`, which can only add encryption. An answer it cannot
+  read while encrypted projects are open refuses
+  (`E2EE_PREFERENCE_UNVERIFIED`) rather than reading as no. A folder sync
+  that meets the refusal mid-visit seals from its next round.
+
 ## Amendment 2026-11-14: sealed contacts list
 
 The contacts list (see [Version integrity](#version-integrity), "Pins must

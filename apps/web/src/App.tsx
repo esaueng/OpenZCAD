@@ -931,6 +931,10 @@ import {
 import { useLineageDemand } from './lib/lineageDemand';
 import { persistsKernelSession } from './lib/kernelSessionPolicy';
 import {
+  folderClickSelection,
+  folderCommandPicks
+} from './lib/objectFolderView';
+import {
   objectPolylines,
   displayObjectsWithTextBudget
 } from './lib/objectPolyline';
@@ -1659,7 +1663,10 @@ import {
   summarizeLocalDocument,
   withSavedVersion
 } from './lib/projectShelf';
-import { preparePartThumbnails } from './components/PartThumbnail';
+import {
+  preparePartThumbnails,
+  rememberCapturedThumbnail
+} from './components/PartThumbnail';
 import { folderStorageKey, readLibraryFolders } from './lib/libraryFolders';
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import {
@@ -4586,6 +4593,21 @@ export function App() {
     cloudProjectIds
   };
   const thumbnailAccountUserId = session?.userId;
+  // Every card the workspace captures goes straight to the shelf's tile
+  // cache, so the shelf shown on leaving draws it without waiting for the
+  // refreshed listing.
+  useEffect(
+    () =>
+      sharedThumbnailCapture.subscribe((captured) =>
+        rememberCapturedThumbnail({
+          projectId: captured.projectId,
+          source: captured.source,
+          accountId: thumbnailAccountUserId ?? null,
+          protected: isEncryptedProject(captured.projectId)
+        })
+      ),
+    [thumbnailAccountUserId]
+  );
   const loadProperties = useCallback(
     async (project: ProjectSummary) => {
       const { loadProjectProperties } = await import('./lib/projectProperties');
@@ -28818,7 +28840,32 @@ export function App() {
       });
     },
     selectBodies(bodyIds, additive) {
-      if (bodyIds.length === 0) return;
+      // An open body command owns the picks: the folder goes to its slots,
+      // as a body row's click does, and the selection follows them.
+      const command = inPlaceRef.current;
+      if (command.active && command.spec?.bodyMode) {
+        const plan = folderCommandPicks(
+          command.slots.bodies.map((body) => body.bodyId),
+          bodyIds.filter((bodyId) => inPlaceEditTakesBody(bodyId)),
+          command.spec.bodyMode
+        );
+        if (plan.kind === 'too-many') {
+          setStatus(
+            `${command.spec.title} takes one body; pick it in the list or the view.`
+          );
+          return;
+        }
+        if (plan.kind === 'toggle') {
+          for (const bodyId of plan.bodies) {
+            const body = inPlaceBodyPick(bodyId);
+            if (body) command.pickBody(body);
+          }
+        }
+        return;
+      }
+      // ⌘/Shift on an empty folder adds nothing; a plain click on one still
+      // replaces the selection, so the old pick does not linger.
+      if (additive && bodyIds.length === 0) return;
       if (moveHasUnappliedChange(movePreview)) {
         setStatus('Apply or cancel the move before selecting a folder.');
         return;
@@ -28831,9 +28878,7 @@ export function App() {
       setSelectedEdges([]);
       setSelectedTopology(null);
       setSelectedSketchProfileId(null);
-      const nextIds = additive
-        ? [...new Set([...selectedBodyIds, ...bodyIds])]
-        : [...bodyIds];
+      const nextIds = folderClickSelection(selectedBodyIds, bodyIds, additive);
       setSelectedBodyIds(nextIds);
       if (nextIds.length === 1) {
         setSelectedTopology({ bodyId: nextIds[0]!, kind: 'body' });
@@ -28842,7 +28887,9 @@ export function App() {
         setSelectedFeatureNode(null);
       }
       setStatus(
-        `${nextIds.length} ${nextIds.length === 1 ? 'body' : 'bodies'} selected.`
+        nextIds.length > 0
+          ? `${nextIds.length} ${nextIds.length === 1 ? 'body' : 'bodies'} selected.`
+          : 'Body selection cleared.'
       );
     }
   };
@@ -31386,6 +31433,9 @@ export function App() {
           loadThumbnail={loadThumbnail}
           thumbnailAccountId={thumbnailAccountUserId ?? null}
           publishThumbnail={publishThumbnail}
+          {...(session &&
+            cloudFunctionsEnabled && { loadStorageUsage: api.storageUsage })}
+          onOpenAccountSettings={() => openSettingsAt('account')}
         />
         <StatusActivityLog
           status={status}

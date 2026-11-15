@@ -53,6 +53,12 @@ const thumbnailPromises = new Map<
 // one answer per project, bounded independently of the number of refreshes.
 const thumbnails = new Map<string, ThumbnailResult>();
 const latestRequest = new Map<string, string>();
+/**
+ * Bumped when the workspace captures a project's card. A read started before
+ * that belongs to the previous card: it may neither be reused nor land, even
+ * when the shelf asks again under the same listing key.
+ */
+const generations = new Map<string, number>();
 const MAX_RETAINED_THUMBNAILS = 256;
 subscribeKeySession(() => {
   for (const [id, value] of thumbnails)
@@ -113,10 +119,14 @@ function thumbnailFor(
   if (cached) {
     return cached;
   }
+  const generation = generations.get(project.projectId) ?? 0;
+  const live = () =>
+    isCurrent() &&
+    latestRequest.get(project.projectId) === cacheKey &&
+    (generations.get(project.projectId) ?? 0) === generation;
   const pending = loadThumbnail(project)
     .then((source) => {
-      if (!isCurrent() || latestRequest.get(project.projectId) !== cacheKey)
-        return undefined;
+      if (!live()) return undefined;
       // Only a cache miss reaches the publisher. A cached null is an answer —
       // the part is genuinely empty — and re-deriving it every visit would
       // undo the caching this store exists for.
@@ -132,15 +142,9 @@ function thumbnailFor(
       return source;
     })
     .then(async (source) => {
-      if (
-        source === undefined ||
-        !isCurrent() ||
-        latestRequest.get(project.projectId) !== cacheKey
-      )
-        return undefined;
+      if (source === undefined || !live()) return undefined;
       if (source) await decodeThumbnail(source);
-      if (!isCurrent() || latestRequest.get(project.projectId) !== cacheKey)
-        return undefined;
+      if (!live()) return undefined;
       const result = {
         key: cacheKey,
         projectId: project.projectId,
@@ -169,6 +173,58 @@ function thumbnailFor(
     });
   thumbnailPromises.set(cacheKey, pending);
   return pending;
+}
+
+/**
+ * Puts a card the open workspace just captured in front of the shelf's tiles.
+ *
+ * Without it, returning to the shelf showed the previous card: a tile's
+ * remembered image is keyed by the listing it was loaded for, and the listing
+ * the shelf renders first is the one from before the project was opened, so
+ * the tile answered its own stale key until the refreshed listing arrived —
+ * a network round trip with an account, never while offline.
+ *
+ * The seed's key matches no listing, so a mounted tile still re-reads the
+ * device record for its own key; until then it shows this image rather than
+ * the superseded one. An encrypted project's image is stored as protected,
+ * scoped to this account and key session like every other protected image.
+ */
+export function rememberCapturedThumbnail(input: {
+  projectId: string;
+  source: string | null;
+  accountId: string | null;
+  protected: boolean;
+}): void {
+  const { projectId, source } = input;
+  generations.set(projectId, (generations.get(projectId) ?? 0) + 1);
+  for (const key of thumbnailPromises.keys())
+    if (key.includes(`:${projectId}:`)) thumbnailPromises.delete(key);
+  if (input.protected && (!input.accountId || !isKeySessionActive())) {
+    // Nothing may be shown for it here; drop the superseded card instead.
+    thumbnails.delete(projectId);
+    latestRequest.delete(projectId);
+    return;
+  }
+  const authorization = input.protected
+    ? `protected:${input.accountId}:${getKeySessionVersion()}`
+    : 'device';
+  latestRequest.delete(projectId);
+  thumbnails.delete(projectId);
+  thumbnails.set(projectId, {
+    key: `captured:${projectId}`,
+    projectId,
+    authorization,
+    protected: input.protected,
+    source
+  });
+  if (thumbnails.size > MAX_RETAINED_THUMBNAILS) {
+    const oldest = thumbnails.keys().next().value!;
+    thumbnails.delete(oldest);
+    latestRequest.delete(oldest);
+  }
+  // Inserted synchronously so a shelf mounting right after the leave flush
+  // reads it; the decode only warms the image the tile is about to show.
+  if (source) void decodeThumbnail(source).catch(() => undefined);
 }
 
 /** Prime a bounded first screen from device images before mounting its tiles.

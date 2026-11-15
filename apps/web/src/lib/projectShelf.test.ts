@@ -291,6 +291,28 @@ describe('cachedThumbnailSource', () => {
   });
 });
 
+describe('cachedThumbnailSource across devices', () => {
+  it("fetches another device's card at the same version number", () => {
+    // Two devices can each turn version 8 into their own version 9. Equal
+    // versions say nothing about which card is current, so a listing naming
+    // an artifact this record does not carry is fetched.
+    expect(
+      cachedThumbnailSource(
+        {
+          ...record('data:image/webp;base64,MINE', LISTED),
+          version: 9,
+          artifactId: toArtifactId('artifact_mine')
+        },
+        {
+          ...summary(LISTED),
+          documentVersion: 9,
+          thumbnailArtifactId: toArtifactId('artifact_other_device')
+        }
+      )
+    ).toBeUndefined();
+  });
+});
+
 describe('mergeProjectSummaries', () => {
   it('keeps the account thumbnail when the device document is newer', () => {
     const [merged] = mergeProjectSummaries(

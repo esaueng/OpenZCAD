@@ -343,6 +343,25 @@ describe('start screen first-run polish', () => {
   });
 });
 
+describe('start screen storage panel', () => {
+  // PR review: below 901px the account card sits under the logo at the
+  // page's top, and the panel rising from it opened 344px above the page.
+  it('drops below the card in the one-column layout', () => {
+    const narrow = [
+      ...css.matchAll(
+        /@media \(max-width: 900px\) \{\s*\.storage-panel \{([^}]*)\}/g
+      )
+    ].map((match) => match[1]!);
+    expect(narrow).toHaveLength(1);
+    expect(narrow[0]).toMatch(/top:\s*calc\(100% \+/);
+    expect(narrow[0]).toMatch(/bottom:\s*auto/);
+  });
+
+  it('rises above the card beside the shelf', () => {
+    expect(rule(css, '.storage-panel')).toMatch(/bottom:\s*calc\(100% \+/);
+  });
+});
+
 describe('start screen folder navigation', () => {
   // 14 Nov 2026 recording: with a folder open, Projects kept its accent wash
   // beside the folder's, so two rows claimed to be the place shown.
