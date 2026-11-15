@@ -283,15 +283,17 @@ describe('a cylinder standing exactly on another cylinder', () => {
     // point: once the contact is proved, the pairwise fuse refuses, and
     // `fuseAll` keeps the two caps.
     let refusal: unknown;
-    withRepairFuse(
-      () => null,
-      () => {
-        try {
-          fuseAllMergingFaceContacts(kernel, touching);
-        } catch (error) {
-          refusal = error;
+    withFuseAllLeavingPieces(() =>
+      withRepairFuse(
+        () => null,
+        () => {
+          try {
+            fuseAllMergingFaceContacts(kernel, touching);
+          } catch (error) {
+            refusal = error;
+          }
         }
-      }
+      )
     );
     expect(refusal).toBeInstanceOf(AdapterRefusal);
     expect((refusal as AdapterRefusal).adapterCode).toBe(
@@ -454,6 +456,29 @@ function withRepairFuse<T>(
   }
 }
 
+/**
+ * Run `body` with every `fuseAll` the gate makes replaced by one that leaves
+ * touching operands in pieces, as the kernel did before esaueng/remus#1792:
+ * each operand after the first is lifted by its index in millimetres before
+ * the real `fuseAll`, so no contact survives. The contact proof still reads
+ * the real operands.
+ */
+function withFuseAllLeavingPieces<T>(body: () => T): T {
+  contactRepairFaults.fuseAll = (kernel, solids) =>
+    kernel.fuseAll(
+      Uint32Array.from(
+        Array.from(solids, (solid, index) =>
+          index === 0 ? solid : lifted(kernel, solid, 0, index)
+        )
+      )
+    );
+  try {
+    return body();
+  } finally {
+    delete contactRepairFaults.fuseAll;
+  }
+}
+
 /** Planar face areas of `solid`, ascending. */
 function planeAreas(kernel: RemusKernel, solid: number): number[] {
   return Array.from<number>(kernel.getSolidFaces(solid))
@@ -492,15 +517,14 @@ describe('certifying each contact group on its own', () => {
     ).length === 1;
 
   it.each([0, 1e5, 1e7])(
-    'sees the two pieces fuseAll leaves of a hub on a flange at %s',
+    'fuseAll merges a hub standing on a flange at %s (esaueng/remus#1738)',
     (by) => {
+      // Until esaueng/remus#1792 (2026.1.141) the plain fuseAll left two
+      // pieces here, both caps intact. It now merges the contact itself.
       const kernel = new RemusKernel();
-      expect(
-        faceComponentsOf(
-          kernel,
-          kernel.fuseAll(Uint32Array.from(hubOnFlange(kernel, by)))
-        )
-      ).toHaveLength(2);
+      const fused = kernel.fuseAll(Uint32Array.from(hubOnFlange(kernel, by)));
+      expect(faceComponentsOf(kernel, fused)).toHaveLength(1);
+      expect(flangeTopMerged(kernel, fused)).toBe(true);
     }
   );
 
@@ -553,13 +577,15 @@ describe('certifying each contact group on its own', () => {
     // A pairwise fuse that "merges" by returning the flange alone: one
     // piece, no wall — and no hub. Before 06483e5: accepted, 50265.48 mm³
     // shipped for an 87964.59 mm³ union.
-    withRepairFuse(
-      (k) => k.copySolid(flange),
-      () => {
-        expect(() => fuseAllMergingFaceContacts(kernel, operands)).toThrow(
-          AdapterRefusal
-        );
-      }
+    withFuseAllLeavingPieces(() =>
+      withRepairFuse(
+        (k) => k.copySolid(flange),
+        () => {
+          expect(() => fuseAllMergingFaceContacts(kernel, operands)).toThrow(
+            AdapterRefusal
+          );
+        }
+      )
     );
   });
 
@@ -574,13 +600,15 @@ describe('certifying each contact group on its own', () => {
       lifted(kernel, kernel.makeCylinder(20, 0.5), 0, 1000),
       1e7
     );
-    withRepairFuse(
-      (k) => k.copySolid(flange),
-      () => {
-        expect(() =>
-          fuseAllMergingFaceContacts(kernel, [flange, boss])
-        ).toThrow(AdapterRefusal);
-      }
+    withFuseAllLeavingPieces(() =>
+      withRepairFuse(
+        (k) => k.copySolid(flange),
+        () => {
+          expect(() =>
+            fuseAllMergingFaceContacts(kernel, [flange, boss])
+          ).toThrow(AdapterRefusal);
+        }
+      )
     );
   });
 
@@ -606,12 +634,25 @@ describe('certifying each contact group on its own', () => {
       );
     }
     expect(operands.length).toBeGreaterThan(MAX_CONTACT_REPAIR_OPERANDS);
+    // The pinned fuseAll merges every pin itself (esaueng/remus#1792): one
+    // piece holding the flange and all twelve pins.
+    const united = fuseAllMergingFaceContacts(kernel, operands);
+    expect(faceComponentsOf(kernel, united)).toHaveLength(1);
+    expect(kernel.volume(united, 0.01)).toBeCloseTo(
+      Math.PI * FLANGE_R ** 2 * FLANGE_H +
+        Math.PI * 3 * (11 * 1 ** 2 + last ** 2),
+      6
+    );
+    // A kernel that left them in pieces could not be repaired past the cap,
+    // and the gate fails closed.
     let refusal: unknown;
-    try {
-      fuseAllMergingFaceContacts(kernel, operands);
-    } catch (error) {
-      refusal = error;
-    }
+    withFuseAllLeavingPieces(() => {
+      try {
+        fuseAllMergingFaceContacts(kernel, operands);
+      } catch (error) {
+        refusal = error;
+      }
+    });
     expect((refusal as AdapterRefusal | undefined)?.adapterCode).toBe(
       'union_unmerged_contact'
     );
