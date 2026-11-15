@@ -835,7 +835,10 @@ describe('certifying each contact group on its own', () => {
  * QA 2026-11-14 finding #2 reported a ×4 circular pattern of Ø6 pins
  * subtracted from the flanged hub cutting one hole. It does not reproduce on
  * the stated geometry, about a world axis or about the bore's datum axis;
- * this pins the report's suggested regression — the removed volume is N holes.
+ * this pins the report's suggested regression for N = 2–8: the removed
+ * volume is N holes, and the flange top (the area the report read) loses N
+ * hole discs. The touching hub (base on the flange top) is the case the QA
+ * pass built; the overlapping hub is the control.
  */
 describe('a circular pattern of pins subtracted from a flange', () => {
   let adapter: ExactKernelAdapter;
@@ -843,14 +846,21 @@ describe('a circular pattern of pins subtracted from a flange', () => {
     adapter = await createExactKernelAdapter();
   });
 
-  it.each([
-    ['world Z', 4],
-    ['bore axis', 4],
-    ['bore axis', 8]
-  ] as const)(
-    'cuts every hole about the %s (×%s)',
-    async (about, count) => {
-      let document = flangedHub(5);
+  // N = 2–8 about the bore's datum axis on the touching hub the QA pass
+  // used, the overlapping hub as the control, and a world-axis pattern.
+  const cases: (readonly ['world Z' | 'bore axis', number, number])[] = [
+    ...[2, 3, 4, 5, 6, 7, 8].map(
+      (count) => ['bore axis', count, FLANGE_H] as const
+    ),
+    ...[2, 4, 8].map((count) => ['bore axis', count, 5] as const),
+    ['world Z', 4, FLANGE_H],
+    ['world Z', 4, 5]
+  ];
+
+  it.each(cases)(
+    'cuts every hole about the %s (×%s, hub base z = %s)',
+    async (about, count, hubBase) => {
+      let document = flangedHub(hubBase);
       const hub = last(document);
       document = cylinder(document, 'Bore', 10, 50, -5);
       document = booleanBodies(document, {
@@ -908,6 +918,19 @@ describe('a circular pattern of pins subtracted from a flange', () => {
           count * Math.PI * 3 ** 2 * FLANGE_H,
         6
       );
+      // The QA symptom was the flange top's area: one hole short of N.
+      const pierced = derived.bodyRepresentations[
+        last(document)
+      ]!.topology!.faces.filter(
+        (face) =>
+          face.geometry?.surfaceType === 'plane' &&
+          face.geometry.area > Math.PI * HUB_R ** 2 + 1
+      )
+        .map((face) => face.geometry!.area)
+        .sort((left, right) => left - right);
+      // Flange top annulus, then the bottom disc, both pierced N times.
+      expect(pierced).toHaveLength(2);
+      expect(pierced[0]).toBeCloseTo(ANNULUS - count * Math.PI * 3 ** 2, 6);
     },
     120_000
   );

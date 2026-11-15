@@ -947,6 +947,19 @@ describe('StartScreen cloud project status', () => {
     ).toBeNull();
   });
 
+  it('offers Retry for an account listing that failed', () => {
+    const onRetryAccountListing = vi.fn();
+    renderStartScreen({
+      accountProjectListReached: false,
+      onRetryAccountListing
+    });
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Retry reaching the account' })
+    );
+    expect(onRetryAccountListing).toHaveBeenCalledTimes(1);
+  });
+
   it('does not expose the retired invitation token paste flow', () => {
     renderStartScreen();
 

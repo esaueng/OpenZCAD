@@ -17,7 +17,13 @@ import {
   sheetMetalBody,
   type SheetMetalInput
 } from '@openzcad/document-core';
-import { computeSketchRegions, profileContainsPoint } from '@openzcad/geometry';
+import {
+  computeSketchRegions,
+  frameForPlaneRef,
+  profileContainsPoint,
+  projectEdgeToSketch,
+  projectableCurveFromTopology
+} from '@openzcad/geometry';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -37,13 +43,16 @@ import {
   type ProjectDocument,
   type SheetMetalBend,
   type SheetMetalBendPosition,
+  type SketchConstraintData,
   type SketchId,
   type SketchObjectData,
+  type SketchPlaneRef,
   type SketchProfileReference
 } from '@openzcad/shared';
 import * as webGlimpse from '../apps/web/src/lib/glimpseContract';
 import * as workerGlimpse from '../apps/web/worker/glimpseContract';
 import { featureValueSummary } from '../apps/web/src/lib/featureSummary';
+import { assertFeatureSketchProjectionsValid } from '../packages/kernel-adapter/src/exact-sketch-projection-failures';
 
 /**
  * ROADMAP M16 slice 2: the `sheet-metal` feature kind, its commands and the
@@ -844,6 +853,7 @@ describe('sheet-metal exact build', { timeout: 240_000 }, () => {
       sheet(blank, lines, table, { relief: { shape: 'obround' } }, cells)
         .document
     );
+    // Its own rounded relief ends are not "a hole near the bend".
     expect(obround.warnings).toEqual([]);
 
     const attached = await adapter.syncDocument(
@@ -1202,3 +1212,415 @@ describe(
     });
   }
 );
+
+/**
+ * Regressions from the review of PR #1554 (gpt-6.1-sol): each reproduces the
+ * reviewer's scenario.
+ */
+describe('sheet-metal review regressions', { timeout: 240_000 }, () => {
+  const plane: SketchPlaneRef = { type: 'canonical', plane: 'XY', offset: 8 };
+
+  /**
+   * A flat sheet whose 20 × 10 outline is tied by sketch relations to a
+   * linked projection of a `w` × 10 × 5 box's top edge, so resizing `w`
+   * re-projects the edge and re-solves the outline at rebuild. `locked`
+   * pins one corner, which makes that solve unsatisfiable once `w` changes.
+   */
+  async function linkedSheet(locked = false) {
+    const manager = new CommandManager(createProjectDocument('Linked', user));
+    manager.execute(
+      commandFactories.setParameter({ name: 'w', expression: '20' })
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Source',
+        primitiveKind: 'box',
+        dimensions: { width: 'w', height: 10, depth: 5 }
+      })
+    );
+    const sourceId = manager.document.bodyOrder[0]!;
+    const built = await adapter.syncDocument(manager.document);
+    const edge = built.bodyRepresentations[sourceId]!.topology!.edges.find(
+      (candidate) => {
+        const points = candidate.points;
+        const end = points.length - 3;
+        return (
+          candidate.reference &&
+          candidate.curve?.type === 'LINE' &&
+          points[1] === 0 &&
+          points[end + 1] === 0 &&
+          points[2] === 5 &&
+          points[end + 2] === 5 &&
+          points[0] !== points[end]
+        );
+      }
+    );
+    expect(edge, 'verified top-front source edge').toBeDefined();
+    const projected = projectEdgeToSketch(
+      projectableCurveFromTopology(edge!),
+      frameForPlaneRef(plane, Number)
+    );
+    if (
+      projected.status !== 'projected' ||
+      projected.data.objectKind !== 'line'
+    ) {
+      throw new Error('Expected an exact projected source line.');
+    }
+    const side = (
+      x1: number,
+      y1: number,
+      x2: number,
+      y2: number
+    ): SketchObjectData => ({ objectKind: 'line', x1, y1, x2, y2 });
+    manager.execute(
+      commandFactories.addSketch({
+        name: 'Linked blank',
+        planeRef: plane,
+        objects: [
+          {
+            ...projected.data,
+            x1: 0,
+            y1: 0,
+            x2: 20,
+            y2: 0,
+            construction: true,
+            projection: {
+              mode: 'linked',
+              source: { bodyId: sourceId, edgeReference: edge!.reference! }
+            }
+          },
+          side(0, 0, 20, 0),
+          side(20, 0, 20, 10),
+          side(20, 10, 0, 10),
+          side(0, 10, 0, 0)
+        ]
+      })
+    );
+    const sketchId = manager.document.sketchOrder.at(-1)!;
+    const [projectionId, bottom, right, top, left] = findSketch(
+      manager.document,
+      sketchId
+    )!.objectIds as [EntityId, EntityId, EntityId, EntityId, EntityId];
+    const constrain = (constraint: SketchConstraintData) =>
+      manager.execute(
+        commandFactories.addSketchConstraint({ sketchId, constraint })
+      );
+    const loop = [bottom, right, top, left];
+    for (const [index, id] of loop.entries()) {
+      constrain({
+        constraintKind: 'coincident',
+        a: { objectId: id, point: 'end' },
+        b: { objectId: loop[(index + 1) % 4]!, point: 'start' }
+      });
+    }
+    for (const point of ['start', 'end'] as const) {
+      constrain({
+        constraintKind: 'coincident',
+        a: { objectId: bottom, point },
+        b: { objectId: projectionId, point }
+      });
+    }
+    constrain({ constraintKind: 'horizontal', objectId: top });
+    constrain({ constraintKind: 'vertical', objectId: right });
+    constrain({ constraintKind: 'vertical', objectId: left });
+    constrain({
+      constraintKind: 'distance',
+      a: { objectId: right, point: 'start' },
+      b: { objectId: right, point: 'end' },
+      value: 10
+    });
+    if (locked) {
+      constrain({
+        constraintKind: 'lock',
+        point: { objectId: bottom, point: 'end' },
+        x: 20,
+        y: 0
+      });
+    }
+    manager.execute(
+      commandFactories.sheetMetalBody({
+        name: 'Sheet metal 1',
+        sketchId,
+        profiles: [{ all: true, sourceEntityIds: loop }],
+        thickness: T,
+        bendRadius: R,
+        kFactor: K,
+        bends: []
+      })
+    );
+    const bodyId = manager.document.bodyOrder.at(-1)!;
+    const featureId = listFeaturesInOrder(manager.document).at(-1)!.featureId;
+    return { manager, bodyId, featureId };
+  }
+
+  function outlineWidth(
+    pattern: Awaited<ReturnType<ExactKernelAdapter['sheetMetalFlatPattern']>>
+  ): number {
+    const xs = pattern.loops[0]!.entities.flatMap((entity) =>
+      entity.kind === 'line' ? [entity.start[0], entity.end[0]] : []
+    );
+    return Math.max(...xs) - Math.min(...xs);
+  }
+
+  it('flat pattern and fold preview follow a re-projected linked outline (finding 1)', async () => {
+    const linked = await linkedSheet();
+    const before = await adapter.sheetMetalFlatPattern(
+      linked.manager.document,
+      linked.featureId
+    );
+    expect(outlineWidth(before)).toBeCloseTo(20, 8);
+    linked.manager.execute(
+      commandFactories.setParameter({ name: 'w', expression: '32' })
+    );
+    const resized = linked.manager.document;
+    const derived = await adapter.syncDocument(resized);
+    // The build re-projects the source edge and re-solves the outline.
+    expect(derived.bodyRepresentations[linked.bodyId]!.volume).toBeCloseTo(
+      32 * 10 * T,
+      6
+    );
+    const pattern = await adapter.sheetMetalFlatPattern(
+      resized,
+      linked.featureId
+    );
+    expect(outlineWidth(pattern)).toBeCloseTo(32, 8);
+    const preview = await adapter.sheetMetalFoldPreview(
+      resized,
+      linked.featureId,
+      0
+    );
+    expect(preview.boundingBox[3] - preview.boundingBox[0]).toBeCloseTo(32, 8);
+    expect(preview.volume).toBeCloseTo(32 * 10 * T, 3);
+  });
+
+  it('refuses to build or export from a blank whose linked sketch failed to solve (finding 3)', async () => {
+    const linked = await linkedSheet(true);
+    expect(
+      (await adapter.syncDocument(linked.manager.document)).bodyRepresentations[
+        linked.bodyId
+      ]!.volume
+    ).toBeCloseTo(20 * 10 * T, 6);
+    linked.manager.execute(
+      commandFactories.setParameter({ name: 'w', expression: '32' })
+    );
+    const resized = linked.manager.document;
+    const derived = await adapter.syncDocument(resized);
+    // The sketch fails, and the sheet-metal feature refuses with it instead
+    // of building the stale 20 × 10 outline.
+    expect(derived.featureWarnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          featureName: 'Linked blank',
+          kind: 'build-failed'
+        }),
+        expect.objectContaining({
+          featureName: 'Sheet metal 1',
+          kind: 'build-failed',
+          message: expect.stringMatching(/linked projections/) as string
+        })
+      ])
+    );
+    expect(derived.bodyRepresentations[linked.bodyId]).toBeUndefined();
+    await expect(
+      adapter.sheetMetalFlatPattern(resized, linked.featureId)
+    ).rejects.toThrow(/linked projections/);
+    await expect(
+      adapter.sheetMetalFoldPreview(resized, linked.featureId, 0)
+    ).rejects.toThrow(/linked projections/);
+  });
+
+  it('refuses a bend whose line is in a sketch that failed to solve (finding 3)', () => {
+    const base = sheet(
+      [rectangle(0, 0, 100, 40)],
+      [line(60, 0, 60, 40)],
+      ([lineId], sketchId) => [bend('b1', sketchId, lineId!)]
+    );
+    const data = listFeaturesInOrder(base.document).at(-1)!.data;
+    const other = 'sketch_other_bend_line' as SketchId;
+    const moved = {
+      ...data,
+      bends: [bend('b1', other, base.objectIds[1]!)]
+    } as FeatureData;
+    for (const failed of [base.sketchId, other]) {
+      expect(() =>
+        assertFeatureSketchProjectionsValid(
+          { sketchProjectionFailures: new Map([[failed, 'unsatisfied']]) },
+          moved
+        )
+      ).toThrow(/linked projections/);
+    }
+    expect(() => assertFeatureSketchProjectionsValid({}, moved)).not.toThrow();
+  });
+
+  /** The 40 × 60 plate with a 30 × 20 tab, bend at x = 39 across the tab. */
+  function tab(overrides: Partial<SheetMetalInput>): Sheet {
+    const outline: [number, number][] = [
+      [0, 0],
+      [40, 0],
+      [40, 20],
+      [70, 20],
+      [70, 40],
+      [40, 40],
+      [40, 60],
+      [0, 60]
+    ];
+    return sheet(
+      outline.map(([x, y], index): SketchObjectData => {
+        const [nextX, nextY] = outline[(index + 1) % outline.length]!;
+        return { objectKind: 'line', x1: x, y1: y, x2: nextX, y2: nextY };
+      }),
+      [line(39, 20, 39, 40)],
+      ([lineId], sketchId) => [bend('tab', sketchId, lineId!)],
+      overrides
+    );
+  }
+
+  it("exempts only a bend's own relief ends from its hole clearance (re-check)", async () => {
+    // Bend 1 folds the plate at x = 30; bend 2 folds the tab at x = 39 with
+    // obround reliefs whose rounded ends sit about 2.5 from bend 1's zone,
+    // inside the 4 (2 × T) clearance. Bend 2's own relief ends stay exempt.
+    const outline: [number, number][] = [
+      [0, 0],
+      [40, 0],
+      [40, 20],
+      [70, 20],
+      [70, 40],
+      [40, 40],
+      [40, 60],
+      [0, 60]
+    ];
+    const twoBends = sheet(
+      outline.map(([x, y], index): SketchObjectData => {
+        const [nextX, nextY] = outline[(index + 1) % outline.length]!;
+        return { objectKind: 'line', x1: x, y1: y, x2: nextX, y2: nextY };
+      }),
+      [line(30, 0, 30, 60), line(39, 20, 39, 40)],
+      ([plateLine, tabLine], sketchId) => [
+        bend('plate', sketchId, plateLine!, { direction: 'down' }),
+        bend('tab', sketchId, tabLine!, { relief: { shape: 'obround' } })
+      ],
+      { fixedPoint: [10, 30] }
+    );
+    const derived = await adapter.syncDocument(twoBends.document);
+    const advisories = (derived.featureWarnings ?? [])
+      .filter((warning) => warning.kind === 'advisory')
+      .map((warning) => warning.message);
+    const near = advisories.filter((message) => /closer than/.test(message));
+    expect(near).toHaveLength(1);
+    expect(near[0]).toMatch(/zone of bend 1\b/);
+  });
+
+  it('cuts obround reliefs as rounded slots, never as rectangular ones (finding 2)', async () => {
+    const obround = tab({ relief: { shape: 'obround' } });
+    const derived = await adapter.syncDocument(obround.document);
+    expect(derived.warnings).toEqual([]);
+    const zoneLo = 39 - BA90 / 2;
+    // Width T = 2 and extension T = 2: the straight part runs from 1 behind
+    // the zone to the plate's edge, closed by a semicircle of radius 1.
+    const slot =
+      T * (40 - (zoneLo - (T - T / 2))) + (Math.PI * (T / 2) ** 2) / 2;
+    const rounded = foldedVolume((40 * 60 + 30 * 20 - 2 * slot) * T, [
+      { angleDeg: 90, width: 20 }
+    ]);
+    const body = derived.bodyRepresentations[obround.bodyId]!;
+    expect(body.volume).toBeCloseTo(rounded, 5);
+    const rectangular = await adapter.syncDocument(
+      tab({ relief: { shape: 'rectangular' } }).document
+    );
+    const square = T * (40 - (zoneLo - T));
+    expect(
+      rectangular.bodyRepresentations[
+        Object.keys(rectangular.bodyRepresentations)[0] as BodyId
+      ]!.volume
+    ).toBeCloseTo(
+      foldedVolume((40 * 60 + 30 * 20 - 2 * square) * T, [
+        { angleDeg: 90, width: 20 }
+      ]),
+      5
+    );
+    expect(Math.abs(square - slot)).toBeGreaterThan(0.1);
+    expect(faceNames(derived, obround.bodyId)).toEqual(
+      expect.arrayContaining([
+        'sheet.face.edge[fixed].relief[tab].start.round',
+        'sheet.face.edge[fixed].relief[tab].end.round'
+      ])
+    );
+  });
+
+  it('decides relief against small material exactly, not by sampling (finding 4)', async () => {
+    // A 1 × 0.1 protrusion on the edge beside the bend line's first end,
+    // inside the default rectangular relief's footprint.
+    const outline: [number, number][] = [
+      [0, 0],
+      [56, 0],
+      [56, -0.1],
+      [57, -0.1],
+      [57, 0],
+      [100, 0],
+      [100, 40],
+      [0, 40]
+    ];
+    const build = (relief: SheetMetalInput['relief']) =>
+      sheet(
+        outline.map(([x, y], index): SketchObjectData => {
+          const [nextX, nextY] = outline[(index + 1) % outline.length]!;
+          return { objectKind: 'line', x1: x, y1: y, x2: nextX, y2: nextY };
+        }),
+        [line(60, 0, 60, 40)],
+        ([lineId], sketchId) => [bend('b1', sketchId, lineId!)],
+        { relief }
+      );
+    const none = build({ shape: 'none' });
+    const kept = await adapter.syncDocument(none.document);
+    expect(kept.warnings).toEqual([]);
+    const withProtrusion = foldedVolume((100 * 40 + 0.1) * T, [
+      { angleDeg: 90, width: 40 }
+    ]);
+    expect(kept.bodyRepresentations[none.bodyId]!.volume).toBeCloseTo(
+      withProtrusion,
+      5
+    );
+    const relieved = build({ shape: 'rectangular' });
+    const derived = await adapter.syncDocument(relieved.document);
+    // The slot covers the protrusion, so the relief removes it: the result
+    // is never the unrelieved body.
+    expect(derived.warnings).toEqual([]);
+    expect(derived.bodyRepresentations[relieved.bodyId]!.volume).toBeCloseTo(
+      withProtrusion - 0.1 * T,
+      5
+    );
+  });
+
+  it('accepts a fixed point inside the fixed region but within the centred zone (finding 5)', async () => {
+    const derived = await adapter.syncDocument(
+      sheet(
+        [rectangle(0, 0, 100, 40)],
+        [line(60, 0, 60, 40)],
+        ([lineId], sketchId) => [
+          bend('b1', sketchId, lineId!, { position: 'moving-side' })
+        ],
+        { fixedPoint: [59, 20] }
+      ).document
+    );
+    expect(derived.warnings).toEqual([]);
+    const body = Object.values(derived.bodyRepresentations)[0]!;
+    // The zone starts on the line and the flange stands R + T beyond it.
+    expect(body.bbox.min.x).toBeCloseTo(0, 6);
+    expect(body.bbox.max.x).toBeCloseTo(60 + R + T, 6);
+    // Mirrored: a point just right of the line keeps the right side fixed.
+    const mirrored = await adapter.syncDocument(
+      sheet(
+        [rectangle(0, 0, 100, 40)],
+        [line(60, 0, 60, 40)],
+        ([lineId], sketchId) => [
+          bend('b1', sketchId, lineId!, { position: 'moving-side' })
+        ],
+        { fixedPoint: [61, 20] }
+      ).document
+    );
+    expect(mirrored.warnings).toEqual([]);
+    const other = Object.values(mirrored.bodyRepresentations)[0]!;
+    expect(other.bbox.max.x).toBeCloseTo(100, 6);
+    expect(other.bbox.min.x).toBeCloseTo(60 - R - T, 6);
+  });
+});

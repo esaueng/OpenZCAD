@@ -232,8 +232,25 @@ T/2)·w`; otherwise it refuses `sheet-metal:fold-failed` (an added code, for
   `bend-not-separating` reports.
 - **Which side moves** is found first on centre-line zones without reliefs,
   because a zone's place (`fixed-side`, `moving-side`, `outside-mold-line`)
-  and its relief depend on it; the build then checks that its own tree
-  agrees and retries once with the tree's answer.
+  and its relief depend on it; the build then lays the zones out for that
+  answer, reads the sides again from the real layout, and retries once with
+  them if they differ. The first pass refuses nothing: a fixed point that
+  falls in a provisional zone takes the region on its own side of the bend
+  line, and only the real layout decides whether the point is on a flat
+  region.
+- **Reliefs are cut by the exact kernel, each as one tool.** No slot is
+  skipped by a guess: a slot off the sheet, or only touching it, comes back
+  from the cut unchanged. An obround slot is one profile (three lines and
+  two quarter arcs), because the exact boolean declines a cylinder cut after
+  the box beside it. Where the tool that passes through the plate is
+  declined (a slot that swallows a whole lug standing off the blank's edge),
+  the same slot is cut flush with the plate's faces. A slot neither cuts
+  refuses `sheet-metal:relief-failed` (an added code); a relief is never
+  left out or replaced by another shape.
+- **Sketch state.** The feature refuses, like an extrude, when its blank's
+  sketch or a bend line's sketch has linked projections that failed to
+  solve; the flat-pattern and fold-preview entry points apply the same guard
+  and read the sketches as the build did (re-projected linked geometry).
 - A bend line that crosses the sheet in two places folding opposite ways is
   refused (`invalid-parameter`): one line has one moving side.
 - Lengths compare within `1e-8` of the blank's diagonal, volumes within
