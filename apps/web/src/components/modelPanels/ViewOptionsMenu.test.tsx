@@ -1,15 +1,20 @@
-import { render, screen, within } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PanelLayoutOptions } from '../../lib/panelLayout';
 import {
   LAYOUT_LOCKED_DETAIL,
   PANEL_LAYOUT_MENU_MARGIN,
+  placePanelLayoutMenu
+} from './ViewOptionsList';
+import type * as ViewOptionsListModule from './ViewOptionsList';
+import {
+  createViewOptionsMenu,
   PanelsHiddenPill,
   ViewOptionsMenu,
-  placePanelLayoutMenu,
   type ViewOptionsMenuProps
 } from './ViewOptionsMenu';
+import { ErrorBoundary } from '../ErrorBoundary';
 
 const OPTIONS: PanelLayoutOptions = {
   hidden: false,
@@ -42,7 +47,10 @@ describe('ViewOptionsMenu', () => {
     expect(button).toHaveAttribute('aria-expanded', 'false');
     await user.click(button);
     expect(button).toHaveAttribute('aria-expanded', 'true');
-    const menu = within(screen.getByRole('menu', { name: 'Panel layout' }));
+    // The list loads on demand: the first press opens it once it arrives.
+    const menu = within(
+      await screen.findByRole('menu', { name: 'Panel layout' })
+    );
 
     const layouts = within(menu.getByRole('group', { name: 'Presets' }));
     expect(
@@ -100,6 +108,7 @@ describe('ViewOptionsMenu', () => {
     const user = userEvent.setup();
     const { props } = renderMenu({ preset: null });
     await user.click(screen.getByRole('button', { name: 'Panel layout' }));
+    await screen.findByRole('menu');
     await user.click(screen.getByRole('menuitemradio', { name: 'Review' }));
     expect(props.onPreset).toHaveBeenCalledWith('review');
     await user.click(
@@ -125,6 +134,7 @@ describe('ViewOptionsMenu', () => {
     const user = userEvent.setup();
     const { props } = renderMenu({ options: { ...OPTIONS, locked: true } });
     await user.click(screen.getByRole('button', { name: 'Panel layout' }));
+    await screen.findByRole('menu');
     const radios = screen.getAllByRole('menuitemradio');
     expect(radios).toHaveLength(8);
     for (const radio of radios) {
@@ -146,7 +156,7 @@ describe('ViewOptionsMenu', () => {
     const button = screen.getByRole('button', { name: 'Panel layout' });
     button.focus();
     await user.keyboard('{Enter}');
-    expect(screen.getByRole('menu')).toHaveFocus();
+    expect(await screen.findByRole('menu')).toHaveFocus();
     // The disabled presets are skipped: the first stop is Hide all.
     await user.keyboard('{ArrowDown}');
     expect(
@@ -172,9 +182,11 @@ describe('ViewOptionsMenu', () => {
     renderMenu();
     const button = screen.getByRole('button', { name: 'Panel layout' });
     await user.click(button);
+    await screen.findByRole('menu');
     await user.click(button);
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     await user.click(button);
+    await screen.findByRole('menu');
     await user.click(document.body);
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
@@ -242,5 +254,118 @@ describe('PanelsHiddenPill', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Panels hidden');
     await user.click(screen.getByRole('button', { name: 'Show panels' }));
     expect(onShow).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** The menu's chunk, released or refused by hand: a slow or broken load. */
+function heldList() {
+  let resolve!: (module: typeof ViewOptionsListModule) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<typeof ViewOptionsListModule>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return {
+    load: () => promise,
+    release: async () => {
+      await act(async () => resolve(await import('./ViewOptionsList')));
+    },
+    reject
+  };
+}
+
+function renderHeld(list: ReturnType<typeof heldList>) {
+  const Menu = createViewOptionsMenu(list.load);
+  render(
+    <ErrorBoundary label="OpenZCAD" scope="page">
+      <button type="button">Elsewhere</button>
+      <Menu
+        options={OPTIONS}
+        preset="essentials"
+        onPreset={vi.fn()}
+        onToggle={vi.fn()}
+        onWidth={vi.fn()}
+      />
+    </ErrorBoundary>
+  );
+  return screen.getByRole('button', { name: 'Panel layout' });
+}
+
+describe('the Panel layout menu while its code loads', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('opens once its code arrives', async () => {
+    const user = userEvent.setup();
+    const list = heldList();
+    const button = renderHeld(list);
+    await user.click(button);
+    expect(screen.queryByRole('menu')).toBeNull();
+    await list.release();
+    expect(await screen.findByRole('menu')).toHaveFocus();
+  });
+
+  it('stays closed after Escape, and does not take focus when it arrives', async () => {
+    const user = userEvent.setup();
+    const list = heldList();
+    const button = renderHeld(list);
+    await user.click(button);
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+    await user.keyboard('{Escape}');
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    await list.release();
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(button).toHaveFocus();
+  });
+
+  it('stays closed after a press outside', async () => {
+    const user = userEvent.setup();
+    const list = heldList();
+    const button = renderHeld(list);
+    await user.click(button);
+    await user.click(document.body);
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    await list.release();
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('stays closed once focus moves elsewhere', async () => {
+    const user = userEvent.setup();
+    const list = heldList();
+    const button = renderHeld(list);
+    await user.click(button);
+    await user.tab({ shift: true });
+    expect(screen.getByRole('button', { name: 'Elsewhere' })).toHaveFocus();
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    await list.release();
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Elsewhere' })).toHaveFocus();
+  });
+
+  it('closes again when its code cannot load, and the workspace stays', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const refetch = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(''));
+    const user = userEvent.setup();
+    const list = heldList();
+    const button = renderHeld(list);
+    await user.click(button);
+    await act(async () =>
+      list.reject(
+        new TypeError(
+          'Failed to fetch dynamically imported module: /assets/ViewOptionsList-gone.js'
+        )
+      )
+    );
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(
+      screen.queryByRole('heading', { name: 'Part of OpenZCAD could not load' })
+    ).toBeNull();
+    expect(button).toBeInTheDocument();
+    expect(refetch).toHaveBeenCalledWith(
+      expect.stringContaining('/assets/ViewOptionsList-gone.js'),
+      { cache: 'reload' }
+    );
   });
 });
