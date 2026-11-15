@@ -154,11 +154,14 @@ export function addedConstraintIds(commands: readonly AnyCommand[]): string[] {
  * it adds could no longer be shown, so it must not land unseen.
  */
 export function drawingSessionStillOpen(
-  planned: { sketchId: string | null; plane: unknown },
+  planned: { sketchId: string | null; plane: unknown; generation: number },
   now:
     | { mode: 'sketch'; session: { sketchId?: string | null; plane: unknown } }
-    | { mode: string }
+    | { mode: string },
+  /** Bumped each time sketch mode is left; a new session is a new number. */
+  generation: number
 ): boolean {
+  if (generation !== planned.generation) return false;
   if (now.mode !== 'sketch' || !('session' in now)) return false;
   const sketchId = now.session.sketchId ?? null;
   // A session that knows its sketch must know this one. One that does not

@@ -4231,6 +4231,18 @@ export function App() {
   // `idle` render it was constructed during.
   const interactionRef = useRef(interaction);
   interactionRef.current = interaction;
+  // S08: which sketch session this is. Leaving sketch mode starts a new
+  // generation, so work planned in one session never lands in the next one,
+  // even on the same plane. Counted here, with `interactionRef`, so async
+  // work that reads one sees the other in step.
+  const sketchSessionGenerationRef = useRef(0);
+  const lastInteractionModeRef = useRef(interaction.mode);
+  if (interaction.mode !== lastInteractionModeRef.current) {
+    if (lastInteractionModeRef.current === 'sketch') {
+      sketchSessionGenerationRef.current += 1;
+    }
+    lastInteractionModeRef.current = interaction.mode;
+  }
   // An armed relation's or modify tool's instruction retires once the tool
   // is put down, and the live hint takes the bar back. A message set with
   // the disarm itself ("constraint added") is younger than the settle time
@@ -20807,6 +20819,7 @@ export function App() {
     hints: SketchSnapHint[] | undefined
   ) {
     const current = interactionRef.current;
+    const generation = sketchSessionGenerationRef.current;
     const manager = managerRef.current;
     const base = manager?.document;
     if (current.mode !== 'sketch' || !manager || !base) return;
@@ -20867,8 +20880,9 @@ export function App() {
     // The sketch closed (or another opened) meanwhile: nothing lands unseen.
     if (
       !drawingSessionStillOpen(
-        { sketchId: sketchId ?? null, plane: session.plane },
-        interactionRef.current
+        { sketchId: sketchId ?? null, plane: session.plane, generation },
+        interactionRef.current,
+        sketchSessionGenerationRef.current
       )
     ) {
       setStatus(
