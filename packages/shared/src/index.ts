@@ -18,6 +18,7 @@ export * from './print-clearance';
 export * from './assembly';
 export * from './assembly-coupling';
 export * from './assembly-kinematics';
+export * from './body-clash';
 export * from './gear-mesh-types';
 export * from './gear-mesh';
 import type { DocumentHistory } from './document-history';

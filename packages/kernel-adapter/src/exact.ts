@@ -89,6 +89,11 @@ import {
   type StlExportMesh
 } from '@openzcad/io-stl';
 import { faceDxfEntities } from './exact-dxf';
+import { pairwiseBodyClash, rowMajorMatrix } from './exact-body-clash';
+import type {
+  AssemblyInterferenceOperand,
+  AssemblyInterferenceReport
+} from '@openzcad/shared';
 import {
   foldSheetMetalAt,
   sheetMetalFlatPattern,
@@ -918,6 +923,18 @@ export interface ExactKernelAdapter {
     bodyIds: BodyId[],
     plane: DrawingSectionPlane
   ): Promise<Record<BodyId, DrawingSectionBody>>;
+  /**
+   * AS04: exact pairwise interference between assembly components, each
+   * component's body posed by its matrix (the M09 clash query of
+   * `exact-body-clash.ts`, run on every unordered pair). Read-only: the posed
+   * copies are released and the model is untouched. A component whose body
+   * has no exact geometry (unknown, consumed or parameter-hidden) is listed
+   * in `missing` and joins no pair.
+   */
+  assemblyInterference(
+    document: ProjectDocument,
+    operands: AssemblyInterferenceOperand[]
+  ): Promise<AssemblyInterferenceReport>;
   /**
    * Solves one sketch's persisted constraints with the kernel's GCS and
    * returns the solved geometry plus classification, DOF, and per-constraint
@@ -5792,6 +5809,56 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           result[bodyId] = drawingTessellationOfShape(kernel, shape, budget);
         }
         return result;
+      },
+      []
+    );
+  }
+
+  assemblyInterference(
+    document: ProjectDocument,
+    operands: AssemblyInterferenceOperand[]
+  ): Promise<AssemblyInterferenceReport> {
+    const matrices = operands.map((operand) => rowMajorMatrix(operand.matrix));
+    return this.withExportBuild(
+      document,
+      (kernel, build) => {
+        const hidden = getParameterHiddenBodyIds(document);
+        const missing: string[] = [];
+        const posed: { id: string; solids: number[] }[] = [];
+        const copies: number[] = [];
+        try {
+          operands.forEach((operand, index) => {
+            const bodyId = operand.bodyId as BodyId;
+            const shape = build.shapes.get(bodyId);
+            if (
+              !shape ||
+              shape.solids.length === 0 ||
+              hidden.has(bodyId) ||
+              build.consumed.has(bodyId)
+            ) {
+              missing.push(operand.componentId);
+              return;
+            }
+            const solids = shape.solids.map((solid) => {
+              const copy = kernel.copyAndTransformSolid(
+                solid,
+                matrices[index]!
+              );
+              copies.push(copy);
+              return copy;
+            });
+            posed.push({ id: operand.componentId, solids });
+          });
+          return { pairs: pairwiseBodyClash(kernel, posed), missing };
+        } finally {
+          for (const copy of copies) {
+            try {
+              kernel.deleteSolid(copy);
+            } catch {
+              // The checkpoint restore after this job releases it anyway.
+            }
+          }
+        }
       },
       []
     );

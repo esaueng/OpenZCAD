@@ -6,6 +6,10 @@ import {
 import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import type {
+  AssemblyInterferenceOperand,
+  AssemblyInterferenceReport
+} from '@openzcad/shared';
+import type {
   BodyId,
   FaceRecognitionSummary,
   FeatureId,
@@ -245,6 +249,17 @@ export type GeometryWorkerRequest =
       anchor?: SketchSolveAnchor;
     }
   | {
+      /**
+       * AS04: exact pairwise interference between assembly components posed
+       * by their matrices (the adapter's `assemblyInterference`, which runs
+       * the M09 clash query). Read-only.
+       */
+      type: 'assembly-interference';
+      requestId: string;
+      document: ProjectDocument;
+      operands: AssemblyInterferenceOperand[];
+    }
+  | {
       /** One planar sketch edit: corner fillet, corner chamfer, or offset. */
       type: 'sketch-2d-op';
       requestId: string;
@@ -444,6 +459,20 @@ export type GeometrySectionResult =
     }
   | { type: 'section'; ok: false; requestId: string; error: string };
 
+export type GeometryAssemblyInterferenceResult =
+  | {
+      type: 'assembly-interference';
+      ok: true;
+      requestId: string;
+      report: AssemblyInterferenceReport;
+    }
+  | {
+      type: 'assembly-interference';
+      ok: false;
+      requestId: string;
+      error: string;
+    };
+
 export type GeometrySolveSketchResult =
   | {
       type: 'solve-sketch';
@@ -567,6 +596,7 @@ export type GeometryWorkerResult =
   | GeometrySheetMetalFoldResult
   | GeometrySectionResult
   | GeometrySolveSketchResult
+  | GeometryAssemblyInterferenceResult
   | GeometrySketch2dOpResult
   | GeometryRecognizeImportedFaceResult
   | GeometrySheetMetalFlatPatternResult;
@@ -1204,6 +1234,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       request.type === 'drawing-tessellation' ||
       request.type === 'section' ||
       request.type === 'solve-sketch' ||
+      request.type === 'assembly-interference' ||
       request.type === 'sketch-2d-op' ||
       request.type === 'recognize-imported-face' ||
       request.type === 'sheet-metal-fold' ||
@@ -1304,6 +1335,20 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           ok: true,
           requestId: request.requestId,
           outcome
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
+      if (request.type === 'assembly-interference') {
+        const report = await exact.assemblyInterference(
+          document,
+          request.operands
+        );
+        post({
+          type: 'assembly-interference',
+          ok: true,
+          requestId: request.requestId,
+          report
         });
         post(stateFor('ready', request, { stale: false }));
         return;
@@ -1776,6 +1821,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     } else if (request.type === 'solve-sketch') {
       post({
         type: 'solve-sketch',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'assembly-interference') {
+      post({
+        type: 'assembly-interference',
         ok: false,
         requestId: request.requestId,
         error: message

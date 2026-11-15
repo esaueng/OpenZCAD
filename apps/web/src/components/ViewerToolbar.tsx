@@ -27,7 +27,7 @@ import type {
 import { AxisTriadIcon } from './ViewerRailIcons';
 import { DisplayModeMenu, isWorkspaceShortcutKey } from './DisplayModeMenu';
 import type { SectionOutlineState } from '../lib/sectionOutline';
-import { SectionToolbox } from './SectionToolbox';
+import { SectionToolbox, type SectionOverlapNote } from './SectionToolbox';
 import { SECTION_PLANE_LABELS } from '../lib/sectionPlaneLabels';
 import { UNDO_FLOOR_TRIMMED_REASON } from '../lib/toasts';
 import { Tooltip } from './Tooltip';
@@ -144,6 +144,11 @@ interface ViewerToolbarProps {
    * told which one is on screen, because only one of them is a drawing.
    */
   sectionOutline: SectionOutlineState;
+  /**
+   * M09: named body pairs whose display caps overlap inside the cut
+   * (display evidence, not an exact clash check).
+   */
+  sectionOverlap?: SectionOverlapNote[];
   /** Document units, for the cut area this reports. */
   units: string;
   /**
@@ -214,6 +219,7 @@ export function ViewerToolbar({
   onSectionFlip,
   onExportSectionDxf,
   sectionOutline,
+  sectionOverlap,
   units,
   touchModifiers,
   onTouchModifiersChange,
@@ -704,6 +710,7 @@ export function ViewerToolbar({
               range={shownCut.range}
               active={sectionOn}
               outline={sectionOutline}
+              {...(sectionOverlap ? { overlap: sectionOverlap } : {})}
               units={units}
               onSwitch={() => {
                 if (sectionOn) setHeldOff(true);

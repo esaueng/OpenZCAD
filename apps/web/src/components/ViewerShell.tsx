@@ -49,6 +49,7 @@ import type {
   MoveSnap,
   PickDetail,
   ProjectionMode,
+  SectionOverlapPair,
   SectionPlaneId,
   SelectionFilter,
   SketchOverlay,
@@ -64,6 +65,7 @@ import {
   VIEWER_RAIL_STOPS_EXCEPT,
   ViewerToolbar
 } from './ViewerToolbar';
+import { describeSectionOverlap } from './SectionToolbox';
 import { useRovingToolbar } from '../hooks/useRovingToolbar';
 import type { SavedViewsSectionProps } from './SavedViewsSection';
 import {
@@ -615,6 +617,22 @@ export function ViewerShell({
   sectionOutline
 }: ViewerShellProps) {
   const { bodies, standIns: parameterVisualPreview } = view;
+  // M09: bodies overlapping inside the cut, as the viewport's section pass
+  // found them on the display meshes; named for the section toolbox.
+  const [sectionOverlapIds, setSectionOverlapIds] = useState<
+    SectionOverlapPair[]
+  >([]);
+  const sectionOverlap = useMemo(() => {
+    const names = new Map(bodies.map((body) => [body.bodyId, body.name]));
+    return sectionOverlapIds.map((pair) => ({
+      a: names.get(pair.a as never) ?? 'A body',
+      b: names.get(pair.b as never) ?? 'a body',
+      area: pair.area
+    }));
+  }, [bodies, sectionOverlapIds]);
+  const sectionOverlapText = settings.sectionView
+    ? describeSectionOverlap(sectionOverlap, units)
+    : null;
   // Assemble's posed view of the same document; null outside Assemble.
   const assemblyView = useAssemblyView(view.document);
   /**
@@ -755,6 +773,7 @@ export function ViewerShell({
       onSectionFlip={onSectionFlip}
       onExportSectionDxf={onExportSectionDxf}
       sectionOutline={drawnSection}
+      sectionOverlap={sectionOverlap}
       units={units}
       roving={!dockLayout}
     />
@@ -811,6 +830,7 @@ export function ViewerShell({
         pickListEnabled={pickListEnabled}
         settings={settings}
         exactSection={exactSection}
+        onSectionOverlap={setSectionOverlapIds}
         fitSignal={fitSignal}
         autoFrame={autoFrame}
         creationFrame={creationFrame}
@@ -1050,6 +1070,17 @@ export function ViewerShell({
                   >
                     Turn off
                   </button>
+                  {sectionOverlapText ? (
+                    // M09: the same words the section toolbox shows, for a
+                    // cut whose toolbox is put away (Assemble, View).
+                    <p className="view-mode-section-overlap" role="note">
+                      <span
+                        className="rail-section-overlap-swatch"
+                        aria-hidden="true"
+                      />
+                      {sectionOverlapText}
+                    </p>
+                  ) : null}
                 </div>
               )}
           </div>

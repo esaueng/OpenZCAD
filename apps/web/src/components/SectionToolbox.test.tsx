@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import {
   SectionToolbox,
+  describeSectionOverlap,
   sectionSliderStep,
   snapSectionOffset
 } from './SectionToolbox';
@@ -151,5 +152,49 @@ describe('compact section controls', () => {
     expect(
       screen.getByLabelText('Export the exact section as DXF')
     ).toBeDisabled();
+  });
+});
+
+describe('overlap inside the cut (M09 display-only slice)', () => {
+  function overlapping(active = true) {
+    render(
+      <SectionToolbox
+        section={{ plane: 'XY', offset: 5 }}
+        range={{ min: 0, max: 10 }}
+        outline={{ kind: 'clipping' }}
+        overlap={[{ a: 'Plate', b: 'Pin', area: 12.5 }]}
+        active={active}
+        units="mm"
+        onSwitch={vi.fn()}
+        onPlane={vi.fn()}
+        onOffset={vi.fn()}
+        onCommit={vi.fn()}
+        onExport={vi.fn()}
+      />
+    );
+  }
+
+  it('names the bodies and labels the highlight as display evidence', () => {
+    overlapping();
+    expect(screen.getByRole('note')).toHaveTextContent(
+      'Overlap in this cut: Plate and Pin (about 12.5 mm²). Display evidence from the meshes on screen, not an exact clash check.'
+    );
+  });
+
+  it('says nothing while the cut is off', () => {
+    overlapping(false);
+    expect(screen.queryByRole('note')).toBeNull();
+  });
+
+  it('lists at most three pairs', () => {
+    expect(
+      describeSectionOverlap(
+        [1, 2, 3, 4, 5].map((n) => ({ a: `A${n}`, b: `B${n}`, area: n })),
+        'in'
+      )
+    ).toBe(
+      'Overlap in this cut: A1 and B1 (about 1 in²); A2 and B2 (about 2 in²); A3 and B3 (about 3 in²), and 2 more. Display evidence from the meshes on screen, not an exact clash check.'
+    );
+    expect(describeSectionOverlap([], 'mm')).toBeNull();
   });
 });

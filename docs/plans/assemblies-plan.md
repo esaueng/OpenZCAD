@@ -222,6 +222,41 @@ Commands, each one undo step: `assembly.components.add`,
 every component's solved pose into its placement, so nothing jumps when the
 joint graph changes.
 
+### Interference (AS04, no schema change)
+
+Assemble's sidebar has an Interference section under Exploded view. Check
+runs an exact pairwise check of the assembled parts in the geometry worker:
+every unordered pair of components, each component's live body posed at its
+solved pose (the stored joint values; never an exploded offset, a drag or
+playback). The check is a read-only query and stores nothing, so it needs no
+schema version.
+
+It is M09's body clash query (`packages/kernel-adapter/src/exact-body-clash.ts`),
+run on posed copies; AS04 adds no second engine and no mesh test. Per solid
+pair: bounding boxes apart prove clearance; otherwise the kernel's exact
+intersection measures the shared volume, and where the kernel declines an
+intersection it cannot build (a pin in a clearance hole), its exact
+difference measures it instead as `volume(b) − volume(b − a)`. A volume above
+a floor scaled to the pair (diagonal³ × 1e-9) is interference; its witnesses
+are the volume, the box of the shared region and a point that the exact and
+robust classifiers both place strictly inside both parts. No shared volume is
+clearance, with the certified distance and closest points where the kernel
+certifies them (planar faces, sphere pairs) and contact at zero. When no
+boolean answers, an interior point still proves an (unmeasured) overlap;
+otherwise the pair is reported unknown with the kernel's refusal, never clear.
+A component whose body is gone is listed as having no geometry to check.
+
+The list leads with overlaps (largest first), then unknown pairs and
+contact; clear pairs are counted. Picking a pair picks both parts and shows
+its witness. A result is tied to the model version and poses it checked and
+says "Out of date" once either changes.
+
+M09's first slice is display-only and separate from this: with a section cut
+on, bodies whose display caps overlap inside the cut are drawn over in red,
+and the toolbox (or, where it is put away, the "Section view on" chip) names
+them and says the highlight is display evidence from the meshes on screen,
+not an exact clash check.
+
 ## Interaction
 
 - **First run:** a card lists the document's bodies; "Use N bodies as
@@ -272,8 +307,9 @@ joint graph changes.
   after a body is reshaped is a follow-up (today the stored frame is kept).
 - Loops (AS09), couplings beyond gear pairs (a general ratio between any two
   joints with its own editor, screw couplings on one cylindrical joint) and
-  video export (AS08), interference during motion (AS04, after kernel clash
-  support). The BOM and stored exploded offsets are AS03 (above); exploded
+  video export (AS08), interference swept through a joint's motion or a
+  motion study (the static pairwise check is AS04, above), and the STEP
+  hierarchy round-trip AS04 also names. The BOM and stored exploded offsets are AS03 (above); exploded
   drawing views wait on D01/D02.
 - A coupling's ratio is fixed when the pair is placed: editing a gear's
   tooth count or moving a joint's frame afterwards does not update it. When
