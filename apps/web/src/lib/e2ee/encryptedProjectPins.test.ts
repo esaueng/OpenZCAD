@@ -521,6 +521,56 @@ describe('encrypted project pins', () => {
     expect(localStorageEncryptedProjectPins(null).resetDegraded()).toBe(false);
   });
 
+  describe("a check that another tab's unconfirmed reset lands in", () => {
+    const projectId = 'proj_racing';
+    const pendingKey = ENCRYPTED_PROJECT_RESET_PENDING_PREFIX + projectId;
+    const resetKey = ENCRYPTED_PROJECT_RESET_PREFIX + projectId;
+
+    // Another tab's reset that saved its pending record and its new
+    // generation, then could neither confirm nor roll back: the generation
+    // before it stays in force, with every record kept under it.
+    function landUnconfirmedReset(values: Map<string, string>) {
+      values.set(pendingKey, NO_RESET);
+      values.set(resetKey, 'mzz0000.other-tab');
+    }
+
+    const checks: [string, (pins: EncryptedProjectPinStore) => boolean][] = [
+      ['the pin', (pins) => pins.has(projectId)],
+      ['the unfinished switch', (pins) => pins.cutoverUnresolved(projectId)],
+      ['the requirement', (pins) => pins.encryptionRequired(projectId)]
+    ];
+
+    for (const [name, check] of checks) {
+      it(`still finds ${name} wherever between its reads the reset lands`, () => {
+        let reads = 0;
+        for (let at = 1; at <= 24; at += 1) {
+          const storage = memoryStorage();
+          const writer = localStorageEncryptedProjectPins(storage);
+          writer.pin(projectId);
+          writer.markCutoverUnresolved(projectId);
+          writer.requireEncryption(projectId);
+          // A tab already open, which noted the project before the reset.
+          const reader = localStorageEncryptedProjectPins(storage);
+          expect(reader.resetElsewhere(projectId)).toBe(false);
+          const getItem = storage.getItem;
+          reads = 0;
+          storage.getItem = (key) => {
+            const value = getItem(key);
+            reads += 1;
+            if (reads === at) landUnconfirmedReset(storage.values);
+            return value;
+          };
+          expect(check(reader)).toBe(true);
+          storage.getItem = getItem;
+          // A tab opened after it holds the project too.
+          expect(check(localStorageEncryptedProjectPins(storage))).toBe(true);
+        }
+        // The window covered every read the check made.
+        expect(reads).toBeLessThan(24);
+      });
+    }
+  });
+
   describe('resets made in another tab', () => {
     it('keeps a tab that opened with a saved pin encrypted and stops it once another tab resets it', () => {
       const storage = memoryStorage();

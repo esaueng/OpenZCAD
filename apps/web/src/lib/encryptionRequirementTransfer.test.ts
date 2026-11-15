@@ -251,8 +251,9 @@ describe('an adoption the account redirects to another project', () => {
     const original = window.localStorage.getItem.bind(window.localStorage);
     let seen = 0;
     vi.spyOn(window.localStorage, 'getItem').mockImplementation((key) => {
-      // The reset generation this tab saw first, then another tab's reset.
-      if (key.includes(`reset:v1:${redirected}`) && (seen += 1) > 1) {
+      // The reset generation this tab saw first (one read, checked by a
+      // second), then another tab's reset.
+      if (key.includes(`reset:v1:${redirected}`) && (seen += 1) > 2) {
         return 'zz.another-tab';
       }
       return original(key);

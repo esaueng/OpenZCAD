@@ -336,6 +336,13 @@ function defaultStorage(): PinStorage | null {
 }
 
 /**
+ * How many times a read of a project's reset generation and records is
+ * retried while another tab's reset moves it; after that it reads as
+ * unreadable, which holds the project as encrypted.
+ */
+const STABLE_READ_ATTEMPTS = 3;
+
+/**
  * Pins in `storage`, one key each. This page's own pins are also kept in
  * memory, so a pin made while storage refuses writes still holds here.
  */
@@ -386,13 +393,22 @@ export function localStorageEncryptedProjectPins(
    * when storage cannot say.
    */
   const generationOf = (projectId: string): string | undefined => {
-    const pending = read(ENCRYPTED_PROJECT_RESET_PENDING_PREFIX + projectId);
-    if (pending === undefined) return undefined;
-    if (pending !== null) {
-      return GENERATION.test(pending) ? pending : undefined;
+    const pendingKey = ENCRYPTED_PROJECT_RESET_PENDING_PREFIX + projectId;
+    const resetKey = ENCRYPTED_PROJECT_RESET_PREFIX + projectId;
+    // Another tab's reset can land between two reads (its pending record,
+    // then its generation), so both are read twice and only a pair that
+    // held still between the reads is used.
+    for (let attempt = 0; attempt < STABLE_READ_ATTEMPTS; attempt += 1) {
+      const pending = read(pendingKey);
+      const saved = read(resetKey);
+      if (pending === undefined || saved === undefined) return undefined;
+      if (read(pendingKey) !== pending || read(resetKey) !== saved) continue;
+      if (pending !== null) {
+        return GENERATION.test(pending) ? pending : undefined;
+      }
+      return saved ?? NO_RESET;
     }
-    const saved = read(ENCRYPTED_PROJECT_RESET_PREFIX + projectId);
-    return saved === undefined ? undefined : (saved ?? NO_RESET);
+    return undefined;
   };
   /** The store's reset generation this tab started with. */
   let storeReset = read(ENCRYPTED_PROJECT_PINS_RESET_KEY);
@@ -530,8 +546,23 @@ export function localStorageEncryptedProjectPins(
    * still write one, and it changes nothing.
    */
   const current = (prefix: string, projectId: string): boolean | undefined => {
-    const generation = generationOf(projectId);
-    if (generation === undefined) return undefined;
+    // A reset in another tab between reading the generation and reading
+    // its record would look up the wrong generation's record, so the
+    // generation is read again after the record and a moved one is retried.
+    for (let attempt = 0; attempt < STABLE_READ_ATTEMPTS; attempt += 1) {
+      const generation = generationOf(projectId);
+      if (generation === undefined) return undefined;
+      const held = recordUnder(prefix, projectId, generation);
+      if (held === undefined) return undefined;
+      if (generationOf(projectId) === generation) return held;
+    }
+    return undefined;
+  };
+  const recordUnder = (
+    prefix: string,
+    projectId: string,
+    generation: string
+  ): boolean | undefined => {
     const keyed = read(`${prefix}${projectId}:${generation}`);
     if (keyed === undefined) return undefined;
     if (keyed !== null) return true;
