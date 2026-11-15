@@ -178,25 +178,37 @@ describe('QA 2026-11-14 P1 #3: draft and blends, in either order', () => {
     const derived = await built(drafted.document, drafted.bodyId);
     const verticals = verticalEdges(derived, drafted.bodyId);
     expect(verticals).toHaveLength(4);
+    const draftedVolume = derived.bodyRepresentations[drafted.bodyId]!.volume;
+    // A convex round removes material: a result no smaller than the drafted
+    // body is a blend that did nothing.
+    const roundRemoves = (result: Outcome) => {
+      if (result.kind === 'built') {
+        expect(result.volumes[0]!).toBeLessThan(draftedVolume - 1e-3);
+      }
+    };
     for (const edges of [verticals.slice(0, 1), verticals]) {
       for (const size of [1, 5]) {
-        await outcome(
-          filletEdges(drafted.document, {
-            name: 'Round',
-            targetBodyId: drafted.bodyId,
-            ...pickEdges(edges),
-            size
-          }).document
+        roundRemoves(
+          await outcome(
+            filletEdges(drafted.document, {
+              name: 'Round',
+              targetBodyId: drafted.bodyId,
+              ...pickEdges(edges),
+              size
+            }).document
+          )
         );
       }
     }
-    await outcome(
-      filletEdges(drafted.document, {
-        name: 'Round',
-        targetBodyId: drafted.bodyId,
-        ...pickEdges(loopAt(derived, drafted.bodyId, 20)),
-        size: 2
-      }).document
+    roundRemoves(
+      await outcome(
+        filletEdges(drafted.document, {
+          name: 'Round',
+          targetBodyId: drafted.bodyId,
+          ...pickEdges(loopAt(derived, drafted.bodyId, 20)),
+          size: 2
+        }).document
+      )
     );
   }, 300_000);
 
@@ -204,9 +216,22 @@ describe('QA 2026-11-14 P1 #3: draft and blends, in either order', () => {
     const document = box(40, 40, 20);
     const id = last(document);
     const base = await built(document);
-    for (const [edges, size] of [
-      [verticalEdges(base, id), 5],
-      [loopAt(base, id, 20), 2]
+    // Drafting the sides 2° about z = 0 grows every horizontal section
+    // outward by δ = z·tan 2°: the plain box gains ∫(160δ + 4δ²)dz, and a
+    // box whose vertical corners stay R5 gains the same, because each
+    // straight wall moves out by δ while the corner arcs keep their radius.
+    const t = Math.tan((2 * Math.PI) / 180);
+    const plainGain = (160 * t * 20 ** 2) / 2 + (4 * t ** 2 * 20 ** 3) / 3;
+    const plain = await outcome(draftSides(document, base, id).document);
+    expect(plain.kind).toBe('built');
+    expect(
+      (plain as Extract<Outcome, { kind: 'built' }>).volumes[0]!
+    ).toBeCloseTo(40 * 40 * 20 + plainGain, 6);
+    for (const [edges, size, tolerance] of [
+      [verticalEdges(base, id), 5, 1],
+      // The top-loop rounds shrink the top band's sections, so the gain
+      // stays within a few percent of the plain box's.
+      [loopAt(base, id, 20), 2, 0.05 * plainGain]
     ] as const) {
       const rounded = filletEdges(document, {
         name: 'Round',
@@ -215,9 +240,16 @@ describe('QA 2026-11-14 P1 #3: draft and blends, in either order', () => {
         size
       });
       const derived = await built(rounded.document, rounded.bodyId);
-      await outcome(
+      const before = derived.bodyRepresentations[rounded.bodyId]!.volume;
+      const result = await outcome(
         draftSides(rounded.document, derived, rounded.bodyId).document
       );
+      if (result.kind === 'built') {
+        // A draft returned unchanged would gain nothing.
+        expect(Math.abs(result.volumes[0]! - before - plainGain)).toBeLessThan(
+          tolerance
+        );
+      }
     }
   }, 300_000);
 });
@@ -335,19 +367,24 @@ describe('QA 2026-11-14 P1 #6: face offset beside blends', () => {
     const derived = await built(document, id);
     const face = upFace(derived, id, z)!;
     expect(face).toBeDefined();
+    // `localOnly`: move the face itself, beside the blend, rather than
+    // re-dimensioning the primitive the face came from and replaying the
+    // fillet, which would never exercise a blend-aware face move.
     const plan = planFaceOffset({
       document: { ...document, derived },
       bodyId: id,
       face,
       faceHash: face.hash,
-      offset: by
+      offset: by,
+      localOnly: true
     });
     expect(plan).not.toBeNull();
+    // These are valid ±1 and −2 moves: the planner must not decline them.
+    expect(
+      'preflightRejection' in plan! ? plan.preflightRejection : undefined
+    ).toBeUndefined();
+    expect(plan!.kind).toBe('direct-edit');
     const before = derived.bodyRepresentations[id]!.volume;
-    if ('preflightRejection' in plan! && plan.preflightRejection) {
-      // A planner refusal is typed by construction (it names its limit).
-      return { result: { kind: 'typed', code: 'planner' }, before };
-    }
     const manager = new CommandManager(document);
     manager.execute(plan!.command);
     return { result: await outcome(manager.document), before };
@@ -359,7 +396,7 @@ describe('QA 2026-11-14 P1 #6: face offset beside blends', () => {
     ['beside one top-edge fillet', 'one', 1],
     ['beside one top-edge fillet', 'one', 5]
   ] as const)(
-    'moves a top face %s (R%s) by ±1 and adds the face area times the move',
+    'moves a top face %s (%s, R%s) by ±1 and adds the face area times the move',
     async (_label, which, size) => {
       const document = box(60, 40, 20);
       const base = await built(document);

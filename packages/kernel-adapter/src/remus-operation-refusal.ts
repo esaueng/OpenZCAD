@@ -15,14 +15,14 @@ import { KernelRefusal, type KernelRefusalCategory } from './kernel-refusal';
 
 /**
  * `OperationsError` Display forms and the category each projects to, most
- * specific first.
+ * specific first. Never `cancelled`: a real cancellation is already typed
+ * (`exact-cancellation.ts`), and prose must not read as one.
  */
 const OPERATION_ERROR_CATEGORIES: ReadonlyArray<
   readonly [RegExp, KernelRefusalCategory]
 > = [
   [/\bexact-only policy\b/, 'quality_refused'],
   [/: unsupported configuration: |\bdoes not support\b/, 'unsupported'],
-  [/\bcancelled\b/i, 'cancelled'],
   [/\b(?:resource limit|budget|exhausted)\b/i, 'resource_limit'],
   [
     /\bnon-manifold result\b|\bempty result: |\bfailed validation\b/,
@@ -47,16 +47,19 @@ export function operationErrorCategory(message: string): KernelRefusalCategory {
 /**
  * The typed refusal for a modeling `operation` the kernel refused with
  * `error`, carrying `message` (the sentence the caller has always shown).
+ * A direct edit (a face offset) files under `direct-edit`, beside the edits
+ * that already have typed twins.
  */
 export function modelingOperationRefusal(
   operation: string,
   error: unknown,
-  message: string
+  message: string,
+  family: 'modeling' | 'direct-edit' = 'modeling'
 ): KernelRefusal {
   const kernelMessage =
     error instanceof Error ? error.message : 'unknown kernel error';
   return new KernelRefusal({
-    family: 'modeling',
+    family,
     category: operationErrorCategory(kernelMessage),
     kernelCode: `${operation}_refused`,
     kernelMessage,
