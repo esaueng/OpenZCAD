@@ -19,6 +19,7 @@ import {
 } from '@openzcad/shared';
 import {
   planSketchCircularPattern,
+  planSketchExtend,
   planSketchLinearPattern,
   planSketchMirror,
   planSketchTrim,
@@ -266,6 +267,73 @@ describe('S05 modify tools on the pinned kernel', () => {
       (kept.y2! - kept.y1!) * (x - kept.x1!);
     expect(cross(far.x1!, far.y1!)).toBeCloseTo(0, 6);
     expect(cross(far.x2!, far.y2!)).toBeCloseTo(0, 6);
+  });
+
+  it('an extended line and arc end ride the boundary they reached', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 },
+      { objectKind: 'line', x1: 10, y1: -8, x2: 10, y2: 8 },
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 6,
+        startAngleDeg: 60,
+        endAngleDeg: 120
+      },
+      { objectKind: 'line', x1: -9, y1: -2, x2: 9, y2: -2 }
+    ]);
+    const [line, wall, arc, floor] = fixture.ids as [
+      string,
+      string,
+      string,
+      string
+    ];
+    fixture.constrain({
+      constraintKind: 'horizontal',
+      objectId: line as EntityId
+    });
+    fixture.constrain(lock(line, 'start', 0, 0));
+    await fixture.commit(
+      planSketchExtend(
+        fixture.manager.document,
+        fixture.sketch(),
+        fixture.sketchId,
+        line,
+        { x: 4, y: 0 },
+        resolve
+      )
+    );
+    await fixture.commit(
+      planSketchExtend(
+        fixture.manager.document,
+        fixture.sketch(),
+        fixture.sketchId,
+        arc,
+        { x: -3, y: 5.2 },
+        resolve
+      )
+    );
+    expectGood(await fixture.solve());
+
+    // Move both boundaries: the line's end stays on the wall at its new x,
+    // the arc's end stays on the floor's new height.
+    for (const [cutter, a, b] of [
+      [wall, { x: 13, y: -8 }, { x: 13, y: 8 }],
+      [floor, { x: -9, y: -3 }, { x: 9, y: -3 }]
+    ] as const) {
+      fixture.constrain(lock(cutter, 'start', a.x, a.y));
+      fixture.constrain(lock(cutter, 'end', b.x, b.y));
+    }
+    // Centre and start held: the radius is fixed by them.
+    fixture.constrain(lock(arc, 'center', 0, 0));
+    fixture.constrain(lock(arc, 'start', 3, 6 * Math.sin(Math.PI / 3)));
+    const outcome = await fixture.solve();
+    expectGood(outcome);
+    expect(solved(outcome, line).x2).toBeCloseTo(13, 6);
+    expect(solved(outcome, line).y2).toBeCloseTo(0, 6);
+    const end = solved(outcome, arc).endAngleDeg!;
+    expect(6 * Math.sin((end * Math.PI) / 180)).toBeCloseTo(-3, 6);
   });
 
   it('a trimmed circle keeps its radius relation as an arc', async () => {

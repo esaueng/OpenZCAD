@@ -140,7 +140,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
         await expect(fold).toBeFocused();
         await expect(menu).toHaveCount(0);
         await fold.press('Enter');
-        for (let i = 0; i < 4; i++) await page.keyboard.press('Tab');
+        for (let i = 0; i < 5; i++) await page.keyboard.press('Tab');
         await expect(
           menu.getByRole('button', { name: 'Circular pattern', exact: true })
         ).toBeFocused();
@@ -198,40 +198,101 @@ function constraintKinds(constraints: SketchConstraintData[]) {
 const undo = (page: Page) =>
   page.getByRole('button', { name: 'Undo', exact: true }).click();
 
-test('Trim cuts a line back to its crossings, one undo step per click', { tag: '@ci-smoke' }, async ({
+test(
+  'Trim cuts a line back to its crossings, one undo step per click',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    const at = await startSketch(page, 'Trim');
+    // A horizontal line crossed by two verticals.
+    await drawLine(page, at(0.25, 0.55), at(0.6, 0.55));
+    await drawLine(page, at(0.35, 0.42), at(0.35, 0.68));
+    await drawLine(page, at(0.5, 0.42), at(0.5, 0.68));
+    const status = page.getByRole('contentinfo');
+
+    await modifyTool(page, 'Trim');
+    await page.mouse.click(at(0.425, 0.55).x, at(0.425, 0.55).y);
+    await expect(status).toContainText('Trim split the line in two.');
+    // Trim stays armed: the next click trims the left stub, which now ends
+    // on its only crossing, so the whole stub goes.
+    await page.mouse.click(at(0.3, 0.55).x, at(0.3, 0.55).y);
+    await expect(status).toContainText(
+      'Trim removed the whole line: nothing crosses it.'
+    );
+    await page.keyboard.press('Escape');
+
+    const trimmed = await exportSketch(page);
+    expect(kindsOf(trimmed.objects)).toEqual(['line', 'line', 'line']);
+    // The far piece starts on the right vertical and is held there.
+    expect(constraintKinds(trimmed.constraints)).toEqual(['point-on-object']);
+
+    await undo(page);
+    await expect
+      .poll(async () => (await exportSketch(page)).objects.length)
+      .toBe(4);
+    await undo(page);
+    const restored = await exportSketch(page);
+    expect(kindsOf(restored.objects)).toEqual(['line', 'line', 'line']);
+    expect(restored.constraints).toEqual([]);
+  }
+);
+
+test('Extend runs a line on to the first curve in its way, one undo step per click', async ({
   page
 }) => {
   test.setTimeout(90_000);
-  const at = await startSketch(page, 'Trim');
-  // A horizontal line crossed by two verticals.
-  await drawLine(page, at(0.25, 0.55), at(0.6, 0.55));
-  await drawLine(page, at(0.35, 0.42), at(0.35, 0.68));
-  await drawLine(page, at(0.5, 0.42), at(0.5, 0.68));
+  const at = await startSketch(page, 'Extend');
+  // A short horizontal line with two verticals beyond its right end.
+  await drawLine(page, at(0.25, 0.55), at(0.35, 0.55));
+  await drawLine(page, at(0.45, 0.42), at(0.45, 0.68));
+  await drawLine(page, at(0.6, 0.42), at(0.6, 0.68));
+  const before = await exportSketch(page);
+  const [line, near] = before.objects as [
+    { id: string; data: Extract<SketchObjectData, { objectKind: 'line' }> },
+    { id: string; data: Extract<SketchObjectData, { objectKind: 'line' }> }
+  ];
   const status = page.getByRole('contentinfo');
 
-  await modifyTool(page, 'Trim');
-  await page.mouse.click(at(0.425, 0.55).x, at(0.425, 0.55).y);
-  await expect(status).toContainText('Trim split the line in two.');
-  // Trim stays armed: the next click trims the left stub, which now ends
-  // on its only crossing, so the whole stub goes.
-  await page.mouse.click(at(0.3, 0.55).x, at(0.3, 0.55).y);
+  await modifyTool(page, 'Extend');
+  await expect(status).toContainText('Click a line or arc near the end');
+  // A click near the right end runs it on to the nearer vertical.
+  await page.mouse.click(at(0.34, 0.55).x, at(0.34, 0.55).y);
   await expect(status).toContainText(
-    'Trim removed the whole line: nothing crosses it.'
+    'Extend lengthened the line to the nearest boundary.'
   );
+  // Extend stays armed: the same end again reaches the far vertical, and
+  // its hold on the near one goes with the end that moved.
+  await page.mouse.click(at(0.43, 0.55).x, at(0.43, 0.55).y);
+  await expect(status).toContainText(
+    'Extend lengthened the line to the nearest boundary. Dropped 1 relation on the moved end.'
+  );
+  // The left end has nothing beyond it, which is refused by name.
+  await page.mouse.click(at(0.29, 0.55).x, at(0.29, 0.55).y);
+  await expect(status).toContainText('Nothing lies beyond that end');
   await page.keyboard.press('Escape');
 
-  const trimmed = await exportSketch(page);
-  expect(kindsOf(trimmed.objects)).toEqual(['line', 'line', 'line']);
-  // The far piece starts on the right vertical and is held there.
-  expect(constraintKinds(trimmed.constraints)).toEqual(['point-on-object']);
+  const extended = await exportSketch(page);
+  expect(kindsOf(extended.objects)).toEqual(['line', 'line', 'line']);
+  const reached = extended.objects[0]!.data as typeof line.data;
+  const far = extended.objects[2]!.data as typeof line.data;
+  // Same entity, same start; the end sits on the far vertical.
+  expect(extended.objects[0]!.id).toBe(line.id);
+  expect(Number(reached.x1)).toBeCloseTo(Number(line.data.x1), 6);
+  expect(Number(reached.x2)).toBeCloseTo(Number(far.x1), 6);
+  expect(constraintKinds(extended.constraints)).toEqual(['point-on-object']);
 
+  // One undo per click: first back to the near vertical, then the original.
   await undo(page);
   await expect
-    .poll(async () => (await exportSketch(page)).objects.length)
-    .toBe(4);
+    .poll(async () => {
+      const data = (await exportSketch(page)).objects[0]!
+        .data as typeof line.data;
+      return Math.abs(Number(data.x2) - Number(near.data.x1)) < 1e-6;
+    })
+    .toBe(true);
   await undo(page);
   const restored = await exportSketch(page);
-  expect(kindsOf(restored.objects)).toEqual(['line', 'line', 'line']);
+  expect(restored.objects[0]!.data).toEqual(line.data);
   expect(restored.constraints).toEqual([]);
 });
 

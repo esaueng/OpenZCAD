@@ -190,6 +190,7 @@ export const KEYMAP_COMMANDS: readonly KeymapCommand[] = [
   ),
   // Unbound by default, so a user can give them keys.
   command('sketch-trim', 'Trim', 'sketch-mode', 'sketch'),
+  command('sketch-extend', 'Extend', 'sketch-mode', 'sketch'),
   command('sketch-offset', 'Offset', 'sketch-mode', 'sketch'),
   command('sketch-finish', 'Finish the sketch', 'sketch-mode', 'sketch'),
   command('assembly-joint', 'Add a joint', 'assemble-mode', 'assemble', 'J'),

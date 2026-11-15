@@ -721,7 +721,7 @@ describe('SketchToolRail', () => {
     expect(screen.getByRole('button', { name: /^Chamfer$/ })).toBeEnabled();
   });
 
-  it('folds offset, trim, mirror and the patterns into one rail slot', async () => {
+  it('folds offset, trim, extend, mirror and the patterns into one rail slot', async () => {
     const user = userEvent.setup();
     const onEditTool = vi.fn();
     renderRail({ onEditTool, canConstrain: true });
@@ -744,6 +744,7 @@ describe('SketchToolRail', () => {
     ).toEqual([
       'Offset',
       'Trim',
+      'Extend',
       'Mirror',
       'Linear pattern',
       'Circular pattern'
@@ -782,7 +783,7 @@ describe('SketchToolRail', () => {
     expect(toggle).toHaveFocus();
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     await user.keyboard('{Enter}');
-    for (let i = 0; i < 4; i++) await user.tab();
+    for (let i = 0; i < 5; i++) await user.tab();
     expect(
       screen.getByRole('button', { name: 'Circular pattern' })
     ).toHaveFocus();

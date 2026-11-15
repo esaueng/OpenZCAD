@@ -885,10 +885,10 @@ function pointRelation(
     : [];
 }
 
-function droppedNote(dropped: number): string {
+function droppedNote(dropped: number, part = 'removed part'): string {
   return dropped === 0
     ? ''
-    : ` Dropped ${dropped} relation${dropped === 1 ? '' : 's'} on the removed part.`;
+    : ` Dropped ${dropped} relation${dropped === 1 ? '' : 's'} on the ${part}.`;
 }
 
 /** A click on a crossing names no segment: both sides end there. */
@@ -1154,6 +1154,197 @@ export function planSketchTrim(
       ...pointRelation(sketchId, pieceStart, above.cutter)
     ]
   };
+}
+
+// ---------------------------------------------------------------------------
+// Extend
+
+const NOTHING_TO_EXTEND_TO =
+  'Nothing lies beyond that end to extend to. Draw a boundary curve for it to reach first.';
+
+/**
+ * Extend the picked line or arc from the end nearer the click to the first
+ * curve its continuation meets: a line along its own direction, an arc round
+ * its own circle. The entity keeps its identity and its far end; the moved
+ * end drops the relations that held it where it was (said on the status
+ * line) and is held on the curve it reached. The counterpart of Trim, under
+ * the same refusals: composites, text, ellipses, splines, linked projections
+ * and an end a reference dimension measures. A circle has no end to extend.
+ */
+export function planSketchExtend(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  sketchId: SketchId,
+  objectId: string,
+  at: Point2,
+  resolve: Resolve
+): SketchModifyPlan {
+  const data = sketchObject(document, sketch, objectId);
+  if (!data) {
+    return {
+      status: 'refuse',
+      reason: 'That object is not part of this sketch.'
+    };
+  }
+  const refusal =
+    compositeRefusal(data, 'extend') ?? linkedProjectionRefusal(data, 'extend');
+  if (refusal) {
+    return { status: 'refuse', reason: refusal };
+  }
+  const curve = evaluateCurve(data, resolve);
+  if (!curve) {
+    return {
+      status: 'refuse',
+      reason: 'That entity has a dimension that does not evaluate.'
+    };
+  }
+  if (
+    curve.kind === 'circle' ||
+    (curve.kind === 'arc' && curve.sweep >= TAU - 1e-9)
+  ) {
+    return {
+      status: 'refuse',
+      reason:
+        'A circle is closed: it has no end to extend. Extend lengthens a line or an arc.'
+    };
+  }
+  if (zeroLength(curve)) {
+    return { status: 'refuse', reason: ZERO_LENGTH };
+  }
+  const id = objectId as EntityId;
+  const tol = trimTolerance(document, sketch, data, resolve);
+  const construction = Boolean(data.construction);
+  const startPoint = pointOnCurve(curve, 0);
+  const endPoint = pointOnCurve(curve, curve.kind === 'line' ? 1 : curve.sweep);
+  const fromEnd = distance(at, endPoint) <= distance(at, startPoint);
+  const moved: 'start' | 'end' = fromEnd ? 'end' : 'start';
+  const movedRef: SketchPointRef = { objectId: id, point: moved };
+  if (referenceMeasuresPoint(sketch, movedRef)) {
+    return {
+      status: 'refuse',
+      reason:
+        'A reference dimension measures the end this extend would move. Delete the dimension first.'
+    };
+  }
+
+  let from = 0;
+  let to = curve.kind === 'line' ? 1 : curve.sweep;
+  let cutter: EntityId | null;
+  if (curve.kind === 'line') {
+    const length = distance(curve.a, curve.b);
+    const origin = fromEnd ? curve.b : curve.a;
+    const away = fromEnd ? sub(curve.b, curve.a) : sub(curve.a, curve.b);
+    // Far enough to pass every curve in the sketch: the ray runs to the
+    // sketch's own extent, measured from the line.
+    const reach =
+      Math.max(length, sketchExtent(document, sketch, origin, resolve)) * 4;
+    const ray: Curve2 = {
+      kind: 'line',
+      a: origin,
+      b: {
+        x: origin.x + (away.x / length) * reach,
+        y: origin.y + (away.y / length) * reach
+      }
+    };
+    const eps = Math.max(PARAM_EPS, tol / reach);
+    const nearest = crossingsOn(
+      document,
+      sketch,
+      id,
+      ray,
+      resolve,
+      tol,
+      construction
+    )
+      .filter((crossing) => crossing.param > eps)
+      .sort((a, b) => a.param - b.param)[0];
+    if (!nearest) {
+      return { status: 'refuse', reason: NOTHING_TO_EXTEND_TO };
+    }
+    const reached = pointOnCurve(ray, nearest.param);
+    const param = curveParam(curve, reached);
+    if (fromEnd) to = param;
+    else from = param;
+    cutter = nearest.cutter;
+  } else {
+    // The rest of the arc's circle, from its end round to its start.
+    const rest: Curve2 = {
+      kind: 'arc',
+      c: curve.c,
+      r: curve.r,
+      start: curve.start + curve.sweep,
+      sweep: TAU - curve.sweep
+    };
+    const eps = Math.max(PARAM_EPS * TAU, tol / curve.r);
+    const inside = crossingsOn(
+      document,
+      sketch,
+      id,
+      rest,
+      resolve,
+      tol,
+      construction
+    ).filter(
+      (crossing) => crossing.param > eps && crossing.param < rest.sweep - eps
+    );
+    const nearest = fromEnd
+      ? inside.sort((a, b) => a.param - b.param)[0]
+      : inside.sort((a, b) => b.param - a.param)[0];
+    if (!nearest) {
+      return { status: 'refuse', reason: NOTHING_TO_EXTEND_TO };
+    }
+    if (fromEnd) to = curve.sweep + nearest.param;
+    else from = -(rest.sweep - nearest.param);
+    cutter = nearest.cutter;
+  }
+
+  const updated = trimmedData(data, curve, from, to, resolve);
+  const remap = remapCommands(sketch, sketchId, {
+    objectId: id,
+    points: { [moved]: null },
+    lengthChanged: curve.kind === 'line'
+  });
+  return {
+    status: 'commands',
+    label: 'Extend',
+    message: `Extend lengthened the ${curve.kind} to the nearest boundary.${droppedNote(remap.dropped, 'moved end')}`,
+    commands: [
+      ...remap.release,
+      commandFactories.updateSketchObject(
+        { sketchId, objectId: id, data: updated },
+        'Extend sketch geometry'
+      ),
+      ...remap.restate,
+      ...pointRelation(sketchId, movedRef, cutter)
+    ]
+  };
+}
+
+/** The largest distance from `from` to any evaluated point of the sketch. */
+function sketchExtent(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  from: Point2,
+  resolve: Resolve
+): number {
+  let extent = 1;
+  for (const objectId of sketch.objectIds) {
+    const data = sketchObject(document, sketch, objectId);
+    const curves = data ? cutterCurves(data, resolve) : [];
+    for (const curve of curves) {
+      const points =
+        curve.kind === 'line'
+          ? [curve.a, curve.b]
+          : [
+              { x: curve.c.x + curve.r, y: curve.c.y + curve.r },
+              { x: curve.c.x - curve.r, y: curve.c.y - curve.r }
+            ];
+      for (const point of points) {
+        extent = Math.max(extent, distance(from, point));
+      }
+    }
+  }
+  return extent;
 }
 
 /**

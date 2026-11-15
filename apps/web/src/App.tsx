@@ -31287,10 +31287,16 @@ export function App() {
         }
         if (
           sketchCommand === 'sketch-trim' ||
+          sketchCommand === 'sketch-extend' ||
           sketchCommand === 'sketch-offset'
         ) {
           event.preventDefault();
-          const editKind = sketchCommand === 'sketch-trim' ? 'trim' : 'offset';
+          const editKind =
+            sketchCommand === 'sketch-trim'
+              ? 'trim'
+              : sketchCommand === 'sketch-extend'
+                ? 'extend'
+                : 'offset';
           dispatchInteraction({
             type: 'sketch-edit-tool',
             kind:
