@@ -1708,7 +1708,8 @@
   white-space: nowrap;
 }
 
-/* Kept whole: it tells a part's recovery copies apart. */
+/* Kept whole: it tells a part's recovery copies apart, so the date clips
+   first. */
 .start-tile-clock {
   flex: none;
   white-space: pre;
@@ -2391,6 +2392,14 @@
   border: var(--border-thin);
 }
 
+/* Delete forever is the icon beside Restore: two labelled buttons overflowed
+   a narrow card and pressed Delete against its edge. */
+.start-tile-footer .start-tile-delete {
+  flex: none;
+  width: 28px;
+  padding: 0;
+}
+
 /* ── Cloud card: update notice ───────────────────────────── */
 
 /* A newer build is out: one quiet line above the cloud card — a dot, the
@@ -2854,10 +2863,13 @@
   background: var(--color-surface-2);
 }
 
-.start-folder-empty-icon {
-  width: 34px;
-  height: 34px;
-  color: var(--color-text-dim);
+/* An empty folder's cover: an outline drawn like the parts' cube placeholder
+   (its colour, a hairline stroke) rather than a solid glyph. `.start-tile-thumb
+   svg` outranked a bare class and stretched it to the pane's height, the
+   heaviest mark on the shelf. */
+.start-folder-thumb .start-folder-empty-icon {
+  width: 48px;
+  height: 48px;
 }
 
 /* A folder in the list is a row like the rest: no tab over the row above
@@ -2880,6 +2892,7 @@
 .start-tile-grid.is-list .start-folder-empty-icon {
   width: 20px;
   height: 20px;
+  color: var(--color-text-dim);
 }
 
 /* Where a dragged part would go: a folder under it, or a part it is held
