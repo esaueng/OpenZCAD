@@ -1278,3 +1278,143 @@ describe('a copy whose source goes away (PR #1477 review, round 3)', () => {
     expect(srv.bucket.objects.has(key)).toBe(true);
   });
 });
+
+describe('a copy retry and a rollback of the same key (PR #1477 review, round 4)', () => {
+  it('a copy starting after a rollback claimed its key is refused retryably, and commits nothing on bytes that rollback removes', async () => {
+    const { recordPendingObject } =
+      await import('@openzcad/cloudflare-adapters');
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { projectId, blobId, step } = await projectWithImport(srv, laptop);
+    const request = await buildCopy(laptop, projectId, 'Bracket');
+    const copyId = request.document!.projectId;
+    const key = `e2ee/${copyId}/${blobId}`;
+    const db = srv.env.DB as D1Database;
+    // An earlier attempt of the same copy failed after its put; its
+    // rollback claims the key and pauses at the R2 delete.
+    srv.bucket.objects.set(key, text('failed attempt').slice().buffer);
+    expect(
+      await recordPendingObject(db, {
+        key,
+        attempt: 'old-attempt',
+        projectId: copyId,
+        ownerUserId: OWNER,
+        bytes: 14,
+        bucket: 'artifacts'
+      })
+    ).toBe('recorded');
+    const deleteMock = srv.bucket.delete as unknown as Mock<
+      (key: string) => Promise<void>
+    >;
+    const remove = deleteMock.getMockImplementation()!;
+    let entered!: () => void;
+    let releaseDelete!: () => void;
+    const atDelete = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (releaseDelete = resolve));
+    let first = true;
+    deleteMock.mockImplementation(async (deleted) => {
+      if (deleted === key && first) {
+        first = false;
+        entered();
+        await released;
+      }
+      return remove(deleted);
+    });
+    const rollback = discardCopiedObjects(
+      db,
+      srv.bucket as never,
+      [key],
+      'old-attempt'
+    );
+    await atDelete;
+    // Without the admission guard the retry would record, put and verify
+    // its bytes, and the rollback would delete them just before its rows
+    // land: let the rollback finish right as a create batch starts.
+    const batch = db.batch.bind(db);
+    let reachedBatch = false;
+    db.batch = async (statements: D1PreparedStatement[]) => {
+      if (
+        !reachedBatch &&
+        statements.some((statement) =>
+          (statement as unknown as { sql?: string }).sql?.includes(
+            'INSERT INTO projects'
+          )
+        )
+      ) {
+        reachedBatch = true;
+        releaseDelete();
+        await rollback;
+      }
+      return batch(statements);
+    };
+    try {
+      // The retry may not put under the key the rollback is deleting.
+      await refusedWith(
+        laptop.store.copyProject({
+          sourceProjectId: projectId,
+          document: request.document!
+        }),
+        503,
+        'STORAGE_CLEANUP_BUSY'
+      );
+      expect(reachedBatch).toBe(false);
+      expect(projectIds(srv)).not.toContain(copyId);
+      expect(blobRows(srv, copyId)).toEqual([]);
+    } finally {
+      releaseDelete();
+      await rollback;
+      db.batch = batch;
+    }
+    expect(srv.bucket.objects.has(key)).toBe(false);
+    // Once the rollback is done, the retry copies and commits its bytes.
+    await laptop.store.copyProject({
+      sourceProjectId: projectId,
+      document: request.document!
+    });
+    expect(srv.bucket.objects.has(key)).toBe(true);
+    expect(rows(srv, 'SELECT object_key FROM r2_pending_objects')).toEqual([]);
+    const desktop = device(srv, owner, 'owner_desktop');
+    await desktop.store.loadProject(copyId);
+    expect(await desktop.blobs.read(copyId, blobId)).toEqual(step);
+  });
+
+  it('counts a copy’s pending objects against the account’s budget, reclaiming aged ones on refusal', async () => {
+    const { PENDING_OBJECTS_PER_ACCOUNT } =
+      await import('@openzcad/cloudflare-adapters');
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { projectId, blobId } = await projectWithImport(srv, laptop);
+    const request = await buildCopy(laptop, projectId, 'Bracket');
+    const copyId = request.document!.projectId;
+    // Failed writes elsewhere in the account fill its pending budget.
+    const insert = srv.db.prepare(
+      `INSERT INTO r2_pending_objects
+         (object_key, attempt, project_id, owner_user_id, object_bytes,
+          bucket, created_at)
+       VALUES (?, 'failed', 'proj_elsewhere', ?, 0, 'artifacts', ?)`
+    );
+    for (let index = 0; index < PENDING_OBJECTS_PER_ACCOUNT; index += 1) {
+      insert.run(`e2ee/proj_elsewhere/b${index}`, OWNER, Date.now());
+    }
+    const copy = () =>
+      laptop.store.copyProject({
+        sourceProjectId: projectId,
+        document: request.document!
+      });
+    await refusedWith(copy(), 503, 'STORAGE_CLEANUP_BUSY');
+    expect(projectIds(srv)).not.toContain(copyId);
+    expect(srv.bucket.objects.has(`e2ee/${copyId}/${blobId}`)).toBe(false);
+    // Once those records are old enough to belong to no write in flight,
+    // the next refusal reclaims a batch of them, and the copy then fits.
+    srv.db.prepare('UPDATE r2_pending_objects SET created_at = 0').run();
+    await refusedWith(copy(), 503, 'STORAGE_CLEANUP_BUSY');
+    expect(
+      rows<{ n: number }>(
+        srv,
+        'SELECT COUNT(*) AS n FROM r2_pending_objects'
+      )[0]!.n
+    ).toBeLessThan(PENDING_OBJECTS_PER_ACCOUNT);
+    await copy();
+    expect(projectIds(srv)).toContain(copyId);
+  });
+});

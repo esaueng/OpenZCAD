@@ -1260,3 +1260,272 @@ describe('an account erasure attempt a retry overtook (PR #1477 review, round 3)
     });
   }
 });
+
+describe('pending object admission (PR #1477 review, round 4)', () => {
+  const pending = (
+    attempt: string,
+    key: string,
+    extra: { bytes?: number; projectId?: string; owner?: string } = {}
+  ) => ({
+    key,
+    attempt,
+    projectId: extra.projectId ?? 'p1',
+    ownerUserId: extra.owner ?? OWNER,
+    bytes: extra.bytes ?? 10,
+    bucket: 'artifacts' as const
+  });
+
+  it('refuses a pending record while a cleanup claims its key, and a claim while another attempt’s record names it', async () => {
+    const { recordPendingObject } =
+      await import('@openzcad/cloudflare-adapters');
+    const db = database();
+    const d1 = sqliteD1(db);
+    // A failed attempt's rollback claims its own pending key...
+    expect(await recordPendingObject(d1, pending('old', 'e2ee/p1/b1'))).toBe(
+      'recorded'
+    );
+    const rollback = await claimObjectKeysForDelete(d1, ['e2ee/p1/b1'], {
+      pending: ['old']
+    });
+    expect([...rollback.keys]).toEqual(['e2ee/p1/b1']);
+    // ...so a retry cannot record the key (and put under it) until the
+    // rollback is done, however its delete then fares.
+    expect(await recordPendingObject(d1, pending('retry', 'e2ee/p1/b1'))).toBe(
+      'key-deleting'
+    );
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO r2_pending_objects
+             (object_key, attempt, project_id, owner_user_id, object_bytes,
+              bucket, created_at)
+           VALUES ('e2ee/p1/b1', 'raw', 'p1', ?, 1, 'artifacts', 0)`
+        )
+        .run(OWNER)
+    ).toThrow('r2_key_deleting');
+    db.prepare(`DELETE FROM r2_pending_objects WHERE attempt = 'old'`).run();
+    await rollback.release();
+    expect(await recordPendingObject(d1, pending('retry', 'e2ee/p1/b1'))).toBe(
+      'recorded'
+    );
+    // The other way round: while the retry's record stands, no other
+    // cleanup can claim the key.
+    const blocked = await claimObjectKeysForDelete(d1, ['e2ee/p1/b1'], {
+      pending: ['old']
+    });
+    expect(blocked.keys.size).toBe(0);
+    await blocked.release();
+  });
+
+  it('bounds the pending objects of one account across its projects, in bytes and in count', async () => {
+    const { PENDING_OBJECTS_PER_ACCOUNT, recordPendingObject } =
+      await import('@openzcad/cloudflare-adapters');
+    const db = database();
+    const d1 = sqliteD1(db);
+    db.prepare(
+      'UPDATE users SET project_storage_limit_bytes = 1000 WHERE id = ?'
+    ).run(OWNER);
+    // One attempt whose own objects exceed the allowance could never commit.
+    expect(
+      await recordPendingObject(d1, pending('big', 'k/big', { bytes: 1001 }))
+    ).toBe('too-large');
+    expect(
+      await recordPendingObject(d1, pending('a1', 'k/1', { bytes: 600 }))
+    ).toBe('recorded');
+    // Another project of the same account shares the budget...
+    expect(
+      await recordPendingObject(
+        d1,
+        pending('a2', 'k/2', { bytes: 500, projectId: 'p2' })
+      )
+    ).toBe('account-full');
+    expect(
+      await recordPendingObject(
+        d1,
+        pending('a2', 'k/2', { bytes: 400, projectId: 'p2' })
+      )
+    ).toBe('recorded');
+    // ...another account does not.
+    expect(
+      await recordPendingObject(
+        d1,
+        pending('a3', 'k/3', { bytes: 900, owner: 'someone_else' })
+      )
+    ).toBe('recorded');
+    // A committed row clears its record, and with it the charge.
+    db.prepare(`DELETE FROM r2_pending_objects WHERE attempt = 'a1'`).run();
+    expect(
+      await recordPendingObject(d1, pending('a4', 'k/4', { bytes: 600 }))
+    ).toBe('recorded');
+    // The record count is bounded as well, whatever the sizes.
+    db.prepare('DELETE FROM r2_pending_objects').run();
+    db.prepare(
+      'UPDATE users SET project_storage_limit_bytes = 1000000000000 WHERE id = ?'
+    ).run(OWNER);
+    const insert = db.prepare(
+      `INSERT INTO r2_pending_objects
+         (object_key, attempt, project_id, owner_user_id, object_bytes,
+          bucket, created_at)
+       VALUES (?, 'many', 'p1', ?, 0, 'artifacts', 0)`
+    );
+    for (let index = 0; index < PENDING_OBJECTS_PER_ACCOUNT; index += 1) {
+      insert.run(`k/many/${index}`, OWNER);
+    }
+    expect(await recordPendingObject(d1, pending('one', 'k/one'))).toBe(
+      'account-full'
+    );
+  });
+
+  it('drains only the account’s own aged records when asked to, removing them by primary key', async () => {
+    const { drainPendingObjects, recordPendingObject } =
+      await import('@openzcad/cloudflare-adapters');
+    const db = database();
+    const statements: string[] = [];
+    const d1 = sqliteD1(db, { onStatement: (sql) => statements.push(sql) });
+    await recordPendingObject(d1, pending('mine', 'k/mine'));
+    await recordPendingObject(
+      d1,
+      pending('theirs', 'k/theirs', { owner: 'someone_else' })
+    );
+    db.prepare('UPDATE r2_pending_objects SET created_at = 0').run();
+    const removed: string[] = [];
+    await drainPendingObjects(
+      d1,
+      { artifacts: { delete: async (key: string) => removed.push(key) } },
+      null,
+      { olderThanMs: 60_000, ownerUserId: OWNER }
+    );
+    expect(removed).toEqual(['k/mine']);
+    expect(db.prepare('SELECT attempt FROM r2_pending_objects').all()).toEqual([
+      { attempt: 'theirs' }
+    ]);
+    // The sweep's final DELETE looks each drained (key, attempt) up by the
+    // primary key; it never scans every account's pending records.
+    const remove = statements.find((sql) =>
+      sql.trim().startsWith('DELETE FROM r2_pending_objects')
+    )!;
+    const plan = db
+      .prepare(`EXPLAIN QUERY PLAN ${remove}`)
+      .all('[["k","a"]]') as { detail: string }[];
+    const details = plan.map((row) => row.detail).join(' | ');
+    expect(details).toMatch(/SEARCH r2_pending_objects USING PRIMARY KEY/);
+    expect(details).not.toMatch(/SCAN r2_pending_objects/);
+  });
+});
+
+describe('the final batch of an erasure a retry completed (PR #1477 review, round 4)', () => {
+  async function pausedAtFinalBatch(scope: 'profile' | 'all') {
+    const { D1R2PersistenceService } =
+      await import('@openzcad/cloudflare-adapters');
+    const { objectBucket } = await import('./support/e2ee-documents');
+    const { deleteAccountData } =
+      await import('../apps/web/worker/accountDeletion');
+    const db = database();
+    db.prepare('DELETE FROM projects').run();
+    const d1 = sqliteD1(db);
+    const bucket = objectBucket();
+    let entered!: () => void;
+    let release!: () => void;
+    const atBatch = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let once = true;
+    // Attempt A's D1: its first batch (the final profile batch) waits.
+    const paused = new Proxy(d1, {
+      get(target, property) {
+        const value = Reflect.get(target, property) as unknown;
+        if (property === 'batch' && once) {
+          return async (statements: D1PreparedStatement[]) => {
+            once = false;
+            entered();
+            await released;
+            return target.batch(statements);
+          };
+        }
+        return typeof value === 'function'
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      }
+    });
+    const base = {
+      ENVIRONMENT: 'development',
+      AUTH_MODE: 'development',
+      DB: d1,
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket,
+      PROJECT_ROOM: {
+        getByName: () => ({
+          fetch: async () => new Response(null, { status: 204 })
+        })
+      }
+    };
+    const envA = { ...base, DB: paused };
+    const session = { userId: OWNER, email: 'dev@example.test' } as never;
+    const input = { scope, confirmation: 'dev@example.test' };
+    const stale = deleteAccountData(
+      session,
+      input,
+      envA as never,
+      new D1R2PersistenceService(envA as never)
+    );
+    await atBatch;
+    // A retry of the same request completes it.
+    expect(
+      (
+        await deleteAccountData(
+          session,
+          input,
+          base as never,
+          new D1R2PersistenceService(base as never)
+        )
+      ).ok
+    ).toBe(true);
+    expect(db.prepare('SELECT * FROM account_erasure_requests').all()).toEqual(
+      []
+    );
+    return { db, stale, release };
+  }
+
+  for (const scope of ['profile', 'all'] as const) {
+    it(`a stale ${scope} batch deletes nothing the account stored after the retry`, async () => {
+      const { db, stale, release } = await pausedAtFinalBatch(scope);
+      // The account comes back and stores new profile data.
+      if (scope === 'all') {
+        db.prepare(
+          'INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)'
+        ).run(OWNER, 'dev@example.test', CREATED);
+      } else {
+        db.prepare('UPDATE users SET email = ? WHERE id = ?').run(
+          'dev@example.test',
+          OWNER
+        );
+      }
+      db.prepare(
+        `INSERT INTO user_settings (user_id, settings_json, updated_at)
+         VALUES (?, '{"units":"mm"}', ?)`
+      ).run(OWNER, CREATED);
+      // A resumes: its request is gone, so its whole batch is refused.
+      release();
+      expect((await stale).ok).toBe(true);
+      expect(
+        db.prepare('SELECT email FROM users WHERE id = ?').get(OWNER)
+      ).toEqual({ email: 'dev@example.test' });
+      expect(
+        db.prepare('SELECT settings_json FROM user_settings').all()
+      ).toEqual([{ settings_json: '{"units":"mm"}' }]);
+    });
+  }
+
+  it('a stale batch never clears a later erasure request', async () => {
+    const { db, stale, release } = await pausedAtFinalBatch('profile');
+    db.prepare(
+      `INSERT INTO account_erasure_requests
+         (user_id, scope, started_at, updated_at, request_token)
+       VALUES (?, 'profile', 1, 1, 'later')`
+    ).run(OWNER);
+    release();
+    expect((await stale).ok).toBe(true);
+    expect(
+      db.prepare('SELECT request_token FROM account_erasure_requests').all()
+    ).toEqual([{ request_token: 'later' }]);
+  });
+});

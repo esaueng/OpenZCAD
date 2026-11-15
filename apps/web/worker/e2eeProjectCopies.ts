@@ -42,7 +42,8 @@ import {
   encryptedBlobObjectKey,
   forgetPendingObjects,
   isPendingObjectStorageReady,
-  recordPendingObject
+  recordPendingObject,
+  type PendingObjectAdmission
 } from '@openzcad/cloudflare-adapters';
 import { idField, invalid, record, refuse } from './e2eeProjects';
 
@@ -333,6 +334,14 @@ export function insertCopiedBlobs(
 
 // --- Objects -----------------------------------------------------------------
 
+/** A copy's pending record (migration 0055) was refused, and why. */
+export class PendingObjectRefusedError extends Error {
+  constructor(readonly admission: Exclude<PendingObjectAdmission, 'recorded'>) {
+    super(`Pending object refused: ${admission}`);
+    this.name = 'PendingObjectRefusedError';
+  }
+}
+
 /**
  * Copies each blob's object byte for byte to the new project's key, one
  * part at a time (a multipart upload above one part), so no more than a
@@ -350,7 +359,7 @@ export async function copyBlobObjects(
   rows: readonly CopiedBlobRow[],
   written: string[],
   partBytes = ARTIFACT_UPLOAD_PART_BYTES,
-  pending?: { db: D1Database; attempt: string }
+  pending?: { db: D1Database; attempt: string; ownerUserId: string }
 ): Promise<void> {
   const record =
     pending && (await isPendingObjectStorageReady(pending.db)) ? pending : null;
@@ -375,12 +384,20 @@ export async function copyBlobObjects(
     const target = encryptedBlobObjectKey(projectId, row.blob_id);
     const size = row.ciphertext_bytes;
     if (record) {
-      await recordPendingObject(record.db, {
+      // Refused (before anything is put under the key) while a rollback
+      // holds a claim on it, or once the account's pending objects reach
+      // their budget: the caller rolls back and answers why.
+      const admission = await recordPendingObject(record.db, {
         key: target,
         attempt: record.attempt,
         projectId,
+        ownerUserId: record.ownerUserId,
+        bytes: size,
         bucket: 'artifacts'
       });
+      if (admission !== 'recorded') {
+        throw new PendingObjectRefusedError(admission);
+      }
     }
     written.push(target);
     if (size <= partBytes || !bucket.createMultipartUpload) {

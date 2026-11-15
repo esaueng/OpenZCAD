@@ -73,6 +73,7 @@ import {
   isPendingObjectStorageReady,
   PENDING_OBJECT_GRACE_MS,
   PENDING_OBJECTS_PER_PROJECT,
+  type PendingObjectAdmission,
   recordPendingObject,
   isE2eeContentBlobStorageReady,
   isE2eeProjectGroupStorageReady,
@@ -121,6 +122,7 @@ import {
   copyBucket,
   copyFromField,
   discardCopiedObjects,
+  PendingObjectRefusedError,
   verifyCopiedObjects,
   insertAdoption,
   insertCopiedBlobs,
@@ -691,25 +693,17 @@ async function storeBody(
   // already takes no new one until they are reclaimed.
   const pending = await isPendingObjectStorageReady(ctx.db);
   if (pending) {
-    const recorded = await recordPendingObject(ctx.db, {
+    const admission = await recordPendingObject(ctx.db, {
       key,
       attempt,
       projectId,
+      ownerUserId: ctx.ownerUserId ?? ctx.userId,
+      bytes: size,
       bucket: 'project-storage',
       cap: PENDING_OBJECTS_PER_PROJECT
     });
-    if (!recorded) {
-      await drainPendingObjects(
-        ctx.db,
-        { 'project-storage': bucket },
-        projectId,
-        { olderThanMs: PENDING_OBJECT_GRACE_MS }
-      ).catch(() => false);
-      refuse(
-        503,
-        'STORAGE_CLEANUP_BUSY',
-        'Earlier failed saves of this project are still being cleaned up. Try again later.'
-      );
+    if (admission !== 'recorded') {
+      await pendingAdmissionRefusal(ctx, projectId, admission, 'save');
     }
   }
   try {
@@ -727,6 +721,55 @@ async function storeBody(
     );
   }
   return { key, inline: null, attempt };
+}
+
+/**
+ * Why a pending record (migration 0055) was refused, as the response: a
+ * project or account still holding objects of earlier failed writes first
+ * drains those old enough to belong to no write in flight, so a retry can
+ * get through once storage recovers even without the scheduled sweep.
+ */
+async function pendingAdmissionRefusal(
+  ctx: Context,
+  projectId: string,
+  admission: Exclude<PendingObjectAdmission, 'recorded'>,
+  write: 'save' | 'copy'
+): Promise<never> {
+  if (admission === 'key-deleting') {
+    refuse(
+      503,
+      'STORAGE_CLEANUP_BUSY',
+      'A stored file of this project is still being removed. Try again in a moment.'
+    );
+  }
+  // A write whose own objects exceed the allowance could never commit.
+  if (admission === 'too-large') {
+    return quotaRefusal(
+      ctx,
+      new Error(
+        write === 'copy'
+          ? 'artifact_account_quota'
+          : 'project_account_storage_quota'
+      )
+    );
+  }
+  const owner = ctx.ownerUserId ?? ctx.userId;
+  await drainPendingObjects(
+    ctx.db,
+    { 'project-storage': ctx.bucket, artifacts: ctx.blobs.bucket },
+    admission === 'project-full' ? projectId : null,
+    {
+      olderThanMs: PENDING_OBJECT_GRACE_MS,
+      ...(admission === 'account-full' ? { ownerUserId: owner } : {})
+    }
+  ).catch(() => false);
+  refuse(
+    503,
+    'STORAGE_CLEANUP_BUSY',
+    admission === 'project-full'
+      ? 'Earlier failed saves of this project are still being cleaned up. Try again later.'
+      : 'Earlier failed saves or copies in this account are still being cleaned up. Try again later.'
+  );
 }
 
 /**
@@ -1248,7 +1291,9 @@ async function writeVersion(
   }
   const accepted =
     (results[0]?.meta?.changes ?? 0) === 1 &&
-    (results[2]?.meta?.changes ?? 0) === 1 &&
+    // At least: D1 counts trigger writes too, and the version's insert
+    // clears its body's pending record (migration 0055).
+    (results[2]?.meta?.changes ?? 0) >= 1 &&
     (revisionId === null || (results[3]?.meta?.changes ?? 0) === 1);
   if (!accepted) {
     await discardBody(ctx, body);
@@ -1466,7 +1511,9 @@ async function writeStagedVersion(
   }
   const accepted =
     (results[0]?.meta?.changes ?? 0) === 1 &&
-    (results[2]?.meta?.changes ?? 0) === 1 &&
+    // At least: D1 counts trigger writes too, and the version's insert
+    // clears its body's pending record (migration 0055).
+    (results[2]?.meta?.changes ?? 0) >= 1 &&
     (revisionId === null || (results[3]?.meta?.changes ?? 0) === 1);
   if (!accepted) {
     await discardBody(ctx, body);
@@ -1714,7 +1761,8 @@ async function createProject(
     if (copy && objects) {
       await copyBlobObjects(objects, projectId, copy.rows, copied, undefined, {
         db: ctx.db,
-        attempt: copyAttempt
+        attempt: copyAttempt,
+        ownerUserId: ctx.userId
       });
       await verifyCopiedObjects(objects, copied);
     }
@@ -1730,6 +1778,9 @@ async function createProject(
   } catch (error) {
     await discardBody(ctx, body);
     await discardCopiedObjects(ctx.db, objects, copied, copyAttempt);
+    if (error instanceof PendingObjectRefusedError) {
+      await pendingAdmissionRefusal(ctx, projectId, error.admission, 'copy');
+    }
     throw error;
   }
   const now = new Date().toISOString();
@@ -1872,9 +1923,12 @@ async function createProject(
   }
   const accepted =
     results.length === statements.length &&
+    // At least the rows each statement inserts: D1 counts trigger writes
+    // too (the project's instance, migration 0056; the pending records
+    // its version and copied blobs clear, migration 0055). A guarded
+    // INSERT … SELECT can never insert more rows than it selects.
     results.every(
-      (result, index) =>
-        (result.meta?.changes ?? 0) === (counts.get(index) ?? 1)
+      (result, index) => (result.meta?.changes ?? 0) >= (counts.get(index) ?? 1)
     );
   if (!accepted) {
     await rollBack();

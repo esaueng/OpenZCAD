@@ -85,8 +85,22 @@ its `v1` SQLite migration; Wrangler applies that class migration on the first
 Worker deployment. Keep the binding name, class name, and migration tag.
 
 The hourly cron in the example runs the existing expired-upload cleanup and
-reclaims expired rate-limit and sign-in rows from D1. You may change its schedule, but
-keep a schedule if uploads are enabled. Cron schedules are UTC.
+reclaims expired rate-limit and sign-in rows from D1. It also sweeps pending
+encrypted objects (migration 0055): an encrypted save or copy records each R2
+object in `r2_pending_objects` before it puts the bytes, and its committed row
+clears the record. A record left behind is a write that failed and could not
+remove its own object. Each run deletes up to 200 such objects whose record is
+at least an hour old (younger ones may still belong to a write in flight),
+then their records; a backlog or a failed R2 delete waits for the next run.
+Pending objects count against an account-wide budget: one account's records
+may not exceed its storage allowance in bytes, nor 2,400 records, and a
+project holds at most 8 pending document bodies, so a save or copy is refused
+with `STORAGE_CLEANUP_BUSY` (after reclaiming what it can) while earlier
+failures are still waiting. Without the cron, those refusals and project
+deletion, retention and the encrypted-data drop still reclaim pending objects
+on demand, but an account with no further activity keeps its leftovers. You
+may change the schedule, but keep a schedule if uploads or encrypted projects
+are enabled. Cron schedules are UTC.
 
 The example's `ratelimits` entries are Workers rate-limit bindings that the
 Worker checks before any D1 work: sign-in verification and desktop refresh

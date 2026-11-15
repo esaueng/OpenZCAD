@@ -363,6 +363,7 @@ async function eraseProjectRooms(
 function profileCleanupStatements(
   db: D1Database,
   userId: UserId,
+  request: ErasureRequest,
   email: string | undefined,
   authRateBucket: string | undefined,
   scope: 'profile' | 'all',
@@ -370,7 +371,9 @@ function profileCleanupStatements(
   e2eeProjectPreferencesReady = false,
   projectGroupStatements: readonly D1PreparedStatement[] = []
 ): D1PreparedStatement[] {
-  const statements: D1PreparedStatement[] = [];
+  const statements: D1PreparedStatement[] = [
+    requestStillOpenGuard(db, userId, request)
+  ];
   if (email) {
     statements.push(
       db
@@ -508,12 +511,40 @@ function profileCleanupStatements(
       db.prepare(`UPDATE users SET email = NULL WHERE id = ?`).bind(userId)
     );
   }
+  // Only this very request: a stale batch can never clear a later one.
   statements.push(
     db
-      .prepare(`DELETE FROM account_erasure_requests WHERE user_id = ?`)
-      .bind(userId)
+      .prepare(
+        `DELETE FROM account_erasure_requests
+         WHERE user_id = ? AND ${request.column} = ?`
+      )
+      .bind(userId, request.value)
   );
   return statements;
+}
+
+/**
+ * The first statement of the final profile batch: fails, rolling back the
+ * whole batch (one D1 transaction), unless `request` is still open. When
+ * it is not, the INSERT runs and is refused, by the primary key when a
+ * later request now holds the row, or by the scope check when none does,
+ * so none of the batch's destructive statements runs against what a newer
+ * state of the account stores. The request stays open until the batch's
+ * own last statement removes it, so every statement in between is fenced.
+ */
+function requestStillOpenGuard(
+  db: D1Database,
+  userId: UserId,
+  request: ErasureRequest
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT INTO account_erasure_requests
+         (user_id, scope, started_at, updated_at)
+       SELECT ?, 'superseded', 0, 0
+       WHERE NOT ${requestOpen(request)}`
+    )
+    .bind(userId, userId, request.value);
 }
 
 export async function deleteAccountData(
@@ -594,63 +625,68 @@ export async function deleteAccountData(
     // Before migration 0029 the tables do not exist, and before 0030 the
     // history table does not; deletion must keep working either way.
     const e2eeTables = await e2eeErasureTables(db);
-    await db.batch(
-      profileCleanupStatements(
-        db,
-        session.userId,
-        email,
-        authRateBucket,
-        input.scope,
-        e2eeTables,
-        // Before migration 0031 there is no opt-in table.
-        await isE2eeProjectPreferenceStorageReady(db),
-        // Before migration 0032 there are no MLS group tables, and before
-        // 0033 no version tables.
-        [
-          ...(await projectGroupErasureStatements(
-            db,
-            session.userId,
-            input.scope
-          )),
-          ...(await projectVersionErasureStatements(
-            db,
-            session.userId,
-            input.scope
-          )),
-          // Before migration 0036 there are no revocation cutoffs.
-          ...(await deviceRemovalErasureStatements(db, session.userId)),
-          // Before migration 0037 there is no contacts table; its rows go
-          // before the identities they reference, and only beside them.
-          ...(e2eeTables.length > 0
-            ? await contactErasureStatements(db, session.userId)
-            : []),
-          // Library folders are profile data (migration 0045), when the
-          // table exists.
-          ...(await libraryFolderErasureStatements(db, session.userId)),
-          // Assistant consents (migration 0041), when the table exists.
-          ...(await assistantConsentErasureStatements(db, session.userId)),
-          // Encrypted invitations this account received, its KeyPackages
-          // and Welcomes (migration 0038), when the tables exist.
-          ...(await invitationErasureStatements(db, session.userId, email)),
-          // Proposals it sent in other owners' projects lose their sender
-          // (migration 0039), when the table exists.
-          ...(await proposalErasureStatements(db, session.userId, input.scope)),
-          // The account's share delegation, and with `all` its user id on
-          // share-link rows in other owners' projects (migration 0040).
-          ...(await shareLinkErasureStatements(
-            db,
-            session.userId,
-            input.scope
-          )),
-          // Before migration 0042 there is no migration state.
-          ...(await projectMigrationErasureStatements(
-            db,
-            session.userId,
-            input.scope
-          ))
-        ]
-      )
+    const statements = profileCleanupStatements(
+      db,
+      session.userId,
+      request,
+      email,
+      authRateBucket,
+      input.scope,
+      e2eeTables,
+      // Before migration 0031 there is no opt-in table.
+      await isE2eeProjectPreferenceStorageReady(db),
+      // Before migration 0032 there are no MLS group tables, and before
+      // 0033 no version tables.
+      [
+        ...(await projectGroupErasureStatements(
+          db,
+          session.userId,
+          input.scope
+        )),
+        ...(await projectVersionErasureStatements(
+          db,
+          session.userId,
+          input.scope
+        )),
+        // Before migration 0036 there are no revocation cutoffs.
+        ...(await deviceRemovalErasureStatements(db, session.userId)),
+        // Before migration 0037 there is no contacts table; its rows go
+        // before the identities they reference, and only beside them.
+        ...(e2eeTables.length > 0
+          ? await contactErasureStatements(db, session.userId)
+          : []),
+        // Library folders are profile data (migration 0045), when the
+        // table exists.
+        ...(await libraryFolderErasureStatements(db, session.userId)),
+        // Assistant consents (migration 0041), when the table exists.
+        ...(await assistantConsentErasureStatements(db, session.userId)),
+        // Encrypted invitations this account received, its KeyPackages
+        // and Welcomes (migration 0038), when the tables exist.
+        ...(await invitationErasureStatements(db, session.userId, email)),
+        // Proposals it sent in other owners' projects lose their sender
+        // (migration 0039), when the table exists.
+        ...(await proposalErasureStatements(db, session.userId, input.scope)),
+        // The account's share delegation, and with `all` its user id on
+        // share-link rows in other owners' projects (migration 0040).
+        ...(await shareLinkErasureStatements(db, session.userId, input.scope)),
+        // Before migration 0042 there is no migration state.
+        ...(await projectMigrationErasureStatements(
+          db,
+          session.userId,
+          input.scope
+        ))
+      ]
     );
+    try {
+      await db.batch(statements);
+    } catch (error) {
+      // The guard refused: a retry completed this request (or a later one
+      // replaced it) while this attempt prepared its batch.
+      if (!(await stillCurrent())) {
+        return completedElsewhere(deletedProjectIds);
+      }
+      throw error;
+    }
   }
 
   return {

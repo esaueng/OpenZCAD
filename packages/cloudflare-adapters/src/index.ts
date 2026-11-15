@@ -613,11 +613,35 @@ export type PendingObjectBuckets = Partial<
 export const PENDING_OBJECTS_PER_PROJECT = 8;
 
 /**
+ * Pending objects one account may hold at once, across its projects and
+ * copies (migration 0055's admission trigger holds the same number): two
+ * copies of the most files one copy may list.
+ */
+export const PENDING_OBJECTS_PER_ACCOUNT = 2_400;
+
+/**
+ * Whether `recordPendingObject` recorded the key, or why not:
+ * - `project-full`: the project already holds `cap` pending objects;
+ * - `account-full`: the account's pending objects would exceed its storage
+ *   allowance in bytes, or `PENDING_OBJECTS_PER_ACCOUNT` records;
+ * - `too-large`: this attempt's own objects would exceed the allowance, so
+ *   its rows could never commit;
+ * - `key-deleting`: a cleanup holds a fresh claim on the key and may be
+ *   about to delete it (retry once it is done).
+ */
+export type PendingObjectAdmission =
+  'recorded' | 'project-full' | 'account-full' | 'too-large' | 'key-deleting';
+
+/**
  * Records that `attempt` is about to put `key` (migration 0055), before the
  * put: from then on no cleanup can claim the key while the record stands,
- * and the row that names the key clears it. With `cap`, refused (false)
- * once the project already holds that many pending objects in `bucket`, so
- * failed writes cannot accumulate stored bytes without bound.
+ * and the row that names the key clears it. The record is charged to
+ * `ownerUserId` for `bytes`. Migration 0055's trigger refuses it in the
+ * same statement while a cleanup holds a fresh claim on the key, or once
+ * the account's pending objects would exceed its allowance; with `cap`,
+ * it is also refused once the project already holds that many pending
+ * objects in `bucket`, so failed writes cannot accumulate stored bytes
+ * without bound. Only `recorded` lets the caller put the object.
  */
 export async function recordPendingObject(
   db: D1Database,
@@ -625,30 +649,44 @@ export async function recordPendingObject(
     key: string;
     attempt: string;
     projectId: string;
+    ownerUserId: string;
+    bytes: number;
     bucket: PendingObjectBucket;
     cap?: number;
   }
-): Promise<boolean> {
-  const result = await db
-    .prepare(
-      `INSERT INTO r2_pending_objects
-         (object_key, attempt, project_id, bucket, created_at)
-       SELECT ?, ?, ?, ?, ?
-       WHERE (SELECT COUNT(*) FROM r2_pending_objects
-              WHERE project_id = ? AND bucket = ?) < ?`
-    )
-    .bind(
-      input.key,
-      input.attempt,
-      input.projectId,
-      input.bucket,
-      Date.now(),
-      input.projectId,
-      input.bucket,
-      input.cap ?? Number.MAX_SAFE_INTEGER
-    )
-    .run();
-  return (result.meta?.changes ?? 0) === 1;
+): Promise<PendingObjectAdmission> {
+  let result: Awaited<ReturnType<D1PreparedStatement['run']>>;
+  try {
+    result = await db
+      .prepare(
+        `INSERT INTO r2_pending_objects
+           (object_key, attempt, project_id, owner_user_id, object_bytes,
+            bucket, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?
+         WHERE (SELECT COUNT(*) FROM r2_pending_objects
+                WHERE project_id = ? AND bucket = ?) < ?`
+      )
+      .bind(
+        input.key,
+        input.attempt,
+        input.projectId,
+        input.ownerUserId,
+        input.bytes,
+        input.bucket,
+        Date.now(),
+        input.projectId,
+        input.bucket,
+        input.cap ?? Number.MAX_SAFE_INTEGER
+      )
+      .run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('r2_key_deleting')) return 'key-deleting';
+    if (message.includes('r2_pending_attempt_quota')) return 'too-large';
+    if (message.includes('r2_pending_account_limit')) return 'account-full';
+    throw error;
+  }
+  return (result.meta?.changes ?? 0) === 1 ? 'recorded' : 'project-full';
 }
 
 /** Drops `attempt`'s records of `keys` once their objects are gone. */
@@ -686,6 +724,8 @@ export async function drainPendingObjects(
     olderThanMs?: number;
     fence?: { sql: string; binds: readonly unknown[] };
     limit?: number;
+    /** Only records charged to this account. */
+    ownerUserId?: string;
   } = {}
 ): Promise<boolean> {
   if (!(await isPendingObjectStorageReady(db))) return false;
@@ -694,10 +734,17 @@ export async function drainPendingObjects(
     .prepare(
       `SELECT object_key, attempt, bucket FROM r2_pending_objects
        WHERE ${projectId === null ? '?1 IS NULL' : 'project_id = ?1'}
-         AND created_at <= ?2
+         AND created_at <= ?2${
+           options.ownerUserId === undefined ? '' : ' AND owner_user_id = ?4'
+         }
        ORDER BY created_at LIMIT ?3`
     )
-    .bind(projectId, Date.now() - (options.olderThanMs ?? 0), limit + 1)
+    .bind(
+      projectId,
+      Date.now() - (options.olderThanMs ?? 0),
+      limit + 1,
+      ...(options.ownerUserId === undefined ? [] : [options.ownerUserId])
+    )
     .all<{
       object_key: string;
       attempt: string;
@@ -734,12 +781,14 @@ export async function drainPendingObjects(
     if (done.length) {
       await db
         .prepare(
+          // By primary key: each listed (key, attempt) is one index lookup,
+          // never a scan of every pending record.
           `DELETE FROM r2_pending_objects
-           WHERE EXISTS (SELECT 1 FROM json_each(?) d
-                         WHERE json_extract(d.value, '$[0]') = object_key
-                           AND json_extract(d.value, '$[1]') = attempt)${
-                             options.fence ? ` AND ${options.fence.sql}` : ''
-                           }`
+           WHERE (object_key, attempt) IN (
+             SELECT json_extract(d.value, '$[0]'), json_extract(d.value, '$[1]')
+             FROM json_each(?) d)${
+               options.fence ? ` AND ${options.fence.sql}` : ''
+             }`
         )
         .bind(
           JSON.stringify(done.map((row) => [row.object_key, row.attempt])),
@@ -8128,7 +8177,12 @@ export class D1R2PersistenceService implements PersistenceService {
           ...this.projectAssetStatements(document.projectId, write),
           ...adoptionStatements
         ]);
-        if (discardGuard.bindings.length && inserted[0]?.meta?.changes !== 1)
+        // At least one: D1 counts trigger writes too (the project's
+        // instance, migration 0056), and a refused guard inserts nothing.
+        if (
+          discardGuard.bindings.length &&
+          (inserted[0]?.meta?.changes ?? 0) < 1
+        )
           throw new ArtifactStorageError(
             'An imported mesh payload was discarded.'
           );
@@ -8185,13 +8239,16 @@ export class D1R2PersistenceService implements PersistenceService {
           insert,
           ...adoptionStatements
         ]);
-        if (discardGuard.bindings.length && inserted[0]?.meta?.changes !== 1)
+        if (
+          discardGuard.bindings.length &&
+          (inserted[0]?.meta?.changes ?? 0) < 1
+        )
           throw new ArtifactStorageError(
             'An imported mesh payload was discarded.'
           );
       } else {
         const inserted = await insert.run();
-        if (discardGuard.bindings.length && inserted.meta?.changes !== 1)
+        if (discardGuard.bindings.length && (inserted.meta?.changes ?? 0) < 1)
           throw new ArtifactStorageError(
             'An imported mesh payload was discarded.'
           );
