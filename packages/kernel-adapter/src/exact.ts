@@ -269,6 +269,7 @@ import {
   sanitizeThreeMfModel
 } from './mesh-export-sanitize';
 import { orientGlbForGltf } from './glb-scene';
+import { labelThreeMfObjects } from './three-mf-labels';
 import {
   declareStepLengthUnit,
   declareThreeMfUnit,
@@ -1203,6 +1204,36 @@ function carryProposalSalt(
 }
 
 /**
+ * Each export solid's body name and display colour, in writer order: every
+ * solid of a body carries that body's label.
+ */
+function exportSolidLabels(
+  document: ProjectDocument,
+  bodies: readonly { bodyId: BodyId; solids: number[] }[]
+): { name: string; color: string }[] {
+  const bodyNodes = new Map(
+    listNodesByKind(document, 'body').map((body) => [body.bodyId, body])
+  );
+  const featureKinds = new Map(
+    listNodesByKind(document, 'feature').map((feature) => [
+      feature.featureId,
+      feature.featureKind
+    ])
+  );
+  return bodies.flatMap(({ bodyId, solids }) => {
+    const body = bodyNodes.get(bodyId);
+    const label = {
+      name: body?.name ?? '',
+      color: bodyDisplayColor(
+        body?.metadata,
+        body ? featureKinds.get(body.featureId) : undefined
+      )
+    };
+    return solids.map(() => label);
+  });
+}
+
+/**
  * One STEP of the given bodies' solids, each named after its body and styled
  * in its display colour.
  */
@@ -1213,30 +1244,11 @@ function writeStepBodies(
   bodies: readonly { bodyId: BodyId; solids: number[] }[],
   options: StepExportOptions
 ): string {
-  const bodyNodes = new Map(
-    listNodesByKind(document, 'body').map((body) => [body.bodyId, body])
-  );
-  const featureKinds = new Map(
-    listNodesByKind(document, 'feature').map((feature) => [
-      feature.featureId,
-      feature.featureKind
-    ])
-  );
   const metadata: StepExportMetadata = {
     productName: document.name,
     fileName: options.fileName ?? `${document.name}.step`,
     timestamp: options.timestamp ?? stepTimestamp(new Date()),
-    solids: bodies.flatMap(({ bodyId, solids }) => {
-      const body = bodyNodes.get(bodyId);
-      const label = {
-        name: body?.name ?? '',
-        color: bodyDisplayColor(
-          body?.metadata,
-          body ? featureKinds.get(body.featureId) : undefined
-        )
-      };
-      return solids.map(() => label);
-    })
+    solids: exportSolidLabels(document, bodies)
   };
   // Never fuse: a boolean union changes the geometry (overlaps merge,
   // coincident faces weld). Every root of the arena document becomes its
@@ -5685,23 +5697,28 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             )
           : null;
       if (meshes && format === 'stl-binary') return writeBinaryStl(meshes);
-      const scaled = this.exportSolidsFor(
+      const scaled = this.exportBodySolidsFor(
         kernel,
         build,
         document,
         bodyIds,
         units
       );
-      const exportSolids =
+      // Re-meshed per body, so each solid still knows the body it labels.
+      const grouped =
         angular === null
           ? scaled
-          : this.angularExportSolids(
-              kernel,
-              io,
-              scaled,
-              unitDeflection,
-              angular
-            );
+          : scaled.map(({ bodyId, solids }) => ({
+              bodyId,
+              solids: this.angularExportSolids(
+                kernel,
+                io,
+                solids,
+                unitDeflection,
+                angular
+              )
+            }));
+      const exportSolids = grouped.flatMap(({ solids }) => solids);
       const bodies = kernel.serializeSolids(new Uint32Array(exportSolids));
       // Every writer takes the whole arena document: bodies stay distinct
       // objects in the 3MF package and merge into one facet stream for the
@@ -5720,9 +5737,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 : io.exportStl(bodies, unitDeflection);
       // glTF is metres and +Y up; the tessellation is model millimetres,
       // +Z up, which the GLB states through its root node (glb-scene.ts).
+      // 3MF objects carry their body's name and display colour.
       return format === '3mf'
         ? sanitizeThreeMf(bytes, (model) =>
-            declareThreeMfUnit(sanitizeThreeMfModel(model), units)
+            labelThreeMfObjects(
+              declareThreeMfUnit(sanitizeThreeMfModel(model), units),
+              exportSolidLabels(document, grouped)
+            )
           )
         : format === 'stl-binary'
           ? sanitizeBinaryStl(bytes)
