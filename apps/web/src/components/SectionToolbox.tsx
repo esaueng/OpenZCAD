@@ -18,6 +18,7 @@ import {
   type SectionOutlineState
 } from '../lib/sectionOutline';
 import { Tooltip } from './Tooltip';
+import { formatMeasuredQuantity } from '../lib/model';
 
 /** Each plane's swatch takes the colour of the axis it cuts across. */
 const PLANES = [
@@ -64,10 +65,39 @@ export function snapSectionOffset(
   return Math.min(range.max, Math.max(range.min, snapped));
 }
 
+/** Two bodies whose display caps overlap inside the cut, by name. */
+export interface SectionOverlapNote {
+  a: string;
+  b: string;
+  /** Overlap area in the cut, model units², from the display meshes. */
+  area: number;
+}
+
+/**
+ * M09 first slice, in words. Always says what it is: display evidence from
+ * the meshes on screen, not an exact clash check.
+ */
+export function describeSectionOverlap(
+  overlap: readonly SectionOverlapNote[],
+  units: string
+): string | null {
+  if (overlap.length === 0) return null;
+  const listed = overlap
+    .slice(0, 3)
+    .map(
+      (pair) =>
+        `${pair.a} and ${pair.b} (about ${formatMeasuredQuantity(pair.area)} ${units}²)`
+    );
+  const more = overlap.length > 3 ? `, and ${overlap.length - 3} more` : '';
+  return `Overlap in this cut: ${listed.join('; ')}${more}. Display evidence from the meshes on screen, not an exact clash check.`;
+}
+
 interface SectionToolboxProps {
   section: SectionViewSettings;
   range: { min: number; max: number };
   outline: SectionOutlineState;
+  /** M09: bodies overlapping inside the cut, from the display meshes. */
+  overlap?: readonly SectionOverlapNote[];
   units: string;
   /**
    * False once the header switch has ended the cut: the panel stays up on
@@ -91,6 +121,7 @@ export function SectionToolbox({
   section,
   range,
   outline,
+  overlap = [],
   units,
   active = true,
   onSwitch,
@@ -113,6 +144,7 @@ export function SectionToolbox({
     setDraft(String(section.offset));
   }
   const status = describeSectionOutline(outline, units);
+  const overlapText = describeSectionOverlap(overlap, units);
   const exportable = active && sectionOutlineExportable(outline);
   const partial = active && outline.kind === 'exact' && outline.unsectioned > 0;
   const stateKind = !active ? 'off' : partial ? 'refused' : status.kind;
@@ -425,6 +457,12 @@ export function SectionToolbox({
           <span>{formatEnd(range.max)}</span>
         </div>
       </div>
+      {active && overlapText ? (
+        <p className="rail-section-overlap" role="note">
+          <span className="rail-section-overlap-swatch" aria-hidden="true" />
+          {overlapText}
+        </p>
+      ) : null}
       <div className="rail-section-footer">
         <p id={detailId} className="rail-section-state-detail">
           {active

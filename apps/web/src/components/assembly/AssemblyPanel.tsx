@@ -60,6 +60,10 @@ import {
   JointDetails
 } from './AssemblyDetails';
 import { AssemblyExplodedSection } from './AssemblyExplodedSection';
+import {
+  AssemblyInterferenceSection,
+  type CheckInterference
+} from './AssemblyInterferenceSection';
 import { AssemblyNameField } from './AssemblyNameField';
 import {
   AddStudyButton,
@@ -102,6 +106,11 @@ export interface AssemblyPanelProps {
   reducedMotion?: boolean;
   /** Saves the BOM CSV; a browser download unless replaced (tests). */
   saveBomCsv?(fileName: string, csv: string): void;
+  /**
+   * AS04: the exact pairwise interference query (the geometry worker's).
+   * Without it the Interference section is not shown.
+   */
+  checkInterference?: CheckInterference;
 }
 
 type MenuTarget =
@@ -189,7 +198,8 @@ function AssemblyLists({
   studies,
   bodyBounds,
   reducedMotion,
-  saveBomCsv
+  saveBomCsv,
+  checkInterference
 }: AssemblyPanelProps) {
   const model = useAssemblyModel(document);
   const selectedComponentId = useAssemblyRuntime((s) => s.selectedComponentId);
@@ -788,6 +798,16 @@ function AssemblyLists({
             <AssemblyExplodedSection
               set={set}
               execute={execute}
+              onStatus={onStatus}
+            />
+          </Section>
+        ) : null}
+
+        {checkInterference && set.components.length > 0 ? (
+          <Section title="Interference">
+            <AssemblyInterferenceSection
+              document={document}
+              check={checkInterference}
               onStatus={onStatus}
             />
           </Section>

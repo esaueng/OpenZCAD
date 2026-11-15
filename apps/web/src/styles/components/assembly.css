@@ -1058,3 +1058,55 @@
   align-items: center;
   gap: var(--sp-1);
 }
+
+/* AS04 interference: the exact pairwise check of the assembled parts. */
+.assembly-interference {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.assembly-interference-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.assembly-interference-head > .assembly-muted {
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+.assembly-interference-stale {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  color: var(--color-warning);
+  font-size: var(--fs-mini);
+}
+
+.assembly-interference-value {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  color: var(--color-text-muted);
+}
+
+.assembly-interference-value.is-interference {
+  color: var(--color-error-text);
+}
+
+.assembly-interference-value.is-unknown {
+  color: var(--color-warning);
+}
+
+.assembly-interference-witness {
+  margin: 0;
+  padding: 0 var(--sp-2) var(--sp-2);
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}

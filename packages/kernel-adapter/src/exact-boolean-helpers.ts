@@ -2035,9 +2035,25 @@ export function certifiedSolidDistance(
   left: number,
   right: number
 ): number | null {
-  let distance: number | undefined;
+  return certifiedSolidDistanceWitness(kernel, left, right)?.distance ?? null;
+}
+
+/**
+ * `certifiedSolidDistance` with the kernel's two closest points, one on each
+ * solid: the witness of the distance it reports. Null exactly where that
+ * function answers null; it throws exactly where that function throws.
+ */
+export function certifiedSolidDistanceWitness(
+  kernel: RemusKernel,
+  left: number,
+  right: number
+): {
+  distance: number;
+  closest: [[number, number, number], [number, number, number]];
+} | null {
+  let raw: Float64Array;
   try {
-    distance = kernel.solidToSolidDistance(left, right)[0];
+    raw = kernel.solidToSolidDistance(left, right);
   } catch (error) {
     if (
       error instanceof Error &&
@@ -2048,16 +2064,22 @@ export function certifiedSolidDistance(
     }
     throw error;
   }
+  const distance = raw[0];
   if (distance === undefined || !Number.isFinite(distance) || distance < 0) {
     throw new Error('The geometry kernel returned an invalid solid distance.');
   }
-  return distance;
+  const point = (offset: number): [number, number, number] => [
+    raw[offset] ?? NaN,
+    raw[offset + 1] ?? NaN,
+    raw[offset + 2] ?? NaN
+  ];
+  return { distance, closest: [point(1), point(4)] };
 }
 
 /** Fractions of the box overlap probed for a shared interior point. */
 const INTERIOR_WITNESS_FRACTIONS = [0.5, 0.25, 0.75] as const;
 
-function strictlyInside(
+export function strictlyInside(
   kernel: RemusKernel,
   solid: number,
   point: readonly [number, number, number],

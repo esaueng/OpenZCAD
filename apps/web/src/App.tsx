@@ -35752,6 +35752,7 @@ export function App() {
                 }
                 bodyBounds={assemblyBodyBounds}
                 reducedMotion={appSettings.appearance.reducedMotion}
+                checkInterference={geometry.assemblyInterference}
               />
             </div>
           </ErrorBoundary>

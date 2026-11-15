@@ -62,6 +62,7 @@ export * from './drawings';
 export * from './object-folders';
 export * from './assembly';
 export * from './assembly-bom';
+export * from './assembly-interference';
 export * from './gear-mesh';
 export * from './print-clearance';
 export * from './reference-images';

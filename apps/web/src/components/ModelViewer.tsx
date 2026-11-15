@@ -102,6 +102,7 @@ import {
   viewDirectionFor,
   applyDisplayMode,
   applySectionPlane,
+  type SectionOverlapPair,
   exactSectionSnapshot,
   sectionClippingPlane,
   CameraController,
@@ -1141,6 +1142,12 @@ export interface ModelViewerProps {
    * anybody is looking at.
    */
   onBodiesDrawnElsewhere?(bodyIds: string[]): void;
+  /**
+   * M09 first slice: the bodies whose display caps overlap inside the
+   * section cut, after every section pass (empty when none, or no cut).
+   * Display evidence from the tessellation, never an exact clash answer.
+   */
+  onSectionOverlap?(pairs: SectionOverlapPair[]): void;
   /** Scroll-wheel auto-detection just proved a different pointing device. */
   onWheelDeviceLearned?(device: WheelDevice): void;
   /** Imperative sink for per-frame axis projections (no React re-render). */
@@ -2386,6 +2393,7 @@ export function ModelViewer({
   onGeometryPresented,
   geometryTrace: incomingGeometryTrace,
   onBodiesDrawnElsewhere,
+  onSectionOverlap,
   onWheelDeviceLearned,
   orientationRef,
   orientationDragRef,
@@ -2718,6 +2726,20 @@ export function ModelViewer({
   const installedEditRevisionRef = useRef<typeof geometryTrace>(undefined);
   const onBodiesDrawnElsewhereRef = useRef(onBodiesDrawnElsewhere);
   onBodiesDrawnElsewhereRef.current = onBodiesDrawnElsewhere;
+  const onSectionOverlapRef = useRef(onSectionOverlap);
+  onSectionOverlapRef.current = onSectionOverlap;
+  const sectionOverlapKeyRef = useRef('[]');
+  /** Reports the section pass's overlap pairs when they change. */
+  const reportSectionOverlap = (pairs: SectionOverlapPair[]) => {
+    // Areas are display figures: a few significant digits are all a label
+    // shows, and reporting every float jitter would re-render each frame.
+    const key = JSON.stringify(
+      pairs.map((pair) => [pair.a, pair.b, Number(pair.area.toPrecision(4))])
+    );
+    if (key === sectionOverlapKeyRef.current) return;
+    sectionOverlapKeyRef.current = key;
+    onSectionOverlapRef.current?.(pairs);
+  };
   const onViewSettledRef = useRef(onViewSettled);
   onViewSettledRef.current = onViewSettled;
   const onWheelDeviceLearnedRef = useRef(onWheelDeviceLearned);
@@ -6647,6 +6669,8 @@ export function ModelViewer({
               curves: number;
               bounds: { min: number[]; max: number[] };
             }[];
+            /** M09 display overlap overlays, one per overlapping pair. */
+            sectionOverlaps: { pair: string[]; triangles: number }[];
             bodyFaces: {
               visible: boolean;
               opacity: number;
@@ -6780,6 +6804,19 @@ export function ModelViewer({
       // Counted per region by the viewport itself, so each entry reports its
       // own boundary curves rather than the group's total.
       const exactSections = exactSectionSnapshot(bodyGroup);
+      const sectionOverlaps: { pair: string[]; triangles: number }[] = [];
+      bodyGroup.traverse((child) => {
+        if (
+          child.userData.sectionOverlap !== true ||
+          !(child instanceof THREE.Mesh)
+        )
+          return;
+        const geometry = child.geometry as THREE.BufferGeometry;
+        sectionOverlaps.push({
+          pair: [...(child.userData.sectionOverlapPair as string[])],
+          triangles: geometry.getAttribute('position').count / 3
+        });
+      });
       const offsetWorldObjects: string[] = [];
       scene.traverse((object) => {
         if (object.name === 'offset-face-handle-world') {
@@ -6790,6 +6827,7 @@ export function ModelViewer({
         offsetWorldObjects,
         sectionCaps,
         exactSections,
+        sectionOverlaps,
         ...(detail.includeBodies
           ? { bodies: context.renderedBodies ?? [] }
           : {}),
@@ -14167,18 +14205,20 @@ export function ModelViewer({
     );
     // Rebuilt bodies and freshly created highlight geometry arrive without
     // clip planes; reapply so an active section survives both.
-    applySectionPlane(
-      context.bodyGroup,
-      sectionViewRef.current
-        ? sectionClippingPlane(sectionViewRef.current)
-        : null,
-      exactSectionRef.current
-        ? {
-            regions: exactSectionRef.current,
-            displayMode: displayModeRef.current,
-            xray: xrayRef.current
-          }
-        : null
+    reportSectionOverlap(
+      applySectionPlane(
+        context.bodyGroup,
+        sectionViewRef.current
+          ? sectionClippingPlane(sectionViewRef.current)
+          : null,
+        exactSectionRef.current
+          ? {
+              regions: exactSectionRef.current,
+              displayMode: displayModeRef.current,
+              xray: xrayRef.current
+            }
+          : null
+      )
     );
 
     // Retune the key light's shadow frustum around the current model so the
@@ -16751,19 +16791,21 @@ export function ModelViewer({
       : null;
     // An offset ghost stands outside the body group: cut it the same way.
     offsetGhostClipRef.current?.(sectionPlane);
-    applySectionPlane(
-      context.bodyGroup,
-      sectionPlane,
-      // The mode is read from the ref, not the deps: the display-mode effect
-      // owns a mode CHANGE, and re-running this one for it would rebuild the
-      // section geometry to no purpose.
-      exactSection
-        ? {
-            regions: exactSection,
-            displayMode: displayModeRef.current,
-            xray: xrayRef.current
-          }
-        : null
+    reportSectionOverlap(
+      applySectionPlane(
+        context.bodyGroup,
+        sectionPlane,
+        // The mode is read from the ref, not the deps: the display-mode effect
+        // owns a mode CHANGE, and re-running this one for it would rebuild the
+        // section geometry to no purpose.
+        exactSection
+          ? {
+              regions: exactSection,
+              displayMode: displayModeRef.current,
+              xray: xrayRef.current
+            }
+          : null
+      )
     );
     // The frozen ground shadow must follow the cut, not the uncut silhouette.
     context.refreshShadowMap();

@@ -6,6 +6,10 @@ import { GeometryWorkerError } from '../lib/workerRefusal';
 import { beginEditTrace, recordEditPhase } from '../lib/editTrace';
 import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
+import type {
+  AssemblyInterferenceOperand,
+  AssemblyInterferenceReport
+} from '@openzcad/shared';
 import { hasDraftDisplay as hasDraftBodies } from '@openzcad/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { documentForWorker, documentForRebuild } from '../lib/meshTransport';
@@ -359,6 +363,14 @@ export interface GeometryWorkerApi {
     options?: { anchor?: SketchSolveAnchor }
   ): Promise<SketchSolveOutcome>;
   /**
+   * AS04: exact pairwise interference between assembly components posed by
+   * their matrices; the M09 clash query run on every unordered pair.
+   */
+  assemblyInterference(
+    document: ProjectDocument,
+    operands: AssemblyInterferenceOperand[]
+  ): Promise<AssemblyInterferenceReport>;
+  /**
    * Runs one planar sketch edit — corner fillet, corner chamfer, or closed
    * loop offset — on the kernel's 2D operations. Geometry only: the caller
    * decides which entities the answer replaces.
@@ -452,6 +464,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const solveSketchRequests = useRef(
     new Map<string, PendingRequest<SketchSolveOutcome>>()
   );
+  const interferenceRequests = useRef(
+    new Map<string, PendingRequest<AssemblyInterferenceReport>>()
+  );
   const sectionRequests = useRef(
     new Map<string, PendingRequest<SectionOutlineReport>>()
   );
@@ -537,6 +552,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       massPropertiesRequests.current,
       sheetMetalFoldRequests.current,
       solveSketchRequests.current,
+      interferenceRequests.current,
       sectionRequests.current,
       sketchPlanarRequests.current,
       recognizeImportedFaceRequests.current,
@@ -1006,6 +1022,19 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             return;
           }
           sectionRequests.current.delete(message.requestId);
+          if (message.ok) {
+            pending.resolve(message.report);
+          } else {
+            pending.reject(new Error(message.error));
+          }
+          return;
+        }
+        if (message.type === 'assembly-interference') {
+          const pending = interferenceRequests.current.get(message.requestId);
+          if (!pending) {
+            return;
+          }
+          interferenceRequests.current.delete(message.requestId);
           if (message.ok) {
             pending.resolve(message.report);
           } else {
@@ -1600,6 +1629,16 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         document: documentForWorker(document),
         sketchId,
         ...(options?.anchor ? { anchor: options.anchor } : {})
+      });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker is unavailable.'));
+    },
+    assemblyInterference(document, operands) {
+      const posted = postRequest(interferenceRequests.current, {
+        type: 'assembly-interference',
+        document: documentForWorker(document),
+        operands
       });
       return posted.ok
         ? posted.promise

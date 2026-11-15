@@ -315,6 +315,25 @@
   white-space: nowrap;
 }
 
+/* M09: a cut with overlapping bodies says so under its label, wrapped. */
+.view-mode-section:has(.view-mode-section-overlap) {
+  flex-wrap: wrap;
+}
+
+.view-mode-section-overlap {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: flex-start;
+  gap: 6px;
+  max-width: 40ch;
+  margin: 0 0 2px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .view-mode-section-label {
   color: var(--color-text-subtle);
 }
@@ -802,6 +821,29 @@
   line-height: var(--lh-normal);
   color: var(--color-text-muted);
   overflow-wrap: anywhere;
+}
+
+/* M09: bodies overlapping inside the cut. The swatch is the overlay's red
+   (SECTION_OVERLAP_COLOR in the viewport), so the words name what is drawn. */
+.rail-section-overlap {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.rail-section-overlap-swatch {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  margin-top: 3px;
+  border-radius: 2px;
+  background: #d83a3a;
+  opacity: 0.8;
 }
 
 .rail-section-icon,
