@@ -30,6 +30,8 @@ import {
   loftGlyph,
   planeGlyph,
   revolveGlyph,
+  bendGlyph,
+  sheetMetalGlyph,
   shellGlyph,
   solidOffsetGlyph,
   sphereGlyph,
@@ -72,6 +74,8 @@ export type ToolId =
   | 'gear'
   | 'gear-teeth'
   | 'thread'
+  | 'sheet-metal'
+  | 'bend'
   | 'fillet'
   | 'chamfer'
   | 'linear-pattern'
@@ -184,6 +188,19 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     group: 'from-sketch',
     shortcut: 'E',
     hint: 'Push a sketch into a solid'
+  },
+  'sheet-metal': {
+    label: 'Sheet metal',
+    short: 'Sheet',
+    icon: sheetMetalGlyph,
+    group: 'from-sketch',
+    hint: 'Turn sketch cells into a flat sheet to bend'
+  },
+  bend: {
+    label: 'Bend',
+    icon: bendGlyph,
+    group: 'edges-faces',
+    hint: 'Bend a sheet-metal part along lines on it'
   },
   revolve: {
     label: 'Revolve',
@@ -365,7 +382,14 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
     {
       id: 'from-sketch',
       label: 'From sketch',
-      tools: ['extrude', 'revolve', 'loft', 'sweep', 'helical-sweep']
+      tools: [
+        'extrude',
+        'sheet-metal',
+        'revolve',
+        'loft',
+        'sweep',
+        'helical-sweep'
+      ]
     },
     {
       id: 'edges-faces',
@@ -376,6 +400,7 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
         'hole',
         'thread',
         'gear-teeth',
+        'bend',
         'shell',
         'draft',
         'thicken',
@@ -440,6 +465,11 @@ export interface ToolAvailability {
    * undefined while that is not known, which leaves the tools offered.
    */
   hasCylindricalFace?: boolean;
+  /**
+   * Whether a live body is a sheet-metal part Bend can work on; undefined
+   * when not known, which leaves Bend offered.
+   */
+  hasSheetMetalBody?: boolean;
 }
 
 /**
@@ -507,13 +537,17 @@ export function toolDisabledReason(
       tool === 'thicken' ||
       tool === 'hole' ||
       tool === 'thread' ||
-      tool === 'gear-teeth') &&
+      tool === 'gear-teeth' ||
+      tool === 'bend') &&
     !avail.exactGeometryReady
   ) {
     return 'Waiting for exact geometry';
   }
   const closedProfiles = avail.closedProfileSketchCount ?? avail.sketchCount;
-  if ((tool === 'extrude' || tool === 'revolve') && closedProfiles === 0) {
+  if (
+    (tool === 'extrude' || tool === 'revolve' || tool === 'sheet-metal') &&
+    closedProfiles === 0
+  ) {
     return avail.sketchCount === 0
       ? 'Create a sketch first'
       : 'Close a sketch profile first';
@@ -563,6 +597,9 @@ export function toolDisabledReason(
     avail.hasCylindricalFace === false
   ) {
     return 'Needs a cylindrical face';
+  }
+  if (tool === 'bend' && avail.hasSheetMetalBody === false) {
+    return 'Needs a sheet-metal body';
   }
   if (
     (tool === 'linear-pattern' ||

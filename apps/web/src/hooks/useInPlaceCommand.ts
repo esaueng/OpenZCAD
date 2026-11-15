@@ -1462,10 +1462,17 @@ export function useInPlaceCommand(
         (other) =>
           other.sketchId === curve.sketchId && other.entityId === curve.entityId
       );
-      // A path lives in one sketch: a curve from another starts it over.
-      const sameSketch = path[0]?.sketchId === curve.sketchId;
+      // A path lives in one sketch: a curve from another starts it over
+      // (bend lines may come from any sketch on the blank's plane).
+      const sameSketch =
+        path[0]?.sketchId === curve.sketchId ||
+        IN_PLACE_TOOL_SPECS[current.tool].pathAcrossSketches === true;
       const next = picked
-        ? path.filter((other) => other.entityId !== curve.entityId)
+        ? path.filter(
+            (other) =>
+              other.entityId !== curve.entityId ||
+              other.sketchId !== curve.sketchId
+          )
         : additive && sameSketch
           ? [...path, curve]
           : [curve];

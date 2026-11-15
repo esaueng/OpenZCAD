@@ -59,10 +59,12 @@ import {
 import { datumAxis, datumPlane, type RefKind, type RefPick } from './datums';
 import { faceSpan, threadSpec, type ThreadRequest } from './thread';
 import { referenceImage, type ImageSlot } from './image';
+import { bendSpec, sheetMetalSpec, type SheetMetalRequest } from './sheetMetal';
 
 export type { RefPick } from './datums';
 export type { ThreadRequest } from './thread';
 export type { ImagePlacement, ImageSlot } from './image';
+export type { SheetMetalRequest } from './sheetMetal';
 
 /**
  * The in-place commands (U09), as data.
@@ -83,6 +85,8 @@ export type InPlaceToolId =
   | 'gear'
   | 'gear-teeth'
   | 'thread'
+  | 'sheet-metal'
+  | 'bend'
   | 'shell'
   | 'thicken'
   | 'solid-offset'
@@ -113,6 +117,8 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'gear',
   'gear-teeth',
   'thread',
+  'sheet-metal',
+  'bend',
   'shell',
   'thicken',
   'solid-offset',
@@ -560,6 +566,14 @@ export type InPlaceRequest =
       thread: ThreadRequest;
     }
   | {
+      /**
+       * An M16 sheet-metal feature, as it stores it: new from Sheet metal
+       * (no bends), or the whole feature as Bend edits it.
+       */
+      tool: 'sheet-metal';
+      sheet: SheetMetalRequest;
+    }
+  | {
       /** A primitive and its placement, as the card's Create built them. */
       tool: 'primitive';
       kind: PrimitiveKind;
@@ -817,6 +831,12 @@ export interface InPlaceToolSpec {
   ): Record<string, { value: number; from: string }> | null;
   wantsAxis: boolean;
   wantsPath: boolean;
+  /**
+   * Its path may hold curves of several sketches (a bend line in another
+   * sketch on the blank's plane): a curve of another sketch joins the path
+   * rather than starting it over.
+   */
+  pathAcrossSketches?: boolean;
   values: readonly ValueSpec[];
   /**
    * Values the picks (or other values) suggest, applied to any the user has
@@ -5424,6 +5444,8 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   gear,
   'gear-teeth': gearTeeth,
   thread: threadSpec,
+  'sheet-metal': sheetMetalSpec,
+  bend: bendSpec,
   shell,
   thicken,
   'solid-offset': solidOffset,

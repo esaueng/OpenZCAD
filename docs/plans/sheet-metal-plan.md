@@ -341,8 +341,8 @@ features are not applied, and folded-overlap is not checked while previewing.
   row (angle, up/down, position, radius and K overrides, relief, delete); a
   click on a region makes it the fixed one; a fold slider previews the fold;
   Apply commits one transaction.
-- Feature summary: "1.5 mm, 3 bends"; with a material preset, its label
-  follows the thickness ("1.5 mm mild steel (crs), 3 bends").
+- Feature summary: "1.5 mm, 3 bends"; with a material preset, its name
+  follows the thickness ("1.5 mm mild steel, 3 bends").
 
 ## Presets
 

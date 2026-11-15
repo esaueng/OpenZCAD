@@ -8,6 +8,7 @@ import type { EditAnalysisRequest } from '@openzcad/shared';
 import type {
   BodyId,
   FaceRecognitionSummary,
+  FeatureId,
   ProjectDocument,
   ProjectId,
   SketchId,
@@ -33,6 +34,7 @@ import type {
   SectionOutlineReport,
   SketchPlanarOperation,
   SketchPlanarResult,
+  SheetMetalFoldPreview,
   SketchSolveAnchor,
   SketchSolveOutcome
 } from '@openzcad/kernel-adapter/exact';
@@ -224,6 +226,17 @@ export type GeometryWorkerRequest =
       bodyId: BodyId;
     }
   | {
+      /**
+       * M16: a sheet-metal feature folded to a fraction of every bend, as a
+       * view-only mesh (the adapter's `sheetMetalFoldPreview`).
+       */
+      type: 'sheet-metal-fold';
+      requestId: string;
+      document: ProjectDocument;
+      featureId: FeatureId;
+      fraction: number;
+    }
+  | {
       type: 'solve-sketch';
       requestId: string;
       document: ProjectDocument;
@@ -401,6 +414,15 @@ export type GeometryMassPropertiesResult =
     }
   | { type: 'mass-properties'; ok: false; requestId: string; error: string };
 
+export type GeometrySheetMetalFoldResult =
+  | {
+      type: 'sheet-metal-fold';
+      ok: true;
+      requestId: string;
+      preview: SheetMetalFoldPreview;
+    }
+  | { type: 'sheet-metal-fold'; ok: false; requestId: string; error: string };
+
 export type GeometrySectionResult =
   | {
       type: 'section';
@@ -516,6 +538,7 @@ export type GeometryWorkerResult =
   | GeometryMeshQualityResult
   | GeometryDrawingTessellationResult
   | GeometryMassPropertiesResult
+  | GeometrySheetMetalFoldResult
   | GeometrySectionResult
   | GeometrySolveSketchResult
   | GeometrySketch2dOpResult
@@ -1155,7 +1178,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       request.type === 'section' ||
       request.type === 'solve-sketch' ||
       request.type === 'sketch-2d-op' ||
-      request.type === 'recognize-imported-face'
+      request.type === 'recognize-imported-face' ||
+      request.type === 'sheet-metal-fold'
     ) {
       // 'failed' means the next load call retries, so it is a loading state
       // here too, not a terminal one.
@@ -1176,6 +1200,21 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           ok: true,
           requestId: request.requestId,
           result
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
+      if (request.type === 'sheet-metal-fold') {
+        const preview = await exact.sheetMetalFoldPreview(
+          document,
+          request.featureId,
+          request.fraction
+        );
+        post({
+          type: 'sheet-metal-fold',
+          ok: true,
+          requestId: request.requestId,
+          preview
         });
         post(stateFor('ready', request, { stale: false }));
         return;
@@ -1660,6 +1699,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     } else if (request.type === 'mass-properties') {
       post({
         type: 'mass-properties',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'sheet-metal-fold') {
+      post({
+        type: 'sheet-metal-fold',
         ok: false,
         requestId: request.requestId,
         error: message

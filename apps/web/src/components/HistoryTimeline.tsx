@@ -84,7 +84,8 @@ import {
   splitGlyph,
   sweepGlyph,
   thickenGlyph,
-  threadGlyph
+  threadGlyph,
+  bendGlyph
 } from '../lib/toolIcons';
 
 // Row icons are constant elements: a commit re-renders every row of a long
@@ -114,6 +115,8 @@ const KIND_ICONS: Partial<Record<FeatureNode['featureKind'], ReactNode>> = {
   hole: <Drill size={14} aria-hidden="true" />,
   gear: <Cog size={14} aria-hidden="true" />,
   thread: threadGlyph,
+  // A sheet-metal feature is its bends: History reopens Bend on it.
+  'sheet-metal': bendGlyph,
   shell: shellGlyph,
   'solid-offset': solidOffsetGlyph,
   draft: draftGlyph,

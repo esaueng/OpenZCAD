@@ -1193,6 +1193,16 @@ const InPlaceCommandBar = preloadableSlot(
     })),
   { pending: <WorkspacePending /> }
 );
+// M16: Bend's table and fold slider, beside its command bar; only Bend
+// needs it, so it stays out of the entry chunk too.
+const SheetMetalBendPanel = preloadableSlot(
+  'Bend table',
+  () =>
+    import('./components/SheetMetalBendPanel').then((module) => ({
+      default: module.SheetMetalBendPanel
+    })),
+  { pending: null }
+);
 // The in-place Extrude bar (region extrude and editing a stored extrude).
 // It shares the command bar's chunk, so loading it on demand is what lets the
 // bar above leave the entry chunk at all. Warmed with the keypad as soon as a
@@ -1764,6 +1774,16 @@ import {
   type RefPick
 } from './lib/inPlace/tools';
 import { imagePlacementPlane, placeImage } from './lib/inPlace/image';
+import {
+  FIXED_POINT_OPTION,
+  bendFixedPoint,
+  bendLineCandidates,
+  bendRows,
+  fixedPointText,
+  onBlank,
+  sheetMetalUpdate,
+  sketchPointOf
+} from './lib/inPlace/sheetMetal';
 import type * as DatumPicks from './lib/inPlace/datumPicks';
 import type { PreparedReferenceImage } from './lib/referenceImageInsert';
 import {
@@ -3794,6 +3814,13 @@ export function App() {
     [doc, hiddenBodyIds]
   );
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
+  /**
+   * M16: Bend's fold slider (0–100 %, view only), and the sheet folded that
+   * far, standing in for the previewed body while it is short of 100 %.
+   */
+  const [bendFold, setBendFold] = useState(0);
+  const [bendFoldStandIn, setBendFoldStandIn] =
+    useState<ParameterPreviewBody | null>(null);
   // D06: an assistant proposal's annotations, drawn on its sheet in Draw.
   const [drawingPreview, setDrawingPreview] = useState<{
     sheetId: DrawingSheetId;
@@ -8722,9 +8749,13 @@ export function App() {
       // A parameter preview stands in for its own result body only; hidden
       // bodies stay hidden and every other part keeps its exact geometry.
       standIns:
+        (bendFoldStandIn && previewDoc && !currentGeometrySnapshot
+          ? [bendFoldStandIn]
+          : null) ??
         (!currentGeometrySnapshot
           ? parameterPreview?.filter((body) => !hiddenBodyIds.has(body.bodyId))
-          : null) ?? null,
+          : null) ??
+        null,
       // Not declared by whatever posed them — observed by the viewer in the
       // frame it drew. The Move gizmo poses a body's mesh with no state the
       // workspace can see, and the next mechanism to do that need not
@@ -8737,6 +8768,7 @@ export function App() {
       viewerBodies,
       hiddenBodyIds,
       parameterPreview,
+      bendFoldStandIn,
       currentGeometrySnapshot,
       currentFaceGeometryPreview,
       bodiesDrawnElsewhere
@@ -9590,6 +9622,19 @@ export function App() {
     () => liveCylindricalFace(liveBodyRepresentations, hiddenBodyIds),
     [liveBodyRepresentations, hiddenBodyIds]
   );
+  // M16: Bend works on a sheet-metal part; unknown until bodies are built.
+  const hasSheetMetalBody = useMemo(
+    () =>
+      liveBodyRepresentations
+        ? Object.values(liveBodyRepresentations).some(
+            (body) =>
+              !body.consumed &&
+              !hiddenBodyIds.has(body.bodyId) &&
+              body.source === 'sheet-metal'
+          )
+        : undefined,
+    [liveBodyRepresentations, hiddenBodyIds]
+  );
   const availability: ToolAvailability = {
     editDisabledReason,
     editDisabledExplained: liveSessionConnecting,
@@ -9598,7 +9643,8 @@ export function App() {
     liveBodyCount: committedBodyCount,
     exactGeometryReady: displayedGeometryComplete,
     hasEdgeSelected: selectedEdges.length > 0,
-    ...(hasCylindricalFace !== undefined ? { hasCylindricalFace } : {})
+    ...(hasCylindricalFace !== undefined ? { hasCylindricalFace } : {}),
+    ...(hasSheetMetalBody !== undefined ? { hasSheetMetalBody } : {})
   };
   // What the palette, the verb rail and the command bar show. Launching
   // a tool still reads `availability`, so a tool that needs the finished
@@ -11352,7 +11398,12 @@ export function App() {
           : null;
       },
       curve: (sketchId, entityId) =>
-        sweepCurveExists(current, sketchId, entityId),
+        sweepCurveExists(
+          current,
+          sketchId,
+          entityId,
+          feature.data.featureKind === 'sheet-metal'
+        ),
       body: (bodyId) => inPlaceBodyPick(bodyId),
       laterTransforms: laterInPlaceSteps(current, feature),
       laterReshapes: laterDirectEdit(current, feature),
@@ -11612,18 +11663,23 @@ export function App() {
 
   /**
    * Whether a sketch still has a curve a path can take: a drawn line or arc
-   * of that sketch, not construction, as the card's path options were.
+   * of that sketch, not construction, as the card's path options were. A
+   * bend line (M16) is any straight line, construction lines included.
    */
   function sweepCurveExists(
     current: ProjectDocument,
     sketchId: SketchId,
-    entityId: string
+    entityId: string,
+    bendLine = false
   ): boolean {
     const node = ownEntry(current.nodes, entityId as EntityId);
     return (
       node?.kind === 'sketch-object' &&
-      !node.data.construction &&
-      (node.data.objectKind === 'line' || node.data.objectKind === 'arc') &&
+      (bendLine
+        ? node.data.objectKind === 'line'
+        : !node.data.construction &&
+          (node.data.objectKind === 'line' ||
+            node.data.objectKind === 'arc')) &&
       (findSketch(current, sketchId)?.objectIds.includes(
         entityId as EntityId
       ) ??
@@ -23719,6 +23775,12 @@ export function App() {
       case 'thread':
         // The threaded body keeps the name of the body it replaces.
         return commandFactories.threadBody({ name, ...request.thread });
+      case 'sheet-metal':
+        return commandFactories.sheetMetalBody({
+          name,
+          bodyName,
+          ...request.sheet
+        });
       case 'modeling': {
         // Through the card's own submission builder, so a face operation
         // run in place is validated and stored exactly as the card's was.
@@ -23963,6 +24025,16 @@ export function App() {
         feature,
         request.kind,
         edgeModifierValue(request, edit.name)
+      );
+    }
+    if (request.tool === 'sheet-metal') {
+      // M16: Bend's Done is one `updateSheetMetal`: the rule and the whole
+      // bend table in one transaction, so one undo step.
+      if (edit.data.featureKind !== 'sheet-metal') {
+        throw new Error(`${edit.name} cannot be edited this way.`);
+      }
+      return commandFactories.updateSheetMetal(
+        sheetMetalUpdate(edit.featureId, edit.data, request.sheet)
       );
     }
     const definition = requestNewAxis(request);
@@ -24327,6 +24399,134 @@ export function App() {
   >(null);
   const inPlaceSpec = inPlace.spec;
   const inPlaceUnits = doc?.units ?? 'mm';
+  // M16: Bend. Started on a body rather than from History, it becomes the
+  // edit of that body's sheet-metal feature, as its History row would arm.
+  const bendBodyId =
+    inPlace.tool === 'bend' && !inPlace.editing
+      ? (inPlace.slots.bodies[0]?.bodyId ?? null)
+      : null;
+  useEffect(() => {
+    if (!bendBodyId) return;
+    const current = managerRef.current?.document;
+    if (!current) return;
+    const feature = listFeaturesInOrder(current).find(
+      (candidate) =>
+        candidate.bodyId === bendBodyId &&
+        candidate.data.featureKind === 'sheet-metal'
+    );
+    if (!feature) {
+      inPlaceRef.current.setPicks({ bodies: [] });
+      setStatus('Bend works on a sheet-metal body: make one with Sheet metal.');
+      return;
+    }
+    applyHistorySelection(feature.id, current);
+    // applyHistorySelection reads refs and the live document only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bendBodyId]);
+  const bendSheet =
+    inPlace.tool === 'bend' &&
+    inPlaceEditing?.data.featureKind === 'sheet-metal'
+      ? inPlaceEditing
+      : null;
+  const bendFeatureId = bendSheet?.featureId ?? null;
+  const bendBodyOfFeature = bendSheet?.resultBodyId ?? null;
+  // Each Bend opens on the flat sheet its lines are picked on.
+  useEffect(() => {
+    setBendFold(0);
+  }, [bendFeatureId, inPlace.sessionId]);
+  const bendBlankView = bendSheet
+    ? availableSketchViews.find(
+        (view) =>
+          bendSheet.data.featureKind === 'sheet-metal' &&
+          view.sketchId === bendSheet.data.sketchId
+      )
+    : undefined;
+  /**
+   * While the sheet is shown flat, a click on it (not on a line) holds the
+   * region it lands in fixed: the click is read on the sheet's mid-plane.
+   */
+  const bendPlacementPlane = useMemo(() => {
+    if (!bendBlankView || bendFold !== 0) return null;
+    const { basis } = bendBlankView;
+    const half =
+      ((inPlace.values.thickness ?? 0) / 2) *
+      (inPlace.options.side === 'negative' ? -1 : 1);
+    return {
+      origin: {
+        x: basis.origin.x + basis.normal.x * half,
+        y: basis.origin.y + basis.normal.y * half,
+        z: basis.origin.z + basis.normal.z * half
+      },
+      normal: basis.normal
+    };
+  }, [bendBlankView, bendFold, inPlace.values.thickness, inPlace.options.side]);
+  function pickBendFixedPoint(point: Vector3) {
+    if (!bendBlankView) return;
+    const local = sketchPointOf(bendBlankView.basis, point);
+    if (!onBlank(local, bendBlankView.regions)) {
+      setStatus('Click inside the flat sheet to hold that region fixed.');
+      return;
+    }
+    inPlace.setOption(FIXED_POINT_OPTION, fixedPointText(local));
+  }
+  // The fold slider: the previewed feature folded that far, from the
+  // adapter, standing in for its body. 100 % is the preview itself.
+  useEffect(() => {
+    if (
+      !bendFeatureId ||
+      !bendBodyOfFeature ||
+      !previewDoc ||
+      bendFold >= 100
+    ) {
+      setBendFoldStandIn(null);
+      return;
+    }
+    let live = true;
+    const timer = window.setTimeout(() => {
+      geometry
+        .sheetMetalFoldPreview(previewDoc, bendFeatureId, bendFold / 100)
+        .then((folded) => {
+          if (!live) return;
+          setBendFoldStandIn({
+            bodyId: bendBodyOfFeature,
+            replaces: [bendBodyOfFeature],
+            color:
+              previewDoc.derived.bodyRepresentations[bendBodyOfFeature]
+                ?.color ?? '#94a3b8',
+            parts: [
+              {
+                key: `sheet-fold:${bendFeatureId}:${bendFold}`,
+                mesh: {
+                  kind: 'mesh',
+                  vertices: Float32Array.from(folded.positions),
+                  indices: Uint32Array.from(folded.indices)
+                },
+                matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+              }
+            ]
+          });
+        })
+        .catch(() => {
+          // A fold that does not build here shows the stored preview.
+          if (live) setBendFoldStandIn(null);
+        });
+    }, 60);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+    // `geometry` is stable for the workspace's life.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bendFeatureId, bendBodyOfFeature, previewDoc, bendFold]);
+  // Read over the feature as the model has it now, as the request is.
+  const bendSaved = bendSheet
+    ? ((doc ? findFeature(doc, bendSheet.featureId)?.data : undefined) ??
+      bendSheet.data)
+    : undefined;
+  const bendTable =
+    bendSaved?.featureKind === 'sheet-metal'
+      ? bendRows(inPlace.slots.path, inPlace.options, { saved: bendSaved })
+      : null;
   // A command canceled mid-drag never sees the release: the next one must
   // not start with its arrows still waiting for it.
   const inPlaceSessionKey = inPlace.sessionId;
@@ -25092,6 +25292,22 @@ export function App() {
   const inPlaceCurveCandidates = useMemo(() => {
     if (!doc || !inPlaceSpec?.wantsPath) return null;
     const resolve = sketchValueResolver(parameterScope.scope, doc.units);
+    // M16: Bend offers the straight lines on the blank's plane, the
+    // construction lines a bend is usually drawn as among them.
+    if (inPlaceSpec.id === 'bend') {
+      const blank =
+        inPlaceEditing?.data.featureKind === 'sheet-metal'
+          ? inPlaceEditing.data.sketchId
+          : null;
+      if (!blank) return null;
+      const views = availableSketchViews.filter((view) =>
+        featurePrecedes(
+          producingFeatureOf({ sketchId: view.sketchId }),
+          inPlaceEditing!.featureId
+        )
+      );
+      return bendLineCandidates(doc, views, blank, (value) => resolve(value));
+    }
     // Every sketch's curves, the profile's own included: one sketch may hold
     // both a closed profile and the open spine it sweeps along. An edit
     // offers only sketches made before its feature, as it takes profiles.
@@ -25278,7 +25494,14 @@ export function App() {
     const curves = (picks: readonly CurvePick[]) =>
       ordered(
         picks.map((pick) =>
-          sweepCurveExists(doc, pick.sketchId, pick.entityId) ? pick : null
+          sweepCurveExists(
+            doc,
+            pick.sketchId,
+            pick.entityId,
+            inPlace.tool === 'bend'
+          )
+            ? pick
+            : null
         )
       );
     // Only against a body whose topology is published: one still being
@@ -34326,14 +34549,19 @@ export function App() {
             placementPlane={
               modelingLocked
                 ? null
-                : imagePlacementPlane(
+                : (bendPlacementPlane ??
+                  imagePlacementPlane(
                     inPlace.slots,
                     inPlace.options,
                     imagePlacementContext,
                     inPlace.values
-                  )
+                  ))
             }
-            onPlacementClick={(point) => inPlace.placeImage({ point })}
+            onPlacementClick={(point) =>
+              bendPlacementPlane
+                ? pickBendFixedPoint(point)
+                : inPlace.placeImage({ point })
+            }
             hiddenDatumIds={hiddenDatumIds}
             referenceImages={
               inPlace.request?.tool === 'reference-image'
@@ -35687,6 +35915,30 @@ export function App() {
                   onValueRestore={inPlace.dropRefusal}
                   onValuePreview={previewInPlacePanelValue}
                   scope={parameterScope.scope}
+                  aside={
+                    bendTable ? (
+                      <SheetMetalBendPanel
+                        rows={bendTable}
+                        unitLabel={displayLengthName(doc.units)}
+                        evaluate={(text) =>
+                          evalParamValue(text, parameterScope.scope, doc.units)
+                        }
+                        onOption={inPlace.setOption}
+                        onRemove={(line) => inPlace.pickCurve(line)}
+                        fold={bendFold}
+                        onFold={setBendFold}
+                        fixedPoint={bendFixedPoint(
+                          inPlace.options,
+                          bendSaved?.featureKind === 'sheet-metal'
+                            ? bendSaved
+                            : undefined
+                        )}
+                        onClearFixed={() =>
+                          inPlace.setOption(FIXED_POINT_OPTION, '')
+                        }
+                      />
+                    ) : null
+                  }
                   onDone={() => inPlace.done()}
                   onCancel={cancelInPlaceCommand}
                 />

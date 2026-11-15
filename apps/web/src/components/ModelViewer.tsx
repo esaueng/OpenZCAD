@@ -11025,6 +11025,11 @@ export function ModelViewer({
           curvePickThreshold(event)
         );
         if (curveId) {
+          // The press is the curve's, as an axis line's is: its release must
+          // not also land on what is under it (a bend's sheet, which takes a
+          // click as its fixed region).
+          lockedHandlePointerId = event.pointerId;
+          gestures.capture(event, null);
           event.preventDefault();
           onPickCurveRef.current?.(curveId, addsToSelection(event));
           requestRender();
@@ -15556,11 +15561,20 @@ export function ModelViewer({
     const rig = buildCurvePickerRig(curvePickerCandidatesRef.current);
     context.scene.add(rig.group);
     curvePickerRigRef.current = rig;
+    // E2E: how many curves a click can take now (a bend's lines, say).
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      context.renderer.domElement.dataset.e2eCurvePicker = String(
+        curvePickerCandidatesRef.current.length
+      );
+    }
     context.requestRender();
     return () => {
       context.scene.remove(rig.group);
       rig.dispose();
       if (curvePickerRigRef.current === rig) curvePickerRigRef.current = null;
+      if (E2E_CANVAS_HOOKS_ENABLED) {
+        delete context.renderer.domElement.dataset.e2eCurvePicker;
+      }
       context.requestRender();
     };
   }, [curvePickerKey]);
