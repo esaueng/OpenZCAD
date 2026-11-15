@@ -33,8 +33,8 @@ import { desktopFetch } from './desktopBridge';
 import { uploadTransport } from './e2ee/encryptedContentBlobs';
 import { localStorageEncryptedProjectPins } from './e2ee/encryptedProjectPins';
 import {
+  ASSISTANT_CONSENT_FLOOR_PREFIX,
   ASSISTANT_GRANT_PREFIX,
-  assistantConsentPinKey,
   beginAssistantAllow,
   completeAssistantAllow,
   stopAssistantGrant
@@ -776,8 +776,8 @@ describe('an assistant request', () => {
     desktop((command) => {
       if (command === 'desktop_prepare_access') {
         window.localStorage.setItem(
-          assistantConsentPinKey('user_ctx', projectId),
-          '2'
+          `${ASSISTANT_CONSENT_FLOOR_PREFIX}user_ctx:${projectId}:2`,
+          '1'
         );
       }
     });

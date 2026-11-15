@@ -3,11 +3,11 @@ import {
   ASSISTANT_ALLOW_PENDING_PREFIX,
   ASSISTANT_GRANT_PREFIX,
   ASSISTANT_STOP_PREFIX,
-  assistantConsentPinKey,
   assistantGrant,
   assistantGrantCurrent,
   beginAssistantAllow,
   completeAssistantAllow,
+  raiseAssistantConsentFloor,
   resetAssistantGrantMemoryForTests,
   stopAssistantGrant,
   withdrawAssistantAllow
@@ -22,6 +22,12 @@ function storage() {
   return {
     faults,
     values,
+    get length() {
+      return values.size;
+    },
+    key(index: number) {
+      return [...values.keys()][index] ?? null;
+    },
     getItem(key: string) {
       if (faults.read) throw new Error('blocked');
       return values.get(key) ?? null;
@@ -113,6 +119,10 @@ describe('this device’s assistant grants', () => {
     const shared = storage();
     let seenByC: unknown = 'not read';
     const tabA = {
+      get length() {
+        return shared.length;
+      },
+      key: (index: number) => shared.key(index),
       getItem: (key: string) => shared.getItem(key),
       removeItem: (key: string) => shared.removeItem(key),
       setItem(key: string, value: string) {
@@ -133,7 +143,7 @@ describe('this device’s assistant grants', () => {
     expect(assistantGrant('u', 'p', shared)).toBeNull();
   });
 
-  it('is not current once this device verified a newer record', () => {
+  it('is not current once any tab verified a newer record, whatever order the floors land in', () => {
     const store = storage();
     const grant = completeAssistantAllow(
       beginAssistantAllow('u', 'p', store)!,
@@ -141,16 +151,57 @@ describe('this device’s assistant grants', () => {
       store
     )!;
     const consent = { userId: 'u', projectId: 'p', ...RECORD, grant: grant.id };
-    store.values.set(assistantConsentPinKey('u', 'p'), String(RECORD.sequence));
+    // Its own record, verified: still current.
+    raiseAssistantConsentFloor('u', 'p', RECORD.sequence, store);
     expect(assistantGrantCurrent(consent, store)).toBe(true);
-    // Any tab verified a Stop (or another device's newer record) past it.
-    store.values.set(
-      assistantConsentPinKey('u', 'p'),
-      String(RECORD.sequence + 1)
-    );
+    // Another tab verifies a revocation past it; a delayed verification of
+    // an older record lands after. The floor does not come back down.
+    raiseAssistantConsentFloor('u', 'p', RECORD.sequence + 2, store);
+    raiseAssistantConsentFloor('u', 'p', RECORD.sequence + 1, store);
     expect(assistantGrantCurrent(consent, store)).toBe(false);
-    store.values.set(assistantConsentPinKey('u', 'p'), 'garbage');
+  });
+
+  it('removes an older grant when the floor cannot be written', () => {
+    const store = storage();
+    const grant = completeAssistantAllow(
+      beginAssistantAllow('u', 'p', store)!,
+      RECORD,
+      store
+    )!;
+    const consent = { userId: 'u', projectId: 'p', ...RECORD, grant: grant.id };
+    store.faults.write = true;
+    raiseAssistantConsentFloor('u', 'p', RECORD.sequence + 1, store);
+    store.faults.write = false;
     expect(assistantGrantCurrent(consent, store)).toBe(false);
+    expect(store.values.has(`${ASSISTANT_GRANT_PREFIX}u:p`)).toBe(false);
+  });
+
+  it('never lets an Allow’s first use overwrite a Stop made as it was clicked', () => {
+    // Tab A reads that the project has no Stop yet; before its first write
+    // (whatever it is), tab B stops. A must not grant.
+    const shared = storage();
+    let stopped = false;
+    const tabA = {
+      ...shared,
+      get length() {
+        return shared.length;
+      },
+      key: (index: number) => shared.key(index),
+      getItem: (key: string) => shared.getItem(key),
+      removeItem: (key: string) => shared.removeItem(key),
+      setItem(key: string, value: string) {
+        if (!stopped) {
+          stopped = true;
+          shared.setItem(`${ASSISTANT_STOP_PREFIX}u:p`, 'x'.repeat(36));
+          shared.removeItem(`${ASSISTANT_GRANT_PREFIX}u:p`);
+        }
+        shared.setItem(key, value);
+      }
+    };
+    const ticket = beginAssistantAllow('u', 'p', tabA)!;
+    expect(completeAssistantAllow(ticket, RECORD, tabA)).toBeNull();
+    expect(assistantGrant('u', 'p', shared)).toBeNull();
+    expect(shared.getItem(`${ASSISTANT_STOP_PREFIX}u:p`)).toBe('x'.repeat(36));
   });
 
   it('reads a malformed grant as none', () => {

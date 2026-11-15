@@ -17,33 +17,40 @@
  * - A grant is made only by an Allow clicked on this device, never by an
  *   account read, so nothing the account answers can bring back a grant a
  *   Stop removed.
- * - Each project has a stop generation (one key, a fixed-length token). An
- *   Allow makes sure the key exists and reads it, and registers itself as
- *   pending, before anything is awaited (`beginAssistantAllow`). A Stop, in
- *   any tab, first writes a new generation, then removes the pending id
- *   and the grant, synchronously, before it awaits anything
- *   (`stopAssistantGrant`). A grant counts only under the generation it
- *   was made under, so a grant an Allow writes after another tab's Stop,
- *   however the tabs' storage operations interleave, is never read as
- *   current by any tab. The Allow also completes only if its own pending
- *   id is still there (`completeAssistantAllow`), so of two Allows in
- *   flight only the last one clicked can grant.
- * - The generation key exists before any grant can, and a Stop overwrites
- *   it with a value of the same length, so a Stop's write fits a full
- *   store. Should it fail anyway, the Stop still removes the keys, and this
- *   tab holds it in memory until an Allow completes here. Storage that
- *   cannot be read reads as no grant, so nothing is sent.
- * - A grant whose record is older than the newest record this device has
- *   verified for the project (the consent pin, which only rises) is not
- *   current: once any tab has seen a Stop or a newer record from another
- *   device, a request confirmed under the older one is refused at the send.
+ * - Each project has a stop generation: one key holding a random token,
+ *   written only by a Stop, never removed (no key reads as `none`). An
+ *   Allow reads it and registers itself as pending before anything is
+ *   awaited (`beginAssistantAllow`); it never writes the generation, so it
+ *   cannot overwrite a Stop. A Stop, in any tab, first writes a new
+ *   generation, then removes the pending id and the grant, synchronously,
+ *   before it awaits anything (`stopAssistantGrant`). A grant counts only
+ *   under the generation it was made under, so a grant an Allow writes
+ *   after another tab's Stop, however the tabs' storage operations
+ *   interleave, is never read as current by any tab. The Allow also
+ *   completes only if its own pending id is still there
+ *   (`completeAssistantAllow`), so of two Allows in flight only the last
+ *   one clicked can grant.
+ * - A Stop that cannot write its generation (a full store) still removes
+ *   the keys, retries the write in the room that frees, and is held in
+ *   this tab's memory until an Allow completes here. Storage that cannot
+ *   be read reads as no grant, so nothing is sent.
+ * - A grant whose record is older than a record this device has verified
+ *   since is not current (`raiseAssistantConsentFloor`): once any tab has
+ *   verified a Stop, or a newer record from another device, a request
+ *   confirmed under the older one is refused at the send. The floor is one
+ *   key per verified sequence, never overwritten, so concurrent writers
+ *   cannot lower it; where its key cannot be written, the older grant is
+ *   removed instead.
  *
  * Keyed by account and project. Free of crypto imports (as the pins are),
  * because `api.ts` checks grants synchronously at the send.
  */
 import type { AssistantSendConsent } from '../projectWriteGate';
 
-type GrantStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+export type GrantStorage = Pick<
+  Storage,
+  'getItem' | 'setItem' | 'removeItem' | 'key' | 'length'
+>;
 
 /** `<prefix><userId>:<projectId>` = the grant, as JSON. */
 export const ASSISTANT_GRANT_PREFIX = 'openzcad:e2ee-assistant-grant:v1:';
@@ -52,17 +59,15 @@ export const ASSISTANT_ALLOW_PENDING_PREFIX =
   'openzcad:e2ee-assistant-allow:v1:';
 /** `<prefix><userId>:<projectId>` = the project's stop generation. */
 export const ASSISTANT_STOP_PREFIX = 'openzcad:e2ee-assistant-stop:v1:';
-
 /**
- * The highest consent sequence this device verified, per account and
- * project (`assistantConsent.ts` writes it; it only rises).
+ * `<prefix><userId>:<projectId>:<sequence>` = a consent record this device
+ * verified (`raiseAssistantConsentFloor`). The highest is the floor.
  */
-export function assistantConsentPinKey(
-  userId: string,
-  projectId: string
-): string {
-  return `openzcad:e2ee-assistant-consent-pin:v1:${userId}:${projectId}`;
-}
+export const ASSISTANT_CONSENT_FLOOR_PREFIX =
+  'openzcad:e2ee-assistant-consent-floor:v1:';
+
+/** The generation of a project no Stop has been written for. */
+const NO_STOP = 'none';
 
 /** What an Allow clicked here granted: the record it verified. */
 export interface AssistantGrant {
@@ -96,7 +101,7 @@ function defaultStorage(): GrantStorage | null {
   }
 }
 
-/** A new id, always 36 characters, so a Stop rewrites its key in place. */
+/** A new id, always 36 characters (never `none`). */
 function newId(): string {
   if (
     typeof crypto !== 'undefined' &&
@@ -140,16 +145,80 @@ function parseGrant(raw: string | null): AssistantGrant | null {
     : null;
 }
 
-/** The consent pin: 0 when none; null when storage cannot say. */
-function consentPin(
+/** The project's floor keys and their sequences. Throws if unreadable. */
+function floorKeys(
   storage: GrantStorage,
   userId: string,
   projectId: string
-): number | null {
-  const raw = storage.getItem(assistantConsentPinKey(userId, projectId));
-  if (raw === null) return 0;
-  const value = Number(raw);
-  return Number.isSafeInteger(value) && value >= 1 ? value : null;
+): { key: string; sequence: number }[] {
+  const prefix = `${ASSISTANT_CONSENT_FLOOR_PREFIX}${scope(userId, projectId)}:`;
+  const keys: { key: string; sequence: number }[] = [];
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index);
+    if (!key?.startsWith(prefix)) continue;
+    const sequence = Number(key.slice(prefix.length));
+    if (Number.isSafeInteger(sequence) && sequence >= 1) {
+      keys.push({ key, sequence });
+    }
+  }
+  return keys;
+}
+
+/** Floors this tab could not write: held here instead. */
+const floorsHere = new Map<string, number>();
+
+/**
+ * Records that this device verified the account's record at `sequence`
+ * for the project: a grant of an older record is no longer current, in
+ * any tab. Called for every verified record (`assistantConsent.ts`).
+ * Writes a key of its own, so it never lowers what another tab wrote.
+ * Where it cannot be written, removes an older grant instead and holds
+ * the floor in this tab.
+ */
+export function raiseAssistantConsentFloor(
+  userId: string,
+  projectId: string,
+  sequence: number,
+  storage: GrantStorage | null = defaultStorage()
+): void {
+  if (!Number.isSafeInteger(sequence) || sequence < 1) return;
+  const key = scope(userId, projectId);
+  const own = `${ASSISTANT_CONSENT_FLOOR_PREFIX}${key}:${sequence}`;
+  let saved = false;
+  try {
+    if (storage) {
+      storage.setItem(own, '1');
+      saved = storage.getItem(own) === '1';
+    }
+  } catch {
+    saved = false;
+  }
+  if (saved && storage) {
+    try {
+      // Lower keys say nothing the new one does not: keep the store small.
+      for (const lower of floorKeys(storage, userId, projectId)) {
+        if (lower.sequence < sequence) storage.removeItem(lower.key);
+      }
+    } catch {
+      /* Best effort. */
+    }
+    return;
+  }
+  floorsHere.set(key, Math.max(floorsHere.get(key) ?? 0, sequence));
+  try {
+    const grant = parseGrant(
+      storage?.getItem(ASSISTANT_GRANT_PREFIX + key) ?? null
+    );
+    if (!grant || grant.sequence < sequence) {
+      storage?.removeItem(ASSISTANT_GRANT_PREFIX + key);
+    }
+  } catch {
+    try {
+      storage?.removeItem(ASSISTANT_GRANT_PREFIX + key);
+    } catch {
+      /* Held in this tab above; unreadable storage reads as no grant. */
+    }
+  }
 }
 
 /**
@@ -167,11 +236,16 @@ export function assistantGrant(
   try {
     const grant = parseGrant(storage.getItem(ASSISTANT_GRANT_PREFIX + key));
     if (!grant) return null;
-    if (storage.getItem(ASSISTANT_STOP_PREFIX + key) !== grant.stop) {
+    if (
+      (storage.getItem(ASSISTANT_STOP_PREFIX + key) ?? NO_STOP) !== grant.stop
+    ) {
       return null;
     }
-    const pin = consentPin(storage, userId, projectId);
-    return pin !== null && grant.sequence >= pin ? grant : null;
+    const floor = Math.max(
+      floorsHere.get(key) ?? 0,
+      ...floorKeys(storage, userId, projectId).map((entry) => entry.sequence)
+    );
+    return grant.sequence >= floor ? grant : null;
   } catch {
     return null;
   }
@@ -210,11 +284,8 @@ export function beginAssistantAllow(
   const pendingKey = ASSISTANT_ALLOW_PENDING_PREFIX + key;
   const id = newId();
   try {
-    // The generation key exists before any grant does, so a Stop only
-    // ever rewrites it in place.
-    if (storage.getItem(stopKey) === null) storage.setItem(stopKey, newId());
-    const stop = storage.getItem(stopKey);
-    if (!stop) return null;
+    // Read, never written here: only a Stop writes the generation.
+    const stop = storage.getItem(stopKey) ?? NO_STOP;
     storage.setItem(pendingKey, id);
     return storage.getItem(pendingKey) === id
       ? { userId, projectId, id, stop }
@@ -240,7 +311,7 @@ export function completeAssistantAllow(
   const stopKey = ASSISTANT_STOP_PREFIX + key;
   const unstopped = () =>
     storage.getItem(pendingKey) === ticket.id &&
-    storage.getItem(stopKey) === ticket.stop;
+    (storage.getItem(stopKey) ?? NO_STOP) === ticket.stop;
   try {
     if (!unstopped()) return null;
     const grant: AssistantGrant = {
@@ -334,11 +405,12 @@ export function isAssistantGrantKey(key: string | null): boolean {
     key.startsWith(ASSISTANT_GRANT_PREFIX) ||
     key.startsWith(ASSISTANT_ALLOW_PENDING_PREFIX) ||
     key.startsWith(ASSISTANT_STOP_PREFIX) ||
-    key.startsWith('openzcad:e2ee-assistant-consent-pin:v1:')
+    key.startsWith(ASSISTANT_CONSENT_FLOOR_PREFIX)
   );
 }
 
 /** Tests only: forget this tab's in-memory Stops, as a reload would. */
 export function resetAssistantGrantMemoryForTests(): void {
   stoppedHere.clear();
+  floorsHere.clear();
 }
