@@ -105,6 +105,12 @@ export interface TileReorderOptions {
   canPlaceBeside?(draggedId: string, targetId: string): boolean;
   /** Saves a drop into a target `dropInto` named. */
   onDropInto?(draggedId: string, target: string): void | Promise<unknown>;
+  /**
+   * The direction tiles run in: across a grid (`x`, the default) a tile lands
+   * before or after the one under the pointer by its left and right halves;
+   * down a single-column list (`y`), by its top and bottom halves.
+   */
+  axis?: 'x' | 'y';
 }
 
 /**
@@ -128,7 +134,8 @@ export function useTileReorder({
   onCommit,
   dropInto,
   canPlaceBeside,
-  onDropInto
+  onDropInto,
+  axis = 'x'
 }: TileReorderOptions) {
   const [order, setOrder] = useState<string[] | null>(null);
   const [moved, setMoved] = useState<TileMoves>(NO_MOVES);
@@ -152,6 +159,7 @@ export function useTileReorder({
     dropInto,
     canPlaceBeside,
     onDropInto,
+    axis,
     order,
     moved
   });
@@ -163,6 +171,7 @@ export function useTileReorder({
     dropInto,
     canPlaceBeside,
     onDropInto,
+    axis,
     order,
     moved
   };
@@ -314,7 +323,10 @@ export function useTileReorder({
         return;
       }
       const box = under.getBoundingClientRect();
-      const after = current.x > box.left + box.width / 2;
+      const after =
+        latest.current.axis === 'y'
+          ? current.y > box.top + box.height / 2
+          : current.x > box.left + box.width / 2;
       next.splice(after ? to + 1 : to, 0, current.id);
       group = groupOf(target);
     } else {

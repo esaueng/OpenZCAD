@@ -761,6 +761,40 @@
   font-weight: var(--fw-medium);
 }
 
+/* The heading's own button collapses the list: it wears the heading's type,
+   with a chevron that points down while the list shows. */
+.start-learn-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  color: inherit;
+  background: none;
+  border: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+
+.start-learn-toggle:hover {
+  color: var(--color-text);
+}
+
+.start-learn-chevron {
+  flex: none;
+  transition: rotate 120ms ease;
+}
+
+.start-learn-toggle[aria-expanded='true'] .start-learn-chevron {
+  rotate: 90deg;
+}
+
+.demo-list[hidden] {
+  display: none;
+}
+
 /* As a list in the column, the demos' heading is the column's eyebrow. */
 @media (min-width: 901px) {
   .start-screen:not(.is-fresh) .start-learn-head h2 {
@@ -3098,8 +3132,27 @@
   color: var(--color-accent);
 }
 
-:root.is-tile-dragging .start-folder-link:hover {
+/* A project dragged over a folder row would go into it; while the rows
+   themselves are being reordered there is nothing to go into. */
+:root.is-tile-dragging
+  .start-folders-list:not(.is-reordering)
+  .start-folder-link:hover {
   border-color: var(--color-accent);
+}
+
+/* A folder row being dragged rides above the others under the pointer,
+   which looks through it to the row it would take the place of. */
+.start-folder-row.is-dragging {
+  position: relative;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.start-folder-row.is-dragging .start-folder-link {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border-color: var(--color-accent-border);
+  box-shadow: var(--shadow-popover);
 }
 
 .start-folder-link-name {

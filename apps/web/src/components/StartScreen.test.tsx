@@ -1893,6 +1893,104 @@ describe('StartScreen folders and selection', () => {
     );
   });
 
+  describe('folder rows in the column', () => {
+    function seedFolders() {
+      localStorage.setItem(
+        'openzcad.library.folders.v1:device',
+        JSON.stringify({
+          folders: ['Alpha', 'Bravo', 'Charlie'].map((name, index) => ({
+            id: `folder-${index}`,
+            name,
+            projectIds: [parts[index]!.projectId],
+            pinned: false,
+            createdAt: '2026-10-29T00:00:00.000Z'
+          }))
+        })
+      );
+    }
+    const rowNames = () =>
+      Array.from(
+        document.querySelectorAll('.start-folders-list .start-folder-link-name')
+      ).map((element) => element.textContent);
+    const storedIds = () =>
+      (
+        JSON.parse(
+          localStorage.getItem('openzcad.library.folders.v1:device')!
+        ) as { folders: { id: string }[] }
+      ).folders.map((folder) => folder.id);
+
+    it('moves a folder row with Alt and the up and down arrows', () => {
+      seedFolders();
+      renderStartScreen({ projects: parts });
+      expect(rowNames()).toEqual(['Alpha', 'Bravo', 'Charlie']);
+      const alpha = () => screen.getByRole('button', { name: /^Alpha/ });
+
+      fireEvent.keyDown(alpha(), { key: 'ArrowDown', altKey: true });
+      expect(rowNames()).toEqual(['Bravo', 'Alpha', 'Charlie']);
+      expect(storedIds()).toEqual(['folder-1', 'folder-0', 'folder-2']);
+
+      // Plain arrows and a move off either end change nothing.
+      fireEvent.keyDown(alpha(), { key: 'ArrowDown' });
+      fireEvent.keyDown(screen.getByRole('button', { name: /^Bravo/ }), {
+        key: 'ArrowUp',
+        altKey: true
+      });
+      expect(rowNames()).toEqual(['Bravo', 'Alpha', 'Charlie']);
+    });
+
+    it('reorders folder rows by dragging them down the list', () => {
+      seedFolders();
+      renderStartScreen({ projects: parts });
+      const rows = Array.from(
+        document.querySelectorAll<HTMLElement>('.start-folder-row')
+      );
+      const [alpha, bravo] = rows.map((row) =>
+        row.querySelector<HTMLButtonElement>('.start-folder-link')
+      );
+      const original = document.elementFromPoint;
+      // Over Bravo's lower half: rows are a column, so the drop lands by
+      // height. Its left edge (x = 0) would mean "before" across a grid.
+      document.elementFromPoint = () => bravo!;
+      try {
+        fireEvent.pointerDown(alpha!, {
+          button: 0,
+          pointerId: 7,
+          pointerType: 'mouse',
+          clientX: 0,
+          clientY: 0
+        });
+        act(() => {
+          window.dispatchEvent(
+            new PointerEvent('pointermove', {
+              pointerId: 7,
+              clientX: 0,
+              clientY: 20
+            })
+          );
+        });
+        expect(rows[0]).toHaveClass('is-dragging');
+        act(() => {
+          window.dispatchEvent(
+            new PointerEvent('pointerup', {
+              pointerId: 7,
+              clientX: 0,
+              clientY: 20
+            })
+          );
+        });
+      } finally {
+        document.elementFromPoint = original;
+      }
+      expect(storedIds()).toEqual(['folder-1', 'folder-0', 'folder-2']);
+      expect(rowNames()).toEqual(['Bravo', 'Alpha', 'Charlie']);
+      // The click that ends the drag does not open the folder.
+      fireEvent.click(alpha!);
+      expect(
+        screen.queryByRole('heading', { level: 2, name: 'Alpha' })
+      ).toBeNull();
+    });
+  });
+
   it('looks through folders while searching', () => {
     seedFolder([parts[1]!.projectId]);
     renderStartScreen({ projects: parts });
@@ -2523,6 +2621,45 @@ describe('StartScreen permanent deletion', () => {
 
 describe('StartScreen sample reset and folders', () => {
   afterEach(() => localStorage.clear());
+
+  it('collapses the example projects and remembers it on this device', () => {
+    const { unmount } = renderStartScreen({ demos: DEMO_DEFINITIONS });
+    const toggle = screen.getByRole('button', { name: 'Example projects' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(
+      screen.getByRole('button', { name: /^Open demo: Scissors/ })
+    ).toBeVisible();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(
+      screen.queryByRole('button', { name: /^Open demo: Scissors/ })
+    ).toBeNull();
+    unmount();
+
+    renderStartScreen({ demos: DEMO_DEFINITIONS });
+    const again = screen.getByRole('button', { name: 'Example projects' });
+    expect(again).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(again);
+    expect(
+      screen.getByRole('button', { name: /^Open demo: Scissors/ })
+    ).toBeVisible();
+    expect(localStorage.getItem('openzcad.start.examplesCollapsed')).toBeNull();
+  });
+
+  it('always shows the examples on the first run, with no toggle', () => {
+    localStorage.setItem('openzcad.start.examplesCollapsed', '1');
+    renderStartScreen({ demos: DEMO_DEFINITIONS, projects: [] });
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Example projects' })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Example projects' })
+    ).toBeNull();
+    expect(
+      screen.getByRole('button', { name: /^Open demo: Scissors/ })
+    ).toBeInTheDocument();
+  });
 
   it('offers the scissors assembly without promising unavailable design revisions', () => {
     const onOpenDemo = vi.fn();
