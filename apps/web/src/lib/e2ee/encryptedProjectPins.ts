@@ -786,7 +786,11 @@ export function localStorageEncryptedProjectPins(
       if (!PROJECT_ID.test(projectId)) return false;
       // Reset in another tab: neither counted nor made again until a reload.
       if (resetElsewhere(projectId)) return false;
-      if (stored(projectId)) {
+      const saved = stored(projectId);
+      // Reset in another tab during the read: a stale tab holds the
+      // project, but its pin is no longer durable.
+      if (resetElsewhere(projectId)) return false;
+      if (saved) {
         own.add(projectId);
         return true;
       }

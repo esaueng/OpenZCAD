@@ -627,6 +627,22 @@ describe('encrypted project pins', () => {
       });
     }
 
+    it('never reports a pin durable once a reset landed while it was read', () => {
+      for (let at = 1; at <= 24; at += 1) {
+        const { reader, result, landed, reads } = withResetAt(
+          at,
+          (pins) => pins.pinDurably(projectId),
+          (pins) => {
+            pins.pin(projectId);
+          }
+        );
+        if (!landed) continue;
+        // Durable only where the reset came after the last read it made.
+        if (result) expect(at).toBe(reads);
+        else expect(reader.resetElsewhere(projectId)).toBe(true);
+      }
+    });
+
     const writers: [string, (pins: EncryptedProjectPinStore) => boolean][] = [
       ['a pin', (pins) => pins.pin(projectId)],
       ['an unfinished switch', (pins) => pins.markCutoverUnresolved(projectId)],
