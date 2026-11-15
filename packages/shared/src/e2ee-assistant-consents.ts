@@ -16,7 +16,7 @@ import { sha256HexSync } from './sha256-sync';
  * pins the two together): every browser then asks again, and the Worker
  * stops honouring consent given to an older copy.
  */
-export const ASSISTANT_CONSENT_COPY_VERSION = 2;
+export const ASSISTANT_CONSENT_COPY_VERSION = 3;
 
 /**
  * The Worker refuses an encrypted project's assistant request with this

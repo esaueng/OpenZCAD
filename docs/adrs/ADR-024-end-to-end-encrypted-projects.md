@@ -1470,6 +1470,83 @@ that may be "Keep both" or recovery copies of them.
   (`E2EE_PREFERENCE_UNVERIFIED`) rather than reading as no. A folder sync
   that meets the refusal mid-visit seals from its next round.
 
+### Account settings
+
+Settings are the user's own words and habits: custom assistant
+instructions, units, theme, keymap, viewport and sketching preferences. An
+account whose library is encrypted (the rule above) stores them sealed.
+
+- **What stays readable.** The Worker acts on two parts of the settings: the
+  sharing switch, which authorizes invitations and live connections, and the
+  assistant's route (on or off, whose credential, provider, endpoint, model,
+  reasoning effort, output and time limits), which it uses to call the
+  provider. `settings_json` holds only those (`accountServerSettings`),
+  every other field at its default.
+- **Sealed record.** The whole settings are one record in
+  `user_settings.sealed_settings` (migration 0057), with the library-folder
+  layout under its own key: HKDF-SHA-256 of the account key, empty salt, info
+  `OpenZCAD E2EE v1 account settings key`, additional-data label
+  `OpenZCAD E2EE v1 account settings`. Plaintext is at most 32 KiB. The
+  shared code is `sealed-records.ts`; the folder record now uses it too,
+  with its bytes unchanged (pinned by its fixed vector).
+- **Reads.** The browser opens the record and takes the readable part from
+  `settings_json`, which wins for the fields the Worker acts on. A record it
+  cannot use (another account key, a sequence below its pin, failed
+  authentication), or locked keys, leaves this device's own values for the
+  sealed fields. Readable settings left from before the account encrypted
+  are sealed by the first read that holds the account key.
+- **Writes.** The browser sends the readable part and a new record, at a
+  sequence above both its own pin and every record it has seen the account
+  hold (read from the header, which needs no key), so no device reuses or
+  lowers a sequence. A device with locked keys sends the readable part alone
+  and the Worker keeps the stored record; while the account's settings are
+  still readable from before and unsealed, it refuses that write instead
+  (`SETTINGS_SEAL_REQUIRED`), since it would reset them for every device.
+  The Worker refuses a write that carries more than the readable part, or
+  that omits fields it would fill from the stored copy
+  (`SETTINGS_ENCRYPTION_REQUIRED`); an account that stores settings readable
+  drops any sealed record on its next write.
+- **Never sealing over a record it has not opened.** Each device keeps,
+  per account in device storage, the record the account held when it last
+  read or wrote, that record's settings once opened, and what it showed in
+  their place while it could not open them, with the settings revision it
+  saw the record at. A sealed save replaces the account's record only after
+  this device opened it at the revision the save names (the Worker's
+  revision check then makes sure it is still the one replaced; a revision
+  learned elsewhere, such as from a credential change, sends the device to
+  read the account first, and a refresh that cannot confirm the revision
+  stops the save as a conflict). While the device shows its own values in
+  place of a record it could not open, a save merges onto the account's
+  settings: each field changed since what it showed or last sent keeps the
+  device's value, every other field takes the account's. That ends once the
+  page adopts an account copy it opened or a save catches up. Two devices
+  that can both open the record follow last-writer-wins on the whole
+  settings, as accounts that store them readable always have. A save that
+  merged becomes the new base, so an edit queued behind it merges too, and the
+  state survives a reload; the page folds the merged result into what it
+  shows, keeping edits made meanwhile. A record sealed before an account-key
+  rotation is opened with that older key through the account-key history
+  (each replaced key is wrapped under its successor) and resealed under the
+  current one. A device that cannot open the record (keys locked, behind its
+  pin, altered, or a key it cannot reach) saves the readable part only and
+  reports the rest as kept on this device (`SETTINGS_SEAL_DEFERRED`), so its
+  edit stays pending instead of reading as saved. The device keeps one copy
+  of the settings, so once another account reads or saves them there, every
+  other account's state is dropped rather than merged against a copy that is
+  no longer its own.
+- **Unanswered library rule.** Only a Worker without the encryption routes
+  reads as "not encrypted"; one that cannot be reached or fails refuses the
+  save (`E2EE_PREFERENCE_UNVERIFIED`), so settings never leave readable on a
+  guess.
+- **Custom instructions** travel with each assistant request
+  (`customInstructions`) instead of being read from the stored settings, so
+  the Worker still adds them for the provider. The request gained a field,
+  so the consent copy lists it and moves to version 3, which asks again on
+  every encrypted project; the transit sentence no longer says the server
+  adds them from settings.
+- **What the server sees.** The readable part, the record's length, write
+  times, revision and the account-key commitment in its header.
+
 ### Shelf state
 
 An audit found the shelf state of every project (pinned, manual order,
