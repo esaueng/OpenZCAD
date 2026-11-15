@@ -32,6 +32,7 @@ import {
   loadLocalSaveState,
   loadProjectMeasurements,
   loadProjectThumbnail,
+  localDeletionFence,
   saveAccountThumbnail,
   saveProjectMeasurements,
   saveProjectThumbnail,
@@ -1427,7 +1428,10 @@ describe('project thumbnails', () => {
 
     it('is kept when the device had no card', async () => {
       await expect(
-        saveAccountThumbnail('project_card', account, { replaces: null })
+        saveAccountThumbnail('project_card', account, {
+          replaces: null,
+          deletionFence: 0
+        })
       ).resolves.toBe(true);
       expect(await loadProjectThumbnail('project_card')).toEqual({
         projectId: 'project_card',
@@ -1439,7 +1443,10 @@ describe('project thumbnails', () => {
       await saveProjectThumbnail('project_card', card);
       const replaces = await loadProjectThumbnail('project_card');
       await expect(
-        saveAccountThumbnail('project_card', account, { replaces })
+        saveAccountThumbnail('project_card', account, {
+          replaces,
+          deletionFence: 0
+        })
       ).resolves.toBe(true);
       expect(await loadProjectThumbnail('project_card')).toMatchObject(account);
     });
@@ -1449,7 +1456,10 @@ describe('project thumbnails', () => {
       // the download landing: the older account image must not replace it.
       await saveProjectThumbnail('project_card', card);
       await expect(
-        saveAccountThumbnail('project_card', account, { replaces: null })
+        saveAccountThumbnail('project_card', account, {
+          replaces: null,
+          deletionFence: 0
+        })
       ).resolves.toBe(false);
       expect(await loadProjectThumbnail('project_card')).toEqual({
         projectId: 'project_card',
@@ -1457,10 +1467,25 @@ describe('project thumbnails', () => {
       });
     });
 
+    it('does not bring back the card of a project deleted while it downloaded', async () => {
+      // Review: deletion removes the card, so "replaces nothing" still held
+      // and a late download wrote a deleted project's image back to disk.
+      const fence = localDeletionFence('project_card');
+      await deleteLocalProject('project_card');
+      await expect(
+        saveAccountThumbnail('project_card', account, {
+          replaces: null,
+          deletionFence: fence
+        })
+      ).resolves.toBe(false);
+      expect(await loadProjectThumbnail('project_card')).toBeNull();
+    });
+
     it('writes nothing once its caller stops', async () => {
       await expect(
         saveAccountThumbnail('project_card', account, {
           replaces: null,
+          deletionFence: 0,
           shouldWrite: () => false
         })
       ).resolves.toBe(false);

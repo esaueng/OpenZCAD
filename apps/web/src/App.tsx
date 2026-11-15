@@ -1681,6 +1681,7 @@ import {
   saveLocalProjectOrganization,
   saveLocalProjectOrganizationIfCurrent,
   saveProjectMeasurements,
+  localDeletionFence,
   saveAccountThumbnail,
   saveProjectThumbnail,
   saveLocalProject,
@@ -4082,6 +4083,7 @@ export function App() {
   const loadThumbnail = useCallback(
     (project: ProjectSummary): Promise<string | null | undefined> => {
       const keyRevision = getKeySessionRevision();
+      const deletionFence = localDeletionFence(project.projectId);
       return resolveShelfThumbnail(project, {
         loadCached: loadProjectThumbnail,
         download: async (artifactId) => {
@@ -4095,6 +4097,7 @@ export function App() {
         remember: (projectId, thumbnail, replaces) =>
           saveAccountThumbnail(projectId, thumbnail, {
             replaces,
+            deletionFence,
             shouldWrite: () =>
               (project.storageFormat !== 2 &&
                 !isEncryptedProject(project.projectId)) ||

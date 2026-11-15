@@ -1520,6 +1520,13 @@ export function saveAccountThumbnail(
   thumbnail: Omit<ProjectThumbnailRecord, 'projectId'>,
   options: {
     replaces: ProjectThumbnailRecord | null;
+    /**
+     * {@link localDeletionFence} as it stood when the download began. A
+     * project deleted since then is not written back: its thumbnail is gone
+     * by then, so the comparison above alone would let a late download put
+     * a deleted (and possibly encrypted) project's image back on disk.
+     */
+    deletionFence: number;
     shouldWrite?: () => boolean;
   }
 ): Promise<boolean> {
@@ -1532,6 +1539,7 @@ export function saveAccountThumbnail(
       const current = (await settled(thumbnails.get(projectId))) as
         ProjectThumbnailRecord | undefined;
       if (!sameThumbnailRecord(current ?? null, options.replaces)) return false;
+      if (localDeletionFence(projectId) !== options.deletionFence) return false;
       if (options.shouldWrite && !options.shouldWrite()) return false;
       await settled(thumbnails.put({ ...thumbnail, projectId }));
       return true;
@@ -1703,11 +1711,26 @@ export function deleteLocalProject(projectId: string): Promise<void> {
   return deleteLocalProjectWhen(projectId).then(() => undefined);
 }
 
+/**
+ * Counts this page's deletions of each project. A deletion bumps it before
+ * its transaction opens, so a write fenced on an earlier value that commits
+ * after the deletion — necessarily later, since the two share a store — sees
+ * the change and stands down. Page-local: a deletion in another tab is not
+ * fenced here.
+ */
+const localDeletions = new Map<string, number>();
+
+/** See {@link saveAccountThumbnail}'s `deletionFence`. */
+export function localDeletionFence(projectId: string): number {
+  return localDeletions.get(projectId) ?? 0;
+}
+
 function deleteLocalProjectWhen(
   projectId: string,
   eligible?: (record: ProjectMetaRecord | undefined) => boolean,
   retainPendingOrganization = false
 ): Promise<boolean> {
+  localDeletions.set(projectId, localDeletionFence(projectId) + 1);
   const storeNames = [
     BACKUP_STORE_NAME,
     STORE_NAME,
