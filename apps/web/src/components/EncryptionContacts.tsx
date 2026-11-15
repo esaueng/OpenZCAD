@@ -22,6 +22,7 @@ import {
   ownVerificationCode,
   parseContactScan,
   recordKeyChange,
+  sealContactsList,
   untrustContact,
   verifyContact,
   type ContactStanding,
@@ -70,6 +71,7 @@ export function EncryptionContacts({
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState<ContactView | null>(null);
   const [own, setOwn] = useState<{ hash: Bytes; code: string } | null>(null);
+  const [sealing, setSealing] = useState(false);
   const accountKey = toHex(account.list.headHash);
 
   const run = useCallback(
@@ -141,6 +143,9 @@ export function EncryptionContacts({
     book?.contacts.filter((contact) => contact.standing === 'verified')
       .length ?? 0;
   const unconfirmed = book !== null && !book.listConfirmed;
+  // A list an older build stored in plaintext (ADR-024 amendment
+  // 2026-11-14): sealed at the next signature, or now on request.
+  const plaintextList = book?.list?.sealed === null;
 
   return (
     <>
@@ -184,6 +189,46 @@ export function EncryptionContacts({
             people you verified elsewhere show as seen. Confirm it from another
             of your devices.
           </Notice>
+        ) : null}
+        {plaintextList ? (
+          <Notice
+            tone="info"
+            action={
+              sealing ? undefined : (
+                <button
+                  className="secondary"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setSealing(true)}
+                >
+                  <ShieldCheck size={14} aria-hidden="true" />
+                  Seal contacts list
+                </button>
+              )
+            }
+          >
+            Your contacts list is stored where the server can read whom you
+            verified. Seal it under your account key; nothing in it changes. It
+            is also sealed the next time you verify someone.
+          </Notice>
+        ) : null}
+        {plaintextList && sealing && book ? (
+          <AuthorizeSignature
+            title="Seal your contacts list"
+            actionLabel="Seal with recovery key"
+            busy={busy}
+            canUsePasskey={canUsePasskey}
+            onCancel={() => setSealing(false)}
+            onAuthorize={async (authorization) => {
+              const sealed = await run(async () => {
+                setBook(
+                  await sealContactsList(ctx, account, book, authorization)
+                );
+                notifyContactsChanged();
+              });
+              if (sealed) setSealing(false);
+            }}
+          />
         ) : null}
         <SettingRow
           title="Your contact code"

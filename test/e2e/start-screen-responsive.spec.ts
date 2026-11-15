@@ -82,6 +82,26 @@ test(
   }
 );
 
+test('tabbing from the name to the units moves the focus mark', async ({
+  page
+}) => {
+  // 14 Nov 2026 review: both sit in one ringed box, and the units showed no
+  // focus of their own.
+  await openLibrary(page, 1440);
+  const units = page.getByRole('combobox', { name: 'Units' });
+  const wash = () =>
+    units.evaluate((element) => getComputedStyle(element).backgroundColor);
+  await page.getByLabel('Project name').focus();
+  const resting = await wash();
+  await page.keyboard.press('Tab');
+  await expect(units).toBeFocused();
+  // The wash fades in and out with the fields' background transition.
+  await expect.poll(wash).not.toBe(resting);
+  await page.keyboard.press('Shift+Tab');
+  await expect(page.getByLabel('Project name')).toBeFocused();
+  await expect.poll(wash).toBe(resting);
+});
+
 for (const width of [1200, 1000, 901, 700, 561]) {
   test(`the shelf toolbar stays on one line at ${width}px`, async ({
     page

@@ -1,18 +1,22 @@
 import {
   E2eeError,
+  accountKeySequence,
   contactDeviceListPin,
   contactVerificationCode,
   contactsEntryHash,
+  encodeContactsEntry,
   fromBase64Url,
   fromHex,
   identityFingerprint,
   isE2eeError,
+  isSealedContactsRecord,
   nextContactsEntry,
-  signContactsEntry,
+  sealContactsEntries,
   toBase64Url,
   toHex,
   verifyContactsList,
   verifyDeviceList,
+  verifySealedContactsList,
   type Bytes,
   type ContactsChange,
   type DeviceListPin,
@@ -26,16 +30,20 @@ import type {
   E2eeContactDeviceListResponse,
   E2eeContactPerson,
   E2eeContactsEntryRecord,
-  E2eeContactsResponse
+  E2eeContactsResponse,
+  E2eeResealContactsRequest
 } from '@openzcad/shared';
 import { desktopFetch } from '../desktopBridge';
 import {
+  EncryptionFlowError,
+  openAccountKeyChain,
   withIdentityKey,
   type AccountView,
   type E2eeContext,
   type UnlockAuthorization
 } from './accountKeys';
 import { callE2eeRoute, type E2eeFetch } from './e2eeApi';
+import { unlockedAccount } from './unlockedKeys';
 import {
   EMPTY_CONTACTS_SEQUENCE,
   contactPins,
@@ -72,12 +80,21 @@ import {
  * the user's devices confirms the head (the approval exchange, which also
  * re-confirms an already certified device) or the user compares codes with
  * that contact again on this browser (ADR-024, verified pins).
+ *
+ * The list travels sealed under the account key (ADR-024 amendment
+ * 2026-11-14), so reading it needs this device unlocked. Records sealed
+ * before an account-key rotation open through the account-key history. A
+ * plaintext list from before sealing is still read, and is resealed, with
+ * the same entries, at the next signature (or `sealContactsList`).
  */
 
 export interface ContactsApi {
   contacts(): Promise<E2eeContactsResponse>;
   appendContacts(
     request: E2eeAppendContactsRequest
+  ): Promise<E2eeContactsResponse>;
+  resealContacts(
+    request: E2eeResealContactsRequest
   ): Promise<E2eeContactsResponse>;
   deviceList(userId: string): Promise<E2eeContactDeviceListResponse>;
 }
@@ -89,6 +106,8 @@ export function createContactsApi(
     contacts: () => callE2eeRoute(fetcher, '/api/e2ee/contacts'),
     appendContacts: (request) =>
       callE2eeRoute(fetcher, '/api/e2ee/contacts', 'POST', request),
+    resealContacts: (request) =>
+      callE2eeRoute(fetcher, '/api/e2ee/contacts', 'PUT', request),
     deviceList: (userId) =>
       callE2eeRoute(
         fetcher,
@@ -105,7 +124,9 @@ export type ContactsErrorCode =
   /** The account's keys changed meanwhile; reload. */
   | 'stale'
   /** The contact has no keys, or no verified key to act on. */
-  | 'not-verifiable';
+  | 'not-verifiable'
+  /** The list is sealed under the account key, and this device is locked. */
+  | 'locked';
 
 export class ContactsError extends Error {
   constructor(
@@ -222,6 +243,42 @@ function refused(error: unknown, what: string): never {
 }
 
 /**
+ * The account key a sealed record names by its `accountKeySequence`: the
+ * current one, or an older one through the account-key history. Returns a
+ * copy the caller zeroes.
+ */
+async function openListKey(
+  ctx: ContactsContext,
+  account: AccountView,
+  keySequence: number
+): Promise<Uint8Array> {
+  try {
+    return await openAccountKeyChain(ctx.keys, account, keySequence);
+  } catch (error) {
+    if (error instanceof EncryptionFlowError) {
+      if (error.code === 'not-unlocked') {
+        // Unlocked, but under another account key: a rotation meanwhile.
+        if (unlockedAccount(ctx.keys.userId)) {
+          throw new ContactsError(
+            'stale',
+            'Your encryption keys changed meanwhile. Reload and try again.'
+          );
+        }
+        throw new ContactsError(
+          'locked',
+          'Unlock this device to read or change your contacts list: it is sealed under your account key.'
+        );
+      }
+      throw new ContactsError(
+        'invalid',
+        `The contacts list did not open: ${error.message}`
+      );
+    }
+    throw error;
+  }
+}
+
+/**
  * Verifies the server's copy of this account's contacts list against the
  * account's identity and this browser's pin, then moves the pin forward.
  * With no pin (a browser enrolled with only a passkey or the recovery key)
@@ -259,14 +316,22 @@ async function acceptList(
       refused(new E2eeError('chain-broken', 'empty'), 'contacts list');
     return { list: null, confirmed };
   }
+  const chain = response.entries.map(signedOf);
   let list: VerifiedContactsList;
   try {
-    list = await verifyContactsList(
-      account.list.identityKey,
-      response.entries.map(signedOf),
-      pin ? { pin } : {}
-    );
+    list = isSealedContactsRecord(chain[0]!.entry)
+      ? await verifySealedContactsList(account.list.identityKey, chain, {
+          userId,
+          openKey: (sequence) => openListKey(ctx, account, sequence),
+          ...(pin ? { pin } : {})
+        })
+      : await verifyContactsList(
+          account.list.identityKey,
+          chain,
+          pin ? { pin } : {}
+        );
   } catch (error) {
+    if (error instanceof ContactsError) throw error;
     refused(error, 'contacts list');
   }
   if (list.userId !== userId) {
@@ -583,9 +648,11 @@ export function verifiedEncryptionKey(view: ContactView): Uint8Array | null {
 }
 
 /**
- * Signs `changes` into the contacts list one entry at a time, each checked
- * against the list the server returns: it must extend the pin this browser
- * held and hold the exact entry just signed. Returns the updated book.
+ * Signs `changes` into the contacts list one entry at a time, each sealed
+ * under the current account key and checked against the list the server
+ * returns: it must extend the pin this browser held and hold the exact
+ * entry just signed. A plaintext list from before sealing is resealed
+ * first, in the same identity unlock. Returns the updated book.
  */
 async function signEntries(
   ctx: ContactsContext,
@@ -601,37 +668,121 @@ async function signEntries(
     throw new ContactsError('stale', 'Reload your contacts and try again.');
   }
   const userId = ctx.keys.userId;
-  await withIdentityKey(ctx.keys, account, authorization, async (identity) => {
-    let list = book.list;
-    for (const change of changes) {
-      const entry = nextContactsEntry(list, userId, {
-        issuedAt: now(ctx),
-        ...change
-      });
-      const signed = await signContactsEntry(identity, entry);
-      requireActive(ctx);
-      const response = await ctx.api.appendContacts({
-        generation: account.generation,
-        entry: toBase64Url(signed.entry),
-        signature: toBase64Url(signed.signature)
-      });
-      requireActive(ctx);
-      const accepted = (await acceptList(ctx, account, response)).list;
-      const written = accepted?.entries[entry.sequence];
-      if (
-        !accepted ||
-        !written ||
-        toHex(written.hash) !== toHex(await contactsEntryHash(signed.entry))
-      ) {
-        throw new ContactsError(
-          'invalid',
-          'The server answered without the contacts entry just signed.'
-        );
+  // Every record is sealed under the current key, so a device removed
+  // before this write cannot read it. Opened before the identity prompt,
+  // so a locked device is told before the passkey or recovery key is asked.
+  const keySequence = accountKeySequence(account.list);
+  const accountKey = await openListKey(ctx, account, keySequence);
+  try {
+    await withIdentityKey(
+      ctx.keys,
+      account,
+      authorization,
+      async (identity) => {
+        let list = book.list;
+        if (list && !list.sealed) {
+          list = await reseal(ctx, account, list, identity, {
+            accountKey,
+            keySequence
+          });
+        }
+        for (const change of changes) {
+          const entry = nextContactsEntry(list, userId, {
+            issuedAt: now(ctx),
+            ...change
+          });
+          const [signed] = await sealContactsEntries(identity, accountKey, {
+            userId,
+            accountKeySequence: keySequence,
+            previous: list?.sealed ?? null,
+            entries: [entry]
+          });
+          requireActive(ctx);
+          const response = await ctx.api.appendContacts({
+            generation: account.generation,
+            entry: toBase64Url(signed!.entry),
+            signature: toBase64Url(signed!.signature)
+          });
+          requireActive(ctx);
+          const accepted = (await acceptList(ctx, account, response)).list;
+          const written = accepted?.entries[entry.sequence];
+          if (
+            !accepted?.sealed ||
+            !written ||
+            toHex(written.hash) !==
+              toHex(await contactsEntryHash(encodeContactsEntry(entry)))
+          ) {
+            throw new ContactsError(
+              'invalid',
+              'The server answered without the contacts entry just signed.'
+            );
+          }
+          list = accepted;
+        }
       }
-      list = accepted;
-    }
-  });
+    );
+  } finally {
+    accountKey.fill(0);
+  }
   return loadContacts(ctx, account);
+}
+
+/**
+ * Replaces a plaintext list with the same entries sealed (ADR-024
+ * amendment 2026-11-14). The entries, and so every pin and approval head,
+ * stay exactly as they were; what comes back must still be this browser's
+ * pinned list, now sealed, or nothing is trusted from it.
+ */
+async function reseal(
+  ctx: ContactsContext,
+  account: AccountView,
+  list: VerifiedContactsList,
+  identity: CryptoKey,
+  key: { readonly accountKey: Uint8Array; readonly keySequence: number }
+): Promise<VerifiedContactsList> {
+  const records = await sealContactsEntries(identity, key.accountKey, {
+    userId: ctx.keys.userId,
+    accountKeySequence: key.keySequence,
+    previous: null,
+    entries: list.entries.map(({ entry }) => entry)
+  });
+  requireActive(ctx);
+  const response = await ctx.api.resealContacts({
+    generation: account.generation,
+    replaces: toHex(list.headHash),
+    entries: records.map((record) => ({
+      entry: toBase64Url(record.entry),
+      signature: toBase64Url(record.signature)
+    }))
+  });
+  requireActive(ctx);
+  const accepted = (await acceptList(ctx, account, response)).list;
+  if (
+    !accepted?.sealed ||
+    accepted.pin.sequence !== list.pin.sequence ||
+    toHex(accepted.headHash) !== toHex(list.headHash)
+  ) {
+    throw new ContactsError(
+      'invalid',
+      'The server answered without the contacts list just sealed.'
+    );
+  }
+  return accepted;
+}
+
+/**
+ * Seals a plaintext contacts list from before sealing, without changing
+ * it: the same entries, under the account key, so the server no longer
+ * reads who this account verified. Asks for a passkey or the recovery key.
+ */
+export async function sealContactsList(
+  ctx: ContactsContext,
+  account: AccountView,
+  book: ContactsBook,
+  authorization: UnlockAuthorization
+): Promise<ContactsBook> {
+  if (!book.list || book.list.sealed) return loadContacts(ctx, account);
+  return signEntries(ctx, account, book, [], authorization);
 }
 
 /**

@@ -461,6 +461,26 @@ export function formatLastEdited(updatedAt: string): string {
   });
 }
 
+/**
+ * A recovery copy's date, ahead of its time ("Nov 12" · "7:00 AM"). The time
+ * is what tells a part's copies apart, and with the year as well the date
+ * clipped to "Nov 12, …" on a card. The year shows only when it is not this
+ * one, and the tooltip keeps the exact moment.
+ */
+export function formatRecoveryDate(
+  updatedAt: string,
+  now: Date = new Date()
+): string {
+  const date = new Date(updatedAt);
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    ...(date.getFullYear() === now.getFullYear()
+      ? {}
+      : { year: 'numeric' as const })
+  });
+}
+
 const SHELVES: ReadonlyArray<{
   status: ProjectStatus;
   label: string;
@@ -613,6 +633,8 @@ export function StartScreen({
 }: StartScreenProps) {
   const projects = scopePending ? [] : discoveredProjects;
   const settingsKey = useKeymap().label('app-settings');
+  // Prefixes the ids the shelf's tiles describe themselves by.
+  const instanceId = useId();
   const [initialDraft] = useState(readLibraryDraft);
   const [name, setName] = useState(
     () => initialDraft?.name ?? generateCutePartName()
@@ -1791,6 +1813,7 @@ export function StartScreen({
     const pinnedNow = shownFolderPinned(folder);
     const dropping = reorder.dropTarget?.target === key;
     const edited = latestEdit(folder);
+    const editedId = `${instanceId}-edited-${folder.id.replace(/[^\w-]/g, '_')}`;
     const renaming = renamingFolderId === folder.id;
     return (
       <div
@@ -1823,6 +1846,7 @@ export function StartScreen({
           data-tile-drag=""
           disabled={busy}
           aria-label={`Open folder ${folder.name}, ${members.length} ${members.length === 1 ? 'project' : 'projects'}`}
+          aria-describedby={edited ? editedId : undefined}
           aria-keyshortcuts={
             canReorder ? `${TILE_KEYS} ${REORDER_KEYS}` : TILE_KEYS
           }
@@ -1848,10 +1872,18 @@ export function StartScreen({
                 publishThumbnail={publishThumbnail}
               />
             ) : (
-              <FolderOpen
-                className="start-folder-empty-icon"
-                aria-hidden="true"
-              />
+              <>
+                <FolderOpen
+                  className="start-folder-empty-icon"
+                  size={48}
+                  strokeWidth={1.25}
+                  absoluteStrokeWidth
+                  aria-hidden="true"
+                />
+                <span className="start-tile-thumb-empty" aria-hidden="true">
+                  Drop projects here
+                </span>
+              </>
             )}
           </span>
           <span className="start-tile-body">
@@ -1883,15 +1915,31 @@ export function StartScreen({
                 </small>
               </>
             ) : (
+              // One short line, like a project card's date: the count with
+              // the newest edit as well wrapped to two or three lines. The
+              // empty folder's drop hint sits on its cover.
               <small className="start-tile-meta">
-                <span className="start-tile-when">
+                <span
+                  className="start-tile-when"
+                  title={
+                    edited
+                      ? `Last edited ${formatLastEditedExact(edited)}`
+                      : undefined
+                  }
+                >
                   {members.length === 0
-                    ? 'Empty — drop projects here'
-                    : `${members.length} ${members.length === 1 ? 'project' : 'projects'}${
-                        edited ? ` · ${formatLastEdited(edited)}` : ''
-                      }`}
+                    ? 'Empty'
+                    : `${members.length} ${members.length === 1 ? 'project' : 'projects'}`}
                 </span>
               </small>
+            )}
+            {/* The newest edit left the card's line, so the button
+                describes it to a keyboard or screen reader; touch has the
+                list's Edited column. */}
+            {edited && (
+              <span id={editedId} className="visually-hidden">
+                {`Last edited ${formatLastEdited(edited)}`}
+              </span>
             )}
           </span>
         </button>
@@ -2156,7 +2204,9 @@ export function StartScreen({
                   project.revisionCount
                 } ${project.revisionCount === 1 ? 'save' : 'saves'}`}
               >
-                {formatLastEdited(project.updatedAt)}
+                {recoveryOf === null
+                  ? formatLastEdited(project.updatedAt)
+                  : formatRecoveryDate(project.updatedAt)}
               </time>
               {/* The time is what tells a part's recovery copies apart, so
                   the date clips before it does. */}
@@ -2730,8 +2780,10 @@ export function StartScreen({
         )}
 
         {trashed && (
-          // The visible labels are short for the narrow footer; the names
-          // say which project, and match the menu's "Delete forever".
+          // Restore takes the row and Delete forever is an icon beside it,
+          // like New project and Import: two labelled buttons overflowed a
+          // narrow card. The names say which project, and match the menu's
+          // "Delete forever".
           <div className="start-tile-footer">
             <button
               type="button"
@@ -2746,15 +2798,15 @@ export function StartScreen({
             </button>
             <button
               type="button"
-              className="is-destructive"
+              className="start-tile-delete is-destructive"
               aria-label={`Delete ${project.name} forever`}
+              title="Delete forever"
               disabled={busy}
               onClick={() =>
                 leaveShelf(project, () => onDeleteForever(project))
               }
             >
               <Trash2 size={13} aria-hidden="true" />
-              Delete
             </button>
           </div>
         )}
@@ -2764,7 +2816,20 @@ export function StartScreen({
 
   const layoutCounts =
     loading && previousLayout ? previousLayout : filterCounts;
-  const showFilters = filterable && (loading || shelfProjects.length > 0);
+  const shownFilters = SHELF_FILTERS.filter(
+    (entry) =>
+      entry.id === 'all' ||
+      entry.id === activeFilter ||
+      (layoutCounts[entry.id] > 0 &&
+        (entry.id !== 'pinned' || pinnedFilterShown))
+  );
+  // 14 Nov 2026: a folder with nothing pinned showed one "All 2" tab beside
+  // its name, a control with nothing to choose; the note says the count
+  // instead. The shelf itself keeps its tabs, which hold the toolbar's line.
+  const showFilters =
+    filterable &&
+    (loading || shelfProjects.length > 0) &&
+    (!openFolder || shownFilters.length > 1);
   // Pinned projects and folders head the shelf as their own group when the
   // whole shelf is on screen. Partitioned by the flag, not sliced by count: a
   // project created this session is prepended to the listing ahead of pinned
@@ -3196,52 +3261,58 @@ export function StartScreen({
               />
             )}
           </div>
-          {/* No visible Name and Units captions: the fields sit in the New
-              project card under its button, and "mm" names its own field.
-              The captions read as form chrome over a one-click action. */}
-          <label className="start-field start-field-name">
-            <input
-              value={name}
-              aria-label="Project name"
-              placeholder="Project name"
-              aria-invalid={nameTooLong || undefined}
-              aria-describedby={nameTooLong ? 'project-name-error' : undefined}
-              onFocus={(event) => {
-                if (!nameSuggested.current) return;
-                event.currentTarget.select();
-                keepSuggestionSelected.current = true;
-              }}
-              // The click that focused the field would otherwise collapse
-              // the selection to a caret where it landed.
-              onMouseUp={(event) => {
-                if (keepSuggestionSelected.current) event.preventDefault();
-                keepSuggestionSelected.current = false;
-              }}
-              onBlur={() => {
-                keepSuggestionSelected.current = false;
-              }}
-              onChange={(event) => {
-                nameSuggested.current = false;
-                keepSuggestionSelected.current = false;
-                setName(event.target.value);
-              }}
-            />
-          </label>
-          <label className="start-field start-field-units">
-            <select
-              value={units}
-              aria-label="Units"
-              onChange={(event) => {
-                unitsEdited.current = true;
-                setUnits(event.target.value as UnitSystem);
-              }}
-            >
-              <option value="mm">mm</option>
-              <option value="cm">cm</option>
-              <option value="m">m</option>
-              <option value="inch">in</option>
-            </select>
-          </label>
+          {/* No visible Name and Units captions: the fields sit under New
+              project, and "mm" names its own field. The captions read as
+              form chrome over a one-click action. Name and units share one
+              box, the units as its suffix: two boxes side by side read as
+              two separate questions. */}
+          <div className="start-launch-field">
+            <label className="start-field start-field-name">
+              <input
+                value={name}
+                aria-label="Project name"
+                placeholder="Project name"
+                aria-invalid={nameTooLong || undefined}
+                aria-describedby={
+                  nameTooLong ? 'project-name-error' : undefined
+                }
+                onFocus={(event) => {
+                  if (!nameSuggested.current) return;
+                  event.currentTarget.select();
+                  keepSuggestionSelected.current = true;
+                }}
+                // The click that focused the field would otherwise collapse
+                // the selection to a caret where it landed.
+                onMouseUp={(event) => {
+                  if (keepSuggestionSelected.current) event.preventDefault();
+                  keepSuggestionSelected.current = false;
+                }}
+                onBlur={() => {
+                  keepSuggestionSelected.current = false;
+                }}
+                onChange={(event) => {
+                  nameSuggested.current = false;
+                  keepSuggestionSelected.current = false;
+                  setName(event.target.value);
+                }}
+              />
+            </label>
+            <label className="start-field start-field-units">
+              <select
+                value={units}
+                aria-label="Units"
+                onChange={(event) => {
+                  unitsEdited.current = true;
+                  setUnits(event.target.value as UnitSystem);
+                }}
+              >
+                <option value="mm">mm</option>
+                <option value="cm">cm</option>
+                <option value="m">m</option>
+                <option value="inch">in</option>
+              </select>
+            </label>
+          </div>
           {nameTooLong ? (
             <small
               id="project-name-error"
@@ -3480,13 +3551,7 @@ export function StartScreen({
                 role="group"
                 aria-label="Show projects"
               >
-                {SHELF_FILTERS.filter(
-                  (entry) =>
-                    entry.id === 'all' ||
-                    entry.id === activeFilter ||
-                    (layoutCounts[entry.id] > 0 &&
-                      (entry.id !== 'pinned' || pinnedFilterShown))
-                ).map((entry) => (
+                {shownFilters.map((entry) => (
                   <button
                     key={entry.id}
                     type="button"

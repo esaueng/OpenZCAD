@@ -19,7 +19,12 @@ import {
   type AccountStorageUsage,
   type ProjectSummary
 } from '@openzcad/shared';
-import { formatLastEdited, recoveryCopyOf, StartScreen } from './StartScreen';
+import {
+  formatLastEdited,
+  formatRecoveryDate,
+  recoveryCopyOf,
+  StartScreen
+} from './StartScreen';
 import { localStorageEncryptedProjectPins } from '../lib/e2ee/encryptedProjectPins';
 import { useAccountStorageUsage } from './StorageUsagePanel';
 
@@ -848,6 +853,20 @@ describe('StartScreen project timestamps', () => {
       expect(formatLastEdited(date.toISOString())).toBe(shortDate(date));
     }
     expect(formatLastEdited(today.toISOString())).not.toMatch(/^Today/);
+  });
+
+  it("dates a recovery copy without this year's year", () => {
+    // 14 Nov 2026: "Nov 12, 2026 · 7:00 AM" clipped to "Nov 12, … · 7:00 AM"
+    // on a card. The time stays a span of its own that never shrinks.
+    const now = new Date(2026, 10, 14, 12, 0);
+    const thisYear = new Date(2026, 10, 12, 7, 0);
+    const lastYear = new Date(2025, 10, 12, 7, 0);
+    expect(formatRecoveryDate(thisYear.toISOString(), now)).toBe(
+      thisYear.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+    );
+    expect(formatRecoveryDate(lastYear.toISOString(), now)).toBe(
+      shortDate(lastYear)
+    );
   });
 });
 
@@ -1990,6 +2009,24 @@ describe('StartScreen folders and selection', () => {
     expect(folder.querySelector('.start-tile-size')).toHaveTextContent('—');
   });
 
+  it('shows no filter tabs inside a folder when All would be the only one', () => {
+    // 14 Nov 2026: an open folder with nothing pinned showed one "All 2"
+    // tab; the note carries the count instead.
+    seedFolder([parts[0]!.projectId, parts[1]!.projectId]);
+    // Saved to the account, so "This device only" has nothing to show.
+    renderStartScreen({
+      projects: parts,
+      cloudProjectIds: new Set(parts.map((part) => part.projectId))
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open folder Fixtures, 2 projects' })
+    );
+    expect(screen.queryByRole('group', { name: 'Show projects' })).toBeNull();
+    expect(document.querySelector('.start-section-note')).toHaveTextContent(
+      /^2 projects$/
+    );
+  });
+
   it('counts a folder card’s projects once, under its name', () => {
     // 14 Nov 2026: a "5" chip on the cover repeated "5 projects" below it.
     seedFolder([parts[0]!.projectId, parts[1]!.projectId]);
@@ -1998,8 +2035,17 @@ describe('StartScreen folders and selection', () => {
       .getByRole('button', { name: 'Open folder Fixtures, 2 projects' })
       .closest('.start-tile')!;
     expect(folder.querySelector('.start-folder-thumb')).toHaveTextContent(/^$/);
-    expect(folder.querySelector('.start-tile-when')).toHaveTextContent(
-      /^2 projects · /
+    // 14 Nov 2026: with the newest edit's date as well, the line wrapped
+    // to two or three lines; the date is a hover away.
+    const when = folder.querySelector('.start-tile-when')!;
+    expect(when).toHaveTextContent(/^2 projects$/);
+    // Off the card's line, the newest edit still describes the button.
+    expect(
+      screen.getByRole('button', { name: 'Open folder Fixtures, 2 projects' })
+    ).toHaveAccessibleDescription(/^Last edited /);
+    expect(when).toHaveAttribute(
+      'title',
+      expect.stringMatching(/^Last edited /)
     );
   });
 
@@ -2308,6 +2354,32 @@ describe('StartScreen selection and dialogs', () => {
 });
 
 describe('StartScreen permanent deletion', () => {
+  it('offers a trashed card Restore and a Delete forever icon beside it', () => {
+    // 14 Nov 2026: two labelled buttons overflowed a narrow card.
+    const trashed: ProjectSummary = {
+      projectId: toProjectId('project_oscar'),
+      name: 'Oscar part',
+      revisionCount: 1,
+      updatedAt: '2026-10-01T12:00:00.000Z',
+      organization: {
+        status: 'deleted',
+        pinned: false,
+        sortOrder: 0,
+        deletedAt: '2026-10-20T12:00:00.000Z'
+      }
+    };
+    renderStartScreen({ projects: [trashed] });
+    fireEvent.click(screen.getByRole('tab', { name: /Trash/ }));
+    expect(
+      screen.getByRole('button', { name: 'Restore Oscar part' })
+    ).toHaveTextContent('Restore');
+    const remove = screen.getByRole('button', {
+      name: 'Delete Oscar part forever'
+    });
+    expect(remove).toHaveTextContent(/^$/);
+    expect(remove).toHaveAttribute('title', 'Delete forever');
+  });
+
   it('keeps the selection when deleting forever is not carried out', () => {
     const trashed: ProjectSummary[] = ['Lima', 'Mike'].map((name) => ({
       projectId: toProjectId(`project_${name.toLowerCase()}`),

@@ -57,7 +57,7 @@ export function ConfirmDialog({
   const Icon = tone === 'danger' ? Trash2 : CircleAlert;
 
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop confirm-backdrop">
       <div
         ref={dialogRef}
         className="confirm-dialog"
