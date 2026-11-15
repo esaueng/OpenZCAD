@@ -1621,6 +1621,34 @@ describe('StartScreen folders and selection', () => {
     ).toBeInTheDocument();
   });
 
+  it('offers no Pinned filter inside a folder, and keeps a shelf one for later', () => {
+    // 14 Nov 2026 recording: a pinned folder read "All 5 · Pinned 5", the
+    // second a repeat of the first.
+    seedFolder([parts[1]!.projectId, parts[2]!.projectId], { pinned: true });
+    renderStartScreen({ projects: parts });
+    const filters = () =>
+      within(screen.getByRole('group', { name: 'Show projects' }));
+    // On the shelf, Pinned lists a pinned folder's projects one by one.
+    fireEvent.click(filters().getByRole('button', { name: /^Pinned/ }));
+    expect(names()).toEqual(['Bravo plate', 'Charlie plate']);
+
+    fireEvent.click(document.querySelector('.start-folder-link')!);
+    expect(filters().queryByRole('button', { name: /^Pinned/ })).toBeNull();
+    expect(filters().getByRole('button', { name: /^All/ })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(names()).toEqual(['Bravo plate', 'Charlie plate']);
+
+    // Back on the shelf, the Pinned filter chosen there still holds.
+    fireEvent.click(document.getElementById('start-shelf-tab-active')!);
+    expect(filters().getByRole('button', { name: /^Pinned/ })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(names()).toEqual(['Bravo plate', 'Charlie plate']);
+  });
+
   it('selects a range and trashes it in one action', () => {
     const onMoveManyToShelf = vi.fn();
     const onOpen = vi.fn();
