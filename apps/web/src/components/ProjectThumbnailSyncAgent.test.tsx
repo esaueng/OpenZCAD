@@ -70,7 +70,13 @@ describe('ProjectThumbnailSyncAgent', () => {
           })
       )
     };
-    const saveThumbnail = vi.fn().mockResolvedValue(undefined);
+    let saved!: () => void;
+    const saveThumbnail = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          saved = resolve;
+        })
+    );
     const capture = createThumbnailCapture({ idleMs: 0 });
     render(
       <ProjectThumbnailSyncAgent
@@ -100,6 +106,11 @@ describe('ProjectThumbnailSyncAgent', () => {
     );
     expect(settled).toBe(false);
     finalize({ artifactId });
+    // The device record is written before the listing may read, too.
+    await vi.waitFor(() => expect(saveThumbnail).toHaveBeenCalled());
+    await act(async () => undefined);
+    expect(settled).toBe(false);
+    saved();
     await listingMayRead;
     expect(saveThumbnail).toHaveBeenCalledWith(
       'project_tracked',
