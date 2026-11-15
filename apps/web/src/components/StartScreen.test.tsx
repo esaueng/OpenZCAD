@@ -1744,6 +1744,45 @@ describe('StartScreen folders and selection', () => {
     ).toBeInTheDocument();
   });
 
+  it('offers no Pinned filter inside a folder, and keeps a shelf one for later', () => {
+    // 14 Nov 2026 recording: a pinned folder read "All 5 · Pinned 5", the
+    // second a repeat of the first. An unpinned folder holding one pinned
+    // and one unpinned project tells "shows All" from "still filters".
+    const mixed = parts.map((part, index) =>
+      index === 1
+        ? { ...part, organization: { ...part.organization!, pinned: true } }
+        : part
+    );
+    seedFolder([mixed[1]!.projectId, mixed[2]!.projectId]);
+    const view = renderStartScreen({ projects: mixed });
+    const filters = () =>
+      within(screen.getByRole('group', { name: 'Show projects' }));
+    fireEvent.click(filters().getByRole('button', { name: /^Pinned/ }));
+    expect(names()).toEqual(['Bravo plate']);
+
+    fireEvent.click(document.querySelector('.start-folder-link')!);
+    expect(filters().queryByRole('button', { name: /^Pinned/ })).toBeNull();
+    expect(filters().getByRole('button', { name: /^All/ })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(names()).toEqual(['Bravo plate', 'Charlie plate']);
+
+    // A reload inside the folder keeps it whole.
+    view.unmount();
+    renderStartScreen({ projects: mixed });
+    expect(filters().queryByRole('button', { name: /^Pinned/ })).toBeNull();
+    expect(names()).toEqual(['Bravo plate', 'Charlie plate']);
+
+    // Back on the shelf, the Pinned filter chosen there still holds.
+    fireEvent.click(document.getElementById('start-shelf-tab-active')!);
+    expect(filters().getByRole('button', { name: /^Pinned/ })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(names()).toEqual(['Bravo plate']);
+  });
+
   it('selects a range and trashes it in one action', () => {
     const onMoveManyToShelf = vi.fn();
     const onOpen = vi.fn();
