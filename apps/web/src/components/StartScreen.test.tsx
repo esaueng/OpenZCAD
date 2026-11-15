@@ -12,7 +12,7 @@ import { toUserId } from '@openzcad/shared';
 import { describeProject } from '../lib/projectProperties';
 import { DEMO_DEFINITIONS } from '../lib/demoDefinitions';
 import type { ComponentProps } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   PROJECT_STORAGE_FORMAT_E2EE_V1,
   toProjectId,
@@ -22,11 +22,16 @@ import {
 import {
   formatLastEdited,
   formatRecoveryDate,
+  LibrarySelectionBar,
   recoveryCopyOf,
   StartScreen
 } from './StartScreen';
 import { localStorageEncryptedProjectPins } from '../lib/e2ee/encryptedProjectPins';
 import { useAccountStorageUsage } from './StorageUsagePanel';
+
+// The selection bar loads on demand; the library warms it once idle. Load it
+// up front so a selection here draws it in the same render, as warmed.
+beforeAll(() => LibrarySelectionBar.preload());
 
 // An encrypted project's properties check the assistant consent against the
 // account; nothing here signs in, so the check would reach for a server.

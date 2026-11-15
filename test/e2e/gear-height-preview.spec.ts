@@ -7,7 +7,8 @@ import {
   stubApi,
   expectBodyCount,
   MODEL_ONLY,
-  waitForStillViewport
+  waitForStillViewport,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 interface PreviewWindow extends Window {
@@ -136,6 +137,8 @@ test(
       })
       .not.toBeNull();
     const chip = page.getByTestId('direct-manipulation-value');
+    // A face starts on Offset; this follows the gear's Total height.
+    await switchFaceOffsetToTotal(page);
     await expect(chip).toContainText('26');
     const handle = await canvas.evaluate((element) => ({
       x: Number(element.dataset.e2eHandleX),

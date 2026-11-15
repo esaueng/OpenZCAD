@@ -3530,7 +3530,9 @@ export interface FeatureWarning {
      * The kernel's cause code, for a refusal whose `code` covers several
      * causes. A refused cylindrical-face resize (`unsupported_move_face`)
      * says `unsupported_neighbor`, `partial_reversed_wall` or `unclassified`
-     * here. A string for the same reason `category` is one.
+     * here; a refused diameter (`cylinder-diameter-unbuildable`) says
+     * `wall_meets_face` or `group_reblend_failed` on a kernel that sends it.
+     * A string for the same reason `category` is one.
      */
     reason?: string;
     /** The surface type of the neighbour that blocked the edit, if named. */
@@ -3893,6 +3895,13 @@ export const ENCRYPTED_PROJECTS_REQUIRED_CODE = 'ENCRYPTED_PROJECTS_REQUIRED';
  */
 export const E2EE_DEFAULT_ON_CODE = 'E2EE_DEFAULT_ON';
 export const E2EE_PLAINTEXT_FROZEN_CODE = 'E2EE_PLAINTEXT_FROZEN';
+/**
+ * An account whose library is encrypted (ADR-024 amendment 2026-11-14) keeps
+ * its pins, manual order and archive in its sealed library record. The
+ * Worker stores the defaults for it and refuses any other value with 409 and
+ * this code; trash and restore stay readable.
+ */
+export const PROJECT_SHELF_STATE_SEALED_CODE = 'PROJECT_SHELF_STATE_SEALED';
 /** The assistant is off on encrypted projects until per-project consent (D7). */
 export const ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE =
   'ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE';

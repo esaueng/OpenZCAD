@@ -12,7 +12,8 @@ import {
   stubApi,
   expectBodyCount,
   MODEL_ONLY,
-  waitForStillViewport
+  waitForStillViewport,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 /** A box beside a standalone gear, as in the 2026-10-31 production QA. */
@@ -220,7 +221,10 @@ for (const refused of [true, false]) {
           await selectTop(canvas, gearId);
           return chip.textContent();
         })
-        .toContain('10');
+        .toMatch(/mm/);
+      // A face starts on Offset; this types the gear's Total width.
+      await switchFaceOffsetToTotal(page);
+      await expect(chip).toContainText('10');
       await chip.click();
       const keypad = page.getByRole('dialog', { name: 'Total value' });
       await keypad.getByRole('textbox').fill('13');
@@ -242,9 +246,15 @@ for (const refused of [true, false]) {
         .toBeGreaterThan(0);
 
       // Pick the box's top while the gear is still being checked.
+      // Read as the box's Total (a face starts on Offset); its height is
+      // known, and the switch offered, once the pick's span is read.
+      const tag = page.getByTestId('direct-manipulation-mode');
       await expect
         .poll(async () => {
           await selectTop(canvas, boxId);
+          if (/^Offset/.test(await tag.innerText().catch(() => ''))) {
+            await tag.click().catch(() => undefined);
+          }
           return chip.textContent();
         })
         .toBe('8 mm');
@@ -309,7 +319,10 @@ test(
         await selectTop(canvas, gearId);
         return chip.textContent();
       })
-      .toContain('10');
+      .toMatch(/mm/);
+    // A face starts on Offset; this drags the gear's Total width.
+    await switchFaceOffsetToTotal(page);
+    await expect(chip).toContainText('10');
     await waitForStillViewport(page);
     const handle = await canvas.evaluate((element) => ({
       x: Number(element.dataset.e2eHandleX),

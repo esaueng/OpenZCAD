@@ -6,6 +6,7 @@ import { confirmKeySessionEnded } from './keySession';
 import { shareWorkStore } from './shareWorkStore';
 import { projectAuthorityStore } from './projectAuthorityStore';
 import { forgetShelfNames } from '../projectShelfNames';
+import { forgetAccountShelf } from '../sealedShelfCore';
 
 /** Only the successful, explicitly requested erasure may reset local trust. */
 export async function eraseAccountWithKeyCleanup<
@@ -32,6 +33,7 @@ export async function eraseAccountWithKeyCleanup<
     if (input.userId) {
       lockAccount(input.userId);
       forgetShelfNames(input.userId);
+      forgetAccountShelf(input.userId, { erased: true });
     }
     confirmKeySessionEnded();
     let cleanup: PromiseSettledResult<void>[] = [];

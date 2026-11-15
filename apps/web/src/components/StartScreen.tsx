@@ -57,6 +57,8 @@ import {
   lazyWithStaleChunkNotice,
   STALE_CHUNK_MESSAGE
 } from '../lib/staleChunk';
+import { preloadableSlot } from './PreloadableSlot';
+import { prefersSavingData } from '../lib/saveData';
 import {
   daysUntilPurge,
   MAX_PROJECT_NAME_LENGTH,
@@ -93,7 +95,6 @@ import {
   type LibraryFolder
 } from '../lib/libraryFolders';
 import { useLibraryFolderCloudSync } from '../lib/useLibraryFolderCloudSync';
-import { LibrarySelectionBar } from './LibrarySelectionBar';
 import {
   bucketProjectsByShelf,
   moveItem,
@@ -129,6 +130,20 @@ const FileDropTarget = lazyWithStaleChunkNotice(async () => ({
 const FolderCoverDialog = lazyWithStaleChunkNotice(async () => ({
   default: (await import('./FolderCoverDialog')).FolderCoverDialog
 }));
+/**
+ * The bar that acts on several selected projects. Only a multi-select draws
+ * it, so it loads apart from the library; the library warms it once idle, so
+ * the first selection usually shows it in the same frame. A selection that
+ * beats the warm-up (or Save-Data, which skips it) shows the bar once its
+ * chunk arrives, and a chunk that cannot load leaves the library standing
+ * with the bar's own "did not load" line in its place.
+ */
+export const LibrarySelectionBar = preloadableSlot(
+  'Selection actions',
+  async () => ({
+    default: (await import('./LibrarySelectionBar')).LibrarySelectionBar
+  })
+);
 
 interface StartScreenProps {
   projects: ProjectSummary[];
@@ -643,6 +658,19 @@ export function StartScreen({
     initialDraft?.units ?? defaultUnits
   );
   const unitsEdited = useRef(initialDraft !== null);
+  // Warm the selection bar once the library is idle; Save-Data asks for
+  // nothing speculative, and there it loads on the first selection.
+  useEffect(() => {
+    if (LibrarySelectionBar.isLoaded() || prefersSavingData()) return;
+    const warm = () =>
+      void LibrarySelectionBar.preload().catch(() => undefined);
+    if (typeof window.requestIdleCallback === 'function') {
+      const idle = window.requestIdleCallback(warm, { timeout: 5_000 });
+      return () => window.cancelIdleCallback(idle);
+    }
+    const timer = window.setTimeout(warm, 2_000);
+    return () => window.clearTimeout(timer);
+  }, []);
   // The suggested name is selected when the field takes focus, so typing a
   // real one replaces it rather than landing inside "Lucky Quokka". Once
   // anything is typed the field behaves as any other, and a click places

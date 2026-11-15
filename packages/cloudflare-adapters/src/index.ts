@@ -2622,12 +2622,15 @@ export class D1R2PersistenceService implements PersistenceService {
     // A copy lands next to its original rather than at the top of the shelf,
     // which is where you go looking for it. It starts unpinned and active: the
     // point of a duplicate is to diverge from the original, not to inherit its
-    // place on the desk.
-    const sortOrder = await this.env.DB.prepare(
-      `SELECT sort_order FROM projects WHERE id = ? AND user_id = ?`
-    )
-      .bind(request.projectId, userId)
-      .first<{ sort_order: number }>();
+    // place on the desk. An account whose shelf state is sealed keeps that
+    // place in its library record, so the row holds the default order.
+    const sortOrder = options?.sealedShelfState
+      ? null
+      : await this.env.DB.prepare(
+          `SELECT sort_order FROM projects WHERE id = ? AND user_id = ?`
+        )
+          .bind(request.projectId, userId)
+          .first<{ sort_order: number }>();
     const initialHead: { value?: ProjectCopyStoredHead } = {};
     const project = await this.insertProject(
       userId,
@@ -3234,6 +3237,36 @@ export class D1R2PersistenceService implements PersistenceService {
     if (updated.meta?.changes === 0)
       throw new ProjectNotFoundError(request.projectId);
     return { ...current, organization };
+  }
+
+  async resetProjectShelfState(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectSummary> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().resetProjectShelfState(userId, projectId);
+    }
+    // One statement against the row as it stands, not a read-then-write: a
+    // project trashed on another device since the browser listed it keeps
+    // its status and deleted_at, and only a row still archived is restored.
+    const updated = await this.env.DB.prepare(
+      `UPDATE projects SET pinned = 0, sort_order = 0,
+         status = CASE WHEN status = 'archived' THEN 'active' ELSE status END,
+         archived_at = CASE WHEN status = 'deleted' THEN archived_at ELSE NULL END
+       WHERE id = ? AND user_id = ?
+       AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)`
+    )
+      .bind(projectId, userId)
+      .run();
+    if (updated.meta?.changes === 0) throw new ProjectNotFoundError(projectId);
+    const row = await this.env.DB.prepare(
+      `${projectSummaryColumns(await this.storageFormatColumn(''))} FROM projects WHERE id = ? AND user_id = ?`
+    )
+      .bind(projectId, userId)
+      .first<ProjectRow>();
+    const current = row ? summaryFromRow(row) : null;
+    if (!current) throw new ProjectNotFoundError(projectId);
+    return current;
   }
 
   async reorderProjects(

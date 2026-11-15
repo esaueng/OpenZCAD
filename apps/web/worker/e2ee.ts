@@ -55,6 +55,7 @@ import {
   type E2eeWriteAuthorization
 } from './e2eeWriteAuthorization';
 import {
+  accountRequiresEncryptedLibrary,
   PROJECT_PREFERENCES_ROUTE,
   handleProjectPreferenceRequest,
   isE2eeProjectPreferenceStorageReady
@@ -2185,6 +2186,24 @@ export async function handleE2eeRequest(
       }
     };
     if (pathname === PROJECT_PREFERENCES_ROUTE) {
+      if (!projectsEnabled && request.method === 'GET') {
+        // Closed to this account: no opt-in to read, but the library rule
+        // still answers, so a browser never has to guess from the general
+        // config, and asking logs no failed request.
+        const libraryEncrypted =
+          (await isE2eeProjectPreferenceStorageReady(rawDb)) &&
+          (await accountRequiresEncryptedLibrary(rawDb, userId));
+        return new Response(
+          JSON.stringify({ preference: null, libraryEncrypted }),
+          {
+            status: 200,
+            headers: {
+              'content-type': 'application/json',
+              'cache-control': 'no-store'
+            }
+          }
+        );
+      }
       if (!projectsEnabled) {
         refuse(
           501,

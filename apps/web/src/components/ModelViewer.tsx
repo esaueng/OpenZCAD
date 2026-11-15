@@ -294,7 +294,9 @@ import {
   offsetTotalReading,
   rearmedChipMode,
   regionChipState,
-  type OffsetChipMode
+  continuesOffsetFace,
+  type OffsetChipMode,
+  type OffsetFaceIdentity
 } from '../lib/offsetChip';
 import { chipLeader, separateChips } from '../lib/commandChipLayout';
 import { faceLift } from '../lib/faceDepthBehind';
@@ -520,6 +522,8 @@ export interface OffsetHandleTarget {
   profilePreview?: CylinderPreviewProfile;
   bodyId: string;
   topologyId: string;
+  /** The face a committed offset moved to make this one (`FaceTarget`). */
+  movedFrom?: string;
   point: { x: number; y: number; z: number };
   normal: { x: number; y: number; z: number };
   /** Displayed displacement; zero when the committed face is restored. */
@@ -1073,6 +1077,13 @@ export interface ModelViewerProps {
   units: string;
   /** Primitive box bodies whose planar faces can drive document dimensions. */
   editableBodyIds: string[];
+  /**
+   * A command is armed that owns dragging (an in-place Extrude's region or
+   * edit), whether or not its handles are drawn yet: a press on a body then
+   * never starts the legacy face resize. Its handles load with its bar, so
+   * without this a press before they arrive resized the body underneath.
+   */
+  dragsHeldByCommand?: boolean;
   movePreview: MovePreview | null;
   /**
    * A committed Move whose rebuild is still in flight. The body stays posed
@@ -2340,6 +2351,7 @@ export function ModelViewer({
   normalToFaceRequest,
   units,
   editableBodyIds,
+  dragsHeldByCommand = false,
   movePreview,
   moveCommitHold,
   appearancePreview,
@@ -2612,6 +2624,8 @@ export function ModelViewer({
   pencilDrawsOnlyRef.current = pencilDrawsOnly;
   const editableBodyIdsRef = useRef(new Set(editableBodyIds));
   editableBodyIdsRef.current = new Set(editableBodyIds);
+  const dragsHeldByCommandRef = useRef(dragsHeldByCommand);
+  dragsHeldByCommandRef.current = dragsHeldByCommand;
   const unitsRef = useRef(units);
   unitsRef.current = units;
   // What an overlay prints after a number: `inch` is the document's unit
@@ -3037,6 +3051,10 @@ export function ModelViewer({
   const offsetExtentRef = useRef<number | null>(null);
   /** Which number the offset chip shows: the drag delta, or the whole span. */
   const offsetChipModeRef = useRef<OffsetChipMode>('offset');
+  /** The reading last chosen with the Total/Offset switch, for the face below. */
+  const offsetChipChosenRef = useRef<OffsetChipMode>('offset');
+  /** The face that switch was made on; null once a region took the chip. */
+  const offsetChipFaceRef = useRef<OffsetFaceIdentity | null>(null);
   /** Cylindrical radius has its own non-translating affordance and lifecycle. */
   const cylinderRadiusRigRef = useRef<DragRig | null>(null);
   const cylinderRadiusDragActiveRef = useRef(false);
@@ -5413,6 +5431,10 @@ export function ModelViewer({
         if (span !== null && span !== undefined) {
           offsetChipModeRef.current =
             offsetChipModeRef.current === 'total' ? 'offset' : 'total';
+          // The switch belongs to the face it was made on.
+          const handle = offsetHandleRef.current;
+          offsetChipChosenRef.current = offsetChipModeRef.current;
+          offsetChipFaceRef.current = handle;
           // Open exact entry edits what the chip shows, so it switches with
           // it: left alone it kept the other mode's label and prefill, and
           // its Apply read the number in that mode.
@@ -11092,8 +11114,10 @@ export function ModelViewer({
         }
       }
       // While any direct-manipulation handle is armed, the handles own
-      // dragging — the legacy box resize would fight the gesture.
+      // dragging — the legacy box resize would fight the gesture. So does an
+      // armed command whose handles have not been drawn yet.
       if (
+        dragsHeldByCommandRef.current ||
         cylinderRadiusRigRef.current ||
         offsetRigRef.current ||
         edgeRigRef.current
@@ -14587,14 +14611,15 @@ export function ModelViewer({
       extentBehind
     );
     offsetExtentRef.current = chipState.extent;
+    const chosenFace = offsetChipFaceRef.current;
+    const chosenHere =
+      chosenFace !== null && continuesOffsetFace(chosenFace, offsetHandle);
+    // The commit renumbered the face the switch was made on: it follows it.
+    if (chosenHere) offsetChipFaceRef.current = offsetHandle;
     offsetChipModeRef.current = rearmedChipMode(
       chipState,
-      offsetChipModeRef.current,
-      previous !== null &&
-        previous !== regionRigRef.current &&
-        built !== null &&
-        built.handle.bodyId === offsetHandle.bodyId &&
-        built.handle.topologyId === offsetHandle.topologyId
+      offsetChipChosenRef.current,
+      chosenHere
     );
     const rig = buildOffsetFaceHandle({
       ...placement,
@@ -15056,6 +15081,8 @@ export function ModelViewer({
     const chipState = regionChipState();
     offsetExtentRef.current = chipState.extent;
     offsetChipModeRef.current = chipState.mode;
+    offsetChipChosenRef.current = chipState.mode;
+    offsetChipFaceRef.current = null;
     context.scene.add(rig.group);
     context.scene.add(rig.worldGroup);
     offsetRigRef.current = rig;

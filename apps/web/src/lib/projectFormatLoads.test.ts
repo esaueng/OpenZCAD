@@ -553,6 +553,46 @@ describe('an account that holds encrypted projects without the opt-in', () => {
       code: 'E2EE_PREFERENCE_UNVERIFIED'
     });
   });
+
+  it.each([
+    ['encryption is closed', { enabled: false, projectsEnabled: false }],
+    [
+      'encrypted projects are closed',
+      { enabled: true, projectsEnabled: false }
+    ],
+    ['config is empty', {}]
+  ] as const)(
+    'keeps the library encrypted when the preferences route says so and %s',
+    async (_, config) => {
+      // #1524 review: the general config never overrides a yes from the
+      // preferences route.
+      vi.mocked(desktopFetch).mockImplementation(async (input) => {
+        if (input === '/api/session') return json({ userId: 'user_1' });
+        if (input === '/api/e2ee/config') return json(config);
+        if (input === '/api/e2ee/project-preferences') {
+          return json({ preference: null, libraryEncrypted: true });
+        }
+        return json({}, 404);
+      });
+      await expect(encryptsAccountLibrary()).resolves.toBe(true);
+    }
+  );
+
+  it('reads as not encrypted from the preferences route while projects are closed', async () => {
+    // The Worker answers it with the library rule rather than 501, so no
+    // failed request is logged.
+    vi.mocked(desktopFetch).mockImplementation(async (input) => {
+      if (input === '/api/session') return json({ userId: 'user_1' });
+      if (input === '/api/e2ee/config') {
+        return json({ enabled: true, projectsEnabled: false });
+      }
+      if (input === '/api/e2ee/project-preferences') {
+        return json({ preference: null, libraryEncrypted: false });
+      }
+      return json({}, 404);
+    });
+    await expect(encryptsAccountLibrary()).resolves.toBe(false);
+  });
 });
 
 describe('the encrypt-new-projects decision fails closed (D2)', () => {
