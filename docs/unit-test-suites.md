@@ -50,3 +50,38 @@ Filesystem fixtures use NTFS junctions for directory/file-path aliases on
 Windows and symlinks on POSIX. They still test actual filesystem resolution,
 inode identity, dangling reparse points and byte preservation. Developer Mode
 and administrator privileges are not required.
+
+## Test deadlines
+
+Multi-process Git fixtures have explicit 30-second integration
+budgets. Root `test/e2ee-*.test.ts` files exercise complete encrypted-project
+flows with real cryptography and use a 30-second integration default. Other
+unit tests retain their five-second default, and explicit per-case deadlines
+still take precedence. Runtime regressions check all three boundaries.
+Protocol, provenance and refusal assertions remain unchanged.
+The explicit approximate-boolean validation probe has a 30-second integration
+budget. Structured-output qualification
+checks every rollout flag combination in batches of 64, retaining the ordinary
+unit deadline.
+The envelope stress checks retain the 500,000-part join under the ordinary
+unit deadline. Real 5,000-record encryption/decryption and 3,000-record hashing
+have 30-second bulk-workload budgets, retaining every record and plaintext
+comparison. Rejection ceilings and resource-limit assertions are unchanged.
+The longer three-account historical-authority journey has a one-minute
+budget, retaining every fresh-browser and historical-version check.
+
+The 1,024-replay kernel-retirement stress case has a five-minute budget and
+the gear fixture uses its suite's existing one-minute geometry budget. The
+glyph audit scans the real source tree once in a bounded 30-second setup;
+coverage and scan-floor assertions inspect that same result. These checks
+assert correctness and ownership, not elapsed-time performance. Global test
+timeouts, worker limits, replay counts and assertion thresholds are unchanged.
+The dense spline oracle still checks all 120 seeded trials and all 4,000
+chords. A sweep over sorted closed x intervals skips provably disjoint pairs,
+retaining the original crossing arithmetic, chord order and default test
+deadline. Differential fixtures retain the original quadratic pair scan as
+an independent check of candidate discovery.
+Repeated STEP byte comparisons supply a fixed timestamp through the public
+export options, since the API defaults to export time. The checkpoint test
+advances the clock across a second while retaining equality of every byte,
+including the header; STL equality and ownership checks are unchanged.
