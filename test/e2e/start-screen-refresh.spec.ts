@@ -195,40 +195,46 @@ test('a failed account listing clears once the library poll reaches the account'
 // The reported bug: a signed-in account whose session read was refused
 // (here a rate limit) reloaded into the signed-out, device-only shelf with
 // "Sign in", as if it had been logged out.
-test('a rate-limited session read on reload never reads as signed out', async ({
-  page
-}) => {
-  await stubApi(page);
-  await createProject(page, 'Still signed in part');
-  await page.getByTitle('Back to projects').click();
-  await expect(
-    page.locator('.start-tile-open', { hasText: 'Still signed in part' })
-  ).toBeVisible();
-  let refuseSession = true;
-  let sessionReads = 0;
-  await page.route('**/api/session', (route) => {
-    sessionReads += 1;
-    return refuseSession
-      ? route.fulfill({
-          status: 429,
-          json: { error: 'API request limit reached. Try again later.' }
-        })
-      : route.fallback();
-  });
-  await page.reload();
-  const account = page.locator('.start-account');
-  await expect(account).toContainText('Cloud unavailable');
-  await expect(account).not.toContainText('On this device only');
-  await expect(account.getByRole('button', { name: 'Sign in' })).toHaveCount(0);
-  // The startup read retried before giving up.
-  expect(sessionReads).toBeGreaterThan(1);
+test(
+  'a rate-limited session read on reload never reads as signed out',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    await createProject(page, 'Still signed in part');
+    await page.getByTitle('Back to projects').click();
+    await expect(
+      page.locator('.start-tile-open', { hasText: 'Still signed in part' })
+    ).toBeVisible();
+    let refuseSession = true;
+    let sessionReads = 0;
+    await page.route('**/api/session', (route) => {
+      sessionReads += 1;
+      return refuseSession
+        ? route.fulfill({
+            status: 429,
+            json: { error: 'API request limit reached. Try again later.' }
+          })
+        : route.fallback();
+    });
+    await page.reload();
+    const account = page.locator('.start-account');
+    await expect(account).toContainText('Cloud unavailable');
+    await expect(account).not.toContainText('On this device only');
+    await expect(account.getByRole('button', { name: 'Sign in' })).toHaveCount(
+      0
+    );
+    // The startup read retried before giving up.
+    expect(sessionReads).toBeGreaterThan(1);
 
-  // Retry asks again and finds the account still signed in.
-  refuseSession = false;
-  await page.getByRole('button', { name: 'Retry the cloud connection' }).click();
-  await expect(account).not.toContainText('Cloud unavailable');
-  await expect(account).not.toContainText('On this device only');
-});
+    // Retry asks again and finds the account still signed in.
+    refuseSession = false;
+    await page
+      .getByRole('button', { name: 'Retry the cloud connection' })
+      .click();
+    await expect(account).not.toContainText('Cloud unavailable');
+    await expect(account).not.toContainText('On this device only');
+  }
+);
 
 test('Retry on Account unavailable lists the account again', async ({
   page
