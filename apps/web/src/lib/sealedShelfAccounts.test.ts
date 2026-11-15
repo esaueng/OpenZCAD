@@ -156,6 +156,27 @@ async function listSealed(accountId: string): Promise<ProjectSummary[]> {
   );
 }
 
+/**
+ * The shelf's listing for `accountId` when the account could not be
+ * reached, composed as `loadProjectSummaries` composes it for a library
+ * that is (or may be) encrypted: the projects this device holds, with this
+ * device's rows as `accountListingOrganizations` lets them apply.
+ */
+async function listUnreached(accountId: string): Promise<ProjectSummary[]> {
+  const store = await import('./localProjectStore');
+  const shelf = await import('./sealedShelfState');
+  const { applyLocalProjectOrganizations, mergeProjectSummaries } =
+    await import('./projectShelf');
+  return applyLocalProjectOrganizations(
+    mergeProjectSummaries([sharedRow()], []),
+    shelf.accountListingOrganizations(
+      accountId,
+      await store.listLocalProjectOrganizations(),
+      null
+    )
+  );
+}
+
 /** A shelf edit as `saveShelfRows` makes it: the device row, then the journal. */
 async function editShelf(
   accountId: string,
@@ -296,6 +317,149 @@ describe('sealed shelf state of accounts sharing a device', () => {
       sortOrder: 7,
       archived: true
     });
+  });
+
+  it('keeps another account’s pending row out of a listing that could not reach the account', async () => {
+    const { resetShelfStateMemory } = await import('./sealedShelfState');
+    const { syncAccountLibraryFolders } =
+      await import('./libraryFolderCloudSync');
+
+    // B listed its library on this device in an earlier visit.
+    server.signedIn = 'B';
+    await listSealed('B');
+    resetShelfStateMemory();
+
+    // A archives the shared project at place 7 and signs out before either
+    // reaches the account: the device row stays pending.
+    server.signedIn = 'A';
+    const [aListed] = await listSealed('A');
+    await editShelf('A', aListed!, { status: 'archived' });
+    const [aArchived] = await listSealed('A');
+    await editShelf('A', aArchived!, { sortOrder: 7 });
+    resetShelfStateMemory();
+
+    // B signs in, but its listing fails. The project is still B's, so B
+    // sees its own shelf for it, not A's archive and order.
+    server.signedIn = 'B';
+    const [bListed] = await listUnreached('B');
+    expect(projectOrganization(bListed!)).toEqual(ACTIVE);
+
+    // B pins it there; B's record holds B's pin and nothing of A's.
+    await editShelf('B', bListed!, { pinned: true });
+    const [bPinned] = await listUnreached('B');
+    expect(projectOrganization(bPinned!)).toEqual({ ...ACTIVE, pinned: true });
+    expect(await syncAccountLibraryFolders('B', () => false)).toBe(false);
+    expect(sealedSet('B')?.projects?.[SHARED]).toMatchObject({
+      pinned: true,
+      sortOrder: 0,
+      archived: false
+    });
+
+    // A finds its archive and order as it left them.
+    server.signedIn = 'A';
+    const [aBack] = await listSealed('A');
+    expect(projectOrganization(aBack!)).toMatchObject({
+      status: 'archived',
+      pinned: false,
+      sortOrder: 7
+    });
+  });
+
+  it('seals only its own edit when an account that knows nothing of a project edits it from a failed listing', async () => {
+    const { syncAccountLibraryFolders } =
+      await import('./libraryFolderCloudSync');
+    const { readShelfEdits } = await import('./sealedShelfState');
+
+    // A leaves the shared project archived at place 7, unsent.
+    const [aListed] = await listSealed('A');
+    await editShelf('A', aListed!, { status: 'archived' });
+    const [aArchived] = await listSealed('A');
+    await editShelf('A', aArchived!, { sortOrder: 7 });
+
+    // B has no record, no edit and no listed rows here, and cannot reach
+    // its account: the project looks like this device's own, so the shelf
+    // shows the device row. Pinning it still journals only B's pin.
+    server.signedIn = 'B';
+    const [bListed] = await listUnreached('B');
+    expect(projectOrganization(bListed!)).toMatchObject({
+      status: 'archived',
+      sortOrder: 7
+    });
+    await editShelf('B', bListed!, { pinned: true });
+    expect(readShelfEdits('B').get(SHARED)).toEqual({
+      before: { pinned: false, sortOrder: 0, archived: false },
+      after: { pinned: true, sortOrder: 0, archived: false }
+    });
+    expect(await syncAccountLibraryFolders('B', () => false)).toBe(false);
+    const sealed = sealedSet('B')?.projects?.[SHARED];
+    expect(sealed).toMatchObject({
+      pinned: true,
+      sortOrder: 0,
+      archived: false
+    });
+    expect(sealed?.archivedAt).toBeUndefined();
+  });
+
+  it('journals an edit under the account that made it when the session ends mid-write', async () => {
+    const { beginShelfEdit, readShelfEdits } =
+      await import('./sealedShelfState');
+    let session: string | null = 'A';
+    const edit = beginShelfEdit(() => session);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const persisted = edit.persist(
+      new Map([[SHARED, ACTIVE]]),
+      new Map([[SHARED, { ...ACTIVE, pinned: true }]]),
+      () => held
+    );
+    // Cloud is turned off while this device's write is still in flight.
+    session = null;
+    release();
+    await persisted;
+    expect(readShelfEdits('A').get(SHARED)?.after).toEqual({
+      pinned: true,
+      sortOrder: 0,
+      archived: false
+    });
+  });
+
+  it('journals an edit under the account that made it when another account signs in mid-write', async () => {
+    const { beginShelfEdit, readShelfEdits } =
+      await import('./sealedShelfState');
+    let session: string | null = 'A';
+    const edit = beginShelfEdit(() => session);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const persisted = edit.persist(
+      new Map([[SHARED, ACTIVE]]),
+      new Map([[SHARED, { ...ACTIVE, status: 'archived' }]]),
+      () => held
+    );
+    session = 'B';
+    release();
+    await persisted;
+    expect(readShelfEdits('A').get(SHARED)?.after).toMatchObject({
+      archived: true
+    });
+    expect(readShelfEdits('B').size).toBe(0);
+  });
+
+  it('journals nothing when this device’s write fails', async () => {
+    const { beginShelfEdit, readShelfEdits } =
+      await import('./sealedShelfState');
+    const edit = beginShelfEdit(() => 'A');
+    await expect(
+      edit.persist(
+        new Map([[SHARED, ACTIVE]]),
+        new Map([[SHARED, { ...ACTIVE, pinned: true }]]),
+        () => Promise.reject(new Error('quota'))
+      )
+    ).rejects.toThrow('quota');
+    expect(readShelfEdits('A').size).toBe(0);
   });
 
   it('journals only the fields an edit changed over the account’s own state', async () => {

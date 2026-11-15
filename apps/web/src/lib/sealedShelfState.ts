@@ -1,4 +1,5 @@
 import {
+  DEFAULT_PROJECT_ORGANIZATION,
   PROJECT_SHELF_STATE_SEALED_CODE,
   projectOrganization,
   toProjectId,
@@ -53,6 +54,8 @@ interface AccountShelf {
   asking?: Promise<boolean>;
   /** The account's rows as last listed or written. */
   rows: Map<string, ProjectOrganization>;
+  /** True once this visit listed the account's rows. */
+  listed?: true;
   /** Readable shelf state waiting for the sealed record before its reset. */
   legacy: Map<string, ProjectOrganization>;
   /** Projects another account owns: their rows are not this account's to reset. */
@@ -251,10 +254,11 @@ function ownShelf(
 /**
  * Notes a shelf edit for the next sync round. Only the fields the edit
  * changed are taken from `before`/`after`, which is what the shelf
- * showed; every other field keeps the account's own value. The shelf can
- * show state this account never chose (a row another account signed in
- * here left pending, for one), and that must not reach this account's
- * record as part of an edit. Later edits of the same project keep the
+ * showed; every other field keeps the account's own value, or the
+ * default when the account knows nothing of the project here. The shelf
+ * can show state this account never chose (a row another account signed
+ * in here left pending, or a device row a failed listing showed), and
+ * that must not reach this account's record as part of an edit. Later edits of the same project keep the
  * first edit's starting point, so the round stamps every field changed
  * since the account last agreed.
  */
@@ -267,7 +271,10 @@ export function journalShelfEdit(
   const edits = readShelfEdits(accountId);
   const from = shelfOfOrganization(before);
   const to = shelfOfOrganization(after);
-  const base = ownShelf(accountId, projectId, edits) ?? from;
+  // What the shelf showed may be a device row another account left here,
+  // so an account that knows nothing of the project starts from the
+  // defaults, never from that row.
+  const base = ownShelf(accountId, projectId, edits) ?? DEFAULT_PROJECT_SHELF;
   const archive =
     from.archived !== to.archived ||
     (from.archived && (from.archivedAt ?? null) !== (to.archivedAt ?? null))
@@ -288,6 +295,44 @@ export function journalShelfEdit(
   writeShelfEdits(accountId, edits);
 }
 
+/**
+ * Starts a shelf edit for the account signed in when the user made it.
+ * The account is read now, before the edit waits for earlier shelf writes
+ * or for this device's storage: the session can end or change to another
+ * account meanwhile, and the edit is still the first account's. Reading
+ * it after the write would drop the edit (no session) or journal it under
+ * the account that signed in next.
+ */
+export function beginShelfEdit(currentAccount: () => string | null): {
+  readonly accountId: string | null;
+  /**
+   * Runs `write` (this device's rows), then journals each row's change
+   * under the account that made the edit. A failed write journals nothing.
+   */
+  persist(
+    before: ReadonlyMap<string, ProjectOrganization>,
+    rows: ReadonlyMap<string, ProjectOrganization>,
+    write: () => Promise<void>
+  ): Promise<void>;
+} {
+  const accountId = currentAccount();
+  return {
+    accountId,
+    async persist(before, rows, write) {
+      await write();
+      if (!accountId) return;
+      for (const [projectId, organization] of rows) {
+        journalShelfEdit(
+          accountId,
+          projectId,
+          before.get(projectId) ?? DEFAULT_PROJECT_ORGANIZATION,
+          organization
+        );
+      }
+    }
+  };
+}
+
 /** Forgets edits a round recorded, keeping any made again since it read them. */
 export function consumeShelfEdits(
   accountId: string,
@@ -304,15 +349,85 @@ export function consumeShelfEdits(
 
 // ── Listings ──────────────────────────────────────────────────────────────
 
-/** The account's rows as listed, for the trash-only mirror. */
+const ROWS_PREFIX = 'openzcad.library.shelf.rows.v1';
+
+export function accountRowsKey(accountId: string): string {
+  return `${ROWS_PREFIX}:${accountId}`;
+}
+
+function parseOrganization(value: unknown): ProjectOrganization | null {
+  if (!value || typeof value !== 'object') return null;
+  const entry = value as Record<string, unknown>;
+  if (
+    (entry.status !== 'active' &&
+      entry.status !== 'archived' &&
+      entry.status !== 'deleted') ||
+    typeof entry.pinned !== 'boolean' ||
+    typeof entry.sortOrder !== 'number' ||
+    !Number.isFinite(entry.sortOrder)
+  )
+    return null;
+  return {
+    status: entry.status,
+    pinned: entry.pinned,
+    sortOrder: entry.sortOrder,
+    ...(entry.status === 'archived' && typeof entry.archivedAt === 'string'
+      ? { archivedAt: entry.archivedAt }
+      : {}),
+    ...(entry.status === 'deleted' && typeof entry.deletedAt === 'string'
+      ? { deletedAt: entry.deletedAt }
+      : {})
+  };
+}
+
+/**
+ * The account's rows as last listed on this device, from this visit or
+ * kept from an earlier one. Only a failed listing reads the stored copy:
+ * the trash-only mirror compares against rows listed this visit, since a
+ * stale row there could hide a trash move that still has to be sent.
+ */
+function listedAccountRows(
+  accountId: string
+): Map<string, ProjectOrganization> {
+  const state = accounts.get(accountId);
+  if (state?.listed) return new Map(state.rows);
+  const rows = new Map<string, ProjectOrganization>();
+  try {
+    const raw = globalThis.localStorage?.getItem(accountRowsKey(accountId));
+    const value: unknown = raw ? JSON.parse(raw) : null;
+    if (!value || typeof value !== 'object') return rows;
+    for (const [projectId, entry] of Object.entries(value)) {
+      const organization = parseOrganization(entry);
+      if (organization) rows.set(projectId, organization);
+    }
+  } catch {
+    // Unreadable storage: the failed listing knows only the edits and record.
+  }
+  return rows;
+}
+
+/**
+ * The account's rows as listed, for the trash-only mirror, and kept on
+ * this device so a listing that cannot reach the account still knows
+ * which projects are the account's (`accountListingOrganizations`).
+ */
 export function rememberAccountRows(
   accountId: string,
   projects: readonly ProjectSummary[]
 ): void {
   const state = account(accountId);
+  state.listed = true;
   state.rows = new Map(
     projects.map((project) => [project.projectId, projectOrganization(project)])
   );
+  try {
+    globalThis.localStorage?.setItem(
+      accountRowsKey(accountId),
+      JSON.stringify(Object.fromEntries(state.rows))
+    );
+  } catch {
+    // Without storage a later failed listing knows the edits and record only.
+  }
 }
 
 function shelfOf(entry: ProjectShelf): ProjectShelf {
@@ -344,36 +459,91 @@ export function overlaySealedShelf(
   const legacy = new Map<string, ProjectOrganization>();
   const projects = remote.map((project) => {
     const row = projectOrganization(project);
-    const readable = shelfOfOrganization(row);
-    if (!isDefaultShelf(readable)) legacy.set(project.projectId, row);
-    const sealed = agreed?.[project.projectId];
-    const edit = edits.get(project.projectId)?.after;
-    const shelf: ProjectShelf = edit
-      ? edit
-      : sealed
-        ? shelfOf(sealed)
-        : isDefaultShelf(readable)
-          ? DEFAULT_PROJECT_SHELF
-          : readable;
-    const organization: ProjectOrganization =
-      row.status === 'deleted'
-        ? {
-            status: 'deleted',
-            pinned: shelf.pinned,
-            sortOrder: shelf.sortOrder,
-            ...(row.deletedAt ? { deletedAt: row.deletedAt } : {})
-          }
-        : {
-            status: shelf.archived ? 'archived' : 'active',
-            pinned: shelf.pinned,
-            sortOrder: shelf.sortOrder,
-            ...(shelf.archived && shelf.archivedAt
-              ? { archivedAt: shelf.archivedAt }
-              : {})
-          };
+    if (!isDefaultShelf(shelfOfOrganization(row)))
+      legacy.set(project.projectId, row);
+    const organization = sealedOrganization(
+      row,
+      agreed?.[project.projectId],
+      edits.get(project.projectId)
+    );
     return { ...project, organization };
   });
   return { projects, legacy };
+}
+
+/** One account row as a sealed library reads it (`overlaySealedShelf`). */
+function sealedOrganization(
+  row: ProjectOrganization,
+  sealed: ProjectShelf | undefined,
+  edit: ShelfEdit | undefined
+): ProjectOrganization {
+  const readable = shelfOfOrganization(row);
+  const shelf: ProjectShelf = edit
+    ? edit.after
+    : sealed
+      ? shelfOf(sealed)
+      : isDefaultShelf(readable)
+        ? DEFAULT_PROJECT_SHELF
+        : readable;
+  return row.status === 'deleted'
+    ? {
+        status: 'deleted',
+        pinned: shelf.pinned,
+        sortOrder: shelf.sortOrder,
+        ...(row.deletedAt ? { deletedAt: row.deletedAt } : {})
+      }
+    : {
+        status: shelf.archived ? 'archived' : 'active',
+        pinned: shelf.pinned,
+        sortOrder: shelf.sortOrder,
+        ...(shelf.archived && shelf.archivedAt
+          ? { archivedAt: shelf.archivedAt }
+          : {})
+      };
+}
+
+/**
+ * This device's organization rows as a listing of an account whose library
+ * is encrypted (or may be) applies them, whether or not the account's
+ * listing came back.
+ *
+ * With the listing (`listed`), the account's rows have already been laid
+ * under its own shelf state (`overlaySealedShelf`), and this device's rows
+ * add only an unmirrored trash move (`sealedListingOrganizations`).
+ *
+ * Without it (`listed` null: offline, or the account did not answer), the
+ * account's projects are still the account's: those it listed here before
+ * (this visit or an earlier one), holds an unsynced edit for, or has in
+ * its agreed sealed record. Each takes its pin, order and archive from the
+ * account's edit, then its record, then its row as last listed, then the
+ * defaults, and its trash from that row unless this device holds an
+ * unmirrored move. A device row never supplies their pin, order or
+ * archive: another account signed in here may have left it. Projects the
+ * account knows nothing of are this device's alone and keep their rows.
+ */
+export function accountListingOrganizations(
+  accountId: string,
+  device: ReadonlyMap<string, ProjectOrganization>,
+  listed: readonly ProjectSummary[] | null
+): Map<string, ProjectOrganization> {
+  if (listed) return sealedListingOrganizations(device, listed);
+  const rows = listedAccountRows(accountId);
+  const edits = readShelfEdits(accountId);
+  const agreed = agreedShelfState(accountId);
+  const own = new Set([
+    ...rows.keys(),
+    ...edits.keys(),
+    ...Object.keys(agreed ?? {})
+  ]);
+  const projects = [...own].map((projectId) => ({
+    projectId: toProjectId(projectId),
+    organization: sealedOrganization(
+      rows.get(projectId) ?? DEFAULT_PROJECT_ORGANIZATION,
+      agreed?.[projectId],
+      edits.get(projectId)
+    )
+  }));
+  return sealedListingOrganizations(device, projects);
 }
 
 /**
@@ -389,7 +559,7 @@ export function overlaySealedShelf(
  */
 export function sealedListingOrganizations(
   device: ReadonlyMap<string, ProjectOrganization>,
-  account: readonly ProjectSummary[]
+  account: readonly Pick<ProjectSummary, 'projectId' | 'organization'>[]
 ): Map<string, ProjectOrganization> {
   const organizations = new Map(device);
   for (const project of account) {

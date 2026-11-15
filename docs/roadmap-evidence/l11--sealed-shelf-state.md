@@ -11,7 +11,8 @@ starts their copies at order 0; the browser sends only trash moves, sends
 pins, order and archive readable only after the library rule answered
 plaintext, overlays the account's own sealed state on listings (this
 device's rows, which every account signed in shares, add only an unmirrored
-trash move), journals an edit as the fields it changed over the account's
+trash move, also when the account's listing fails), journals an edit
+under the account that made it as the fields it changed over the account's
 own state, and migrates readable
 rows into the sealed record before a Worker-side conditional reset that
 never touches the trash.

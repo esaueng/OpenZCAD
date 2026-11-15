@@ -1660,7 +1660,9 @@ import {
   withSavedVersion
 } from './lib/projectShelf';
 import {
+  accountListingOrganizations,
   agreedShelfState,
+  beginShelfEdit,
   isShelfSealed,
   journalShelfEdit,
   mirrorShelfToAccount,
@@ -1670,7 +1672,6 @@ import {
   rememberAccountRows,
   reorderShelfOnAccount,
   SEALED_SHELF_APPLIED_EVENT,
-  sealedListingOrganizations,
   setShelfAccount,
   shelfAccount,
   shelfSealedOrSafe
@@ -2323,7 +2324,12 @@ async function loadProjectSummaries(
   let remoteProjects = remote?.projects ?? [];
   let legacyShelf: ReadonlyMap<string, ProjectOrganization> = new Map();
   let sealedListing = false;
-  if (accountId && remote) {
+  if (accountId && !remote) {
+    // Unreached, the account still owns its shelf state: an encrypted (or
+    // unanswerable) library lists its known projects from its own edits,
+    // record and last-listed rows, never from this device's rows.
+    sealedListing = await sealedShelf;
+  } else if (accountId && remote) {
     rememberAccountRows(accountId, remoteProjects);
     if (await sealedShelf) {
       sealedListing = true;
@@ -2378,7 +2384,8 @@ async function loadProjectSummaries(
     : localOrganizations;
   // Readable shelf state goes into the sealed record with the next folder
   // sync, which then resets those account rows.
-  if (accountId && sealedListing) noteLegacyShelfRows(accountId, legacyShelf);
+  if (accountId && remote && sealedListing)
+    noteLegacyShelfRows(accountId, legacyShelf);
   const pendingEncryptedProjectIds = isCurrentKeySession(keySessionRevision)
     ? remote?.pendingEncryptedProjectIds
     : undefined;
@@ -2410,9 +2417,14 @@ async function loadProjectSummaries(
         local
       ),
       // A sealed library's projects take only the trash from this device's
-      // rows, which another account signed in here may have left pending.
-      sealedListing
-        ? sealedListingOrganizations(settledOrganizations, remoteProjects)
+      // rows, which another account signed in here may have left pending,
+      // whether or not the account's listing came back.
+      accountId && sealedListing
+        ? accountListingOrganizations(
+            accountId,
+            settledOrganizations,
+            remote ? remoteProjects : null
+          )
         : settledOrganizations
     ),
     local,
@@ -14831,6 +14843,8 @@ export function App() {
     projectId: string,
     update: (current: ProjectOrganization) => ProjectOrganization
   ): Promise<ProjectOrganization> {
+    // The account that made the edit, read before it waits for anything.
+    const edit = beginShelfEdit(() => sessionRef.current?.userId ?? null);
     const organization = await queueShelfWrite(async () => {
       const project = latestProjects.current.find(
         (entry) => entry.projectId === projectId
@@ -14843,7 +14857,7 @@ export function App() {
       // reconcile pushes a flagged row and adopts the account's otherwise,
       // so the flag is what keeps a change alive across a failed mirror
       // without letting this device overrule every other one forever.
-      await saveShelfRows(new Map([[projectId, next]]));
+      await saveShelfRows(new Map([[projectId, next]]), edit);
       return next;
     });
     if (session) {
@@ -14869,7 +14883,10 @@ export function App() {
    * write, so no other shelf write is in flight: a failure drops just these
    * rows, and the rows before them are already on the shelf.
    */
-  async function saveShelfRows(rows: Map<string, ProjectOrganization>) {
+  async function saveShelfRows(
+    rows: Map<string, ProjectOrganization>,
+    edit: ReturnType<typeof beginShelfEdit>
+  ) {
     const before = new Map(
       [...rows.keys()].map((projectId) => [
         projectId,
@@ -14884,36 +14901,28 @@ export function App() {
     for (const [projectId, organization] of rows) {
       pendingOrganizations.current.set(projectId, organization);
     }
-    try {
-      await Promise.all(
-        [...rows].map(([projectId, organization]) =>
-          saveLocalProjectOrganization(projectId, organization, {
-            mirrorPending: true
-          })
-        )
-      );
-    } catch (error) {
-      for (const [projectId, organization] of rows) {
-        if (pendingOrganizations.current.get(projectId) === organization) {
-          pendingOrganizations.current.delete(projectId);
-        }
-      }
-      throw error;
-    }
     // The edit also waits for the account's sealed library record, which
     // carries pins, order and archive of an account whose library is
-    // encrypted; a plaintext library's sync forgets it again.
-    const accountId = sessionRef.current?.userId;
-    if (accountId) {
-      for (const [projectId, organization] of rows) {
-        journalShelfEdit(
-          accountId,
-          projectId,
-          before.get(projectId)!,
-          organization
+    // encrypted; a plaintext library's sync forgets it again. It is the
+    // account that made the edit, even if the session changed meanwhile.
+    await edit.persist(before, rows, async () => {
+      try {
+        await Promise.all(
+          [...rows].map(([projectId, organization]) =>
+            saveLocalProjectOrganization(projectId, organization, {
+              mirrorPending: true
+            })
+          )
         );
+      } catch (error) {
+        for (const [projectId, organization] of rows) {
+          if (pendingOrganizations.current.get(projectId) === organization) {
+            pendingOrganizations.current.delete(projectId);
+          }
+        }
+        throw error;
       }
-    }
+    });
     setProjects((current) =>
       current
         .map((project) => {
@@ -15171,6 +15180,7 @@ export function App() {
     pin?: { projectId: string; pinned: boolean }
   ): Promise<void> {
     const positions = new Map(projectIds.map((id, index) => [id, index]));
+    const edit = beginShelfEdit(() => sessionRef.current?.userId ?? null);
     let pinnedName: string | undefined;
     try {
       pinnedName = await queueShelfWrite(async () => {
@@ -15192,7 +15202,7 @@ export function App() {
               ];
             })
         );
-        await saveShelfRows(rows);
+        await saveShelfRows(rows, edit);
         return pin
           ? latestProjects.current.find(
               (project) => project.projectId === pin.projectId
