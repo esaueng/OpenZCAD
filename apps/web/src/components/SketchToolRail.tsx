@@ -7,6 +7,7 @@ import {
   type ReactNode
 } from 'react';
 import {
+  ArrowRightToLine,
   Crosshair,
   CircleDot,
   Construction,
@@ -492,6 +493,7 @@ const EDIT_TOOL_ICONS: Record<SketchEditToolKind, typeof Minus> = {
   chamfer: Slice,
   offset: SquareDashed,
   trim: Scissors,
+  extend: ArrowRightToLine,
   mirror: FlipHorizontal2,
   'linear-pattern': Columns3,
   'circular-pattern': RotateCw
@@ -505,6 +507,7 @@ const EDIT_TOOL_ICONS: Record<SketchEditToolKind, typeof Minus> = {
 const FOLDED_EDIT_TOOLS = new Set<SketchEditToolKind>([
   'offset',
   'trim',
+  'extend',
   'mirror',
   'linear-pattern',
   'circular-pattern'

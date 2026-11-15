@@ -211,6 +211,7 @@ export type SketchEditToolKind =
   | 'chamfer'
   | 'offset'
   | 'trim'
+  | 'extend'
   | 'mirror'
   | 'linear-pattern'
   | 'circular-pattern';
