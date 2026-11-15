@@ -49,6 +49,26 @@ describe('start screen list names', () => {
     expect(columns!.match(/clamp\(/g)).toHaveLength(2);
   });
 
+  it('gives the Size column back to the name on a narrower shelf', () => {
+    const wide = rule(css, '.start-tile-grid.is-list .start-tile-open').match(
+      /grid-template-columns:\s*([^;]*);/
+    )?.[1];
+    const block =
+      /@container\s+start-section\s*\(max-width:\s*860px\)\s*\{([\s\S]*?\})\s*\}/.exec(
+        css
+      )?.[1];
+    expect(block).toBeDefined();
+    const narrow = /grid-template-columns:\s*([^;]*);/.exec(block!)?.[1];
+    expect(narrow).toBeDefined();
+    // One fixed column fewer, and the Size cells and heading leave with it.
+    expect(narrow!.trim().split(/\s+(?![^(]*\))/)).toHaveLength(
+      wide!.trim().split(/\s+(?![^(]*\))/).length - 1
+    );
+    expect(block).toMatch(
+      /\.start-list-head \.start-list-head-size,\s*\.start-tile-grid\.is-list \.start-tile-size\s*\{[^}]*display:\s*none/
+    );
+  });
+
   it('wraps a long name to two lines instead of one clipped line', () => {
     const name = rule(css, '.start-tile-grid.is-list .start-tile-name');
     expect(name).toMatch(/-webkit-line-clamp:\s*2/);
@@ -177,6 +197,31 @@ describe('start screen card names and flags', () => {
   });
 });
 
+describe('start screen folder tab', () => {
+  it('fills the tab in the folder edge colour, so it shows on the page', () => {
+    // 14 Nov 2026: an outline in the card's own fill, 7px tall, all but
+    // vanished; with the count chip gone it is what says "folder".
+    const tab = rule(css, '.start-tile-folder::before');
+    expect(tab).toMatch(/background:\s*var\(--start-folder-tab\)/);
+    expect(tab).not.toMatch(/border:/);
+    expect(Number(/height:\s*(\d+)px/.exec(tab)?.[1])).toBeGreaterThan(7);
+    expect(rule(css, '.start-tile-folder')).toMatch(
+      /--start-folder-tab:\s*var\(--color-border-strong\)/
+    );
+    expect(rule(css, '.start-tile-folder.is-drop-target')).toMatch(
+      /--start-folder-tab:\s*var\(--color-accent\)/
+    );
+  });
+});
+
+describe('start screen encryption mark', () => {
+  it('draws the not-encrypted mark in the warning hue', () => {
+    expect(rule(css, '.start-tile-mark.is-plaintext')).toMatch(
+      /color:\s*var\(--color-warning\)/
+    );
+  });
+});
+
 describe('start screen shelf groups', () => {
   it('styles the Pinned and Projects labels as the column eyebrow', () => {
     // 5 Nov 2026: the groups were unlabelled, so a short Pinned row read as
@@ -184,7 +229,7 @@ describe('start screen shelf groups', () => {
     const label = rule(css, '.start-group-label');
     expect(label).toMatch(/font-family:\s*var\(--font-mono\)/);
     expect(label).toMatch(/text-transform:\s*uppercase/);
-    // A negative bottom margin would put a folder's 7px tab on the label.
+    // A negative bottom margin would put a folder's tab on the label.
     expect(label).toMatch(/margin:\s*0;/);
   });
 });
@@ -198,8 +243,14 @@ describe('start screen shelf clip', () => {
     expect(tab).toMatch(new RegExp(`top:\\s*-${tabHeight}px`));
     const body = rule(css, '.start-body');
     const inset = Number(/--start-shelf-inset:\s*(\d+)px/.exec(body)?.[1]);
-    expect(inset).toBeGreaterThan(tabHeight);
-    for (const side of ['top', 'right', 'left']) {
+    const tabRoom = Number(
+      /--start-folder-tab-room:\s*(\d+)px/.exec(body)?.[1]
+    );
+    // The tab, plus the 2px focus ring above the tile beside it.
+    expect(tabRoom).toBeGreaterThanOrEqual(tabHeight + 2);
+    expect(body).toMatch(/padding-top:\s*var\(--start-folder-tab-room\)/);
+    expect(inset).toBeGreaterThanOrEqual(2);
+    for (const side of ['right', 'left']) {
       expect(body).toMatch(
         new RegExp(`padding-${side}:\\s*var\\(--start-shelf-inset\\)`)
       );
@@ -289,5 +340,51 @@ describe('start screen first-run polish', () => {
       )
     ).toMatch(/opacity:\s*1/);
     expect(css).not.toMatch(/^\.start-tile\.is-pinned \.start-tile-pin\s*\{/m);
+  });
+});
+
+describe('start screen storage panel', () => {
+  // PR review: below 901px the account card sits under the logo at the
+  // page's top, and the panel rising from it opened 344px above the page.
+  it('drops below the card in the one-column layout', () => {
+    const narrow = [
+      ...css.matchAll(
+        /@media \(max-width: 900px\) \{\s*\.storage-panel \{([^}]*)\}/g
+      )
+    ].map((match) => match[1]!);
+    expect(narrow).toHaveLength(1);
+    expect(narrow[0]).toMatch(/top:\s*calc\(100% \+/);
+    expect(narrow[0]).toMatch(/bottom:\s*auto/);
+  });
+
+  it('rises above the card beside the shelf', () => {
+    expect(rule(css, '.storage-panel')).toMatch(/bottom:\s*calc\(100% \+/);
+  });
+});
+
+describe('start screen folder navigation', () => {
+  // 14 Nov 2026 recording: with a folder open, Projects kept its accent wash
+  // beside the folder's, so two rows claimed to be the place shown.
+  it('lights only the open folder beside the folder list', () => {
+    expect(rule(css, '.start-shelf-tabs button.is-parent')).not.toMatch(
+      /background/
+    );
+  });
+
+  it('keeps Projects lit on the narrow strip, where no folder row shows', () => {
+    const narrow = css
+      .split(/@media\s*\(max-width:\s*900px\)/)
+      .find((chunk) => /\.start-folders\s*\{\s*display:\s*none/.test(chunk));
+    expect(narrow).toBeDefined();
+    // The shared hover rules (here and in buttons.css) exclude only
+    // .is-active and outrank a bare .is-parent, so hover keeps the wash at
+    // the same weight as theirs.
+    const lit =
+      /(?:^|[}\n])\s*\.start-shelf-tabs button\.is-parent,\s*\.start-shelf-tabs button\.is-parent:hover:not\(\.is-active\)\s*\{([^}]*)\}/.exec(
+        narrow!
+      )?.[1];
+    expect(lit).toBeDefined();
+    expect(lit).toMatch(/background:\s*var\(--color-accent-dim\)/);
+    expect(lit).toMatch(/box-shadow:\s*none/);
   });
 });

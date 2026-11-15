@@ -21,4 +21,15 @@ describe('modeling refusal recovery', () => {
       modelingRefusalSummary('unrecognized kernel error', 'Intersect')
     ).toBeNull();
   });
+
+  // QA 2026-11-14 finding #18: the identical-box cut read as an internal
+  // failure; the kernel's two empty-cut wordings now read the same way.
+  it.each([
+    'empty result: Cut of identical solids',
+    'empty result: Cut with target fully contained in tool'
+  ])('says a cut that empties the body would remove it: %s', (reason) => {
+    expect(modelingRefusalSummary(reason, 'Subtract')).toBe(
+      'This cut would remove the entire target body. Reduce its size or move it.'
+    );
+  });
 });

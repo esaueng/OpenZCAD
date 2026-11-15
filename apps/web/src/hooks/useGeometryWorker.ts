@@ -232,8 +232,13 @@ export interface GeometryWorkerApi {
      * fillet/chamfer the edit stranded may be carried and reported in
      * `edgeHashRepairs`, for the commit to store in the same revision. Every
      * other rebuild leaves it unset and depends on the document alone.
+     *
+     * `signal`: aborting rejects with an `AbortError`-named error and asks
+     * the worker to drop the job. A queued job is skipped; a running one
+     * stops at its next feature boundary (a wasm call already under way
+     * completes), and its result is discarded either way.
      */
-    options?: { proposeCarry?: boolean }
+    options?: { proposeCarry?: boolean; signal?: AbortSignal }
   ): Promise<DerivedState>;
   /** Exact display/validation only; cannot be used as an authoritative commit. */
   previewGeometry(
@@ -1294,6 +1299,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         } satisfies GeometryWorkerRequest);
     },
     syncOnce(document, analysis, lineageDemand, options) {
+      const signal = options?.signal;
+      if (signal?.aborted)
+        return Promise.reject(abortError('Rebuild cancelled.'));
       // One-off rebuilds (previews, preflights, demo seeding, AI proposals)
       // read lineage straight from the result, so they get full lineage by
       // default. Only an explicit demand opts one into the idle skip.
@@ -1304,16 +1312,33 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         ...(lineageDemand ? { lineageDemand: [...lineageDemand] } : {}),
         ...(options?.proposeCarry ? { proposeCarry: true } : {})
       });
-      return posted.ok
-        ? posted.promise.then((derived) => {
-            syncOrigins.current.set(derived, {
-              document,
-              lineageDemand,
-              analysis: analysis !== undefined
-            });
-            return derived;
-          })
-        : Promise.reject(new Error('Geometry worker unavailable.'));
+      if (!posted.ok)
+        return Promise.reject(new Error('Geometry worker unavailable.'));
+      // A preview its command closed (Cancel, another tool) no longer holds
+      // the worker: without this a large pattern's preview kept building for
+      // a minute after its card was gone, and everything queued behind it.
+      const onAbort = () => {
+        const pending = syncRequests.current.get(posted.requestId);
+        if (!pending) return;
+        syncRequests.current.delete(posted.requestId);
+        armedRef.current = true;
+        workerRef.current?.postMessage({
+          type: 'cancel',
+          requestId: posted.requestId
+        });
+        pending.reject(abortError('Rebuild cancelled.'));
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      return posted.promise
+        .finally(() => signal?.removeEventListener('abort', onAbort))
+        .then((derived) => {
+          syncOrigins.current.set(derived, {
+            document,
+            lineageDemand,
+            analysis: analysis !== undefined
+          });
+          return derived;
+        });
     },
     releaseEditPreview(document) {
       workerRef.current?.postMessage({

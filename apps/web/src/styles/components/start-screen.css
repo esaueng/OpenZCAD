@@ -385,6 +385,7 @@
    under it in the column, in its own flow. */
 .start-account-details {
   display: grid;
+  padding: 0 0 6px 8px;
   gap: var(--sp-2);
   max-height: 180px;
   overflow-y: auto;
@@ -657,6 +658,13 @@
   color: var(--color-accent-hi);
 }
 
+/* Projects while one of its folders is open: the folder row is the place
+   shown, so the shelf keeps only its full-strength name. Two lit rows read
+   as two places at once. */
+.start-shelf-tabs button.is-parent {
+  color: var(--color-text);
+}
+
 /* ── Column: demos ───────────────────────────────────────── */
 
 /* In the column the demos are a list; the card treatment they take on the
@@ -715,6 +723,7 @@
    saved, failed) so the words can stay short; the full account is in the
    tooltip. */
 .start-cloud {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-2);
@@ -726,9 +735,62 @@
      a long one ran past the column's edge instead of ellipsizing. */
   grid-template-columns: minmax(0, 1fr);
   gap: 6px;
-  padding: 6px 0 6px 8px;
   color: var(--color-text-subtle);
   font-size: var(--fs-sm);
+}
+
+/* The sentence and its storage meter, which together open the storage
+   details. The button is drawn under them so the whole card is the target;
+   the line's own actions stand above it and keep their clicks. */
+.start-account-head {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
+  padding: 7px 8px;
+}
+
+.start-account-head > :not(.start-account-open) {
+  position: relative;
+  pointer-events: none;
+}
+
+.start-account-head button:not(.start-account-open) {
+  pointer-events: auto;
+}
+
+.start-account-open {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  padding: 0;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+
+.start-account-open:hover,
+.start-account.is-open .start-account-open {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border);
+}
+
+.start-account-open:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
+}
+
+/* "42 MB of 1 GB" at the line's end: the figure the meter under it draws. */
+.start-account-figure {
+  flex: none;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .start-account-row {
@@ -909,16 +971,18 @@
 
 .start-body {
   /* Room inside the scroller's clip for what a tile draws outside its box:
-     a folder's 7px tab above the first row and the 2px focus and drop rings
-     on every edge. The left margin cancels the inset so the cards keep their
-     line; on the right it is the gutter before the scrollbar. */
+     the 2px focus and drop rings on every edge, and above the first row a
+     folder's 9px tab as well. The left margin cancels the inset so the
+     cards keep their line; on the right it is the gutter before the
+     scrollbar. */
   --start-shelf-inset: 8px;
+  --start-folder-tab-room: 12px;
   display: grid;
   align-content: start;
   gap: var(--sp-3);
   min-height: 0;
   margin-left: calc(-1 * var(--start-shelf-inset));
-  padding-top: var(--start-shelf-inset);
+  padding-top: var(--start-folder-tab-room);
   padding-right: var(--start-shelf-inset);
   padding-bottom: var(--sp-4);
   padding-left: var(--start-shelf-inset);
@@ -1272,7 +1336,7 @@
 }
 
 /* Pinned and Projects, over their groups: the column's mono eyebrow. The
-   body's row gap below it leaves room for a folder's 7px tab; the margin
+   body's row gap below it leaves room for a folder's 9px tab; the margin
    above sets the label off from the group before it. */
 .start-group-label {
   margin: 0;
@@ -1602,12 +1666,19 @@
   color: var(--color-accent);
 }
 
+/* Plaintext in an account whose projects are encrypted: the one mark that
+   asks for a look, in the warning hue the Needs attention count uses. */
+.start-tile-mark.is-plaintext {
+  color: var(--color-warning);
+}
+
 /* Room for the copies count beside the actions button. */
 .start-tile-project:has(> .start-tile-copies) .start-tile-meta {
   padding-right: 34px;
 }
 
-.start-tile-rev {
+.start-tile-rev,
+.start-tile-size {
   flex: none;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
@@ -1672,12 +1743,13 @@
    row's columns, so every action and menu keeps working. The name is what
    tells two rows apart, so it has the room: Status and Edited give way on a
    narrower window (they were a fixed 330px together, and at 1050px left the
-   name 135px, "QA-20261028-Profil…" on two different parts). */
+   name 135px, "QA-20261028-Profil…" on two different parts). Size holds
+   "1,023.9 KiB" in the mono figures. */
 .start-list-head,
 .start-tile-grid.is-list .start-tile-open {
   grid-template-columns:
     52px minmax(0, 1fr) clamp(7rem, 12vw, 170px) clamp(6.5rem, 11vw, 160px)
-    76px 88px;
+    80px 76px 88px;
 }
 
 .start-list-head {
@@ -1775,7 +1847,9 @@
   order: 3;
 }
 
-/* Wide enough for a folder's "12 projects" as well as a part's saves. */
+/* Size precedes Saves in the markup, so the two share an order. Saves is
+   wide enough for a folder's "12 projects" as well as a part's saves. */
+.start-tile-grid.is-list .start-tile-size,
 .start-tile-grid.is-list .start-tile-rev {
   order: 4;
   white-space: nowrap;
@@ -1828,6 +1902,22 @@
 /* The menu carries Restore and Delete forever; a row has no footer. */
 .start-tile-grid.is-list .start-tile-footer {
   display: none;
+}
+
+/* A narrower shelf gives the Size column back to the name: with it, a
+   1050px window left the name about 100px, the F016 clipping again. */
+@container start-section (max-width: 860px) {
+  .start-list-head,
+  .start-tile-grid.is-list .start-tile-open {
+    grid-template-columns:
+      52px minmax(0, 1fr) clamp(7rem, 12vw, 170px) clamp(6.5rem, 11vw, 160px)
+      76px 88px;
+  }
+
+  .start-list-head .start-list-head-size,
+  .start-tile-grid.is-list .start-tile-size {
+    display: none;
+  }
 }
 
 /* One line above phone width: title, filters and tools stay together and
@@ -2067,7 +2157,8 @@
     display: none;
   }
 
-  .start-tile-grid.is-list .start-tile-rev {
+  .start-tile-grid.is-list .start-tile-rev,
+  .start-tile-grid.is-list .start-tile-size {
     display: none;
   }
 
@@ -2658,28 +2749,38 @@
 /* A folder is a card with a tab: the same tile, so the shelf stays one grid,
    but it reads as something that holds parts rather than as a part. */
 .start-tile-folder {
+  --start-folder-tab: var(--color-border-strong);
   background: var(--color-surface-2);
   border-color: var(--color-border-strong);
 }
 
 /* The tab rides in the grid's row gap, so a folder lines up with the parts
-   beside it. */
+   beside it. It is filled in the card's edge colour and its last pixel is
+   that edge, so tab and top edge read as one folder back: drawn as an
+   outline in the card's own fill, 7px tall, it all but vanished against
+   the page (14 Nov 2026). The sloped side is a folder's, not a browser
+   tab's. */
 .start-tile-folder::before {
   content: '';
   position: absolute;
-  top: -7px;
+  top: -10px;
   left: -1px;
-  width: 42%;
-  height: 7px;
-  background: var(--color-surface-2);
-  border: 1px solid var(--color-border-strong);
-  border-bottom: 0;
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  width: 40%;
+  height: 10px;
+  background: var(--start-folder-tab);
+  border-radius: var(--radius-lg) 0 0 0;
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 100%, 0 100%);
 }
 
-.start-tile-folder:has(.start-tile-open:focus-visible)::before,
-.start-tile-folder:hover::before {
-  border-color: var(--color-accent-border);
+/* Lit with the card's edge, in the colour that edge shows: the accent
+   border over the folder's own fill. */
+.start-tile-folder:has(> .start-tile-open:not(.is-static):hover:not(:disabled)),
+.start-tile-folder:has(.start-tile-open:focus-visible) {
+  --start-folder-tab: color-mix(
+    in srgb,
+    var(--color-accent) 45%,
+    var(--color-surface-2)
+  );
 }
 
 .start-tile-folder .start-tile-name {
@@ -2720,13 +2821,13 @@
 
 /* Where a dragged part would go: a folder under it, or a part it is held
    over (pending until the hold arms, then the accent). */
-.start-tile-project.is-drop-target,
-.start-tile-folder.is-drop-target::before {
+.start-tile-project.is-drop-target {
   border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent);
 }
 
-.start-tile-project.is-drop-target {
-  box-shadow: 0 0 0 2px var(--color-accent);
+.start-tile-folder.is-drop-target {
+  --start-folder-tab: var(--color-accent);
 }
 
 .start-tile-project.is-drop-pending {
@@ -2950,6 +3051,24 @@
     display: none;
   }
 
+  /* With no folder row to carry it, Projects stays lit while one of its
+     folders is open: the strip still says which shelf the folder is on. */
+  /* Hover too: the shared hover rules exclude only .is-active, and their
+     :hover:not() outranks a bare .is-parent, so they would wash it out. */
+  .start-shelf-tabs button.is-parent,
+  .start-shelf-tabs button.is-parent:hover:not(.is-active) {
+    background: var(--color-accent-dim);
+    box-shadow: none;
+  }
+
+  .start-shelf-tabs button.is-parent > svg {
+    color: var(--color-accent);
+  }
+
+  .start-shelf-tabs button.is-parent .start-shelf-count {
+    color: var(--color-accent-hi);
+  }
+
   .start-selection-bar {
     bottom: var(--sp-2);
     max-width: calc(100vw - 16px);
@@ -2986,5 +3105,395 @@
   .start-tile-grid.is-small,
   .start-tile-grid.is-medium {
     --start-tile-min: 140px;
+  }
+}
+
+/* ── Column foot: storage ────────────────────────────────── */
+
+/* Used of allowance, in its parts: project storage, then imports and
+   exports, then uploads in flight. Thin under the footer's sentence, taller
+   in the details. Nearly full turns the parts amber; over, red. */
+.storage-bar {
+  display: flex;
+  gap: 1px;
+  width: 100%;
+  height: 4px;
+  overflow: hidden;
+  background: var(--color-border);
+  border-radius: 999px;
+}
+
+.storage-bar.is-large {
+  height: 8px;
+}
+
+.storage-bar-part {
+  display: block;
+  /* A sliver still shows: 40 KB of 1 GB must not read as an empty bar. */
+  min-width: 3px;
+  height: 100%;
+  transition: width var(--dur-base) var(--ease-out);
+}
+
+.storage-bar-part:first-child {
+  border-radius: 999px 0 0 999px;
+}
+
+.storage-bar-part:last-child {
+  border-radius: 0 999px 999px 0;
+}
+
+.storage-bar-part:only-child {
+  border-radius: 999px;
+}
+
+.storage-bar-part.is-projects,
+.storage-panel-swatch.is-projects {
+  background: var(--color-accent);
+}
+
+.storage-bar-part.is-files,
+.storage-panel-swatch.is-files {
+  background: color-mix(in srgb, var(--color-accent) 45%, var(--color-surface));
+}
+
+.storage-bar-part.is-uploading,
+.storage-panel-swatch.is-uploading {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--color-text-subtle) 0 3px,
+    transparent 3px 6px
+  );
+}
+
+.storage-bar.is-near .storage-bar-part.is-projects,
+.storage-panel-parts.is-near .storage-panel-swatch.is-projects {
+  background: var(--color-warning);
+}
+
+.storage-bar.is-near .storage-bar-part.is-files,
+.storage-panel-parts.is-near .storage-panel-swatch.is-files {
+  background: color-mix(
+    in srgb,
+    var(--color-warning) 50%,
+    var(--color-surface)
+  );
+}
+
+.storage-bar.is-over .storage-bar-part.is-projects,
+.storage-panel-parts.is-over .storage-panel-swatch.is-projects {
+  background: var(--color-error);
+}
+
+.storage-bar.is-over .storage-bar-part.is-files,
+.storage-panel-parts.is-over .storage-panel-swatch.is-files {
+  background: color-mix(in srgb, var(--color-error) 50%, var(--color-surface));
+}
+
+/* The details rise from the footer card, over the shelf if they must, and
+   never past the window's edge. */
+.storage-panel {
+  position: absolute;
+  bottom: calc(100% + var(--sp-2));
+  left: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-3);
+  width: min(300px, calc(100vw - 2 * var(--sp-3)));
+  max-height: calc(100dvh - 96px);
+  padding: var(--sp-3);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-popover);
+  animation: oz-rise var(--dur-fast) var(--ease-out);
+}
+
+.storage-panel:focus {
+  outline: none;
+}
+
+.storage-panel:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.storage-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin: -4px -4px 0 0;
+}
+
+.storage-panel-title {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+}
+
+.storage-panel-close {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  min-height: 0;
+  padding: 0;
+  color: var(--color-text-subtle);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.storage-panel-close:hover {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
+}
+
+.storage-panel-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--sp-2);
+}
+
+.storage-panel-section + .storage-panel-section {
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.storage-panel-hero {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.storage-panel-used {
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-semibold);
+  letter-spacing: -0.01em;
+}
+
+.storage-panel-limit {
+  color: var(--color-text-muted);
+}
+
+.storage-panel-percent {
+  margin-left: auto;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.storage-panel-percent.is-near,
+.storage-panel-caption.is-near {
+  color: var(--color-warning);
+}
+
+.storage-panel-percent.is-over,
+.storage-panel-caption.is-over {
+  color: var(--color-error-text);
+}
+
+.storage-panel-caption {
+  margin: -2px 0 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.storage-panel-parts {
+  display: grid;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.storage-panel-part {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) max-content;
+  align-items: start;
+  column-gap: var(--sp-2);
+}
+
+.storage-panel-swatch {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 2px;
+}
+
+.storage-panel-part-text {
+  display: grid;
+  min-width: 0;
+}
+
+.storage-panel-part-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.storage-panel-part-note {
+  overflow: hidden;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.storage-panel-part-bytes {
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.storage-panel-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px var(--sp-2);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+}
+
+.storage-panel-note > svg {
+  flex: none;
+  color: var(--color-text-subtle);
+}
+
+.storage-panel-note > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.storage-panel-note.is-failed {
+  color: var(--color-text);
+}
+
+.storage-panel-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 0;
+  height: 22px;
+  padding: 0 4px;
+  color: var(--color-accent);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.storage-panel-link:hover {
+  color: var(--color-accent-hi);
+  background: var(--color-accent-dim);
+}
+
+.storage-panel-subtitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.storage-panel-facts {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.storage-panel-facts > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.storage-panel-facts dt {
+  color: var(--color-text-muted);
+}
+
+.storage-panel-facts dd {
+  margin: 0;
+  color: var(--color-text);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.storage-panel-facts dd.is-warning {
+  color: var(--color-warning);
+}
+
+.storage-panel-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: 0;
+  height: 30px;
+  margin: 0 calc(-1 * var(--sp-2)) calc(-1 * var(--sp-1));
+  padding: 0 var(--sp-2);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  background: none;
+  border: none;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+
+.storage-panel-footer:hover {
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
+}
+
+.storage-panel-footer.is-primary {
+  color: var(--color-accent);
+  font-weight: var(--fw-medium);
+}
+
+.storage-panel-loading {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.storage-panel-skeleton {
+  display: block;
+  background: color-mix(in srgb, var(--color-text) 8%, transparent);
+  border-radius: var(--radius-sm);
+}
+
+.storage-panel-skeleton.is-hero {
+  width: 55%;
+  height: 22px;
+}
+
+.storage-panel-skeleton.is-bar {
+  height: 8px;
+  border-radius: 999px;
+}
+
+/* In the one-column layout the card sits under the logo, at the page's top:
+   rising from it ran the panel off the top of the page. It drops instead. */
+@media (max-width: 900px) {
+  .storage-panel {
+    top: calc(100% + var(--sp-2));
+    bottom: auto;
+    max-height: none;
+    animation-name: oz-drop;
   }
 }

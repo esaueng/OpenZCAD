@@ -3,7 +3,10 @@ import type {
   FeatureId,
   FeatureWarning
 } from '@openzcad/shared';
-import type { CommandDiagnostic } from './interaction/machine';
+import {
+  isStaleReferenceError,
+  type CommandDiagnostic
+} from './interaction/machine';
 import { plainRefusal, type RefusalClassification } from './refusalLanguage';
 
 /**
@@ -20,7 +23,10 @@ import { plainRefusal, type RefusalClassification } from './refusalLanguage';
 export function splitRefusal(
   text: string,
   classification?: string | RefusalClassification
-): Pick<CommandDiagnostic, 'message' | 'detail' | 'category' | 'headline'> {
+): Pick<
+  CommandDiagnostic,
+  'message' | 'detail' | 'category' | 'headline' | 'code'
+> {
   return plainRefusal(text, classification);
 }
 
@@ -162,11 +168,22 @@ export function validatedFeatureRejection(
     input.featureId
   );
   if (warning) {
+    const split = splitRefusal(
+      warning.reason,
+      warning.kernelRefusal ?? warning.category
+    );
     return {
-      ...splitRefusal(
-        warning.reason,
-        warning.kernelRefusal ?? warning.category
-      ),
+      ...split,
+      // A later feature lost a saved pick to this edit. The adapter's
+      // sentence says "this feature", which on the edited feature's card
+      // reads as the feature being edited: name the one that broke, and keep
+      // the adapter's words as detail.
+      ...(input.dependent && isStaleReferenceError(split)
+        ? {
+            message: dependentReferenceMessage(input.featureName),
+            detail: [split.message, split.detail].filter(Boolean).join('\n')
+          }
+        : {}),
       ...(warning.advice ? { advice: warning.advice } : {}),
       ...(warning.kernelRefusal?.limit !== undefined
         ? { limit: warning.kernelRefusal.limit }
@@ -189,6 +206,14 @@ export function validatedFeatureRejection(
     return { message: 'The document changed while the operation validated.' };
   }
   return null;
+}
+
+/**
+ * What a card says when this edit strands a later feature's saved edge or
+ * face pick: which feature, and the two ways forward.
+ */
+export function dependentReferenceMessage(featureName: string): string {
+  return `“${featureName}” can no longer find an edge or face it was applied to after this change. Edit “${featureName}” and pick them again, or try a smaller change.`;
 }
 
 /** Keeps exact failure attribution intact while crossing async edit boundaries. */

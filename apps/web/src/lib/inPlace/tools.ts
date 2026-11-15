@@ -143,6 +143,15 @@ export function isInPlaceTool(tool: string): tool is InPlaceToolId {
   return (IN_PLACE_TOOLS as readonly string[]).includes(tool);
 }
 
+/** The commands whose Done runs through the cancellable pattern rebuild. */
+export function isInPlacePatternTool(tool: InPlaceToolId | null): boolean {
+  return (
+    tool === 'linear-pattern' ||
+    tool === 'circular-pattern' ||
+    tool === 'grid-pattern'
+  );
+}
+
 /** A picked region: its sketch, its stored reference, and which cell. */
 export interface ProfilePick {
   sketchId: SketchId;

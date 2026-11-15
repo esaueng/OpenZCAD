@@ -185,6 +185,46 @@ describe('typed boolean refusal', () => {
     expect(exactBooleanRefusalOf(wrapped)?.category).toBe('quality_refused');
   });
 
+  // QA 2026-11-14 finding #18: subtracting a box from an identical box was
+  // reported as "the exact modeling engine failed internally". Nothing
+  // failed; the answer is that no body would be left.
+  it.each([
+    ['an identical box', [40, 40, 20], 0, 'Cut of identical solids'],
+    [
+      'a tool that encloses the body',
+      [50, 50, 30],
+      -5,
+      'Cut with target fully contained in tool'
+    ]
+  ] as const)(
+    'says a cut by %s would remove the whole body',
+    (_label, [width, depth, height], shift, kernelWords) => {
+      const kernel = new RemusKernel();
+      const target = kernel.makeBox(40, 40, 20);
+      const tool = kernel.copyAndTransformSolid(
+        kernel.makeBox(width, depth, height),
+        translation(shift, shift, shift)
+      );
+      const outcome = exactBooleanOutcome(kernel, 'cut', target, tool, [
+        'Box 1',
+        'Box 2'
+      ]);
+      expect(outcome.status).toBe('refused');
+      if (outcome.status !== 'refused') return;
+      const [sentence, detail] = outcome.refusal.message.split('\n');
+      expect(sentence).toBe(
+        'Subtract refused: subtracting "Box 1" and "Box 2" would leave ' +
+          'nothing, because the tool covers the whole body. Make the tool ' +
+          'smaller or move it so part of the body remains.'
+      );
+      // The kernel's verdict is kept, and its category is not rewritten.
+      expect(detail).toBe(
+        `Kernel refusal operation_failed (internal): empty result: ${kernelWords}`
+      );
+      expect(outcome.refusal.category).toBe('internal');
+    }
+  );
+
   it('reports an invalid handle as invalid_input rather than throwing', () => {
     const kernel = new RemusKernel();
     const outcome = exactBooleanOutcome(kernel, 'cut', 999_999, 999_998);

@@ -347,7 +347,7 @@ describe('Remus modeling operations', () => {
     ).toThrow(/safe integer/);
   });
 
-  it('refuses oversized walls and offsets before calling the kernel', () => {
+  it('refuses oversized walls before calling the kernel', () => {
     const source = kernel.makeBox(10, 20, 30);
     const before = readSolid(kernel, source);
     const operations = createRemusModelingOperations(kernel);
@@ -359,10 +359,28 @@ describe('Remus modeling operations', () => {
         openingFaces: [topFace(kernel, source)]
       })
     ).toThrow(/oversized/);
-    expect(() =>
-      operations.offsetSolid({ targetSolid: source, distance: 5 })
-    ).toThrow(/oversized/);
     expect(readSolid(kernel, source)).toEqual(before);
+  });
+
+  // QA 2026-11-14 finding #12: the wall cap (half the thinnest extent) was
+  // also applied to the outward-only solid offset, refusing +11 on a
+  // 40 x 40 x 20 box although growing a box never runs out of material.
+  it('grows a box outward past half its thinnest extent', () => {
+    const source = kernel.makeBox(40, 40, 20);
+    const operations = createRemusModelingOperations(kernel);
+
+    for (const distance of [11, 25]) {
+      const offset = operations.offsetSolid({ targetSolid: source, distance });
+      const reading = readSolid(kernel, offset);
+      expect(reading.validationErrors).toBe(0);
+      const [minX, minY, minZ, maxX, maxY, maxZ] = reading.bounds;
+      expect(maxX! - minX!).toBeCloseTo(40 + 2 * distance, 6);
+      expect(maxY! - minY!).toBeCloseTo(40 + 2 * distance, 6);
+      expect(maxZ! - minZ!).toBeCloseTo(20 + 2 * distance, 6);
+      expect(reading.volume).toBeGreaterThan(
+        (40 + 2 * distance) ** 2 * (20 + 2 * distance) * 0.9
+      );
+    }
   });
 
   it('refuses a non-manifold concave offset and leaves its input unchanged', () => {

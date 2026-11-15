@@ -4,23 +4,24 @@
 
 /* ── Modals (command palette, shortcuts) ─────────────────── */
 
+/* Project properties fits on one screen: two columns of sections on a
+   desktop, one on a phone, with no scrolling at 1280 x 800 or 390 x 844.
+   The body still scrolls as a fallback on shorter screens. */
 .project-properties-dialog {
-  width: min(560px, 100%);
+  width: min(720px, 100%);
   max-height: calc(100dvh - 12vh - 32px);
-  overflow-y: auto;
-  display: grid;
-  gap: var(--sp-3);
-  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
   color: var(--color-text);
   background: var(--color-surface);
   border: var(--border-strong);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-3);
+  overflow: hidden;
 }
 
 .project-properties-header,
-.project-properties-header h2,
-.project-properties-dialog > p {
+.project-properties-header h2 {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
@@ -30,76 +31,23 @@
   justify-content: space-between;
 }
 
+.project-properties-dialog > .project-properties-header {
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
+  border-bottom: var(--border-thin);
+}
+
 .project-properties-header h2 {
   margin: 0;
   font-size: var(--fs-lg);
 }
 
-.project-properties-list {
+.project-properties-body {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: var(--sp-4);
-  margin: 0;
-  font-size: var(--fs-sm);
-}
-
-.project-properties-list > div {
-  display: grid;
-  gap: var(--sp-1);
-  padding: var(--sp-2) 0;
-  border-bottom: var(--border-thin);
-}
-
-.project-properties-list > div:first-child,
-.project-properties-list > div:last-child {
-  grid-column: 1 / -1;
-}
-
-/* An odd count between the full-width first and last rows (archived,
-   trashed or branched projects, details loading or failed) left one cell
-   alone with a half-width rule under it; it takes the row instead. */
-.project-properties-list > div:nth-last-child(2):nth-child(even) {
-  grid-column: 1 / -1;
-}
-
-@media (max-width: 480px) {
-  .project-properties-list {
-    display: block;
-  }
-
-  .project-properties-list > div {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
-    gap: var(--sp-3);
-  }
-}
-
-.project-properties-list dt,
-.project-properties-dialog > p {
-  color: var(--color-text-muted);
-}
-
-.project-properties-list dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.project-properties-dialog > p {
-  margin: 0;
-  font-size: var(--fs-sm);
-  line-height: 1.5;
-}
-
-.project-properties-actions {
-  display: flex;
-  justify-content: flex-end;
-  /* Pinned to the dialog's foot while its rows scroll: at 900 px tall the
-     Close sat below the fold, under a dozen rows of sizes. */
-  position: sticky;
-  bottom: calc(-1 * var(--sp-4));
-  margin: 0 calc(-1 * var(--sp-4)) calc(-1 * var(--sp-4));
-  padding: var(--sp-2) var(--sp-4) var(--sp-4);
-  background: var(--color-surface);
-  border-top: var(--border-thin);
+  gap: var(--sp-3);
+  min-height: 0;
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 /* The name is edited in place: Enter or leaving the field renames. */
@@ -110,8 +58,16 @@
 
 .project-properties-name input {
   width: 100%;
-  min-height: 28px;
-  font-size: var(--fs-sm);
+  min-height: 34px;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+}
+
+.project-properties-name p {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  overflow-wrap: anywhere;
 }
 
 .project-properties-name small {
@@ -119,15 +75,248 @@
   font-size: var(--fs-xs);
 }
 
-.project-properties-note {
-  padding-top: var(--sp-2);
+.project-properties-name small.is-problem {
+  color: var(--color-error-text);
+}
+
+.project-properties-message {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
 }
 
 /* Retry sits inside the failure sentence: a button, at the compact size. */
-.project-properties-dialog > p .secondary {
+.project-properties-message .secondary {
   min-height: 26px;
   padding: 2px 10px;
   font-size: var(--fs-xs);
+}
+
+/* What the model holds, read at a glance before the bookkeeping: each
+   count beside its label, one row of four. */
+.project-properties-counts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin: 0;
+}
+
+.project-properties-counts > div {
+  display: flex;
+  flex-direction: row-reverse;
+  justify-content: flex-end;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: 6px var(--sp-3);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.project-properties-counts dt {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-properties-counts dd {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.project-properties-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3) var(--sp-5);
+  align-items: start;
+}
+
+.project-properties-section {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.project-properties-section h3 {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.project-properties-list {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+/* Label at its own width, value right-aligned in the rest, so short values
+   line up on the right edge whatever the label's length. */
+.project-properties-list > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp-3);
+  align-items: baseline;
+  padding: 5px 0;
+  border-bottom: var(--border-thin);
+}
+
+.project-properties-list > div:last-child {
+  border-bottom: 0;
+}
+
+.project-properties-list dt {
+  color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.project-properties-note-toggle {
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin-block: -4px;
+  color: var(--color-text-subtle);
+}
+
+.project-properties-note-toggle[aria-expanded='true'] {
+  color: var(--color-accent);
+}
+
+/* The caveat a label's info button opens: the row's full width. */
+.project-properties-list dd.project-properties-note {
+  grid-column: 1 / -1;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  text-align: left;
+}
+
+.project-properties-list dd.project-properties-note[hidden] {
+  display: none;
+}
+
+.project-properties-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.project-properties-encryption {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.project-properties-encryption.is-encrypted svg {
+  color: var(--color-success);
+}
+
+.project-properties-encryption.is-plaintext svg,
+.project-properties-encryption.is-unreadable svg {
+  color: var(--color-text-subtle);
+}
+
+.project-properties-encryption.is-paused svg {
+  color: var(--color-warning);
+}
+
+.project-properties-encryption.is-encrypting svg {
+  color: var(--color-accent);
+}
+
+.project-properties-id {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.project-properties-id code {
+  min-width: 0;
+  /* One click selects the whole ID, the fallback when copying fails. */
+  user-select: all;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.project-properties-id .icon-button {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  min-height: 0;
+}
+
+.project-properties-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  border-top: var(--border-thin);
+}
+
+/* Close is this dialog's only action, so it is its answer: it keeps the
+   whole button the bare-secondary rule below takes from a Cancel beside a
+   filled primary. It read as stray text in the corner. */
+.modal-backdrop
+  .project-properties-actions
+  > .secondary:not(:hover:not(:disabled), :focus-visible) {
+  background: var(--color-surface-2);
+  border-color: var(--color-border-strong);
+}
+
+.project-properties-actions > .secondary {
+  min-width: 84px;
+}
+
+.project-properties-source {
+  margin-right: auto;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+}
+
+@media (max-width: 640px) {
+  .project-properties-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  /* A phone gives the dialog the screen's height, not the 12vh drop the
+     command palette sits under. */
+  .modal-backdrop:has(> .project-properties-dialog) {
+    padding-top: 16px;
+  }
+
+  .project-properties-dialog {
+    max-height: calc(100dvh - 32px);
+  }
+
+  .project-properties-counts {
+    gap: 6px;
+  }
+
+  .project-properties-counts > div {
+    flex-direction: column-reverse;
+    align-items: flex-start;
+    gap: 0;
+    padding: 4px var(--sp-2);
+  }
 }
 
 .modal-backdrop {

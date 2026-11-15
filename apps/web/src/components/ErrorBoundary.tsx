@@ -10,6 +10,12 @@ interface ErrorBoundaryProps {
   resetKey?: string | number;
   fallback?: ReactNode;
   /**
+   * Show `fallback` during the automatic remount too, rather than nothing:
+   * for a fallback that keeps the panel's essential control (a running
+   * rebuild's Cancel), which must not blink out for the retry.
+   */
+  fallbackWhileRecovering?: boolean;
+  /**
    * `page` when the boundary wraps the whole app: its fallback is then the
    * only thing on screen, so it takes the viewport rather than a panel strip.
    */
@@ -144,7 +150,9 @@ export class ErrorBoundary extends Component<
       return this.props.children;
     }
     if (this.state.recovering) {
-      return null;
+      return this.props.fallbackWhileRecovering
+        ? (this.props.fallback ?? null)
+        : null;
     }
     if (this.props.fallback !== undefined) {
       return this.props.fallback;
