@@ -122,6 +122,7 @@ import {
 } from './exact-face-distance';
 import { preparedFaceMove } from './exact-prepared-face-move';
 import { offsetFaceRefusalOf } from './exact-offset-face-refusal';
+import { modelingOperationRefusal } from './remus-operation-refusal';
 import {
   isNonadjacentFaceCollision,
   sweepFaceIntoBody
@@ -2109,8 +2110,18 @@ export function applyDirectEdit(
           }
         }
         // A neighbour that would collapse is a limit on the value, not an
-        // internal failure: say so, and how far the face can go.
-        throw offsetFaceRefusalOf(error, offset) ?? error;
+        // internal failure: say so, and how far the face can go. Any other
+        // refusal of the move (a face ringed by a blend loop the pin cannot
+        // carry, esaueng/remus#1741) is typed from the kernel's error.
+        throw (
+          offsetFaceRefusalOf(error, offset) ??
+          modelingOperationRefusal(
+            'offset_face',
+            error,
+            error instanceof Error ? error.message : String(error),
+            'direct-edit'
+          )
+        );
       }
     };
     const moved =

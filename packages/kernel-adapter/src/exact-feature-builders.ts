@@ -93,7 +93,7 @@ import {
 } from './exact-edge-modifiers';
 import {
   assertQualifiedVariableFillet,
-  variableBlendFailureMessage,
+  variableBlendRefusal,
   type VariableFilletSpec
 } from './exact-variable-blends';
 import {
@@ -197,6 +197,7 @@ import {
   probeBooleanEntityEvolution,
   type BooleanEvolutionOperation
 } from './exact-boolean-evolution';
+import { modelingOperationRefusal } from './remus-operation-refusal';
 import {
   remusHashOnlyLineage,
   createRemusImportedStepLineage,
@@ -1684,15 +1685,24 @@ function buildSplitFeature(
   // The kernel refuses rather than approximates — a plane through
   // an edge, across a curved face, or missing the solid entirely
   // is a typed error that lands in the feature's warnings.
-  const halves = kernel.split(
-    targetSolid,
-    planePoint.x,
-    planePoint.y,
-    planePoint.z,
-    planeNormal.x,
-    planeNormal.y,
-    planeNormal.z
-  );
+  let halves: ArrayLike<number>;
+  try {
+    halves = kernel.split(
+      targetSolid,
+      planePoint.x,
+      planePoint.y,
+      planePoint.z,
+      planeNormal.x,
+      planeNormal.y,
+      planeNormal.z
+    );
+  } catch (error) {
+    throw modelingOperationRefusal(
+      'split',
+      error,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
   const positive = halves[0];
   const negative = halves[1];
   if (positive === undefined || negative === undefined) {
@@ -2630,12 +2640,10 @@ function buildEdgeModifierFeature(
   );
   if (modified === null) {
     if (variableRadius || chamferSecondDistance !== undefined) {
-      throw new Error(
-        variableBlendFailureMessage(
-          data.featureKind,
-          selected.length,
-          reportedRefusal
-        )
+      throw variableBlendRefusal(
+        data.featureKind,
+        selected.length,
+        reportedRefusal
       );
     }
     const refusal = edgeModifierRefusal(

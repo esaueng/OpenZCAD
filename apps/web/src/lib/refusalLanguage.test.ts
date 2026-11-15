@@ -25,6 +25,25 @@ describe('stepImportRefusal', () => {
 });
 
 describe('plainRefusal', () => {
+  it('reads a typed variable-blend refusal as the not-yet sentence of its category', () => {
+    const text =
+      'Variable-radius fillet could not be created on 1 selected edge. edges-not-blended: blend: 1 of the edges named were not blended';
+    // Untyped, this was the generic "could not build" line; typed
+    // `unsupported` (exact-variable-blends.ts), it says what the kernel
+    // cannot do yet. The kernel's own words stay in the detail.
+    const plain = plainRefusal(text, {
+      category: 'unsupported',
+      code: 'edges-not-blended'
+    });
+    expect(plain.message).toBe(
+      'The exact kernel does not support this combination of shapes yet.'
+    );
+    expect(plain.detail ?? '').toContain('edges-not-blended');
+    expect(plainRefusal(text).message).toBe(
+      'The exact kernel could not build this result.'
+    );
+  });
+
   it('says which fillets removal and resize cannot rebuild yet, by code', () => {
     const text =
       'unsupported-support-pair: resize blend: unsupported analytic support pair: plane x cone';
