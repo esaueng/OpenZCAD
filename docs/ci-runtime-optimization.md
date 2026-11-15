@@ -29,6 +29,25 @@ last fourteen. Browser retries retain traces and failure screenshots. Full
 daily qualification retains its complete tests, coverage and single attempt.
 Privacy audit scope, receipts and CodeQL overlay caches are unaffected.
 
+## Staged v9: no serial preflight, lint on two runners
+
+`fleet-ci-v9.yml` is staged, not active; it goes live through the same
+two-PR procedure. It changes scheduling only. In v8 every check waits for the
+hosted `plan` job, so a pull request pays for two runner waits before its
+first test starts (a median of two minutes each under load, up to eight). In
+v9 lint, typecheck, units, the build and the PR browser shards depend on queue
+trust alone and each runs `scripts/ci-selection.mjs` itself. `plan` still runs
+the kernel declaration and still chooses the queue and manual browser set, and
+`validate` and `e2e` still fail unless it succeeds.
+
+Lint is the longest single step (222 s hosted). v9 runs it as two partitions,
+`apps` and `packages test types`, through `pnpm lint:paths`; each took 77 to
+78 s locally against 158 s for the whole tree. ESLint's `--concurrency` was
+rejected: one type-aware process peaks at 5.8 GB and every thread builds its
+own program. `test/ci-staged-fleet.test.ts` holds the partitions to the paths
+of `pnpm lint` and pins the workflow header, queue authorization, isolation
+guard, runner expression and both gates to v8's bytes.
+
 ## Qualification and later work
 
 Validate the staging PR and a separate activation PR on their exact heads.

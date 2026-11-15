@@ -20,6 +20,10 @@ describe('workflow runner policy', () => {
         'ubuntu-24.04',
         ...Array<string>(8).fill('*fleet-runner')
       ],
+      'fleet-ci-v9.yml': [
+        'ubuntu-24.04',
+        ...Array<string>(8).fill('*fleet-runner')
+      ],
       'daily-validation.yml': Array(4).fill('ubuntu-24.04'),
       'kernel-pin.yml': ['ubuntu-24.04'],
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
