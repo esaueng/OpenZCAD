@@ -439,6 +439,7 @@ import { DeferredExactEntry } from './lib/deferredExactEntry';
 import type { SketchSolveStatus } from './components/SketchToolRail';
 import type { SharedLinkCopyDestination } from './components/SharedLinkCopyDialog';
 import {
+  accountSettingsAdopted,
   ApiError,
   api,
   encryptsNewProjects,
@@ -7504,6 +7505,8 @@ export function App() {
                 remoteSettings.settings,
                 remoteSettings.revision
               );
+              if (activeSession)
+                accountSettingsAdopted(activeSession.userId, remoteSettings);
             }
           } else {
             setSettingsMessage(

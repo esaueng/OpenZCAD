@@ -732,6 +732,21 @@ function noteAccountRecord(
   );
 }
 
+/**
+ * The page adopted the account's settings (`account`) in place of its own:
+ * what it shows is now an account copy, so a merge base kept from showing
+ * its own values ends, unless the copy was one this device could not open.
+ */
+export function accountSettingsAdopted(
+  userId: string,
+  account: Pick<AppSettingsResponse, 'revision'>
+): void {
+  const state = loadMergeState(userId);
+  if (!state?.base || !state.theirs || state.revision !== account.revision)
+    return;
+  saveMergeState(userId, { ...state, base: null });
+}
+
 export const SETTINGS_SEAL_DEFERRED_CODE = 'SETTINGS_SEAL_DEFERRED';
 
 /**
@@ -773,16 +788,11 @@ async function readAccountSettings(): Promise<AppSettingsResponse> {
       : null;
     const earlier = loadMergeState(userId);
     // Whatever this device shows in place of a record it cannot open is its
-    // own. Once open, an earlier base still decides what merges; failing
-    // that, a record that replaced one this device knew merges against what
-    // it knew, so another device's change to a field this one left alone
-    // survives this device's next save.
-    const base = opened
-      ? (earlier?.base ??
-        (earlier?.theirs && earlier.record !== response.sealedSettings
-          ? earlier.theirs
-          : null))
-      : (earlier?.base ?? local);
+    // own, and stays the merge base until the page adopts an account copy it
+    // opened (`accountSettingsAdopted`) or a save catches up. Two devices
+    // that could both open the record follow last-writer-wins on the whole
+    // settings, as accounts that store them readable always have.
+    const base = opened ? (earlier?.base ?? null) : (earlier?.base ?? local);
     saveMergeState(userId, {
       base,
       theirs: opened,
@@ -881,6 +891,16 @@ async function writeAccountSettings(
     // account first, so it never replaces a record it has not opened.
     await readAccountSettings();
     state = loadMergeState(userId);
+    if (state?.revision !== payload.expectedRevision) {
+      // Not refreshed to the revision this save names (the account moved
+      // on, or the refresh could not tell whose it was): never seal over a
+      // record this device has not opened. A conflict reads and retries.
+      throw new ApiError(
+        409,
+        'Settings changed elsewhere. Reload and try again.',
+        'SETTINGS_REFRESH_REQUIRED'
+      );
+    }
   }
   let theirs: AppSettings | null = null;
   if (sealed && state?.record) {

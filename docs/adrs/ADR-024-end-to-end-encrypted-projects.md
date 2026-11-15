@@ -1493,12 +1493,15 @@ account whose library is encrypted (the rule above) stores them sealed.
   this device opened it at the revision the save names (the Worker's
   revision check then makes sure it is still the one replaced; a revision
   learned elsewhere, such as from a credential change, sends the device to
-  read the account first), and merges onto it: each
-  field changed since what the device showed, last sent, or last opened
-  keeps the device's value, every other field takes the account's, so
-  another device's change to a field this one left alone survives a
-  conflict retry. A save that merged
-  becomes the new base, so an edit queued behind it merges too, and the
+  read the account first, and a refresh that cannot confirm the revision
+  stops the save as a conflict). While the device shows its own values in
+  place of a record it could not open, a save merges onto the account's
+  settings: each field changed since what it showed or last sent keeps the
+  device's value, every other field takes the account's. That ends once the
+  page adopts an account copy it opened or a save catches up. Two devices
+  that can both open the record follow last-writer-wins on the whole
+  settings, as accounts that store them readable always have. A save that
+  merged becomes the new base, so an edit queued behind it merges too, and the
   state survives a reload; the page folds the merged result into what it
   shows, keeping edits made meanwhile. A record sealed before an account-key
   rotation is opened with that older key through the account-key history

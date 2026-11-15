@@ -10,7 +10,7 @@ import {
   fromBase64Url,
   readSealedRecordHeader
 } from '@openzcad/crypto';
-import { api } from './api';
+import { accountSettingsAdopted, api } from './api';
 import { subscribeAccountSettingsMerged } from './accountSettingsEvents';
 import { openSettings, sealSettings } from './e2ee/sealedSettings';
 import { saveLocalAppSettings } from './appSettings';
@@ -465,7 +465,9 @@ describe('settings of an account whose library is encrypted', () => {
     state.account = { accountKey: ACCOUNT_KEY };
     const edited = structuredClone(read.settings);
     edited.general.defaultUnits = 'cm';
-    for (const expectedRevision of [1, 2])
+    // The mock account stays at revision 1: the readable part saves, and
+    // the next save names the revision the account still reports.
+    for (const expectedRevision of [1, 1])
       await expect(
         api.updateSettings({ settings: edited, expectedRevision })
       ).rejects.toMatchObject({ code: 'SETTINGS_SEAL_DEFERRED' });
@@ -528,7 +530,10 @@ describe('settings of an account whose library is encrypted', () => {
     // A conflict refresh reads the replacement, which it cannot open.
     const refreshed = await api.getSettings();
     await expect(
-      api.updateSettings({ settings: refreshed.settings, expectedRevision: 2 })
+      api.updateSettings({
+        settings: refreshed.settings,
+        expectedRevision: refreshed.revision
+      })
     ).rejects.toMatchObject({ code: 'SETTINGS_SEAL_DEFERRED' });
     expect(patches.at(-1)).not.toHaveProperty('sealedSettings');
   });
@@ -601,42 +606,86 @@ describe('settings of an account whose library is encrypted', () => {
     expect(patches[0]).not.toHaveProperty('sealedSettings');
   });
 
-  it('keeps another device’s change to a field this one left alone', async () => {
+  it('ends the merge once the page adopts an account copy it opened', async () => {
     const keys = (pin = 0) => ({
       accountKey: ACCOUNT_KEY,
       userId: state.userId,
       pins: { read: () => pin, write: () => undefined }
     });
     state.libraryEncrypted = true;
-    state.account = { accountKey: ACCOUNT_KEY };
-    const ours = privateSettings();
-    let current = (await sealSettings(keys(), ours)).record;
+    const account = privateSettings();
+    account.general.defaultUnits = 'cm';
+    let current = (await sealSettings(keys(), account)).record;
     let revision = 1;
-    const patches = worker(() =>
-      response(accountServerSettings(ours), {
+    worker(() =>
+      response(accountServerSettings(account), {
         revision,
         sealedSettings: current
       })
     );
-    const read = await api.getSettings();
-    // Another device changes the units.
-    const theirs = privateSettings();
-    theirs.general.defaultUnits = 'cm';
-    current = (await sealSettings(keys(5), theirs)).record;
+    await api.getSettings(); // locked: this device shows its own
+    state.account = { accountKey: ACCOUNT_KEY };
+    const opened = await api.getSettings();
+    expect(opened.settings.general.defaultUnits).toBe('cm');
+    // The page adopts that copy.
+    saveLocalAppSettings(opened.settings, opened.revision);
+    accountSettingsAdopted(state.userId, opened);
+    // Another device changes the units again.
+    const later = structuredClone(account);
+    later.general.defaultUnits = 'mm';
+    current = (await sealSettings(keys(5), later)).record;
     revision = 2;
-    // This page changed the density meanwhile; its save meets a conflict
-    // and the autosave reads the account again before retrying.
-    const edited = structuredClone(read.settings);
-    edited.appearance.density = 'compact';
-    await api.getSettings();
-    await api.updateSettings({ settings: edited, expectedRevision: 2 });
-    const stored = await openSettings(
-      keys(),
-      patches.at(-1)!.sealedSettings as string
+    const again = await api.getSettings();
+    // The adopted 'cm' is the account's value, not an edit of this device's.
+    expect(again.settings.general.defaultUnits).toBe('mm');
+  });
+
+  it('refuses to seal when the refresh before a save cannot confirm the revision', async () => {
+    state.libraryEncrypted = true;
+    state.account = { accountKey: ACCOUNT_KEY };
+    const { record } = await sealSettings(
+      {
+        accountKey: ACCOUNT_KEY,
+        userId: state.userId,
+        pins: { read: () => 0, write: () => undefined }
+      },
+      privateSettings()
     );
-    expect(stored?.general.defaultUnits).toBe('cm');
-    expect(stored?.appearance.density).toBe('compact');
-    expect(stored?.assistant.customInstructions).toBe(SECRET);
+    let sessionDown = false;
+    const patches: Record<string, unknown>[] = [];
+    vi.mocked(desktopFetch).mockImplementation(async (input, init) => {
+      if (input === '/api/session')
+        return sessionDown
+          ? json({ error: 'down' }, 503)
+          : json({ userId: state.userId });
+      if (input === '/api/e2ee/config') {
+        return json({ enabled: true, projectsEnabled: true });
+      }
+      if (input === '/api/e2ee/project-preferences') {
+        return json({ preference: null, libraryEncrypted: true });
+      }
+      if (input === '/api/settings' && init?.method === 'PATCH') {
+        patches.push(
+          JSON.parse(init.body as string) as Record<string, unknown>
+        );
+        return json(response(DEFAULT_APP_SETTINGS, { revision: 3 }));
+      }
+      if (input === '/api/settings')
+        return json(
+          response(accountServerSettings(privateSettings()), {
+            revision: sessionDown ? 2 : 1,
+            sealedSettings: record
+          })
+        );
+      return json({}, 404);
+    });
+    const read = await api.getSettings(); // opened at revision 1
+    // Revision 2 arrives from elsewhere; the refresh's session lookup fails.
+    sessionDown = true;
+    await expect(
+      api.updateSettings({ settings: read.settings, expectedRevision: 2 })
+    ).rejects.toBeTruthy();
+    expect(patches.filter((patch) => 'sealedSettings' in patch)).toEqual([]);
   });
 
   it('wipes an older account key on every way out, a rollback included', async () => {
