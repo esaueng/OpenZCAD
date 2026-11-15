@@ -36,11 +36,10 @@ in a Preview first.
 Previews do not see production secrets. The Preview base config holds its own
 `AUTH_OTP_PEPPER`, `SETTINGS_ENCRYPTION_KEY`, `AI_IDENTITY_PEPPER` (random,
 staging-only) and `TURNSTILE_SECRET_KEY` (the production widget's secret).
-The Worker checks the Turnstile hostname against the request's own host, so a
-Preview works only if the widget accepts `*.dev.zcad.app`. If sign-in fails
-there with "The security check expired", add `dev.zcad.app` to the widget's
-hostnames. A new Preview copies the base secrets when it is created; changing
-one later reaches only Previews created after.
+The Worker checks the Turnstile hostname against the request's own host, so
+the widget lists `dev.zcad.app` among its hostnames to accept Preview hosts.
+A new Preview copies the base secrets when it is created; changing one later
+reaches only Previews created after.
 
 ```bash
 pnpm --filter @openzcad/web exec wrangler preview base-config secret list --config ../../wrangler.jsonc
