@@ -277,7 +277,10 @@ export function bendZoneStart(
   }
 }
 
-/** Flat length of a part from its outside flange lengths and bends. */
+/**
+ * Flat length of a part from its outside flange lengths and bends. Refuses
+ * a bend with no finite deduction (180°).
+ */
 export function flatLengthFromOutsideFlanges(
   outsideFlangeLengths: readonly number[],
   bends: readonly Pick<SheetMetalBendMetrics, 'bendDeduction'>[]
@@ -286,6 +289,13 @@ export function flatLengthFromOutsideFlanges(
     throw new RangeError('A part with n bends has n + 1 flanges.');
   }
   const flanges = outsideFlangeLengths.reduce((sum, length) => sum + length, 0);
+  if (bends.some((bend) => !Number.isFinite(bend.bendDeduction))) {
+    // A 180° bend has no outside mold line, so outside flange lengths do
+    // not define its flat length.
+    throw new RangeError(
+      'A 180° bend has no outside mold line; lay it out from the flat instead.'
+    );
+  }
   const deductions = bends.reduce((sum, bend) => sum + bend.bendDeduction, 0);
   return flanges - deductions;
 }

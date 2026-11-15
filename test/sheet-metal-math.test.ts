@@ -73,6 +73,9 @@ describe('bend arithmetic', () => {
       -hem.bendAllowance / 2,
       12
     );
+    expect(() => flatLengthFromOutsideFlanges([50, 50], [hem])).toThrow(
+      /180° bend/
+    );
   });
 
   it('refuses out-of-range inputs', () => {

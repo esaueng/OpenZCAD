@@ -163,9 +163,13 @@ the first delivery.
    on its parent side is revolved about the bend axis through `θ` (the axis
    lies in that face's plane, `R` away from it), then transformed by the
    parent's transform.
-7. `fuseAll` the pieces, then place the result from the sketch frame into the
+7. Refuse `folded-overlap` when transformed pieces that are not neighbours
+   in the region tree intersect (flanges folded through each other, e.g. two
+   outward 135° up bends on a 20 mm base with 30 mm flanges); the message
+   names the two bends or regions. Neighbours share only their joining face.
+8. `fuseAll` the pieces, then place the result from the sketch frame into the
    world.
-8. Name every face: `sheet.face.top|bottom|edge…` for plate faces and
+9. Name every face: `sheet.face.top|bottom|edge…` for plate faces and
    `sheet.bend[<bendId>].inner|outer|side…` for bend faces, by role, never by
    output order (follow ADR-013 and the gear naming pattern). Name edges
    from their two faces as gears do.
