@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { CAD_PATCH_OPERATION_KINDS } from '@openzcad/ai-contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -1239,6 +1240,18 @@ describe('assistant integration', () => {
   it('defaults hosted OpenRouter to free Nemotron and preserves the direct OpenAI default', () => {
     expect(DEFAULT_AI_PROVIDER).toBe('openrouter');
     expect(DEFAULT_OPENROUTER_MODEL).toBe('nvidia/nemotron-3.5-super-vl:free');
+    // Every checked-in configuration and the local template name the same
+    // model: one left on a withdrawn model would override the default.
+    for (const file of [
+      'wrangler.jsonc',
+      'apps/web/wrangler.jsonc',
+      'wrangler.selfhost.example.jsonc',
+      'apps/web/.dev.vars.example'
+    ]) {
+      const text = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
+      const match = /AI_MODEL"?\s*[:=]\s*"?([^"\s,]+)/.exec(text);
+      expect(match?.[1], file).toBe(DEFAULT_OPENROUTER_MODEL);
+    }
     expect(DEFAULT_AI_MODEL).toBe('gpt-6-luna');
   });
 

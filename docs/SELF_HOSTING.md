@@ -40,8 +40,8 @@ resource names owned by your Cloudflare account. `PUBLIC_APP_ORIGIN` must be a
 complete HTTPS origin with no trailing slash, for example
 `https://cad.example.com` or the `workers.dev` URL Wrangler assigns.
 
-The example enables `AI_DEPLOYMENT_FREE_ENABLED` and selects the free MiniMax
-model through OpenRouter. Once you add `OPENROUTER_API_KEY`, **every verified
+The example enables `AI_DEPLOYMENT_FREE_ENABLED` and selects the free NVIDIA
+Nemotron 3.5 Super VL model through OpenRouter. Once you add `OPENROUTER_API_KEY`, **every verified
 account can use your deployment's built-in assistant**, without Premium
 membership or an email allowlist. Account quotas and shared OpenRouter free-tier
 limits still apply. Prompts, context and selected attachments are sent to the AI
