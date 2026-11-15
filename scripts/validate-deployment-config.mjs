@@ -342,6 +342,15 @@ function validateCommon(config, { allowPlaceholders }) {
   return errors;
 }
 
+function sameOrigin(value, origin) {
+  if (typeof value !== 'string') return false;
+  try {
+    return new URL(value.trim()).origin === new URL(origin).origin;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Worker Previews (`previews` in wrangler.jsonc) inherit no bindings or vars,
  * so the official config must declare them, and they must never reach
@@ -389,6 +398,15 @@ function validateOfficialPreviews(config) {
       'previews Durable Object binding PROJECT_ROOM must use ProjectCollaborationRoom'
     );
   }
+  // A script_name points the binding at another Worker's objects (production's
+  // own name included); only same-Worker classes get per-Preview isolation.
+  for (const item of previews.durable_objects?.bindings ?? []) {
+    if (item?.script_name) {
+      errors.push(
+        `previews Durable Object binding ${item.name} must not set script_name`
+      );
+    }
+  }
   if (!binding(previews, 'send_email', 'EMAIL', 'name')) {
     errors.push('previews email binding EMAIL is required for sign-in codes');
   }
@@ -409,7 +427,7 @@ function validateOfficialPreviews(config) {
   if (vars.PRODUCTION_GUARD !== 'enabled') {
     errors.push('previews.vars.PRODUCTION_GUARD must be enabled');
   }
-  if (vars.PUBLIC_APP_ORIGIN?.trim() === OFFICIAL.publicOrigin) {
+  if (sameOrigin(vars.PUBLIC_APP_ORIGIN, OFFICIAL.publicOrigin)) {
     errors.push(
       'previews.vars.PUBLIC_APP_ORIGIN must not send invitation links to production'
     );

@@ -226,6 +226,37 @@ describe('deployment configuration preflight', () => {
       ]);
     });
 
+    it('refuses a Durable Object binding to another Worker, production included', () => {
+      expect(
+        withPreviews((previews) => {
+          (
+            previews as unknown as {
+              durable_objects: { bindings: Record<string, string>[] };
+            }
+          ).durable_objects.bindings[0]!.script_name = OFFICIAL.workerName;
+        })
+      ).toEqual([
+        'previews Durable Object binding PROJECT_ROOM must not set script_name'
+      ]);
+    });
+
+    it('refuses production invitation links written another way', () => {
+      for (const origin of ['https://zcad.app/', ' https://ZCAD.app ', 'https://zcad.app:443/invite']) {
+        expect(
+          withPreviews((previews) => {
+            previews.vars.PUBLIC_APP_ORIGIN = origin;
+          })
+        ).toEqual([
+          'previews.vars.PUBLIC_APP_ORIGIN must not send invitation links to production'
+        ]);
+      }
+      expect(
+        withPreviews((previews) => {
+          previews.vars.PUBLIC_APP_ORIGIN = 'https://staging.zcad.app';
+        })
+      ).toEqual([]);
+    });
+
     it('lets a Preview try a flag production has not turned on', () => {
       expect(
         withPreviews((previews) => {
