@@ -1484,19 +1484,37 @@ manual order and the archive are now sealed; the trash stays readable.
   encrypted project.
 - **The browser.** Shelf edits are noted per account until a sealed sync
   takes them, and the shelf's account writes carry only moves into and out
-  of the trash. Listings take the trash from the account's rows, and pins,
-  order and archive from this device's unsynced edits, then the agreed
-  sealed record, then this device's rows. With locked keys a device keeps
-  its own state and sends nothing readable; a fresh device takes the
-  sealed record once its keys unlock. A sync records only edits made on
-  the shelf, never a row as it stands, so a row the listing wrote cannot
-  overrule the account.
+  of the trash. A pin, an order or an archive is sent readable only after
+  the library rule answered, for that write, that the account's library is
+  plaintext: another tab may have encrypted a project or accepted an
+  encrypted invitation, and a refusal from the Worker would come after it
+  had read the value. When the rule cannot answer, the trash move is still
+  sent and the rest stays on the device (its row pending, its edit noted)
+  until it can. Listings take the trash from the account's rows, and pins,
+  order and archive from the account's unsynced edits on this device, then
+  its agreed sealed record, then (once, to migrate) readable state its rows
+  still hold. With locked keys a device sends nothing readable; a fresh
+  device takes the sealed record once its keys unlock. A sync records only
+  edits made on the shelf, never a row as it stands, so a row the listing
+  wrote cannot overrule the account.
+- **Accounts sharing a device.** This device's project organization rows
+  are shared by every account signed in on it, so they are attributable to
+  none. An account's sealed record is seeded only from that account's own
+  edits and its own listed rows, and its sync never writes the device rows;
+  the listing lays the agreed record over the account's rows instead. A
+  second account signing in therefore never seals the first one's private
+  project ids, pins or archive, nor overwrites them on the device.
 - **Migration.** Rows that still hold readable shelf state are shown once
   and seeded into the sealed record wherever it holds nothing for the
   project, stamped below every real edit. Only after that record is saved,
   and only for an account the Worker or the preference route confirmed is
-  encrypted, are the rows reset to the defaults; a trashed row stays in the
-  trash. A row of a project another account owns is never reset.
+  encrypted, are the rows reset, through a route of its own
+  (`POST /api/projects/:id/shelf/reset`) that the Worker applies as one
+  conditional write to the row as it stands: pin and order to the
+  defaults, the archive cleared only while the row is still archived, and
+  the trash (status and time) never touched, so a project trashed on
+  another device after the listing stays in the trash. Only the owner's
+  row changes; a project another account owns is never reset.
 - **Members.** Only an owner writes a project's row. A member used to see
   the owner's pins and archive; a member whose library is encrypted now
   keeps its own shelf state for shared projects in its own sealed record,

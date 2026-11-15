@@ -1373,18 +1373,12 @@ export function saveLocalProjectOrganization(
   ).then(() => undefined);
 }
 
-/**
- * A network acknowledgement/adoption may replace only the revision it read.
- * `keepMirrorPending` keeps a row's unmirrored flag: the sealed shelf sync
- * lays pins and order over a row whose move to the trash may still be on
- * its way to the account.
- */
+/** A network acknowledgement/adoption may replace only the revision it read. */
 export function saveLocalProjectOrganizationIfCurrent(
   projectId: string,
   organization: ProjectOrganization,
   expectedRevision: string | null,
-  isCurrent?: () => boolean,
-  options: { keepMirrorPending?: boolean } = {}
+  isCurrent?: () => boolean
 ): Promise<boolean> {
   return scopedTransaction(
     'readwrite',
@@ -1402,10 +1396,7 @@ export function saveLocalProjectOrganizationIfCurrent(
       meta.put({
         ...organizationOf({ ...organization, projectId }),
         projectId,
-        organizationRevision: crypto.randomUUID(),
-        ...(options.keepMirrorPending && current?.mirrorPending
-          ? { mirrorPending: true }
-          : {})
+        organizationRevision: crypto.randomUUID()
       });
       return true;
     }

@@ -1051,6 +1051,17 @@ export const api = {
         body: JSON.stringify(payload)
       }
     ),
+  /**
+   * Clears a project's readable pin, order and archive once the account's
+   * sealed library record holds them (ADR-024 amendment 2026-11-14). The
+   * Worker clears the archive only while the row is still archived and
+   * never changes the trash.
+   */
+  resetProjectShelf: (projectId: string, signal?: AbortSignal) =>
+    requestJson<UpdateProjectResponse>(
+      `/api/projects/${encodeURIComponent(projectId)}/shelf/reset`,
+      { method: 'POST', ...(signal ? { signal } : {}) }
+    ),
   reorderProjects: (payload: ReorderProjectsRequest, signal?: AbortSignal) =>
     requestJson<ReorderProjectsResponse>('/api/projects/reorder', {
       method: 'POST',

@@ -16,7 +16,6 @@ import {
   type ProjectShelf,
   type ShelfEdit
 } from './libraryFolderSync';
-import type { LocalProjectOrganizationSnapshot } from './localProjectStore';
 
 /**
  * Shelf state (pin, manual order, archive) of an account whose library is
@@ -29,15 +28,20 @@ import type { LocalProjectOrganizationSnapshot } from './localProjectStore';
  * sharing, purging and quotas act on it. This module is what the shelf's
  * account writes and listings consult:
  *
- * - listings lay this device's rows, then the agreed sealed record, over
- *   the account's rows, which then speak only for the trash
- *   (`overlaySealedShelf`), so neither locked keys nor a fresh device turns
- *   pins into defaults;
+ * - listings lay this account's unsynced edits, then its agreed sealed
+ *   record, over the account's rows, which then speak only for the trash
+ *   (`overlaySealedShelf`);
  * - the shelf's mirror sends only moves into and out of the trash
- *   (`mirrorShelfToAccount`, `reorderShelfOnAccount`);
+ *   (`mirrorShelfToAccount`, `reorderShelfOnAccount`), and sends a pin, an
+ *   order or an archive readable only after the account answered that its
+ *   library is plaintext;
  * - shelf state an account stored readable before is migrated: a listing
- *   gives it to this device's rows, the next sealed sync seals it, and only
- *   then are the rows reset to the defaults (`resetLegacyShelfRows`).
+ *   notes it, the next sealed sync seals it, and only then are the rows
+ *   reset (`resetLegacyShelfRows`).
+ *
+ * Everything here is kept per account. This device's project organization
+ * rows (`localProjectStore.ts`) are shared by every account signed in on
+ * it, so they never feed an account's sealed record or its listing.
  */
 
 interface AccountShelf {
@@ -281,16 +285,16 @@ function shelfOf(entry: ProjectShelf): ProjectShelf {
 
 /**
  * The account's rows as a sealed library reads them: the trash from the
- * row; pin, order and archive from this device's unsynced edit, else the
- * agreed sealed record, else this device's row (locked keys before the
- * first sealed sync), else whatever the row still holds readable from
- * before (`legacy`, which the next sealed sync migrates). Every returned
- * summary carries its organization, so the listing's reconcile adopts it
- * like an account row and a device row pending a mirror still wins.
+ * row; pin, order and archive from this account's unsynced edit on this
+ * device, else its agreed sealed record, else whatever the row still holds
+ * readable from before (`legacy`, which the next sealed sync migrates).
+ * This device's organization rows are not consulted: another account
+ * signed in on this device may have written them. Every returned summary
+ * carries its organization, so the listing's reconcile adopts it like an
+ * account row and a device row pending a mirror still wins.
  */
 export function overlaySealedShelf(
   remote: readonly ProjectSummary[],
-  local: ReadonlyMap<string, LocalProjectOrganizationSnapshot>,
   agreed: Readonly<Record<string, ProjectShelf>> | null,
   edits: ReadonlyMap<string, ShelfEdit> = new Map()
 ): { projects: ProjectSummary[]; legacy: Map<string, ProjectOrganization> } {
@@ -299,18 +303,15 @@ export function overlaySealedShelf(
     const row = projectOrganization(project);
     const readable = shelfOfOrganization(row);
     if (!isDefaultShelf(readable)) legacy.set(project.projectId, row);
-    const device = local.get(project.projectId)?.organization;
     const sealed = agreed?.[project.projectId];
     const edit = edits.get(project.projectId)?.after;
     const shelf: ProjectShelf = edit
       ? edit
       : sealed
         ? shelfOf(sealed)
-        : device
-          ? shelfOfOrganization(device)
-          : isDefaultShelf(readable)
-            ? DEFAULT_PROJECT_SHELF
-            : readable;
+        : isDefaultShelf(readable)
+          ? DEFAULT_PROJECT_SHELF
+          : readable;
     const organization: ProjectOrganization =
       row.status === 'deleted'
         ? {
@@ -365,6 +366,36 @@ export interface ShelfApi {
     payload: ReorderProjectsRequest,
     signal?: AbortSignal
   ): Promise<{ projects: ProjectSummary[] }>;
+  /**
+   * Clears a row's readable pin, order and archive in one conditional
+   * write: the archive only while the row is still archived, the trash
+   * never (`POST /api/projects/:id/shelf/reset`).
+   */
+  resetProjectShelf(
+    projectId: string,
+    signal?: AbortSignal
+  ): Promise<UpdateProjectResponse>;
+}
+
+/**
+ * The library rule (`encryptsAccountLibrary` in `api.ts`): true when the
+ * account's library is encrypted; throws when it cannot tell.
+ */
+export type LibraryRuleCheck = () => Promise<boolean>;
+
+/**
+ * A pin, an order or an archive that waits on this device: the account's
+ * library rule could not be checked, so it was not sent readable. The row
+ * stays pending and its edit stays journaled until the rule answers.
+ */
+export class ShelfStateUnverifiedError extends Error {
+  readonly code = 'SHELF_STATE_UNVERIFIED';
+  constructor() {
+    super(
+      'Whether this account encrypts its library could not be checked, so pins, order and the archive stay on this device for now.'
+    );
+    this.name = 'ShelfStateUnverifiedError';
+  }
 }
 
 async function mirrorTrash(
@@ -387,23 +418,54 @@ async function mirrorTrash(
   state.rows.set(projectId, projectOrganization(response.project));
 }
 
+function sameRowShelf(
+  row: ProjectOrganization | undefined,
+  organization: ProjectOrganization
+): boolean {
+  const wanted = shelfOfOrganization(organization);
+  const held = row ? shelfOfOrganization(row) : DEFAULT_PROJECT_SHELF;
+  return (
+    held.pinned === wanted.pinned &&
+    held.sortOrder === wanted.sortOrder &&
+    held.archived === wanted.archived
+  );
+}
+
 /**
  * The shelf's write of one project's organization to the account. A sealed
  * library sends only a move into or out of the trash, and nothing when the
  * account's row already agrees; pin, order and archive go to the sealed
- * record instead. An account not known to be sealed writes as before, and
- * the Worker's refusal turns it sealed from then on.
+ * record instead.
+ *
+ * Pin, order and archive go readable only once the account has answered,
+ * for this write, that its library is plaintext: another tab can encrypt a
+ * project or accept an encrypted invitation at any time, and the Worker's
+ * refusal would come after it had read them. Without an answer the trash
+ * move is still sent (it is readable either way) and the rest waits on
+ * this device (`ShelfStateUnverifiedError`). A refusal that still arrives
+ * (the account changed between the answer and the write) turns the account
+ * sealed from then on.
  */
 export async function mirrorShelfToAccount(
   api: ShelfApi,
   accountId: string | null,
   projectId: string,
   organization: ProjectOrganization,
+  encryptsLibrary: LibraryRuleCheck,
   signal?: AbortSignal
 ): Promise<void> {
-  const state = accountId ? account(accountId) : null;
-  if (state?.sealed === true) {
-    return mirrorTrash(api, state, projectId, organization, signal);
+  // No account to check the rule against: nothing goes readable.
+  if (!accountId) throw new ShelfStateUnverifiedError();
+  const state = account(accountId);
+  const sealed = await askShelfSealed(accountId, encryptsLibrary);
+  if (sealed !== false) {
+    await mirrorTrash(api, state, projectId, organization, signal);
+    if (
+      sealed === null &&
+      !sameRowShelf(state.rows.get(projectId), organization)
+    )
+      throw new ShelfStateUnverifiedError();
+    return;
   }
   try {
     const response = await api.updateProject(
@@ -415,9 +477,9 @@ export async function mirrorShelfToAccount(
       },
       signal
     );
-    state?.rows.set(projectId, projectOrganization(response.project));
+    state.rows.set(projectId, projectOrganization(response.project));
   } catch (error) {
-    if (state && errorCode(error) === PROJECT_SHELF_STATE_SEALED_CODE) {
+    if (errorCode(error) === PROJECT_SHELF_STATE_SEALED_CODE) {
       state.sealed = true;
       return mirrorTrash(api, state, projectId, organization, signal);
     }
@@ -427,16 +489,22 @@ export async function mirrorShelfToAccount(
 
 /**
  * A manual order for the account. A sealed library keeps it in the sealed
- * record, so nothing is sent and no account row answers.
+ * record, so nothing is sent and no account row answers. Like the mirror,
+ * it is sent readable only after the account answered that its library is
+ * plaintext; without an answer it waits on this device.
  */
 export async function reorderShelfOnAccount(
   api: ShelfApi,
   accountId: string | null,
   projectIds: readonly string[],
+  encryptsLibrary: LibraryRuleCheck,
   signal?: AbortSignal
 ): Promise<ProjectSummary[]> {
-  const state = accountId ? account(accountId) : null;
-  if (state?.sealed === true) return [];
+  if (!accountId) throw new ShelfStateUnverifiedError();
+  const state = account(accountId);
+  const sealed = await askShelfSealed(accountId, encryptsLibrary);
+  if (sealed === true) return [];
+  if (sealed === null) throw new ShelfStateUnverifiedError();
   try {
     return (
       await api.reorderProjects(
@@ -445,7 +513,7 @@ export async function reorderShelfOnAccount(
       )
     ).projects;
   } catch (error) {
-    if (state && errorCode(error) === PROJECT_SHELF_STATE_SEALED_CODE) {
+    if (errorCode(error) === PROJECT_SHELF_STATE_SEALED_CODE) {
       state.sealed = true;
       return [];
     }
@@ -456,9 +524,11 @@ export async function reorderShelfOnAccount(
 /**
  * Resets rows that still hold readable shelf state to the defaults, once a
  * sealed sync has saved the record that now holds it. Only for an account
- * known to be sealed: an unanswered check never resets anything. A row in
- * the trash stays there. Failures wait for the next round; a project this
- * account does not own is left alone.
+ * known to be sealed: an unanswered check never resets anything. The
+ * Worker resets each row as it stands, not as this listing saw it: the
+ * archive is cleared only while the row is still archived, and a project
+ * trashed meanwhile (on another device) stays in the trash. Failures wait
+ * for the next round; a project this account does not own is left alone.
  */
 export async function resetLegacyShelfRows(
   api: ShelfApi,
@@ -467,16 +537,9 @@ export async function resetLegacyShelfRows(
 ): Promise<void> {
   const state = account(accountId);
   if (state.sealed !== true) return;
-  for (const [projectId, organization] of rows) {
+  for (const projectId of rows.keys()) {
     try {
-      const response = await api.updateProject({
-        projectId: toProjectId(projectId),
-        pinned: false,
-        sortOrder: 0,
-        ...(organization.status === 'archived'
-          ? { status: 'active' as const }
-          : {})
-      });
+      const response = await api.resetProjectShelf(projectId);
       state.rows.set(projectId, projectOrganization(response.project));
       state.legacy.delete(projectId);
     } catch (error) {
@@ -489,7 +552,10 @@ export async function resetLegacyShelfRows(
   }
 }
 
-/** Fired after a sealed sync laid the account's shelf state over device rows. */
+/**
+ * Fired after a sealed sync changed the account's agreed shelf state, so
+ * the shelf re-lists and lays it over the account's rows.
+ */
 export const SEALED_SHELF_APPLIED_EVENT = 'openzcad:sealed-shelf-applied';
 
 export function notifySealedShelfApplied(accountId: string): void {

@@ -2211,8 +2211,16 @@ const organizationMirrorHost: OrganizationMirrorHost = {
   saveLocal: saveLocalProjectOrganizationIfCurrent,
   // An account whose library is encrypted sends only trash moves; its pins,
   // order and archive go to the sealed library record (sealedShelfState.ts).
+  // Any other account's are sent only after its library rule says plaintext.
   updateRemote: (projectId, organization, signal) =>
-    mirrorShelfToAccount(api, shelfAccount(), projectId, organization, signal)
+    mirrorShelfToAccount(
+      api,
+      shelfAccount(),
+      projectId,
+      organization,
+      encryptsAccountLibrary,
+      signal
+    )
 };
 const organizationBackground = new OrganizationMirrorBackground();
 
@@ -2317,12 +2325,12 @@ async function loadProjectSummaries(
     rememberAccountRows(accountId, remoteProjects);
     if (await sealedShelf) {
       // The account's rows speak for the trash only (ADR-024 amendment
-      // 2026-11-14): pins, order and archive come from this device's
-      // unsynced edits, the sealed record, then this device's rows, and
-      // once from readable state still on the rows, to migrate.
+      // 2026-11-14): pins, order and archive come from this account's
+      // unsynced edits, its sealed record, and once from readable state
+      // still on the rows, to migrate. Never from this device's rows, which
+      // every account signed in here shares.
       const overlaid = overlaySealedShelf(
         remoteProjects,
-        organizationSnapshots,
         agreedShelfState(accountId),
         readShelfEdits(accountId)
       );
@@ -7247,8 +7255,8 @@ export function App() {
       setCloudAvailable(true);
     };
     const stop = watchLibraryFreshness(refresh);
-    // A sealed shelf sync laid the account's pins, order or archive over
-    // this device's rows: show them now rather than at the next poll.
+    // A sealed shelf sync changed the account's agreed pins, order or
+    // archive: list them now rather than at the next poll.
     const applied = (event: Event) => {
       if (
         (event as CustomEvent<{ accountId?: string }>).detail?.accountId ===
@@ -15207,6 +15215,7 @@ export function App() {
             api,
             session.userId,
             ids,
+            encryptsAccountLibrary,
             organizationScope.signal
           ),
         undefined,

@@ -4,21 +4,16 @@ import {
   writeLibraryFolders,
   type LibraryFolders
 } from './libraryFolders';
-import type { ProjectOrganization } from '@openzcad/shared';
 import {
   deviceFoldersFromSet,
   folderSetFromDevice,
   mergeFolderSets,
-  organizationWithShelf,
   parseFolderSet,
   plaintextFolderSet,
   pruneFolderSet,
   recordFolderChanges,
   recordShelfEdits,
-  sameShelf,
   seedMissingShelf,
-  seedShelf,
-  shelfInSet,
   shelfOfOrganization,
   withoutShelf,
   type FolderSet,
@@ -27,11 +22,7 @@ import {
 } from './libraryFolderSync';
 import { unlockedAccount } from './e2ee/unlockedKeys';
 import {
-  listLocalProjectOrganizationSnapshots,
-  saveLocalProjectOrganizationIfCurrent,
-  type LocalProjectOrganizationSnapshot
-} from './localProjectStore';
-import {
+  agreedShelfState,
   confirmShelfSealed,
   consumeShelfEdits,
   folderSyncRecordKey,
@@ -66,9 +57,12 @@ export { folderSyncRecordKey };
  *
  * A sealed record also carries each project's shelf state (pin, manual
  * order, archive; ADR-024 amendment 2026-11-14), which such an account no
- * longer stores on its project rows. Its device copy is this device's
- * project organization rows (`localProjectStore.ts`), read and written
- * through the host's shelf methods.
+ * longer stores on its project rows. Its sources are kept per account:
+ * the account's own shelf edits on this device (a journal), and readable
+ * state its listed rows still hold from before (seeds). This device's
+ * project organization rows (`localProjectStore.ts`) are shared by every
+ * account signed in on it, so the sync neither reads nor writes them; the
+ * listing lays the agreed set over the account's rows instead.
  */
 export interface LibraryFolderSnapshot {
   /** 0 while the account has never stored folders. */
@@ -156,21 +150,11 @@ export interface FolderSyncHost {
   codec(): Promise<FolderRecordCodec | null>;
   now(): number;
   /**
-   * This device's project organization rows, with the revision each was
-   * read at. Read only when the codec seals (format 2); a plaintext library
-   * keeps its shelf state on the project rows.
+   * This account's shelf edits made on this device that the account has
+   * not taken yet. A host without it syncs folders only. Recorded only when
+   * the codec seals (format 2); a plaintext library keeps its shelf state
+   * on the project rows.
    */
-  readShelf?(): Promise<ReadonlyMap<string, LocalProjectOrganizationSnapshot>>;
-  /**
-   * Lays the account's shelf state over a row, only while it is still at
-   * `revision`; false when the row changed meanwhile.
-   */
-  writeShelf?(
-    projectId: string,
-    organization: ProjectOrganization,
-    revision: string | null
-  ): Promise<boolean>;
-  /** Shelf edits made on this device that the account has not taken yet. */
   readShelfEdits?(): ReadonlyMap<string, ShelfEdit>;
   /** Forgets these edits, except any made again since they were read. */
   consumeShelfEdits?(recorded: ReadonlyMap<string, ShelfEdit>): void;
@@ -238,20 +222,14 @@ export async function syncLibraryFolders(
   const codec = await host.codec();
   if (!codec) return 'waiting';
   const edits = host.readShelfEdits?.() ?? new Map<string, ShelfEdit>();
-  const shelf =
-    codec.format === 2 && host.readShelf && host.writeShelf
-      ? await host.readShelf()
-      : null;
-  local = shelf
-    ? recordShelfEdits(
-        seedMissingShelf(
-          seedShelf(local, shelfRows(shelf)),
-          host.readShelfSeeds?.() ?? new Map()
-        ),
-        edits,
-        host.now()
-      )
-    : withoutShelf(local);
+  local =
+    codec.format === 2 && host.readShelfEdits
+      ? recordShelfEdits(
+          seedMissingShelf(local, host.readShelfSeeds?.() ?? new Map()),
+          edits,
+          host.now()
+        )
+      : withoutShelf(local);
   for (let attempt = 1; ; attempt += 1) {
     let remoteSet: FolderSet | null = null;
     if (remote.revision > 0) {
@@ -286,55 +264,19 @@ export async function syncLibraryFolders(
       encoded.commit();
       revision = result.saved.revision;
     }
-    await finish(host, device, merged, revision, shelf !== null);
+    finish(host, device, merged, revision);
     // Sealed, or kept on the project rows by a plaintext library's mirror.
     host.consumeShelfEdits?.(edits);
     return 'synced';
   }
 }
 
-function shelfRows(
-  rows: ReadonlyMap<string, LocalProjectOrganizationSnapshot>
-): Map<string, ProjectShelf> {
-  return new Map(
-    [...rows].map(([projectId, row]) => [
-      projectId,
-      shelfOfOrganization(row.organization)
-    ])
-  );
-}
-
-/**
- * Lays the merged shelf state over this device's rows, for the projects the
- * set holds. A row with an edit the account has not taken yet keeps it, as
- * does a row edited while this ran; the next round records the edit. Rows
- * of projects the set does not hold are left alone (a project used only on
- * this device, signed out), and the listing gives a project this device has
- * no row for its state from the agreed set.
- */
-async function applyShelf(host: FolderSyncHost, merged: FolderSet) {
-  const rows = await host.readShelf!();
-  const edited = host.readShelfEdits?.() ?? new Map<string, ShelfEdit>();
-  for (const [projectId, row] of rows) {
-    if (!merged.projects?.[projectId] || edited.has(projectId)) continue;
-    const target = shelfInSet(merged, projectId);
-    if (sameShelf(target, shelfOfOrganization(row.organization))) continue;
-    await host.writeShelf!(
-      projectId,
-      organizationWithShelf(row.organization, target),
-      row.revision
-    );
-  }
-}
-
-async function finish(
+function finish(
   host: FolderSyncHost,
   device: LibraryFolders,
   merged: FolderSet,
-  revision: number,
-  sealsShelf: boolean
+  revision: number
 ) {
-  if (sealsShelf) await applyShelf(host, merged);
   // An edit made on the shelf while the account answered is kept: it is
   // recorded on top of the merged set rather than overwritten by it, and
   // goes to the account with the next sync.
@@ -473,11 +415,11 @@ export async function syncAccountLibraryFolders(
 ): Promise<boolean> {
   try {
     const { api, encryptsAccountLibrary } = await import('./api');
-    // Rows still holding readable shelf state, as listed before this round
-    // read the device: once the sealed record holds them they are reset.
+    // Rows still holding readable shelf state, as this account's listing
+    // noted them: once the sealed record holds them they are reset.
     const legacy = legacyShelfRows(accountId);
+    const agreedBefore = JSON.stringify(agreedShelfState(accountId));
     let sealed = false;
-    let applied = false;
     const host: FolderSyncHost = {
       ...browserFolderSyncHost(accountId, api, async () => {
         // Asked only after the first read answered: a yes holds for the
@@ -497,7 +439,6 @@ export async function syncAccountLibraryFolders(
           pins: localStorageFolderSequencePins(accountId)
         });
       }),
-      readShelf: listLocalProjectOrganizationSnapshots,
       readShelfEdits: () => readShelfEdits(accountId),
       consumeShelfEdits: (recorded) => consumeShelfEdits(accountId, recorded),
       readShelfSeeds: () =>
@@ -506,21 +447,13 @@ export async function syncAccountLibraryFolders(
             projectId,
             shelfOfOrganization(organization)
           ])
-        ),
-      writeShelf: async (projectId, organization, revision) => {
-        const saved = await saveLocalProjectOrganizationIfCurrent(
-          projectId,
-          organization,
-          revision,
-          () => !cancelled(),
-          { keepMirrorPending: true }
-        );
-        applied ||= saved;
-        return saved;
-      }
+        )
     };
     const outcome = await syncLibraryFolders(host);
-    if (applied) notifySealedShelfApplied(accountId);
+    // The listing lays the agreed set over the account's rows: re-list when
+    // this round changed what it holds.
+    if (JSON.stringify(agreedShelfState(accountId)) !== agreedBefore)
+      notifySealedShelfApplied(accountId);
     if (outcome === 'synced' && sealed && isShelfSealed(accountId)) {
       await resetLegacyShelfRows(api, accountId, legacy);
     }

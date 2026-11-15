@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   PROJECT_SHELF_STATE_SEALED_CODE,
+  toProjectId,
   type ProjectOrganization,
   type ProjectSummary,
   type ReorderProjectsRequest,
-  type UpdateProjectRequest
+  type UpdateProjectRequest,
+  type UpdateProjectResponse
 } from '@openzcad/shared';
 import {
   canonicalFolderJson,
@@ -21,11 +23,9 @@ import {
   parseFolderSet,
   pruneFolderSet,
   recordShelfEdits,
-  seedShelf,
   type FolderSet,
   type ShelfEdit
 } from './libraryFolderSync';
-import type { LocalProjectOrganizationSnapshot } from './localProjectStore';
 import {
   askShelfSealed,
   confirmShelfSealed,
@@ -40,6 +40,7 @@ import {
   reorderShelfOnAccount,
   resetLegacyShelfRows,
   resetShelfStateMemory,
+  ShelfStateUnverifiedError,
   shelfSealedOrSafe,
   type ShelfApi
 } from './sealedShelfState';
@@ -106,25 +107,23 @@ function server() {
   };
 }
 
-/** One browser: its organization rows, its edit journal and its record. */
+/**
+ * One browser signed in to the account: its edit journal and the record it
+ * agreed with the account. Its project organization rows are not part of
+ * the sync (every account signed in on the device shares them); the
+ * listing lays the agreed record over the account's rows instead.
+ */
 function device(
   remote: ReturnType<typeof server>,
   options: {
     codec?: FolderRecordCodec | null;
-    rows?: Record<string, ProjectOrganization>;
     seeds?: Map<string, ProjectOrganization>;
   } = {}
 ) {
-  const rows = new Map<string, LocalProjectOrganizationSnapshot>(
-    Object.entries(options.rows ?? {}).map(([id, organization], index) => [
-      id,
-      { organization, revision: `r${index}`, mirrorPending: false }
-    ])
-  );
-  let edits = new Map<string, ShelfEdit>();
+  const shelves = new Map<string, ProjectOrganization>();
+  const edits = new Map<string, ShelfEdit>();
   let record: ReturnType<FolderSyncHost['readRecord']> = null;
   let clock = T0;
-  let revisions = 0;
   const codec = options.codec === undefined ? sealedCodec : options.codec;
   const host: FolderSyncHost = {
     readDevice: () => ({ folders: [] }),
@@ -137,17 +136,6 @@ function device(
     save: (request) => remote.save(request),
     codec: () => Promise.resolve(codec),
     now: () => clock,
-    readShelf: () => Promise.resolve(new Map(rows)),
-    writeShelf: (projectId, organization, revision) => {
-      const row = rows.get(projectId);
-      if ((row?.revision ?? null) !== revision) return Promise.resolve(false);
-      rows.set(projectId, {
-        organization,
-        revision: `w${(revisions += 1)}`,
-        mirrorPending: row?.mirrorPending ?? false
-      });
-      return Promise.resolve(true);
-    },
     readShelfEdits: () => new Map(edits),
     consumeShelfEdits: (recorded) => {
       for (const [id, edit] of recorded)
@@ -167,16 +155,12 @@ function device(
       )
   };
   return {
-    /** A shelf edit, as `saveShelfRows` makes it: the row and the journal. */
+    /** A shelf edit, as `saveShelfRows` journals it. */
     edit(projectId: string, change: Partial<ProjectOrganization>) {
       clock += 1000;
-      const before = rows.get(projectId)?.organization ?? ACTIVE;
+      const before = shelves.get(projectId) ?? ACTIVE;
       const after = { ...before, ...change };
-      rows.set(projectId, {
-        organization: after,
-        revision: `e${(revisions += 1)}`,
-        mirrorPending: true
-      });
+      shelves.set(projectId, after);
       const shelfOf = (organization: ProjectOrganization) => ({
         pinned: organization.pinned,
         sortOrder: organization.sortOrder,
@@ -190,21 +174,11 @@ function device(
         after: shelfOf(after)
       });
     },
-    /** A row the listing wrote (an acknowledgement, not an edit). */
-    adopt(projectId: string, organization: ProjectOrganization) {
-      rows.set(projectId, {
-        organization,
-        revision: `a${(revisions += 1)}`,
-        mirrorPending: false
-      });
-    },
     sync: () => syncLibraryFolders(host),
-    row: (projectId: string) => rows.get(projectId),
+    /** What the listing lays over the account's row for the project. */
+    agreed: (projectId: string) => record?.set.projects?.[projectId],
     get edits() {
       return edits;
-    },
-    set edits(next: Map<string, ShelfEdit>) {
-      edits = next;
     },
     get record() {
       return record;
@@ -215,9 +189,7 @@ function device(
 describe('the sealed shelf record', () => {
   it('carries pins, order and archive from one device to another', async () => {
     const remote = server();
-    const laptop = device(remote, {
-      rows: { p1: ACTIVE, p2: ACTIVE, p3: ACTIVE }
-    });
+    const laptop = device(remote);
     laptop.edit('p1', { pinned: true });
     laptop.edit('p2', { sortOrder: 4 });
     laptop.edit('p3', {
@@ -234,23 +206,21 @@ describe('the sealed shelf record', () => {
     // The journal is spent once the account holds the edits.
     expect(laptop.edits.size).toBe(0);
 
-    // Another device lays them over the rows it holds.
-    const desktop = device(remote, {
-      rows: { p1: ACTIVE, p2: ACTIVE, p3: ACTIVE }
-    });
+    // Another device agrees on them, for its listing to lay over the rows.
+    const desktop = device(remote);
     expect(await desktop.sync()).toBe('synced');
-    expect(desktop.row('p1')?.organization.pinned).toBe(true);
-    expect(desktop.row('p2')?.organization.sortOrder).toBe(4);
-    expect(desktop.row('p3')?.organization).toMatchObject({
-      status: 'archived',
+    expect(desktop.agreed('p1')?.pinned).toBe(true);
+    expect(desktop.agreed('p2')?.sortOrder).toBe(4);
+    expect(desktop.agreed('p3')).toMatchObject({
+      archived: true,
       archivedAt: '2026-11-14T00:00:00Z'
     });
   });
 
   it('keeps a pin on one device and a reorder on another', async () => {
     const remote = server();
-    const a = device(remote, { rows: { p1: ACTIVE } });
-    const b = device(remote, { rows: { p1: ACTIVE } });
+    const a = device(remote);
+    const b = device(remote);
     await a.sync();
     await b.sync();
     a.edit('p1', { pinned: true });
@@ -262,63 +232,33 @@ describe('the sealed shelf record', () => {
       pinned: true,
       sortOrder: 7
     });
-    expect(a.row('p1')?.organization).toMatchObject({
-      pinned: true,
-      sortOrder: 7
-    });
+    expect(a.agreed('p1')).toMatchObject({ pinned: true, sortOrder: 7 });
   });
 
-  it('never reads a row the listing wrote as an edit (fresh device)', async () => {
-    // Regression guard: a fresh device's listing writes default rows from
-    // a record older than the sync's; diffing rows would unpin everything.
+  it('gives a fresh device the account state without overruling it', async () => {
     const remote = server();
-    const a = device(remote, { rows: { p1: ACTIVE } });
+    const a = device(remote);
     a.edit('p1', { pinned: true });
     await a.sync();
     const fresh = device(remote);
     await fresh.sync();
-    fresh.adopt('p1', ACTIVE);
     await fresh.sync();
     expect(remote.set?.projects?.p1?.pinned).toBe(true);
-    expect(fresh.row('p1')?.organization.pinned).toBe(true);
+    expect(fresh.agreed('p1')?.pinned).toBe(true);
   });
 
   it('waits with locked keys and keeps every edit for later', async () => {
     const remote = server();
-    const locked = device(remote, { codec: null, rows: { p1: ACTIVE } });
+    const locked = device(remote, { codec: null });
     locked.edit('p1', { pinned: true });
     expect(await locked.sync()).toBe('waiting');
     expect(remote.snapshot.revision).toBe(0);
     expect(locked.edits.get('p1')?.after.pinned).toBe(true);
-    expect(locked.row('p1')?.organization.pinned).toBe(true);
-  });
-
-  it('lets the account win over a first round of untimed device rows', async () => {
-    const remote = server();
-    const a = device(remote, { rows: { p1: ACTIVE } });
-    a.edit('p1', { pinned: true });
-    await a.sync();
-    // A device that synced folders before shelf state joined them, holding
-    // a stale row from before: its rows are seeded at stamp 0.
-    const stale = device(remote, {
-      rows: { p1: { ...ACTIVE, sortOrder: 9 }, p2: { ...ACTIVE, pinned: true } }
-    });
-    await stale.sync();
-    expect(remote.set?.projects?.p1).toMatchObject({
-      pinned: true,
-      sortOrder: 0
-    });
-    // What the account did not hold arrives.
-    expect(remote.set?.projects?.p2?.pinned).toBe(true);
-    expect(stale.row('p1')?.organization).toMatchObject({
-      pinned: true,
-      sortOrder: 0
-    });
   });
 
   it('seeds readable rows only where the sealed record holds nothing', async () => {
     const remote = server();
-    const a = device(remote, { rows: { p1: ACTIVE } });
+    const a = device(remote);
     a.edit('p1', { sortOrder: 2 });
     await a.sync();
     const b = device(remote, {
@@ -335,31 +275,9 @@ describe('the sealed shelf record', () => {
     expect(remote.set?.projects?.p2?.archived).toBe(true);
   });
 
-  it('keeps a row in the trash there while laying pins over it', async () => {
-    const remote = server();
-    const a = device(remote, { rows: { p1: ACTIVE } });
-    a.edit('p1', { pinned: true });
-    await a.sync();
-    const b = device(remote, {
-      rows: {
-        p1: { ...ACTIVE, status: 'deleted', deletedAt: '2026-11-13T00:00:00Z' }
-      }
-    });
-    await b.sync();
-    expect(b.row('p1')?.organization).toEqual({
-      status: 'deleted',
-      deletedAt: '2026-11-13T00:00:00Z',
-      pinned: true,
-      sortOrder: 0
-    });
-  });
-
   it('sends no shelf state for a plaintext library', async () => {
     const remote = server();
-    const plain = device(remote, {
-      codec: plaintextFolderCodec,
-      rows: { p1: ACTIVE }
-    });
+    const plain = device(remote, { codec: plaintextFolderCodec });
     plain.edit('p1', { pinned: true });
     plain.edit('p2', { sortOrder: 1 });
     expect(await plain.sync()).toBe('synced');
@@ -377,7 +295,7 @@ describe('the sealed shelf record', () => {
       format: 2,
       record: JSON.stringify({ version: 2, folders: {}, members: {} })
     });
-    const a = device(remote, { rows: { p1: ACTIVE } });
+    const a = device(remote);
     expect(await a.sync()).toBe('synced');
     expect(
       (JSON.parse(remote.snapshot.record!) as { version: number }).version
@@ -386,8 +304,12 @@ describe('the sealed shelf record', () => {
 });
 
 describe('shelf set merging', () => {
-  const base = (): FolderSet =>
-    seedShelf({ version: 3, folders: {}, members: {} }, new Map());
+  const base = (): FolderSet => ({
+    version: 3,
+    folders: {},
+    members: {},
+    projects: {}
+  });
   const edit = (
     before: Partial<ShelfEdit['before']>,
     after: Partial<ShelfEdit['after']>
@@ -440,15 +362,7 @@ describe('listings of a sealed library', () => {
       updatedAt: '2026-11-14T00:00:00Z',
       organization
     }) as ProjectSummary;
-  const snapshot = (
-    organization: ProjectOrganization
-  ): LocalProjectOrganizationSnapshot => ({
-    organization,
-    revision: 'r',
-    mirrorPending: false
-  });
-
-  it('takes the trash from the account and everything else from the device', () => {
+  it('takes the trash from the account and everything else from its own sources', () => {
     const { projects, legacy } = overlaySealedShelf(
       [
         summary('edited', ACTIVE),
@@ -461,14 +375,9 @@ describe('listings of a sealed library', () => {
         }),
         summary('legacy', { status: 'archived', pinned: true, sortOrder: 3 })
       ],
-      new Map([
-        ['edited', snapshot({ ...ACTIVE, pinned: true })],
-        ['agreed', snapshot(ACTIVE)],
-        ['row', snapshot({ ...ACTIVE, sortOrder: 6 })],
-        ['trashed', snapshot({ ...ACTIVE, pinned: true })]
-      ]),
       {
-        agreed: { pinned: true, sortOrder: 2, archived: false }
+        agreed: { pinned: true, sortOrder: 2, archived: false },
+        trashed: { pinned: true, sortOrder: 0, archived: false }
       },
       new Map([
         [
@@ -483,7 +392,9 @@ describe('listings of a sealed library', () => {
     const byId = Object.fromEntries(
       projects.map((project) => [project.projectId, project.organization])
     );
-    // An unsynced edit leads; then the agreed record; then this device's row.
+    // An unsynced edit leads; then the agreed record; then the defaults.
+    // This device's organization rows (shared by every account signed in
+    // here) are not a source.
     expect(byId.edited).toEqual({
       status: 'archived',
       pinned: false,
@@ -494,7 +405,7 @@ describe('listings of a sealed library', () => {
       pinned: true,
       sortOrder: 2
     });
-    expect(byId.row).toEqual({ status: 'active', pinned: false, sortOrder: 6 });
+    expect(byId.row).toEqual(ACTIVE);
     expect(byId.trashed).toEqual({
       status: 'deleted',
       pinned: true,
@@ -508,20 +419,6 @@ describe('listings of a sealed library', () => {
       sortOrder: 3
     });
     expect([...legacy.keys()]).toEqual(['legacy']);
-  });
-
-  it('never turns a device pin into the account default', () => {
-    // Post-migration rows hold defaults; locked keys hold no agreed record.
-    const { projects } = overlaySealedShelf(
-      [summary('p', ACTIVE)],
-      new Map([['p', snapshot({ ...ACTIVE, pinned: true, sortOrder: 4 })]]),
-      null
-    );
-    expect(projects[0]!.organization).toEqual({
-      status: 'active',
-      pinned: true,
-      sortOrder: 4
-    });
   });
 });
 
@@ -557,6 +454,19 @@ describe('the shelf edit journal', () => {
 function fakeApi(options: { refuse?: boolean; status?: number } = {}) {
   const updates: unknown[] = [];
   const reorders: unknown[] = [];
+  const resets: string[] = [];
+  const summary = (
+    projectId: string,
+    organization: ProjectOrganization
+  ): UpdateProjectResponse => ({
+    project: {
+      projectId: toProjectId(projectId),
+      name: 'x',
+      revisionCount: 0,
+      updatedAt: '',
+      organization
+    }
+  });
   const api: ShelfApi = {
     updateProject: vi.fn(async (payload: UpdateProjectRequest) => {
       updates.push(payload);
@@ -572,19 +482,11 @@ function fakeApi(options: { refuse?: boolean; status?: number } = {}) {
           status: 409,
           code: PROJECT_SHELF_STATE_SEALED_CODE
         });
-      return {
-        project: {
-          projectId: payload.projectId,
-          name: 'x',
-          revisionCount: 0,
-          updatedAt: '',
-          organization: {
-            status: payload.status ?? 'active',
-            pinned: payload.pinned ?? false,
-            sortOrder: payload.sortOrder ?? 0
-          }
-        }
-      };
+      return summary(payload.projectId, {
+        status: payload.status ?? 'active',
+        pinned: payload.pinned ?? false,
+        sortOrder: payload.sortOrder ?? 0
+      });
     }),
     reorderProjects: vi.fn(async (payload: ReorderProjectsRequest) => {
       reorders.push(payload);
@@ -594,9 +496,34 @@ function fakeApi(options: { refuse?: boolean; status?: number } = {}) {
           code: PROJECT_SHELF_STATE_SEALED_CODE
         });
       return { projects: [] };
+    }),
+    resetProjectShelf: vi.fn(async (projectId: string) => {
+      resets.push(projectId);
+      if (options.status)
+        throw Object.assign(new Error('refused'), { status: options.status });
+      return summary(projectId, ACTIVE);
     })
   };
-  return { api, updates, reorders };
+  return { api, updates, reorders, resets };
+}
+
+/** The library rule's answers (`encryptsAccountLibrary`). */
+const encrypted = async () => true;
+const plaintext = async () => false;
+const unanswerable = async (): Promise<boolean> => {
+  throw Object.assign(new Error('unverified'), {
+    code: 'E2EE_PREFERENCE_UNVERIFIED'
+  });
+};
+
+/** Whether any write carried a pin, a manual position or the archive. */
+function disclosed(updates: readonly unknown[]): boolean {
+  return updates.some((update) => {
+    const { pinned, sortOrder, status } = update as UpdateProjectRequest;
+    return (
+      pinned !== undefined || sortOrder !== undefined || status === 'archived'
+    );
+  });
 }
 
 describe('account writes of a sealed library', () => {
@@ -606,55 +533,156 @@ describe('account writes of a sealed library', () => {
     rememberAccountRows('acct', [
       { projectId: 'p', organization: ACTIVE } as ProjectSummary
     ]);
-    await mirrorShelfToAccount(api, 'acct', 'p', {
-      ...ACTIVE,
-      pinned: true,
-      sortOrder: 5
-    });
-    await mirrorShelfToAccount(api, 'acct', 'p', {
-      ...ACTIVE,
-      status: 'archived'
-    });
+    await mirrorShelfToAccount(
+      api,
+      'acct',
+      'p',
+      { ...ACTIVE, pinned: true, sortOrder: 5 },
+      encrypted
+    );
+    await mirrorShelfToAccount(
+      api,
+      'acct',
+      'p',
+      { ...ACTIVE, status: 'archived' },
+      encrypted
+    );
     expect(updates).toEqual([]);
-    await mirrorShelfToAccount(api, 'acct', 'p', {
-      ...ACTIVE,
-      status: 'deleted',
-      pinned: true
-    });
-    await mirrorShelfToAccount(api, 'acct', 'p', {
-      ...ACTIVE,
-      status: 'archived',
-      pinned: true
-    });
+    await mirrorShelfToAccount(
+      api,
+      'acct',
+      'p',
+      { ...ACTIVE, status: 'deleted', pinned: true },
+      encrypted
+    );
+    await mirrorShelfToAccount(
+      api,
+      'acct',
+      'p',
+      { ...ACTIVE, status: 'archived', pinned: true },
+      encrypted
+    );
     expect(updates).toEqual([
       { projectId: 'p', status: 'deleted' },
       { projectId: 'p', status: 'active' }
     ]);
   });
 
-  it('turns sealed on the Worker refusal and still moves the trash', async () => {
-    const { api, updates } = fakeApi({ refuse: true });
-    await mirrorShelfToAccount(api, 'acct', 'p', {
-      ...ACTIVE,
+  it('checks the library rule before a pin, an order or an archive leaves the page', async () => {
+    // Another tab encrypted a project (or accepted an encrypted invitation)
+    // and this tab has not listed since: it never assumed plaintext.
+    const { api, updates, reorders } = fakeApi({ refuse: true });
+    rememberAccountRows('acct', [
+      { projectId: 'p', organization: ACTIVE } as ProjectSummary
+    ]);
+    await mirrorShelfToAccount(
+      api,
+      'acct',
+      'p',
+      { ...ACTIVE, status: 'archived', pinned: true, sortOrder: 3 },
+      encrypted
+    );
+    await mirrorShelfToAccount(
+      api,
+      'acct',
+      'p',
+      { ...ACTIVE, status: 'deleted', pinned: true },
+      encrypted
+    );
+    expect(
+      await reorderShelfOnAccount(api, 'acct', ['p', 'q'], encrypted)
+    ).toEqual([]);
+    expect(disclosed(updates)).toBe(false);
+    expect(updates).toEqual([{ projectId: 'p', status: 'deleted' }]);
+    expect(reorders).toEqual([]);
+  });
+
+  it('keeps shelf edits on the device while the library rule cannot answer', async () => {
+    const { api, updates, reorders } = fakeApi();
+    rememberAccountRows('acct', [
+      { projectId: 'p', organization: ACTIVE } as ProjectSummary
+    ]);
+    // The pin waits (the row stays pending); the trash move still goes.
+    await expect(
+      mirrorShelfToAccount(
+        api,
+        'acct',
+        'p',
+        { ...ACTIVE, status: 'deleted', pinned: true },
+        unanswerable
+      )
+    ).rejects.toBeInstanceOf(ShelfStateUnverifiedError);
+    await expect(
+      reorderShelfOnAccount(api, 'acct', ['p', 'q'], unanswerable)
+    ).rejects.toBeInstanceOf(ShelfStateUnverifiedError);
+    expect(updates).toEqual([{ projectId: 'p', status: 'deleted' }]);
+    expect(reorders).toEqual([]);
+    // A trash move alone has nothing left to wait for.
+    await mirrorShelfToAccount(
+      api,
+      'acct',
+      'p',
+      { ...ACTIVE, status: 'deleted' },
+      unanswerable
+    );
+    // No account to check against: nothing is sent.
+    await expect(
+      mirrorShelfToAccount(
+        api,
+        null,
+        'p',
+        { ...ACTIVE, pinned: true },
+        plaintext
+      )
+    ).rejects.toBeInstanceOf(ShelfStateUnverifiedError);
+    expect(disclosed(updates)).toBe(false);
+    // Once the account answers plaintext, the retry sends it as before.
+    await mirrorShelfToAccount(
+      api,
+      'acct',
+      'p',
+      { ...ACTIVE, status: 'deleted', pinned: true },
+      plaintext
+    );
+    expect(updates.at(-1)).toEqual({
+      projectId: 'p',
       status: 'deleted',
-      pinned: true
+      pinned: true,
+      sortOrder: 0
     });
+  });
+
+  it('turns sealed on a Worker refusal that beats the answer', async () => {
+    // The account changed between the answer and the write.
+    const { api, updates } = fakeApi({ refuse: true });
+    await mirrorShelfToAccount(
+      api,
+      'acct',
+      'p',
+      { ...ACTIVE, status: 'deleted', pinned: true },
+      plaintext
+    );
     expect(updates).toEqual([
       { projectId: 'p', status: 'deleted', pinned: true, sortOrder: 0 },
       { projectId: 'p', status: 'deleted' }
     ]);
     const { api: reorderApi, reorders } = fakeApi();
-    expect(await reorderShelfOnAccount(reorderApi, 'acct', ['p', 'q'])).toEqual(
-      []
-    );
+    expect(
+      await reorderShelfOnAccount(reorderApi, 'acct', ['p', 'q'], plaintext)
+    ).toEqual([]);
     expect(reorders).toEqual([]);
   });
 
   it('writes a plaintext library as before', async () => {
     const { api, updates, reorders } = fakeApi();
-    await askShelfSealed('plain', async () => false);
-    await mirrorShelfToAccount(api, 'plain', 'p', { ...ACTIVE, pinned: true });
-    await reorderShelfOnAccount(api, 'plain', ['p', 'q']);
+    await mirrorShelfToAccount(
+      api,
+      'plain',
+      'p',
+      { ...ACTIVE, pinned: true },
+      plaintext
+    );
+    await reorderShelfOnAccount(api, 'plain', ['p', 'q'], plaintext);
     expect(updates).toEqual([
       { projectId: 'p', status: 'active', pinned: true, sortOrder: 0 }
     ]);
@@ -673,34 +701,29 @@ describe('account writes of a sealed library', () => {
     expect(ask).toHaveBeenCalledTimes(3);
   });
 
-  it('resets readable rows only for an account known to be sealed', async () => {
+  it('resets readable rows only for an account known to be sealed, through the Worker', async () => {
     const legacy = new Map<string, ProjectOrganization>([
       ['p', { status: 'archived', pinned: true, sortOrder: 3 }],
       ['t', { status: 'deleted', pinned: true, sortOrder: 0 }]
     ]);
-    const { api, updates } = fakeApi();
+    const { api, updates, resets } = fakeApi();
     // An unanswerable check counts as sealed for reading, never for a reset.
-    expect(
-      await shelfSealedOrSafe('acct', async () => {
-        throw new Error('offline');
-      })
-    ).toBe(true);
+    expect(await shelfSealedOrSafe('acct', unanswerable)).toBe(true);
     await resetLegacyShelfRows(api, 'acct', legacy);
-    expect(updates).toEqual([]);
+    expect(resets).toEqual([]);
 
     confirmShelfSealed('acct');
     noteLegacyShelfRows('acct', legacy);
     await resetLegacyShelfRows(api, 'acct', legacyShelfRows('acct'));
-    // The archived row returns to active; the trashed one stays trashed.
-    expect(updates).toEqual([
-      { projectId: 'p', pinned: false, sortOrder: 0, status: 'active' },
-      { projectId: 't', pinned: false, sortOrder: 0 }
-    ]);
+    // The Worker resets each row as it stands, so no status chosen from
+    // this listing is sent: a project trashed since stays in the trash.
+    expect(resets).toEqual(['p', 't']);
+    expect(updates).toEqual([]);
     expect(legacyShelfRows('acct').size).toBe(0);
   });
 
   it("leaves another owner's rows alone after one refusal", async () => {
-    const { api, updates } = fakeApi({ status: 404 });
+    const { api, resets } = fakeApi({ status: 404 });
     confirmShelfSealed('member');
     const shared = new Map<string, ProjectOrganization>([
       ['shared', { ...ACTIVE, pinned: true }]
@@ -709,6 +732,6 @@ describe('account writes of a sealed library', () => {
     await resetLegacyShelfRows(api, 'member', legacyShelfRows('member'));
     noteLegacyShelfRows('member', shared);
     expect(legacyShelfRows('member').size).toBe(0);
-    expect(updates).toHaveLength(1);
+    expect(resets).toHaveLength(1);
   });
 });

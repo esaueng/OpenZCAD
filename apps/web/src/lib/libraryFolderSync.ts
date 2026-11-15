@@ -664,31 +664,6 @@ export function shelfOfOrganization(
   };
 }
 
-/**
- * A device row with this shelf state laid over it. A row in the trash stays
- * there: only the account moves a project in or out of the trash.
- */
-export function organizationWithShelf(
-  organization: ProjectOrganization,
-  shelf: ProjectShelf
-): ProjectOrganization {
-  if (organization.status === 'deleted') {
-    return {
-      ...organization,
-      pinned: shelf.pinned,
-      sortOrder: shelf.sortOrder
-    };
-  }
-  return {
-    status: shelf.archived ? 'archived' : 'active',
-    pinned: shelf.pinned,
-    sortOrder: shelf.sortOrder,
-    ...(shelf.archived && shelf.archivedAt
-      ? { archivedAt: shelf.archivedAt }
-      : {})
-  };
-}
-
 /** The shelf state the set holds for a project; defaults when it holds none. */
 export function shelfInSet(set: FolderSet, projectId: string): ProjectShelf {
   const shelf = set.projects?.[projectId];
@@ -708,12 +683,6 @@ function sameArchive(a: ProjectShelf, b: ProjectShelf): boolean {
   );
 }
 
-export function sameShelf(a: ProjectShelf, b: ProjectShelf): boolean {
-  return (
-    a.pinned === b.pinned && a.sortOrder === b.sortOrder && sameArchive(a, b)
-  );
-}
-
 function syncedShelf(
   shelf: ProjectShelf,
   stamps: ShelfFieldStamps
@@ -727,30 +696,6 @@ function syncedShelf(
       : {}),
     stamps
   };
-}
-
-/**
- * Gives a set that has never carried shelf state (the account's first
- * sealed round, or a device that synced folders before shelf state joined
- * them) this device's non-default rows, stamped 0 so anything the account
- * already holds wins over them. A set that carries shelf state is returned
- * as it is: from then on only edits made on the shelf are recorded.
- */
-export function seedShelf(
-  set: FolderSet,
-  rows: ReadonlyMap<string, ProjectShelf>
-): FolderSet {
-  if (set.projects) return set;
-  const projects: Record<string, SyncedShelf> = {};
-  for (const [projectId, shelf] of rows) {
-    if (isDefaultShelf(shelf)) continue;
-    projects[projectId] = syncedShelf(shelf, {
-      pinned: 0,
-      order: 0,
-      archived: 0
-    });
-  }
-  return { ...set, projects };
 }
 
 /**
