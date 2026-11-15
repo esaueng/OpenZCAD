@@ -332,15 +332,23 @@ export function featureValueSummary(
       return `${size}, ${profile}`;
     }
     case 'sheet-metal': {
-      // "1.5 mm, 3 bends"; with a material preset, "1.5 mm steel, 3 bends".
+      // "1.5 mm, 3 bends"; with a material preset, "1.5 mm mild steel, 3
+      // bends" (the preset's name without its note, alloys as written).
       const thickness = num(data.thickness);
       if (thickness === null) return null;
       const material =
         data.materialPresetId === undefined
           ? null
           : sheetMetalMaterialById(data.materialPresetId);
+      const materialName = material
+        ? material.label.replace(/\s*\([^)]*\)$/u, '')
+        : null;
       const count = data.bends.length;
-      return `${thickness} ${unit}${material ? ` ${material.label.toLowerCase()}` : ''}, ${count === 0 ? 'flat' : `${count} ${count === 1 ? 'bend' : 'bends'}`}`;
+      return `${thickness} ${unit}${
+        materialName
+          ? ` ${materialName.charAt(0).toLowerCase()}${materialName.slice(1)}`
+          : ''
+      }, ${count === 0 ? 'flat' : `${count} ${count === 1 ? 'bend' : 'bends'}`}`;
     }
     case 'hole': {
       const diameter = num(data.diameter);

@@ -67,6 +67,13 @@ async function openPart(
   );
 }
 
+/**
+ * Every tool in the catalog (`TOOL_META`): the More tools sheet holds one
+ * tile each, and its All filter counts them. 37 since M16 added Sheet metal
+ * and Bend.
+ */
+const TOOL_TILES = 37;
+
 async function capture(page: Page, testInfo: TestInfo, name: string) {
   const path = testInfo.outputPath(`${name}.png`);
   await page.mouse.move(0, 0);
@@ -429,7 +436,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
             page.getByRole('button', { name: 'Ready now', exact: true })
           );
           await reachable(
-            page.getByRole('button', { name: 'All 35', exact: true })
+            page.getByRole('button', { name: `All ${TOOL_TILES}`, exact: true })
           );
           const loft = page
             .locator('.command-tile')
@@ -690,10 +697,10 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await page.getByRole('button', { name: /^More tools/ }).click();
       for (const width of [1440, 390, 320]) {
         await page.setViewportSize({ width, height: 844 });
-        await expect(page.locator('.command-tile')).toHaveCount(35);
+        await expect(page.locator('.command-tile')).toHaveCount(TOOL_TILES);
         await reachable(page.getByRole('searchbox', { name: 'Find a tool' }));
         await reachable(
-          page.getByRole('button', { name: 'All 35', exact: true })
+          page.getByRole('button', { name: `All ${TOOL_TILES}`, exact: true })
         );
         const labels = await page
           .locator('.command-tile > span')
@@ -1419,7 +1426,7 @@ test.describe('touch review followups', () => {
         await reachable(
           page.getByRole('button', { name: 'Close tools drawer', exact: true })
         );
-        await expect(page.locator('.command-tile')).toHaveCount(35);
+        await expect(page.locator('.command-tile')).toHaveCount(TOOL_TILES);
         const last = page.locator('.command-tile').last();
         await last.scrollIntoViewIfNeeded();
         await reachable(last);
@@ -1577,7 +1584,7 @@ for (const stage of [
           });
         // The sheet with nothing typed: the frame a search may shrink from
         // and must never outgrow.
-        await expect(tiles).toHaveCount(35);
+        await expect(tiles).toHaveCount(TOOL_TILES);
         const full = await frame();
         expect(full.top).toBeGreaterThanOrEqual(full.stageTop - 1);
         expect(full.bottom).toBeLessThanOrEqual(full.stageBottom + 1);
@@ -1617,7 +1624,7 @@ for (const stage of [
         }
         // Cleared, the sheet is its fixed frame again.
         await search.fill('');
-        await expect(tiles).toHaveCount(35);
+        await expect(tiles).toHaveCount(TOOL_TILES);
         expect((await frame()).bottom).toBeCloseTo(full.bottom, 0);
       }
     );

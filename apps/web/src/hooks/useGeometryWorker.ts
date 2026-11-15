@@ -46,7 +46,8 @@ import type {
   SketchPlanarResult,
   SketchSolveAnchor,
   SketchSolveOutcome,
-  DxfFaceSelector
+  DxfFaceSelector,
+  SheetMetalFoldPreview
 } from '@openzcad/kernel-adapter/exact';
 import type {
   GeometryExportFormat,
@@ -327,6 +328,15 @@ export interface GeometryWorkerApi {
     options?: { signal?: AbortSignal }
   ): Promise<MassPropertiesRead>;
   /**
+   * M16: a sheet-metal feature folded to `fraction` of every bend (0 flat,
+   * 1 as stored), as a view-only mesh; later features are not applied.
+   */
+  sheetMetalFoldPreview(
+    document: ProjectDocument,
+    featureId: FeatureId,
+    fraction: number
+  ): Promise<SheetMetalFoldPreview>;
+  /**
    * The exact, kernel-computed section at one plane — section curves, not the
    * viewport's clipped preview. Asked for when the plane comes to rest.
    *
@@ -436,6 +446,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const massPropertiesRequests = useRef(
     new Map<string, PendingRequest<MassPropertiesRead>>()
   );
+  const sheetMetalFoldRequests = useRef(
+    new Map<string, PendingRequest<SheetMetalFoldPreview>>()
+  );
   const solveSketchRequests = useRef(
     new Map<string, PendingRequest<SketchSolveOutcome>>()
   );
@@ -522,6 +535,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       meshQualityRequests.current,
       drawingTessellationRequests.current,
       massPropertiesRequests.current,
+      sheetMetalFoldRequests.current,
       solveSketchRequests.current,
       sectionRequests.current,
       sketchPlanarRequests.current,
@@ -975,6 +989,14 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           if (!pending) return;
           massPropertiesRequests.current.delete(message.requestId);
           if (message.ok) pending.resolve(message.result);
+          else pending.reject(new Error(message.error));
+          return;
+        }
+        if (message.type === 'sheet-metal-fold') {
+          const pending = sheetMetalFoldRequests.current.get(message.requestId);
+          if (!pending) return;
+          sheetMetalFoldRequests.current.delete(message.requestId);
+          if (message.ok) pending.resolve(message.preview);
           else pending.reject(new Error(message.error));
           return;
         }
@@ -1541,6 +1563,18 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       return posted.promise.finally(() => {
         signal.removeEventListener('abort', onAbort);
       });
+    },
+    sheetMetalFoldPreview(document, featureId, fraction) {
+      const posted = postRequest(sheetMetalFoldRequests.current, {
+        type: 'sheet-metal-fold',
+        document: documentForWorker(document),
+        featureId,
+        fraction
+      });
+      if (!posted.ok) {
+        return Promise.reject(new Error('Geometry worker is unavailable.'));
+      }
+      return posted.promise;
     },
     sectionOutline(document, plane, bodyIds) {
       const worker = workerRef.current;

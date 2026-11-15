@@ -583,7 +583,7 @@ describe('sheet-metal commands and document', () => {
       }
     } as typeof feature;
     expect(featureValueSummary(three, {}, 'mm')).toBe(
-      '1.5 mm mild steel (crs), 3 bends'
+      '1.5 mm mild steel, 3 bends'
     );
     for (const contract of [webGlimpse, workerGlimpse]) {
       expect(contract.CAD_OPERATIONS).toContain('feature.sheet-metal');

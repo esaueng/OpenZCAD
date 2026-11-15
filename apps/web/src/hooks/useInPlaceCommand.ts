@@ -1462,10 +1462,17 @@ export function useInPlaceCommand(
         (other) =>
           other.sketchId === curve.sketchId && other.entityId === curve.entityId
       );
-      // A path lives in one sketch: a curve from another starts it over.
-      const sameSketch = path[0]?.sketchId === curve.sketchId;
+      // A path lives in one sketch: a curve from another starts it over
+      // (bend lines may come from any sketch on the blank's plane).
+      const sameSketch =
+        path[0]?.sketchId === curve.sketchId ||
+        IN_PLACE_TOOL_SPECS[current.tool].pathAcrossSketches === true;
       const next = picked
-        ? path.filter((other) => other.entityId !== curve.entityId)
+        ? path.filter(
+            (other) =>
+              other.entityId !== curve.entityId ||
+              other.sketchId !== curve.sketchId
+          )
         : additive && sameSketch
           ? [...path, curve]
           : [curve];
@@ -2122,6 +2129,7 @@ export function useInPlaceCommand(
     const state = spec ? inPlacePanelState(spec, chosen, heldValues) : null;
     const applies = (valueId: string) => {
       if (handles.some((handle) => handle.valueId === valueId)) return true;
+      if (spec?.holdsEntry?.(valueId, slots)) return true;
       const valueSpec = spec?.values.find(
         (candidate) => candidate.id === valueId
       );
@@ -2132,7 +2140,15 @@ export function useInPlaceCommand(
       );
     };
     clearEntryRefusals((valueId) => !applies(valueId));
-  }, [entryRefusals, handles, spec, chosen, heldValues, clearEntryRefusals]);
+  }, [
+    entryRefusals,
+    handles,
+    spec,
+    slots,
+    chosen,
+    heldValues,
+    clearEntryRefusals
+  ]);
   const optionSpecs = useMemo(
     () =>
       (spec?.options ?? [])
