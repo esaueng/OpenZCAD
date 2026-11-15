@@ -534,9 +534,7 @@ export const assemblyRuntime = {
             gearMesh: null,
             // Closing a tool drops the values its preview was showing.
             overrides:
-              state.jointTool || state.motionSetup
-                ? new Map()
-                : state.overrides
+              state.jointTool || state.motionSetup ? new Map() : state.overrides
           }
         : { exploded, explodeOverrides: new Map() }
     );
@@ -549,8 +547,7 @@ export const assemblyRuntime = {
     patch({ explodeOverrides: next });
   },
   clearExplodeOverrides(): void {
-    if (state.explodeOverrides.size > 0)
-      patch({ explodeOverrides: new Map() });
+    if (state.explodeOverrides.size > 0) patch({ explodeOverrides: new Map() });
   },
   /** Saves the dragged offsets as one undo step and clears them. */
   commitExplodeOverrides(): void {

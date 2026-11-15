@@ -357,8 +357,7 @@ export function deleteAssemblyComponent(
     freezePlacements(set);
     set.components = set.components.filter((c) => c.id !== input.componentId);
     if (set.explode && Object.hasOwn(set.explode.offsets, input.componentId)) {
-      const { [input.componentId]: _removed, ...offsets } =
-        set.explode.offsets;
+      const { [input.componentId]: _removed, ...offsets } = set.explode.offsets;
       if (Object.keys(offsets).length > 0) set.explode = { offsets };
       else delete set.explode;
     }
