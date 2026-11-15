@@ -148,3 +148,8 @@
   border-radius: var(--radius-sm);
   font: inherit;
 }
+
+.sheet-bend-missing {
+  margin: 0 0 4px;
+  color: var(--color-warning);
+}

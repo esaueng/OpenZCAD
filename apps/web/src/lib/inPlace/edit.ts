@@ -1404,6 +1404,26 @@ export function keptInOrder<T>(entries: readonly (T | null)[]): {
 }
 
 /**
+ * An edit's path picks re-checked against the model. A path or guide is
+ * ordered, so one lost before a kept one clears the list ({@link
+ * keptInOrder}). A bend table is not a path (M16): each row stands alone, so
+ * every row is kept and one whose line is gone stays for the user to remove
+ * (its rebuild refuses until then); `missing` names those.
+ */
+export function recheckedCurvePicks(
+  picks: readonly CurvePick[],
+  exists: (pick: CurvePick) => boolean,
+  rowsStandAlone: boolean
+): { kept: CurvePick[]; cleared: boolean; missing: CurvePick[] } {
+  const missing = picks.filter((pick) => !exists(pick));
+  if (rowsStandAlone) return { kept: [...picks], cleared: false, missing };
+  const { kept, cleared } = keptInOrder(
+    picks.map((pick) => (exists(pick) ? pick : null))
+  );
+  return { kept, cleared, missing };
+}
+
+/**
  * The features after a transform that may act on its body: downstream of
  * it, or for a copy (which never republishes its source) after it in
  * history.

@@ -22,6 +22,7 @@ import {
   type Vector3
 } from '@openzcad/shared';
 import type { PlaneBasis } from '@openzcad/geometry';
+import { resolvedSketchDocument } from '@openzcad/document-core';
 import type { SheetMetalUpdateInput } from '@openzcad/command-system';
 import type {
   CurvePick,
@@ -400,17 +401,27 @@ function ruleFields(
   const extension = touched.has('reliefExtension')
     ? values.reliefExtension
     : undefined;
+  // A stored relief the edit has not changed is written back as stored,
+  // fields a `none` relief does not read included.
+  const savedRelief = saved?.relief;
   const relief: SheetMetalRelief | undefined =
-    saved?.relief === undefined &&
-    shape === 'rectangular' &&
-    width === undefined &&
-    extension === undefined
-      ? undefined
-      : {
-          shape,
-          ...(shape !== 'none' && width !== undefined ? { width } : {}),
-          ...(shape !== 'none' && extension !== undefined ? { extension } : {})
-        };
+    savedRelief !== undefined &&
+    shape === savedRelief.shape &&
+    width === savedRelief.width &&
+    extension === savedRelief.extension
+      ? savedRelief
+      : savedRelief === undefined &&
+          shape === 'rectangular' &&
+          width === undefined &&
+          extension === undefined
+        ? undefined
+        : {
+            shape,
+            ...(shape !== 'none' && width !== undefined ? { width } : {}),
+            ...(shape !== 'none' && extension !== undefined
+              ? { extension }
+              : {})
+          };
   return {
     thickness,
     ...(side === undefined ? {} : { thicknessSide: side }),
@@ -785,7 +796,14 @@ export const bendSpec: InPlaceToolSpec = {
       }
     };
   },
-  handles: () => []
+  handles: () => [],
+  // A refused bend-table entry holds Done while its row stands.
+  holdsEntry: (valueId, slots) =>
+    slots.path.some((line) =>
+      BEND_FIELDS.some(
+        (field) => valueId === bendOptionId(line.entityId, field)
+      )
+    )
 };
 
 // ---------------------------------------------------------------------------
@@ -819,14 +837,17 @@ export function samePlane(a: PlaneBasis, b: PlaneBasis): boolean {
 
 /**
  * The lines a bend may run along: straight lines, construction ones
- * included, of every sketch lying on the blank's plane.
+ * included, of every sketch lying on the blank's plane, where the sketch
+ * solve put them (as the sketch is drawn and built), not where they were
+ * authored.
  */
 export function bendLineCandidates(
-  document: ProjectDocument,
+  authored: ProjectDocument,
   views: readonly { sketchId: string; basis: PlaneBasis }[],
   blankSketchId: SketchId,
   resolve: (value: ParamValue) => number
 ): SketchCurveCandidate[] {
+  const document = resolvedSketchDocument(authored);
   const blank = views.find((view) => view.sketchId === blankSketchId);
   if (!blank) return [];
   const out: SketchCurveCandidate[] = [];

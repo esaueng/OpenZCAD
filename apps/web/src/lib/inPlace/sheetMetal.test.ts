@@ -20,8 +20,10 @@ import {
   inPlaceEditSourceSketchIds,
   inPlaceFeatureUpdate,
   inPlaceToolForFeature,
+  recheckedCurvePicks,
   type InPlaceEditContext
 } from './edit';
+import { editAvailability, toolDisabledReason } from '../tools';
 import { inPlacePanelSections, inPlacePanelState } from './panel';
 import {
   FIXED_POINT_OPTION,
@@ -710,5 +712,140 @@ describe('Bend: table rows and picks', () => {
       { x: 50, y: 0, z: 0 },
       { x: 50, y: 40, z: 0 }
     ]);
+  });
+});
+
+describe('review fixes (PR #1562)', () => {
+  it('keeps every bend row when one line is deleted, and marks the missing one', () => {
+    // Finding 1: [missing, healthy] used to clear the whole table, and Done
+    // then saved a flat sheet without the healthy bend.
+    const armed = inPlaceEditSeed(storedNode(), {
+      ...EDIT_CTX,
+      curve: (_sketchId, entityId) => entityId !== LINE_A
+    })!;
+    expect(armed.seed.slots.path).toHaveLength(2);
+    const exists = (pick: CurvePick) => pick.entityId !== LINE_A;
+    const bend = recheckedCurvePicks(armed.seed.slots.path, exists, true);
+    expect(bend.kept).toEqual(armed.seed.slots.path);
+    expect(bend.cleared).toBe(false);
+    expect(bend.missing.map((pick) => pick.entityId)).toEqual([LINE_A]);
+    // Done builds both rows: the missing line refuses at rebuild, so the
+    // healthy bend is never dropped behind the user's back.
+    expect(
+      editRequest(STORED, { path: bend.kept }).bends.map((row) => row.id)
+    ).toEqual(['b1', 'b2']);
+    // A sweep's path is ordered: a gap still clears it to be picked again.
+    const sweep = recheckedCurvePicks(armed.seed.slots.path, exists, false);
+    expect(sweep).toMatchObject({ kept: [], cleared: true });
+  });
+
+  it('offers a bend line where the sketch solve put it, not where it was authored', () => {
+    // Finding 2: a line authored at x = 20 and solved to x = 60.
+    const { document: withSketch, sketchId } = addSketchFeature(
+      createProjectDocument('Solved', toUserId('user_sheet')),
+      {
+        name: 'Blank',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [
+          {
+            objectKind: 'line',
+            x1: 20,
+            y1: 0,
+            x2: 20,
+            y2: 40,
+            construction: true
+          }
+        ]
+      }
+    );
+    const lineId = findSketch(withSketch, sketchId)!.objectIds[0]!;
+    const document = {
+      ...withSketch,
+      derived: {
+        ...withSketch.derived,
+        sketchGeometry: {
+          projectId: withSketch.projectId,
+          documentVersion: withSketch.version,
+          objects: {
+            [lineId]: {
+              objectKind: 'line' as const,
+              x1: 60,
+              y1: 0,
+              x2: 60,
+              y2: 40,
+              construction: true
+            }
+          }
+        }
+      }
+    };
+    const [candidate] = bendLineCandidates(
+      document,
+      [{ sketchId, basis: XY }],
+      sketchId,
+      (value) => Number(value)
+    );
+    expect(candidate!.points).toEqual([
+      { x: 60, y: 0, z: 0 },
+      { x: 60, y: 40, z: 0 }
+    ]);
+  });
+
+  it('opens History’s Bend with no sheet-metal body on screen', () => {
+    // Finding 4: hidden, or failed with no result body.
+    const avail = {
+      sketchCount: 1,
+      liveBodyCount: 0,
+      exactGeometryReady: true,
+      hasEdgeSelected: false,
+      hasSheetMetalBody: false
+    };
+    expect(toolDisabledReason('bend', avail)).toBe('Needs a sheet-metal body');
+    expect(toolDisabledReason('bend', editAvailability(avail))).toBeNull();
+  });
+
+  describe('writes every stored relief back as stored (finding 5)', () => {
+    const reliefs = [
+      { shape: 'none', width: 'reliefW', extension: 3 },
+      { shape: 'none' },
+      { shape: 'rectangular', width: 2.5 },
+      { shape: 'rectangular', width: 'reliefW', extension: 'reliefW' },
+      { shape: 'obround', extension: 1 },
+      { shape: 'obround' }
+    ] as const;
+    for (const relief of reliefs) {
+      it(`feature ${JSON.stringify(relief)}`, () => {
+        const data: typeof STORED = { ...STORED, relief: { ...relief } };
+        const { featureKind: _kind, ...stored } = data;
+        expect(editRequest(data)).toEqual(stored);
+        expect(
+          inPlaceFeatureUpdate(storedNode(data), {
+            tool: 'sheet-metal',
+            sheet: editRequest(data)
+          })!.clearData
+        ).toBeUndefined();
+      });
+      it(`bend ${JSON.stringify(relief)}`, () => {
+        const data: typeof STORED = {
+          ...STORED,
+          bends: STORED.bends.map((bend) => ({
+            ...bend,
+            relief: { ...relief }
+          }))
+        };
+        const { featureKind: _kind, ...stored } = data;
+        expect(editRequest(data)).toEqual(stored);
+      });
+    }
+
+    it('drops the fields a user switches to no relief', () => {
+      const data: typeof STORED = {
+        ...STORED,
+        relief: { shape: 'rectangular', width: 3 }
+      };
+      expect(
+        editRequest(data, { options: { reliefShape: 'none' } }).relief
+      ).toEqual({ shape: 'none' });
+    });
   });
 });

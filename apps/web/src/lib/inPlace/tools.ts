@@ -837,6 +837,11 @@ export interface InPlaceToolSpec {
    * rather than starting it over.
    */
   pathAcrossSketches?: boolean;
+  /**
+   * Entries the command keeps beyond its handles and Options values (a bend
+   * table's fields): a refused one holds Done while this says it applies.
+   */
+  holdsEntry?(valueId: string, slots: InPlaceSlots): boolean;
   values: readonly ValueSpec[];
   /**
    * Values the picks (or other values) suggest, applied to any the user has

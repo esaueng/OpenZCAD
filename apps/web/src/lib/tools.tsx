@@ -502,6 +502,23 @@ export function liveCylindricalFace(
 }
 
 /**
+ * The availability an edit of a stored feature is judged by: what a new
+ * feature needs on screen (two live bodies for a boolean, closed profiles
+ * for a loft, a sheet-metal body for Bend) the stored feature already names,
+ * even consumed, hidden, or failed with no body to show (M16: History opens
+ * a sheet-metal feature's Bend to repair it).
+ */
+export function editAvailability(avail: ToolAvailability): ToolAvailability {
+  return {
+    ...avail,
+    liveBodyCount: Number.POSITIVE_INFINITY,
+    sketchCount: Number.POSITIVE_INFINITY,
+    closedProfileSketchCount: Number.POSITIVE_INFINITY,
+    hasSheetMetalBody: true
+  };
+}
+
+/**
  * What a tool's row or tooltip says: why it cannot run, or its own hint
  * while the workspace explains a shared lock elsewhere.
  */

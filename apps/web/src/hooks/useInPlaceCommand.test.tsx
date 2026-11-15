@@ -3153,3 +3153,78 @@ describe('useInPlaceCommand: axes and directions picked in the model', () => {
     expect(hook.result.current.request).toMatchObject({ axis: 'x' });
   });
 });
+
+describe('useInPlaceCommand: a bend table entry refused (M16, PR #1562)', () => {
+  const LINE = { sketchId: SKETCH, entityId: 'ent_line_a' };
+  const SEED: InPlaceEditSeed = {
+    featureId: 'feature_sheet' as FeatureId,
+    nodeId: 'node_sheet',
+    name: 'Sheet metal',
+    data: {
+      featureKind: 'sheet-metal',
+      sketchId: SKETCH,
+      profiles: [{ all: true, sourceEntityIds: ['a'] }],
+      thickness: 2,
+      bendRadius: 2,
+      kFactor: 0.44,
+      bends: [
+        {
+          id: 'b1',
+          line: { sketchId: SKETCH, objectId: 'ent_line_a' as never },
+          angleDeg: 90,
+          direction: 'up'
+        }
+      ]
+    },
+    resultBodyId: BODY,
+    ownBodyIds: [BODY],
+    slots: {
+      profiles: [],
+      axisId: null,
+      path: [LINE],
+      guide: [],
+      faces: [],
+      bodies: [],
+      plane: null,
+      edges: []
+    },
+    values: { thickness: 2, bendRadius: 2, kFactor: 0.44 },
+    raws: {},
+    touched: ['thickness', 'bendRadius', 'kFactor'],
+    options: { side: 'positive', material: 'none', kMethod: 'value' },
+    axes: [],
+    choices: {},
+    lockedOptions: [],
+    notice: null
+  };
+
+  it('holds Done while the row stands, and lets go once it is gone', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.edit('bend', SEED));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    // An unknown expression typed over the angle of 90: Done must not save
+    // the 90 the field no longer shows.
+    act(() =>
+      hook.result.current.refuseValue(
+        'bend.ent_line_a.angle',
+        'Bend 1 angle: nope is not a number or a known expression.'
+      )
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+    expect(hook.result.current.refusal).toContain('Bend 1 angle');
+    // It is not a handle or an Options value, yet it still holds.
+    hook.rerender();
+    expect(hook.result.current.canFinish).toBe(false);
+    expect(hook.result.current.done()).toBe(false);
+    // Given up (Escape) it lets go.
+    act(() => hook.result.current.dropRefusal('bend.ent_line_a.angle'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    // Refused again, then the row removed: nothing is left to hold Done.
+    act(() =>
+      hook.result.current.refuseValue('bend.ent_line_a.angle', 'refused')
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+    act(() => hook.result.current.pickCurve(LINE));
+    await waitFor(() => expect(hook.result.current.refusal).toBeNull());
+  });
+});

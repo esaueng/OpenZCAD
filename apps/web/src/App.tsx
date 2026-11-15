@@ -592,6 +592,7 @@ import {
 import {
   TOOL_GROUPS,
   TOOL_META,
+  editAvailability,
   liveCylindricalFace,
   toolDisabledReason,
   type ToolAvailability,
@@ -1811,6 +1812,7 @@ import {
   inPlaceEditSourceSketchIds,
   inPlaceFeatureUpdate,
   inPlaceToolForFeature,
+  recheckedCurvePicks,
   featureEditsInPlace,
   type InPlaceEditSeed
 } from './lib/inPlace/edit';
@@ -11471,12 +11473,7 @@ export function App() {
     if (!current || !tool) return false;
     // What a new feature needs on screen (two live bodies for a boolean,
     // closed profiles for a loft) the stored feature already has, consumed.
-    const reason = toolDisabledReason(tool, {
-      ...availability,
-      liveBodyCount: Number.POSITIVE_INFINITY,
-      sketchCount: Number.POSITIVE_INFINITY,
-      closedProfileSketchCount: Number.POSITIVE_INFINITY
-    });
+    const reason = toolDisabledReason(tool, editAvailability(availability));
     if (reason) {
       setStatus(`${TOOL_META[tool].label}: ${reason}.`);
       return false;
@@ -24585,6 +24582,27 @@ export function App() {
     bendSaved?.featureKind === 'sheet-metal'
       ? bendRows(inPlace.slots.path, inPlace.options, { saved: bendSaved })
       : null;
+  const bendMissingLines = useMemo(
+    () =>
+      new Set(
+        doc && bendTable
+          ? bendTable
+              .filter(
+                (row) =>
+                  !sweepCurveExists(
+                    doc,
+                    row.line.sketchId,
+                    row.line.entityId,
+                    true
+                  )
+              )
+              .map((row) => row.line.entityId)
+          : []
+      ),
+    // The rows' lines, as ids: the table itself is rebuilt each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc, bendTable?.map((row) => row.line.entityId).join('|')]
+  );
   // A command canceled mid-drag never sees the release: the next one must
   // not start with its arrows still waiting for it.
   const inPlaceSessionKey = inPlace.sessionId;
@@ -25549,19 +25567,23 @@ export function App() {
       if (result.cleared) reordered = true;
       return result.kept;
     };
-    const curves = (picks: readonly CurvePick[]) =>
-      ordered(
-        picks.map((pick) =>
+    // A bend table's rows stand alone (M16): a row whose line is gone is
+    // kept, marked, for the user to remove; the healthy ones never go.
+    const curves = (picks: readonly CurvePick[]) => {
+      const result = recheckedCurvePicks(
+        picks,
+        (pick) =>
           sweepCurveExists(
             doc,
             pick.sketchId,
             pick.entityId,
             inPlace.tool === 'bend'
-          )
-            ? pick
-            : null
-        )
+          ),
+        inPlace.tool === 'bend'
       );
+      if (result.cleared) reordered = true;
+      return result.kept;
+    };
     // Only against a body whose topology is published: one still being
     // analysed says nothing yet. A face is found as the feature rebuilds
     // it, by lineage first, and is read afresh where it stands now (its
@@ -35983,6 +36005,9 @@ export function App() {
                           evalParamValue(text, parameterScope.scope, doc.units)
                         }
                         onOption={inPlace.setOption}
+                        onRefuse={inPlace.refuseValue}
+                        onRestore={inPlace.dropRefusal}
+                        missingLines={bendMissingLines}
                         onRemove={(line) => inPlace.pickCurve(line)}
                         fold={bendFold}
                         onFold={setBendFold}

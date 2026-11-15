@@ -2129,6 +2129,7 @@ export function useInPlaceCommand(
     const state = spec ? inPlacePanelState(spec, chosen, heldValues) : null;
     const applies = (valueId: string) => {
       if (handles.some((handle) => handle.valueId === valueId)) return true;
+      if (spec?.holdsEntry?.(valueId, slots)) return true;
       const valueSpec = spec?.values.find(
         (candidate) => candidate.id === valueId
       );
@@ -2139,7 +2140,15 @@ export function useInPlaceCommand(
       );
     };
     clearEntryRefusals((valueId) => !applies(valueId));
-  }, [entryRefusals, handles, spec, chosen, heldValues, clearEntryRefusals]);
+  }, [
+    entryRefusals,
+    handles,
+    spec,
+    slots,
+    chosen,
+    heldValues,
+    clearEntryRefusals
+  ]);
   const optionSpecs = useMemo(
     () =>
       (spec?.options ?? [])

@@ -30,6 +30,8 @@ function panel(
           ? 95
           : null,
     onOption: vi.fn(),
+    onRefuse: vi.fn(),
+    onRestore: vi.fn(),
     onRemove: vi.fn(),
     fold: 0,
     onFold: vi.fn(),
@@ -66,9 +68,20 @@ describe('SheetMetalBendPanel', () => {
     await user.type(angle, 'nope{Enter}');
     expect(angle).toHaveAttribute('aria-invalid', 'true');
     expect(props.onOption).not.toHaveBeenCalled();
+    // Refused through the command, so Done waits (review finding 3).
+    expect(props.onRefuse).toHaveBeenCalledWith(
+      'bend.ent_a.angle',
+      'Bend 1 angle: nope is not a number or a known expression.'
+    );
+    await user.keyboard('{Escape}');
+    expect(props.onRestore).toHaveBeenCalledWith('bend.ent_a.angle');
+    expect(angle).toHaveValue('a + 5');
+    await user.clear(angle);
+    await user.type(angle, 'nope{Enter}');
     await user.clear(angle);
     await user.type(angle, '45{Enter}');
     expect(props.onOption).toHaveBeenLastCalledWith('bend.ent_a.angle', '45');
+    expect(props.onRestore).toHaveBeenLastCalledWith('bend.ent_a.angle');
     await user.click(screen.getByRole('button', { name: 'Down' }));
     expect(props.onOption).toHaveBeenLastCalledWith(
       'bend.ent_a.direction',
@@ -106,5 +119,17 @@ describe('SheetMetalBendPanel', () => {
       target: { value: '40' }
     });
     expect(props.onFold).toHaveBeenCalledWith(40);
+  });
+});
+
+describe('SheetMetalBendPanel: a row whose line is gone', () => {
+  it('stays, says so, and is removed on purpose', async () => {
+    const user = userEvent.setup();
+    const props = panel({ missingLines: new Set(['ent_a']) });
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Bend 1: its line is gone from the sketch'
+    );
+    await user.click(screen.getByRole('button', { name: 'Remove Bend 1' }));
+    expect(props.onRemove).toHaveBeenCalledWith(LINE);
   });
 });

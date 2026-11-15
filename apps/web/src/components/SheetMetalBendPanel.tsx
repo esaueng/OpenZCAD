@@ -25,7 +25,16 @@ export interface SheetMetalBendPanelProps {
   /** A typed number or expression as a number, or null when it is not one. */
   evaluate(text: string): number | null;
   onOption(optionId: string, value: string): void;
+  /**
+   * An entry that does not evaluate, refused through the command, which
+   * holds Done while it stands (as a refused Options value does).
+   */
+  onRefuse?(optionId: string, message: string): void;
+  /** A refused entry given up or replaced by one that evaluates. */
+  onRestore?(optionId: string): void;
   onRemove(line: CurvePick): void;
+  /** Rows whose line the sketch no longer has, by line id. */
+  missingLines?: ReadonlySet<string>;
   /** View only, 0 to 100. */
   fold: number;
   onFold(percent: number): void;
@@ -51,6 +60,8 @@ function ExprField({
   optional,
   evaluate,
   onCommit,
+  onRefuse,
+  onRestore,
   locked
 }: {
   label: string;
@@ -59,6 +70,8 @@ function ExprField({
   optional: boolean;
   evaluate(text: string): number | null;
   onCommit(text: string): void;
+  onRefuse?(message: string): void;
+  onRestore?(): void;
   locked: boolean;
 }) {
   const [draft, setDraft] = useState(value);
@@ -67,17 +80,28 @@ function ExprField({
     setDraft(value);
     setRefused(false);
   }, [value]);
+  const restore = () => {
+    if (refused) onRestore?.();
+    setRefused(false);
+  };
   const commit = () => {
     const trimmed = draft.trim();
     if (trimmed === value.trim()) {
-      setRefused(false);
+      restore();
       return;
     }
     if (trimmed === '' ? !optional : evaluate(trimmed) === null) {
       setRefused(true);
+      // Through the command, so Done waits rather than saving the value
+      // the field no longer shows.
+      onRefuse?.(
+        trimmed === ''
+          ? `${label} needs a value.`
+          : `${label}: ${trimmed} is not a number or a known expression.`
+      );
       return;
     }
-    setRefused(false);
+    restore();
     onCommit(trimmed);
   };
   return (
@@ -100,7 +124,7 @@ function ExprField({
         } else if (event.key === 'Escape') {
           event.stopPropagation();
           setDraft(value);
-          setRefused(false);
+          restore();
         }
       }}
     />
@@ -112,7 +136,10 @@ export function SheetMetalBendPanel({
   unitLabel,
   evaluate,
   onOption,
+  onRefuse,
+  onRestore,
   onRemove,
+  missingLines,
   fold,
   onFold,
   fixedPoint,
@@ -121,6 +148,13 @@ export function SheetMetalBendPanel({
 }: SheetMetalBendPanelProps) {
   const set = (row: BendRow, field: BendField, value: string) =>
     onOption(bendOptionId(row.line.entityId, field), value);
+  const guards = (row: BendRow, field: BendField) => {
+    const id = bendOptionId(row.line.entityId, field);
+    return {
+      onRefuse: (message: string) => onRefuse?.(id, message),
+      onRestore: () => onRestore?.(id)
+    };
+  };
   return (
     <section className="sheet-bend-panel" aria-label="Bend table">
       <header className="sheet-bend-header">
@@ -163,6 +197,12 @@ export function SheetMetalBendPanel({
             const name = `Bend ${index + 1}`;
             return (
               <li key={`${row.line.sketchId}|${row.line.entityId}`}>
+                {missingLines?.has(row.line.entityId) ? (
+                  <p className="sheet-bend-missing" role="alert">
+                    {name}: its line is gone from the sketch · remove this bend
+                    or restore the line
+                  </p>
+                ) : null}
                 <div className="sheet-bend-row">
                   <span className="sheet-bend-index mono">{index + 1}</span>
                   <ExprField
@@ -172,6 +212,7 @@ export function SheetMetalBendPanel({
                     evaluate={evaluate}
                     locked={locked}
                     onCommit={(value) => set(row, 'angle', value)}
+                    {...guards(row, 'angle')}
                   />
                   <span className="sheet-bend-unit">°</span>
                   <span
@@ -227,6 +268,7 @@ export function SheetMetalBendPanel({
                     evaluate={evaluate}
                     locked={locked}
                     onCommit={(value) => set(row, 'radius', value)}
+                    {...guards(row, 'radius')}
                   />
                   <ExprField
                     label={`${name} K-factor`}
@@ -236,6 +278,7 @@ export function SheetMetalBendPanel({
                     evaluate={evaluate}
                     locked={locked}
                     onCommit={(value) => set(row, 'kFactor', value)}
+                    {...guards(row, 'kFactor')}
                   />
                   <select
                     className="sheet-bend-select"
@@ -261,6 +304,7 @@ export function SheetMetalBendPanel({
                       evaluate={evaluate}
                       locked={locked}
                       onCommit={(value) => set(row, 'reliefWidth', value)}
+                      {...guards(row, 'reliefWidth')}
                     />
                     <ExprField
                       label={`${name} relief extension (${unitLabel})`}
@@ -270,6 +314,7 @@ export function SheetMetalBendPanel({
                       evaluate={evaluate}
                       locked={locked}
                       onCommit={(value) => set(row, 'reliefExtension', value)}
+                      {...guards(row, 'reliefExtension')}
                     />
                   </div>
                 ) : null}
