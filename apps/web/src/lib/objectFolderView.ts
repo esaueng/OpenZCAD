@@ -106,3 +106,56 @@ export function useCollapsedFolders(projectId: string | null): {
   );
   return { collapsed: current.collapsed, toggle, expand };
 }
+
+/**
+ * The bodies selected after a click on a folder row. A plain click picks the
+ * folder's bodies alone, so an empty folder clears the selection rather than
+ * leaving the previous pick behind. ⌘/Shift toggles the folder as it toggles
+ * a body: one already wholly picked leaves the selection, anything else
+ * joins it, and an empty folder changes nothing.
+ */
+export function folderClickSelection<T>(
+  selected: readonly T[],
+  folderBodies: readonly T[],
+  additive: boolean
+): T[] {
+  if (!additive) return [...folderBodies];
+  if (folderBodies.length === 0) return [...selected];
+  const inFolder = new Set(folderBodies);
+  if (folderBodies.every((id) => selected.includes(id))) {
+    return selected.filter((id) => !inFolder.has(id));
+  }
+  return [...new Set([...selected, ...folderBodies])];
+}
+
+/** What a folder click does to an open command that takes bodies. */
+export type FolderCommandPick<T> =
+  { kind: 'toggle'; bodies: T[] } | { kind: 'none' } | { kind: 'too-many' };
+
+/**
+ * A folder click while a body command (Union, Mirror…) is open goes to the
+ * command's own picks, as a body row's click does, rather than to the plain
+ * selection the command keeps in step with. `toggle` lists the bodies to
+ * pass to the command's toggling pick, in order: a folder whose bodies are
+ * all picked comes back out, otherwise the ones not yet picked join. A
+ * one-body command takes a folder only when it holds exactly one body.
+ */
+export function folderCommandPicks<T>(
+  picked: readonly T[],
+  folderBodies: readonly T[],
+  bodyMode: 'one' | 'many'
+): FolderCommandPick<T> {
+  if (folderBodies.length === 0) return { kind: 'none' };
+  if (bodyMode === 'one') {
+    return folderBodies.length === 1
+      ? { kind: 'toggle', bodies: [folderBodies[0]!] }
+      : { kind: 'too-many' };
+  }
+  const allPicked = folderBodies.every((id) => picked.includes(id));
+  return {
+    kind: 'toggle',
+    bodies: allPicked
+      ? [...folderBodies]
+      : folderBodies.filter((id) => !picked.includes(id))
+  };
+}

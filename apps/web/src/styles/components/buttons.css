@@ -355,17 +355,8 @@ html select:not([multiple]):not(.start-field *):not(.object-filter *):focus {
   border-color: var(--color-border-strong);
 }
 
-/* The new-project units picker rests bare like every other dropdown; its
-   drawn chevron still marks it. */
-.start-field-units select:not(:hover):not(:focus) {
-  background: transparent;
-  border-color: transparent;
-}
-
-.start-field-units select:hover:not(:focus) {
-  background: var(--color-surface-hover);
-  border-color: var(--color-border-strong);
-}
+/* The new-project units picker is the name field's suffix, bare inside
+   that box (start-screen.css); its drawn chevron marks it. */
 
 /*
  * Choice chips: an unchosen chip rests bare and becomes a whole button under

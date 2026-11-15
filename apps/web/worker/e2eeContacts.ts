@@ -3,10 +3,18 @@
  *
  * - `GET /api/e2ee/contacts`: the caller's identity-signed contacts list
  *   for their current identity generation, and the people they may look up.
- * - `POST /api/e2ee/contacts`: appends one entry. The Worker checks it under
- *   the caller's identity key and the list's rules (`verifyContactsList`),
- *   that it extends the stored head, and stores it in the same statement
- *   that checks the head and the generation, so two tabs cannot fork it.
+ * - `POST /api/e2ee/contacts`: appends one sealed record (ADR-024 amendment
+ *   2026-11-14). The Worker cannot open it; it checks what it can without
+ *   the account key (`verifySealedContactsChain`): the record is
+ *   identity-signed, extends the stored head by sequence and record hash,
+ *   and is sealed under the account's current account key. It stores it in
+ *   the same statement that checks the head, the generation and the device
+ *   list, so two tabs cannot fork it and a rotation cannot slip past it. A
+ *   plaintext entry is refused: the server no longer accepts the list in a
+ *   form it can read.
+ * - `PUT /api/e2ee/contacts`: replaces a plaintext list from before sealing
+ *   with the same entries sealed, deleting the plaintext rows in the same
+ *   transaction (and any a replaced identity left).
  * - `GET /api/e2ee/users/:id/device-list`: another user's identity key and
  *   device list, served only when the two share a project (owner and
  *   member, or two members) or an invitation (decision M2). Anyone else,
@@ -22,11 +30,17 @@ import {
   E2eeError,
   MAX_CONTACTS_ENTRIES,
   MAX_CONTACTS_ENTRY_BYTES,
+  SEALED_CONTACTS_RECORD_BYTES,
   decodeContactsEntry,
+  decodeDeviceListEntry,
   fromBase64Url,
+  isSealedContactsRecord,
+  readSealedContactsHeader,
+  toBase64Url,
   toHex,
-  verifyContactsList,
-  type SignedContactsEntry
+  verifySealedContactsChain,
+  type SignedContactsEntry,
+  type VerifiedSealedContactsChain
 } from '@openzcad/crypto';
 import type {
   E2eeContactDeviceListResponse,
@@ -39,6 +53,7 @@ import {
   isE2eeInvitationStorageReady,
   isE2eeProjectGroupStorageReady
 } from '@openzcad/cloudflare-adapters';
+import { deviceListMoved, deviceListUnchanged } from './e2eeProjects';
 import type { E2eeWriteAuthorization } from './e2eeWriteAuthorization';
 
 export const CONTACTS_ROUTE = '/api/e2ee/contacts';
@@ -46,6 +61,28 @@ const DEVICE_LIST_ROUTE = /^\/api\/e2ee\/users\/([^/]+)\/device-list$/;
 /** People one contacts response lists at most. */
 export const MAX_CONTACT_PEOPLE = 500;
 const SIGNATURE_BYTES = 65;
+
+const base64UrlChars = (bytes: number) => Math.ceil((bytes * 4) / 3);
+/**
+ * The body a reseal (`PUT`) may carry: a whole list at the longest,
+ * `MAX_CONTACTS_ENTRIES` sealed records with their signatures as JSON, and
+ * room for the rest. Larger than the 512 KiB every other encrypted route
+ * takes, which a list of about 720 entries already outgrows; refused at that
+ * size, a list would stay readable and block every later contacts change.
+ */
+export const MAX_CONTACTS_RESEAL_BODY_BYTES =
+  MAX_CONTACTS_ENTRIES *
+    (base64UrlChars(SEALED_CONTACTS_RECORD_BYTES.next) +
+      base64UrlChars(SIGNATURE_BYTES) +
+      64) +
+  16 * 1024;
+/**
+ * The base64url text every stored row starts with: exactly the 3-byte magic
+ * of a plaintext entry ("OZK") or a sealed record ("OZC"), so SQL can tell
+ * them apart without decoding.
+ */
+const PLAINTEXT_PREFIX = toBase64Url(Uint8Array.of(0x4f, 0x5a, 0x4b));
+const SEALED_PREFIX = toBase64Url(Uint8Array.of(0x4f, 0x5a, 0x43));
 
 export function isE2eeContactsPath(pathname: string): boolean {
   return pathname === CONTACTS_ROUTE || DEVICE_LIST_ROUTE.test(pathname);
@@ -113,6 +150,10 @@ interface EntryRow {
   signature: string;
 }
 
+interface ContactRow extends EntryRow {
+  entry_hash: string;
+}
+
 async function currentGeneration(
   db: D1Database,
   userId: string
@@ -130,16 +171,18 @@ async function contactRows(
   db: D1Database,
   userId: string,
   generation: number
-): Promise<EntryRow[]> {
+): Promise<ContactRow[]> {
   const { results } = await db
     .prepare(
-      `SELECT sequence, entry, signature FROM e2ee_contact_entries
+      `SELECT sequence, entry, signature, entry_hash FROM e2ee_contact_entries
        WHERE user_id = ? AND generation = ? ORDER BY sequence`
     )
     .bind(userId, generation)
-    .all<EntryRow>();
+    .all<ContactRow>();
   return results ?? [];
 }
+
+const isSealedRow = (row: EntryRow) => row.entry.startsWith(SEALED_PREFIX);
 
 const toRecord = (row: EntryRow): E2eeContactsEntryRecord => ({
   sequence: row.sequence,
@@ -294,31 +337,181 @@ async function contactsResponse(
   };
 }
 
-async function handleAppend(
+/**
+ * The caller's device-list head and the `accountKeySequence` of the account
+ * key it commits to: the sequence of the entry that first committed to it.
+ * Entries were verified when they were appended.
+ */
+async function currentAccountKey(
   db: D1Database,
   userId: string,
-  authorization: E2eeWriteAuthorization,
-  body: Record<string, unknown>
-): Promise<E2eeContactsResponse> {
-  const entry = bytesField(body.entry, 'entry', MAX_CONTACTS_ENTRY_BYTES);
-  const signature = bytesField(body.signature, 'signature', SIGNATURE_BYTES);
+  generation: number
+): Promise<{ generation: number; headSequence: number; keySequence: number }> {
+  const { results } = await db
+    .prepare(
+      `SELECT entry FROM e2ee_device_list_entries
+       WHERE user_id = ? AND generation = ? ORDER BY sequence`
+    )
+    .bind(userId, generation)
+    .all<{ entry: string }>();
+  const commitments: { sequence: number; commitment: string }[] = [];
+  try {
+    for (const row of results ?? []) {
+      const entry = decodeDeviceListEntry(fromBase64Url(row.entry));
+      commitments.push({
+        sequence: entry.sequence,
+        commitment: toHex(entry.accountKeyCommitment)
+      });
+    }
+  } catch {
+    refuse(409, 'E2EE_NOT_SET_UP', 'Encryption keys are not set up yet.');
+  }
+  const head = commitments.at(-1);
+  if (!head) {
+    refuse(409, 'E2EE_NOT_SET_UP', 'Encryption keys are not set up yet.');
+  }
+  let first = commitments.length - 1;
+  while (first > 0 && commitments[first - 1]!.commitment === head.commitment) {
+    first -= 1;
+  }
+  return {
+    generation,
+    headSequence: head.sequence,
+    keySequence: commitments[first]!.sequence
+  };
+}
+
+function refuseStaleKey(): never {
+  refuse(
+    409,
+    'E2EE_DEVICE_LIST_CHANGED',
+    'Your account key changed meanwhile. Reload and try again.'
+  );
+}
+
+function conflict(): never {
+  refuse(
+    409,
+    'E2EE_CONTACTS_CONFLICT',
+    'Your contacts list changed meanwhile. Reload and try again.'
+  );
+}
+
+/** A signed record from the request: sealed, or refused before any work. */
+function signedRecord(value: unknown, signatureValue: unknown) {
+  const entry = bytesField(value, 'entry', MAX_CONTACTS_ENTRY_BYTES);
+  const signature = bytesField(signatureValue, 'signature', SIGNATURE_BYTES);
   if (signature.byteLength !== SIGNATURE_BYTES) {
     invalid(`signature must be ${SIGNATURE_BYTES} bytes`);
   }
-  if (!Number.isSafeInteger(body.generation)) {
+  if (!isSealedContactsRecord(entry)) {
+    let plaintext = false;
+    try {
+      decodeContactsEntry(entry);
+      plaintext = true;
+    } catch {
+      // Not a plaintext entry either.
+    }
+    if (plaintext) {
+      refuse(
+        400,
+        'E2EE_CONTACTS_SEALED_REQUIRED',
+        'Contacts lists are stored sealed now. Reload OpenZCAD and try again.'
+      );
+    }
+    refuse(400, 'E2EE_CONTACTS_INVALID', 'Not a sealed contacts record.');
+  }
+  return { entry, signature };
+}
+
+async function requireGeneration(
+  db: D1Database,
+  userId: string,
+  generation: unknown
+): Promise<{ generation: number; identity_key: string }> {
+  if (!Number.isSafeInteger(generation)) {
     invalid('generation must be an integer');
   }
   const current = await currentGeneration(db, userId);
   if (!current) {
     refuse(409, 'E2EE_NOT_SET_UP', 'Encryption keys are not set up yet.');
   }
-  if (body.generation !== current.generation) {
+  if (generation !== current.generation) {
     refuse(
       409,
       'E2EE_GENERATION_CONFLICT',
       'The encryption identity changed meanwhile. Reload and try again.'
     );
   }
+  return current;
+}
+
+function sealedHeader(entry: Uint8Array) {
+  try {
+    return readSealedContactsHeader(entry);
+  } catch (error) {
+    if (error instanceof E2eeError) {
+      refuse(
+        400,
+        'E2EE_CONTACTS_INVALID',
+        `Not a sealed contacts record: ${error.message}`
+      );
+    }
+    throw error;
+  }
+}
+
+async function checkSealedChain(
+  identityKey: string,
+  chain: SignedContactsEntry[],
+  signaturesFrom: number
+): Promise<VerifiedSealedContactsChain> {
+  try {
+    return await verifySealedContactsChain(fromBase64Url(identityKey), chain, {
+      signaturesFrom
+    });
+  } catch (error) {
+    if (error instanceof E2eeError) {
+      refuse(
+        400,
+        'E2EE_CONTACTS_INVALID',
+        `The contacts record did not verify: ${error.message}`
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Plaintext rows a replaced identity left: no browser reads a replaced
+ * identity's list again, and it cannot be resealed under a key no device
+ * holds, so the first sealed write of the account deletes them.
+ */
+function replacedPlaintextCleanup(
+  db: D1Database,
+  userId: string,
+  generation: number
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `DELETE FROM e2ee_contact_entries
+       WHERE user_id = ? AND generation < ? AND substr(entry, 1, 4) = ?`
+    )
+    .bind(userId, generation, PLAINTEXT_PREFIX);
+}
+
+function isConstraintError(error: unknown): boolean {
+  return /UNIQUE|PRIMARY KEY|constraint/i.test(String(error));
+}
+
+async function handleAppend(
+  db: D1Database,
+  userId: string,
+  authorization: E2eeWriteAuthorization,
+  body: Record<string, unknown>
+): Promise<E2eeContactsResponse> {
+  const { entry, signature } = signedRecord(body.entry, body.signature);
+  const current = await requireGeneration(db, userId, body.generation);
   const rows = await contactRows(db, userId, current.generation);
   if (rows.length >= MAX_CONTACTS_ENTRIES) {
     refuse(
@@ -327,24 +520,11 @@ async function handleAppend(
       'Your contacts list is full. Replace the recovery key to start a new one.'
     );
   }
-  let sequence: number;
-  try {
-    sequence = decodeContactsEntry(entry).sequence;
-  } catch (error) {
-    if (error instanceof E2eeError) {
-      refuse(
-        400,
-        'E2EE_CONTACTS_INVALID',
-        `Not a contacts entry: ${error.message}`
-      );
-    }
-    throw error;
-  }
-  if (sequence !== rows.length) {
+  if (!rows.every(isSealedRow)) {
     refuse(
       409,
-      'E2EE_CONTACTS_CONFLICT',
-      'Your contacts list changed meanwhile. Reload and try again.'
+      'E2EE_CONTACTS_RESEAL_REQUIRED',
+      'Your contacts list must be sealed before it can change. Reload and try again.'
     );
   }
   const chain: SignedContactsEntry[] = [
@@ -354,70 +534,190 @@ async function handleAppend(
     })),
     { entry, signature }
   ];
-  let list;
+  // The sequence first: a stale record is a conflict, not an invalid one.
+  if (sealedHeader(entry).sequence !== rows.length) conflict();
+  const checked = await checkSealedChain(
+    current.identity_key,
+    chain,
+    rows.length
+  );
+  const key = await currentAccountKey(db, userId, current.generation);
+  if (checked.head.accountKeySequence !== key.keySequence) refuseStaleKey();
+  const unchanged = deviceListUnchanged(userId, key);
+  let result: { meta?: { changes?: number } } | undefined;
   try {
-    // Stored entries were checked when they were appended; re-check only
-    // the new signature, but every rule over the whole chain.
-    list = await verifyContactsList(
-      fromBase64Url(current.identity_key),
-      chain,
-      { signaturesFrom: rows.length }
-    );
+    [result] = await db.batch([
+      db
+        .prepare(
+          `INSERT INTO e2ee_contact_entries
+             (user_id, generation, sequence, entry, signature, entry_hash, created_at)
+           SELECT ?, ?, ?, ?, ?, ?, ?
+           WHERE ${authorization.sql}
+             AND (SELECT COUNT(*) FROM e2ee_contact_entries
+                  WHERE user_id = ? AND generation = ?) = ?
+             AND NOT EXISTS (SELECT 1 FROM e2ee_contact_entries
+                  WHERE user_id = ? AND generation = ? AND substr(entry, 1, 4) <> ?)
+             AND ${unchanged.sql}`
+        )
+        .bind(
+          userId,
+          current.generation,
+          rows.length,
+          body.entry,
+          body.signature,
+          toHex(checked.head.recordHash),
+          new Date().toISOString(),
+          ...authorization.binds,
+          userId,
+          current.generation,
+          rows.length,
+          userId,
+          current.generation,
+          SEALED_PREFIX,
+          ...unchanged.binds
+        ),
+      replacedPlaintextCleanup(db, userId, current.generation)
+    ]);
   } catch (error) {
-    if (error instanceof E2eeError) {
-      refuse(
-        400,
-        'E2EE_CONTACTS_INVALID',
-        `The contacts entry did not verify: ${error.message}`
-      );
+    // A concurrent append took this sequence first.
+    if (isConstraintError(error)) conflict();
+    throw error;
+  }
+  if ((result?.meta?.changes ?? 0) !== 1) {
+    if (await deviceListMoved(db, userId, key)) refuseStaleKey();
+    conflict();
+  }
+  return contactsResponse(db, userId);
+}
+/**
+ * Replaces the caller's plaintext list with the same entries sealed. The
+ * Worker cannot see that the entries match (the browser that resealed them
+ * checked, and every device checks its own pin against them later); it
+ * checks that the records are a whole sealed chain of the same length under
+ * the current account key, and swaps the rows only while the stored list is
+ * still the plaintext list whose head the browser named.
+ */
+async function handleReseal(
+  db: D1Database,
+  userId: string,
+  authorization: E2eeWriteAuthorization,
+  body: Record<string, unknown>
+): Promise<E2eeContactsResponse> {
+  if (
+    !Array.isArray(body.entries) ||
+    body.entries.length === 0 ||
+    body.entries.length > MAX_CONTACTS_ENTRIES
+  ) {
+    invalid(`entries must list 1 to ${MAX_CONTACTS_ENTRIES} records`);
+  }
+  if (
+    typeof body.replaces !== 'string' ||
+    !/^[0-9a-f]{64}$/.test(body.replaces)
+  ) {
+    invalid('replaces must be a lowercase hex entry hash');
+  }
+  const records = (body.entries as unknown[]).map((item) => {
+    if (item === null || typeof item !== 'object') invalid('Not a record');
+    const record = item as Record<string, unknown>;
+    return {
+      ...signedRecord(record.entry, record.signature),
+      text: {
+        entry: record.entry as string,
+        signature: record.signature as string
+      }
+    };
+  });
+  const current = await requireGeneration(db, userId, body.generation);
+  const rows = await contactRows(db, userId, current.generation);
+  if (
+    rows.length !== records.length ||
+    rows.some(isSealedRow) ||
+    rows.at(-1)?.entry_hash !== body.replaces
+  ) {
+    conflict();
+  }
+  const checked = await checkSealedChain(
+    current.identity_key,
+    records.map(({ entry, signature }) => ({ entry, signature })),
+    0
+  );
+  const key = await currentAccountKey(db, userId, current.generation);
+  if (
+    checked.records.some(
+      (record) => record.header.accountKeySequence !== key.keySequence
+    )
+  ) {
+    refuseStaleKey();
+  }
+  const unchanged = deviceListUnchanged(userId, key);
+  const createdAt = new Date().toISOString();
+  const count = `(SELECT COUNT(*) FROM e2ee_contact_entries
+                  WHERE user_id = ? AND generation = ?)`;
+  let removed: { meta?: { changes?: number } } | undefined;
+  try {
+    [removed] = await db.batch([
+      db
+        .prepare(
+          `DELETE FROM e2ee_contact_entries
+           WHERE user_id = ? AND generation = ?
+             AND ${authorization.sql}
+             AND ${count} = ?
+             AND NOT EXISTS (SELECT 1 FROM e2ee_contact_entries
+                  WHERE user_id = ? AND generation = ? AND substr(entry, 1, 4) <> ?)
+             AND (SELECT entry_hash FROM e2ee_contact_entries
+                  WHERE user_id = ? AND generation = ? AND sequence = ?) = ?
+             AND ${unchanged.sql}`
+        )
+        .bind(
+          userId,
+          current.generation,
+          ...authorization.binds,
+          userId,
+          current.generation,
+          rows.length,
+          userId,
+          current.generation,
+          PLAINTEXT_PREFIX,
+          userId,
+          current.generation,
+          rows.length - 1,
+          body.replaces,
+          ...unchanged.binds
+        ),
+      // Each insert writes its record only once the delete above ran (the
+      // count is then its sequence); otherwise the record is NULL, the NOT
+      // NULL constraint fails and the whole batch rolls back, so the list is
+      // never left half replaced.
+      ...records.map(({ text }, index) =>
+        db
+          .prepare(
+            `INSERT INTO e2ee_contact_entries
+               (user_id, generation, sequence, entry, signature, entry_hash, created_at)
+             SELECT ?, ?, ?, CASE WHEN ${count} = ? THEN ? END, ?, ?, ?`
+          )
+          .bind(
+            userId,
+            current.generation,
+            index,
+            userId,
+            current.generation,
+            index,
+            text.entry,
+            text.signature,
+            toHex(checked.records[index]!.hash),
+            createdAt
+          )
+      ),
+      replacedPlaintextCleanup(db, userId, current.generation)
+    ]);
+  } catch (error) {
+    if (isConstraintError(error)) {
+      if (await deviceListMoved(db, userId, key)) refuseStaleKey();
+      conflict();
     }
     throw error;
   }
-  if (list.userId !== userId) {
-    refuse(
-      400,
-      'E2EE_CONTACTS_INVALID',
-      'The contacts list names another user.'
-    );
-  }
-  const result = await db
-    .prepare(
-      `INSERT INTO e2ee_contact_entries
-         (user_id, generation, sequence, entry, signature, entry_hash, created_at)
-       SELECT ?, ?, ?, ?, ?, ?, ?
-       WHERE ${authorization.sql}
-         AND (SELECT COUNT(*) FROM e2ee_contact_entries
-              WHERE user_id = ? AND generation = ?) = ?
-         AND (SELECT MAX(generation) FROM e2ee_identities WHERE user_id = ?) = ?`
-    )
-    .bind(
-      userId,
-      current.generation,
-      sequence,
-      body.entry,
-      body.signature,
-      toHex(list.headHash),
-      new Date().toISOString(),
-      ...authorization.binds,
-      userId,
-      current.generation,
-      rows.length,
-      userId,
-      current.generation
-    )
-    .run()
-    .catch((error: unknown) => {
-      // A concurrent append took this sequence first.
-      if (/UNIQUE|PRIMARY KEY|constraint/i.test(String(error))) return null;
-      throw error;
-    });
-  if ((result?.meta?.changes ?? 0) !== 1) {
-    refuse(
-      409,
-      'E2EE_CONTACTS_CONFLICT',
-      'Your contacts list changed meanwhile. Reload and try again.'
-    );
-  }
+  if ((removed?.meta?.changes ?? 0) !== rows.length) conflict();
   return contactsResponse(db, userId);
 }
 
@@ -472,8 +772,8 @@ export async function handleE2eeContactsRequest(
       if (method !== 'GET') refuse(405, 'METHOD_NOT_ALLOWED', 'Use GET.');
       return respond(await handleDeviceList(db, userId, lookup[1]!));
     }
-    if (method !== 'GET' && method !== 'POST') {
-      refuse(405, 'METHOD_NOT_ALLOWED', 'Use GET or POST.');
+    if (method !== 'GET' && method !== 'POST' && method !== 'PUT') {
+      refuse(405, 'METHOD_NOT_ALLOWED', 'Use GET, POST or PUT.');
     }
     if (!(await isE2eeContactStorageReady(db))) {
       refuse(
@@ -483,6 +783,11 @@ export async function handleE2eeContactsRequest(
       );
     }
     if (method === 'GET') return respond(await contactsResponse(db, userId));
+    if (method === 'PUT') {
+      return respond(
+        await handleReseal(db, userId, authorization, await readBody())
+      );
+    }
     return respond(
       await handleAppend(db, userId, authorization, await readBody()),
       201

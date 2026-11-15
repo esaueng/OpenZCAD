@@ -166,23 +166,30 @@
     height: 44px;
   }
 
-  /* The launch card's fields follow its two buttons and painted over their
-     reach; the buttons stand over them. */
-  .start-launch-create,
-  .start-launch-import {
-    z-index: 1;
+  /* The storage readout is one button drawn under its line and meter, so
+     the readout itself is the target: 34 px tall on a phone, between the
+     column's foot and the launch row. */
+  .start-account-head {
+    min-height: 44px;
+    align-content: center;
   }
 
-  /* The name and units sit side by side under the buttons, with no caption
-     above them to take a finger: each is drawn 44 px tall, and the row
-     clears the buttons' 9 px reach rather than lose its top edge to it. */
-  .start-field input,
-  .start-field select {
+  /* New project and Import share a row 6 px apart, so a reach would land
+     on the other: both are drawn 44 px, Import square. */
+  .start-launch-create {
     min-height: 44px;
   }
 
-  .start-launch-form {
-    row-gap: 10px;
+  .start-launch-import {
+    width: 44px;
+    height: 44px;
+  }
+
+  /* The name and its units share one box under them, with no caption above
+     to take a finger: each is drawn 44 px tall. */
+  .start-launch-field .start-field input,
+  .start-launch-field .start-field select {
+    min-height: 44px;
   }
 
   /* The brand's reach would end on the project name 7 px away. */
