@@ -227,6 +227,70 @@ test('Retry on Account unavailable lists the account again', async ({
   );
 });
 
+test('Retry warns in a toast only while the account stays unreachable', async ({
+  page
+}) => {
+  await stubApi(page);
+  await createProject(page, 'Toasted part');
+  await page.getByTitle('Back to projects').click();
+  await expect(
+    page.locator('.start-tile-open', { hasText: 'Toasted part' })
+  ).toBeVisible();
+  let listings = 0;
+  const failing = (route: Route) => {
+    listings += 1;
+    return route.fulfill({
+      status: 503,
+      json: { error: 'Temporarily unavailable' }
+    });
+  };
+  await page.route('**/api/projects', failing);
+  await page.reload();
+  await expect(page.getByText('Account unavailable')).toBeVisible();
+  const retry = page.getByRole('button', {
+    name: 'Retry reaching the account'
+  });
+  const toast = page.locator('.toast');
+
+  // Nothing is announced before Retry asks.
+  await expect(toast).toHaveCount(0);
+  const asked = listings;
+  await retry.click();
+  await expect(toast).toHaveClass(/\bwarning\b/);
+  await expect(toast.locator('.toast-message')).toHaveText(
+    'Your account still could not be reached. Your projects remain saved on this device.'
+  );
+  // Retry listed again rather than repeating what it already knew.
+  expect(listings).toBeGreaterThan(asked);
+  // Screen readers hear it through the toast's live region.
+  await expect(
+    page.getByRole('status').filter({
+      hasText: 'Your account still could not be reached.'
+    })
+  ).toHaveCount(1);
+});
+
+test('Retry that reaches the account shows no toast', async ({ page }) => {
+  await stubApi(page);
+  await createProject(page, 'Quiet part');
+  await page.getByTitle('Back to projects').click();
+  await expect(
+    page.locator('.start-tile-open', { hasText: 'Quiet part' })
+  ).toBeVisible();
+  const failing = (route: Route) =>
+    route.fulfill({ status: 503, json: { error: 'Temporarily unavailable' } });
+  await page.route('**/api/projects', failing);
+  await page.reload();
+  await expect(page.getByText('Account unavailable')).toBeVisible();
+
+  await page.unroute('**/api/projects', failing);
+  await page
+    .getByRole('button', { name: 'Retry reaching the account' })
+    .click();
+  await expect(page.getByText('Account unavailable')).toHaveCount(0);
+  await expect(page.locator('.toast')).toHaveCount(0);
+});
+
 for (const layout of ['grid', 'list']) {
   for (const width of [1440, 390]) {
     test(`reload preserves pinned sections and ${layout} geometry at ${width}px`, async ({
