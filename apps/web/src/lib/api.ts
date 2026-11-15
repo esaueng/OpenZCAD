@@ -641,6 +641,12 @@ interface SettingsMergeState {
   base: AppSettings | null;
   theirs: AppSettings | null;
   record: string | null;
+  /**
+   * The settings revision `record` was seen at. A save is checked against
+   * the revision the page sends, so it may replace `record` only when the
+   * two agree; otherwise it reads the account again first.
+   */
+  revision: number | null;
 }
 
 const MERGE_STATE_PREFIX = 'openzcad.settings.merge.v1';
@@ -659,7 +665,9 @@ function loadMergeState(userId: string): SettingsMergeState | null {
         ? {
             base: parsed.base ? normalizeAppSettings(parsed.base) : null,
             theirs: parsed.theirs ? normalizeAppSettings(parsed.theirs) : null,
-            record: typeof parsed.record === 'string' ? parsed.record : null
+            record: typeof parsed.record === 'string' ? parsed.record : null,
+            revision:
+              typeof parsed.revision === 'number' ? parsed.revision : null
           }
         : null;
     mergeStates.set(userId, state);
@@ -671,7 +679,10 @@ function loadMergeState(userId: string): SettingsMergeState | null {
 
 function saveMergeState(userId: string, state: SettingsMergeState | null) {
   const kept =
-    state && (state.base || state.theirs || state.record) ? state : null;
+    state &&
+    (state.base || state.theirs || state.record || state.revision !== null)
+      ? state
+      : null;
   mergeStates.set(userId, kept);
   try {
     const key = `${MERGE_STATE_PREFIX}:${userId}`;
@@ -762,12 +773,21 @@ async function readAccountSettings(): Promise<AppSettingsResponse> {
       : null;
     const earlier = loadMergeState(userId);
     // Whatever this device shows in place of a record it cannot open is its
-    // own; once open, any earlier base still decides what merges.
-    const base = opened ? (earlier?.base ?? null) : (earlier?.base ?? local);
+    // own. Once open, an earlier base still decides what merges; failing
+    // that, a record that replaced one this device knew merges against what
+    // it knew, so another device's change to a field this one left alone
+    // survives this device's next save.
+    const base = opened
+      ? (earlier?.base ??
+        (earlier?.theirs && earlier.record !== response.sealedSettings
+          ? earlier.theirs
+          : null))
+      : (earlier?.base ?? local);
     saveMergeState(userId, {
       base,
       theirs: opened,
-      record: response.sealedSettings
+      record: response.sealedSettings,
+      revision: response.revision
     });
     return {
       ...response,
@@ -783,8 +803,12 @@ async function readAccountSettings(): Promise<AppSettingsResponse> {
   }
   if (!userId) return response;
   const earlier = loadMergeState(userId);
-  if (earlier?.record)
-    saveMergeState(userId, { ...earlier, theirs: null, record: null });
+  saveMergeState(userId, {
+    base: earlier?.base ?? null,
+    theirs: null,
+    record: null,
+    revision: response.revision
+  });
   if (!response.synced || response.revision === 0) return response;
   const readable = !holdsOnlyAccountServerSettings(response.settings);
   if (!(await libraryEncryptedForRead(userId))) return response;
@@ -850,7 +874,14 @@ async function writeAccountSettings(
   const userId = await sessionUserId();
   if (userId) dropOtherMergeStates(userId);
   const sealed = await sealedSettingsKeys(userId);
-  const state = userId ? loadMergeState(userId) : null;
+  let state = userId ? loadMergeState(userId) : null;
+  if (sealed && userId && state?.revision !== payload.expectedRevision) {
+    // The page's revision came from somewhere this device did not open the
+    // record (a credential change answers with the settings too): read the
+    // account first, so it never replaces a record it has not opened.
+    await readAccountSettings();
+    state = loadMergeState(userId);
+  }
   let theirs: AppSettings | null = null;
   if (sealed && state?.record) {
     noteAccountRecord(
@@ -898,7 +929,8 @@ async function writeAccountSettings(
     // sent is the new base, so an edit already queued from it merges too.
     base: caughtUp ? null : payload.settings,
     theirs: settings,
-    record: sealing.record
+    record: sealing.record,
+    revision: response.revision
   });
   if (!caughtUp) accountSettingsMerged(owner, payload.settings, settings);
   return {

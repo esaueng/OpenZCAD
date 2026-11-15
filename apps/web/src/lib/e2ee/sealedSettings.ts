@@ -120,54 +120,56 @@ export async function openSettings(
   keys: SealedSettingsKeys,
   record: string
 ): Promise<AppSettings | null> {
-  let sealed: Uint8Array;
-  let sequence: number;
-  let accountKey: Uint8Array = keys.accountKey;
   let older: Uint8Array | null = null;
   try {
-    sealed = fromBase64Url(record);
-    const header = readSealedRecordHeader(ACCOUNT_SETTINGS_RECORD, sealed);
-    if (
-      toHex(header.commitment) !==
-      toHex(await accountKeyCommitment(keys.accountKey))
-    ) {
-      // Sealed before an account-key rotation: open it with that older key,
-      // through the account-key history.
-      older = (await keys.olderKey?.(header.commitment)) ?? null;
-      if (!older) return null;
-      accountKey = older;
+    let sealed: Uint8Array;
+    let sequence: number;
+    let accountKey: Uint8Array = keys.accountKey;
+    try {
+      sealed = fromBase64Url(record);
+      const header = readSealedRecordHeader(ACCOUNT_SETTINGS_RECORD, sealed);
+      if (
+        toHex(header.commitment) !==
+        toHex(await accountKeyCommitment(keys.accountKey))
+      ) {
+        // Sealed before an account-key rotation: open it with that older
+        // key, through the account-key history.
+        older = (await keys.olderKey?.(header.commitment)) ?? null;
+        if (!older) return null;
+        accountKey = older;
+      }
+      if (header.sequence < keys.pins.read()) return null;
+      sequence = header.sequence;
+    } catch (error) {
+      if (isE2eeError(error) || error instanceof Error) return null;
+      throw error;
     }
-    if (header.sequence < keys.pins.read()) return null;
-    sequence = header.sequence;
-  } catch (error) {
-    older?.fill(0);
-    if (isE2eeError(error) || error instanceof Error) return null;
-    throw error;
-  }
-  let plaintext: Uint8Array;
-  try {
-    ({ plaintext } = await openRecord(
-      ACCOUNT_SETTINGS_RECORD,
-      accountKey,
-      keys.userId,
-      sealed
-    ));
-  } catch (error) {
-    if (isE2eeError(error)) return null;
-    throw error;
+    let plaintext: Uint8Array;
+    try {
+      ({ plaintext } = await openRecord(
+        ACCOUNT_SETTINGS_RECORD,
+        accountKey,
+        keys.userId,
+        sealed
+      ));
+    } catch (error) {
+      if (isE2eeError(error)) return null;
+      throw error;
+    }
+    let settings: AppSettings;
+    try {
+      settings = normalizeAppSettings(
+        JSON.parse(new TextDecoder().decode(plaintext))
+      );
+    } catch {
+      return null;
+    }
+    keys.pins.write(sequence);
+    return settings;
   } finally {
+    // Every exit, a rolled-back record included, wipes the older key.
     older?.fill(0);
   }
-  let settings: AppSettings;
-  try {
-    settings = normalizeAppSettings(
-      JSON.parse(new TextDecoder().decode(plaintext))
-    );
-  } catch {
-    return null;
-  }
-  keys.pins.write(sequence);
-  return settings;
 }
 
 /**

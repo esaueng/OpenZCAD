@@ -1488,11 +1488,16 @@ account whose library is encrypted (the rule above) stores them sealed.
 - **Never sealing over a record it has not opened.** Each device keeps,
   per account in device storage, the record the account held when it last
   read or wrote, that record's settings once opened, and what it showed in
-  their place while it could not open them. A sealed save replaces the
-  account's record only after this device opened it (the Worker's revision
-  check makes sure it is still the one replaced), and merges onto it: each
-  field changed since what the device showed or last sent keeps the
-  device's value, every other field takes the account's. A save that merged
+  their place while it could not open them, with the settings revision it
+  saw the record at. A sealed save replaces the account's record only after
+  this device opened it at the revision the save names (the Worker's
+  revision check then makes sure it is still the one replaced; a revision
+  learned elsewhere, such as from a credential change, sends the device to
+  read the account first), and merges onto it: each
+  field changed since what the device showed, last sent, or last opened
+  keeps the device's value, every other field takes the account's, so
+  another device's change to a field this one left alone survives a
+  conflict retry. A save that merged
   becomes the new base, so an edit queued behind it merges too, and the
   state survives a reload; the page folds the merged result into what it
   shows, keeping edits made meanwhile. A record sealed before an account-key

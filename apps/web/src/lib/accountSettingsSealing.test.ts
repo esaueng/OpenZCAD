@@ -571,6 +571,99 @@ describe('settings of an account whose library is encrypted', () => {
     expect(stored?.general.defaultUnits).toBe('cm');
   });
 
+  it('reads the account again before saving at a revision it did not open', async () => {
+    const keys = (accountKey: Uint8Array, pin = 0) => ({
+      accountKey,
+      userId: state.userId,
+      pins: { read: () => pin, write: () => undefined }
+    });
+    state.libraryEncrypted = true;
+    state.account = { accountKey: ACCOUNT_KEY };
+    let current = (await sealSettings(keys(ACCOUNT_KEY), privateSettings()))
+      .record;
+    let revision = 1;
+    const patches = worker(() =>
+      response(accountServerSettings(privateSettings()), {
+        revision,
+        sealedSettings: current
+      })
+    );
+    const read = await api.getSettings();
+    // Another device replaces the record under a rotated key, and this page
+    // learns the new revision from another response (a credential change).
+    const rotated = Uint8Array.from({ length: 32 }, (_, index) => 30 + index);
+    current = (await sealSettings(keys(rotated, 4), privateSettings())).record;
+    revision = 2;
+    await expect(
+      api.updateSettings({ settings: read.settings, expectedRevision: 2 })
+    ).rejects.toMatchObject({ code: 'SETTINGS_SEAL_DEFERRED' });
+    expect(patches).toHaveLength(1);
+    expect(patches[0]).not.toHaveProperty('sealedSettings');
+  });
+
+  it('keeps another device’s change to a field this one left alone', async () => {
+    const keys = (pin = 0) => ({
+      accountKey: ACCOUNT_KEY,
+      userId: state.userId,
+      pins: { read: () => pin, write: () => undefined }
+    });
+    state.libraryEncrypted = true;
+    state.account = { accountKey: ACCOUNT_KEY };
+    const ours = privateSettings();
+    let current = (await sealSettings(keys(), ours)).record;
+    let revision = 1;
+    const patches = worker(() =>
+      response(accountServerSettings(ours), {
+        revision,
+        sealedSettings: current
+      })
+    );
+    const read = await api.getSettings();
+    // Another device changes the units.
+    const theirs = privateSettings();
+    theirs.general.defaultUnits = 'cm';
+    current = (await sealSettings(keys(5), theirs)).record;
+    revision = 2;
+    // This page changed the density meanwhile; its save meets a conflict
+    // and the autosave reads the account again before retrying.
+    const edited = structuredClone(read.settings);
+    edited.appearance.density = 'compact';
+    await api.getSettings();
+    await api.updateSettings({ settings: edited, expectedRevision: 2 });
+    const stored = await openSettings(
+      keys(),
+      patches.at(-1)!.sealedSettings as string
+    );
+    expect(stored?.general.defaultUnits).toBe('cm');
+    expect(stored?.appearance.density).toBe('compact');
+    expect(stored?.assistant.customInstructions).toBe(SECRET);
+  });
+
+  it('wipes an older account key on every way out, a rollback included', async () => {
+    const formerKey = Uint8Array.from({ length: 32 }, (_, index) => 9 + index);
+    const { record } = await sealSettings(
+      {
+        accountKey: formerKey,
+        userId: state.userId,
+        pins: { read: () => 0, write: () => undefined }
+      },
+      privateSettings()
+    );
+    const handedOut = new Uint8Array(formerKey);
+    const opened = await openSettings(
+      {
+        accountKey: ACCOUNT_KEY,
+        userId: state.userId,
+        // This device already opened a newer record.
+        pins: { read: () => 9, write: () => undefined },
+        olderKey: async () => handedOut
+      },
+      record
+    );
+    expect(opened).toBeNull();
+    expect(handedOut.every((byte) => byte === 0)).toBe(true);
+  });
+
   it('refuses to save rather than guess when the library rule cannot be read', async () => {
     vi.mocked(desktopFetch).mockImplementation(async (input) => {
       if (input === '/api/session') return json({ userId: state.userId });
@@ -628,6 +721,8 @@ describe('settings of a readable account', () => {
         }
         return json(response(body.settings as AppSettings));
       }
+      if (input === '/api/settings')
+        return json(response(DEFAULT_APP_SETTINGS));
       return json({}, 404);
     });
     preferences.loadProjectPreference.mockImplementation(async () => ({
