@@ -71,6 +71,8 @@ import {
   buildRegionExtrude,
   regionSideSources
 } from './exact-profile-builders';
+import { assertFeatureSketchProjectionsValid } from './exact-sketch-projection-failures';
+import type { ExactBuildResult } from './exact-types';
 import { KernelRefusal, type KernelRefusalCategory } from './kernel-refusal';
 import {
   createRemusSemanticLineage,
@@ -105,6 +107,7 @@ export type SheetMetalRefusalCode =
   | 'bend-not-separating'
   | 'bend-loop'
   | 'folded-overlap'
+  | 'relief-failed'
   | 'fold-failed';
 
 function refuse(
@@ -684,39 +687,89 @@ function buildBlank(
   return { solid, sources };
 }
 
-/** Whether any of a grid of points inside a slot lies in the solid. */
-function slotMeetsMaterial(
+/**
+ * One relief slot as a cutting tool, from `zLo` to `zHi`: a rectangle along
+ * the line from `from` to `to` and across it from the zone's moving edge to
+ * `back`; an obround one is closed past `back` by a semicircle on that width
+ * (two quarter arcs, so the tool is one profile with tangent joins rather
+ * than a box and a cylinder the exact boolean will not cut in turn).
+ */
+function reliefTool(
   kernel: RemusKernel,
-  solid: number,
   bend: ResolvedBend,
+  obround: boolean,
   from: number,
   to: number,
-  lo: number,
-  hi: number,
-  z: number,
-  tolerance: number
-): boolean {
-  const columns = 3;
-  const rows = 9;
-  for (let column = 0; column < columns; column += 1) {
-    const along = from + ((to - from) * (column + 0.5)) / columns;
-    for (let row = 0; row < rows; row += 1) {
-      const across = lo + ((hi - lo) * (row + 0.5)) / rows;
-      const point = bendPoint(bend, along, across);
-      if (
-        kernel.classifyPoint(solid, point[0], point[1], z, tolerance) !==
-        'outside'
-      ) {
-        return true;
-      }
-    }
+  movingEdge: number,
+  back: number,
+  zLo: number,
+  zHi: number
+): number {
+  if (!obround) {
+    return prism(
+      kernel,
+      [
+        bendPoint(bend, from, movingEdge),
+        bendPoint(bend, to, movingEdge),
+        bendPoint(bend, to, back),
+        bendPoint(bend, from, back)
+      ],
+      zLo,
+      zHi
+    );
   }
-  return false;
+  // Counter-clockwise in the sketch frame whichever way the slot points.
+  const away = Math.sign(back - movingEdge) || 1;
+  const first = away > 0 ? from : to;
+  const second = away > 0 ? to : from;
+  const radius = (to - from) / 2;
+  const middle = (from + to) / 2;
+  const p1 = bendPoint(bend, first, movingEdge);
+  const p2 = bendPoint(bend, second, movingEdge);
+  const p3 = bendPoint(bend, second, back);
+  const apex = bendPoint(bend, middle, back + away * radius);
+  const p4 = bendPoint(bend, first, back);
+  const center = bendPoint(bend, middle, back);
+  const lineEdge = (a: P2, b: P2) =>
+    kernel.makeLineEdge(a[0], a[1], zLo, b[0], b[1], zLo);
+  const arcEdge = (a: P2, b: P2) =>
+    kernel.makeCircleArc3d(
+      a[0],
+      a[1],
+      zLo,
+      b[0],
+      b[1],
+      zLo,
+      center[0],
+      center[1],
+      zLo,
+      0,
+      0,
+      1
+    );
+  const wire = kernel.makeWire(
+    Uint32Array.from([
+      lineEdge(p1, p2),
+      lineEdge(p2, p3),
+      arcEdge(p3, apex),
+      arcEdge(apex, p4),
+      lineEdge(p4, p1)
+    ]),
+    true
+  );
+  return kernel.extrude(kernel.makeFaceFromWire(wire), 0, 0, 1, zHi - zLo);
 }
 
 /**
  * Cuts each bend's relief slots (spec "Reliefs") and records the planes and
- * cylinders their walls lie on. A slot that meets no material is skipped.
+ * cylinders their walls lie on.
+ *
+ * Every slot is cut by the exact kernel, which decides what it meets: a slot
+ * off the sheet, or only touching it, comes back unchanged. Where the kernel
+ * declines the tool that passes through the plate (a slot that swallows a
+ * whole lug standing off the blank's edge), the same slot is cut flush with
+ * the plate's faces, which it does build. A slot neither tool cuts refuses
+ * `relief-failed` by name; a relief is never skipped or swapped for another.
  */
 function cutReliefs(
   kernel: RemusKernel,
@@ -725,7 +778,6 @@ function cutReliefs(
   zones: readonly Zone[],
   z0: number,
   z1: number,
-  tolerance: number,
   sources: EdgeSource[]
 ): number {
   let flat = blank;
@@ -747,33 +799,44 @@ function cutReliefs(
       const far = end === 'start' ? -width : bend.length + width;
       const from = Math.min(near, far);
       const to = Math.max(near, far);
-      if (
-        !slotMeetsMaterial(
-          kernel,
-          flat,
-          bend,
-          from,
-          to,
-          lo,
-          hi,
-          (z0 + z1) / 2,
-          tolerance
-        )
-      ) {
-        continue;
+      let cut: number | null = null;
+      let failure = 'the kernel returned no result';
+      for (const [zLo, zHi] of [
+        [z0 - thickness, z1 + thickness],
+        [z0, z1]
+      ] as const) {
+        try {
+          const outcome = kernel.cutDetailed(
+            flat,
+            reliefTool(
+              kernel,
+              bend,
+              shape === 'obround',
+              from,
+              to,
+              movingEdge,
+              back,
+              zLo,
+              zHi
+            )
+          );
+          if (outcome.status === 'ok') {
+            cut = outcome.value;
+            break;
+          }
+          failure = outcome.code;
+        } catch (error) {
+          failure = error instanceof Error ? error.message : String(error);
+        }
       }
-      const slot = prism(
-        kernel,
-        [
-          bendPoint(bend, from, lo),
-          bendPoint(bend, to, lo),
-          bendPoint(bend, to, hi),
-          bendPoint(bend, from, hi)
-        ],
-        z0 - thickness,
-        z1 + thickness
-      );
-      flat = kernel.cut(flat, slot);
+      if (cut === null) {
+        refuse(
+          'relief-failed',
+          `The ${shape} relief at the ${end} of ${bend.label} could not be cut exactly (${failure}). Change its width or extension, use another relief shape, or tidy the edge beside the bend.`,
+          'unsupported'
+        );
+      }
+      flat = cut;
       const name = `relief[${bend.bend.id}].${end}`;
       const wall = (suffix: string, a: P2, b: P2) => {
         const source = planeSource(`${name}.${suffix}`, a, b);
@@ -787,33 +850,13 @@ function cutReliefs(
         bendPoint(bend, to, movingEdge)
       );
       if (shape === 'obround') {
-        const center = bendPoint(bend, (near + far) / 2, back);
-        const round = kernel.makeCylinder(width / 2, 3 * thickness);
-        kernel.transformSolid(
-          round,
-          affineMatrix([
-            1,
-            0,
-            0,
-            center[0],
-            0,
-            1,
-            0,
-            center[1],
-            0,
-            0,
-            1,
-            z0 - thickness
-          ])
-        );
-        try {
-          flat = kernel.cut(flat, round);
-        } catch {
-          // The rounded end lies wholly off the sheet.
-        }
         sources.push({
           token: `${name}.round`,
-          carrier: { kind: 'cylinder', center, radius: width / 2 }
+          carrier: {
+            kind: 'cylinder',
+            center: bendPoint(bend, (near + far) / 2, back),
+            radius: width / 2
+          }
         });
       } else {
         wall('back', bendPoint(bend, from, back), bendPoint(bend, to, back));
@@ -1265,8 +1308,72 @@ function crossingsOf(
 }
 
 /**
+ * The fixed region among provisional, centre-line regions. These zones are
+ * not the bends' own, so a fixed point may fall inside one while lying in
+ * the fixed region of the real layout (a `moving-side` bend's zone starts on
+ * its line, and the point may sit just before the line). Such a point takes
+ * the region on its own side of that line; nothing is refused here, because
+ * the build proper checks the point against the bends' actual zones.
+ */
+function provisionalRoot(
+  kernel: RemusKernel,
+  regions: readonly Region[],
+  contacts: readonly ZoneContact[],
+  bends: readonly ResolvedBend[],
+  zones: readonly Zone[],
+  fixedPoint: readonly [number, number] | undefined,
+  z: number,
+  tolerance: number
+): number {
+  const largest = () => {
+    let best = 0;
+    regions.forEach((region, index) => {
+      if (region.volume > regions[best]!.volume) best = index;
+    });
+    return best;
+  };
+  if (!fixedPoint) return largest();
+  const inside = regions.findIndex(
+    (region) =>
+      kernel.classifyPoint(
+        region.flat,
+        fixedPoint[0],
+        fixedPoint[1],
+        z,
+        tolerance
+      ) !== 'outside'
+  );
+  if (inside >= 0) return inside;
+  for (let index = 0; index < bends.length; index += 1) {
+    const bend = bends[index]!;
+    const zone = zones[index]!;
+    const [along, across] = bendCoordinates(bend, fixedPoint);
+    if (
+      along < -tolerance ||
+      along > bend.length + tolerance ||
+      across < zone.lo - tolerance ||
+      across > zone.hi + tolerance
+    ) {
+      continue;
+    }
+    const side = across < 0 ? 'lo' : 'hi';
+    const contact = contacts.find(
+      (entry) =>
+        entry.bend === index &&
+        entry.side === side &&
+        along >= entry.from - tolerance &&
+        along <= entry.to + tolerance
+    );
+    if (contact) return contact.region;
+  }
+  return largest();
+}
+
+/**
  * Which side of each bend moves: found on centre-line zones without reliefs,
- * because a zone's place and its relief depend on the answer.
+ * because a zone's place and its relief depend on the answer. It is a first
+ * answer only: the build lays the zones out for it, reads the sides again
+ * from that real layout, and retries with them if they differ.
  */
 function discoverSides(
   input: PlanInput,
@@ -1295,14 +1402,14 @@ function discoverSides(
     return new Map();
   }
   const regions = regionsOf(kernel, solids);
-  const crossings = crossingsOf(
-    zoneContacts(kernel, regions, bends, zones, tolerance),
-    bends.length,
-    tolerance
-  );
-  const root = rootRegion(
+  const contacts = zoneContacts(kernel, regions, bends, zones, tolerance);
+  const crossings = crossingsOf(contacts, bends.length, tolerance);
+  const root = provisionalRoot(
     kernel,
     regions,
+    contacts,
+    bends,
+    zones,
     data.fixedPoint,
     (z0 + z1) / 2,
     tolerance
@@ -1344,9 +1451,8 @@ function planSheetMetal(input: PlanInput): SheetMetalPlan {
     } catch (second) {
       if (!(second instanceof MovingSidesChanged)) throw second;
       return refuse(
-        'fold-failed',
-        'Which side of each bend moves could not be settled. Set the fixed region, or place the bends on their centre lines.',
-        'internal'
+        'invalid-parameter',
+        'Which side of each bend moves could not be settled from the fixed region: it lies beyond a bend zone that is placed away from its line. Move the fixed point, or place the bend on its centre line.'
       );
     }
   }
@@ -1439,16 +1545,7 @@ function planWithSides(
   }
 
   const sources = [...blank.sources];
-  const flat = cutReliefs(
-    kernel,
-    blank.solid,
-    bends,
-    zones,
-    z0,
-    z1,
-    tolerance,
-    sources
-  );
+  const flat = cutReliefs(kernel, blank.solid, bends, zones, z0, z1, sources);
   const flatVolume = kernel.volume(flat, VOLUME_DEFLECTION);
 
   // Zone pieces: F ∩ Zᵢ must be rectangular prisms across the zone, inside
@@ -1623,6 +1720,19 @@ function planWithSides(
           const params = analyticParams(kernel, face);
           const origin = vector3(params?.origin);
           if (!origin || typeof params?.radius !== 'number') continue;
+          const radius = params.radius;
+          // A relief's own rounded end stands beside its bend by design.
+          const reliefEnd = sources.some(
+            ({ token, carrier }) =>
+              token.startsWith('relief[') &&
+              carrier.kind === 'cylinder' &&
+              Math.abs(carrier.radius - radius) <= tolerance &&
+              Math.hypot(
+                carrier.center[0] - origin[0],
+                carrier.center[1] - origin[1]
+              ) <= tolerance
+          );
+          if (reliefEnd) continue;
           const [along, across] = bendCoordinates(bend, origin);
           const gap =
             Math.hypot(
@@ -2278,23 +2388,54 @@ function requireSheetMetal(
   return { feature, data: feature.data };
 }
 
+/**
+ * What the flat-pattern and fold-preview entry points read from a finished
+ * build, so they rebuild from the same sketches the feature was built from.
+ */
+export type SheetMetalBuildState = Pick<
+  ExactBuildResult,
+  'sketchBases' | 'sketchProjectionFailures'
+>;
+
+/**
+ * The plan input for a rebuild outside the build loop. `document` must be
+ * the document as the build read it (linked sketch projections re-projected,
+ * `withSketchObjectOverrides`), and a blank or bend-line sketch whose linked
+ * projections failed to solve refuses here as it does in the build.
+ */
+function rebuildInput(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  scope: Record<string, number>,
+  build: SheetMetalBuildState,
+  featureId: FeatureId
+): PlanInput {
+  const { feature, data } = requireSheetMetal(document, featureId);
+  assertFeatureSketchProjectionsValid(build, data);
+  return {
+    kernel,
+    document,
+    scope,
+    sketchBases: build.sketchBases,
+    feature,
+    data
+  };
+}
+
+/**
+ * `document` is the document as the build read it; see {@link rebuildInput}.
+ */
 export function sheetMetalFlatPattern(
   kernel: RemusKernel,
   document: ProjectDocument,
   scope: Record<string, number>,
-  sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+  build: SheetMetalBuildState,
   featureId: FeatureId,
   modelUnitMm: number
 ): SheetMetalFlatPattern {
-  const { feature, data } = requireSheetMetal(document, featureId);
-  const plan = planSheetMetal({
-    kernel,
-    document,
-    scope,
-    sketchBases,
-    feature,
-    data
-  });
+  const input = rebuildInput(kernel, document, scope, build, featureId);
+  const { feature } = input;
+  const plan = planSheetMetal(input);
   const top = Array.from(kernel.getSolidFaces(plan.flat)).find((face) => {
     if (kernel.getSurfaceType(face) !== 'plane') return false;
     const normal = kernel.getFaceNormal(face);
@@ -2392,22 +2533,16 @@ export function foldSheetMetalAt(
   kernel: RemusKernel,
   document: ProjectDocument,
   scope: Record<string, number>,
-  sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+  build: SheetMetalBuildState,
   featureId: FeatureId,
   fraction: number
 ): number {
   if (!Number.isFinite(fraction) || fraction < 0 || fraction > 1) {
     throw new RangeError('Fold fraction must be between 0 and 1.');
   }
-  const { feature, data } = requireSheetMetal(document, featureId);
-  const plan = planSheetMetal({
-    kernel,
-    document,
-    scope,
-    sketchBases,
-    feature,
-    data
-  });
+  const plan = planSheetMetal(
+    rebuildInput(kernel, document, scope, build, featureId)
+  );
   const solid =
     fraction === 0 || plan.pieces.length === 0
       ? kernel.copySolid(plan.flat)
