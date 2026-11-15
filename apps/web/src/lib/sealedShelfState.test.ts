@@ -40,6 +40,7 @@ import {
   reorderShelfOnAccount,
   resetLegacyShelfRows,
   resetShelfStateMemory,
+  sealedListingOrganizations,
   ShelfStateUnverifiedError,
   shelfSealedOrSafe,
   type ShelfApi
@@ -419,6 +420,49 @@ describe('listings of a sealed library', () => {
       sortOrder: 3
     });
     expect([...legacy.keys()]).toEqual(['legacy']);
+  });
+
+  it('takes only an unmirrored trash move from this device’s rows', () => {
+    const account = [
+      summary('shelved', { ...ACTIVE, pinned: true, sortOrder: 2 }),
+      summary('trashed-here', ACTIVE),
+      summary('restored-here', {
+        ...ACTIVE,
+        status: 'deleted',
+        pinned: true,
+        deletedAt: '2026-11-10T00:00:00Z'
+      })
+    ];
+    const organizations = sealedListingOrganizations(
+      new Map<string, ProjectOrganization>([
+        // Pin, order and archive another account signed in here left.
+        ['shelved', { status: 'archived', pinned: false, sortOrder: 7 }],
+        [
+          'trashed-here',
+          {
+            status: 'deleted',
+            pinned: true,
+            sortOrder: 9,
+            deletedAt: '2026-11-12T00:00:00Z'
+          }
+        ],
+        ['restored-here', { status: 'archived', pinned: false, sortOrder: 4 }],
+        // A project only this device holds keeps its row.
+        ['device-only', { status: 'archived', pinned: true, sortOrder: 5 }]
+      ]),
+      account
+    );
+    expect(Object.fromEntries(organizations)).toEqual({
+      shelved: { ...ACTIVE, pinned: true, sortOrder: 2 },
+      'trashed-here': {
+        status: 'deleted',
+        pinned: false,
+        sortOrder: 0,
+        deletedAt: '2026-11-12T00:00:00Z'
+      },
+      'restored-here': { status: 'active', pinned: true, sortOrder: 0 },
+      'device-only': { status: 'archived', pinned: true, sortOrder: 5 }
+    });
   });
 });
 

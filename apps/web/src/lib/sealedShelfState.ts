@@ -30,7 +30,10 @@ import {
  *
  * - listings lay this account's unsynced edits, then its agreed sealed
  *   record, over the account's rows, which then speak only for the trash
- *   (`overlaySealedShelf`);
+ *   (`overlaySealedShelf`); this device's rows add only an unmirrored move
+ *   into or out of the trash (`sealedListingOrganizations`);
+ * - an edit is journaled as the fields it changed over the account's own
+ *   state (`journalShelfEdit`), never over what another account left here;
  * - the shelf's mirror sends only moves into and out of the trash
  *   (`mirrorShelfToAccount`, `reorderShelfOnAccount`), and sends a pin, an
  *   order or an archive readable only after the account answered that its
@@ -227,9 +230,33 @@ function writeShelfEdits(accountId: string, edits: Map<string, ShelfEdit>) {
 }
 
 /**
- * Notes a shelf edit for the next sync round. Later edits of the same
- * project keep the first edit's starting point, so the round stamps every
- * field changed since the account last agreed.
+ * The account's own pin, order and archive for a project, as its listing
+ * reads them: its unsynced edit, else its agreed sealed record, else its
+ * row as last listed or written. Null when the account knows nothing of
+ * the project here (a project only on this device, a copy just made).
+ */
+function ownShelf(
+  accountId: string,
+  projectId: string,
+  edits: ReadonlyMap<string, ShelfEdit>
+): ProjectShelf | null {
+  const edit = edits.get(projectId)?.after;
+  if (edit) return edit;
+  const sealed = agreedShelfState(accountId)?.[projectId];
+  if (sealed) return shelfOf(sealed);
+  const row = accounts.get(accountId)?.rows.get(projectId);
+  return row ? shelfOfOrganization(row) : null;
+}
+
+/**
+ * Notes a shelf edit for the next sync round. Only the fields the edit
+ * changed are taken from `before`/`after`, which is what the shelf
+ * showed; every other field keeps the account's own value. The shelf can
+ * show state this account never chose (a row another account signed in
+ * here left pending, for one), and that must not reach this account's
+ * record as part of an edit. Later edits of the same project keep the
+ * first edit's starting point, so the round stamps every field changed
+ * since the account last agreed.
  */
 export function journalShelfEdit(
   accountId: string,
@@ -238,9 +265,25 @@ export function journalShelfEdit(
   after: ProjectOrganization
 ): void {
   const edits = readShelfEdits(accountId);
+  const from = shelfOfOrganization(before);
+  const to = shelfOfOrganization(after);
+  const base = ownShelf(accountId, projectId, edits) ?? from;
+  const archive =
+    from.archived !== to.archived ||
+    (from.archived && (from.archivedAt ?? null) !== (to.archivedAt ?? null))
+      ? to
+      : base;
   edits.set(projectId, {
-    before: edits.get(projectId)?.before ?? shelfOfOrganization(before),
-    after: shelfOfOrganization(after)
+    before: edits.get(projectId)?.before ?? base,
+    after: {
+      pinned: from.pinned !== to.pinned ? to.pinned : base.pinned,
+      sortOrder:
+        from.sortOrder !== to.sortOrder ? to.sortOrder : base.sortOrder,
+      archived: archive.archived,
+      ...(archive.archived && archive.archivedAt
+        ? { archivedAt: archive.archivedAt }
+        : {})
+    }
   });
   writeShelfEdits(accountId, edits);
 }
@@ -331,6 +374,43 @@ export function overlaySealedShelf(
     return { ...project, organization };
   });
   return { projects, legacy };
+}
+
+/**
+ * This device's organization rows as a sealed library's listing may lay
+ * them over the account's (`overlaySealedShelf`) rows. Every account
+ * signed in on this device shares these rows, and a row pending a mirror
+ * may hold another account's pin, order or archive, so for the account's
+ * projects a row speaks only for the trash: a move into or out of it that
+ * this device has not mirrored yet. Pin, order and archive stay the
+ * account's own (its unsynced edit, its sealed record, its row), so a
+ * later edit never starts from another account's choices. Projects the
+ * account does not list are this device's alone and keep their rows.
+ */
+export function sealedListingOrganizations(
+  device: ReadonlyMap<string, ProjectOrganization>,
+  account: readonly ProjectSummary[]
+): Map<string, ProjectOrganization> {
+  const organizations = new Map(device);
+  for (const project of account) {
+    const own = projectOrganization(project);
+    const row = device.get(project.projectId);
+    organizations.set(
+      project.projectId,
+      !row || (row.status === 'deleted') === (own.status === 'deleted')
+        ? own
+        : row.status === 'deleted'
+          ? {
+              status: 'deleted',
+              pinned: own.pinned,
+              sortOrder: own.sortOrder,
+              ...(row.deletedAt ? { deletedAt: row.deletedAt } : {})
+            }
+          : // Restored here: out of the trash unarchived, as on the device.
+            { status: 'active', pinned: own.pinned, sortOrder: own.sortOrder }
+    );
+  }
+  return organizations;
 }
 
 /**

@@ -1670,6 +1670,7 @@ import {
   rememberAccountRows,
   reorderShelfOnAccount,
   SEALED_SHELF_APPLIED_EVENT,
+  sealedListingOrganizations,
   setShelfAccount,
   shelfAccount,
   shelfSealedOrSafe
@@ -2252,8 +2253,8 @@ async function loadProjectSummaries(
   const scope = organizationBackground.begin(accountId);
   setShelfAccount(accountId);
   // Whether this account's shelf state is sealed, asked beside the listing.
-  // Unanswerable reads as sealed here: the listing then keeps this device's
-  // pins instead of adopting the account's rows, which loses nothing.
+  // Unanswerable reads as sealed here: the listing then shows the account's
+  // own edits, record and rows, and sends nothing readable on a guess.
   const sealedShelf = signedIn
     ? shelfSealedOrSafe(accountId, encryptsAccountLibrary)
     : Promise.resolve(false);
@@ -2321,9 +2322,11 @@ async function loadProjectSummaries(
   );
   let remoteProjects = remote?.projects ?? [];
   let legacyShelf: ReadonlyMap<string, ProjectOrganization> = new Map();
+  let sealedListing = false;
   if (accountId && remote) {
     rememberAccountRows(accountId, remoteProjects);
     if (await sealedShelf) {
+      sealedListing = true;
       // The account's rows speak for the trash only (ADR-024 amendment
       // 2026-11-14): pins, order and archive come from this account's
       // unsynced edits, its sealed record, and once from readable state
@@ -2375,8 +2378,7 @@ async function loadProjectSummaries(
     : localOrganizations;
   // Readable shelf state goes into the sealed record with the next folder
   // sync, which then resets those account rows.
-  if (accountId && remote && (await sealedShelf))
-    noteLegacyShelfRows(accountId, legacyShelf);
+  if (accountId && sealedListing) noteLegacyShelfRows(accountId, legacyShelf);
   const pendingEncryptedProjectIds = isCurrentKeySession(keySessionRevision)
     ? remote?.pendingEncryptedProjectIds
     : undefined;
@@ -2407,7 +2409,11 @@ async function loadProjectSummaries(
         pendingEncryptedProjectIds,
         local
       ),
-      settledOrganizations
+      // A sealed library's projects take only the trash from this device's
+      // rows, which another account signed in here may have left pending.
+      sealedListing
+        ? sealedListingOrganizations(settledOrganizations, remoteProjects)
+        : settledOrganizations
     ),
     local,
     pendingEncryptedProjectIds

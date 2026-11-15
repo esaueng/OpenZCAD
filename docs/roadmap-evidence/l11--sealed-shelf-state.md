@@ -9,8 +9,10 @@ purging and quotas. The Worker refuses readable shelf state for such accounts
 (`PROJECT_SHELF_STATE_SEALED`) on the organization and reorder routes and
 starts their copies at order 0; the browser sends only trash moves, sends
 pins, order and archive readable only after the library rule answered
-plaintext, overlays the account's own sealed state on listings (never this
-device's rows, which every account signed in shares), and migrates readable
+plaintext, overlays the account's own sealed state on listings (this
+device's rows, which every account signed in shares, add only an unmirrored
+trash move), journals an edit as the fields it changed over the account's
+own state, and migrates readable
 rows into the sealed record before a Worker-side conditional reset that
 never touches the trash.
 Regression evidence: `test/e2ee-sealed-shelf-state.test.ts`,

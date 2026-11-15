@@ -1502,8 +1502,18 @@ manual order and the archive are now sealed; the trash stays readable.
   none. An account's sealed record is seeded only from that account's own
   edits and its own listed rows, and its sync never writes the device rows;
   the listing lays the agreed record over the account's rows instead. A
-  second account signing in therefore never seals the first one's private
-  project ids, pins or archive, nor overwrites them on the device.
+  device row still pending a mirror may hold another account's choices, so
+  a sealed library's listing takes only an unmirrored move into or out of
+  the trash from it, and an edit is noted as the fields it changed over the
+  account's own state, never over what the shelf showed. A second account
+  signing in therefore never sees the first one's pending pins, order or
+  archive, never seals its private project ids, pins or archive (not even
+  by editing a project the first one left pending), nor overwrites them on
+  the device; the first account finds its noted edits when it returns.
+  Known limit: device rows carry no account, so an edit a plaintext library
+  left pending on the device is settled by the next account's shelf mirror:
+  an encrypted library's mirror sends none of it and drops it there, and a
+  plaintext library's mirror still writes it to its own rows, as before.
 - **Migration.** Rows that still hold readable shelf state are shown once
   and seeded into the sealed record wherever it holds nothing for the
   project, stamped below every real edit. Only after that record is saved,
