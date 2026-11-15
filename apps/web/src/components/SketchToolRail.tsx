@@ -8,6 +8,8 @@ import {
 } from 'react';
 import {
   Crosshair,
+  Dot,
+  RectangleHorizontal,
   CircleDot,
   Construction,
   Columns3,
@@ -169,7 +171,14 @@ interface SketchToolRailProps {
 const TOOLS: {
   id: Exclude<
     SketchToolId,
-    'circle' | 'rectangle' | 'polygon' | 'ellipse' | 'spline' | 'project'
+    | 'circle'
+    | 'rectangle'
+    | 'polygon'
+    | 'ellipse'
+    | 'spline'
+    | 'project'
+    | 'slot'
+    | 'point'
   >;
   label: string;
   /** The keymap command whose live key the tooltip names. */
@@ -296,7 +305,7 @@ function ThreePointRectangle({ size }: { size: number }) {
  * relations and named as one object.
  */
 const SHAPE_MODES: {
-  mode: SketchRectangleMode | 'polygon';
+  mode: SketchRectangleMode | 'polygon' | 'slot' | 'point';
   label: string;
   tile: string;
   detail: string;
@@ -329,6 +338,20 @@ const SHAPE_MODES: {
     tile: 'Polygon',
     detail: 'Center, then a vertex on the circumcircle',
     icon: Hexagon
+  },
+  {
+    mode: 'slot',
+    label: 'Slot',
+    tile: 'Slot',
+    detail: 'Two end centres, then the radius',
+    icon: RectangleHorizontal
+  },
+  {
+    mode: 'point',
+    label: 'Point',
+    tile: 'Point',
+    detail: 'A single point relations can hold',
+    icon: Dot
   }
 ];
 
@@ -420,7 +443,9 @@ function curveModeSpec(mode: SketchCurveMode) {
 
 const MIN_POLYGON_SIDES = 3;
 
-function shapeModeSpec(mode: SketchRectangleMode | 'polygon') {
+function shapeModeSpec(
+  mode: SketchRectangleMode | 'polygon' | 'slot' | 'point'
+) {
   return SHAPE_MODES.find((spec) => spec.mode === mode) ?? SHAPE_MODES[0]!;
 }
 
@@ -786,9 +811,15 @@ export function SketchToolRail({
   };
   const circleSpec = circleModeSpec(circleMode);
   const CircleIcon = circleSpec.icon;
-  const shapeOn = tool === 'rectangle' || tool === 'polygon';
+  const shapeOn =
+    tool === 'rectangle' ||
+    tool === 'polygon' ||
+    tool === 'slot' ||
+    tool === 'point';
   const shapeSpec = shapeModeSpec(
-    tool === 'polygon' ? 'polygon' : rectangleMode
+    tool === 'polygon' || tool === 'slot' || tool === 'point'
+      ? tool
+      : rectangleMode
   );
   const ShapeIcon = shapeSpec.icon;
   const curveOn = tool === 'ellipse' || tool === 'spline';
@@ -894,10 +925,22 @@ export function SketchToolRail({
             type="button"
             className={shapeOn ? 'active' : undefined}
             aria-pressed={shapeOn}
-            aria-label={shapeSpec.mode === 'polygon' ? 'Polygon' : 'Rectangle'}
+            aria-label={
+              shapeSpec.mode === 'polygon' ||
+              shapeSpec.mode === 'slot' ||
+              shapeSpec.mode === 'point'
+                ? shapeSpec.label
+                : 'Rectangle'
+            }
             onClick={() => {
               setFoldedStripKey(null);
-              onTool(shapeSpec.mode === 'polygon' ? 'polygon' : 'rectangle');
+              onTool(
+                shapeSpec.mode === 'polygon' ||
+                  shapeSpec.mode === 'slot' ||
+                  shapeSpec.mode === 'point'
+                  ? shapeSpec.mode
+                  : 'rectangle'
+              );
             }}
           >
             <ShapeIcon size={16} aria-hidden="true" />
@@ -918,8 +961,10 @@ export function SketchToolRail({
                 const choose = (
                   choice: (typeof SHAPE_MODES)[number]['mode']
                 ) =>
-                  choice === 'polygon'
-                    ? onTool('polygon')
+                  choice === 'polygon' ||
+                  choice === 'slot' ||
+                  choice === 'point'
+                    ? onTool(choice)
                     : onRectangleMode?.(choice);
                 return (
                   <Tooltip key={mode} label={label} description={detail}>
@@ -948,7 +993,7 @@ export function SketchToolRail({
                 );
               }
             )}
-            {tool === 'polygon' ? (
+            {tool === 'slot' || tool === 'point' ? null : tool === 'polygon' ? (
               <PolygonSidesField
                 value={polygonSides}
                 onCommit={(sides) => onPolygonSides?.(sides)}

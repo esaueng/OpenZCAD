@@ -248,6 +248,13 @@ export function refusePick(
   if (!data) {
     return 'That object is not part of this sketch.';
   }
+  // I01: a sketch point is one solver point, named `center`. Every tool
+  // that takes a point takes it; nothing else applies to it.
+  if (data.objectKind === 'point') {
+    return pick.kind === 'point' && pick.point === 'center'
+      ? null
+      : `${spec.label} needs a line, arc or circle, not a point.`;
+  }
   switch (kind) {
     case 'horizontal':
     case 'vertical':
@@ -767,6 +774,11 @@ function pointPosition(
   if (data.objectKind === 'ellipse' && pick.point === 'center') {
     const x = resolve(data.centerX);
     const y = resolve(data.centerY);
+    return x === undefined || y === undefined ? null : { x, y };
+  }
+  if (data.objectKind === 'point' && pick.point === 'center') {
+    const x = resolve(data.x);
+    const y = resolve(data.y);
     return x === undefined || y === undefined ? null : { x, y };
   }
   if (data.objectKind === 'spline' && pick.point !== 'center') {

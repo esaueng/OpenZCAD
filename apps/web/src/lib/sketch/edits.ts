@@ -175,7 +175,8 @@ const COMPOSITE_REFUSALS: Partial<
   ellipse:
     'Modify tools work on lines, arcs and circles; they do not take an ellipse yet.',
   spline:
-    'Modify tools work on lines, arcs and circles; they do not take a spline yet.'
+    'Modify tools work on lines, arcs and circles; they do not take a spline yet.',
+  point: 'Modify tools work on lines, arcs and circles; a point has no curve.'
 };
 
 /**

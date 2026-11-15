@@ -234,13 +234,20 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // older client would refuse the unknown commands, or, past that, drop the
 // list on its next save and let the gears turn out of mesh, so it must
 // refuse the document.
+// v59 adds the I01 point and slot sketch entities: the `point` sketch object
+// (a position held by relations, bounding no profile) and the `slot`
+// composite (two lines and two half-circle arcs held tangent, named as one
+// shape with a construction centre line). An older client would refuse the
+// unknown object, or drop the composite record on its next save and leave
+// four unrelated curves, so it must refuse the document. v58 is claimed by
+// the M16 sheet-metal change (#1554).
 // v57 adds M15 thread runouts and tapered pipe threads: `runoutStart` and
 // `runoutEnd` finish a thread end with the kernel's runout cone, and the
 // `'npt'` and `'bspt'` profiles with their `pipeSize` cut a 1:16 taper.
 // Every field is optional and absent keeps the v53 thread, so older
 // documents load unchanged. An older client would build a plain end or a
 // cylindrical thread in their place, so it must refuse.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 57 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 59 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -321,7 +328,8 @@ export type SketchObjectKind =
   | 'arc'
   | 'ellipse'
   | 'spline'
-  | 'text';
+  | 'text'
+  | 'point';
 /**
  * How a spline is defined (I01, schema v27): `fit` interpolates its points,
  * `control` treats them as the control polygon of a clamped B-spline.
@@ -1343,6 +1351,17 @@ export type SketchCompositeData =
       compositeKind: 'polygon';
       /** Vertices lie on the construction circle: its radius is the circumradius. */
       method: 'inscribed';
+    }
+  | {
+      /**
+       * I01 (schema v59): a straight slot, side 0 a line, side 1 the
+       * half-circle arc about the second centre, side 2 the opposite line
+       * and side 3 the arc about the first centre, counter-clockwise. Its
+       * one helper is the construction line from the first centre to the
+       * second: its length is the slot's centre distance.
+       */
+      compositeKind: 'slot';
+      method: 'center-to-center';
     };
 
 export type SketchCompositeKind = SketchCompositeData['compositeKind'];
@@ -1471,6 +1490,16 @@ export type SketchObjectData = (
       rotation?: ParamValue;
       /** Horizontal alignment of each line about `x`. Defaults to `'left'`. */
       align?: TextAlign;
+    }
+  | {
+      /**
+       * I01 (schema v59). A sketch point: a position relations can hold
+       * (its one solver point is named `center`) and other geometry can
+       * snap to. It bounds no profile and splits no curve.
+       */
+      objectKind: 'point';
+      x: ParamValue;
+      y: ParamValue;
     }
 ) & {
   /**

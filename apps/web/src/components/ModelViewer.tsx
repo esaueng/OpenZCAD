@@ -410,6 +410,9 @@ import {
   inscribedPolygonShape,
   isCompositeShape,
   threePointRectangleShape,
+  slotPreviewPoints,
+  slotRadiusAt,
+  slotShape,
   typedRectangleShape,
   type CompositeShape
 } from '../lib/sketch/composites';
@@ -9373,6 +9376,35 @@ export function ModelViewer({
       ) {
         showSketchCenterInference(point, snapTargetsRef.current);
       }
+      if (mode.tool === 'slot' && gesture.circleFirst) {
+        // I01: the centre line, then the whole outline at the pointer's
+        // distance off it.
+        if (!gesture.circleSecond) {
+          rig.setInProgress([gesture.circleFirst, point], false);
+          positionSketchDimLabel(
+            event,
+            `${Math.round(Math.hypot(point.x - gesture.circleFirst.x, point.y - gesture.circleFirst.y) * 1000) / 1000} ${unitLabelRef.current} · centre 2 of 2`,
+            false
+          );
+        } else {
+          const shape = slotShape(
+            gesture.circleFirst,
+            gesture.circleSecond,
+            slotRadiusAt(gesture.circleFirst, gesture.circleSecond, point)
+          );
+          if (shape) {
+            rig.setInProgress(slotPreviewPoints(shape), true);
+            positionSketchDimLabel(event, compositeSizeLabel(shape), false);
+          } else {
+            rig.setInProgress(
+              [gesture.circleFirst, gesture.circleSecond],
+              false
+            );
+          }
+        }
+        requestRender();
+        return;
+      }
       if (
         mode.tool === 'rectangle' &&
         mode.rectangleMode === 'three-point' &&
@@ -10885,7 +10917,10 @@ export function ModelViewer({
             mode.tool === 'ellipse' ||
             mode.tool === 'spline' ||
             (mode.tool === 'circle' && mode.circleMode === 'three-point') ||
-            (mode.tool === 'rectangle' && mode.rectangleMode === 'three-point'))
+            (mode.tool === 'rectangle' &&
+              mode.rectangleMode === 'three-point') ||
+            mode.tool === 'slot' ||
+            mode.tool === 'point')
         ) {
           gesture.pointerId = event.pointerId;
           gesture.moved = false;
@@ -11515,6 +11550,53 @@ export function ModelViewer({
           rig?.setInProgress(null, false);
           finishSketchNumericEntry();
           onSketchDrawingChangeRef.current(false);
+          requestRender();
+          return;
+        }
+        if (mode.tool === 'point' && point && !moved) {
+          // I01: one click places a point where it snapped.
+          onSketchCommitRef.current({
+            objectKind: 'point',
+            x: point.x,
+            y: point.y
+          });
+          requestRender();
+          return;
+        }
+        if (mode.tool === 'slot' && point && !moved) {
+          if (!gesture.circleFirst) {
+            gesture.circleFirst = point;
+            onSketchDrawingChangeRef.current(true);
+          } else if (!gesture.circleSecond) {
+            if (
+              Math.hypot(
+                point.x - gesture.circleFirst.x,
+                point.y - gesture.circleFirst.y
+              ) >= 0.5
+            ) {
+              gesture.circleSecond = point;
+            }
+          } else {
+            const shape = slotShape(
+              gesture.circleFirst,
+              gesture.circleSecond,
+              slotRadiusAt(gesture.circleFirst, gesture.circleSecond, point)
+            );
+            if (shape) {
+              onSketchCommitCompositeRef.current(shape);
+              gesture.circleFirst = null;
+              gesture.circleSecond = null;
+              rig?.setInProgress(null, false);
+              hideSketchDimLabel();
+              onSketchDrawingChangeRef.current(false);
+            } else {
+              positionSketchDimLabel(
+                event,
+                'Move off the centre line to set the radius',
+                false
+              );
+            }
+          }
           requestRender();
           return;
         }

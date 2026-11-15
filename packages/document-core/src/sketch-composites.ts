@@ -5,6 +5,7 @@ import {
   isSketchComposite,
   sketchCompositeHelperKinds,
   sketchCompositeMemberIds,
+  sketchCompositeSideKind,
   type EntityId,
   type ProjectDocument,
   type SketchComposite,
@@ -14,6 +15,7 @@ import {
   type SketchNode
 } from '@openzcad/shared';
 import { cloneDocument, findSketch } from './index';
+import { assertMinimumProjectSchema } from './document-content-schema';
 
 /**
  * S04 composite identity: the record that names a drawn rectangle's or
@@ -68,6 +70,8 @@ export function addSketchComposite(
   const compositeId =
     suppliedIds(input.ids)?.compositeId ?? createSketchCompositeId();
   const composite: SketchComposite = { ...input.composite, compositeId };
+  if (composite.compositeKind === 'slot')
+    assertMinimumProjectSchema(document.schemaVersion, 59, 'Sketch slots');
   if (composite.helperIds?.length === 0) delete composite.helperIds;
   assertSketchComposites({
     ...sketch,
@@ -81,9 +85,12 @@ export function addSketchComposite(
       throw new Error(`Sketch ${input.sketchId} has no object ${member}.`);
     }
     const side = index < composite.edgeIds.length;
-    if (side && node.objectKind !== 'line') {
+    const sideKind = side
+      ? sketchCompositeSideKind(composite.compositeKind, index)
+      : null;
+    if (sideKind && node.objectKind !== sideKind) {
       throw new Error(
-        `A composite's sides must be lines, not a ${node.objectKind}.`
+        `Side ${index + 1} of a ${composite.compositeKind} must be ${sideKind === 'line' ? 'a line' : 'an arc'}, not a ${node.objectKind}.`
       );
     }
     if (!side && !node.data.construction) {

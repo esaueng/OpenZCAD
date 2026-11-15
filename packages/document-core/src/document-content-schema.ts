@@ -63,6 +63,8 @@ export function assertSketchObjectContentSchema(
 ): void {
   if (data.projection !== undefined)
     assertMinimumProjectSchema(version, 33, 'Sketch projections');
+  if (data.objectKind === 'point')
+    assertMinimumProjectSchema(version, 59, 'Sketch points');
   assertSketchObjectProjection(data, objectId);
 }
 

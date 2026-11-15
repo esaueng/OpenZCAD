@@ -83,6 +83,7 @@
   "shoulder-cap-offset.spec.ts": 668,
   "sketch-modify-tools.spec.ts": 12,
   "sketch-move.spec.ts": 14,
+  "sketch-point-slot.spec.ts": 12,
   "sketch-review-fixes.spec.ts": 20,
   "sketch-transition-continuity.spec.ts": 26,
   "space-mouse.spec.ts": 4,
