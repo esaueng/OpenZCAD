@@ -11,6 +11,10 @@ import type { UserId } from '@openzcad/shared';
 import { exportFileStem } from './model';
 import { describeProjectImportFailure } from './plainFailure';
 import { projectInsertLayout, projectInsertLeftOut } from './projectInsert';
+import {
+  insertEncryptionRefusal,
+  type ProjectInsertDestination
+} from './projectInsertEncryption';
 import { prepareProjectInsertInWorker } from './projectInsertWorkerClient';
 import type { ImportProgressSink } from './importProgress';
 import { runStepImport, type StepImportRunDeps } from './stepImportRun';
@@ -24,6 +28,12 @@ export interface ProjectInsertRunDeps {
   setStatus(message: string, options?: { detail?: string }): void;
   /** False once the project that was open when the file was picked is not. */
   stillCurrent(): boolean;
+  /**
+   * The open project the bodies go into, read once the other project is
+   * prepared: its encryption decides whether the insert may go ahead
+   * (`projectInsertEncryption.ts`). Null when none is open.
+   */
+  destination(): ProjectInsertDestination | null;
   /** Told when the insert fails for any reason but a cancel. */
   onFailure?(): void;
   /** The STEP import's own collaborators, as Import CAD files passes them. */
@@ -66,6 +76,18 @@ export async function runProjectInsert(
       const message = 'The project changed while the other one was read.';
       progress.finish({ tone: 'warning', message });
       setStatus(message);
+      return;
+    }
+    // Settled before the STEP import stores, archives or commits anything:
+    // the source's id is gone from the prepared content, so the send gate
+    // sees only this project's id from here on.
+    const destination = deps.destination();
+    const refusal = destination
+      ? insertEncryptionRefusal(prepared.sourceProjectId, destination)
+      : 'No project is open.';
+    if (refusal) {
+      progress.finish({ tone: 'error', message: 'nothing was added' });
+      setStatus(`${prepared.projectName} was not inserted. ${refusal}`);
       return;
     }
     let dropped: string[] = [];

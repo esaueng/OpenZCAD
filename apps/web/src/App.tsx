@@ -18243,6 +18243,19 @@ export function App() {
         progress: createImportProgressSink(),
         setStatus,
         stillCurrent: () => managerRef.current === importManager,
+        destination: () => {
+          const projectId = managerRef.current?.document.projectId;
+          return projectId
+            ? {
+                projectId,
+                onAccount: cloudArchivable(
+                  Boolean(sessionRef.current),
+                  projectId,
+                  remoteVersionsRef.current
+                )
+              }
+            : null;
+        },
         onFailure: () => trackDetail('error_import'),
         stepImport: {
           archive: archiveArtifact,
