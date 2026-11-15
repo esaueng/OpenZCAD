@@ -207,6 +207,29 @@ describe('opening a project whose copies differ only in the assembly', () => {
     );
     expect(choice.choice).toBe('diverged');
   });
+
+  // The cases above also differ in their command logs and history; these
+  // copies are identical in everything but the assembly pose, so only the
+  // assembly itself can make them differ.
+  it('tells apart copies that differ in nothing but the saved pose', () => {
+    const { manager } = scissors();
+    const synced = manager.document;
+    const posed = structuredClone(synced);
+    posed.assembly!.joints[0]!.values = [20];
+    expect(posed.version).toBe(synced.version);
+    expect(posed.commandLog).toEqual(synced.commandLog);
+    expect(posed.editHistory).toEqual(synced.editHistory);
+    expect(projectsHaveSameCanonicalContent(synced, posed)).toBe(false);
+    // Same version, different content: neither side may be dropped.
+    expect(chooseProjectDocument(posed, synced, synced.version).choice).toBe(
+      'diverged'
+    );
+    expect(chooseProjectDocument(posed, synced).choice).not.toBe('remote');
+    // The control: an identical copy is the same content.
+    expect(
+      projectsHaveSameCanonicalContent(synced, structuredClone(synced))
+    ).toBe(true);
+  });
 });
 
 describe('room merges of concurrent assembly edits', () => {
