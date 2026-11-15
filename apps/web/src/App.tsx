@@ -4635,25 +4635,25 @@ export function App() {
     []
   );
   /**
-   * Redraws every project's card from its model, on request only. The shelf
-   * never loads a model to draw a card (see `loadThumbnail`); this is the
-   * deliberate exception, offered from the library so no open project's
-   * rebuild competes with it.
+   * Redraws every project's card on this device from its model, on request
+   * only. The shelf never loads a model to draw a card (see `loadThumbnail`);
+   * this is the deliberate exception, offered from the library so no open
+   * project's rebuild competes with it. It publishes nothing: the shelf's
+   * backfill sends a redrawn card the account lacks, as it does any other.
    */
   async function handleRegenerateThumbnails() {
     if (thumbnailRegeneration || doc) return;
     const list = projects;
     const accountId = session?.userId ?? null;
     const cloudIds = cloudProjectIds;
-    const publishes = Boolean(session && accountProjectListReached);
     const run = {
       accountId,
       keyRevision: getKeySessionRevision(),
       controller: new AbortController()
     };
     thumbnailRegenerationRun.current = run;
-    // One signal for every way the run ends, so an upload in flight stops
-    // before it finalizes whichever way that was.
+    // One signal for every way the run ends, so the rebuild in flight is
+    // cancelled whichever way that was.
     const active = () => {
       if (
         thumbnailRegenerationRun.current !== run ||
@@ -4690,31 +4690,13 @@ export function App() {
           }),
         render: renderPartThumbnail,
         save: saveProjectThumbnail,
-        publish: async (input) => {
-          const { uploadCloudThumbnail } = await import('./lib/cloudThumbnail');
-          if (!active()) throw new Error('Stopped.');
-          return uploadCloudThumbnail(api, input, {
-            signal: run.controller.signal
-          });
-        },
-        publishes: (projectId) => publishes && cloudIds.has(projectId),
-        drawn: (project, source, artifactId) => {
+        drawn: (project, source) =>
           rememberCapturedThumbnail({
             projectId: project.projectId,
             source,
             accountId,
             protected: isEncryptedProject(project.projectId)
-          });
-          if (artifactId) {
-            setProjects((current) =>
-              current.map((candidate) =>
-                candidate.projectId === project.projectId
-                  ? { ...candidate, thumbnailArtifactId: artifactId }
-                  : candidate
-              )
-            );
-          }
-        },
+          }),
         progress: (count, total) => {
           done = count;
           if (active()) setThumbnailRegeneration({ done: count, total });

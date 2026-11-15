@@ -131,41 +131,6 @@ describe('cloud thumbnails', () => {
     });
   });
 
-  it('never finalizes an upload whose run stopped while it was sending', async () => {
-    // Review of the Settings regeneration: a project opened mid-upload, and
-    // the card still became the account's.
-    const artifactId = toArtifactId('artifact_stopped');
-    const controller = new AbortController();
-    const transport = {
-      createUploadSession: vi.fn().mockResolvedValue({
-        session: {
-          uploadSessionId: 'upload_stopped',
-          artifactId,
-          uploadUrl: '/api/uploads/upload_stopped/content'
-        }
-      }),
-      uploadArtifact: vi.fn(async () => {
-        controller.abort();
-      }),
-      finalizeArtifact: vi.fn().mockResolvedValue({ artifactId })
-    };
-
-    await expect(
-      uploadCloudThumbnail(
-        transport,
-        {
-          projectId: toProjectId('project_stopped'),
-          version: 3,
-          updatedAt: '2026-11-14T12:00:00.000Z',
-          source: 'data:image/webp;base64,cHJldmlldw=='
-        },
-        { signal: controller.signal }
-      )
-    ).rejects.toMatchObject({ name: 'AbortError' });
-    expect(transport.uploadArtifact).toHaveBeenCalledTimes(1);
-    expect(transport.finalizeArtifact).not.toHaveBeenCalled();
-  });
-
   // ADR-024 Phase 4, slice 4-7.
   it('publishes an encrypted project’s thumbnail as a blob, never an artifact', async () => {
     const projectId = toProjectId('proj_encrypted_thumbnail');
