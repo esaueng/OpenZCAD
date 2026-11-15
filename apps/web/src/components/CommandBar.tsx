@@ -725,7 +725,13 @@ export function CommandBar({
             className={`command-bar-result ${result.tone}`}
             title={result.text}
             aria-label={`${result.text}. Open the assistant`}
-            onClick={() => onResult?.()}
+            onClick={() => {
+              onResult?.();
+              // The button goes with the unread reply it names: focus the
+              // field, which is the open conversation's composer, rather
+              // than leave it on <body> where the next key is a shortcut.
+              inputRef.current?.focus();
+            }}
           >
             <ResultIcon size={12} aria-hidden="true" />
             <span className="command-bar-result-text">{result.text}</span>

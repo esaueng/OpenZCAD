@@ -402,10 +402,7 @@ describe('CommandBar', () => {
     );
 
     const search = searchField();
-    expect(search).toHaveAttribute(
-      'placeholder',
-      'Search commands or ask'
-    );
+    expect(search).toHaveAttribute('placeholder', 'Search commands or ask');
     // A sentence names no one command, so nothing lists over the stream.
     await userEvent.type(search, '  fillet the top edges 2 mm  ');
     expect(screen.queryAllByRole('option')).toHaveLength(0);
@@ -936,6 +933,9 @@ describe('the newest reply on the closed bar', () => {
     expect(chip.closest('.command-bar')).toHaveClass('unread', 'has-result');
     await userEvent.click(chip);
     expect(onResult).toHaveBeenCalledTimes(1);
+    // Focus lands in the field, the open conversation's composer, not on
+    // <body> where the next key would be a workspace shortcut.
+    expect(searchField()).toHaveFocus();
   });
 
   it('says nothing once it is read', () => {

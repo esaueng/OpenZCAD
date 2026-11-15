@@ -1041,6 +1041,12 @@
   color: transparent;
 }
 
+/* The resting line is drawn over the field too, and would run under the
+   reply: the reply is the bar's line while it shows. */
+.command-bar-lane:has(.command-bar.has-result) > .workspace-hint {
+  display: none;
+}
+
 /* The list, standing on the bar where the conversation also stands. */
 .command-bar-float {
   position: absolute;
