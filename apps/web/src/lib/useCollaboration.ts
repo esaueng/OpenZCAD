@@ -29,6 +29,11 @@ import {
   desktopFetch,
   isDesktopApp
 } from './desktopBridge';
+import {
+  projectRequest,
+  projectWriteBlocked,
+  sendProjectFrame
+} from './projectWriteGate';
 import { cloudFunctionsAreEnabled } from './cloudMode';
 import { listLocalOnlyImportSources } from './importArchival';
 import { noteProjectMigrating } from './migrationStatus';
@@ -580,6 +585,9 @@ export function useCollaboration({
         conflictRef.current ||
         readUnresolvedConflict(projectId, 'room') ||
         roleRef.current === 'viewer' ||
+        // An unfinished switch to encryption, or a reset in another tab:
+        // the edit stays on this device (`projectWriteGate.ts`).
+        projectWriteBlocked(projectId, codecLoad ? 'encrypted' : 'plaintext') ||
         !leaseIdRef.current ||
         (leaseRef.current?.expiresAt ?? 0) <= Date.now() ||
         pendingDocument ||
@@ -615,22 +623,28 @@ export function useCollaboration({
         return true;
       }
       const payload = frame(normalized);
+      const sentBefore = lastSentVersionRef.current;
       pendingDocument = current;
       lastSentVersionRef.current = current.version;
       if (new TextEncoder().encode(payload).byteLength > MAX_MESSAGE_BYTES) {
         setStatus('oversize');
         void desktopFetch(
           `/api/projects/${encodeURIComponent(projectId)}/collaboration`,
-          {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              clientId: id,
-              baseVersion: baseVersionRef.current,
-              document: collaborationDocument(normalized),
-              leaseId: leaseIdRef.current
-            })
-          }
+          // Plaintext: refused at its send if the project is pinned as
+          // encrypted meanwhile (`projectWriteGate.ts`).
+          projectRequest(
+            { projectId, payload: 'plaintext' },
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({
+                clientId: id,
+                baseVersion: baseVersionRef.current,
+                document: collaborationDocument(normalized),
+                leaseId: leaseIdRef.current
+              })
+            }
+          )
         )
           .then(async (response) => {
             if (!isCurrentRoom() || socketRef.current !== socket) return;
@@ -653,7 +667,16 @@ export function useCollaboration({
           });
         return false;
       }
-      socket.send(payload);
+      try {
+        // A plaintext frame of a project pinned as encrypted meanwhile is
+        // refused here, at the send.
+        sendProjectFrame({ projectId, payload: 'plaintext' }, socket, payload);
+      } catch {
+        // Refused by the write gate: the edit stays on this device.
+        pendingDocument = null;
+        lastSentVersionRef.current = sentBefore;
+        return false;
+      }
       lastSentVersionRef.current = current.version;
       return true;
     };
@@ -739,7 +762,15 @@ export function useCollaboration({
         };
         const payload = JSON.stringify({ type: 'e2ee-document', ...body });
         if (new TextEncoder().encode(payload).byteLength <= MAX_MESSAGE_BYTES) {
-          if (socket.readyState === WebSocket.OPEN) socket.send(payload);
+          // Asked again here, after sealing: a reset or an unfinished
+          // switch noted meanwhile sends nothing (the catch reports it).
+          if (socket.readyState === WebSocket.OPEN) {
+            sendProjectFrame(
+              { projectId, payload: 'encrypted' },
+              socket,
+              payload
+            );
+          }
           return;
         }
         // Too large for a frame: the same submission over HTTP. A refusal
@@ -747,11 +778,14 @@ export function useCollaboration({
         // account's autosave takes the version instead.
         const response = await desktopFetch(
           `/api/projects/${encodeURIComponent(projectId)}/collaboration`,
-          {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify(body)
-          }
+          projectRequest(
+            { projectId, payload: 'encrypted' },
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify(body)
+            }
+          )
         );
         const decoded = await codec.decode(await response.text());
         if (!stillPending()) return;
@@ -807,6 +841,7 @@ export function useCollaboration({
         conflictRef.current ||
         readUnresolvedConflict(projectId, 'room') ||
         roleRef.current === 'viewer' ||
+        projectWriteBlocked(projectId, codecLoad ? 'encrypted' : 'plaintext') ||
         (checkpointRef.current && !checkpointDrainRef.current)
       ) {
         return false;
@@ -949,8 +984,7 @@ export function useCollaboration({
             const local = documentRef.current;
             const choice = chooseProjectDocument(local, message.document);
             const canAdopt =
-              message.role === 'viewer' ||
-              choice.choice === 'remote';
+              message.role === 'viewer' || choice.choice === 'remote';
             if (codecLoad && !retained && !canAdopt) {
               if (
                 choice.choice === 'local' ||

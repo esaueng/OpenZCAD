@@ -808,16 +808,14 @@ export function createEncryptedProjectStore(
       keyEpoch,
       undefined,
       deviceLists
-    ).catch(
-      (error: unknown) => {
-        if (
-          error instanceof ProjectGroupError &&
-          error.code === 'archive-invalid'
-        )
-          return null;
-        throw error;
-      }
-    );
+    ).catch((error: unknown) => {
+      if (
+        error instanceof ProjectGroupError &&
+        error.code === 'archive-invalid'
+      )
+        return null;
+      throw error;
+    });
     return editingMember(authority, authorId, deviceId, readOnly);
   }
 
@@ -1797,7 +1795,9 @@ export function createEncryptedProjectStore(
             ...document,
             version,
             checkpoints: document.checkpoints.map((point) =>
-              point === checkpoint ? { ...point, documentVersion: version } : point
+              point === checkpoint
+                ? { ...point, documentVersion: version }
+                : point
             )
           }
         : document;
@@ -2584,6 +2584,12 @@ export function createEncryptedProjectStore(
             throw integrity(
               'content',
               'The account stored another version than this browser sent.'
+            );
+          }
+          if (response.project.projectId !== projectId) {
+            throw integrity(
+              'content',
+              'The account stored the project under another id than this browser chose.'
             );
           }
           created = {

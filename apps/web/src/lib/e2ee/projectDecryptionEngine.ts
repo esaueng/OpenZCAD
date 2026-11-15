@@ -93,7 +93,11 @@ export interface DecryptionEngineDeps {
   readonly leases?: MigrationLeaseStore;
   /** Saves this page's pending edits to the project before staging begins. */
   flushProject?(projectId: string): Promise<void>;
-  /** After the cutover: this page now treats the project as plaintext. */
+  /**
+   * This run's own cutover call answered success: this page now treats
+   * the project as plaintext. Not called on a resume that only finds it
+   * cut over.
+   */
   onCutover?(projectId: string): void;
   onProgress?(progress: MigrationProgress): void;
   readonly renewEveryMs?: number;
@@ -300,11 +304,16 @@ export function createProjectDecryptionEngine(
    * it accepted of its encrypted form (head, pins, cached project keys and
    * roles), so encrypting it again later starts from nothing.
    */
-  async function leftEncryption(projectId: string): Promise<void> {
+  async function leftEncryption(
+    projectId: string,
+    ownCutover: boolean
+  ): Promise<void> {
     leases.delete(projectId);
     currentLease = null;
     await read().store.forgetStagedProject(projectId);
-    deps.onCutover?.(projectId);
+    // Only this run's own cutover answer unpins it here; a status that
+    // says it is cut over is the account's word (PR #1418).
+    if (ownCutover) deps.onCutover?.(projectId);
   }
 
   async function purgeAll(
@@ -408,7 +417,7 @@ export function createProjectDecryptionEngine(
       .migration;
     const ours = status?.direction === 'decrypt';
     if (ours && (status.state === 'cutover' || status.state === 'purging')) {
-      await leftEncryption(projectId);
+      await leftEncryption(projectId, false);
       return purgeAll(projectId, (phase) => report({ phase }));
     }
     if (ours && status.state === 'done') {
@@ -428,7 +437,7 @@ export function createProjectDecryptionEngine(
     } finally {
       renewal.stop();
     }
-    await leftEncryption(projectId);
+    await leftEncryption(projectId, true);
     await check('purge');
     await purgeAll(projectId, (phase) => report({ phase }));
   }

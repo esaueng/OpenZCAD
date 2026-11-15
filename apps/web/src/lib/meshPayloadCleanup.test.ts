@@ -70,7 +70,7 @@ function fixture() {
           artifactId,
           projectId: input.projectId,
           objectKey: `objects/${artifactId}`,
-          uploadUrl: '/api/uploads/body',
+          uploadUrl: `/api/uploads/upload_${artifactId}/content`,
           expiresAt: '2026-01-01T00:00:00.000Z',
           fileName: input.fileName,
           contentType: input.contentType,

@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { expectDeclaredProjectContext } from '../test/projectRequestContext';
 import {
   addPrimitiveFeature,
   appendRevision,
@@ -380,6 +381,10 @@ describe('durable room checkpoints', () => {
         expect(outcome).toBeInstanceOf(Error);
       else expect(outcome).not.toBeInstanceOf(Error);
       expect(fetch).toHaveBeenCalledOnce();
+      expectDeclaredProjectContext(fetch.mock.calls, {
+        projectId: clicked.projectId,
+        payload: 'plaintext'
+      });
       const submitted = JSON.parse(fetch.mock.calls[0]![1]!.body as string) as {
         document: ProjectDocument;
       };

@@ -61,8 +61,10 @@ export function prepareProjectInsertInWorker(
       const result = event.data;
       if (result.requestId !== requestId) return;
       finish(() => {
-        if (result.ok) resolve(result.prepared);
-        else reject(new Error(result.error));
+        if (!result.ok) reject(new Error(result.error));
+        else if (typeof result.prepared?.sourceProjectId !== 'string')
+          reject(new Error('Reading the project returned unreadable data.'));
+        else resolve(result.prepared);
       });
     };
     const request: ProjectInsertWorkerRequest = {

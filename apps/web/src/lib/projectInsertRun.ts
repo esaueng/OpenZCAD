@@ -11,6 +11,11 @@ import type { UserId } from '@openzcad/shared';
 import { exportFileStem } from './model';
 import { describeProjectImportFailure } from './plainFailure';
 import { projectInsertLayout, projectInsertLeftOut } from './projectInsert';
+import {
+  INSERT_DESTINATION_CHANGED,
+  insertEncryptionRefusal,
+  type ProjectInsertDestination
+} from './projectInsertEncryption';
 import { prepareProjectInsertInWorker } from './projectInsertWorkerClient';
 import type { ImportProgressSink } from './importProgress';
 import { runStepImport, type StepImportRunDeps } from './stepImportRun';
@@ -24,6 +29,14 @@ export interface ProjectInsertRunDeps {
   setStatus(message: string, options?: { detail?: string }): void;
   /** False once the project that was open when the file was picked is not. */
   stillCurrent(): boolean;
+  /**
+   * The open project the bodies go into, as it is now: its id fences the
+   * run (it must not change before the commit), and its encryption decides
+   * whether the insert may go ahead, checked once the other project is
+   * prepared and again immediately before the commit
+   * (`projectInsertEncryption.ts`). Null when none is open.
+   */
+  destination(): ProjectInsertDestination | null;
   /** Told when the insert fails for any reason but a cancel. */
   onFailure?(): void;
   /** The STEP import's own collaborators, as Import CAD files passes them. */
@@ -56,22 +69,60 @@ export async function runProjectInsert(
     }
   };
   progress.start({ fileName: file.name, phases: ['reading', 'building'] });
+  // The run is fenced on the open project's id as well as on its manager:
+  // an adoption keeps the manager but moves the document to another id.
+  const destinationId = deps.destination()?.projectId ?? null;
+  const stillHere = () =>
+    deps.stillCurrent() &&
+    (destinationId === null || deps.destination()?.projectId === destinationId);
+  const fence = () => {
+    if (!stillHere()) throw new Error(INSERT_DESTINATION_CHANGED);
+  };
   try {
     const prepared = await prepareProjectInsertInWorker(
       file,
       deps.ownerUserId,
       signal
     );
-    if (!deps.stillCurrent()) {
+    if (!stillHere()) {
       const message = 'The project changed while the other one was read.';
       progress.finish({ tone: 'warning', message });
       setStatus(message);
       return;
     }
+    // Settled before the STEP import stores, archives or commits anything,
+    // and again immediately before the commit: another tab can pin the
+    // source meanwhile. The source's id is gone from the prepared content,
+    // so every upload of it names the source to the send gate too.
+    const sources = [prepared.sourceProjectId];
+    const refusalNow = (): string | null => {
+      const destination = deps.destination();
+      return destination
+        ? insertEncryptionRefusal(prepared.sourceProjectId, destination)
+        : 'No project is open.';
+    };
+    const refusal = refusalNow();
+    if (refusal) {
+      progress.finish({ tone: 'error', message: 'nothing was added' });
+      setStatus(`${prepared.projectName} was not inserted. ${refusal}`);
+      return;
+    }
     let dropped: string[] = [];
     await runStepImport({
       ...deps.stepImport,
-      stillCurrent: deps.stillCurrent,
+      stillCurrent: stillHere,
+      archive: (input) => {
+        fence();
+        return deps.stepImport.archive({ ...input, sources });
+      },
+      // Synchronous with the commit's first write: the bodies land only in
+      // the project this run started in, and only while the source's
+      // requirement holds there.
+      beforeCommit: () => {
+        fence();
+        const refused = refusalNow();
+        if (refused) throw new Error(refused);
+      },
       file: new File(
         [prepared.stepText],
         `${exportFileStem(prepared.projectName)}.step`,

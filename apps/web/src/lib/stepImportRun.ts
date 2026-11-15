@@ -208,6 +208,8 @@ export interface StepImportRunDeps {
     metadata: Record<string, string>;
     onUploadProgress?(uploaded: number, total: number): void;
     signal?: AbortSignal;
+    /** Other projects whose content the body carries (`projectRequest`). */
+    sources?: readonly string[];
   }): Promise<string>;
   validatedFeature: StepImportCommitHook;
   status: StepImportStatusSink;
@@ -240,6 +242,11 @@ export interface StepImportRunDeps {
    * the project switched to.
    */
   stillCurrent?(): boolean;
+  /**
+   * Called synchronously immediately before the commit lands, after every
+   * await; throws to refuse it (`ValidatedFeatureRunOptions.beforeCommit`).
+   */
+  beforeCommit?(): void;
   /** Unique per call. `crypto.randomUUID` in the app. */
   newId(): string;
   /** Alternate atomic command for imports that carry additional evidence. */
@@ -617,6 +624,7 @@ export async function runStepImport(
       // The lock this run has been holding since before it wrote a byte. The
       // run adopts it instead of competing for it.
       reservation: commitLock,
+      ...(deps.beforeCommit ? { beforeCommit: deps.beforeCommit } : {}),
       // The hook terminates the disposable rebuild worker through this same
       // signal, then re-checks it at the upload and commit boundaries.
       cancelled: () => signal?.aborted === true,

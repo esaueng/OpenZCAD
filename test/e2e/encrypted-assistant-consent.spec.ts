@@ -1,8 +1,5 @@
 import { withEncryptedProjectInfo } from '../../apps/web/worker/e2eeProjectDocuments';
-import {
-  ASSISTANT_CONSENT_DIGEST_FIELDS,
-  ASSISTANT_CONSENT_REQUEST_FIELDS
-} from '../../apps/web/src/lib/assistant/consentCopy';
+import { ENCRYPTED_PROJECT_ASSISTANT_NOTICE } from '../../apps/web/src/lib/assistant/encryptedProject';
 import { d1Database } from '../d1-sqlite';
 import {
   askAssistant,
@@ -75,13 +72,15 @@ const consentRow = (server: E2eeServer) =>
     { allowed: number; sequence: number; revoked: number } | undefined;
 
 /**
- * ADR-024 Phase 6, slice 6-1: on an end-to-end encrypted project the
- * assistant asks first, sends exactly the fields its consent lists once
- * allowed, and sends nothing after Stop or Revoke. The real `/api/e2ee/*`
- * Worker routes store the MAC'd consent over SQLite; the provider is a stub
- * that records every request the browser makes.
+ * PR #1418, owner decision 2026-11-14: the assistant is off for every
+ * project this device holds as encrypted, with no consent exception, until
+ * the consent work returns in a follow-up (branch
+ * `feat/e2ee-assistant-consent-log`). It says so, asks nothing, stores no
+ * consent and sends nothing. The real `/api/e2ee/*` Worker routes run over
+ * SQLite; the provider is a stub that records every request the browser
+ * makes.
  */
-test('asks before reading an encrypted project and stops on revocation', async ({
+test('is off for an encrypted project on this device, asks nothing and sends nothing', async ({
   page,
   context
 }) => {
@@ -144,89 +143,19 @@ test('asks before reading an encrypted project and stops on revocation', async (
     server.db.prepare('SELECT id FROM projects').get() as { id: string }
   ).id;
 
-  // First use: the question, and nothing sent while it is open or declined.
+  expect(projectId).toBeTruthy();
+
   await openAssistant(page);
+  await expect(
+    page
+      .locator('.assistant-panel')
+      .getByText(ENCRYPTED_PROJECT_ASSISTANT_NOTICE)
+  ).toBeVisible();
   await askAssistant(page, 'How big is the block?');
-  const dialog = page.getByRole('dialog', { name: CONSENT_DIALOG });
-  await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText(
-    'OpenZCAD’s AI provider, OpenRouter, model openai/gpt-5.6-sol'
+  await expect(page.getByRole('dialog', { name: CONSENT_DIALOG })).toHaveCount(
+    0
   );
-  await expect(dialog).toContainText('cannot be recalled');
-  await dialog.getByRole('button', { name: 'Not now' }).click();
-  await expect(dialog).toHaveCount(0);
   expect(proposals).toEqual([]);
   expect(consentRow(server)).toBeUndefined();
-
-  // Allowed: exactly the listed fields leave, once.
-  await askAssistant(page, 'How big is the block?');
-  await page
-    .getByRole('dialog', { name: CONSENT_DIALOG })
-    .getByRole('button', { name: 'Allow for this project' })
-    .click();
-  await expect.poll(() => proposals.length).toBe(1);
-  expect(Object.keys(proposals[0]!).sort()).toEqual([
-    ...ASSISTANT_CONSENT_REQUEST_FIELDS
-  ]);
-  const digest = proposals[0]!.digest as Record<string, unknown>;
-  for (const key of Object.keys(digest)) {
-    expect(ASSISTANT_CONSENT_DIGEST_FIELDS as readonly string[]).toContain(key);
-  }
-  expect(digest.projectId).toBe(projectId);
-  expect(consentRow(server)).toEqual({ allowed: 1, sequence: 1, revoked: 0 });
-  await expect(
-    page.getByText('The block is 10 mm on each side.')
-  ).toBeVisible();
-  const chip = page.getByText('Allowed for this project');
-  await expect(chip).toBeVisible();
-
-  // Stop in the panel: the Worker row is revoked and nothing more is sent.
-  await page
-    .getByRole('button', { name: 'Stop the assistant reading this project' })
-    .click();
-  await expect
-    .poll(() => consentRow(server))
-    .toEqual({
-      allowed: 0,
-      sequence: 2,
-      revoked: 1
-    });
-  await expect(chip).toHaveCount(0);
-  await askAssistant(page, 'And now?');
-  await expect(
-    page.getByRole('dialog', { name: CONSENT_DIALOG })
-  ).toBeVisible();
-  await page
-    .getByRole('dialog', { name: CONSENT_DIALOG })
-    .getByRole('button', { name: 'Allow for this project' })
-    .click();
-  await expect.poll(() => proposals.length).toBe(2);
-  expect(Object.keys(proposals[1]!).sort()).toEqual([
-    ...ASSISTANT_CONSENT_REQUEST_FIELDS
-  ]);
-  expect(consentRow(server)).toEqual({ allowed: 1, sequence: 3, revoked: 0 });
-
-  // Revoke from Settings › Encryption › Assistant access.
-  const open = await openEncryptionSettings(page);
-  const access = open.getByRole('button', {
-    name: 'Revoke assistant access to Secret bracket'
-  });
-  await expect(access).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await access.click();
-  await expect
-    .poll(() => consentRow(server))
-    .toEqual({
-      allowed: 0,
-      sequence: 4,
-      revoked: 1
-    });
-  await page.keyboard.press('Escape');
-  await expect(open).toHaveCount(0);
-  await openAssistant(page);
-  await askAssistant(page, 'Still there?');
-  const again = page.getByRole('dialog', { name: CONSENT_DIALOG });
-  await expect(again).toBeVisible();
-  await again.getByRole('button', { name: 'Not now' }).click();
-  expect(proposals).toHaveLength(2);
   expect(errors).toEqual([]);
 });

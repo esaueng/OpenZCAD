@@ -88,6 +88,7 @@ import {
 import { ProjectEncryptionPreference } from './ProjectEncryptionPreference';
 import { ExistingProjectEncryption } from './ExistingProjectEncryption';
 import { StopProjectEncryption } from './StopProjectEncryption';
+import { EncryptedPinRecovery } from './EncryptedPinReset';
 import { EncryptedProjectRecovery } from './EncryptedProjectRecovery';
 import { EncryptionContacts } from './EncryptionContacts';
 import { EncryptedInvitations } from './EncryptedInvitations';
@@ -294,6 +295,7 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
                 onAfterSetupDone={() => setJustSetUp(false)}
               />
               <ExistingProjectEncryption userId={userId} unlocked={unlocked} />
+              <EncryptedPinRecovery />
             </>
           }
           people={

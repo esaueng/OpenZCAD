@@ -138,6 +138,11 @@ export interface ValidatedFeatureRunOptions extends ValidatedFeatureTarget {
    */
   finalize?(): Promise<AnyCommand>;
   /**
+   * Called synchronously immediately before the commit, after every await;
+   * throws to refuse it (reported as a rejection, and nothing lands).
+   */
+  beforeCommit?(): void;
+  /**
    * Refusal sink for this run, replacing the host's. The host's renders inline
    * in an open feature form; a caller that has none — the File menu's import —
    * must not leave its refusal in an unrelated panel.
@@ -294,6 +299,7 @@ export function useValidatedFeatureCommit(
     cancelled?(): boolean;
     signal?: AbortSignal;
     finalize?(): Promise<AnyCommand>;
+    beforeCommit?(): void;
     commit(
       host: ValidatedFeatureCommitOptions,
       derived: ProjectDocument['derived'] | null,
@@ -464,6 +470,7 @@ export function useValidatedFeatureCommit(
           return 'cancelled';
         }
       }
+      input.beforeCommit?.();
       if (!input.commit(host, commitDerived, finalized)) {
         throw new Error(input.commitFailure);
       }
@@ -535,6 +542,9 @@ export function useValidatedFeatureCommit(
           ? { reservation: runOptions.reservation }
           : {}),
         finalize: runOptions.finalize,
+        ...(runOptions.beforeCommit
+          ? { beforeCommit: runOptions.beforeCommit }
+          : {}),
         commit: (host, derived, finalized) =>
           host.commit(finalized ?? command, derived),
         commitFailure: 'The validated operation could not be committed.'
