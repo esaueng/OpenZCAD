@@ -40,6 +40,9 @@ interface AdapterRefusalSpec {
  * - `union_disconnected`: the selected solids form separate groups, so a
  *   union would not be one body.
  * - `union_dropped_operand`: the fuse silently lost one of its operands.
+ * - `union_unmerged_contact`: operands proved to touch could not be
+ *   certified as one piece of material — a hidden internal wall the adapter
+ *   could not repair, or evidence it could not resolve.
  * - `reference_missing`: a saved edge or face no longer resolves on the body.
  * - `reference_positional`: a saved reference is a pre-ADR-011 traversal
  *   ordinal that cannot be resolved safely.
@@ -65,6 +68,11 @@ export const ADAPTER_REFUSALS = {
     operation: 'fuse'
   },
   union_dropped_operand: {
+    family: 'boolean',
+    category: 'invalid_topology',
+    operation: 'fuse'
+  },
+  union_unmerged_contact: {
     family: 'boolean',
     category: 'invalid_topology',
     operation: 'fuse'
