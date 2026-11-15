@@ -401,10 +401,40 @@ describe('SVG text from DXF TEXT entities', () => {
     expect(svg).toContain(
       '<text x="5" y="-4" font-size="2" text-anchor="middle" stroke="none" fill="#000000" transform="rotate(-90 5 -4)">UP 90° &lt;R1&gt;</text>'
     );
-    expect(
-      sketchSvgBounds([
-        { kind: 'text', position: [5, 4], height: 2, text: 'x' }
-      ])
-    ).toEqual({ minX: 5, minY: 4, maxX: 5, maxY: 4 });
+    // Approximate glyph box: 0.6 × height per character, cap height above
+    // the baseline, a quarter height below.
+    const box = sketchSvgBounds([
+      { kind: 'text', position: [5, 4], height: 2, text: 'xy' }
+    ]);
+    expect(box.minX).toBeCloseTo(5, 9);
+    expect(box.maxX).toBeCloseTo(7.4, 9);
+    expect(box.minY).toBeCloseTo(3.5, 9);
+    expect(box.maxY).toBeCloseTo(6, 9);
+    // Centred and turned 90°: the box stands across the anchor.
+    const turned = sketchSvgBounds([
+      {
+        kind: 'text',
+        position: [0, 0],
+        height: 2,
+        text: 'xy',
+        align: 'center',
+        rotationDeg: 90
+      }
+    ]);
+    expect(turned.minX).toBeCloseTo(-2, 9);
+    expect(turned.maxX).toBeCloseTo(0.5, 9);
+    expect(turned.minY).toBeCloseTo(-1.2, 9);
+    expect(turned.maxY).toBeCloseTo(1.2, 9);
+    // A text-only export gets a viewBox around the whole note.
+    const textOnly = writeSketchSvg(
+      [{ kind: 'text', position: [0, 0], height: 2, text: 'NOTE' }],
+      { units: 'mm' }
+    );
+    const viewBox = /viewBox="([^"]+)"/
+      .exec(textOnly)![1]!
+      .split(' ')
+      .map(Number);
+    expect(viewBox[2]).toBeGreaterThan(4.8);
+    expect(viewBox[3]).toBeGreaterThan(2.5);
   });
 });

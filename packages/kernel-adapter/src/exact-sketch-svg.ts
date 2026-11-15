@@ -176,8 +176,7 @@ export function sketchSvgBounds(entities: readonly DxfEntity[]): Bounds {
   for (const entity of entities) {
     switch (entity.kind) {
       case 'text':
-        // The anchor only: glyph extents depend on the reader's font.
-        include(bounds, ...entity.position);
+        for (const corner of textBoxCorners(entity)) include(bounds, ...corner);
         break;
       case 'line':
         include(bounds, ...entity.start);
@@ -267,6 +266,36 @@ export function sketchSvgBounds(entities: readonly DxfEntity[]): Bounds {
     }
   }
   return bounds;
+}
+
+/**
+ * An approximate glyph box for a text entity, so the viewBox does not clip
+ * it: glyph extents depend on the reader's font, so this allows an average
+ * advance of 0.6 × height per character, the cap height above the
+ * baseline and a descender of 0.25 × height below, shifted for the
+ * alignment and turned by the rotation about the anchor.
+ */
+function textBoxCorners(
+  entity: Extract<DxfEntity, { kind: 'text' }>
+): Array<[number, number]> {
+  const width = 0.6 * entity.height * [...entity.text].length;
+  const left =
+    entity.align === 'center'
+      ? -width / 2
+      : entity.align === 'right'
+        ? -width
+        : 0;
+  const box: Array<[number, number]> = [
+    [left, -0.25 * entity.height],
+    [left + width, -0.25 * entity.height],
+    [left + width, entity.height],
+    [left, entity.height]
+  ];
+  const angle = ((entity.rotationDeg ?? 0) * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const [x0, y0] = entity.position;
+  return box.map(([x, y]) => [x0 + x * cos - y * sin, y0 + x * sin + y * cos]);
 }
 
 function element(entity: DxfEntity): string {

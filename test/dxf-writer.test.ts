@@ -305,6 +305,11 @@ describe('writeDxf layers and text', () => {
     expect(() => text('two\nlines')).toThrow(/single line/);
     expect(() => text('tab\there')).toThrow(/U\+9/);
     expect(() => text('😀')).toThrow(/U\+1F600/);
+    // 256 encoded characters is the reader limit; escapes count at length.
+    expect(() => text('x'.repeat(256))).not.toThrow();
+    expect(() => text('x'.repeat(257))).toThrow(/256 characters/);
+    expect(() => text('°'.repeat(36) + 'x'.repeat(1))).not.toThrow();
+    expect(() => text('°'.repeat(37))).toThrow(/needs 259/);
     expect(() =>
       writeDxf([{ kind: 'text', position: [0, 0], height: 0, text: 'x' }])
     ).toThrow(/height/);
@@ -319,6 +324,14 @@ describe('writeDxf layers and text', () => {
     ).toThrow(/layer name/);
     expect(() =>
       writeDxf([], { layers: [{ name: 'A' }, { name: 'A' }] })
+    ).toThrow(/twice/);
+    expect(() =>
+      writeDxf([], {
+        layers: [
+          { name: 'BEND_UP', color: 3, lineType: 'DASHED' },
+          { name: 'bend_up', color: 1 }
+        ]
+      })
     ).toThrow(/twice/);
     expect(() => writeDxf([], { layers: [{ name: 'A', color: 0 }] })).toThrow(
       /ACI/

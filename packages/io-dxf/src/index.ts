@@ -148,6 +148,9 @@ function layerName(layer: string | undefined): string {
  * characters outside printable ASCII are written as `\U+XXXX` escapes,
  * which AutoCAD-compatible readers show as the character.
  */
+/** Readers (AutoCAD among them) reject a file with a longer string value. */
+const MAX_DXF_STRING_LENGTH = 256;
+
 function dxfTextValue(text: string): string {
   if (/[\r\n]/.test(text)) {
     throw new Error(
@@ -166,6 +169,11 @@ function dxfTextValue(text: string): string {
         `DXF TEXT cannot carry the character U+${code.toString(16).toUpperCase()}.`
       );
     }
+  }
+  if (out.length > MAX_DXF_STRING_LENGTH) {
+    throw new Error(
+      `DXF TEXT is limited to ${MAX_DXF_STRING_LENGTH} characters once encoded; this note needs ${out.length}.`
+    );
   }
   return out;
 }
@@ -270,13 +278,16 @@ export interface DxfLayer {
 }
 
 function layerTables(layers: readonly DxfLayer[]): string[] {
+  // Layer names are case-insensitive: readers merge `BEND_UP` and `bend_up`
+  // into one layer and keep only the last declaration's colour and type.
   const names = new Set<string>();
   for (const layer of layers) {
     layerName(layer.name);
-    if (names.has(layer.name)) {
+    const key = layer.name.toUpperCase();
+    if (names.has(key)) {
       throw new Error(`DXF layer declared twice: ${layer.name}`);
     }
-    names.add(layer.name);
+    names.add(key);
     if (
       layer.color !== undefined &&
       !(Number.isInteger(layer.color) && layer.color >= 1 && layer.color <= 255)
