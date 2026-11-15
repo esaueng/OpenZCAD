@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   accountServerSettings,
@@ -347,5 +348,28 @@ describe('custom instructions with each assistant request', () => {
     expect(() =>
       parseAssistantProposalRequest(body({ customInstructions: 7 }))
     ).toThrow(/customInstructions/);
+  });
+});
+
+describe('adopting account settings in the app', () => {
+  it('ends the sealed-settings merge wherever the page adopts an account copy', () => {
+    // An adoption that skipped it would keep a merge base from a locked
+    // read, so adopted account values would later count as this device's
+    // edits (ADR-024 amendment 2026-11-14, #1519 review).
+    const source = readFileSync(
+      new URL('../apps/web/src/App.tsx', import.meta.url),
+      'utf8'
+    );
+    const lines = source.split('\n');
+    const adoptions = lines
+      .map((line, index) => ({ line, index }))
+      .filter(({ line }) =>
+        line.includes('setAppSettings(remoteSettings.settings)')
+      );
+    expect(adoptions.length).toBeGreaterThanOrEqual(2);
+    for (const { index } of adoptions) {
+      const near = lines.slice(index, index + 6).join('\n');
+      expect(near, `App.tsx:${index + 1}`).toContain('accountSettingsAdopted(');
+    }
   });
 });
