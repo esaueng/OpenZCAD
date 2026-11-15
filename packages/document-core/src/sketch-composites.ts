@@ -15,7 +15,7 @@ import {
   type SketchNode
 } from '@openzcad/shared';
 import { cloneDocument, findSketch } from './index';
-import { assertMinimumProjectSchema } from './document-content-schema';
+import { assertSlotSchema } from './document-content-schema';
 
 /**
  * S04 composite identity: the record that names a drawn rectangle's or
@@ -71,7 +71,7 @@ export function addSketchComposite(
     suppliedIds(input.ids)?.compositeId ?? createSketchCompositeId();
   const composite: SketchComposite = { ...input.composite, compositeId };
   if (composite.compositeKind === 'slot')
-    assertMinimumProjectSchema(document.schemaVersion, 59, 'Sketch slots');
+    assertSlotSchema(document.schemaVersion);
   if (composite.helperIds?.length === 0) delete composite.helperIds;
   assertSketchComposites({
     ...sketch,

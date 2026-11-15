@@ -9,7 +9,8 @@ import {
   createProjectDocument,
   extrudeSketch,
   findSketch,
-  getNode
+  getNode,
+  normalizeDocument
 } from '@openzcad/document-core';
 import { computeSketchRegions } from '@openzcad/geometry';
 import {
@@ -21,6 +22,7 @@ import {
   resolveSketchComposite,
   toUserId,
   type EntityId,
+  type ProjectDocument,
   type SketchObjectData
 } from '@openzcad/shared';
 import {
@@ -164,9 +166,9 @@ describe('I01 slot', () => {
     );
     const radius = (id: string) =>
       (solved.get(id) as unknown as { radius: number }).radius;
-    expect(radius(arc1!)).toBeCloseTo(4, 9);
-    expect(radius(arc3!)).toBeCloseTo(4, 9);
-    const line = solved.get(line0!) as unknown as Record<string, number>;
+    expect(radius(arc1)).toBeCloseTo(4, 9);
+    expect(radius(arc3)).toBeCloseTo(4, 9);
+    const line = solved.get(line0) as unknown as Record<string, number>;
     expect(Math.hypot(line.x2! - line.x1!, line.y2! - line.y1!)).toBeCloseTo(
       40,
       9
@@ -325,6 +327,47 @@ describe('I01 point', () => {
         sketchId: fixture.sketchId,
         objects: [{ objectKind: 'point', x: 1, y: 1 }]
       })
+    ).toThrow('Sketch points require project schema v59 or newer.');
+  });
+
+  it('refuses saved points and slots below v59, in nodes and in command history (review #1561)', () => {
+    const fixture = sketchFixture();
+    addSlot(fixture);
+    const saved = (version: number, edit?: (doc: ProjectDocument) => void) => {
+      const doc = JSON.parse(
+        JSON.stringify(fixture.manager.document)
+      ) as ProjectDocument;
+      edit?.(doc);
+      return { ...doc, schemaVersion: version } as unknown as ProjectDocument;
+    };
+    // A slot composite on a loaded sketch.
+    expect(() => normalizeDocument(saved(58))).toThrow(
+      'Sketch slots require project schema v59 or newer.'
+    );
+    expect(() => normalizeDocument(saved(59))).not.toThrow();
+    // A point that survives only in the saved command log.
+    const point = sketchFixture();
+    point.manager.execute(
+      commandFactories.addSketchObjects({
+        sketchId: point.sketchId,
+        objects: [{ objectKind: 'point', x: 1, y: 2 }]
+      })
+    );
+    const pointId = point.sketch().objectIds.at(-1)!;
+    const logOnly = JSON.parse(
+      JSON.stringify(point.manager.document)
+    ) as ProjectDocument;
+    delete (logOnly.nodes as Record<string, unknown>)[pointId];
+    const sketchNode = findSketch(logOnly, point.sketchId)!;
+    sketchNode.objectIds = sketchNode.objectIds.filter((id) => id !== pointId);
+    expect(
+      logOnly.commandLog.some((command) => command.kind === 'sketch.object.add')
+    ).toBe(true);
+    expect(() =>
+      normalizeDocument({
+        ...logOnly,
+        schemaVersion: 58
+      } as unknown as ProjectDocument)
     ).toThrow('Sketch points require project schema v59 or newer.');
   });
 });

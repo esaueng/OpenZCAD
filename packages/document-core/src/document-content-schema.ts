@@ -19,6 +19,11 @@ export function assertMinimumProjectSchema(
     throw new Error(`${content} require project schema v${minimum} or newer.`);
 }
 
+/** I01 (schema v59): slot composites, wherever a document or command holds one. */
+export function assertSlotSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 59, 'Sketch slots');
+}
+
 export function assertObjectFolderSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 34, 'Objects folders');
 }
@@ -93,8 +98,13 @@ export function assertDocumentContentCommandSchema(
       if (change.field === 'commandLog')
         pending.push(change.before, change.after);
   const seen = new Set<object>();
+  // Objects whose kind or fields need a newer schema: a projection (v33)
+  // or a point (v59), wherever a saved command carries one.
   const object = (value: unknown) => {
-    if (record(value) && value.projection !== undefined)
+    if (
+      record(value) &&
+      (value.projection !== undefined || value.objectKind === 'point')
+    )
       assertSketchObjectContentSchema(
         value as unknown as SketchObjectData,
         document.schemaVersion
@@ -131,6 +141,12 @@ export function assertDocumentContentCommandSchema(
     if (command.kind === 'feature.sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
     if (!record(command.payload)) continue;
+    if (
+      command.kind === 'sketch.composite.add' &&
+      record(command.payload.composite) &&
+      command.payload.composite.compositeKind === 'slot'
+    )
+      assertSlotSchema(document.schemaVersion);
     if (command.kind === 'feature.thread')
       assertThreadContentSchema(command.payload, document.schemaVersion);
     // A feature patch (`feature.update`) need not name its kind, so a
@@ -194,6 +210,14 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       assertThreadContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
+    if (
+      node.kind === 'sketch' &&
+      Array.isArray(node.composites) &&
+      node.composites.some(
+        (composite) => record(composite) && composite.compositeKind === 'slot'
+      )
+    )
+      assertSlotSchema(document.schemaVersion);
   }
   assertDocumentContentCommandSchema(document);
 }
