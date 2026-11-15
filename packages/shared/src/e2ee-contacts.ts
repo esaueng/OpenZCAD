@@ -7,12 +7,16 @@
  */
 import type { E2eeDeviceListEntryRecord } from './index';
 
-/** One identity-signed contacts entry, as stored. */
+/**
+ * One identity-signed contacts entry, as stored: a sealed record
+ * (`sealContactsEntry`, ADR-024 amendment 2026-11-14), or, in a list from
+ * before sealing that no browser has resealed yet, the plaintext entry.
+ */
 export interface E2eeContactsEntryRecord {
   sequence: number;
-  /** Canonical `encodeContactsEntry` bytes. */
+  /** Sealed record bytes, or canonical `encodeContactsEntry` bytes. */
   entry: string;
-  /** 65-byte identity signature. */
+  /** 65-byte identity signature over `entry`. */
   signature: string;
 }
 
@@ -38,8 +42,22 @@ export interface E2eeContactsResponse {
 export interface E2eeAppendContactsRequest {
   /** The identity generation the entry is signed under. */
   generation: number;
+  /** A sealed record; the Worker refuses a plaintext entry. */
   entry: string;
   signature: string;
+}
+
+/**
+ * `PUT /api/e2ee/contacts`: replaces a plaintext list from before sealing
+ * with the same entries sealed, in one step (ADR-024 amendment 2026-11-14).
+ */
+export interface E2eeResealContactsRequest {
+  /** The identity generation the records are signed under. */
+  generation: number;
+  /** Hex entry hash of the stored plaintext head this reseals. */
+  replaces: string;
+  /** Every entry sealed, oldest first, from sequence 0. */
+  entries: { entry: string; signature: string }[];
 }
 
 /** Another user's current identity and device list; null without keys. */
