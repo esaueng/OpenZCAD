@@ -138,7 +138,7 @@ describe('Assembly interference section (AS04)', () => {
       fireEvent.click(within(section()).getByRole('button', { name: 'Check' }));
     });
     expect(within(section()).getByRole('status')).toHaveTextContent(
-      'No overlap found in the pairs checked exactly.'
+      'No overlap found, but 1 pair could not be checked exactly.'
     );
     expect(section()).toHaveTextContent('1 pair not checked exactly');
     fireEvent.click(
@@ -149,6 +149,35 @@ describe('Assembly interference section (AS04)', () => {
     expect(section()).toHaveTextContent(
       'Not checked exactly: the exact pipeline could not build this result. This pair is not reported as clear.'
     );
+  });
+
+  it('does not claim no overlap while a part had no geometry to check', async () => {
+    const { section, onStatus } = renderPanel(async () => ({
+      pairs: [
+        {
+          a: 'comp_a',
+          b: 'comp_b',
+          verdict: {
+            kind: 'clear',
+            touching: false,
+            distance: 5,
+            closest: null,
+            atLeast: 5
+          }
+        }
+      ],
+      missing: ['comp_c']
+    }));
+    await act(async () => {
+      fireEvent.click(within(section()).getByRole('button', { name: 'Check' }));
+    });
+    expect(within(section()).getByRole('status')).toHaveTextContent(
+      'No overlap found, but 1 part had no geometry to check.'
+    );
+    expect(onStatus).toHaveBeenCalledWith(
+      'Interference: no overlap found, but 1 part had no geometry to check.'
+    );
+    expect(section()).not.toHaveTextContent('No parts overlap');
   });
 
   it('reports a failed check in place', async () => {

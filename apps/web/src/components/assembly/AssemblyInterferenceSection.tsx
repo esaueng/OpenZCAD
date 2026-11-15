@@ -31,6 +31,29 @@ function plural(count: number, one: string, many = `${one}s`) {
   return `${count} ${count === 1 ? one : many}`;
 }
 
+type InterferenceSummary = ReturnType<typeof summarizeInterference>;
+
+/**
+ * "No parts overlap" is a claim about every pair. A pair the kernel could
+ * not decide, or a part with no geometry to check, leaves it unproven.
+ */
+function incomplete(summary: InterferenceSummary): boolean {
+  return summary.unknown > 0 || summary.missing > 0;
+}
+
+function unchecked(summary: InterferenceSummary): string {
+  return [
+    summary.unknown > 0
+      ? `${plural(summary.unknown, 'pair')} could not be checked exactly`
+      : '',
+    summary.missing > 0
+      ? `${plural(summary.missing, 'part')} had no geometry to check`
+      : ''
+  ]
+    .filter(Boolean)
+    .join(' and ');
+}
+
 /**
  * AS04: exact pairwise interference of the assembled parts. Check runs the
  * M09 clash query on every pair of components at their solved pose (never
@@ -79,8 +102,8 @@ export function AssemblyInterferenceSection({
         onStatus(
           summary.interfering > 0
             ? `Interference: ${plural(summary.interfering, 'pair')} of parts overlap.`
-            : summary.unknown > 0
-              ? `Interference: no overlap found, but ${plural(summary.unknown, 'pair')} could not be checked exactly.`
+            : incomplete(summary)
+              ? `Interference: no overlap found, but ${unchecked(summary)}.`
               : 'Interference: no parts overlap.'
         );
       },
@@ -117,8 +140,8 @@ export function AssemblyInterferenceSection({
                 : summary
                   ? summary.interfering > 0
                     ? `${plural(summary.interfering, 'pair')} overlap.`
-                    : summary.unknown > 0
-                      ? 'No overlap found in the pairs checked exactly.'
+                    : incomplete(summary)
+                      ? `No overlap found, but ${unchecked(summary)}.`
                       : 'No parts overlap.'
                   : 'Checks every pair of parts as assembled, with the exact kernel.'}
         </p>

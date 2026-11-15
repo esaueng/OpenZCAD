@@ -141,6 +141,35 @@ describe('exact body clash (M09, shared by AS04)', () => {
     expectInside(kernel, [box, ball], verdict);
   });
 
+  it('counts a small part sunk whole into a much larger one', () => {
+    // A floor scaled to the pair's diagonal (≈ 1000 mm³ here) once called
+    // this 1 mm³ cube clear: the floor follows the smaller body.
+    const kernel = new RemusKernel();
+    const beam = kernel.makeBox(10000, 10, 10);
+    const cube = moved(kernel, kernel.makeBox(1, 1, 1), 5000, 4.5, 4.5);
+    for (const verdict of [
+      exactSolidClash(kernel, beam, cube),
+      exactSolidClash(kernel, cube, beam)
+    ]) {
+      expect(verdict.kind).toBe('interference');
+      if (verdict.kind !== 'interference') continue;
+      expect(verdict.volume).toBeCloseTo(1, 6);
+      expectInside(kernel, [beam, cube], verdict);
+    }
+  });
+
+  it('counts a small pin sunk into a long bar where only the difference answers', () => {
+    // A curved pin inside a long bar: whichever boolean measures it, a
+    // sunk part is never reported clear.
+    const kernel = new RemusKernel();
+    const bar = kernel.makeBox(10000, 20, 20);
+    const pin = moved(kernel, kernel.makeCylinder(0.5, 1), 5000, 10, 10);
+    const verdict = exactSolidClash(kernel, bar, pin);
+    expect(verdict.kind).toBe('interference');
+    if (verdict.kind !== 'interference') return;
+    expect(verdict.volume).toBeCloseTo(Math.PI * 0.25, 6);
+  });
+
   it('separates boxes by their gap without any boolean', () => {
     const kernel = new RemusKernel();
     const a = kernel.makeBox(10, 10, 10);

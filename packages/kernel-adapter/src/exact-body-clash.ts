@@ -16,8 +16,11 @@
  *    assembly case. The exact difference of one solid by the other then
  *    measures the same volume as `volume(b) − volume(b − a)`, and the other
  *    way round if that is declined too.
- * 3. A shared volume above a floor scaled to the pair (diagonal³ × 1e-9, the
- *    floor `sharedSolidVolume` uses) is interference. Its witness is a point
+ * 3. A shared volume above a noise floor is interference. The floor is the
+ *    smaller solid's box diagonal³ × 1e-9 (a part sunk whole into a much
+ *    larger one must still count), and for a difference also its
+ *    cancellation noise, 1e-9 of the larger operand. Anything below it is
+ *    still interference when a point lies strictly inside both solids. Its witness is a point
  *    classified strictly inside both solids by the exact and the robust
  *    classifiers, and the box of the shared region when the kernel built it.
  * 4. No shared volume is clearance. Where the kernel certifies the solid
@@ -75,6 +78,10 @@ function boxGap(a: Box, b: Box): number {
   return gap;
 }
 
+function boxDiagonal(box: Box): number {
+  return Math.hypot(box[3] - box[0], box[4] - box[1], box[5] - box[2]);
+}
+
 function pairDiagonal(a: Box, b: Box): number {
   return Math.hypot(
     Math.max(a[3], b[3]) - Math.min(a[0], b[0]),
@@ -97,6 +104,13 @@ interface SharedMeasure {
   proof: 'intersect' | 'difference';
   /** The intersection solid, when the kernel built a non-empty one. */
   region: number | null;
+  /**
+   * The largest volume this measure can report from rounding alone: the
+   * pair's floor for an intersection, measured on its own result; for a
+   * difference also the cancellation noise of `volume(b) − volume(b − a)`,
+   * which scales with b, the possibly much larger body.
+   */
+  noise: number;
 }
 
 type SharedOutcome =
@@ -119,16 +133,17 @@ function differenceShare(
   kernel: RemusKernel,
   minuend: number,
   subtrahend: number,
-  tolerance: number
-): number | null {
+  floor: number
+): { shared: number; noise: number } | null {
   const outcome = exactBooleanOutcome(kernel, 'cut', minuend, subtrahend);
   if (outcome.status !== 'ok') return null;
   try {
     const whole = volumeOf(kernel, minuend);
     const rest = volumeOf(kernel, outcome.solid);
     const shared = whole - rest;
-    if (shared < -tolerance || shared > whole + tolerance) return null;
-    return Math.min(whole, Math.max(0, shared));
+    const noise = Math.max(floor, whole * 1e-9);
+    if (shared < -noise || shared > whole + noise) return null;
+    return { shared: Math.min(whole, Math.max(0, shared)), noise };
   } finally {
     safeDelete(kernel, outcome.solid, [minuend, subtrahend]);
   }
@@ -143,24 +158,37 @@ function measureShared(
   const common = exactBooleanOutcome(kernel, 'intersect', a, b);
   if (common.status === 'ok') {
     const volume = volumeOf(kernel, common.solid);
-    if (volume > floor) {
+    if (volume > 0) {
       return {
         ok: true,
-        measure: { volume, proof: 'intersect', region: common.solid }
+        measure: {
+          volume,
+          proof: 'intersect',
+          region: common.solid,
+          noise: floor
+        }
       };
     }
     safeDelete(kernel, common.solid, [a, b]);
-    return { ok: true, measure: { volume, proof: 'intersect', region: null } };
+    return {
+      ok: true,
+      measure: { volume, proof: 'intersect', region: null, noise: floor }
+    };
   }
   for (const [minuend, subtrahend] of [
     [b, a],
     [a, b]
   ] as const) {
-    const shared = differenceShare(kernel, minuend, subtrahend, floor);
-    if (shared !== null) {
+    const measured = differenceShare(kernel, minuend, subtrahend, floor);
+    if (measured !== null) {
       return {
         ok: true,
-        measure: { volume: shared, proof: 'difference', region: null }
+        measure: {
+          volume: measured.shared,
+          proof: 'difference',
+          region: null,
+          noise: measured.noise
+        }
       };
     }
   }
@@ -247,7 +275,10 @@ export function exactSolidClash(
   const boxB = boxOf(kernel, b);
   const diagonal = pairDiagonal(boxA, boxB);
   const lengthTolerance = Math.max(diagonal, 1) * 1e-9;
-  const floor = diagonal ** 3 * 1e-9;
+  // Scaled to the SMALLER body: a part sunk whole into a much larger one
+  // shares all of its own volume, which a floor sized to the pair (or to the
+  // larger body) could exceed.
+  const floor = Math.min(boxDiagonal(boxA), boxDiagonal(boxB)) ** 3 * 1e-9;
   const gap = boxGap(boxA, boxB);
   if (gap > lengthTolerance) {
     const distance = certifiedDistance(kernel, a, b);
@@ -273,7 +304,7 @@ export function exactSolidClash(
     };
   }
 
-  if (shared.ok && shared.measure.volume > floor) {
+  if (shared.ok && shared.measure.volume > shared.measure.noise) {
     const { volume, proof, region } = shared.measure;
     try {
       return {
@@ -302,6 +333,24 @@ export function exactSolidClash(
       };
     }
     return { kind: 'unknown', reason: shared.reason, message: shared.message };
+  }
+
+  // Below the noise floor is not yet clear: a point the exact classifiers
+  // place strictly inside both solids still proves an overlap too small to
+  // measure, so clearance is only ever reported where no such point exists.
+  const { volume, proof, region } = shared.measure;
+  if (region !== null) safeDelete(kernel, region, [a, b]);
+  const inside =
+    gap < -lengthTolerance ? sharedInteriorPoint(kernel, a, b) : null;
+  if (inside) {
+    return {
+      kind: 'interference',
+      volume: volume > 0 ? volume : null,
+      proof: volume > 0 ? proof : 'point',
+      point: vector(inside),
+      bounds: null,
+      complete: volume > 0
+    };
   }
 
   const distance = certifiedDistance(kernel, a, b);
