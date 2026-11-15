@@ -1724,7 +1724,7 @@ function planWithSides(
           // A relief's own rounded end stands beside its bend by design.
           const reliefEnd = sources.some(
             ({ token, carrier }) =>
-              token.startsWith('relief[') &&
+              token.startsWith(`relief[${bend.bend.id}].`) &&
               carrier.kind === 'cylinder' &&
               Math.abs(carrier.radius - radius) <= tolerance &&
               Math.hypot(

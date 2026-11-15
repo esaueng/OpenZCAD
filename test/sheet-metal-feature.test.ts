@@ -1475,6 +1475,41 @@ describe('sheet-metal review regressions', { timeout: 240_000 }, () => {
     );
   }
 
+  it("exempts only a bend's own relief ends from its hole clearance (re-check)", async () => {
+    // Bend 1 folds the plate at x = 30; bend 2 folds the tab at x = 39 with
+    // obround reliefs whose rounded ends sit about 2.5 from bend 1's zone,
+    // inside the 4 (2 × T) clearance. Bend 2's own relief ends stay exempt.
+    const outline: [number, number][] = [
+      [0, 0],
+      [40, 0],
+      [40, 20],
+      [70, 20],
+      [70, 40],
+      [40, 40],
+      [40, 60],
+      [0, 60]
+    ];
+    const twoBends = sheet(
+      outline.map(([x, y], index): SketchObjectData => {
+        const [nextX, nextY] = outline[(index + 1) % outline.length]!;
+        return { objectKind: 'line', x1: x, y1: y, x2: nextX, y2: nextY };
+      }),
+      [line(30, 0, 30, 60), line(39, 20, 39, 40)],
+      ([plateLine, tabLine], sketchId) => [
+        bend('plate', sketchId, plateLine!, { direction: 'down' }),
+        bend('tab', sketchId, tabLine!, { relief: { shape: 'obround' } })
+      ],
+      { fixedPoint: [10, 30] }
+    );
+    const derived = await adapter.syncDocument(twoBends.document);
+    const advisories = (derived.featureWarnings ?? [])
+      .filter((warning) => warning.kind === 'advisory')
+      .map((warning) => warning.message);
+    const near = advisories.filter((message) => /closer than/.test(message));
+    expect(near).toHaveLength(1);
+    expect(near[0]).toMatch(/zone of bend 1\b/);
+  });
+
   it('cuts obround reliefs as rounded slots, never as rectangular ones (finding 2)', async () => {
     const obround = tab({ relief: { shape: 'obround' } });
     const derived = await adapter.syncDocument(obround.document);
