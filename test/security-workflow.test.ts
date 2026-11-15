@@ -72,6 +72,13 @@ describe('workflow runner policy', () => {
           /pull_request_target|workflow_run|secrets(?:\.|:)|id-token: write|contents: write/
         );
       }
+      if (workflowPath === 'codeql.yml') {
+        // Advisory scanning follows main and must be able to finish there:
+        // cancelling a ten-minute analysis on every merge starves it.
+        expect(workflow).toContain('push:\n    branches: [main]');
+        expect(workflow).not.toMatch(/^ {2}pull_request/m);
+        expect(workflow).toContain('cancel-in-progress: false');
+      }
       if (workflowPath === 'fleet-ci-v6.yml') {
         // Hosted shards install browser binaries only: the Ubuntu mirror
         // behind `--with-deps` stalled one shard in six for minutes.

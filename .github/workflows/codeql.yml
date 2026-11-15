@@ -15,9 +15,12 @@ permissions:
   contents: read
 
 concurrency:
-  # A newer main push supersedes the analysis of the one before it.
+  # Let a running analysis finish. Main takes a merge every few minutes and
+  # an analysis runs about ten, so cancelling the running one for each new
+  # push meant none completed. GitHub keeps only the newest waiting run, so
+  # this is at most one analysis running and one queued.
   group: codeql-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   analyze:
