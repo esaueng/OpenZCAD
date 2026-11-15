@@ -3,6 +3,7 @@ import {
   test,
   expect,
   WORKSPACE_SESSION_STORAGE_KEY,
+  shareLoadResponse,
   stubAnonymousApi,
   stubApi,
   stubEmailLoginApi,
@@ -539,7 +540,7 @@ test('allows signed-out invitation sign-in while a superseded share request is p
   await expect(
     page.getByRole('button', { name: 'Email me a code' })
   ).toBeEnabled();
-  const response = page.waitForResponse(/\/api\/share\//);
+  const response = shareLoadResponse(page);
   release();
   await response;
   await page.waitForTimeout(250);
@@ -676,7 +677,7 @@ for (const active of [false, true]) {
       { key: PROJECT_INVITATION_SESSION_KEY, token: invitationToken }
     );
     if (!active) {
-      const response = page.waitForResponse(/\/api\/share\//);
+      const response = shareLoadResponse(page);
       release();
       await response;
       await page.waitForTimeout(250);
@@ -764,12 +765,14 @@ for (const status of [404, 503]) {
     await page.evaluate(() => {
       window.location.hash = `share=${'f'.repeat(43)}`;
     });
+    // A 5xx says the server had a problem in plain words; the server's own
+    // text is kept under Details, not in the status (#1422).
     await expect(
       page.getByRole('status').filter({
         hasText:
           status === 404
             ? 'It may have expired or been revoked'
-            : 'Unavailable share'
+            : 'server had a problem'
       })
     ).toBeVisible();
     await page.getByRole('button', { name: 'Back to projects', exact: true }).click();
@@ -873,7 +876,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
         await expect(page.locator('.breadcrumb')).toContainText(name);
         expect(new URL(page.url()).hash).toBe('');
         if (pending) {
-          const response = page.waitForResponse(/\/api\/share\//);
+          const response = shareLoadResponse(page);
           release();
           await response;
           await page.waitForTimeout(250);
@@ -944,7 +947,7 @@ test('cancels a pending share on Back and leaves an active share when its fragme
   });
   await expect.poll(() => requested).toBe(true);
   await page.goBack();
-  const response = page.waitForResponse(/\/api\/share\//);
+  const response = shareLoadResponse(page);
   release();
   await response;
   // Let the old loader process its delayed response before checking that it
