@@ -12,6 +12,7 @@ import {
   compareProjectSummaries,
   MAX_LOCAL_CHECKPOINT_DOCUMENTS,
   persistedDocumentBytes,
+  toArtifactId,
   toBodyId,
   toProjectId,
   toUserId,
@@ -31,6 +32,8 @@ import {
   loadLocalSaveState,
   loadProjectMeasurements,
   loadProjectThumbnail,
+  localDeletionFence,
+  saveAccountThumbnail,
   saveProjectMeasurements,
   saveProjectThumbnail,
   ThumbnailWriteCancelledError,
@@ -1413,6 +1416,80 @@ describe('project thumbnails', () => {
     expect(await loadProjectThumbnail('project_card')).toEqual({
       projectId: 'project_card',
       ...card
+    });
+  });
+  describe('an image downloaded from the account', () => {
+    const account = {
+      source: 'data:image/webp;base64,ACCOUNT',
+      artifactId: toArtifactId('artifact_account'),
+      version: -1,
+      updatedAt: '2026-11-15T09:00:00.000Z'
+    };
+
+    it('is kept when the device had no card', async () => {
+      await expect(
+        saveAccountThumbnail('project_card', account, {
+          replaces: null,
+          deletionFence: 0
+        })
+      ).resolves.toBe(true);
+      expect(await loadProjectThumbnail('project_card')).toEqual({
+        projectId: 'project_card',
+        ...account
+      });
+    });
+
+    it('replaces the record the download was decided on', async () => {
+      await saveProjectThumbnail('project_card', card);
+      const replaces = await loadProjectThumbnail('project_card');
+      await expect(
+        saveAccountThumbnail('project_card', account, {
+          replaces,
+          deletionFence: 0
+        })
+      ).resolves.toBe(true);
+      expect(await loadProjectThumbnail('project_card')).toMatchObject(account);
+    });
+
+    it('never overwrites a card written while it downloaded', async () => {
+      // The workspace captured a newer card between the shelf's read and
+      // the download landing: the older account image must not replace it.
+      await saveProjectThumbnail('project_card', card);
+      await expect(
+        saveAccountThumbnail('project_card', account, {
+          replaces: null,
+          deletionFence: 0
+        })
+      ).resolves.toBe(false);
+      expect(await loadProjectThumbnail('project_card')).toEqual({
+        projectId: 'project_card',
+        ...card
+      });
+    });
+
+    it('does not bring back the card of a project deleted while it downloaded', async () => {
+      // Review: deletion removes the card, so "replaces nothing" still held
+      // and a late download wrote a deleted project's image back to disk.
+      const fence = localDeletionFence('project_card');
+      await deleteLocalProject('project_card');
+      await expect(
+        saveAccountThumbnail('project_card', account, {
+          replaces: null,
+          deletionFence: fence
+        })
+      ).resolves.toBe(false);
+      expect(await loadProjectThumbnail('project_card')).toBeNull();
+    });
+
+    it('writes nothing once its caller stops', async () => {
+      await expect(
+        saveAccountThumbnail('project_card', account, {
+          replaces: null,
+          deletionFence: 0,
+          shouldWrite: () => false
+        })
+      ).resolves.toBe(false);
+      expect(await loadProjectThumbnail('project_card')).toBeNull();
     });
   });
 });

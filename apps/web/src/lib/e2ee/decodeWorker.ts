@@ -10,7 +10,8 @@
  *   or stores until a job resolves, and on any rejection keeps the version it
  *   already had. A refused version is never partially applied: content blobs
  *   resolve only once the whole blob has authenticated.
- * - **Never wait on a stuck worker.** Jobs run one at a time. Each one's
+ * - **Never wait on a stuck worker.** Jobs run one at a time per lane —
+ *   thumbnails on a lane of their own, everything else on the other. Each one's
  *   budget starts when it reaches the worker. A job that overruns it rejects
  *   with `DecodeWorkerError` `timeout`, the worker is terminated (decryption
  *   and inflation cannot be interrupted any other way), and the next job runs
@@ -150,11 +151,19 @@ function validBudget(budgetMs: number): boolean {
   return Number.isFinite(budgetMs) && budgetMs > 0;
 }
 
-export function createE2eeDecoder(
-  options: DecodeWorkerOptions = {}
-): E2eeDecoder {
-  const createWorker = options.createWorker ?? startModuleWorker;
-  const budgets = { ...DEFAULT_DECODE_BUDGETS_MS, ...options.budgetsMs };
+/** One worker and its queue: jobs run one at a time, in order. */
+interface DecodeLane {
+  submit<R extends DecodeResult>(
+    job: DecodeJob,
+    jobOptions: JobOptions | undefined
+  ): Promise<R>;
+  dispose(error: Error): void;
+}
+
+function createDecodeLane(
+  createWorker: () => DecodeWorkerHandle,
+  budgets: Record<DecodeJob['type'], number>
+): DecodeLane {
   const queue: PendingJob[] = [];
   let worker: DecodeWorkerHandle | null = null;
   let running: {
@@ -313,6 +322,47 @@ export function createE2eeDecoder(
   };
 
   return {
+    submit,
+    dispose(error) {
+      if (disposed) return;
+      disposed = true;
+      const current = running;
+      running = null;
+      if (current) clearTimeout(current.timer);
+      discardWorker();
+      current?.pending.reject(error);
+      for (const pending of queue.splice(0)) pending.reject(error);
+    }
+  };
+}
+
+/**
+ * Thumbnails decode on a lane of their own. Behind one queue a shelf's cards
+ * waited for every document and imported source queued before them — jobs
+ * with budgets of 20 and 90 seconds — though each card is a few kilobytes.
+ * A thumbnail's plaintext is capped at `MAX_THUMBNAIL_BYTES` by the worker
+ * whatever its envelope claims, so this lane can never be handed bulk work.
+ */
+function isThumbnailJob(job: DecodeJob): boolean {
+  return job.type === 'content-blob' && job.reference.kind === 'thumbnail';
+}
+
+export function createE2eeDecoder(
+  options: DecodeWorkerOptions = {}
+): E2eeDecoder {
+  const createWorker = options.createWorker ?? startModuleWorker;
+  const budgets = { ...DEFAULT_DECODE_BUDGETS_MS, ...options.budgetsMs };
+  // Each lane starts its worker on its first job, so a page that never
+  // shows an encrypted card never starts the second.
+  const bulk = createDecodeLane(createWorker, budgets);
+  const thumbnails = createDecodeLane(createWorker, budgets);
+  const submit = <R extends DecodeResult>(
+    job: DecodeJob,
+    jobOptions: JobOptions | undefined
+  ): Promise<R> =>
+    (isThumbnailJob(job) ? thumbnails : bulk).submit<R>(job, jobOptions);
+
+  return {
     decodeProjectEnvelope: (job, jobOptions) =>
       submit({ ...job, type: 'project-envelope' }, jobOptions),
     decodeContentBlob: (job, jobOptions) =>
@@ -320,18 +370,12 @@ export function createE2eeDecoder(
     sealDocument: (job, jobOptions) =>
       submit({ ...job, type: 'seal-document' }, jobOptions),
     dispose() {
-      if (disposed) return;
-      disposed = true;
       const error = new DecodeWorkerError(
         'disposed',
         'The decoder was disposed'
       );
-      const current = running;
-      running = null;
-      if (current) clearTimeout(current.timer);
-      discardWorker();
-      current?.pending.reject(error);
-      for (const pending of queue.splice(0)) pending.reject(error);
+      bulk.dispose(error);
+      thumbnails.dispose(error);
     }
   };
 }
