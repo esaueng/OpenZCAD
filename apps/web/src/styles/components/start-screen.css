@@ -1858,7 +1858,7 @@
   display: grid;
   gap: var(--sp-3);
   margin-bottom: calc(4px - var(--sp-3));
-  padding: 0 var(--sp-3);
+  padding: 0 var(--sp-3) 0 var(--start-list-inset);
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
@@ -1895,11 +1895,18 @@
   background: var(--color-surface-hover);
 }
 
+/* A row starts past its select box (20px at 4px in, then 8px clear), so the
+   box sits beside the preview rather than over its corner. The head keeps
+   its columns over the rows'. */
+.start-screen {
+  --start-list-inset: 32px;
+}
+
 .start-tile-grid.is-list .start-tile-open {
   grid-template-rows: none;
   align-items: center;
   gap: var(--sp-3);
-  padding: 6px var(--sp-3);
+  padding: 6px var(--sp-3) 6px var(--start-list-inset);
 }
 
 .start-tile-grid.is-list .start-tile-body,
