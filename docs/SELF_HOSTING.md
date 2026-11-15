@@ -133,7 +133,7 @@ pnpm --filter @openzcad/web exec wrangler secret put AI_IDENTITY_PEPPER --config
 ```
 
 Deployment-funded AI is optional. The example's public free assistant needs an
-`OPENROUTER_API_KEY` allowed to use `minimax/minimax-m3.1-flash:free`:
+`OPENROUTER_API_KEY` allowed to use `nvidia/nemotron-3.5-super-vl:free`:
 
 ```bash
 pnpm --filter @openzcad/web exec wrangler secret put OPENROUTER_API_KEY --config ../../wrangler.selfhost.jsonc

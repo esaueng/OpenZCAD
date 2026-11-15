@@ -58,7 +58,7 @@
     "DESKTOP_AUTH_ENABLED": "true",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAD_j6Y7NvXKtcxNX",
     "AI_PROVIDER": "openrouter",
-    "AI_MODEL": "minimax/minimax-m3.1-flash:free",
+    "AI_MODEL": "nvidia/nemotron-3.5-super-vl:free",
     "AI_REASONING_EFFORT": "high",
     "AI_DEPLOYMENT_FREE_ENABLED": "true",
     // Collaboration is open to every authenticated beta account. Authorization

@@ -1236,9 +1236,9 @@ describe('assistant integration', () => {
     });
   });
 
-  it('defaults hosted OpenRouter to free MiniMax and preserves the direct OpenAI default', () => {
+  it('defaults hosted OpenRouter to free Nemotron and preserves the direct OpenAI default', () => {
     expect(DEFAULT_AI_PROVIDER).toBe('openrouter');
-    expect(DEFAULT_OPENROUTER_MODEL).toBe('minimax/minimax-m3.1-flash:free');
+    expect(DEFAULT_OPENROUTER_MODEL).toBe('nvidia/nemotron-3.5-super-vl:free');
     expect(DEFAULT_AI_MODEL).toBe('gpt-6-luna');
   });
 
@@ -1290,7 +1290,7 @@ describe('assistant integration', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('uses an OpenRouter key, endpoint, headers, and free MiniMax model default', async () => {
+  it('uses an OpenRouter key, endpoint and headers, and JSON mode for free MiniMax', async () => {
     const fetchMock = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
         Response.json({
@@ -1317,6 +1317,7 @@ describe('assistant integration', () => {
       AI_PROVIDER: 'openrouter' as const,
       AI_API_KEY: 'wrong-generic-key',
       OPENROUTER_API_KEY: 'openrouter-test-key',
+      AI_MODEL: 'minimax/minimax-m3.1-flash:free',
       AI_SITE_URL: 'https://beta.openzcad.example',
       AI_APP_NAME: 'OpenZCAD Beta'
     };
@@ -1324,7 +1325,7 @@ describe('assistant integration', () => {
     expect(status).toMatchObject({
       configured: true,
       provider: 'openrouter',
-      model: DEFAULT_OPENROUTER_MODEL
+      model: 'minimax/minimax-m3.1-flash:free'
     });
 
     const response = await streamAssistantProposal(input, env, 'user_test');
@@ -1342,7 +1343,7 @@ describe('assistant integration', () => {
       stream: boolean;
     };
     expect(request).toMatchObject({
-      model: DEFAULT_OPENROUTER_MODEL,
+      model: 'minimax/minimax-m3.1-flash:free',
       provider: {
         require_parameters: true,
         max_price: { prompt: 0, completion: 0, request: 0 }
@@ -1371,7 +1372,30 @@ describe('assistant integration', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('keeps the free model and zero price cap with JSON mode and the exact prompt schema', async () => {
+  it('sends the free default model its native strict schema, at zero price', async () => {
+    // Nemotron enforces JSON schemas, so it takes the strict Responses route
+    // rather than MiniMax's prompted JSON mode.
+    const fetchMock = vi.fn(
+      async (_url: RequestInfo | URL, _init?: RequestInit) =>
+        new Response('upstream down', { status: 500 })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await streamAssistantProposal(input, { OPENROUTER_API_KEY: 'test-key' });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('https://openrouter.ai/api/v1/responses');
+    expect(JSON.parse(init?.body as string)).toMatchObject({
+      model: 'nvidia/nemotron-3.5-super-vl:free',
+      provider: {
+        require_parameters: true,
+        max_price: { prompt: 0, completion: 0, request: 0 }
+      },
+      text: { format: { type: 'json_schema', strict: true } }
+    });
+  });
+
+  it('keeps free MiniMax and its zero price cap with JSON mode and the exact prompt schema', async () => {
     const output = JSON.stringify({
       replyKind: 'message',
       proposal: null,
@@ -1389,14 +1413,15 @@ describe('assistant integration', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     const response = await streamAssistantProposal(input, {
-      OPENROUTER_API_KEY: 'test-key'
+      OPENROUTER_API_KEY: 'test-key',
+      AI_MODEL: 'minimax/minimax-m3.1-flash:free'
     });
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('Connection ready.');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     for (const [, init] of fetchMock.mock.calls) {
       expect(JSON.parse(init?.body as string)).toMatchObject({
-        model: DEFAULT_OPENROUTER_MODEL,
+        model: 'minimax/minimax-m3.1-flash:free',
         provider: {
           require_parameters: true,
           max_price: { prompt: 0, completion: 0, request: 0 }
