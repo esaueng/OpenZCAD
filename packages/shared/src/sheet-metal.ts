@@ -392,22 +392,21 @@ export function rotationAbout(
   const c = Math.cos(angle);
   const s = Math.sin(angle);
   const t = 1 - c;
-  const r = [
-    t * x * x + c,
-    t * x * y - s * z,
-    t * x * z + s * y,
-    t * x * y + s * z,
-    t * y * y + c,
-    t * y * z - s * x,
-    t * x * z - s * y,
-    t * y * z + s * x,
-    t * z * z + c
-  ];
+  const r00 = t * x * x + c;
+  const r01 = t * x * y - s * z;
+  const r02 = t * x * z + s * y;
+  const r10 = t * x * y + s * z;
+  const r11 = t * y * y + c;
+  const r12 = t * y * z - s * x;
+  const r20 = t * x * z - s * y;
+  const r21 = t * y * z + s * x;
+  const r22 = t * z * z + c;
   // p' = R (p − q) + q  ⇒  translation q − R q
-  const tx = point[0] - (r[0] * point[0] + r[1] * point[1] + r[2] * point[2]);
-  const ty = point[1] - (r[3] * point[0] + r[4] * point[1] + r[5] * point[2]);
-  const tz = point[2] - (r[6] * point[0] + r[7] * point[1] + r[8] * point[2]);
-  return [r[0], r[1], r[2], tx, r[3], r[4], r[5], ty, r[6], r[7], r[8], tz];
+  const [px, py, pz] = point;
+  const tx = px - (r00 * px + r01 * py + r02 * pz);
+  const ty = py - (r10 * px + r11 * py + r12 * pz);
+  const tz = pz - (r20 * px + r21 * py + r22 * pz);
+  return [r00, r01, r02, tx, r10, r11, r12, ty, r20, r21, r22, tz];
 }
 
 /** `a · b`: apply `b` first, then `a`. */
@@ -416,13 +415,14 @@ export function composeAffine(
   b: SheetMetalAffine
 ): SheetMetalAffine {
   const out: number[] = [];
+  const at = (m: SheetMetalAffine, index: number): number => m[index] ?? 0;
   for (let row = 0; row < 3; row += 1) {
     for (let col = 0; col < 4; col += 1) {
       let value =
-        a[row * 4] * b[col] +
-        a[row * 4 + 1] * b[4 + col] +
-        a[row * 4 + 2] * b[8 + col];
-      if (col === 3) value += a[row * 4 + 3];
+        at(a, row * 4) * at(b, col) +
+        at(a, row * 4 + 1) * at(b, 4 + col) +
+        at(a, row * 4 + 2) * at(b, 8 + col);
+      if (col === 3) value += at(a, row * 4 + 3);
       out.push(value);
     }
   }
