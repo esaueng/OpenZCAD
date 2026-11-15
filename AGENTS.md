@@ -88,16 +88,16 @@ pnpm test:parity-corpus
 pnpm build
 ```
 
-A required `plan` preflight runs the kernel-pin declaration and selects the
-tests; then `quality` (lint), `typecheck`, `unit` (the root Vitest project in
+A required `plan` job runs the kernel-pin declaration; beside it `quality`
+(lint, in two partitions), `typecheck`, `unit` (the root Vitest project in
 two partitions) and `validation` (the web Vitest project, the parity corpus,
-the build) run in parallel. Together `unit` and `validation` are `pnpm test`.
+the build) run in parallel, each selecting its own tests. Together `unit` and `validation` are `pnpm test`.
 Root and web Vitest run the critical manifest plus the files a change affects;
 unknown inputs, dependency or configuration changes and kernel (Remus)
 updates select the complete suites. Local runs remain full. `pnpm test:full` explicitly runs both
 complete projects even with `CI` set (`test:unit:full` and `test:web:full` run
 either one). See [Unit test suites](docs/unit-test-suites.md) for the manifest,
-coverage tradeoff and pre-worker Git fixture preparation. The separate parity
+coverage tradeoff. The separate parity
 corpus and policy assertions remain required. The tagged Playwright smoke suite
 runs as six shards on pull requests, started beside those jobs (`e2e-tests-pr`); a newer push
 cancels a superseded run's shards, and manual dispatches run the same set
@@ -152,11 +152,12 @@ in `.github/workflows/macos-desktop.yml`.
 
 - Root Vitest and web Vitest are separate projects. `pnpm test` runs both;
   invoking root Vitest directly does not cover the web happy-dom suites.
-- Never edit the active fleet workflow (the `fleet-ci*.yml` that `ci.yml`
-  pins) in place, and never pin `ci.yml` to a PR branch commit: GitHub
-  deletes the branch at merge and every `ci` run then fails at startup.
-  Stage a new `fleet-ci-vN.yml`, then activate it from main in a second PR,
-  as [docs/runner-routing.md](docs/runner-routing.md) describes.
+- `ci.yml` calls `.github/workflows/checks.yml` from the same commit, so a
+  PR that edits the checks is validated by its own edit and lands in one
+  step. Keep the call a local path: a repository path pinned to a PR branch
+  commit stops resolving when GitHub deletes the branch at merge, and every
+  `ci` run then fails at startup. Keep the caller's job named `checks`; it
+  is part of both required contexts.
 - Parity files intentionally use `test/parity/**/*.spec.ts`. Renaming one to
   `*.test.ts` silently moves it into the root pool instead of the serial parity
   job configured by `test/parity/vitest.corpus.config.ts`.

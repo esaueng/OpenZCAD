@@ -34,7 +34,7 @@ import {
  * assignment is a gate: a selected spec left out of every shard never runs,
  * and one assigned twice wastes a runner. Test both the full and smoke plans.
  * The shard count here mirrors
- * the active fleet workflow selected by `ci.yml`.
+ * `.github/workflows/checks.yml`.
  */
 const CI_SHARDS = 6;
 

@@ -22,5 +22,6 @@ jobs:
   checks:
     permissions:
       contents: read
-      pull-requests: read
-    uses: esaueng/OpenZCAD/.github/workflows/fleet-ci-v8.yml@158a250b52a1c83b31eb9088c09782383c8f835c
+    # The same commit's jobs, so a change to them is checked by the pull
+    # request that makes it. The job name is part of both required contexts.
+    uses: ./.github/workflows/checks.yml

@@ -55,7 +55,6 @@ export default defineConfig({
     // package's own dependencies (`three` is not a root dependency).
     include: unitTestInclude('root'),
     setupFiles: ['test/setup.ts'],
-    globalSetup: ['test/unit-global-setup.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],

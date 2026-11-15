@@ -3,15 +3,6 @@ from functools import lru_cache
 import os
 from pathlib import Path
 import subprocess
-import sys
-
-
-def git_command(*arguments, env=None):
-    # CreateProcess cannot execute the POSIX PATH shim used by the fetch
-    # fixture. Invoke that fixture's Python entry point explicitly on Windows.
-    environment = os.environ if env is None else env
-    wrapper = environment.get("OPENZCAD_FIXTURE_GIT_WRAPPER") if os.name == "nt" else None
-    return [sys.executable, wrapper, *arguments] if wrapper else ["git", *arguments]
 
 
 @lru_cache

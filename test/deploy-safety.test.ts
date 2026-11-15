@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import ts from 'typescript';
 import { foldEvidence, readFragments } from '../scripts/roadmap-evidence.mjs';
 import { UPLOAD_CLEANUP_CRON } from '../scripts/validate-deployment-config.mjs';
-import { FLEET_CI_PATH } from './fleet-workflow';
+import { CI_CHECKS_PATH } from './ci-workflow';
 import { MAX_SOURCE_IMPORT_BYTES } from '@openzcad/shared';
 
 it('runs the locked deployment CLI from the repository root without registry or cached packages', () => {
@@ -269,7 +269,7 @@ describe('CI gates cannot silently stop testing', () => {
     // that entirely and no commit message mentions the kernel.
     // The required preflight runs the guard before any application job; its
     // behaviour is exercised in test/kernel-pin-declaration.test.ts.
-    const ci = readFileSync(FLEET_CI_PATH, 'utf8');
+    const ci = readFileSync(CI_CHECKS_PATH, 'utf8');
     expect(ci).toContain(
       "      - name: Refuse an unannounced geometry kernel bump\n        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'\n        run: node scripts/kernel-pin-declaration.mjs\n"
     );

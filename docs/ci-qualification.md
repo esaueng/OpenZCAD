@@ -1,6 +1,6 @@
 # Fast PR checks and complete qualification
 
-The active `fleet-ci-v8.yml` supersedes v7, separates lint and typecheck, partitions root
+`.github/workflows/checks.yml` separates lint and typecheck, partitions root
 unit tests over two runners, and combines the critical unit manifest with
 Vitest's affected-file inventory from the full project. Changed tests are
 eligible even when they are absent from the smoke manifest. Missing Git
@@ -70,24 +70,22 @@ from harness/resource failures, and promote a confirmed regression into the
 critical or affected PR coverage. A red full run remains red. Do not relax
 geometry, privacy, persistence or timeout assertions to clear it.
 
-## Activation
+## Changing the checks
 
-The staging PR (#1295) left `ci.yml` and `fleet-ci-v6.yml` unchanged. The
-activation PR pins v8 at `158a250b52a1c83b31eb9088c09782383c8f835c` and
-retires v6. Kernel (Remus) updates change `pnpm-lock.yaml` and
-`packages/kernel-adapter/package.json`, so v8 selects the complete unit
-suites for them, which catches ledger and measurement drift before merge.
-Activation steps:
+Kernel (Remus) updates change `pnpm-lock.yaml` and
+`packages/kernel-adapter/package.json`, so the selection runs the complete
+unit suites for them, which catches ledger and measurement drift before merge.
+
+`ci.yml` calls `checks.yml` from the same commit, so a change to the checks
+is exercised by its own pull request and merge candidate. When changing them:
 
 1. Retain the inline kernel declaration and all six existing required contexts
-   and their GitHub App bindings. Requiring the separate declaration is an
-   optional settings change; it must be verified before removing inline enforcement.
-2. Activate v8 at the staging squash commit reachable from main, following
-   [runner routing](runner-routing.md). Verify the new version on that PR's
-   exact head and separate merge candidate before retiring v6.
-3. Keep label events until the separate declaration is required. Any later
-   trigger change must document when `ci:full` takes effect and update policy
-   tests with it.
+   and their GitHub App bindings.
+2. Verify the change on the PR's exact head and on the separate merge
+   candidate.
+3. Keep label events on `ci.yml`: `kernel-bump` and `ci:full` take effect
+   through them. Any trigger change must document when `ci:full` takes effect
+   and update the policy tests with it.
 
 Compare PR and merge-candidate P50/P95 latency, summed runner-minutes and
 daily-only regressions before reducing the critical manifest or shard count

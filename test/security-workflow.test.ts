@@ -1,9 +1,9 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { FLEET_CI_PATH } from './fleet-workflow';
+import { CI_CHECKS_PATH } from './ci-workflow';
 
 describe('workflow runner policy', () => {
-  it('keeps ordinary workflows hosted with a restricted trusted workflow', () => {
+  it('keeps every workflow on a named hosted runner', () => {
     const workflowDirectory = '.github/workflows';
     const expectedRunners: Record<string, string[]> = {
       'history-privacy.yml': ['ubuntu-24.04'],
@@ -11,14 +11,7 @@ describe('workflow runner policy', () => {
       'ci.yml': [],
       'ci-recovery.yml': ['ubuntu-24.04'],
       'public-commit-metadata.yml': ['ubuntu-24.04'],
-      'fleet-ci-v8.yml': [
-        'ubuntu-24.04',
-        ...Array<string>(8).fill('*fleet-runner')
-      ],
-      'fleet-ci-v9.yml': [
-        'ubuntu-24.04',
-        ...Array<string>(8).fill('*fleet-runner')
-      ],
+      'checks.yml': Array<string>(10).fill('ubuntu-24.04'),
       'daily-validation.yml': Array(5).fill('ubuntu-24.04'),
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'codeql.yml': ['ubuntu-24.04'],
@@ -73,7 +66,7 @@ describe('workflow runner policy', () => {
         expect(workflow).not.toMatch(/^ {2}pull_request/m);
         expect(workflow).toContain('cancel-in-progress: false');
       }
-      if (`${workflowDirectory}/${workflowPath}` === FLEET_CI_PATH) {
+      if (`${workflowDirectory}/${workflowPath}` === CI_CHECKS_PATH) {
         // Hosted shards install browser binaries only: the Ubuntu mirror
         // behind `--with-deps` stalled one shard in six for minutes.
         expect(workflow).toContain(
