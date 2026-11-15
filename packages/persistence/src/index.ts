@@ -2609,7 +2609,8 @@ function summarizeDocument(document: ProjectDocument): ProjectSummary {
     lastRevisionId: latestRevision?.revisionId,
     revisionCount: document.revisions.length,
     updatedAt: latestRevision?.createdAt ?? nowIso(),
-    documentVersion: document.version
+    documentVersion: document.version,
+    documentBytes: persistedDocumentBytes(withoutDerivedProjection(document))
   };
 }
 

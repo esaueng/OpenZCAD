@@ -3826,6 +3826,16 @@ export interface ProjectSummary {
    */
   documentVersion?: number;
   /**
+   * Bytes of the saved document at `documentVersion`, measured as
+   * {@link persistedDocumentBytes} of the canonical document (without its
+   * derived projection) — the size Project properties calls "Document size"
+   * and the account's per-project limit measures. Imported sources stored
+   * beside the document are not included. Absent when the store has not
+   * measured this version: a device projection written before sizes were
+   * recorded, or an encrypted project the account holds only as ciphertext.
+   */
+  documentBytes?: number;
+  /**
    * Absent when the store holding this summary has no shelf state for the
    * project — an older row, or a device that has never organised it. Read it
    * through {@link projectOrganization} so a missing record reads as defaults
@@ -4473,6 +4483,11 @@ export interface E2eeProjectPreferenceRecord {
 
 export interface E2eeProjectPreferenceResponse {
   preference: E2eeProjectPreferenceRecord | null;
+  /**
+   * Whether the account's library must be encrypted: opted in, or owning or
+   * a member of an encrypted project. Absent from an older Worker.
+   */
+  libraryEncrypted?: boolean;
 }
 
 export interface E2eeSaveProjectPreferenceRequest {

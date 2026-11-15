@@ -122,6 +122,8 @@ describe('storage formats on the shelf', () => {
     const marks = screen.getAllByRole('img', { name: /encrypted/i });
     expect(marks).toHaveLength(1);
     expect(marks[0]).toHaveAccessibleName('Not end-to-end encrypted');
+    // In the warning hue, so it shows among the quiet date-line marks.
+    expect(marks[0]).toHaveClass('start-tile-mark', 'is-plaintext');
     expect(marks[0]!.closest('.start-tile-project')).toHaveTextContent(
       'Plain bracket'
     );

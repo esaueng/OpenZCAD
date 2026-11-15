@@ -14,7 +14,9 @@ import {
   isProjectObjectStorageReady
 } from '../apps/web/worker/readiness';
 import {
+  adoptProjectDocument,
   createProjectDocument,
+  reidentifyProjectDocument,
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
@@ -689,6 +691,90 @@ describe('encrypted projects required (decision D2)', () => {
     ).toBe(201);
   });
 
+  const adoptedDocument = (owner: ReturnType<typeof toUserId>) =>
+    withoutDerivedProjection(
+      adoptProjectDocument(
+        reidentifyProjectDocument(
+          createProjectDocument('Adopted', owner),
+          toProjectId(`proj_${crypto.randomUUID()}`)
+        ),
+        owner,
+        'Adopted'
+      )
+    );
+
+  it('adopts encrypted for an account holding encrypted projects without the opt-in', async () => {
+    // Encrypting existing projects and accepting an encrypted invitation need
+    // no opt-in, yet a device project saved to such an account can be a
+    // "Keep both" or recovery copy of one: it must not arrive as plaintext.
+    const { call, db } = await seed(projectsOn);
+    optIn(db, false);
+    db.prepare(
+      'INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)'
+    ).run('user_plain', 'plain@example.test', '2026-10-24T00:00:00.000Z');
+    const adopt = (user: string) =>
+      call('POST', '/api/projects', {
+        user,
+        body: {
+          name: 'Adopted',
+          adoptionProtocolVersion: 2,
+          localProjectId: `proj_local_${user}`,
+          document: adoptedDocument(toUserId(user))
+        }
+      });
+    const count = () =>
+      (
+        db.prepare('SELECT COUNT(*) AS n FROM projects').get() as {
+          n: number;
+        }
+      ).n;
+    const before = count();
+    // The owner of an encrypted project, and a member of one.
+    for (const user of [OWNER, MEMBER]) {
+      const response = await adopt(user);
+      expect(response.status, user).toBe(409);
+      expect(((await response.json()) as { code: string }).code).toBe(
+        ENCRYPTED_PROJECTS_REQUIRED_CODE
+      );
+    }
+    expect(count()).toBe(before);
+    // New blank projects still follow the opt-in.
+    expect(
+      (await call('POST', '/api/projects', { body: createBody() })).status
+    ).toBe(201);
+    // An account with no encrypted project adopts as before.
+    const plain = await adopt('user_plain');
+    expect(plain.status, await plain.clone().text()).toBe(201);
+    // Without the rollout flag nothing changes.
+    const off = await seed();
+    expect(
+      (
+        await off.call('POST', '/api/projects', {
+          body: {
+            name: 'Adopted',
+            adoptionProtocolVersion: 2,
+            localProjectId: 'proj_local_off',
+            document: adoptedDocument(OWNER)
+          }
+        })
+      ).status
+    ).toBe(201);
+  });
+
+  it('reports the library rule on the preference route', async () => {
+    const { call, db } = await seed(projectsOn);
+    db.prepare(
+      'INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)'
+    ).run('user_plain', 'plain@example.test', '2026-10-24T00:00:00.000Z');
+    const read = async (user: string) =>
+      (await (
+        await call('GET', '/api/e2ee/project-preferences', { user })
+      ).json()) as { libraryEncrypted?: boolean };
+    expect((await read(OWNER)).libraryEncrypted).toBe(true);
+    expect((await read(MEMBER)).libraryEncrypted).toBe(true);
+    expect((await read('user_plain')).libraryEncrypted).toBe(false);
+  });
+
   it('refuses a plaintext insert in the same write, however it races the opt-in', async () => {
     // The Worker's own check reads the opt-in first; migration 0031's trigger
     // refuses the insert itself, so a preference written between that read
@@ -814,7 +900,7 @@ describe('the "encrypt new projects" record routes', () => {
     const { call } = await seed(projectsOn);
     expect(
       await (await call('GET', '/api/e2ee/project-preferences')).json()
-    ).toEqual({ preference: null });
+    ).toEqual({ preference: null, libraryEncrypted: true });
     const first = await call('PUT', '/api/e2ee/project-preferences', {
       body: await record(1)
     });

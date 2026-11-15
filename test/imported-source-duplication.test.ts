@@ -499,6 +499,13 @@ describe.each(['memory', 'D1/R2'] as const)(
       expect(copy.document.checkpoints.at(-1)?.reason).toBe(
         `Duplicated from ${source.name}`
       );
+      // The copy's row reads its size at once, and the same size the next
+      // listing reports: finishing the source copy writes a new version.
+      const listedCopy = (await service.listProjects(owner)).projects.find(
+        (project) => project.projectId === copy.project.projectId
+      );
+      expect(copy.project.documentBytes).toBeGreaterThan(0);
+      expect(copy.project.documentBytes).toBe(listedCopy?.documentBytes);
       const copied = importArtifactId(copy.document);
       expect(copied).not.toBe(artifact.artifactId);
       expect(copied.startsWith('artifact_local_')).toBe(false);
