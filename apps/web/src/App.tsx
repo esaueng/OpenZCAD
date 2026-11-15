@@ -617,6 +617,7 @@ import {
 } from './components/WorkspaceReadout';
 import { StatusActivityLog } from './components/StatusActivityLog';
 import { recordActivity } from './lib/activityLog';
+import { reportProjectListingFailure } from './lib/projectListingFailure';
 import { WORKSPACE_MODE_OPTIONS } from './lib/topBarPresentation';
 import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -2378,7 +2379,10 @@ async function loadProjectSummaries(
                 }
               : undefined
           )
-          .catch(() => null)
+          .catch((error: unknown) => {
+            reportProjectListingFailure(error);
+            return null;
+          })
       : Promise.resolve(null)
   ]);
   const localOrganizations = new Map(
