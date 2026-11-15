@@ -13,8 +13,8 @@ import type {
  * - **Guideline extensions**: a line's extension past either end, so a point
  *   placed there can be held on the line (where coincidence is reachable).
  * - **Tangent guidelines**: from the end of the line being drawn, the two
- *   points where a line would touch a circle or arc (where tangency is
- *   reachable).
+ *   points where a line would touch a circle (where tangency is reachable
+ *   and can be held).
  * - **Model guidepoints**: vertices, edge midpoints, circle centres (hole
  *   and boss centres) and planar face centres of the model, lifted into the
  *   sketch plane. Those on the plane are always offered; those off it only
@@ -162,9 +162,14 @@ export function extensionTargets(
 }
 
 /**
- * Where a line from `anchor` touches each circle and arc: the two tangent
- * points of a circle, and of an arc those that lie on its sweep. An anchor
- * on or inside a curve has none.
+ * Where a line from `anchor` touches each circle: its two tangent points.
+ * An anchor on or inside the circle has none.
+ *
+ * Only circles: the guide promises a held tangent, and the schema can hold
+ * a line tangent to a circle anywhere but to an arc only at the arc's own
+ * start or end (`tangent.at`). A line touching an arc's interior could be
+ * held on the arc but not tangent to it, so no arc guide is offered rather
+ * than one that keeps less than it shows (review #1567).
  */
 export function tangentTargets(
   anchor: SketchPoint,
@@ -174,7 +179,7 @@ export function tangentTargets(
   const targets: SketchGuideTarget[] = [];
   for (const object of objects) {
     const data = object.data;
-    if (data.objectKind !== 'circle' && data.objectKind !== 'arc') continue;
+    if (data.objectKind !== 'circle') continue;
     const c = { x: resolve(data.centerX), y: resolve(data.centerY) };
     const r = resolve(data.radius);
     if (![c.x, c.y, r].every(Number.isFinite) || !(r > 0)) continue;
@@ -186,7 +191,6 @@ export function tangentTargets(
     const base = Math.atan2(dy, dx);
     const spread = Math.acos(r / d);
     for (const [index, angle] of [base + spread, base - spread].entries()) {
-      if (data.objectKind === 'arc' && !onSweep(data, angle, resolve)) continue;
       const at = { x: c.x + r * Math.cos(angle), y: c.y + r * Math.sin(angle) };
       targets.push({
         id: `tangent:${object.id}:${index}`,
@@ -200,17 +204,4 @@ export function tangentTargets(
     }
   }
   return targets;
-}
-
-function onSweep(
-  data: Extract<SketchObjectData, { objectKind: 'arc' }>,
-  angle: number,
-  resolve: Resolve
-): boolean {
-  const start = (resolve(data.startAngleDeg) * Math.PI) / 180;
-  const end = (resolve(data.endAngleDeg) * Math.PI) / 180;
-  const tau = Math.PI * 2;
-  const sweep = (((end - start) % tau) + tau) % tau || tau;
-  const offset = (((angle - start) % tau) + tau) % tau;
-  return offset <= sweep;
 }

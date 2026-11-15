@@ -108,7 +108,7 @@ describe('tangent guidelines', () => {
     ]);
   });
 
-  it('keeps only an arc’s tangent points on its sweep, none from inside', () => {
+  it('offers no tangent guide on an arc, which could not hold it, and none from inside (review #1567)', () => {
     const upper = {
       id: 'r',
       data: {
@@ -120,9 +120,9 @@ describe('tangent guidelines', () => {
         endAngleDeg: 180
       } as SketchObjectData
     };
-    const targets = tangentTargets({ x: 10, y: 0 }, [upper], resolve);
-    expect(targets).toHaveLength(1);
-    expect(targets[0]!.y).toBeGreaterThan(0);
+    // The schema holds a line tangent to an arc only at the arc's own ends,
+    // so a guide on its interior would keep less than it showed.
+    expect(tangentTargets({ x: 10, y: 0 }, [upper], resolve)).toEqual([]);
     expect(tangentTargets({ x: 1, y: 1 }, [circle], resolve)).toEqual([]);
   });
 
