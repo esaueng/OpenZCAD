@@ -1989,6 +1989,79 @@ describe('StartScreen folders and selection', () => {
         screen.queryByRole('heading', { level: 2, name: 'Alpha' })
       ).toBeNull();
     });
+
+    it('keeps a dragged folder row inside the list, so it never raises scrollbars', () => {
+      seedFolders();
+      renderStartScreen({ projects: parts });
+      const list = document.querySelector<HTMLElement>('.start-folders-list')!;
+      const row = document.querySelector<HTMLElement>('.start-folder-row')!;
+      const link = row.querySelector<HTMLButtonElement>('.start-folder-link')!;
+      // The list shows rows from y = 100 to 190; the first row's slot is at
+      // the top, 28px tall, and moves with its transform.
+      const rect = (top: number, height: number) =>
+        ({
+          top,
+          bottom: top + height,
+          left: 0,
+          right: 140,
+          width: 140,
+          height,
+          x: 0,
+          y: top,
+          toJSON: () => ({})
+        }) as DOMRect;
+      list.getBoundingClientRect = () => rect(100, 90);
+      Object.defineProperty(list, 'clientHeight', { value: 90 });
+      row.getBoundingClientRect = () => {
+        const shift = /translate\([^,]+,\s*(-?[\d.]+)px\)/.exec(
+          row.style.transform
+        );
+        return rect(100 + (shift ? Number(shift[1]) : 0), 28);
+      };
+      const original = document.elementFromPoint;
+      document.elementFromPoint = () => list;
+      const moveTo = (clientX: number, clientY: number) =>
+        act(() => {
+          window.dispatchEvent(
+            new PointerEvent('pointermove', { pointerId: 9, clientX, clientY })
+          );
+        });
+      try {
+        fireEvent.pointerDown(link, {
+          button: 0,
+          pointerId: 9,
+          pointerType: 'mouse',
+          clientX: 20,
+          clientY: 110
+        });
+        // Far below and to the right of the list: the row stops at its
+        // bottom edge and does not leave the column sideways.
+        moveTo(400, 600);
+        expect(row).toHaveClass('is-dragging');
+        expect(row.style.transform).toBe('translate(0px, 62px)');
+        // Far above: it stops at the top edge.
+        moveTo(-50, -300);
+        expect(row.style.transform).toBe('translate(0px, 0px)');
+        // Inside the list it still follows the pointer.
+        moveTo(20, 140);
+        expect(row.style.transform).toBe('translate(0px, 30px)');
+        act(() => {
+          window.dispatchEvent(
+            new PointerEvent('pointerup', {
+              pointerId: 9,
+              clientX: 20,
+              clientY: 140
+            })
+          );
+        });
+      } finally {
+        document.elementFromPoint = original;
+      }
+      // Released over no other row: nothing moves, and the row lets go.
+      fireEvent.click(link);
+      expect(row.style.transform).toBe('');
+      expect(rowNames()).toEqual(['Alpha', 'Bravo', 'Charlie']);
+    });
   });
 
   it('looks through folders while searching', () => {
