@@ -229,6 +229,8 @@ import {
   addAssemblyCoupling,
   updateAssemblyCoupling,
   deleteAssemblyCoupling,
+  setAssemblyExplode,
+  type AssemblyExplodeSetInput,
   type AssemblyCouplingAddInput,
   type AssemblyCouplingUpdateInput,
   type AssemblyCouplingDeleteInput,
@@ -412,6 +414,7 @@ export type CommandKind =
   | 'assembly.coupling.add'
   | 'assembly.coupling.update'
   | 'assembly.coupling.delete'
+  | 'assembly.explode.set'
   | 'drawing.annotation.add'
   | 'drawing.annotation.update'
   | 'drawing.annotation.delete'
@@ -528,6 +531,7 @@ export type AnyCommand =
   | CommandDefinition<AssemblyCouplingAddInput>
   | CommandDefinition<AssemblyCouplingUpdateInput>
   | CommandDefinition<AssemblyCouplingDeleteInput>
+  | CommandDefinition<AssemblyExplodeSetInput>
   | CommandDefinition<DrawingAnnotationAddInput>
   | CommandDefinition<DrawingAnnotationUpdateInput>
   | CommandDefinition<DrawingAnnotationDeleteInput>
@@ -3285,6 +3289,14 @@ export const commandFactories = {
   ): CommandDefinition<AssemblyStudySetInput> {
     return makeCommand('assembly.study.set', label, payload, (document) =>
       setAssemblyStudy(document, payload)
+    );
+  },
+  setAssemblyExplode(
+    payload: AssemblyExplodeSetInput,
+    label = 'Move exploded part'
+  ): CommandDefinition<AssemblyExplodeSetInput> {
+    return makeCommand('assembly.explode.set', label, payload, (document) =>
+      setAssemblyExplode(document, payload)
     );
   },
   deleteAssemblyStudy(
@@ -6296,6 +6308,12 @@ export function replayCommands(
         next = deleteAssemblyCoupling(
           next,
           command.payload as AssemblyCouplingDeleteInput
+        );
+        break;
+      case 'assembly.explode.set':
+        next = setAssemblyExplode(
+          next,
+          command.payload as AssemblyExplodeSetInput
         );
         break;
       case 'objectFolder.move':

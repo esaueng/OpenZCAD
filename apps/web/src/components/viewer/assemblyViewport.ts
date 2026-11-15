@@ -35,6 +35,13 @@ import {
   type FramePickResult
 } from '../../lib/assembly/framePick';
 import { assemblyLengthScale } from '../../lib/assembly/assemblyUi';
+import {
+  beginExplodeDrag,
+  formatExplodeDragValue,
+  readExplodeDrag,
+  type ExplodeDragReading,
+  type ExplodeDragSession
+} from '../../lib/assembly/explodeDrag';
 import { AssemblyGlyphLayer, ASSEMBLY_GLYPH_COLORS } from './assemblyGlyphs';
 
 /**
@@ -97,6 +104,16 @@ interface Drag {
   last: AssemblyDragReading | null;
 }
 
+/** AS03: a part dragged in the exploded view, along one world axis. */
+interface ExplodeDrag {
+  pointerId: number;
+  componentId: string;
+  session: ExplodeDragSession;
+  startX: number;
+  startY: number;
+  last: ExplodeDragReading | null;
+}
+
 /** Pointer travel, CSS px, before a press on a component becomes a drag. */
 const DRAG_THRESHOLD_PX = 3;
 /** Vertex, centroid and axis-end snaps reach this far from the hit, CSS px. */
@@ -133,6 +150,7 @@ export class AssemblyViewport {
   private posed = new Set<string>();
   private press: Press | null = null;
   private drag: Drag | null = null;
+  private explodeDrag: ExplodeDrag | null = null;
   private hoverEvent: PointerEvent | null = null;
   private hoverFrame: number | null = null;
 
@@ -283,7 +301,10 @@ export class AssemblyViewport {
       '--gizmo-axis-color',
       warning ? WARNING_CSS : ACCENT_CSS
     );
-    this.chip.classList.toggle('is-active', this.drag !== null);
+    this.chip.classList.toggle(
+      'is-active',
+      this.drag !== null || this.explodeDrag !== null
+    );
     this.deps.hud.showAtPointer(this.chip, event, 16, -12);
   }
 
@@ -345,15 +366,17 @@ export class AssemblyViewport {
     if (press && event.pointerId === press.pointerId) {
       event.stopPropagation();
       event.preventDefault();
-      if (!this.drag && !press.blocked) {
+      if (!this.drag && !this.explodeDrag && !press.blocked) {
         const travel = Math.hypot(
           event.clientX - press.startX,
           event.clientY - press.startY
         );
         if (travel < DRAG_THRESHOLD_PX || !press.componentId) return;
-        this.beginDrag(press);
+        if (view.exploded) this.beginExplodeDrag(press, event);
+        else this.beginDrag(press);
       }
-      if (this.drag) this.continueDrag(event);
+      if (this.explodeDrag) this.continueExplodeDrag(event);
+      else if (this.drag) this.continueDrag(event);
       else if (press.blocked && press.componentId)
         this.showChip(event, blockedHint(view, press.componentId), true);
       return;
@@ -387,6 +410,14 @@ export class AssemblyViewport {
     }
     event.stopPropagation();
     event.preventDefault();
+    const explodeDrag = this.explodeDrag;
+    if (explodeDrag) {
+      const moved =
+        explodeDrag.last !== null &&
+        Math.abs(explodeDrag.last.distance) > 1e-12;
+      if (moved) assemblyRuntime.commitExplodeOverrides();
+      else assemblyRuntime.clearExplodeOverrides();
+    }
     const drag = this.drag;
     if (drag) {
       const moved =
@@ -419,7 +450,7 @@ export class AssemblyViewport {
   };
 
   private onKeyDown = (event: KeyboardEvent): void => {
-    if (event.key !== 'Escape' || !this.drag) return;
+    if (event.key !== 'Escape' || (!this.drag && !this.explodeDrag)) return;
     event.stopPropagation();
     event.preventDefault();
     this.endGesture(true);
@@ -436,6 +467,7 @@ export class AssemblyViewport {
   private endGesture(cancel: boolean) {
     const drag = this.drag;
     if (drag && cancel) this.restoreDrag(drag);
+    if (this.explodeDrag && cancel) assemblyRuntime.clearExplodeOverrides();
     if (this.press) {
       try {
         if (this.deps.canvas.hasPointerCapture(this.press.pointerId))
@@ -446,6 +478,7 @@ export class AssemblyViewport {
     }
     this.press = null;
     this.drag = null;
+    this.explodeDrag = null;
     this.hideChip();
   }
 
@@ -542,11 +575,68 @@ export class AssemblyViewport {
       );
   }
 
+  /**
+   * AS03: in the exploded view a part slides along the world axis that
+   * best matches the pointer's first travel; any part can be pulled out,
+   * grounded or not, and its joints are left as they are.
+   */
+  private beginExplodeDrag(press: Press, event: PointerEvent) {
+    const view = this.view;
+    if (!view || !press.componentId || !press.grabPoint) return;
+    const p = this.canvasPoint(event);
+    const grab = press.grabPoint;
+    const session = beginExplodeDrag(
+      grab,
+      this.deps.camera(),
+      { width: p.width, height: p.height },
+      this.deps.worldPerPixelAt,
+      { dx: event.clientX - press.startX, dy: event.clientY - press.startY },
+      view.explodeOffsets.get(press.componentId) ?? { x: 0, y: 0, z: 0 }
+    );
+    if (!session) {
+      press.blocked = true;
+      return;
+    }
+    this.explodeDrag = {
+      pointerId: press.pointerId,
+      componentId: press.componentId,
+      session,
+      startX: press.startX,
+      startY: press.startY,
+      last: null
+    };
+    this.setCursor('grabbing');
+  }
+
+  private continueExplodeDrag(event: PointerEvent) {
+    const drag = this.explodeDrag;
+    if (!drag) return;
+    const reading = readExplodeDrag(
+      drag.session,
+      event.clientX - drag.startX,
+      event.clientY - drag.startY,
+      assemblyLengthScale(this.view?.lengthUnit).step,
+      event.shiftKey
+    );
+    const previous = drag.last;
+    drag.last = reading;
+    if (!previous || previous.distance !== reading.distance)
+      assemblyRuntime.setExplodeOverride(drag.componentId, reading.offset);
+    this.showChip(
+      event,
+      formatExplodeDragValue(
+        drag.session.axis,
+        reading.distance,
+        this.view?.lengthUnit
+      )
+    );
+  }
+
   // ── Hover and frame picking ───────────────────────────────────────────
 
   private hover(event: PointerEvent) {
     const view = this.view;
-    if (!view || this.drag || this.press) return;
+    if (!view || this.drag || this.explodeDrag || this.press) return;
     if (this.toolPicking()) {
       const found = this.framePickAt(event);
       if (found) {
@@ -579,6 +669,7 @@ export class AssemblyViewport {
       return;
     }
     const draggable =
+      view.exploded ||
       dragSpecFor(view.set, view.solution, hit.componentId) !== null;
     this.setCursor(draggable ? 'grab' : 'pointer');
   }

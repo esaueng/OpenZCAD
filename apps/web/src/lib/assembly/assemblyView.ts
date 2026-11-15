@@ -2,6 +2,7 @@ import { assemblyComponentBodies } from '@openzcad/document-core';
 import {
   ASSEMBLY_JOINT_DOFS,
   asBuiltChildFrame,
+  assemblyExplodeOffset,
   flipFrame,
   frameInWorld,
   framesCoincide,
@@ -20,7 +21,8 @@ import {
   type AssemblyUnsolvedReason,
   type BodyId,
   type ProjectDocument,
-  type UnitSystem
+  type UnitSystem,
+  type Vector3
 } from '@openzcad/shared';
 import type {
   AssemblyJointToolState,
@@ -59,13 +61,26 @@ export interface AssemblyViewModel {
   glyphs: AssemblyJointGlyph[];
   /** The document's unit: a slide's values are in it. Absent reads as mm. */
   lengthUnit?: UnitSystem;
+  /**
+   * AS03: shown exploded. Each part's matrix carries its offset, the joint
+   * glyphs are hidden (they belong to the assembled pose) and a drag moves
+   * the part's offset instead of its joint.
+   */
+  exploded: boolean;
+  /** Offsets the matrices carry while exploded, by component (world). */
+  explodeOffsets: Map<string, Vector3>;
 }
 
 type ViewRuntime = Pick<
   AssemblyRuntimeState,
   'overrides' | 'placementOverrides' | 'selectedJointId' | 'jointTool'
 > &
-  Partial<Pick<AssemblyRuntimeState, 'motionSetup' | 'drivers'>>;
+  Partial<
+    Pick<
+      AssemblyRuntimeState,
+      'motionSetup' | 'drivers' | 'exploded' | 'explodeOverrides'
+    >
+  >;
 
 export const TOOL_PREVIEW_JOINT_ID = '__joint_tool_preview__';
 /** The joint Set up motion previews before Create. */
@@ -195,18 +210,40 @@ export function buildAssemblyView(
   );
   const matrices = new Map<BodyId, number[]>();
   const componentByBody = new Map<BodyId, string>();
+  const exploded = runtime.exploded === true;
+  const explodeOffsets = new Map<string, Vector3>();
   for (const component of set.components) {
     const bodyId = bodyByComponent.get(component.id);
     const pose = solution.poses.get(component.id);
     if (!bodyId || !pose) continue;
-    matrices.set(bodyId, transformToMatrix4(pose));
+    const offset = exploded
+      ? (runtime.explodeOverrides?.get(component.id) ??
+        assemblyExplodeOffset(set, component.id))
+      : null;
+    if (offset) explodeOffsets.set(component.id, offset);
+    // The offset is applied after the pose: a world translation.
+    matrices.set(
+      bodyId,
+      transformToMatrix4(
+        offset
+          ? {
+              t: {
+                x: pose.t.x + offset.x,
+                y: pose.t.y + offset.y,
+                z: pose.t.z + offset.z
+              },
+              q: pose.q
+            }
+          : pose
+      )
+    );
     componentByBody.set(bodyId, component.id);
   }
   const otherBodyIds = document.bodyOrder.filter(
     (bodyId) => isLive(bodyId) && !componentByBody.has(bodyId)
   );
   const glyphs: AssemblyJointGlyph[] = [];
-  for (const joint of set.joints) {
+  for (const joint of exploded ? [] : set.joints) {
     const frames = jointWorldFrames(solution, joint);
     if (!frames) continue;
     glyphs.push({
@@ -231,7 +268,9 @@ export function buildAssemblyView(
     bodyByComponent,
     otherBodyIds,
     lengthUnit: document.units,
-    glyphs
+    glyphs,
+    exploded,
+    explodeOffsets
   };
 }
 

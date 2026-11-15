@@ -250,7 +250,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // shape with a construction centre line). An older client would refuse the
 // unknown object, or drop the composite record on its next save and leave
 // four unrelated curves, so it must refuse the document. Builds on v58.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 59 as const;
+// v61 adds the AS03 exploded view (`assembly.explode`): one stored world
+// offset per component, shown on top of its pose when the view is exploded
+// and edited by dragging. Absent means none, so every older assembly loads
+// unchanged. An older client would drop the offsets on its next save, so it
+// must refuse. v60 is claimed by the L09 print clearance (#1563); nothing
+// depends on consecutive numbers.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 61 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

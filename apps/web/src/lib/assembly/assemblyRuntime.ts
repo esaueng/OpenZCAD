@@ -8,7 +8,8 @@ import type {
   AssemblyJointKind,
   AssemblyPlacement,
   AssemblyPlayback,
-  BodyId
+  BodyId,
+  Vector3
 } from '@openzcad/shared';
 import type { GearMeshDraft } from './gearMesh';
 import type { MotionSetupDraft } from './motionSetup';
@@ -117,6 +118,14 @@ export interface AssemblyRuntimeState {
   motionSetup: AssemblyMotionSetupState | null;
   /** Mesh gears' draft while its card is open (never saved until Mesh). */
   gearMesh: GearMeshDraft | null;
+  /**
+   * AS03: show the assembly exploded, each part pulled out by its stored
+   * offset. A view toggle, never saved; a drag then moves the exploded part
+   * rather than its joint.
+   */
+  exploded: boolean;
+  /** Exploded-view offsets shown instead of the saved ones during a drag. */
+  explodeOverrides: ReadonlyMap<string, Vector3>;
 }
 
 /** Commits the app performs on the store's behalf (registered by App). */
@@ -129,6 +138,8 @@ export interface AssemblyCommitHandlers {
   ): void;
   /** The joint tool's Create: the app builds and executes the joint command. */
   createJoint(tool: AssemblyJointToolState): void;
+  /** One undo step: the exploded-view offsets a drag left parts at. */
+  commitExplode?(offsets: Record<string, Vector3>): void;
 }
 
 const INITIAL: AssemblyRuntimeState = {
@@ -145,7 +156,9 @@ const INITIAL: AssemblyRuntimeState = {
   studyTimeS: 0,
   jointTool: null,
   motionSetup: null,
-  gearMesh: null
+  gearMesh: null,
+  exploded: false,
+  explodeOverrides: new Map()
 };
 
 let state: AssemblyRuntimeState = INITIAL;
@@ -234,6 +247,8 @@ export const assemblyRuntime = {
             active,
             playback: null,
             overrides: new Map(),
+            exploded: false,
+            explodeOverrides: new Map(),
             placementOverrides: new Map(),
             jointTool: null,
             motionSetup: null,
@@ -394,6 +409,9 @@ export const assemblyRuntime = {
     patch({
       playback: null,
       overrides: new Map(),
+      // Frames are picked and parts placed on the assembled pose.
+      exploded: false,
+      explodeOverrides: new Map(),
       motionSetup: null,
       gearMesh: null,
       jointTool: {
@@ -444,6 +462,9 @@ export const assemblyRuntime = {
     patch({
       playback: null,
       overrides: new Map(),
+      // Frames are picked and parts placed on the assembled pose.
+      exploded: false,
+      explodeOverrides: new Map(),
       jointTool: null,
       gearMesh: null,
       motionSetup: { draft, preview: null, previewing }
@@ -484,6 +505,9 @@ export const assemblyRuntime = {
     patch({
       playback: null,
       overrides: new Map(),
+      // Frames are picked and parts placed on the assembled pose.
+      exploded: false,
+      explodeOverrides: new Map(),
       jointTool: null,
       motionSetup: null,
       gearMesh: draft
@@ -494,5 +518,47 @@ export const assemblyRuntime = {
   },
   closeGearMesh(): void {
     if (state.gearMesh) patch({ gearMesh: null });
+  },
+  /**
+   * AS03 view toggle. Exploding closes the joint tools (they pick frames on
+   * the assembled pose); collapsing drops any drag in progress.
+   */
+  setExploded(exploded: boolean): void {
+    if (exploded === state.exploded) return;
+    patch(
+      exploded
+        ? {
+            exploded,
+            jointTool: null,
+            motionSetup: null,
+            gearMesh: null,
+            // Closing a tool drops the values its preview was showing.
+            overrides:
+              state.jointTool || state.motionSetup
+                ? new Map()
+                : state.overrides
+          }
+        : { exploded, explodeOverrides: new Map() }
+    );
+  },
+  /** A transient offset for one part (a drag); null drops it. */
+  setExplodeOverride(componentId: string, offset: Vector3 | null): void {
+    const next = new Map(state.explodeOverrides);
+    if (offset) next.set(componentId, offset);
+    else next.delete(componentId);
+    patch({ explodeOverrides: next });
+  },
+  clearExplodeOverrides(): void {
+    if (state.explodeOverrides.size > 0)
+      patch({ explodeOverrides: new Map() });
+  },
+  /** Saves the dragged offsets as one undo step and clears them. */
+  commitExplodeOverrides(): void {
+    if (state.explodeOverrides.size === 0) return;
+    const offsets = Object.fromEntries(
+      [...state.explodeOverrides].map(([id, v]) => [id, { ...v }])
+    );
+    handlers?.commitExplode?.(offsets);
+    patch({ explodeOverrides: new Map() });
   }
 };
