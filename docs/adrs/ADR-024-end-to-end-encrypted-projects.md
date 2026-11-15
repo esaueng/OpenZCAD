@@ -895,6 +895,23 @@ server-forged consent never makes a browser send; the Worker keeps a live row
 as defence in depth. It is asked again when the copy version or the provider
 route changes.
 
+Consent copy version 2 (D06 slice E) adds the drawing sheet an ask from Draw
+is made on: its name, scale and views, the model edges each view draws with
+their positions on the paper, and its dimensions and notes with their values
+and text.
+
+Provider retention (2026-11-14). An encrypted project's request through
+OpenRouter carries `provider.data_collection: 'deny'`, so OpenRouter routes it
+only to providers whose policy is not to train on or store prompts, and
+refuses it (reported as no eligible route) rather than falling back to one
+that does. That is not zero retention: a provider may still keep a request
+for a while for abuse monitoring (OpenRouter's stricter `zdr` routing would
+narrow that further, at the cost of fewer eligible providers). Requests to
+OpenAI's Responses API already carry `store: false`, which leaves OpenAI's
+own abuse-monitoring retention. Any other route, such as a user's own
+Responses-compatible endpoint, follows that provider's terms. The consent
+dialog says all of this. A plaintext project's request is unchanged.
+
 ### Settled product decisions
 
 | Question                           | Decision                                                                                                                                                               |
