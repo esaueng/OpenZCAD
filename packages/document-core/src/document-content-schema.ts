@@ -52,6 +52,14 @@ export function assertThreadContentSchema(
     assertMinimumProjectSchema(version, 57, 'Thread runouts and pipe threads');
 }
 
+/**
+ * M16 sheet-metal features (schema v58): an older reader has no builder for
+ * the kind and would drop the body, so the document must declare the schema.
+ */
+export function assertSheetMetalSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 58, 'Sheet-metal features');
+}
+
 function hasCouplings(assembly: unknown): boolean {
   return record(assembly) && assembly.couplings !== undefined;
 }
@@ -118,6 +126,8 @@ export function assertDocumentContentCommandSchema(
       command.kind.startsWith('assembly.coupling.')
     )
       assertAssemblyCouplingSchema(document.schemaVersion);
+    if (command.kind === 'feature.sheet-metal')
+      assertSheetMetalSchema(document.schemaVersion);
     if (!record(command.payload)) continue;
     if (command.kind === 'feature.thread')
       assertThreadContentSchema(command.payload, document.schemaVersion);
@@ -180,6 +190,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       );
     if (node.kind === 'feature' && node.data.featureKind === 'thread')
       assertThreadContentSchema(node.data, document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'sheet-metal')
+      assertSheetMetalSchema(document.schemaVersion);
   }
   assertDocumentContentCommandSchema(document);
 }

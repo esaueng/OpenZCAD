@@ -51,6 +51,7 @@ import {
 export { assertSketchBoundaryTopologyPreserved } from './sketch-boundary-dependencies';
 import {
   assertDocumentContentSchema,
+  assertSheetMetalSchema,
   assertSketchObjectContentSchema,
   assertThreadContentSchema
 } from './document-content-schema';
@@ -577,6 +578,20 @@ export type ThreadInput = Omit<
 > & {
   name: string;
   ids?: BodyFeatureIds;
+};
+
+/**
+ * M16 (schema v58): a sheet-metal feature's input — its {@link FeatureData}
+ * fields plus the command's name, optional preallocated ids and the new
+ * body's name.
+ */
+export type SheetMetalInput = Omit<
+  Extract<FeatureData, { featureKind: 'sheet-metal' }>,
+  'featureKind'
+> & {
+  name: string;
+  ids?: BodyFeatureIds;
+  bodyName?: string;
 };
 
 export interface SplitInput {
@@ -3509,6 +3524,7 @@ function addBodyResultFeature(
     | 'hole'
     | 'gear'
     | 'thread'
+    | 'sheet-metal'
     | 'shell'
     | 'solid-offset'
     | 'loft'
@@ -3527,6 +3543,7 @@ function addBodyResultFeature(
         | 'hole'
         | 'gear'
         | 'thread'
+        | 'sheet-metal'
         | 'shell'
         | 'solid-offset'
         | 'loft'
@@ -3706,6 +3723,29 @@ export function threadBody(
     'thread',
     deepClone({ featureKind: 'thread', ...parameters }),
     ids
+  );
+}
+
+/**
+ * Adds an M16 sheet-metal part: one new body, the blank's sketch cells
+ * `thickness` thick, folded by every bend in `bends`. No body is consumed.
+ */
+export function sheetMetalBody(
+  document: ProjectDocument,
+  input: SheetMetalInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  const { name, ids, bodyName, ...parameters } = input;
+  // Written to a document that declares an older schema, the feature would
+  // be dropped by the readers that schema admits.
+  assertSheetMetalSchema(document.schemaVersion);
+  assertFeatureProfileProvenance(parameters, document);
+  return addBodyResultFeature(
+    document,
+    name,
+    'sheet-metal',
+    deepClone({ featureKind: 'sheet-metal', ...parameters }),
+    ids,
+    bodyName
   );
 }
 
@@ -4694,6 +4734,20 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
   mirror: ['targetBodyId', 'plane'],
   'datum-plane': ['definition'],
   'datum-axis': ['definition'],
+  'sheet-metal': [
+    'sketchId',
+    'profiles',
+    'thickness',
+    'thicknessSide',
+    'bendRadius',
+    'kFactor',
+    'kFactorMethod',
+    'relief',
+    'materialPresetId',
+    'gaugeId',
+    'fixedPoint',
+    'bends'
+  ],
   thread: [
     'targetBodyId',
     'faceHash',
@@ -4848,6 +4902,16 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   Record<FeatureKind, readonly string[]>
 > = {
   extrude: ['endCondition', 'throughAllSide', 'toFace', 'draftAngleDeg'],
+  // M16: each falls back to its documented default (positive side, a
+  // K-factor value, a rectangular relief, no preset, the largest region).
+  'sheet-metal': [
+    'thicknessSide',
+    'kFactorMethod',
+    'relief',
+    'materialPresetId',
+    'gaugeId',
+    'fixedPoint'
+  ],
   boolean: ['keepOriginals'],
   split: ['keepOriginal'],
   loft: ['endPoint'],

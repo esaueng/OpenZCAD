@@ -266,6 +266,7 @@ function suppressedScopeSource(feature: FeatureNode): BodyId | null {
     case 'loft':
     case 'sweep':
     case 'helical-sweep':
+    case 'sheet-metal':
     case 'imported-mesh':
     case 'imported-step':
     case 'datum-plane':
@@ -333,6 +334,11 @@ function featureScopeForBodies(
     included.add(feature.featureId);
     switch (data.featureKind) {
       case 'sketch':
+        break;
+      case 'sheet-metal':
+        // The blank's sketch and each bend line's sketch.
+        neededSketches.add(data.sketchId);
+        for (const bend of data.bends) neededSketches.add(bend.line.sketchId);
         break;
       case 'extrude':
         neededSketches.add(data.sketchId);
@@ -650,6 +656,7 @@ function nativeCandidates(
         break;
       case 'hole':
       case 'split':
+      case 'sheet-metal':
       case 'gear':
       case 'thread':
         // In scope so the walk reaches the bodies they consume, but their

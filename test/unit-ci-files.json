@@ -179,6 +179,7 @@
     "test/security-boundary-regressions.test.ts",
     "test/security-workflow.test.ts",
     "test/settings-search-index.test.ts",
+    "test/sheet-metal-feature.test.ts",
     "test/shell-draft-edge-lineage.test.ts",
     "test/sketch-constraint-set.test.ts",
     "test/sketch-editing.test.ts",
