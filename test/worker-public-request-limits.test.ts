@@ -298,13 +298,14 @@ describe('signed-in reads', () => {
          VALUES (?, ?, ?, ?)`
       )
       .run(tokenHash, userId, 0, 4_000_000_000);
-    const read = () =>
+    const get = (path: string) =>
       worker.fetch(
-        new Request('https://example.com/api/session', {
+        new Request(`https://example.com${path}`, {
           headers: { cookie: `__Host-openzcad_session=${token}` }
         }),
         env
       );
+    const read = () => get('/api/collaboration/config');
     expect((await read()).status).toBe(200);
     // Spend the rest of this minute's 1,200 reads in one step.
     sqlite
@@ -313,6 +314,11 @@ describe('signed-in reads', () => {
       )
       .run(`api-read:${userId}`);
     expect((await read()).status).toBe(429);
+    // The session read stays answerable: refusing it made a busy signed-in
+    // page read as signed out.
+    const session = await get('/api/session');
+    expect(session.status).toBe(200);
+    expect(await session.json()).toMatchObject({ userId });
   });
 });
 
@@ -440,7 +446,9 @@ describe('Workers rate-limit bindings', () => {
     const binding = limiter(false);
     statements.length = 0;
     const response = await worker.fetch(
-      new Request('https://example.com/api/session', { headers: { cookie } }),
+      new Request('https://example.com/api/collaboration/config', {
+        headers: { cookie }
+      }),
       { ...env, ACCOUNT_READ_LIMITER: binding }
     );
     expect(response.status).toBe(429);
@@ -448,6 +456,19 @@ describe('Workers rate-limit bindings', () => {
     expect(
       statements.filter((sql) => sql.includes('auth_rate_limits'))
     ).toEqual([]);
+  });
+
+  it('never count the session read against the account read budget', async () => {
+    const { env, sqlite } = hostedEnv();
+    const { userId, cookie } = await signedIn(sqlite);
+    const binding = limiter(false);
+    const response = await worker.fetch(
+      new Request('https://example.com/api/session', { headers: { cookie } }),
+      { ...env, ACCOUNT_READ_LIMITER: binding }
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ userId });
+    expect(binding.limit).not.toHaveBeenCalled();
   });
 
   it('match the limits each Wrangler configuration declares', () => {
