@@ -34,6 +34,7 @@ import { uploadTransport } from './e2ee/encryptedContentBlobs';
 import { localStorageEncryptedProjectPins } from './e2ee/encryptedProjectPins';
 import {
   ASSISTANT_GRANT_PREFIX,
+  assistantConsentPinKey,
   beginAssistantAllow,
   completeAssistantAllow,
   stopAssistantGrant
@@ -753,6 +754,30 @@ describe('an assistant request', () => {
       if (command === 'desktop_prepare_access') {
         window.localStorage.removeItem(
           `${ASSISTANT_GRANT_PREFIX}user_ctx:${projectId}`
+        );
+      }
+    });
+    await expect(
+      streamAssistantReply({
+        prompt: 'Hi',
+        digest: assistantDigest(projectId),
+        consent
+      })
+    ).rejects.toMatchObject({ code: 'AI_E2EE_PROJECT' });
+    expect(nativeSends()).toEqual([]);
+  });
+
+  it('refuses at the send a grant older than a record another tab verified meanwhile', async () => {
+    // Confirmed under sequence 1; while the native credential is readied,
+    // Settings in another tab verifies another device's revocation at 2.
+    const projectId = 'proj_assistant_revoked_meanwhile';
+    otherTab().pin(projectId);
+    const consent = grantHere(projectId);
+    desktop((command) => {
+      if (command === 'desktop_prepare_access') {
+        window.localStorage.setItem(
+          assistantConsentPinKey('user_ctx', projectId),
+          '2'
         );
       }
     });

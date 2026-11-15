@@ -190,6 +190,49 @@ describe('Settings › Encryption › Assistant access (ADR-024 6-1)', () => {
     );
   });
 
+  it('revokes past an Allow stored since the list was read (stale sequence)', async () => {
+    unlock();
+    const user = userEvent.setup();
+    const { api, rows } = fakeApi([await row('proj_a', 1)]);
+    const save = api.save;
+    let raced = false;
+    api.save = vi.fn(
+      async (projectId: string, request: E2eeSaveAssistantConsentRequest) => {
+        if (!raced) {
+          raced = true;
+          // Another device's Allow lands at sequence 2 first: the account
+          // refuses this revocation's sequence 2 as stale.
+          rows.set(projectId, await row(projectId, 2));
+          throw new E2eeApiError(
+            409,
+            'A newer assistant choice is already stored for this project. Reload and try again.',
+            'E2EE_ASSISTANT_CONSENT_STALE'
+          );
+        }
+        return save(projectId, request);
+      }
+    );
+    render(
+      <AssistantAccessSettings
+        userId={USER}
+        unlocked
+        api={api}
+        pins={memoryConsentPins()}
+        listProjects={listProjects}
+      />
+    );
+    await user.click(
+      await screen.findByRole('button', {
+        name: 'Revoke assistant access to Secret bracket'
+      })
+    );
+    await waitFor(() =>
+      expect(rows.get('proj_a')).toMatchObject({ allowed: false, sequence: 3 })
+    );
+    expect(api.save).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('shows nothing when the account cannot store consent', async () => {
     unlock();
     const api: AssistantConsentApi = {

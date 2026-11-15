@@ -9,6 +9,7 @@ import {
   assistantConsentContext,
   consentFloor,
   createAssistantConsentApi,
+  loadAssistantConsent,
   localStorageConsentPins,
   saveAssistantConsent,
   verifyListedConsent,
@@ -17,6 +18,7 @@ import {
   type ConsentPinStore
 } from '../lib/e2ee/assistantConsent';
 import { stopAssistantGrant } from '../lib/e2ee/assistantConsentGrants';
+import { E2eeApiError } from '../lib/e2ee/e2eeApi';
 import { Group, Notice, SettingRow, Status } from './settingsControls';
 
 interface Listed {
@@ -145,13 +147,30 @@ export function AssistantAccessSettings({
     stopAssistantGrant(ctx.userId, entry.projectId);
     setBusy(entry.projectId);
     setError(null);
-    try {
-      await saveAssistantConsent(
+    const saveRevocation = (floor: number) =>
+      saveAssistantConsent(
         ctx,
         entry.projectId,
         { allowed: false, route: '' },
-        consentFloor(entry.state)
+        floor
       );
+    try {
+      try {
+        await saveRevocation(consentFloor(entry.state));
+      } catch (caught) {
+        // An Allow stored since this list was read took that sequence:
+        // read the account's record again and revoke past it.
+        if (
+          !(caught instanceof E2eeApiError) ||
+          caught.code !== 'E2EE_ASSISTANT_CONSENT_STALE'
+        ) {
+          throw caught;
+        }
+        const latest = await loadAssistantConsent(ctx, entry.projectId);
+        await saveRevocation(
+          Math.max(consentFloor(entry.state), consentFloor(latest))
+        );
+      }
     } catch (caught) {
       setError(
         caught instanceof Error

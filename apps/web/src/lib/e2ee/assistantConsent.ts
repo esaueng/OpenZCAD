@@ -26,6 +26,7 @@ import {
   type E2eeSaveAssistantConsentRequest
 } from '@openzcad/shared';
 import { desktopFetch } from '../desktopBridge';
+import { assistantConsentPinKey } from './assistantConsentGrants';
 import { E2eeApiError } from './e2eeApi';
 import { unlockedAccount } from './unlockedKeys';
 
@@ -100,8 +101,12 @@ export interface ConsentPinStore {
   write(userId: string, projectId: string, sequence: number): Promise<void>;
 }
 
-const PIN_KEY = (userId: string, projectId: string) =>
-  `openzcad:e2ee-assistant-consent-pin:v1:${userId}:${projectId}`;
+/**
+ * Also the floor the send gate holds a grant to
+ * (`assistantConsentGrants.ts`): a request confirmed under an older record
+ * than this device has verified since is refused.
+ */
+const PIN_KEY = assistantConsentPinKey;
 
 /**
  * Pins in localStorage. Storage that is blocked or cleared loses the pin,

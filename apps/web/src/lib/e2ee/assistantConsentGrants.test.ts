@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  ASSISTANT_ALLOW_PENDING_PREFIX,
+  ASSISTANT_GRANT_PREFIX,
+  ASSISTANT_STOP_PREFIX,
+  assistantConsentPinKey,
   assistantGrant,
   assistantGrantCurrent,
   beginAssistantAllow,
@@ -102,11 +106,64 @@ describe('this device’s assistant grants', () => {
     expect(assistantGrantCurrent(consent, store)).toBe(false);
   });
 
+  it('never lets another tab read a grant written after a Stop interleaved with the write', () => {
+    // Tab A completes its Allow; between its pending check and its grant
+    // write, tab B stops (moves the generation, removes the keys). Tab C
+    // reads the grant right after A wrote it, before A's own re-check.
+    const shared = storage();
+    let seenByC: unknown = 'not read';
+    const tabA = {
+      getItem: (key: string) => shared.getItem(key),
+      removeItem: (key: string) => shared.removeItem(key),
+      setItem(key: string, value: string) {
+        if (key === 'openzcad:e2ee-assistant-grant:v1:u:p') {
+          shared.setItem(`${ASSISTANT_STOP_PREFIX}u:p`, 'x'.repeat(36));
+          shared.removeItem(`${ASSISTANT_ALLOW_PENDING_PREFIX}u:p`);
+          shared.removeItem(`${ASSISTANT_GRANT_PREFIX}u:p`);
+          shared.setItem(key, value);
+          seenByC = assistantGrant('u', 'p', shared);
+          return;
+        }
+        shared.setItem(key, value);
+      }
+    };
+    const ticket = beginAssistantAllow('u', 'p', tabA)!;
+    expect(completeAssistantAllow(ticket, RECORD, tabA)).toBeNull();
+    expect(seenByC).toBeNull();
+    expect(assistantGrant('u', 'p', shared)).toBeNull();
+  });
+
+  it('is not current once this device verified a newer record', () => {
+    const store = storage();
+    const grant = completeAssistantAllow(
+      beginAssistantAllow('u', 'p', store)!,
+      RECORD,
+      store
+    )!;
+    const consent = { userId: 'u', projectId: 'p', ...RECORD, grant: grant.id };
+    store.values.set(assistantConsentPinKey('u', 'p'), String(RECORD.sequence));
+    expect(assistantGrantCurrent(consent, store)).toBe(true);
+    // Any tab verified a Stop (or another device's newer record) past it.
+    store.values.set(
+      assistantConsentPinKey('u', 'p'),
+      String(RECORD.sequence + 1)
+    );
+    expect(assistantGrantCurrent(consent, store)).toBe(false);
+    store.values.set(assistantConsentPinKey('u', 'p'), 'garbage');
+    expect(assistantGrantCurrent(consent, store)).toBe(false);
+  });
+
   it('reads a malformed grant as none', () => {
     const store = storage();
     store.values.set(
       'openzcad:e2ee-assistant-grant:v1:u:p',
-      JSON.stringify({ sequence: 0, route: '', copyVersion: 1, id: 'x' })
+      JSON.stringify({
+        sequence: 0,
+        route: '',
+        copyVersion: 1,
+        id: 'x',
+        stop: 'y'
+      })
     );
     expect(assistantGrant('u', 'p', store)).toBeNull();
     store.values.set('openzcad:e2ee-assistant-grant:v1:u:p', '{');
