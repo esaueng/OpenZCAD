@@ -166,6 +166,14 @@
     height: 44px;
   }
 
+  /* The storage readout is one button drawn under its line and meter, so
+     the readout itself is the target: 34 px tall on a phone, between the
+     column's foot and the launch row. */
+  .start-account-head {
+    min-height: 44px;
+    align-content: center;
+  }
+
   /* New project and Import share a row 6 px apart, so a reach would land
      on the other: both are drawn 44 px, Import square. */
   .start-launch-create {

@@ -264,7 +264,30 @@ const LOADING_PROJECT_TILES = 10;
 
 /** The Projects shelf's narrowing, beside its heading. */
 type ShelfFilter = 'all' | 'pinned' | 'attention' | 'local';
-type ShelfSort = 'custom' | 'edited' | 'name';
+type ShelfSort = 'custom' | 'edited' | 'name' | 'size';
+
+/**
+ * The size sort's order: largest first, and a row with no figure (unmeasured,
+ * or locked) after every row that has one, where its size cannot mislead.
+ */
+function largestFirst(a: number | undefined, b: number | undefined): number {
+  if (a === undefined) return b === undefined ? 0 : 1;
+  if (b === undefined) return -1;
+  return b - a;
+}
+
+/**
+ * The size the list shows for a project: none for one this build cannot open,
+ * or for a figure that is not a number of bytes (the column shows a dash).
+ */
+function shownBytes(project: ProjectSummary): number | undefined {
+  const bytes = project.documentBytes;
+  return projectNeedsUpdate(project) ||
+    bytes === undefined ||
+    !Number.isFinite(bytes)
+    ? undefined
+    : bytes;
+}
 type ShelfLayout = 'grid' | 'list';
 
 const SHELF_FILTERS: ReadonlyArray<{ id: ShelfFilter; label: string }> = [
@@ -363,7 +386,11 @@ function readLibraryView(): LibraryView {
     ) {
       view.filter = stored.filter;
     }
-    if (stored.sort === 'edited' || stored.sort === 'name') {
+    if (
+      stored.sort === 'edited' ||
+      stored.sort === 'name' ||
+      stored.sort === 'size'
+    ) {
       view.sort = stored.sort;
     }
     if (typeof stored.query === 'string') {
@@ -990,9 +1017,12 @@ export function StartScreen({
             Number(projectOrganization(b).pinned) -
             Number(projectOrganization(a).pinned);
           if (pinned !== 0) return pinned;
-          return sort === 'edited'
-            ? b.updatedAt.localeCompare(a.updatedAt)
-            : a.name.localeCompare(b.name, undefined, { numeric: true });
+          if (sort === 'edited') return b.updatedAt.localeCompare(a.updatedAt);
+          if (sort === 'size') {
+            const bySize = largestFirst(shownBytes(a), shownBytes(b));
+            if (bySize !== 0) return bySize;
+          }
+          return a.name.localeCompare(b.name, undefined, { numeric: true });
         });
   // Folders gather projects only on the unfiltered shelf; a filter or a search
   // looks through them, showing every matching project on its own.
@@ -1013,11 +1043,18 @@ export function StartScreen({
     ? []
     : sort === 'custom'
       ? folders
-      : [...folders].sort((a, b) =>
-          sort === 'edited'
-            ? latestEdit(b).localeCompare(latestEdit(a))
-            : a.name.localeCompare(b.name, undefined, { numeric: true })
-        );
+      : [...folders].sort((a, b) => {
+          if (sort === 'edited')
+            return latestEdit(b).localeCompare(latestEdit(a));
+          if (sort === 'size') {
+            const bySize = largestFirst(
+              folderBytes(folderMembers(a)),
+              folderBytes(folderMembers(b))
+            );
+            if (bySize !== 0) return bySize;
+          }
+          return a.name.localeCompare(b.name, undefined, { numeric: true });
+        });
 
   // A project sent to another shelf takes its tile, and the focused control in
   // it, off the page, which would leave focus on nothing. Once it is gone the
@@ -1072,6 +1109,11 @@ export function StartScreen({
     ...looseProjects.map((project) => project.projectId)
   ];
   const folderById = new Map(folders.map((folder) => [folder.id, folder]));
+  // An open folder's members as shown. A move starts from the order on
+  // screen: from the stored order, under a sort, Alt+Right on the last card
+  // shown did nothing because it was first in storage. Reordering needs the
+  // whole shelf (no search or filter), so these are all its members.
+  const shownMemberIds = matchingProjects.map((project) => project.projectId);
 
   /**
    * Saves a new order of the tiles on screen, and the tile a drag took into
@@ -1172,9 +1214,7 @@ export function StartScreen({
   }
 
   const reorder = useTileReorder({
-    ids: openFolder
-      ? baseProjects.map((project) => project.projectId)
-      : reorderIds,
+    ids: openFolder ? shownMemberIds : reorderIds,
     enabled: canReorder,
     tileRefs,
     // Pinned projects and folders head the shelf as their own group: dragging
@@ -1262,9 +1302,7 @@ export function StartScreen({
 
   /** Alt and an arrow key move the focused card one place among its kind. */
   function nudge(id: string, offset: number) {
-    const ids = openFolder
-      ? baseProjects.map((project) => project.projectId)
-      : reorderIds;
+    const ids = openFolder ? shownMemberIds : reorderIds;
     const kind = ids.filter(
       (entry) => Boolean(folderIdOf(entry)) === Boolean(folderIdOf(id))
     );
@@ -1692,9 +1730,9 @@ export function StartScreen({
     if (members.length === 0) return undefined;
     let total = 0;
     for (const member of members) {
-      if (projectNeedsUpdate(member) || member.documentBytes === undefined)
-        return undefined;
-      total += member.documentBytes;
+      const bytes = shownBytes(member);
+      if (bytes === undefined) return undefined;
+      total += bytes;
     }
     return total;
   }
@@ -2100,7 +2138,7 @@ export function StartScreen({
             {/* The list has Size and Saves columns; a card leaves both out. */}
             {layout === 'list' &&
               renderSize(
-                locked ? undefined : project.documentBytes,
+                shownBytes(project),
                 'Document size',
                 locked
                   ? undefined
@@ -3509,6 +3547,7 @@ export function StartScreen({
                       <option value="custom">Custom order</option>
                       <option value="edited">Last edited</option>
                       <option value="name">Name</option>
+                      <option value="size">Size</option>
                     </select>
                   </label>
                 ) : (
@@ -3525,6 +3564,7 @@ export function StartScreen({
                       <option value="custom">Custom order</option>
                       <option value="edited">Last edited</option>
                       <option value="name">Name</option>
+                      <option value="size">Size</option>
                     </select>
                   </span>
                 )}
