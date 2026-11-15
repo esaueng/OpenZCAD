@@ -2,8 +2,8 @@
 row: AS03
 ---
 
-Stored exploded-view offsets (schema v61, `assembly.explode`; builds on v59,
-v60 is claimed by the L09 print clearance): one world translation per
+Stored exploded-view offsets (schema v61, `assembly.explode`; builds on v60,
+the L09 print clearance): one world translation per
 component, applied after its solved pose, presentation only (no effect on
 the joint solve, couplings, playback, BOM or rebuild). Assemble's sidebar
 gains an Exploded view section: Assembled / Exploded (a view toggle, never
