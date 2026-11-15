@@ -36,6 +36,39 @@ describe('validated feature warnings', () => {
     expect(failure.diagnostic.headline).toContain('smaller diameter');
     expect(failure.diagnostic.detail).toBe('opaque diagnostic');
   });
+  it.each([
+    [undefined, 'Try a smaller diameter.'],
+    ['wall_meets_face', 'Try a smaller diameter.'],
+    [
+      'group_reblend_failed',
+      'Change or remove those fillets in History, then resize the wall.'
+    ]
+  ])(
+    'carries the kernel cause of a diameter refusal to the card (%s)',
+    (reason, advice) => {
+      const diagnostic = validatedFeatureRejection({
+        ...safe,
+        featureWarnings: [
+          {
+            kind: 'refusal',
+            featureId: toFeatureId('resize'),
+            featureName: safe.featureName,
+            message: 'opaque diagnostic',
+            kernelRefusal: {
+              family: 'direct-edit',
+              operation: 'resize-cylindrical-face',
+              category: 'internal',
+              code: 'cylinder-diameter-unbuildable',
+              ...(reason ? { reason } : {})
+            }
+          }
+        ]
+      })!;
+      expect(diagnostic.headline).toContain(advice);
+      expect(diagnostic.message).toContain(advice);
+      expect(diagnostic.detail).toBe('opaque diagnostic');
+    }
+  );
   it('extracts only the warning for the candidate feature', () => {
     const warnings = [
       'Feature "Other feature": unrelated',

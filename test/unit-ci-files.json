@@ -158,6 +158,7 @@
     "test/pin-remus.test.ts",
     "test/prepared-face-move-preview.test.ts",
     "test/private-artifacts.test.ts",
+    "test/project-adoption-api.test.ts",
     "test/project-authorization.test.ts",
     "test/project-diagnostics.test.ts",
     "test/project-sharing.test.ts",

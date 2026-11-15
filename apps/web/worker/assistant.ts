@@ -27,7 +27,7 @@ import { isPrivateHostname } from './privateNetwork';
 import { matchesAssistantSchema } from './assistantJsonSchema';
 
 export const DEFAULT_AI_MODEL = 'gpt-6-luna';
-export const DEFAULT_OPENROUTER_MODEL = 'minimax/minimax-m3.1-flash:free';
+export const DEFAULT_OPENROUTER_MODEL = 'nvidia/nemotron-3.5-super-vl:free';
 export const DEFAULT_AI_REASONING_EFFORT = 'high';
 export const DEFAULT_AI_MAX_OUTPUT_TOKENS = 32_000;
 export const DEFAULT_AI_TIMEOUT_MS = 90_000;
