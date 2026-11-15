@@ -1641,6 +1641,13 @@
   white-space: nowrap;
 }
 
+/* Kept whole: it tells a part's recovery copies apart, so the date clips
+   first. */
+.start-tile-clock {
+  flex: none;
+  white-space: pre;
+}
+
 /* The date and the quiet marks that qualify it: encrypted, a recovery copy,
    on this device only. */
 .start-tile-when {

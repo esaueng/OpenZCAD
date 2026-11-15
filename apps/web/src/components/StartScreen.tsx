@@ -433,24 +433,23 @@ export function formatLastEdited(updatedAt: string): string {
 }
 
 /**
- * A recovery copy's stamp: its date and time ("Nov 12 · 7:00 AM"). The time
+ * A recovery copy's date, ahead of its time ("Nov 12" · "7:00 AM"). The time
  * is what tells a part's copies apart, and with the year as well the date
  * clipped to "Nov 12, …" on a card. The year shows only when it is not this
  * one, and the tooltip keeps the exact moment.
  */
-export function formatRecoveryStamp(
+export function formatRecoveryDate(
   updatedAt: string,
   now: Date = new Date()
 ): string {
   const date = new Date(updatedAt);
-  const day = date.toLocaleDateString(undefined, {
+  return date.toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
     ...(date.getFullYear() === now.getFullYear()
       ? {}
       : { year: 'numeric' as const })
   });
-  return `${day} · ${formatTime(date)}`;
 }
 
 const SHELVES: ReadonlyArray<{
@@ -605,6 +604,8 @@ export function StartScreen({
 }: StartScreenProps) {
   const projects = scopePending ? [] : discoveredProjects;
   const settingsKey = useKeymap().label('app-settings');
+  // Prefixes the ids the shelf's tiles describe themselves by.
+  const instanceId = useId();
   const [initialDraft] = useState(readLibraryDraft);
   const [name, setName] = useState(
     () => initialDraft?.name ?? generateCutePartName()
@@ -1759,6 +1760,7 @@ export function StartScreen({
     const pinnedNow = shownFolderPinned(folder);
     const dropping = reorder.dropTarget?.target === key;
     const edited = latestEdit(folder);
+    const editedId = `${instanceId}-edited-${folder.id.replace(/[^\w-]/g, '_')}`;
     const renaming = renamingFolderId === folder.id;
     return (
       <div
@@ -1791,6 +1793,7 @@ export function StartScreen({
           data-tile-drag=""
           disabled={busy}
           aria-label={`Open folder ${folder.name}, ${members.length} ${members.length === 1 ? 'project' : 'projects'}`}
+          aria-describedby={edited ? editedId : undefined}
           aria-keyshortcuts={
             canReorder ? `${TILE_KEYS} ${REORDER_KEYS}` : TILE_KEYS
           }
@@ -1876,6 +1879,14 @@ export function StartScreen({
                     : `${members.length} ${members.length === 1 ? 'project' : 'projects'}`}
                 </span>
               </small>
+            )}
+            {/* The newest edit left the card's line, so the button
+                describes it to a keyboard or screen reader; touch has the
+                list's Edited column. */}
+            {edited && (
+              <span id={editedId} className="visually-hidden">
+                {`Last edited ${formatLastEdited(edited)}`}
+              </span>
             )}
           </span>
         </button>
@@ -2126,8 +2137,15 @@ export function StartScreen({
               >
                 {recoveryOf === null
                   ? formatLastEdited(project.updatedAt)
-                  : formatRecoveryStamp(project.updatedAt)}
+                  : formatRecoveryDate(project.updatedAt)}
               </time>
+              {/* The time is what tells a part's recovery copies apart, so
+                  the date clips before it does. */}
+              {recoveryOf !== null && (
+                <span className="start-tile-clock">
+                  {`· ${formatTime(new Date(project.updatedAt))}`}
+                </span>
+              )}
             </span>
             {/* The list has Size and Saves columns; a card leaves both out. */}
             {layout === 'list' &&

@@ -21,7 +21,7 @@ import {
 } from '@openzcad/shared';
 import {
   formatLastEdited,
-  formatRecoveryStamp,
+  formatRecoveryDate,
   recoveryCopyOf,
   StartScreen
 } from './StartScreen';
@@ -854,22 +854,17 @@ describe('StartScreen project timestamps', () => {
     expect(formatLastEdited(today.toISOString())).not.toMatch(/^Today/);
   });
 
-  it("stamps a recovery copy with its time, and its year only when it isn't this one", () => {
+  it("dates a recovery copy without this year's year", () => {
     // 14 Nov 2026: "Nov 12, 2026 · 7:00 AM" clipped to "Nov 12, … · 7:00 AM"
-    // on a card.
+    // on a card. The time stays a span of its own that never shrinks.
     const now = new Date(2026, 10, 14, 12, 0);
     const thisYear = new Date(2026, 10, 12, 7, 0);
     const lastYear = new Date(2025, 10, 12, 7, 0);
-    const time = (date: Date) =>
-      date.toLocaleTimeString(undefined, {
-        hour: 'numeric',
-        minute: '2-digit'
-      });
-    expect(formatRecoveryStamp(thisYear.toISOString(), now)).toBe(
-      `${thisYear.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · ${time(thisYear)}`
+    expect(formatRecoveryDate(thisYear.toISOString(), now)).toBe(
+      thisYear.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
     );
-    expect(formatRecoveryStamp(lastYear.toISOString(), now)).toBe(
-      `${shortDate(lastYear)} · ${time(lastYear)}`
+    expect(formatRecoveryDate(lastYear.toISOString(), now)).toBe(
+      shortDate(lastYear)
     );
   });
 });
@@ -1845,6 +1840,10 @@ describe('StartScreen folders and selection', () => {
     // to two or three lines; the date is a hover away.
     const when = folder.querySelector('.start-tile-when')!;
     expect(when).toHaveTextContent(/^2 projects$/);
+    // Off the card's line, the newest edit still describes the button.
+    expect(
+      screen.getByRole('button', { name: 'Open folder Fixtures, 2 projects' })
+    ).toHaveAccessibleDescription(/^Last edited /);
     expect(when).toHaveAttribute(
       'title',
       expect.stringMatching(/^Last edited /)
