@@ -6,6 +6,7 @@ import {
   isEncryptedProject,
   rememberEncryptedProject,
   rememberProjectFormats,
+  resetEncryptedProjectPins,
   treatProjectAsNotEncrypted
 } from '../lib/api';
 import {
@@ -17,6 +18,7 @@ import {
 import {
   EncryptedPinRecovery,
   PIN_RESET_NOT_SAVED,
+  PIN_RESET_UNCONFIRMED,
   PinResetDialog
 } from './EncryptedPinReset';
 
@@ -24,6 +26,7 @@ const OWNER = { confirmedByOwner: true } as const;
 
 afterEach(() => {
   resetGenerationsFit = true;
+  resetReadBackFails = false;
   window.localStorage.removeItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY);
 });
 
@@ -37,9 +40,22 @@ const storageDescriptor = Object.getOwnPropertyDescriptor(
   'localStorage'
 );
 let resetGenerationsFit = true;
+/** Set: a reset generation is saved, but reading it back throws once. */
+let resetReadBackFails = false;
+let unreadable: string | null = null;
 const gatedStorage = {
-  getItem: (key: string) => realStorage.getItem(key),
+  getItem: (key: string) => {
+    if (key === unreadable) {
+      unreadable = null;
+      throw new DOMException('blocked', 'SecurityError');
+    }
+    return realStorage.getItem(key);
+  },
   setItem: (key: string, value: string) => {
+    if (resetReadBackFails && key.startsWith(ENCRYPTED_PROJECT_RESET_PREFIX)) {
+      resetReadBackFails = false;
+      unreadable = key;
+    }
     if (
       !resetGenerationsFit &&
       key.startsWith(ENCRYPTED_PROJECT_RESET_PREFIX)
@@ -211,6 +227,46 @@ describe('Settings › Encryption › On this device', () => {
       expect(screen.getByRole('group', { name: 'Full bracket' })).toBeTruthy();
     } finally {
       resetGenerationsFit = true;
+      treatProjectAsNotEncrypted(projectId, OWNER);
+    }
+  });
+});
+
+// PR #1418 review: a reset saved but not read back was reported as
+// changing nothing, while a reload dropped the project's protections.
+describe('a project reset that cannot be confirmed', () => {
+  it('says so, and keeps the project encrypted here and after a reload', () => {
+    const projectId = 'proj_reset_unsure';
+    disagreeing(projectId, 'Unsure bracket');
+    try {
+      render(<EncryptedPinRecovery />);
+      const row = screen.getByRole('group', { name: 'Unsure bracket' });
+      fireEvent.click(
+        within(row).getByRole('button', {
+          name: 'Treat as not encrypted on this device'
+        })
+      );
+      fireEvent.click(within(row).getByRole('checkbox'));
+      resetReadBackFails = true;
+      fireEvent.click(
+        within(row).getByRole('button', { name: 'Treat as not encrypted' })
+      );
+      expect(screen.getByText(PIN_RESET_UNCONFIRMED)).toBeTruthy();
+      expect(PIN_RESET_UNCONFIRMED).toMatch(/still treated as encrypted/);
+      expect(PIN_RESET_UNCONFIRMED).toMatch(/reload/);
+      expect(PIN_RESET_UNCONFIRMED).toMatch(/Settings › Encryption/);
+      expect(screen.queryByText(PIN_RESET_NOT_SAVED)).toBeNull();
+      expect(isEncryptedProject(projectId)).toBe(true);
+      expect(encryptedProjectPinsUnavailable()).toBe(true);
+      // A fresh load, even without the failure key, still holds the pin.
+      window.localStorage.removeItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY);
+      expect(
+        localStorageEncryptedProjectPins(window.localStorage).has(projectId)
+      ).toBe(true);
+    } finally {
+      resetReadBackFails = false;
+      unreadable = null;
+      resetEncryptedProjectPins(OWNER);
       treatProjectAsNotEncrypted(projectId, OWNER);
     }
   });

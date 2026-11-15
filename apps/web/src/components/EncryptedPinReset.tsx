@@ -7,6 +7,7 @@ import {
   encryptedProjectPinsUnavailable,
   formatMismatchedProjects,
   isEncryptedPinProblemError,
+  projectResetUnconfirmed,
   resetEncryptedProjectPins,
   treatProjectAsNotEncrypted,
   type ApiError,
@@ -181,6 +182,20 @@ export const PIN_RESET_NOT_SAVED =
   'This device couldn’t save the reset because browser storage is full or blocked, so nothing changed and the project stays as it was. Free up browser storage for this site (or allow site storage), then try again. Don’t clear site data: that would also remove unsynced work and this device’s encryption keys.';
 
 /**
+ * A project reset this device saved but could not confirm: the project is
+ * still treated as encrypted, here and after a reload.
+ */
+export const PIN_RESET_UNCONFIRMED =
+  'This device couldn’t confirm the reset because browser storage is full or blocked, so the project is still treated as encrypted (and, until this is sorted out, so is every other project). Free up browser storage for this site, reload, then check Settings › Encryption. Don’t clear site data: that would also remove unsynced work and this device’s encryption keys.';
+
+/** Why a confirmed project reset did not take effect. */
+export function pinResetFailure(projectId: string): string {
+  return projectResetUnconfirmed(projectId)
+    ? PIN_RESET_UNCONFIRMED
+    : PIN_RESET_NOT_SAVED;
+}
+
+/**
  * Runs a confirmed reset and says what came of it. The account is never
  * asked: the reset is this device's own.
  */
@@ -206,7 +221,7 @@ export function runPinReset(target: PinResetTarget): {
         ok: true,
         message: `${target.name ?? 'The project'} now follows your account on this device.`
       }
-    : { ok: false, message: PIN_RESET_NOT_SAVED };
+    : { ok: false, message: pinResetFailure(target.projectId) };
 }
 
 /**

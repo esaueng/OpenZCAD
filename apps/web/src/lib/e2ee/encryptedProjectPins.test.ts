@@ -4,6 +4,7 @@ import {
   ENCRYPTED_PROJECT_PIN_FAILED_KEY,
   ENCRYPTED_PROJECT_PIN_RESERVE_KEY,
   ENCRYPTED_PROJECT_PINS_RESET_KEY,
+  ENCRYPTED_PROJECT_RESET_PENDING_PREFIX,
   ENCRYPTED_PROJECT_RESET_PREFIX,
   ENCRYPTED_PROJECT_UNRESOLVED_PREFIX,
   ENCRYPTION_REQUIRED_PREFIX,
@@ -296,6 +297,125 @@ describe('encrypted project pins', () => {
     expect(localStorageEncryptedProjectPins(storage).has('proj_dropped')).toBe(
       true
     );
+  });
+
+  // PR #1418 review: a reset whose new generation was saved but could not
+  // be read back reported that nothing changed, while a fresh load read
+  // the saved generation and so none of the project's records.
+  describe('a reset that is saved but not confirmed', () => {
+    const projectId = 'proj_unsure';
+    const resetKey = ENCRYPTED_PROJECT_RESET_PREFIX + projectId;
+
+    function heldStore() {
+      const storage = memoryStorage();
+      const pins = localStorageEncryptedProjectPins(storage);
+      pins.pin(projectId);
+      pins.markCutoverUnresolved(projectId);
+      pins.requireEncryption(projectId);
+      return { storage, pins };
+    }
+
+    function expectHeld(pins: EncryptedProjectPinStore) {
+      expect(pins.has(projectId)).toBe(true);
+      expect(pins.cutoverUnresolved(projectId)).toBe(true);
+      expect(pins.encryptionRequired(projectId)).toBe(true);
+    }
+
+    it('keeps everything held here and after a reload, and degrades the store', () => {
+      const { storage, pins } = heldStore();
+      const getItem = storage.getItem;
+      let written = false;
+      const setItem = storage.setItem;
+      storage.setItem = (key, value) => {
+        setItem(key, value);
+        if (key === resetKey) written = true;
+      };
+      // The write lands; reading it back throws once.
+      storage.getItem = (key) => {
+        if (key === resetKey && written) {
+          written = false;
+          throw new DOMException('blocked', 'SecurityError');
+        }
+        return getItem(key);
+      };
+      expect(pins.resetProject(projectId)).toBe(false);
+      expect(pins.resetUnconfirmed(projectId)).toBe(true);
+      expectHeld(pins);
+      expect(pins.degraded).toBe(true);
+      expect(storage.values.get(ENCRYPTED_PROJECT_PIN_FAILED_KEY)).toBe('1');
+      // The old generation was put back.
+      expect(storage.values.has(resetKey)).toBe(false);
+
+      storage.getItem = getItem;
+      storage.setItem = setItem;
+      const reloaded = localStorageEncryptedProjectPins(storage);
+      expect(reloaded.degraded).toBe(true);
+      // Even once the owner resets the degraded store, the project's
+      // records are still in force.
+      expect(reloaded.resetDegraded()).toBe(true);
+      expectHeld(reloaded);
+      // A later reset that is confirmed goes through.
+      expect(reloaded.resetProject(projectId)).toBe(true);
+      expect(reloaded.resetUnconfirmed(projectId)).toBe(false);
+      const after = localStorageEncryptedProjectPins(storage);
+      expect(after.has(projectId)).toBe(false);
+      expect(after.cutoverUnresolved(projectId)).toBe(false);
+      expect(after.encryptionRequired(projectId)).toBe(false);
+    });
+
+    it('keeps the old generation in force when the new one cannot be put back', () => {
+      const { storage, pins } = heldStore();
+      const getItem = storage.getItem;
+      const setItem = storage.setItem;
+      const removeItem = storage.removeItem;
+      let locked = false;
+      storage.setItem = (key, value) => {
+        if (locked && key === resetKey) throw new DOMException('full');
+        setItem(key, value);
+        if (key === resetKey) locked = true;
+      };
+      storage.removeItem = (key) => {
+        if (locked && key === resetKey) throw new DOMException('blocked');
+        removeItem(key);
+      };
+      let readBack = true;
+      storage.getItem = (key) => {
+        if (key === resetKey && locked && readBack) {
+          readBack = false;
+          throw new DOMException('blocked', 'SecurityError');
+        }
+        return getItem(key);
+      };
+      expect(pins.resetProject(projectId)).toBe(false);
+      expectHeld(pins);
+      // The new generation stayed saved, unconfirmed.
+      expect(storage.values.get(resetKey)).toMatch(/\./);
+      // Even with the failure key gone, a fresh load reads the old
+      // generation's records: an unconfirmed reset retires nothing.
+      storage.values.delete(ENCRYPTED_PROJECT_PIN_FAILED_KEY);
+      storage.setItem = setItem;
+      storage.removeItem = removeItem;
+      const reloaded = localStorageEncryptedProjectPins(storage);
+      expect(reloaded.degraded).toBe(false);
+      expectHeld(reloaded);
+    });
+
+    it('treats a reset whose pending record cannot be removed as unconfirmed', () => {
+      const { storage, pins } = heldStore();
+      const removeItem = storage.removeItem;
+      storage.removeItem = (key) => {
+        if (key.startsWith(ENCRYPTED_PROJECT_RESET_PENDING_PREFIX)) {
+          throw new DOMException('blocked');
+        }
+        removeItem(key);
+      };
+      expect(pins.resetProject(projectId)).toBe(false);
+      expect(pins.resetUnconfirmed(projectId)).toBe(true);
+      expectHeld(pins);
+      storage.removeItem = removeItem;
+      storage.values.delete(ENCRYPTED_PROJECT_PIN_FAILED_KEY);
+      expectHeld(localStorageEncryptedProjectPins(storage));
+    });
   });
 
   it('keeps a carried encryption requirement across a reload, apart from the pin', () => {
@@ -643,15 +763,18 @@ describe('encrypted project pins', () => {
       const owner = localStorageEncryptedProjectPins(storage);
       owner.pin('proj_cleanup');
       owner.markCutoverUnresolved('proj_cleanup');
-      // Between the reset saving its new generation and removing the old
-      // records, a tab that loads now pins the project and begins another
-      // cutover under that new generation.
+      // Between the reset taking effect (its pending record removed) and
+      // removing the old records, a tab that loads now pins the project
+      // and begins another cutover under that new generation.
       let pinnedAgain = false;
       const resetting = localStorageEncryptedProjectPins({
         getItem: (key) => storage.getItem(key),
         setItem: (key, value) => storage.setItem(key, value),
         removeItem: (key) => {
-          if (!pinnedAgain) {
+          const confirming = key.startsWith(
+            ENCRYPTED_PROJECT_RESET_PENDING_PREFIX
+          );
+          if (!pinnedAgain && !confirming) {
             pinnedAgain = true;
             const fresh = localStorageEncryptedProjectPins(storage);
             expect(fresh.pin('proj_cleanup')).toBe(true);

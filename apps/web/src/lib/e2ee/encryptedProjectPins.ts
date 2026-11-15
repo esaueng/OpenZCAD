@@ -54,6 +54,14 @@
  * the bare `<prefix><projectId>` (written before records had generation
  * keys) still counts unless it names an older generation, as is safe.
  *
+ * A reset takes effect only once confirmed: the generation in force is
+ * first recorded as pending (`ENCRYPTED_PROJECT_RESET_PENDING_PREFIX`),
+ * then the new one is saved and read back, and only then is the pending
+ * record removed. While a pending record is there, its generation stays
+ * in force, so a reset whose new generation was saved but could not be
+ * read back retires nothing, in this tab or after a reload; the store is
+ * then degraded as for a failed pin (`resetUnconfirmed`).
+ *
  * Content this device moves under a new or different project id (a copy,
  * a branch, a device copy made when the account could not be reached, or
  * an adoption the account redirected to another project) from a project
@@ -140,11 +148,19 @@ export interface EncryptedProjectPinStore {
   /**
    * The owner's confirmed "Treat as not encrypted on this device" for one
    * project: drops its pin, its unresolved record and its requirement.
-   * Never called on the account's word. Whether it was reset: false, with
-   * nothing changed here or in storage, when its new reset generation
-   * could not be saved and read back (storage full or blocked).
+   * Never called on the account's word. Whether it was reset: false when
+   * its new reset generation could not be saved and confirmed (storage
+   * full or blocked). Either nothing changed, or the outcome is unknown
+   * (`resetUnconfirmed`): then this tab keeps holding the project as
+   * before, the store is degraded, and a reload still reads its records,
+   * since a reset counts only once confirmed.
    */
   resetProject(projectId: string): boolean;
+  /**
+   * Whether this tab's last reset of the project was saved but could not
+   * be confirmed: it is still held as encrypted, here and after a reload.
+   */
+  resetUnconfirmed(projectId: string): boolean;
   /**
    * The owner's confirmed reset of a degraded store: removes the failure
    * key and keeps every saved pin, then saves the reserve again. This
@@ -199,6 +215,15 @@ export const ENCRYPTION_REQUIRED_PREFIX =
  */
 export const ENCRYPTED_PROJECT_RESET_PREFIX =
   'openzcad:e2ee-encrypted-project-reset:v1:';
+
+/**
+ * One key per project whose reset is not yet confirmed: `<prefix><projectId>`
+ * = the generation in force before it. While it is there that generation
+ * stays in force, whatever the reset key says, so a reset saved but never
+ * confirmed (its read-back failed) retires nothing, here or after a reload.
+ */
+export const ENCRYPTED_PROJECT_RESET_PENDING_PREFIX =
+  'openzcad:e2ee-encrypted-project-reset-pending:v1:';
 
 /** A new token on each confirmed reset of a degraded store. */
 export const ENCRYPTED_PROJECT_PINS_RESET_KEY =
@@ -355,6 +380,20 @@ export function localStorageEncryptedProjectPins(
       return undefined;
     }
   };
+  /**
+   * The project's reset generation in force: the one before a reset that
+   * is not yet confirmed, if there is one, or the one saved; `undefined`
+   * when storage cannot say.
+   */
+  const generationOf = (projectId: string): string | undefined => {
+    const pending = read(ENCRYPTED_PROJECT_RESET_PENDING_PREFIX + projectId);
+    if (pending === undefined) return undefined;
+    if (pending !== null) {
+      return GENERATION.test(pending) ? pending : undefined;
+    }
+    const saved = read(ENCRYPTED_PROJECT_RESET_PREFIX + projectId);
+    return saved === undefined ? undefined : (saved ?? NO_RESET);
+  };
   /** The store's reset generation this tab started with. */
   let storeReset = read(ENCRYPTED_PROJECT_PINS_RESET_KEY);
   let storeStale = false;
@@ -371,7 +410,7 @@ export function localStorageEncryptedProjectPins(
   const resetElsewhere = (projectId: string): boolean => {
     if (storeResetElsewhere()) return true;
     if (staleProjects.has(projectId)) return true;
-    const current = read(ENCRYPTED_PROJECT_RESET_PREFIX + projectId);
+    const current = generationOf(projectId);
     if (current === undefined) return false;
     if (!seenResets.has(projectId)) {
       // First seen now: what this tab holds of it starts here.
@@ -383,31 +422,96 @@ export function localStorageEncryptedProjectPins(
     staleProjects.add(projectId);
     return true;
   };
+  /** Projects whose reset this tab saved but could not confirm. */
+  const unconfirmed = new Set<string>();
   /**
-   * Saves a new reset generation for the project, as this tab's own;
-   * whether it was saved (read back). Not saved (storage full or blocked),
-   * nothing changes here, and the caller clears nothing: the project's
-   * records of the current generation are still the ones a reload reads.
+   * Saves a new reset generation for the project, as this tab's own, in
+   * two steps: first the generation in force now is recorded as pending
+   * (so it stays in force), then the new one is saved, and only once that
+   * is read back is the pending record removed, which retires the old
+   * generation. `unchanged`: not saved (storage full or blocked), so the
+   * caller clears nothing. `indeterminate`: saved, but not confirmed; the
+   * old generation is put back where it can be, the store is degraded,
+   * and the caller clears nothing either.
    */
-  const markReset = (projectId: string): boolean => {
+  const markReset = (
+    projectId: string
+  ): 'reset' | 'unchanged' | 'indeterminate' => {
+    unconfirmed.delete(projectId);
     if (!storage) {
       // Memory only: nothing is saved, so nothing outlives this page.
       staleProjects.delete(projectId);
-      seenResets.set(projectId, null);
-      return true;
+      seenResets.set(projectId, NO_RESET);
+      return 'reset';
     }
-    const token = resetToken();
+    const resetKey = ENCRYPTED_PROJECT_RESET_PREFIX + projectId;
+    const pendingKey = ENCRYPTED_PROJECT_RESET_PENDING_PREFIX + projectId;
+    const before = generationOf(projectId);
+    const beforeSaved = read(resetKey);
+    const pendingBefore = read(pendingKey);
+    if (
+      before === undefined ||
+      beforeSaved === undefined ||
+      pendingBefore === undefined
+    ) {
+      return 'unchanged';
+    }
     try {
-      storage.setItem(ENCRYPTED_PROJECT_RESET_PREFIX + projectId, token);
+      storage.setItem(pendingKey, before);
     } catch {
       // Fall through to the read-back.
     }
-    if (read(ENCRYPTED_PROJECT_RESET_PREFIX + projectId) !== token) {
-      return false;
+    // Not recorded: nothing else is written. A pending record that did
+    // land names the generation in force, so it changes nothing.
+    if (read(pendingKey) !== before) return 'unchanged';
+    const token = resetToken();
+    try {
+      storage.setItem(resetKey, token);
+    } catch {
+      // Fall through to the read-back.
     }
-    staleProjects.delete(projectId);
-    seenResets.set(projectId, token);
-    return true;
+    const saved = read(resetKey);
+    if (saved === beforeSaved) {
+      // Refused outright: nothing changed. Only a pending record this
+      // reset made is removed; an earlier one still holds its generation.
+      if (pendingBefore === null) {
+        try {
+          storage.removeItem(pendingKey);
+        } catch {
+          // Names the generation in force, so it changes nothing.
+        }
+      }
+      return 'unchanged';
+    }
+    if (saved === token) {
+      try {
+        storage.removeItem(pendingKey);
+      } catch {
+        // Checked below.
+      }
+      if (read(pendingKey) === null) {
+        staleProjects.delete(projectId);
+        seenResets.set(projectId, token);
+        return 'reset';
+      }
+    }
+    // Saved, perhaps, but not confirmed: keep the old generation in force
+    // (the pending record first, then the reset key itself), and hold
+    // every project as encrypted until the owner checks.
+    try {
+      storage.setItem(pendingKey, before);
+    } catch {
+      // Best effort; the failure key below still degrades every load.
+    }
+    try {
+      if (beforeSaved === null) storage.removeItem(resetKey);
+      else storage.setItem(resetKey, beforeSaved);
+    } catch {
+      // As above.
+    }
+    unconfirmed.add(projectId);
+    recordFailure();
+    return 'indeterminate';
   };
   /**
    * The generation this tab writes the project's records under: the one
@@ -426,9 +530,8 @@ export function localStorageEncryptedProjectPins(
    * still write one, and it changes nothing.
    */
   const current = (prefix: string, projectId: string): boolean | undefined => {
-    const saved = read(ENCRYPTED_PROJECT_RESET_PREFIX + projectId);
-    if (saved === undefined) return undefined;
-    const generation = saved ?? NO_RESET;
+    const generation = generationOf(projectId);
+    if (generation === undefined) return undefined;
     const keyed = read(`${prefix}${projectId}:${generation}`);
     if (keyed === undefined) return undefined;
     if (keyed !== null) return true;
@@ -566,22 +669,22 @@ export function localStorageEncryptedProjectPins(
     if (written !== undefined) older.add(written);
     const ownTag = unresolvedTags.get(projectId);
     if (ownTag !== undefined) older.add(ownTag);
-    const replaced = read(ENCRYPTED_PROJECT_RESET_PREFIX + projectId);
-    if (replaced !== undefined) older.add(replaced ?? NO_RESET);
+    const replaced = generationOf(projectId);
+    if (replaced !== undefined) older.add(replaced);
     // Nothing is cleared, here or in storage, unless the new generation
-    // was saved: a reload would otherwise still read the old records while
-    // this page reported the project reset.
-    if (!markReset(projectId)) return false;
+    // was saved and confirmed: a reload would otherwise still read the old
+    // records while this page reported the project reset.
+    if (markReset(projectId) !== 'reset') return false;
     own.delete(projectId);
     ownUnresolved.delete(projectId);
     ownRequired.delete(projectId);
     unresolvedTags.delete(projectId);
     // The generation saved now is never removed.
-    const saved = read(ENCRYPTED_PROJECT_RESET_PREFIX + projectId);
+    const saved = generationOf(projectId);
     if (saved === undefined) return true;
-    older.delete(saved ?? NO_RESET);
+    older.delete(saved);
     removeRecords(projectId, older);
-    if (saved !== null) sweepOlderRecords(projectId, saved);
+    sweepOlderRecords(projectId, saved);
     return true;
   };
   /**
@@ -710,6 +813,9 @@ export function localStorageEncryptedProjectPins(
     },
     resetProject(projectId) {
       return forget(projectId);
+    },
+    resetUnconfirmed(projectId) {
+      return unconfirmed.has(projectId);
     },
     resetDegraded() {
       if (!storage) return false;

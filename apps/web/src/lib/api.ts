@@ -834,6 +834,15 @@ export function treatProjectAsNotEncrypted(
 }
 
 /**
+ * Whether this tab's last reset of the project was saved but could not be
+ * confirmed: the project (and, the store being degraded, every project) is
+ * still held as encrypted, here and after a reload.
+ */
+export function projectResetUnconfirmed(projectId: string): boolean {
+  return encryptedProjectPins().resetUnconfirmed(projectId);
+}
+
+/**
  * The owner confirmed "Treat as not encrypted on this device" for this
  * device's pin storage after a pin could not be saved: every saved pin is
  * kept, and the projects whose pins were lost are pinned again by the next
