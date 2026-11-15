@@ -27,10 +27,13 @@ import {
   type ShelfEdit
 } from './libraryFolderSync';
 import {
+  accountRowsKey,
   askShelfSealed,
+  beginShelfEdit,
   confirmShelfSealed,
   consumeShelfEdits,
   journalShelfEdit,
+  MAX_REMEMBERED_ACCOUNT_ROWS,
   mirrorShelfToAccount,
   noteLegacyShelfRows,
   legacyShelfRows,
@@ -42,6 +45,7 @@ import {
   resetShelfStateMemory,
   sealedListingOrganizations,
   ShelfStateUnverifiedError,
+  shelfEditsKey,
   shelfSealedOrSafe,
   type ShelfApi
 } from './sealedShelfState';
@@ -60,9 +64,42 @@ const ACTIVE: ProjectOrganization = {
 };
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   resetShelfStateMemory();
   localStorage.clear();
 });
+
+/**
+ * This page's localStorage with `setItem` refused for the keys `refuse`
+ * names (a full quota), or every read refused (`blocked`). happy-dom's
+ * Storage ignores prototype spies once it holds an item, so the global is
+ * replaced instead. Returns the restore.
+ */
+function stubStorage(options: {
+  refuse?: (key: string) => boolean;
+  blocked?: boolean;
+}): () => void {
+  const real = globalThis.localStorage;
+  const stub = {
+    get length() {
+      return real.length;
+    },
+    key: (index: number) => real.key(index),
+    getItem: (key: string) => {
+      if (options.blocked) throw new DOMException('blocked', 'SecurityError');
+      return real.getItem(key);
+    },
+    setItem: (key: string, value: string) => {
+      if (options.blocked || options.refuse?.(key))
+        throw new DOMException('full', 'QuotaExceededError');
+      real.setItem(key, value);
+    },
+    removeItem: (key: string) => real.removeItem(key),
+    clear: () => real.clear()
+  } as Storage;
+  vi.stubGlobal('localStorage', stub);
+  return () => vi.unstubAllGlobals();
+}
 
 /** Format 2 without the crypto: the folder set as JSON, tagged sealed. */
 const sealedCodec: FolderRecordCodec = {
@@ -492,6 +529,115 @@ describe('the shelf edit journal', () => {
     expect([...readShelfEdits('acct').keys()]).toEqual(['p', 'q']);
     consumeShelfEdits('acct', readShelfEdits('acct'));
     expect(readShelfEdits('acct').size).toBe(0);
+  });
+
+  it('keeps an edit storage refused for the visit, and stores it once storage takes it', async () => {
+    // Stored while there was room.
+    journalShelfEdit('acct', 'q', ACTIVE, { ...ACTIVE, sortOrder: 3 });
+    journalShelfEdit('acct', 'r', ACTIVE, { ...ACTIVE, sortOrder: 4 });
+    const restore = stubStorage({ refuse: () => true });
+    const stored = await beginShelfEdit(() => 'acct').persist(
+      new Map([['p', ACTIVE]]),
+      new Map([['p', { ...ACTIVE, pinned: true }]]),
+      async () => {}
+    );
+    expect(stored).toBe(false);
+    expect([...readShelfEdits('acct').keys()]).toEqual(['q', 'r', 'p']);
+
+    // A round takes `q` and `p` while storage is still full: neither comes
+    // back, although storage still holds `q`.
+    const taken = readShelfEdits('acct');
+    taken.delete('r');
+    consumeShelfEdits('acct', taken);
+    expect([...readShelfEdits('acct').keys()]).toEqual(['r']);
+    expect(localStorage.getItem(shelfEditsKey('acct'))).toContain('"q"');
+
+    // Edited again, still refused; then storage frees up and the next
+    // write stores the journal as this visit holds it.
+    expect(
+      journalShelfEdit('acct', 's', ACTIVE, { ...ACTIVE, pinned: true })
+    ).toBe(false);
+    restore();
+    expect(
+      journalShelfEdit('acct', 't', ACTIVE, { ...ACTIVE, pinned: true })
+    ).toBe(true);
+    expect(
+      Object.keys(
+        JSON.parse(localStorage.getItem(shelfEditsKey('acct'))!) as object
+      )
+    ).toEqual(['r', 's', 't']);
+    resetShelfStateMemory();
+    expect([...readShelfEdits('acct').keys()]).toEqual(['r', 's', 't']);
+  });
+
+  it('keeps an edit for the visit when storage is blocked', async () => {
+    stubStorage({ blocked: true });
+    const stored = await beginShelfEdit(() => 'acct').persist(
+      new Map([['p', ACTIVE]]),
+      new Map([['p', { ...ACTIVE, status: 'archived' }]]),
+      async () => {}
+    );
+    expect(stored).toBe(false);
+    expect(readShelfEdits('acct').get('p')?.after.archived).toBe(true);
+  });
+});
+
+describe('the account rows kept on this device', () => {
+  const summary = (
+    projectId: string,
+    organization: ProjectOrganization
+  ): ProjectSummary =>
+    ({
+      projectId: toProjectId(projectId),
+      name: projectId,
+      updatedAt: '',
+      organization
+    }) as ProjectSummary;
+
+  it('keeps only what differs from the defaults, rows with shelf state first, up to the cap', () => {
+    const rows = [
+      ...Array.from({ length: MAX_REMEMBERED_ACCOUNT_ROWS + 50 }, (_, i) =>
+        summary(`plain_${i}`, ACTIVE)
+      ),
+      summary('archived', {
+        status: 'archived',
+        pinned: false,
+        sortOrder: 7,
+        archivedAt: '2026-11-01T00:00:00.000Z'
+      }),
+      summary('trashed', {
+        status: 'deleted',
+        pinned: true,
+        sortOrder: 0,
+        deletedAt: '2026-11-02T00:00:00.000Z'
+      })
+    ];
+    rememberAccountRows('acct', rows);
+    const kept = JSON.parse(
+      localStorage.getItem(accountRowsKey('acct'))!
+    ) as Record<string, unknown>;
+    expect(Object.keys(kept)).toHaveLength(MAX_REMEMBERED_ACCOUNT_ROWS);
+    expect(kept.archived).toEqual({
+      s: 'a',
+      o: 7,
+      t: '2026-11-01T00:00:00.000Z'
+    });
+    expect(kept.trashed).toEqual({
+      s: 'd',
+      p: 1,
+      t: '2026-11-02T00:00:00.000Z'
+    });
+    expect(kept.plain_0).toEqual({});
+    expect(kept[`plain_${MAX_REMEMBERED_ACCOUNT_ROWS}`]).toBeUndefined();
+  });
+
+  it('drops a stale copy that storage refuses to replace', () => {
+    rememberAccountRows('acct', [
+      summary('p', { status: 'active', pinned: true, sortOrder: 0 })
+    ]);
+    stubStorage({ refuse: () => true });
+    rememberAccountRows('acct', [summary('p', ACTIVE)]);
+    expect(localStorage.getItem(accountRowsKey('acct'))).toBeNull();
   });
 });
 

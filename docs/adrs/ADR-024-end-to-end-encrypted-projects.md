@@ -1532,6 +1532,29 @@ manual order and the archive are now sealed; the trash stays readable.
   expiry until that account returns (perhaps never); the case needs a
   project both accounts hold, edited by the plaintext one while its mirror
   could not run, so it stays a documented limit.
+- **What the device keeps per account.** Two localStorage entries: the
+  journal of unsynced edits (`openzcad.library.shelf.edits.v1:<account>`)
+  and the account's rows as last listed
+  (`openzcad.library.shelf.rows.v1:<account>`), kept for a listing that
+  cannot reach the account. The rows hold only what differs from the
+  defaults, at most 1,000 of them, rows with shelf state first; a project
+  left out counts as one the account knows nothing of. An edit's starting
+  point reads the stored row when this visit has not listed the account
+  yet, so a pin made from a failed listing after a reload keeps the
+  readable archive and order still waiting to migrate, instead of sealing
+  the defaults over them where no later migration could replace them. If
+  localStorage refuses the journal (full or blocked) after the device row
+  was written, the edit is kept in memory for the visit. Listings and the
+  sealed sync read it from there, and it is stored with the next journal
+  write that succeeds. The shelf warns that the change is lost if the tab
+  closes before the library syncs, since the device row no longer speaks
+  for an encrypted library's pin, order or archive. Signing out forgets
+  the stored rows, as it forgets cached project titles, but keeps the
+  journal, so an edit the sealed record has not taken still reaches it
+  when the account returns. Until that account lists again, a failed
+  listing knows its projects only from its journal and record. Erasing the
+  account forgets both entries. The agreed folder record is the folder
+  sync's own state and is unchanged here.
 - **Migration.** Rows that still hold readable shelf state are shown once
   and seeded into the sealed record wherever it holds nothing for the
   project, stamped below every real edit. Only after that record is saved,

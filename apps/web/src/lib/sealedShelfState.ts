@@ -195,14 +195,25 @@ function parseShelf(value: unknown): ProjectShelf | null {
 }
 
 /**
- * Shelf edits made on this device for the account and not yet taken by a
- * sync round. Kept in storage, so an edit made with locked keys, offline or
- * just before the tab closed still reaches the sealed record.
+ * Journal changes this visit could not store, per account: an edit, or
+ * null for one a round took. A full or blocked localStorage must not lose
+ * an encrypted library's edit (its device row no longer speaks for pin,
+ * order or archive), so the change is kept here, read with the stored
+ * journal (`readShelfEdits`), and written with the next journal write
+ * that storage takes. It lasts for the visit only: the shelf tells the
+ * user so (`beginShelfEdit`'s `persist` answers false).
  */
-export function readShelfEdits(accountId: string): Map<string, ShelfEdit> {
+const unstoredEdits = new Map<string, Map<string, ShelfEdit | null>>();
+
+/** The journal as stored; null when storage cannot be read. */
+function readStoredShelfEdits(
+  accountId: string
+): Map<string, ShelfEdit> | null {
   const edits = new Map<string, ShelfEdit>();
   try {
-    const raw = globalThis.localStorage?.getItem(shelfEditsKey(accountId));
+    const storage = globalThis.localStorage;
+    if (!storage) return null;
+    const raw = storage.getItem(shelfEditsKey(accountId));
     const value: unknown = raw ? JSON.parse(raw) : null;
     if (!value || typeof value !== 'object') return edits;
     for (const [projectId, entry] of Object.entries(value)) {
@@ -213,23 +224,64 @@ export function readShelfEdits(accountId: string): Map<string, ShelfEdit> {
         edits.set(projectId, { before: parsedBefore, after: parsedAfter });
     }
   } catch {
-    // Unreadable storage holds no edits; the rows still show them here.
+    return null;
   }
   return edits;
 }
 
-function writeShelfEdits(accountId: string, edits: Map<string, ShelfEdit>) {
+function withUnstored(
+  accountId: string,
+  edits: Map<string, ShelfEdit>
+): Map<string, ShelfEdit> {
+  for (const [projectId, edit] of unstoredEdits.get(accountId) ?? []) {
+    if (edit) edits.set(projectId, edit);
+    else edits.delete(projectId);
+  }
+  return edits;
+}
+
+/**
+ * Shelf edits made on this device for the account and not yet taken by a
+ * sync round. Kept in storage, so an edit made with locked keys, offline or
+ * just before the tab closed still reaches the sealed record; an edit
+ * storage refused is kept for the visit (`unstoredEdits`).
+ */
+export function readShelfEdits(accountId: string): Map<string, ShelfEdit> {
+  return withUnstored(
+    accountId,
+    readStoredShelfEdits(accountId) ?? new Map<string, ShelfEdit>()
+  );
+}
+
+/**
+ * Applies journal changes (an edit, or null to forget one) and stores the
+ * whole journal. False when storage refused it: the changes are then kept
+ * for the visit and stored with the next write that succeeds.
+ */
+function changeShelfEdits(
+  accountId: string,
+  changes: ReadonlyMap<string, ShelfEdit | null>
+): boolean {
+  const floor = new Map([...(unstoredEdits.get(accountId) ?? []), ...changes]);
+  unstoredEdits.set(accountId, floor);
+  const stored = readStoredShelfEdits(accountId);
+  // Unreadable storage: writing now would drop what it holds.
+  if (!stored) return false;
+  const edits = withUnstored(accountId, stored);
   try {
-    if (edits.size === 0)
-      globalThis.localStorage?.removeItem(shelfEditsKey(accountId));
+    // Present: reading it just worked.
+    const storage = globalThis.localStorage;
+    if (edits.size === 0) storage.removeItem(shelfEditsKey(accountId));
     else
-      globalThis.localStorage?.setItem(
+      storage.setItem(
         shelfEditsKey(accountId),
         JSON.stringify(Object.fromEntries(edits))
       );
   } catch {
-    // Without storage the edit stays on this device's row only.
+    return false;
   }
+  unstoredEdits.delete(accountId);
+  return true;
 }
 
 /**
@@ -247,7 +299,7 @@ function ownShelf(
   if (edit) return edit;
   const sealed = agreedShelfState(accountId)?.[projectId];
   if (sealed) return shelfOf(sealed);
-  const row = accounts.get(accountId)?.rows.get(projectId);
+  const row = knownAccountRow(accountId, projectId);
   return row ? shelfOfOrganization(row) : null;
 }
 
@@ -260,14 +312,15 @@ function ownShelf(
  * in here left pending, or a device row a failed listing showed), and
  * that must not reach this account's record as part of an edit. Later edits of the same project keep the
  * first edit's starting point, so the round stamps every field changed
- * since the account last agreed.
+ * since the account last agreed. False when storage refused the journal:
+ * the edit then lasts for this visit only (`unstoredEdits`).
  */
 export function journalShelfEdit(
   accountId: string,
   projectId: string,
   before: ProjectOrganization,
   after: ProjectOrganization
-): void {
+): boolean {
   const edits = readShelfEdits(accountId);
   const from = shelfOfOrganization(before);
   const to = shelfOfOrganization(after);
@@ -280,7 +333,7 @@ export function journalShelfEdit(
     (from.archived && (from.archivedAt ?? null) !== (to.archivedAt ?? null))
       ? to
       : base;
-  edits.set(projectId, {
+  const edit: ShelfEdit = {
     before: edits.get(projectId)?.before ?? base,
     after: {
       pinned: from.pinned !== to.pinned ? to.pinned : base.pinned,
@@ -291,8 +344,8 @@ export function journalShelfEdit(
         ? { archivedAt: archive.archivedAt }
         : {})
     }
-  });
-  writeShelfEdits(accountId, edits);
+  };
+  return changeShelfEdits(accountId, new Map([[projectId, edit]]));
 }
 
 /**
@@ -308,27 +361,32 @@ export function beginShelfEdit(currentAccount: () => string | null): {
   /**
    * Runs `write` (this device's rows), then journals each row's change
    * under the account that made the edit. A failed write journals nothing.
+   * Resolves false when storage refused the journal: the edit is kept for
+   * this visit only, so the shelf tells the user.
    */
   persist(
     before: ReadonlyMap<string, ProjectOrganization>,
     rows: ReadonlyMap<string, ProjectOrganization>,
     write: () => Promise<void>
-  ): Promise<void>;
+  ): Promise<boolean>;
 } {
   const accountId = currentAccount();
   return {
     accountId,
     async persist(before, rows, write) {
       await write();
-      if (!accountId) return;
+      if (!accountId) return true;
+      let stored = true;
       for (const [projectId, organization] of rows) {
-        journalShelfEdit(
-          accountId,
-          projectId,
-          before.get(projectId) ?? DEFAULT_PROJECT_ORGANIZATION,
-          organization
-        );
+        stored =
+          journalShelfEdit(
+            accountId,
+            projectId,
+            before.get(projectId) ?? DEFAULT_PROJECT_ORGANIZATION,
+            organization
+          ) && stored;
       }
+      return stored;
     }
   };
 }
@@ -340,11 +398,12 @@ export function consumeShelfEdits(
 ): void {
   if (recorded.size === 0) return;
   const edits = readShelfEdits(accountId);
+  const taken = new Map<string, null>();
   for (const [projectId, edit] of recorded) {
     if (JSON.stringify(edits.get(projectId)) === JSON.stringify(edit))
-      edits.delete(projectId);
+      taken.set(projectId, null);
   }
-  writeShelfEdits(accountId, edits);
+  if (taken.size > 0) changeShelfEdits(accountId, taken);
 }
 
 // ── Listings ──────────────────────────────────────────────────────────────
@@ -355,49 +414,80 @@ export function accountRowsKey(accountId: string): string {
   return `${ROWS_PREFIX}:${accountId}`;
 }
 
-function parseOrganization(value: unknown): ProjectOrganization | null {
-  if (!value || typeof value !== 'object') return null;
-  const entry = value as Record<string, unknown>;
-  if (
-    (entry.status !== 'active' &&
-      entry.status !== 'archived' &&
-      entry.status !== 'deleted') ||
-    typeof entry.pinned !== 'boolean' ||
-    typeof entry.sortOrder !== 'number' ||
-    !Number.isFinite(entry.sortOrder)
-  )
-    return null;
+/**
+ * At most this many rows are kept per account: a failed listing and an
+ * edit's starting point need them, but they must not crowd the journal out
+ * of storage. Rows holding anything but the defaults are kept first; a
+ * project left out counts, in a failed listing, as one the account knows
+ * nothing of.
+ */
+export const MAX_REMEMBERED_ACCOUNT_ROWS = 1000;
+
+/**
+ * One row as kept on this device, holding only what differs from the
+ * defaults: `s` the status (`a` archived, `d` deleted), `p` pinned, `o`
+ * the manual order, `t` when it was archived or deleted.
+ */
+interface RememberedRow {
+  s?: 'a' | 'd';
+  p?: 1;
+  o?: number;
+  t?: string;
+}
+
+function rememberedRow(organization: ProjectOrganization): RememberedRow {
+  const at =
+    organization.status === 'archived'
+      ? organization.archivedAt
+      : organization.status === 'deleted'
+        ? organization.deletedAt
+        : undefined;
   return {
-    status: entry.status,
-    pinned: entry.pinned,
-    sortOrder: entry.sortOrder,
-    ...(entry.status === 'archived' && typeof entry.archivedAt === 'string'
-      ? { archivedAt: entry.archivedAt }
-      : {}),
-    ...(entry.status === 'deleted' && typeof entry.deletedAt === 'string'
-      ? { deletedAt: entry.deletedAt }
-      : {})
+    ...(organization.status === 'archived'
+      ? { s: 'a' as const }
+      : organization.status === 'deleted'
+        ? { s: 'd' as const }
+        : {}),
+    ...(organization.pinned ? { p: 1 as const } : {}),
+    ...(organization.sortOrder !== 0 ? { o: organization.sortOrder } : {}),
+    ...(at ? { t: at } : {})
   };
 }
 
-/**
- * The account's rows as last listed on this device, from this visit or
- * kept from an earlier one. Only a failed listing reads the stored copy:
- * the trash-only mirror compares against rows listed this visit, since a
- * stale row there could hide a trash move that still has to be sent.
- */
-function listedAccountRows(
+function parseRememberedRow(value: unknown): ProjectOrganization | null {
+  if (!value || typeof value !== 'object') return null;
+  const entry = value as Record<string, unknown>;
+  if (
+    (entry.s !== undefined && entry.s !== 'a' && entry.s !== 'd') ||
+    (entry.p !== undefined && entry.p !== 1) ||
+    (entry.o !== undefined &&
+      (typeof entry.o !== 'number' || !Number.isFinite(entry.o))) ||
+    (entry.t !== undefined && typeof entry.t !== 'string')
+  )
+    return null;
+  const base = {
+    pinned: entry.p === 1,
+    sortOrder: typeof entry.o === 'number' ? entry.o : 0
+  };
+  const at = typeof entry.t === 'string' ? entry.t : undefined;
+  return entry.s === 'a'
+    ? { status: 'archived', ...base, ...(at ? { archivedAt: at } : {}) }
+    : entry.s === 'd'
+      ? { status: 'deleted', ...base, ...(at ? { deletedAt: at } : {}) }
+      : { status: 'active', ...base };
+}
+
+/** The account's rows kept on this device from an earlier listing. */
+function storedAccountRows(
   accountId: string
 ): Map<string, ProjectOrganization> {
-  const state = accounts.get(accountId);
-  if (state?.listed) return new Map(state.rows);
   const rows = new Map<string, ProjectOrganization>();
   try {
     const raw = globalThis.localStorage?.getItem(accountRowsKey(accountId));
     const value: unknown = raw ? JSON.parse(raw) : null;
     if (!value || typeof value !== 'object') return rows;
     for (const [projectId, entry] of Object.entries(value)) {
-      const organization = parseOrganization(entry);
+      const organization = parseRememberedRow(entry);
       if (organization) rows.set(projectId, organization);
     }
   } catch {
@@ -407,9 +497,42 @@ function listedAccountRows(
 }
 
 /**
+ * The account's rows as last listed on this device, from this visit or
+ * kept from an earlier one. Only a failed listing and an edit's starting
+ * point read the stored copy: the trash-only mirror compares against rows
+ * listed this visit, since a stale row there could hide a trash move that
+ * still has to be sent.
+ */
+function listedAccountRows(
+  accountId: string
+): Map<string, ProjectOrganization> {
+  const state = accounts.get(accountId);
+  if (state?.listed) return new Map(state.rows);
+  return storedAccountRows(accountId);
+}
+
+/**
+ * The account's row for a project as an edit's starting point reads it:
+ * written or listed this visit, else (before this visit listed the
+ * account) as listed in an earlier visit. A reload before a failed listing
+ * must still start from the row that listing showed, or an edit there
+ * would seal the defaults over readable state still waiting to migrate.
+ */
+function knownAccountRow(
+  accountId: string,
+  projectId: string
+): ProjectOrganization | undefined {
+  const state = accounts.get(accountId);
+  const row = state?.rows.get(projectId);
+  if (row || state?.listed) return row;
+  return storedAccountRows(accountId).get(projectId);
+}
+
+/**
  * The account's rows as listed, for the trash-only mirror, and kept on
- * this device so a listing that cannot reach the account still knows
- * which projects are the account's (`accountListingOrganizations`).
+ * this device (at most `MAX_REMEMBERED_ACCOUNT_ROWS`, defaults left out)
+ * so a listing that cannot reach the account still knows which projects
+ * are the account's (`accountListingOrganizations`).
  */
 export function rememberAccountRows(
   accountId: string,
@@ -420,13 +543,62 @@ export function rememberAccountRows(
   state.rows = new Map(
     projects.map((project) => [project.projectId, projectOrganization(project)])
   );
+  const kept = [...state.rows]
+    .map(([projectId, organization]) => ({
+      projectId,
+      row: rememberedRow(organization)
+    }))
+    // Stable: rows holding shelf state first, each group in listing order.
+    .sort(
+      (a, b) =>
+        Number(Object.keys(b.row).length > 0) -
+        Number(Object.keys(a.row).length > 0)
+    )
+    .slice(0, MAX_REMEMBERED_ACCOUNT_ROWS);
   try {
     globalThis.localStorage?.setItem(
       accountRowsKey(accountId),
-      JSON.stringify(Object.fromEntries(state.rows))
+      JSON.stringify(
+        Object.fromEntries(kept.map(({ projectId, row }) => [projectId, row]))
+      )
     );
   } catch {
-    // Without storage a later failed listing knows the edits and record only.
+    // A stale copy would misplace projects; without one a later failed
+    // listing knows the edits and record only, and the space goes back to
+    // the journal.
+    try {
+      globalThis.localStorage?.removeItem(accountRowsKey(accountId));
+    } catch {
+      // Storage is blocked.
+    }
+  }
+}
+
+/**
+ * Forgets what this device keeps of the account's projects, at sign-out
+ * (`erased` false) and after the account was erased (`erased` true): its
+ * rows as last listed, and this visit's answers. The journal of unsynced
+ * edits is kept at sign-out, so an edit the sealed record has not taken
+ * yet still reaches it when the account signs in again; an erased account
+ * has no record left to take it, so its journal goes too. The agreed
+ * folder record (`folderSyncRecordKey`) belongs to the folder sync.
+ */
+export function forgetAccountShelf(
+  accountId: string,
+  { erased }: { erased: boolean }
+): void {
+  accounts.delete(accountId);
+  try {
+    globalThis.localStorage?.removeItem(accountRowsKey(accountId));
+  } catch {
+    // Storage is blocked; nothing was kept.
+  }
+  if (!erased) return;
+  unstoredEdits.delete(accountId);
+  try {
+    globalThis.localStorage?.removeItem(shelfEditsKey(accountId));
+  } catch {
+    // Storage is blocked; nothing was kept.
   }
 }
 
@@ -818,8 +990,12 @@ export function notifySealedShelfApplied(accountId: string): void {
   }
 }
 
-/** Forgets every answer and row (tests, sign-out). */
+/**
+ * Forgets every answer, row and unstored edit held in memory (tests, a
+ * reload).
+ */
 export function resetShelfStateMemory(): void {
   accounts.clear();
+  unstoredEdits.clear();
   listingAccount = null;
 }

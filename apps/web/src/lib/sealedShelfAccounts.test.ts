@@ -95,12 +95,45 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  vi.unstubAllGlobals();
   const { resetShelfStateMemory } = await import('./sealedShelfState');
   resetShelfStateMemory();
   server.records.clear();
   server.signedIn = 'A';
   localStorage.clear();
 });
+
+/**
+ * This page's localStorage with `setItem` refused for the keys `refuse`
+ * names (a full quota), or every read refused (`blocked`). happy-dom's
+ * Storage ignores prototype spies once it holds an item, so the global is
+ * replaced instead. Returns the restore.
+ */
+function stubStorage(options: {
+  refuse?: (key: string) => boolean;
+  blocked?: boolean;
+}): () => void {
+  const real = globalThis.localStorage;
+  const stub = {
+    get length() {
+      return real.length;
+    },
+    key: (index: number) => real.key(index),
+    getItem: (key: string) => {
+      if (options.blocked) throw new DOMException('blocked', 'SecurityError');
+      return real.getItem(key);
+    },
+    setItem: (key: string, value: string) => {
+      if (options.blocked || options.refuse?.(key))
+        throw new DOMException('full', 'QuotaExceededError');
+      real.setItem(key, value);
+    },
+    removeItem: (key: string) => real.removeItem(key),
+    clear: () => real.clear()
+  } as Storage;
+  vi.stubGlobal('localStorage', stub);
+  return () => vi.unstubAllGlobals();
+}
 
 function sealedSet(accountId: string): FolderSet | null {
   const record = server.records.get(accountId)?.record;
@@ -124,14 +157,16 @@ function sharedRow(): ProjectSummary {
  * rows (a pending one is left alone), then this device's rows as a sealed
  * listing may apply them.
  */
-async function listSealed(accountId: string): Promise<ProjectSummary[]> {
+async function listSealed(
+  accountId: string,
+  remote: ProjectSummary[] = [sharedRow()]
+): Promise<ProjectSummary[]> {
   const store = await import('./localProjectStore');
   const shelf = await import('./sealedShelfState');
   const { prepareOrganizationMirrors } =
     await import('./projectOrganizationBackground');
   const { applyLocalProjectOrganizations, mergeProjectSummaries } =
     await import('./projectShelf');
-  const remote = [sharedRow()];
   shelf.rememberAccountRows(accountId, remote);
   const overlaid = shelf.overlaySealedShelf(
     remote,
@@ -479,5 +514,77 @@ describe('sealed shelf state of accounts sharing a device', () => {
       before: { pinned: false, sortOrder: 0, archived: false },
       after: { pinned: true, sortOrder: 0, archived: false }
     });
+  });
+
+  it('starts an edit after a reload from the row an earlier listing showed', async () => {
+    const { resetShelfStateMemory } = await import('./sealedShelfState');
+    const { syncAccountLibraryFolders } =
+      await import('./libraryFolderCloudSync');
+    // A's row still holds readable shelf state from before its library was
+    // encrypted: archived at place 7. A lists it, and the page reloads
+    // before a sync migrates it.
+    const legacy = {
+      ...sharedRow(),
+      organization: {
+        status: 'archived',
+        pinned: false,
+        sortOrder: 7,
+        archivedAt: '2026-11-01T00:00:00.000Z'
+      }
+    } as ProjectSummary;
+    await listSealed('A', [legacy]);
+    resetShelfStateMemory();
+
+    // The next listing fails; the row kept from the last one still shows
+    // the archive and the order.
+    const [shown] = await listUnreached('A');
+    expect(projectOrganization(shown!)).toMatchObject({
+      status: 'archived',
+      sortOrder: 7
+    });
+
+    // A pins it there. The sealed record keeps the archive and the order
+    // with the pin, not the defaults, which no later migration could
+    // replace.
+    await editShelf('A', shown!, { pinned: true });
+    expect(await syncAccountLibraryFolders('A', () => false)).toBe(false);
+    expect(sealedSet('A')?.projects?.[SHARED]).toMatchObject({
+      pinned: true,
+      sortOrder: 7,
+      archived: true,
+      archivedAt: '2026-11-01T00:00:00.000Z'
+    });
+  });
+
+  it('seals an edit this visit when storage refuses the journal, and says so', async () => {
+    const { beginShelfEdit, shelfEditsKey } =
+      await import('./sealedShelfState');
+    const { syncAccountLibraryFolders } =
+      await import('./libraryFolderCloudSync');
+    const [listed] = await listSealed('A');
+    // localStorage is full for the journal; IndexedDB still takes the row.
+    const restore = stubStorage({
+      refuse: (key) => key === shelfEditsKey('A')
+    });
+    const { saveLocalProjectOrganization } =
+      await import('./localProjectStore');
+    const before = projectOrganization(listed!);
+    const after = { ...before, pinned: true };
+    const stored = await beginShelfEdit(() => 'A').persist(
+      new Map([[SHARED, before]]),
+      new Map([[SHARED, after]]),
+      () => saveLocalProjectOrganization(SHARED, after, { mirrorPending: true })
+    );
+    // The shelf is told the edit lasts for this visit only…
+    expect(stored).toBe(false);
+    expect(localStorage.getItem(shelfEditsKey('A'))).toBeNull();
+    // …but the listing keeps it, and the next sealed sync takes it.
+    const [pinned] = await listSealed('A');
+    expect(projectOrganization(pinned!)).toEqual({ ...ACTIVE, pinned: true });
+    expect(await syncAccountLibraryFolders('A', () => false)).toBe(false);
+    expect(sealedSet('A')?.projects?.[SHARED]).toMatchObject({
+      pinned: true
+    });
+    restore();
   });
 });

@@ -14909,7 +14909,7 @@ export function App() {
     // carries pins, order and archive of an account whose library is
     // encrypted; a plaintext library's sync forgets it again. It is the
     // account that made the edit, even if the session changed meanwhile.
-    await edit.persist(before, rows, async () => {
+    const journaled = await edit.persist(before, rows, async () => {
       try {
         await Promise.all(
           [...rows].map(([projectId, organization]) =>
@@ -14935,6 +14935,18 @@ export function App() {
         })
         .sort(compareProjectSummaries)
     );
+    // An encrypted library's pin, order and archive reach the account only
+    // through the journal. Storage refused it, so the edit lasts until the
+    // tab closes unless the library syncs first: say so instead of letting
+    // the next listing quietly restore the old shelf.
+    if (!journaled && isShelfSealed(edit.accountId)) {
+      const message =
+        'Saved for now only: this browser would not store the change, so keep this tab open until your library syncs, or it will be lost.';
+      setStatus(message);
+      if (onStartScreenRef.current) {
+        announce(message, undefined, { tone: 'warning' });
+      }
+    }
   }
 
   /**
