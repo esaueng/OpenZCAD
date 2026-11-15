@@ -89,11 +89,12 @@ export function continuesOffsetFace(
   return (
     chosen.bodyId === next.bodyId &&
     n.x * m.x + n.y * m.y + n.z * m.z > 1 - 1e-6 &&
-    (next.movedFrom === undefined
-      ? next.topologyId === chosen.topologyId &&
+    // The moved face keeps naming the face it came from after the switch
+    // has followed it, so its own id on its own plane still counts.
+    (next.movedFrom === chosen.topologyId ||
+      (next.topologyId === chosen.topologyId &&
         Math.abs(n.x * (q.x - p.x) + n.y * (q.y - p.y) + n.z * (q.z - p.z)) <
-          1e-5
-      : next.movedFrom === chosen.topologyId)
+          1e-5))
   );
 }
 

@@ -190,6 +190,31 @@ test('a Total switch on the shoulder does not carry to the cap', async ({
   await expect
     .poll(async () => parseFloat(await chip.innerText()))
     .toBeCloseTo(26, 2);
+
+  // Committed, the moved shoulder keeps its Total; reopening entry and
+  // cancelling it once re-armed the moved face as Offset, so the next typed
+  // value meant a displacement.
+  await chip.click();
+  const total = page.getByRole('dialog', { name: 'Total value' });
+  await total.getByRole('textbox').fill('27');
+  await expect(chip).toHaveAttribute('aria-busy', 'false', { timeout: 60_000 });
+  await total.getByRole('button', { name: 'Apply total' }).click();
+  await featureCount(page, 2);
+  await expect(tag).toHaveText(/^Total/);
+  await expect
+    .poll(async () => parseFloat(await chip.innerText()), { timeout: 30_000 })
+    .toBeCloseTo(27, 2);
+  await chip.click();
+  await expect(total).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(total).toBeHidden();
+  await expect(tag).toHaveText(/^Total/);
+  await expect
+    .poll(async () => parseFloat(await chip.innerText()))
+    .toBeCloseTo(27, 2);
+  await chip.click();
+  await expect(total).toBeVisible();
+  await page.keyboard.press('Escape');
 });
 
 test(

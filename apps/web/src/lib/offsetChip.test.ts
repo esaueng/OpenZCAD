@@ -156,6 +156,36 @@ describe('offset chip', () => {
         continuesOffsetFace(shoulder, { ...moved, movedFrom: 'face:9' })
       ).toBe(false);
     });
+
+    it('keeps it on the moved face once the switch has followed it there', () => {
+      // Review of #1533: after the commit the switch belongs to the moved
+      // face, whose target still names the face it came from; reopening
+      // entry and cancelling re-armed it and the chip fell back to Offset.
+      const moved = {
+        ...shoulder,
+        topologyId: 'face:12',
+        point: { x: 20, y: 14, z: 27 }
+      };
+      expect(
+        continuesOffsetFace(moved, { ...moved, movedFrom: 'face:7' })
+      ).toBe(true);
+      // Still not another face, nor the moved id on another plane.
+      expect(
+        continuesOffsetFace(moved, {
+          ...moved,
+          topologyId: 'face:9',
+          point: { x: 0, y: 0, z: 35 },
+          movedFrom: 'face:7'
+        })
+      ).toBe(false);
+      expect(
+        continuesOffsetFace(moved, {
+          ...moved,
+          point: { x: 20, y: 14, z: 35 },
+          movedFrom: 'face:7'
+        })
+      ).toBe(false);
+    });
   });
 
   it('reads Total as the span plus the signed offset', () => {
