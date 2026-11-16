@@ -24,6 +24,7 @@ import {
   CommandManager,
   commandFactories,
   isConfigurationTableOnlyCommand,
+  isTweakCommand,
   replayCommands
 } from '@openzcad/command-system';
 import {
@@ -41,6 +42,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { createProjectDiagnosticBundle } from '../apps/web/src/lib/projectDiagnostics';
+import { sharedDocumentOnRow } from '../apps/web/src/lib/sharedConfiguration';
 
 /**
  * F06 configurations (schema v72): a variant table of named rows over
@@ -327,11 +329,17 @@ describe('storage and history', () => {
     });
     expect(isConfigurationTableOnlyCommand(cell, manager.document)).toBe(true);
     manager.execute(cell);
+    // Editing the table is Build's; switching rows is Tweak's, as a value is.
+    expect(isTweakCommand(cell)).toBe(false);
+    expect(manager.undoIsParameterOnly).toBe(false);
     const activate = commandFactories.activateConfiguration({ rowId: 'b' });
     expect(isConfigurationTableOnlyCommand(activate, manager.document)).toBe(
       false
     );
+    expect(isTweakCommand(activate)).toBe(true);
     manager.execute(activate);
+    expect(manager.undoIsParameterOnly).toBe(true);
+    expect(manager.canUndoIn(true)).toBe(true);
     expect(listParameters(manager.document)[0]!.expression).toBe('33');
     expect(
       isDocumentHistory(
@@ -354,6 +362,35 @@ describe('storage and history', () => {
       .changes.find((entry) => entry.field === 'configurations')!;
     (change as { after: unknown }).after = { rows: [] };
     expect(isDocumentHistory(history, manager.document.projectId)).toBe(false);
+  });
+
+  it('opens a shared model on the row its link names (Tweak link)', () => {
+    const { document } = table();
+    const opened = sharedDocumentOnRow(document, 'large');
+    expect(opened.document.configurations!.activeRowId).toBe('large');
+    expect(listParameters(opened.document)[0]!.expression).toBe('45');
+    expect(opened.note).toBe('Showing Large.');
+    // No row named, or the active one: the model as saved.
+    expect(sharedDocumentOnRow(document, null)).toEqual({
+      document,
+      note: null
+    });
+    expect(sharedDocumentOnRow(document, 'small').document).toBe(document);
+    // A row the model no longer has opens it as saved, saying so.
+    const gone = sharedDocumentOnRow(document, 'deleted');
+    expect(gone.document).toBe(document);
+    expect(gone.note).toMatch(/no longer in the model/);
+    // A model without a table ignores the row.
+    const plain = model().document;
+    expect(sharedDocumentOnRow(plain, 'large').document).toBe(plain);
+    // A row the model cannot take is refused, not half applied.
+    const broken = structuredClone(document);
+    broken.configurations!.rows[1]!.parameters[
+      Object.keys(broken.configurations!.rows[1]!.parameters)[0] as ParameterId
+    ] = 'missing_parameter * 2';
+    const refused = sharedDocumentOnRow(broken, 'large');
+    expect(refused.document).toBe(broken);
+    expect(refused.note).toMatch(/Large could not be built/);
   });
 
   it('keeps row names out of a diagnostic reproduction', () => {

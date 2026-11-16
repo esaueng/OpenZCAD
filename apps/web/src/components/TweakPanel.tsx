@@ -39,6 +39,15 @@ interface TweakPanelProps {
    */
   share: { onMakeCopy(): void } | null;
   /**
+   * F06: the model's configurations, when it has a table. Picking one
+   * rebuilds the model as that row, one undoable step like a parameter.
+   */
+  configuration?: {
+    rows: { id: string; name: string }[];
+    activeRowId: string;
+    onActivate(rowId: string): void;
+  } | null;
+  /**
    * The parameter table's flyout: open to begin with — the knobs are what
    * Tweak is for — and remembered per device by the caller.
    */
@@ -82,6 +91,7 @@ export function TweakPanel({
   onExportStep,
   onOpenMeshExport,
   share,
+  configuration = null,
   panelOpen,
   onTogglePanel,
   parts
@@ -288,6 +298,23 @@ export function TweakPanel({
                   </span>
                 )}
               </p>
+            )}
+            {configuration && configuration.rows.length > 0 && (
+              <label className="tweak-configuration">
+                <span>Configuration</span>
+                <select
+                  value={configuration.activeRowId}
+                  onChange={(event) =>
+                    configuration.onActivate(event.target.value)
+                  }
+                >
+                  {configuration.rows.map((row) => (
+                    <option key={row.id} value={row.id}>
+                      {row.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
             )}
             {modelError && (
               <p className="parameter-feedback error" role="alert">

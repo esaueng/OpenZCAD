@@ -568,6 +568,45 @@ describe('ProjectSharingDialog', () => {
     expect(screen.queryByLabelText('Share link')).not.toBeInTheDocument();
   });
 
+  it('lets a new link open on a chosen configuration (F06)', async () => {
+    const base = createProjectDocument('Share links', owner);
+    const links = shareLinkClient();
+    const writeText = vi.fn(async () => undefined);
+    vi.spyOn(navigator.clipboard, 'writeText').mockImplementation(writeText);
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={links}
+        configurations={[
+          { id: 'small', name: 'Small' },
+          { id: 'large', name: 'Large' }
+        ]}
+        onClose={vi.fn()}
+      />
+    );
+    await user.click(
+      await screen.findByRole('button', { name: 'Create link' })
+    );
+    const plain = `${location.origin}/#share=${'a'.repeat(43)}`;
+    const url = await screen.findByLabelText('Share link');
+    const opensOn = screen.getByRole('combobox', { name: 'Opens on' });
+    expect(opensOn).toHaveValue('');
+    expect(url).toHaveValue(plain);
+    await user.selectOptions(opensOn, 'Large');
+    expect(url).toHaveValue(`${plain}&configuration=large`);
+    await user.click(screen.getByRole('button', { name: 'Copy' }));
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(`${plain}&configuration=large`)
+    );
+    await user.selectOptions(opensOn, 'The saved configuration');
+    expect(url).toHaveValue(plain);
+  });
+
   it('names a new link, renames links in place, and clears a blank name', async () => {
     const base = createProjectDocument('Named links', owner);
     const links = shareLinkClient();

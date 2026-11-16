@@ -8,12 +8,68 @@
  */
 export const PROJECT_SHARE_HASH_PREFIX = 'share=';
 
+/**
+ * F06: a share link may name the configuration it opens on, after the
+ * capability: `#share=<token>&configuration=<row id>`. Only the row id
+ * travels; its values come from the shared model. Tokens and encrypted
+ * payloads are base64url and dots, so `&` never occurs inside one.
+ */
+export const SHARE_CONFIGURATION_PARAM = 'configuration';
+
+/** The fragment's capability part and its optional parameters. */
+function splitShareHash(hash: string): {
+  capability: string;
+  params: URLSearchParams;
+} | null {
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  if (!raw.startsWith(PROJECT_SHARE_HASH_PREFIX)) return null;
+  const rest = raw.slice(PROJECT_SHARE_HASH_PREFIX.length);
+  const cut = rest.indexOf('&');
+  return cut < 0
+    ? { capability: rest.trim(), params: new URLSearchParams() }
+    : {
+        capability: rest.slice(0, cut).trim(),
+        params: new URLSearchParams(rest.slice(cut + 1))
+      };
+}
+
 /** Recognize the share destination even when its capability is incomplete. */
 export function shareRequestFromHash(hash: string): string | null {
-  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
-  return raw.startsWith(PROJECT_SHARE_HASH_PREFIX)
-    ? raw.slice(PROJECT_SHARE_HASH_PREFIX.length).trim()
-    : null;
+  return splitShareHash(hash)?.capability ?? null;
+}
+
+/** F06: the configuration row a share link opens on, or null for none. */
+export function shareConfigurationFromHash(hash: string): string | null {
+  const value = splitShareHash(hash)?.params.get(SHARE_CONFIGURATION_PARAM);
+  return value && value.length <= 128 ? value : null;
+}
+
+/** F06: the configuration row named by the current URL's share link. */
+export function captureShareConfiguration(): string | null {
+  try {
+    return shareConfigurationFromHash(globalThis.location?.hash ?? '');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * F06: `url` (a share link) opening on configuration `rowId`, or on the
+ * model as shared when null. Any row the link named before is replaced.
+ */
+export function withShareConfiguration(
+  url: string,
+  rowId: string | null
+): string {
+  const at = url.indexOf('#');
+  const base = at < 0 ? url : url.slice(0, at);
+  const parts = splitShareHash(at < 0 ? '' : url.slice(at));
+  if (!parts) return url;
+  const params = new URLSearchParams(parts.params);
+  if (rowId) params.set(SHARE_CONFIGURATION_PARAM, rowId);
+  else params.delete(SHARE_CONFIGURATION_PARAM);
+  const query = params.toString();
+  return `${base}#${PROJECT_SHARE_HASH_PREFIX}${parts.capability}${query ? `&${query}` : ''}`;
 }
 
 /** Includes empty/malformed links so they reach the dedicated share page. */
@@ -46,12 +102,8 @@ export function projectLinkPath(
 
 /** The token inside a `#share=` fragment, or null when the hash is not one. */
 export function shareTokenFromHash(hash: string): string | null {
-  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
-  if (!raw.startsWith(PROJECT_SHARE_HASH_PREFIX)) {
-    return null;
-  }
-  const token = raw.slice(PROJECT_SHARE_HASH_PREFIX.length).trim();
-  return /^[A-Za-z0-9_-]{43}$/.test(token) ? token : null;
+  const token = shareRequestFromHash(hash);
+  return token !== null && /^[A-Za-z0-9_-]{43}$/.test(token) ? token : null;
 }
 
 /**
@@ -71,10 +123,10 @@ const ENCRYPTED_SHARE_LINK =
 export function shareLinkFromHash(hash: string): string | null {
   const token = shareTokenFromHash(hash);
   if (token !== null) return token;
-  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
-  if (!raw.startsWith(PROJECT_SHARE_HASH_PREFIX)) return null;
-  const payload = raw.slice(PROJECT_SHARE_HASH_PREFIX.length).trim();
-  return ENCRYPTED_SHARE_LINK.test(payload) ? payload : null;
+  const payload = shareRequestFromHash(hash);
+  return payload !== null && ENCRYPTED_SHARE_LINK.test(payload)
+    ? payload
+    : null;
 }
 
 /** Whether a `shareLinkFromHash` value is an encrypted link's payload. */

@@ -208,6 +208,7 @@ import {
   duplicateFeatureCommands,
   duplicateFeatureRefusal,
   isParameterRetype,
+  isTweakCommand,
   isAssemblyOnlyCommand,
   isConfigurationTableOnlyCommand,
   isDrawingCommand,
@@ -710,11 +711,13 @@ import {
 } from './lib/projectInvitationLink';
 import {
   captureProjectShareRequest,
+  captureShareConfiguration,
   isEncryptedShareLink,
   shareLinkFromHash,
   projectLinkPath,
   clearProjectShareFragment
 } from './lib/projectShareLink';
+import { sharedDocumentOnRow } from './lib/sharedConfiguration';
 import type {
   ExportProgress,
   MeshExportDialogFormat,
@@ -7016,11 +7019,7 @@ export function App() {
       return ensureCanEditAssembly(action);
     }
     const parametersOnly =
-      commands.length > 0 &&
-      commands.every(
-        (command) =>
-          command.kind === 'parameter.set' && !isParameterRetype(command)
-      );
+      commands.length > 0 && commands.every(isTweakCommand);
     return parametersOnly
       ? ensureCanEditParameters(action)
       : ensureCanEdit(action);
@@ -15370,6 +15369,9 @@ export function App() {
       return;
     }
     shareOpenAttemptRef.current = pendingShareToken;
+    // F06: the configuration the link opens on, read before the fragment
+    // can be tidied away.
+    const shareRowId = captureShareConfiguration();
     updateSettingsViewState({ open: false });
     setSettingsOpen(false);
     setSharingOpen(false);
@@ -15458,13 +15460,16 @@ export function App() {
         setShareSession(opened);
         shareSessionRef.current = opened;
         setSharePage(null);
-        hydrateSharedDocumentRef.current(shared.document, {
+        const opening = sharedDocumentOnRow(shared.document, shareRowId);
+        hydrateSharedDocumentRef.current(opening.document, {
           rememberProject: false
         });
         setStatus(
-          shared.encryptedMode === 'view'
-            ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
-            : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
+          `${
+            shared.encryptedMode === 'view'
+              ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
+              : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
+          }${opening.note ? ` ${opening.note}` : ''}`
         );
       } catch (error) {
         if (isCurrent()) {
@@ -35268,6 +35273,20 @@ export function App() {
             onOpenMeshExport={() => setMeshExportOpen(true)}
             // Make a copy is the top bar's labelled button now (I73).
             share={null}
+            configuration={
+              doc?.configurations
+                ? {
+                    rows: doc.configurations.rows,
+                    activeRowId: doc.configurations.activeRowId,
+                    onActivate: (rowId) =>
+                      void Promise.resolve(
+                        configurationActions.activate(rowId)
+                      ).then((refused) => {
+                        if (refused) setStatus(refused);
+                      })
+                  }
+                : null
+            }
             panelOpen={panelState.tweakPanelOpen}
             onTogglePanel={() =>
               setPanelState((current) => ({
@@ -37580,6 +37599,7 @@ export function App() {
               <ProjectSharingDialog
                 projectId={doc.projectId}
                 projectName={doc.name}
+                configurations={doc.configurations?.rows ?? []}
                 localProject={!activeProjectIsCloud}
                 localImportSourceNames={localOnlySources.map(
                   (source) => source.sourceName
