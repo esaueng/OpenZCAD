@@ -1,0 +1,17 @@
+{
+  "name": "@openzcad/agent-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "openzcad-mcp": "./bin/openzcad-mcp.mjs"
+  },
+  "dependencies": {
+    "@openzcad/agent-api": "workspace:*",
+    "@openzcad/document-core": "workspace:*",
+    "@openzcad/kernel-adapter": "workspace:*",
+    "@openzcad/shared": "workspace:*",
+    "vite": "^8.3.5"
+  }
+}
