@@ -384,6 +384,35 @@ notes to D01 sheets:
   hole callouts, per-drawing unit and precision properties, and annotations
   on section and detail views (D03).
 
+## Dimension tolerances, prefixes and suffixes (D02, schema v68)
+
+- **Shape.** A dimension gains an optional `tolerance` — `symmetric`
+  (`value > 0`), `deviation` or `limits` (`upper > lower`, both signed) or
+  `basic` — and an optional `prefix` and `suffix` (one trimmed line of at most
+  40 characters, printed with a space between). Tolerances are stored as
+  deviations from the measured value in document units (degrees on an
+  angle), never as a value, so `limits` prints the measured value plus each
+  deviation and follows the model through the sheet's explicit Update. A
+  reference dimension, a chamfer's `size × angle` and a counterbore or
+  countersink callout take no tolerance (refused by the validator); marking a
+  dimension Reference drops its tolerance. A toleranced diameter on an M01
+  hole's rim states its diameter, not the hole's callout.
+- **Text.** Symmetric reads `20 ±0.05`; deviation `20` then `+0.10` over
+  `-0.05`; limits `20.10` over `19.95`; basic frames the value. A tolerance
+  keeps its own decimals when finer than the dimension's, and a stacked pair
+  keeps trailing zeros so its lines agree; no deviation prints as an
+  unsigned `0`. The flat label (`20 +0.10/-0.05`, `[20]`) names the
+  annotation in lists and the properties panel.
+- **Page.** The stacked pair is set at 0.7 × the dimension text, centred on
+  the value's mid-height, after the lead and before the suffix, each part a
+  start-aligned text on the label's (possibly rotated) baseline; a basic
+  frame is a closed `dimension` stroke. A dimension without these fields
+  lays out exactly as before, so older sheets export byte-identical.
+- **Schema.** v68, built on v67. A content gate refuses the fields in a
+  document, its edit history or a drawing command that declares v67 or
+  older. Drawing-level units, precision and decimal separator remain the
+  next D02 slice.
+
 ## Finishing-body update repair
 
 When a finishing feature consumes a drawing's body, the sheet offers the

@@ -302,7 +302,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // thread is described for drawings and callouts but not cut, so the bore
 // stays its tap drill. An older client would cut the thread, so it must
 // refuse. Builds on v66.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 67 as const;
+// v68 adds D02 dimension tolerances, prefixes and suffixes (`tolerance`,
+// `prefix` and `suffix` on a drawing dimension): symmetric, deviation, limits
+// and basic tolerances read against the measured value each time the sheet is
+// drawn. Absent keeps the bare value, so every older sheet draws unchanged.
+// An older client would print the bare value and drop them on its next save,
+// so it must refuse. Builds on v67.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 68 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
