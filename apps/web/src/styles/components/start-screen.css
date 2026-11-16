@@ -2961,15 +2961,17 @@
   border-color: var(--color-accent-border);
 }
 
+/* Carried just above the dragged card, clear of the pointer: centred on the
+   card it was dropped onto, the dragged card sat on top of it. */
 .start-tile-merge-hint {
-  grid-area: 1 / 1;
-  align-self: center;
-  justify-self: center;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  translate: -50% 0;
   z-index: 2;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 30px;
   padding: 5px 9px;
   color: var(--color-text);
   background: var(--color-surface);
@@ -2981,7 +2983,7 @@
   white-space: nowrap;
 }
 
-.start-tile-project.is-drop-target .start-tile-merge-hint {
+.start-tile-merge-hint.is-armed {
   color: var(--color-selected-text);
   background: var(--color-accent-dim);
   border-color: var(--color-accent);

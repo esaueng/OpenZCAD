@@ -2512,6 +2512,12 @@ export function StartScreen({
       reorder.dropTarget?.target === `merge:${project.projectId}`
         ? reorder.dropTarget
         : null;
+    // The hint rides on the dragged card: on the card under it, the dragged
+    // card covered it (15 Nov 2026 recording).
+    const carriedMerge =
+      dragging && reorder.dropTarget?.target.startsWith('merge:')
+        ? reorder.dropTarget
+        : null;
     // While anything is selected, a click picks rather than opens; ⌘/Ctrl
     // and Shift pick from the start.
     const picks = (event: {
@@ -2630,10 +2636,13 @@ export function StartScreen({
           {isSelected && <Check size={12} aria-hidden="true" />}
         </button>
 
-        {mergeTarget && (
-          <span className="start-tile-merge-hint" aria-hidden="true">
+        {carriedMerge && (
+          <span
+            className={`start-tile-merge-hint${carriedMerge.armed ? ' is-armed' : ''}`}
+            aria-hidden="true"
+          >
             <FolderPlus size={14} aria-hidden="true" />
-            {mergeTarget.armed
+            {carriedMerge.armed
               ? 'Release to make a folder'
               : 'Hold to make a folder'}
           </span>
