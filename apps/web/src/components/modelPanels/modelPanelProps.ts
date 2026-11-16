@@ -18,6 +18,7 @@ import type { ObjectFolderActions } from './ObjectsPanel';
 import type { BodyAppearancePreview } from '../ModelViewer';
 import type { BodyAppearancePatch } from './BodyAppearanceEditor';
 import type { PrintClearanceState } from '../PrintClearanceRow';
+import type { ConfigurationTableProps } from '../ConfigurationTable';
 
 /**
  * Everything the five model panels read from the open document and the
@@ -133,6 +134,11 @@ export interface ModelPanelSource {
   onSetPrintClearance?(
     value: ParamValue | null
   ): string | null | Promise<string | null>;
+  /**
+   * F06: the variant table under the parameters, without the parameters and
+   * bodies the panel already has. Absent hides it.
+   */
+  configurationTable?: Omit<ConfigurationTableProps, 'parameters' | 'bodies'>;
   /** A new parameter the add row refused before setting it (a taken name). */
   onParameterAddRefused?(name: string, message: string): void;
   /** F05: retypes a parameter; answers with a refusal. */

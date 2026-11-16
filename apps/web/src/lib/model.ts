@@ -199,6 +199,7 @@ export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   hole: 'Hole',
   gear: 'Gear',
   'sheet-metal': 'Sheet metal',
+  'standard-part': 'Standard part',
   thread: 'Thread',
   shell: 'Shell',
   'solid-offset': 'Solid offset',

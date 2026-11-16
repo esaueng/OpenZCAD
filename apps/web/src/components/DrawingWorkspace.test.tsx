@@ -26,6 +26,7 @@ import {
   type BodyRepresentation,
   type DrawingAnnotation,
   type DrawingAnnotationId,
+  type DrawingLinearDimension,
   type DrawingSheet,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -765,6 +766,56 @@ describe('DrawingWorkspace', () => {
     } finally {
       window.removeEventListener('keydown', reached);
     }
+  });
+
+  it('sets the sheet’s drawing properties as one format, leaving defaults out (v70)', async () => {
+    const sheet = {
+      ...starter(drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!),
+      format: { decimalSeparator: 'comma' as const }
+    };
+    const { onCommand } = setup({ sheet });
+    const panel = screen.getByRole('complementary', {
+      name: 'Drawing properties'
+    });
+    await userEvent.selectOptions(
+      within(panel).getByRole('combobox', { name: 'Dimension units' }),
+      'inch'
+    );
+    let command = onCommand.mock.calls.at(-1)![0];
+    expect(command.kind).toBe('drawing.sheet.update');
+    expect(command.payload).toEqual({
+      sheetId: sheet.sheetId,
+      format: { decimalSeparator: 'comma', units: 'inch' }
+    });
+    await userEvent.selectOptions(
+      within(panel).getByRole('combobox', { name: 'Angles' }),
+      'dms'
+    );
+    command = onCommand.mock.calls.at(-1)![0];
+    expect(command.payload).toMatchObject({
+      format: { decimalSeparator: 'comma', angleFormat: 'dms' }
+    });
+    // Back to the default separator: nothing left, so the format clears.
+    await userEvent.selectOptions(
+      within(panel).getByRole('combobox', { name: 'Decimal separator' }),
+      ''
+    );
+    command = onCommand.mock.calls.at(-1)![0];
+    expect(command.payload).toEqual({ sheetId: sheet.sheetId, format: null });
+    // A print weight in bounds is kept; one out of bounds reverts.
+    await userEvent.click(screen.getByText('Line weights (mm)'));
+    const visible = within(panel).getByRole('spinbutton', {
+      name: 'Visible edges'
+    });
+    const calls = onCommand.mock.calls.length;
+    await userEvent.type(visible, '5{Enter}');
+    expect(onCommand.mock.calls.length).toBe(calls);
+    expect((visible as HTMLInputElement).value).toBe('');
+    await userEvent.type(visible, '0.5{Enter}');
+    command = onCommand.mock.calls.at(-1)![0];
+    expect(command.payload).toMatchObject({
+      format: { decimalSeparator: 'comma', lineWidthsMm: { visible: 0.5 } }
+    });
   });
 
   it('shows the paper dark on request and remembers it on this device', async () => {
@@ -1581,6 +1632,83 @@ describe('DrawingWorkspace', () => {
       ).toBe(false);
     });
 
+    it('tolerances a dimension and gives it a prefix and suffix (v68)', async () => {
+      const sheet = dimensioned();
+      sheet.annotations = [
+        {
+          ...(sheet.annotations![0] as DrawingLinearDimension),
+          tolerance: { kind: 'deviation', upper: 0.1, lower: -0.05 },
+          suffix: 'TYP'
+        }
+      ];
+      const { onCommand } = setup({ sheet });
+      const canvas = screen.getByRole('application', {
+        name: 'Sheet Sheet 1'
+      });
+      const drawn = await within(canvas).findByRole('button', {
+        name: 'Horizontal dimension 10 +0.10/-0.05 TYP'
+      });
+      // The pair is drawn stacked, each line its own smaller text.
+      expect(
+        [...canvas.querySelectorAll('text')].map((text) => text.textContent)
+      ).toEqual(expect.arrayContaining(['10', '+0.10', '-0.05', 'TYP']));
+      await userEvent.click(drawn);
+      expect(
+        screen.getByRole<HTMLSelectElement>('combobox', { name: 'Tolerance' })
+          .value
+      ).toBe('deviation');
+      // Switching to symmetric keeps the larger deviation as its amount.
+      await userEvent.selectOptions(
+        screen.getByRole('combobox', { name: 'Tolerance' }),
+        'symmetric'
+      );
+      let command = onCommand.mock.calls.at(-1)![0];
+      expect(command.kind).toBe('drawing.annotation.update');
+      expect(command.payload).toMatchObject({
+        annotation: { tolerance: { kind: 'symmetric', value: 0.1 } }
+      });
+      // An upper deviation below the lower one is refused and reverts.
+      const calls = onCommand.mock.calls.length;
+      const upper = screen.getByRole<HTMLInputElement>('spinbutton', {
+        name: 'Tolerance upper'
+      });
+      await userEvent.clear(upper);
+      await userEvent.type(upper, '-1{Enter}');
+      expect(onCommand.mock.calls.length).toBe(calls);
+      expect(upper.value).toBe('0.1');
+      await userEvent.clear(upper);
+      await userEvent.type(upper, '0.2{Enter}');
+      command = onCommand.mock.calls.at(-1)![0];
+      expect(command.payload).toMatchObject({
+        annotation: {
+          tolerance: { kind: 'deviation', upper: 0.2, lower: -0.05 }
+        }
+      });
+      // A blank suffix clears it; a prefix is trimmed.
+      const suffix = screen.getByRole('textbox', { name: 'Suffix' });
+      await userEvent.clear(suffix);
+      await userEvent.tab();
+      command = onCommand.mock.calls.at(-1)![0];
+      expect(
+        (command.payload as { annotation: DrawingAnnotation }).annotation
+      ).not.toHaveProperty('suffix');
+      const prefix = screen.getByRole('textbox', { name: 'Prefix' });
+      await userEvent.type(prefix, ' 2× {Enter}');
+      command = onCommand.mock.calls.at(-1)![0];
+      expect(command.payload).toMatchObject({ annotation: { prefix: '2×' } });
+      // A reference dimension takes none: marking one drops it.
+      await userEvent.click(
+        screen.getByRole('checkbox', { name: /Reference dimension/ })
+      );
+      command = onCommand.mock.calls.at(-1)![0];
+      expect(command.payload).toMatchObject({
+        annotation: { reference: true }
+      });
+      expect(
+        (command.payload as { annotation: DrawingAnnotation }).annotation
+      ).not.toHaveProperty('tolerance');
+    });
+
     it('keeps a broken dimension in place, refuses export and offers a re-pick', async () => {
       const { onCommand } = setup({ sheet: dimensioned(999) });
       const canvas = screen.getByRole('application', {
@@ -2221,8 +2349,14 @@ describe('DrawingWorkspace QA fixes', () => {
         expect(wheel({ deltaY: 40, deltaX: 30 })).toBe(false);
         const panned = viewBox();
         expect(panned[2]).toBeCloseTo(zoomed[2], 6);
-        expect(panned[0]).toBeCloseTo(zoomed[0] + 30 / (2 * (420 / zoomed[2])), 2);
-        expect(panned[1]).toBeCloseTo(zoomed[1] + 40 / (2 * (420 / zoomed[2])), 2);
+        expect(panned[0]).toBeCloseTo(
+          zoomed[0] + 30 / (2 * (420 / zoomed[2])),
+          2
+        );
+        expect(panned[1]).toBeCloseTo(
+          zoomed[1] + 40 / (2 * (420 / zoomed[2])),
+          2
+        );
       } finally {
         rect.mockRestore();
         // The swipe taught the classifier a trackpad; forget it.

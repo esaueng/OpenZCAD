@@ -22,6 +22,10 @@ import {
   type DrawingPointRef,
   type DrawingView,
   type DrawingViewFrame,
+  type DrawingAngleFormat,
+  type DrawingSheetFormat,
+  millimetresPerUnit,
+  MAX_DRAWING_DIMENSION_DECIMALS,
   type EdgeTopology,
   type EdgeTopologyReferenceV5,
   type FaceTopology,
@@ -181,6 +185,8 @@ export type ResolvedAnnotation =
       to: UV;
       value: number;
       label: string;
+      /** v68: a stacked or framed label's parts; absent is `label` alone. */
+      text?: DimensionText;
     }
   | {
       kind: 'radius' | 'diameter';
@@ -194,6 +200,8 @@ export type ResolvedAnnotation =
       arc?: number[];
       value: number;
       label: string;
+      /** v68: a stacked or framed label's parts; absent is `label` alone. */
+      text?: DimensionText;
     }
   | {
       kind: 'chamfer';
@@ -205,6 +213,8 @@ export type ResolvedAnnotation =
       value: number;
       angle: number;
       label: string;
+      /** v68: a stacked or framed label's parts; absent is `label` alone. */
+      text?: DimensionText;
     }
   | {
       kind: 'angle';
@@ -213,6 +223,8 @@ export type ResolvedAnnotation =
       rays: [[UV, UV], [UV, UV]];
       value: number;
       label: string;
+      /** v68: a stacked or framed label's parts; absent is `label` alone. */
+      text?: DimensionText;
       /**
        * v51: the ray turned outward, now from the vertex along its edge's
        * extension, and that edge's near end, where its extension line
@@ -297,20 +309,215 @@ export function formatDrawingNumber(value: number, decimals: number): string {
 }
 
 /**
- * A dimension's text from its value: the count, the value, and brackets for
- * a reference dimension. WinAnsi has no diameter sign; Ø (U+00D8) is the
- * usual stand-in, and × (U+00D7) is in it.
+ * v68: a dimension label laid out in parts: `head` (count and prefix),
+ * `lead` (the value and any symmetric tolerance), a deviation or limits pair
+ * stacked upper over lower, then `tail` (the suffix). A basic dimension's
+ * lead, the value alone, is framed.
  */
-function dimensionLabel(
-  annotation: Exclude<DrawingAnnotation, { kind: 'note' }>,
-  text: string
+export interface DimensionText {
+  /** The count and prefix, outside any frame ("2× "). */
+  head: string;
+  lead: string;
+  stack?: [string, string];
+  tail: string;
+  framed?: true;
+}
+
+/**
+ * What a dimension measures, before its format: `Ø` and 12.5 (a length in
+ * the sheet's printed units), or 30 (an angle, in degrees).
+ */
+interface Measured {
+  symbol: string;
+  value: number;
+  decimals: number;
+  kind: 'length' | 'angle';
+}
+
+/**
+ * D02 (schema v70): how a sheet writes numbers, from its drawing
+ * properties and the document's units. Lengths are measured in document
+ * units and printed in `units` (`lengthFactor` converts).
+ */
+export interface DrawingNumberFormat {
+  units: UnitSystem;
+  lengthFactor: number;
+  lengthDecimals: number;
+  angleDecimals: number;
+  angleFormat: DrawingAngleFormat;
+  comma: boolean;
+}
+
+export function drawingNumberFormat(
+  format: DrawingSheetFormat | undefined,
+  documentUnits: UnitSystem
+): DrawingNumberFormat {
+  const units = format?.units ?? documentUnits;
+  return {
+    units,
+    lengthFactor: millimetresPerUnit(documentUnits) / millimetresPerUnit(units),
+    lengthDecimals: format?.decimals ?? LENGTH_DECIMALS[units],
+    angleDecimals: format?.angleDecimals ?? ANGLE_DECIMALS,
+    angleFormat: format?.angleFormat ?? 'decimal',
+    comma: format?.decimalSeparator === 'comma'
+  };
+}
+
+/** The sheet's number format (absent properties: the document's). */
+export function sheetNumberFormat(
+  sheet: Pick<DrawingSheet, 'format'>,
+  documentUnits: UnitSystem
+): DrawingNumberFormat {
+  return drawingNumberFormat(sheet.format, documentUnits);
+}
+
+/** The fewest decimals (at most the bound) that state `value` exactly. */
+function significantDecimals(value: number): number {
+  for (let decimals = 0; decimals < MAX_DRAWING_DIMENSION_DECIMALS; decimals++)
+    if (
+      Math.abs(Number(value.toFixed(decimals)) - value) <=
+      1e-9 * Math.max(1, Math.abs(value))
+    )
+      return decimals;
+  return MAX_DRAWING_DIMENSION_DECIMALS;
+}
+
+/** Fixed decimals, kept so a stacked pair lines up; never "-0". */
+function fixedNumber(value: number, decimals: number): string {
+  const fixed = value.toFixed(decimals);
+  return /^-0(\.0*)?$/.test(fixed) ? fixed.slice(1) : fixed;
+}
+
+/**
+ * A number in the sheet's format: trimmed like {@link formatDrawingNumber}
+ * or fixed (a tolerance), with its decimal separator; an angle with its
+ * degree sign, or as degrees, minutes and seconds to `decimals` on the
+ * seconds.
+ */
+function writeNumber(
+  value: number,
+  decimals: number,
+  kind: Measured['kind'],
+  format: DrawingNumberFormat,
+  trim: boolean
 ): string {
+  const plain = (n: number, d: number) =>
+    trim ? formatDrawingNumber(n, d) : fixedNumber(n, d);
+  const separate = (text: string) =>
+    format.comma ? text.replace('.', ',') : text;
+  if (kind === 'length') return separate(plain(value, decimals));
+  if (format.angleFormat === 'decimal')
+    return `${separate(plain(value, decimals))}°`;
+  // Rounded once, in seconds, so 29°59'59.96" to one decimal is 30°0'0".
+  const step = 10 ** decimals;
+  let seconds = Math.round(Math.abs(value) * 3600 * step) / step;
+  const degrees = Math.floor(seconds / 3600 + 1e-9);
+  seconds -= degrees * 3600;
+  const minutes = Math.floor(seconds / 60 + 1e-9);
+  seconds = Math.max(0, seconds - minutes * 60);
+  const sign = value < 0 && degrees + minutes + seconds > 0 ? '-' : '';
+  return `${sign}${degrees}°${minutes}'${separate(plain(seconds, decimals))}"`;
+}
+
+/** A deviation: signed, and a bare `0` for none (ISO 129-1, ASME Y14.5). */
+function signedDeviation(
+  value: number,
+  decimals: number,
+  kind: Measured['kind'],
+  format: DrawingNumberFormat
+): string {
+  const step = kind === 'angle' && format.angleFormat === 'dms' ? 3600 : 1;
+  if (Math.abs(value * step) < 0.5 * 10 ** -decimals) return '0';
+  const text = writeNumber(value, decimals, kind, format, false);
+  return value < 0 ? text : `+${text}`;
+}
+
+/**
+ * A dimension's text: the count, the prefix, the value with its tolerance,
+ * the suffix, and brackets for a reference dimension. `measured` is a
+ * number to format, or text a callout already wrote (which takes no
+ * tolerance: the validator refuses one on a counterbore, a countersink or a
+ * chamfer, and a toleranced diameter states its diameter, not the hole's
+ * callout). WinAnsi has no diameter sign; Ø (U+00D8) is the usual stand-in,
+ * and × (U+00D7) and ± (U+00B1) are in it.
+ */
+export function formatDimension(
+  annotation: Exclude<DrawingAnnotation, { kind: 'note' }>,
+  measured: string | Measured,
+  format: DrawingNumberFormat = drawingNumberFormat(undefined, 'mm')
+): { label: string; text?: DimensionText } {
   const count =
     'count' in annotation && annotation.count !== undefined
       ? `${annotation.count}× `
       : '';
-  const label = `${count}${text}`;
-  return annotation.reference ? `(${label})` : label;
+  const head = `${count}${annotation.prefix ? `${annotation.prefix} ` : ''}`;
+  const tail = annotation.suffix ? ` ${annotation.suffix}` : '';
+  const tolerance =
+    typeof measured === 'string' ? undefined : annotation.tolerance;
+  let lead: string;
+  let stack: [string, string] | undefined;
+  let gap = '';
+  if (typeof measured === 'string') lead = measured;
+  else {
+    const { symbol, value, decimals, kind } = measured;
+    const write = (n: number, d: number, trim: boolean) =>
+      writeNumber(n, d, kind, format, trim);
+    const nominal = `${symbol}${write(value, decimals, true)}`;
+    // A tolerance keeps the decimals it needs, so a stored one never prints
+    // as zero: a length's or decimal degree's own, a D°M'S" amount's in
+    // seconds (0.000001° is 0.0036").
+    const tolerant = (...amounts: number[]) =>
+      kind === 'angle' && format.angleFormat === 'dms'
+        ? Math.max(
+            decimals,
+            ...amounts.map((amount) => significantDecimals(amount * 3600))
+          )
+        : Math.max(decimals, ...amounts.map(significantDecimals));
+    switch (tolerance?.kind) {
+      case undefined:
+      case 'basic':
+        lead = nominal;
+        break;
+      case 'symmetric': {
+        const d = tolerant(tolerance.value);
+        lead = `${nominal} ±${write(tolerance.value, d, false)}`;
+        break;
+      }
+      case 'deviation':
+      case 'limits': {
+        const d = tolerant(tolerance.upper, tolerance.lower);
+        if (tolerance.kind === 'deviation') {
+          lead = nominal;
+          gap = ' ';
+          stack = [
+            signedDeviation(tolerance.upper, d, kind, format),
+            signedDeviation(tolerance.lower, d, kind, format)
+          ];
+        } else {
+          lead = symbol;
+          stack = [
+            write(value + tolerance.upper, d, false),
+            write(value + tolerance.lower, d, false)
+          ];
+        }
+        break;
+      }
+    }
+  }
+  const framed = tolerance?.kind === 'basic';
+  const flat = `${head}${framed ? `[${lead}]` : lead}${stack ? `${gap}${stack[0]}/${stack[1]}` : ''}${tail}`;
+  const label = annotation.reference ? `(${flat})` : flat;
+  if (!stack && !framed) return { label };
+  return {
+    label,
+    text: {
+      head,
+      lead,
+      ...(stack ? { stack } : {}),
+      tail,
+      ...(framed ? { framed: true as const } : {})
+    }
+  };
 }
 
 export function defaultDimensionDecimals(
@@ -820,7 +1027,9 @@ export function resolveDrawingAnnotation(
   bodies: AnnotationBodies,
   units: UnitSystem,
   /** M01: a hole's callout data, by the hole's feature id. */
-  holes?: HoleCalloutLookup
+  holes?: HoleCalloutLookup,
+  /** D02 v70: the sheet's number format; absent prints in `units`. */
+  format: DrawingNumberFormat = drawingNumberFormat(undefined, units)
 ): AnnotationResolution {
   if (annotation.kind === 'note') {
     const label = annotation.text;
@@ -855,7 +1064,21 @@ export function resolveDrawingAnnotation(
   )
     return failure('foreshortened');
   const decimals =
-    annotation.decimals ?? defaultDimensionDecimals(annotation.kind, units);
+    annotation.decimals ??
+    (annotation.kind === 'angle'
+      ? format.angleDecimals
+      : format.lengthDecimals);
+  /** A length in document units, printed. */
+  const length = (n: number, d = decimals) =>
+    writeNumber(n * format.lengthFactor, d, 'length', format, true);
+  const angle = (n: number, d: number) =>
+    writeNumber(n, d, 'angle', format, true);
+  const measuredLength = (symbol: string, n: number): Measured => ({
+    symbol,
+    value: n * format.lengthFactor,
+    decimals,
+    kind: 'length'
+  });
   switch (annotation.kind) {
     case 'linear': {
       const frame = DRAWING_VIEW_FRAMES[view.orientation];
@@ -898,9 +1121,10 @@ export function resolveDrawingAnnotation(
           from: from.point.uv,
           to: to.point.uv,
           value,
-          label: dimensionLabel(
+          ...formatDimension(
             annotation,
-            `${annotation.diameter ? 'Ø' : ''}${formatDrawingNumber(value, decimals)}`
+            measuredLength(annotation.diameter ? 'Ø' : '', value),
+            format
           )
         }
       };
@@ -926,9 +1150,10 @@ export function resolveDrawingAnnotation(
             radius: tube.radius,
             ...(tube.arc ? { arc: tube.arc } : {}),
             value: tube.radius,
-            label: dimensionLabel(
+            ...formatDimension(
               annotation,
-              `R${formatDrawingNumber(tube.radius, decimals)}`
+              measuredLength('R', tube.radius),
+              format
             )
           }
         };
@@ -950,7 +1175,7 @@ export function resolveDrawingAnnotation(
           body?.topology?.faces ?? []
         );
         if (!reading.ok) return failure(reading.reason);
-        const number = (n: number) => formatDrawingNumber(n, decimals);
+        const number = (n: number) => length(n);
         const hole = reading.through
           ? `Ø${number(value)} THRU`
           : `Ø${number(value)} × ${number(reading.holeDepth)} DEEP`;
@@ -961,9 +1186,10 @@ export function resolveDrawingAnnotation(
             center: circle.center,
             radius: circle.radius,
             value,
-            label: dimensionLabel(
+            ...formatDimension(
               annotation,
-              `${hole}, CSK Ø${number(2 * reading.rim.radius)} × ${formatDrawingNumber(reading.angleDeg, ANGLE_DECIMALS)}°`
+              `${hole}, CSK Ø${number(2 * reading.rim.radius)} × ${angle(reading.angleDeg, format.angleDecimals)}`,
+              format
             )
           }
         };
@@ -979,7 +1205,7 @@ export function resolveDrawingAnnotation(
           body?.topology?.faces ?? []
         );
         if (!reading.ok) return failure(reading.reason);
-        const number = (n: number) => formatDrawingNumber(n, decimals);
+        const number = (n: number) => length(n);
         const hole = reading.through
           ? `Ø${number(value)} THRU`
           : `Ø${number(value)} × ${number(reading.holeDepth)} DEEP`;
@@ -990,18 +1216,20 @@ export function resolveDrawingAnnotation(
             center: circle.center,
             radius: circle.radius,
             value,
-            label: dimensionLabel(
+            ...formatDimension(
               annotation,
-              `${hole}, CBORE Ø${number(2 * reading.bore.radius)} × ${number(reading.depth)} DEEP`
+              `${hole}, CBORE Ø${number(2 * reading.bore.radius)} × ${number(reading.depth)} DEEP`,
+              format
             )
           }
         };
       }
       // M01: a diameter on the rim of a hole's bore reads the hole's
       // callout (its standard, its thread, cosmetic or cut), where the hole
-      // says more than its diameter.
+      // says more than its diameter. A toleranced diameter states the
+      // diameter it tolerances instead (v68).
       const callout =
-        annotation.kind === 'diameter' && holes
+        annotation.kind === 'diameter' && holes && !annotation.tolerance
           ? boreCallout(
               annotationBody(bodies, view, annotation.edge.bodyId),
               found.edge,
@@ -1019,13 +1247,12 @@ export function resolveDrawingAnnotation(
             ? {}
             : { arc: projectedPolyline(view, found.edge) }),
           value,
-          label: dimensionLabel(
+          ...formatDimension(
             annotation,
             callout
-              ? holeCalloutLabel(callout, (n) =>
-                  formatDrawingNumber(n, decimals)
-                )
-              : `${annotation.kind === 'radius' ? 'R' : 'Ø'}${formatDrawingNumber(value, decimals)}`
+              ? holeCalloutLabel(callout, (n) => length(n))
+              : measuredLength(annotation.kind === 'radius' ? 'R' : 'Ø', value),
+            format
           )
         }
       };
@@ -1074,8 +1301,7 @@ export function resolveDrawingAnnotation(
           return failure('foreshortened');
         segments = [chamfer.ends.map((end) => project(end.point)) as [UV, UV]];
       }
-      const lengthDecimals =
-        annotation.decimals ?? defaultDimensionDecimals('chamfer', units);
+      const lengthDecimals = annotation.decimals ?? format.lengthDecimals;
       return {
         ok: true,
         resolved: {
@@ -1083,9 +1309,10 @@ export function resolveDrawingAnnotation(
           segments,
           value: chamfer.size,
           angle: chamfer.angleDeg,
-          label: dimensionLabel(
+          ...formatDimension(
             annotation,
-            `${formatDrawingNumber(chamfer.size, lengthDecimals)} × ${formatDrawingNumber(chamfer.angleDeg, ANGLE_DECIMALS)}°`
+            `${length(chamfer.size, lengthDecimals)} × ${angle(chamfer.angleDeg, format.angleDecimals)}`,
+            format
           )
         }
       };
@@ -1144,9 +1371,10 @@ export function resolveDrawingAnnotation(
           vertex,
           rays: ordered,
           value,
-          label: dimensionLabel(
+          ...formatDimension(
             annotation,
-            `${formatDrawingNumber(value, decimals)}°`
+            { symbol: '', value, decimals, kind: 'angle' },
+            format
           ),
           ...(outside !== undefined
             ? { outside: { index: outside, from: near! } }
@@ -1641,6 +1869,161 @@ function placedText(
   };
 }
 
+/** v68: a stacked pair's text size, and the gap between its lines. */
+const STACK_TEXT_MM = 0.7 * ANNOTATION_TEXT_MM;
+const STACK_GAP_MM = 0.4;
+/** v68: space between a label's parts, and a basic frame's margin. */
+const PART_GAP_MM = 0.6;
+const FRAME_MARGIN_MM = 0.8;
+
+interface PlacedLabel {
+  texts: SheetText[];
+  strokes: SheetStroke[];
+  box: AnnotationBox;
+}
+
+/** The width a label takes along its baseline. */
+function labelWidthMm(label: string, text: DimensionText | undefined): number {
+  if (!text) return textWidthMm(sheetSafeText(label), ANNOTATION_TEXT_MM);
+  return labelParts(text).width;
+}
+
+/**
+ * Where each part of a stacked or framed label sits along its baseline,
+ * from its start: the lead, the stack's two lines (raised and lowered about
+ * the lead's middle), then the tail, and the frame's extent.
+ */
+function labelParts(text: DimensionText): {
+  width: number;
+  parts: { text: string; at: number; lift: number; size: number }[];
+  frame: [number, number] | null;
+} {
+  const parts: { text: string; at: number; lift: number; size: number }[] = [];
+  let at = 0;
+  // Sheet text is trimmed, so a part's edge spaces ("2× " before the value,
+  // " TYP" after it) are kept as advances.
+  const space = textWidthMm(' ', ANNOTATION_TEXT_MM);
+  const head = sheetSafeText(text.head);
+  if (head) {
+    parts.push({ text: head, at, lift: 0, size: ANNOTATION_TEXT_MM });
+    at += textWidthMm(head, ANNOTATION_TEXT_MM) + space;
+  }
+  const lead = sheetSafeText(text.lead);
+  const leadWidth = lead ? textWidthMm(lead, ANNOTATION_TEXT_MM) : 0;
+  const margin = text.framed ? FRAME_MARGIN_MM : 0;
+  const frameStart = at;
+  at += margin;
+  if (lead) parts.push({ text: lead, at, lift: 0, size: ANNOTATION_TEXT_MM });
+  at += leadWidth + margin;
+  const frame: [number, number] | null = text.framed ? [frameStart, at] : null;
+  if (text.stack) {
+    if (lead) at += /\s$/.test(text.lead) ? space : PART_GAP_MM;
+    const [upper, lower] = text.stack.map(sheetSafeText) as [string, string];
+    const middle = ANNOTATION_TEXT_MM / 2;
+    const lowerLift = middle - STACK_TEXT_MM - STACK_GAP_MM / 2;
+    parts.push(
+      {
+        text: upper,
+        at,
+        lift: lowerLift + STACK_TEXT_MM + STACK_GAP_MM,
+        size: STACK_TEXT_MM
+      },
+      { text: lower, at, lift: lowerLift, size: STACK_TEXT_MM }
+    );
+    at += Math.max(
+      textWidthMm(upper, STACK_TEXT_MM),
+      textWidthMm(lower, STACK_TEXT_MM)
+    );
+  }
+  const tail = sheetSafeText(text.tail);
+  if (tail) {
+    if (/^\s/.test(text.tail)) at += space;
+    parts.push({ text: tail, at, lift: 0, size: ANNOTATION_TEXT_MM });
+    at += textWidthMm(tail, ANNOTATION_TEXT_MM);
+  }
+  return { width: at, parts, frame };
+}
+
+/**
+ * {@link placedText} for a dimension's label: its plain text when it has no
+ * parts (so a sheet without v68 formats lays out byte-identical), else each
+ * part placed along the same baseline, start-aligned, with a basic
+ * dimension's frame as a closed dimension stroke.
+ */
+function placedLabel(
+  label: string,
+  text: DimensionText | undefined,
+  at: XY,
+  angleDeg: number,
+  align: 'start' | 'middle' | 'end' = 'middle'
+): PlacedLabel {
+  if (!text) {
+    const placed = placedText(label, at, angleDeg, align);
+    return { texts: [placed.text], strokes: [], box: placed.box };
+  }
+  const { width, parts, frame } = labelParts(text);
+  const radians = (angleDeg * Math.PI) / 180;
+  const along: XY = [Math.cos(radians), Math.sin(radians)];
+  const up: XY = [-along[1], along[0]];
+  // A frame's bottom edge clears the dimension line.
+  const lift = TEXT_LIFT_MM + (frame ? FRAME_MARGIN_MM : 0);
+  const shift = align === 'middle' ? -width / 2 : align === 'end' ? -width : 0;
+  const point = (s: number, h: number): XY => [
+    at[0] + along[0] * (s + shift) + up[0] * (lift + h),
+    at[1] + along[1] * (s + shift) + up[1] * (lift + h)
+  ];
+  const texts: SheetText[] = parts.map((part) => {
+    const [x, y] = point(part.at, part.lift);
+    return {
+      x,
+      y,
+      sizeMm: part.size,
+      text: part.text,
+      ...(angleDeg !== 0 ? { angleDeg } : {})
+    };
+  });
+  const strokes: SheetStroke[] = [];
+  const corners: XY[] = [];
+  let low = 0;
+  let high = ANNOTATION_TEXT_MM;
+  for (const part of parts) {
+    low = Math.min(low, part.lift);
+    high = Math.max(high, part.lift + part.size);
+  }
+  if (frame) {
+    const bottom = -FRAME_MARGIN_MM;
+    const top = ANNOTATION_TEXT_MM + FRAME_MARGIN_MM;
+    const box = [
+      point(frame[0], bottom),
+      point(frame[1], bottom),
+      point(frame[1], top),
+      point(frame[0], top)
+    ];
+    strokes.push({ kind: 'dimension', closed: true, points: box.flat() });
+    low = Math.min(low, bottom);
+    high = Math.max(high, top);
+  }
+  corners.push(
+    point(0, low),
+    point(width, low),
+    point(0, high),
+    point(width, high)
+  );
+  const xs = corners.map((corner) => corner[0]);
+  const ys = corners.map((corner) => corner[1]);
+  const pad = 0.8;
+  return {
+    texts,
+    strokes,
+    box: {
+      x: Math.min(...xs) - pad,
+      y: Math.min(...ys) - pad,
+      width: Math.max(...xs) - Math.min(...xs) + 2 * pad,
+      height: Math.max(...ys) - Math.min(...ys) + 2 * pad
+    }
+  };
+}
+
 /** Readable text angle for a line along `direction`: in (−90°, 90°]. */
 function readableAngle(direction: XY): number {
   let angle = (Math.atan2(direction[1], direction[0]) * 180) / Math.PI;
@@ -1690,8 +2073,7 @@ function linearLayout(
   // Along the dimension line: `low` and `high` are the two feet.
   const [low, high] = dot(fa, d) <= dot(fb, d) ? [fa, fb] : [fb, fa];
   const span = dot(high, d) - dot(low, d);
-  const label = placedText(resolved.label, [0, 0], readableAngle(d));
-  const textWidth = textWidthMm(label.text.text, ANNOTATION_TEXT_MM);
+  const textWidth = labelWidthMm(resolved.label, resolved.text);
   // The text sits mid-span unless the placement is beyond either end; the
   // dimension line then runs out under it.
   const along = dot(anchor, d);
@@ -1722,8 +2104,14 @@ function linearLayout(
     arrow(low, arrowsInside ? minus : d),
     arrow(high, arrowsInside ? d : minus)
   );
-  const placed = placedText(resolved.label, centre, readableAngle(d));
-  return { strokes, texts: [placed.text], box: placed.box };
+  const placed = placedLabel(
+    resolved.label,
+    resolved.text,
+    centre,
+    readableAngle(d)
+  );
+  strokes.push(...placed.strokes);
+  return { strokes, texts: placed.texts, box: placed.box };
 }
 
 function radialLayout(
@@ -1796,13 +2184,15 @@ function radialLayout(
     line([c[0], c[1] - mark], [c[0], c[1] + mark])
   );
   const right = u[0] >= 0;
-  const placed = placedText(
+  const placed = placedLabel(
     resolved.label,
+    resolved.text,
     [end[0] + (right ? 1 : -1), end[1]],
     0,
     right ? 'start' : 'end'
   );
-  return { strokes, texts: [placed.text], box: placed.box };
+  strokes.push(...placed.strokes);
+  return { strokes, texts: placed.texts, box: placed.box };
 }
 
 function angleLayout(
@@ -1891,15 +2281,17 @@ function angleLayout(
   });
   const mid = a1 + sweep / 2;
   const reach = radius + 2;
-  const placed = placedText(
+  const placed = placedLabel(
     resolved.label,
+    resolved.text,
     [
       v[0] + Math.cos(mid) * reach,
       v[1] + Math.sin(mid) * reach - ANNOTATION_TEXT_MM / 2 - 1
     ],
     0
   );
-  return { strokes, texts: [placed.text], box: placed.box };
+  strokes.push(...placed.strokes);
+  return { strokes, texts: placed.texts, box: placed.box };
 }
 
 /**
@@ -2170,7 +2562,8 @@ export function resolveSheetAnnotations(
         annotation.viewId ? views.get(annotation.viewId) : undefined,
         bodies,
         units,
-        holes
+        holes,
+        sheetNumberFormat(sheet, units)
       )
     ])
   );

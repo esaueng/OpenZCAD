@@ -27,6 +27,7 @@ import { featureHistory, featureResultBodyIds } from '../featureHistory';
 import { holePositionAxes } from '../holePositionAxes';
 import type { RevolveAxisCandidate } from './revolve';
 import { threadEditOptions } from './thread';
+import { standardPartEditSeed } from './standardPart';
 import { sheetMetalCleared, sheetMetalEditOptions } from './sheetMetal';
 import {
   IN_PLACE_TOOL_SPECS,
@@ -192,6 +193,8 @@ export function inPlaceToolForFeature(data: FeatureData): InPlaceToolId | null {
     // M16: Bend edits the whole feature, its rule and its bend table.
     case 'sheet-metal':
       return 'bend';
+    case 'standard-part':
+      return 'standard-part';
     case 'boolean':
       return data.operation;
     case 'pattern':
@@ -577,6 +580,16 @@ export function inPlaceEditSeed(
       } else {
         missing.push('plane');
       }
+      break;
+    }
+    case 'standard-part': {
+      // M17: the row as options, the length as a value, and the stored
+      // placement as a saved plane, kept as stored until another is picked.
+      const seeded = standardPartEditSeed(data, ctx.evaluate);
+      Object.assign(seed.options, seeded.options);
+      value('length', data.length);
+      if (seeded.plane) seed.slots.plane = seeded.plane;
+      else missing.push('plane');
       break;
     }
     case 'thread': {
@@ -1149,6 +1162,19 @@ export function inPlaceFeatureUpdate(
         featureId,
         name,
         data: { featureKind: 'gear', ...request.gear },
+        ...(clear.length > 0 ? { clearData: [...clear] } : {})
+      };
+    }
+    case 'standard-part': {
+      if (saved.featureKind !== 'standard-part') return null;
+      // A screw's head and a length go when the edit no longer sets them.
+      const clear = (['head', 'length', 'xDirection'] as const).filter(
+        (key) => saved[key] !== undefined && request.part[key] === undefined
+      );
+      return {
+        featureId,
+        name,
+        data: { featureKind: 'standard-part', ...request.part },
         ...(clear.length > 0 ? { clearData: [...clear] } : {})
       };
     }

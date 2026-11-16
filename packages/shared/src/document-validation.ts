@@ -27,6 +27,11 @@ import type {
 } from './index';
 import { PIPE_THREAD_SIZES } from './pipe-threads';
 import type { SheetMetalKFactorMethod } from './sheet-metal';
+import {
+  STANDARD_PART_KINDS,
+  STANDARD_PART_SIZES,
+  STANDARD_SCREW_HEADS
+} from './standard-parts';
 
 /** Limits apply before normalization, cloning, or recursive history traversal. */
 export const MAX_DOCUMENT_DEPTH = 64;
@@ -393,6 +398,15 @@ const FEATURE_ENUM_FIELDS = {
       'din-6935': true
     })
   },
+  'standard-part': {
+    partKind: new Set<string>(STANDARD_PART_KINDS),
+    system: valuesOf<FeatureDataOf<'standard-part'>['system']>({
+      iso: true,
+      ansi: true
+    }),
+    size: STANDARD_PART_SIZES,
+    head: new Set<string>(STANDARD_SCREW_HEADS)
+  },
   fillet: { radiusLaw: RADIUS_LAWS },
   'imported-mesh': { assumedUnits: UNIT_SYSTEMS }
 } satisfies {
@@ -519,6 +533,7 @@ const FEATURE_KINDS = valuesOf<FeatureKind>({
   gear: true,
   thread: true,
   'sheet-metal': true,
+  'standard-part': true,
   'direct-edit': true,
   'imported-step': true,
   'imported-mesh': true,
@@ -553,6 +568,7 @@ export const COMMAND_FEATURE_KINDS = {
   'feature.gear': 'gear',
   'feature.thread': 'thread',
   'feature.sheet-metal': 'sheet-metal',
+  'feature.standard-part': 'standard-part',
   'feature.shell': 'shell',
   'feature.solid-offset': 'solid-offset',
   'feature.draft': 'draft',

@@ -165,13 +165,17 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
   );
 
   it(
-    'keeps the exact-only refusal where the evolution entry point would ship a body',
+    'builds the cylinder ∩ sphere the exact pipeline now answers exactly',
     async () => {
-      // Measured on the pin: the plain intersect refuses this by the exact-only
-      // policy, while `intersectWithEntityEvolution` returns a two-face body of
-      // 1946.740248 mm^3. Shipping that body is the fail-closed violation this
-      // case exists to prevent.
-      const { document, bodyId, operandIds } = operandDocument(
+      // Before Remus 2026.1.142 the plain intersect refused this by the
+      // exact-only policy while `intersectWithEntityEvolution` already
+      // returned a two-face body. 1.142 builds it on the plain pipeline too:
+      // the sphere (r 8 at z 5) less the 3 mm cap the cylinder's end plane
+      // cuts off, closed by a planar disc, exactly
+      // 4/3·π·8³ − π·3²·(3·8 − 3)/3 = 2048π/3 − 63π mm³. The part is taller
+      // than the radius, so it keeps the sphere's equator seam: two sphere
+      // patches and the disc.
+      const { document, bodyId } = operandDocument(
         'Cylinder meets sphere',
         [
           { name: 'Cylinder', primitive: { kind: 'cylinder', radius: 10, height: 20 } },
@@ -184,10 +188,14 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
         'intersect'
       );
       const derived = await adapter.syncDocument(document);
-      // Refused, so no boolean geometry ships: the first operand is passed
-      // through unchanged (ADR-017, November 2026).
-      expectPassedThrough(derived, bodyId, operandIds[0]!);
-      expect(derived.warnings.join('\n')).toMatch(/exact-only policy/);
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[bodyId];
+      expect(body, 'the intersection body').toBeDefined();
+      expect(body!.faceCount).toBe(3);
+      expect(
+        body!.topology!.faces.map((face) => face.geometry?.surfaceType).sort()
+      ).toEqual(['plane', 'sphere', 'sphere']);
+      expect(body!.volume).toBeCloseTo((2048 * Math.PI) / 3 - 63 * Math.PI, 6);
     },
     120_000
   );

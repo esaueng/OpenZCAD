@@ -20,6 +20,7 @@ import {
   ArrowDown,
   ArrowUpFromDot,
   Axis3d,
+  Bolt,
   Box,
   BrushCleaning,
   CirclePause,
@@ -115,6 +116,7 @@ const KIND_ICONS: Partial<Record<FeatureNode['featureKind'], ReactNode>> = {
   split: splitGlyph,
   hole: <Drill size={14} aria-hidden="true" />,
   gear: <Cog size={14} aria-hidden="true" />,
+  'standard-part': <Bolt size={14} aria-hidden="true" />,
   thread: threadGlyph,
   // A sheet-metal feature is its bends: History reopens Bend on it.
   'sheet-metal': bendGlyph,

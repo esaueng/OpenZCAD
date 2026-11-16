@@ -86,6 +86,7 @@
     "test/collaboration-checkpoint.test.ts",
     "test/combination-matrix.test.ts",
     "test/command-system.test.ts",
+    "test/configurations.test.ts",
     "test/css-class-coverage.test.ts",
     "test/cylinder-radius-across-boolean.test.ts",
     "test/cylinder-resize-face-lineage.test.ts",
@@ -103,6 +104,9 @@
     "test/drawing-assistant-operations.test.ts",
     "test/drawing-auto-dimension.test.ts",
     "test/drawing-dimension-audit.test.ts",
+    "test/drawing-dimension-tolerances.test.ts",
+    "test/drawing-dxf-export.test.ts",
+    "test/drawing-sheet-format.test.ts",
     "test/e2e-shards.test.ts",
     "test/e2ee-authority-fork.test.ts",
     "test/e2ee-authority-trust.test.ts",
@@ -200,6 +204,7 @@
     "test/sphere-cylinder-union.test.ts",
     "test/sphere-patch-lineage.test.ts",
     "test/spline-self-seam.test.ts",
+    "test/standard-parts.test.ts",
     "test/step-import-privacy.test.ts",
     "test/step-import-rejection.test.ts",
     "test/step-preview-profile.test.ts",
@@ -221,6 +226,7 @@
     "test/worker-public-request-limits.test.ts"
   ],
   "web": [
+    "src/components/ConfigurationTable.test.tsx",
     "src/components/DrawingWorkspace.test.tsx",
     "src/components/EncryptedPinReset.test.tsx",
     "src/components/ExportDialog.test.tsx",

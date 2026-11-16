@@ -10,8 +10,11 @@ import {
 } from '@openzcad/shared';
 import {
   holeStandardLabel,
+  millimetresPerUnit,
   pipeThreadLabel,
-  sheetMetalMaterialById
+  sheetMetalMaterialById,
+  standardPartDesignation,
+  standardPartProblem
 } from '@openzcad/shared';
 import { edgeSelectionName, storedLoopEdges } from './edgeLoops';
 import { unitLabel } from './measurements';
@@ -334,6 +337,20 @@ export function featureValueSummary(
             ? `pitch ${pitch} ${unit}`
             : 'fits the face';
       return `${size}, ${profile}`;
+    }
+    case 'standard-part': {
+      // M17: the designation a bill of materials lists, "ISO 4762 M6×1 × 20
+      // socket head cap screw", its length in its standard's units.
+      if (standardPartProblem(data) !== null) return null;
+      const lengthInUnits =
+        data.length === undefined ? undefined : lengthValue(data.length);
+      if (lengthInUnits === null) return null;
+      return standardPartDesignation(
+        data,
+        lengthInUnits === undefined
+          ? undefined
+          : Number(lengthInUnits) * millimetresPerUnit(units)
+      );
     }
     case 'sheet-metal': {
       // "1.5 mm, 3 bends"; with a material preset, "1.5 mm mild steel, 3

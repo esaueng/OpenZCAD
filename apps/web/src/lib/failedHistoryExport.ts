@@ -59,6 +59,7 @@ function inputBodyIds(feature: FeatureNode): BodyId[] {
     case 'sweep':
     case 'helical-sweep':
     case 'sheet-metal':
+    case 'standard-part':
     case 'imported-step':
     case 'imported-mesh':
     case 'datum-plane':

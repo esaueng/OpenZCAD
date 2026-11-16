@@ -52,6 +52,7 @@ export { assertSketchBoundaryTopologyPreserved } from './sketch-boundary-depende
 import {
   assertDocumentContentSchema,
   assertSheetMetalSchema,
+  assertStandardPartSchema,
   assertPatternContentSchema,
   assertHoleContentSchema,
   assertSketchObjectContentSchema,
@@ -68,6 +69,7 @@ export * from './assembly-interference';
 export * from './gear-mesh';
 export * from './hole-callout';
 export * from './print-clearance';
+export * from './configurations';
 export * from './reference-images';
 export * from './body-consumption';
 export {
@@ -82,6 +84,7 @@ export {
   normalizeDocumentHistory
 } from './document-history';
 import {
+  configurationHiddenBodyIds,
   isDocumentHistory,
   isReservedRecordKey,
   ownEntry,
@@ -89,6 +92,7 @@ import {
   holePointsProblem,
   holeStandardDiameter,
   holeStandardProblem,
+  standardPartProblem,
   holeTappedProblem,
   patternSourceProblem,
   skippedInstancesProblem,
@@ -609,6 +613,20 @@ export type ThreadInput = Omit<
  */
 export type SheetMetalInput = Omit<
   Extract<FeatureData, { featureKind: 'sheet-metal' }>,
+  'featureKind'
+> & {
+  name: string;
+  ids?: BodyFeatureIds;
+  bodyName?: string;
+};
+
+/**
+ * M17 (schema v69): a standard part's input — its {@link FeatureData}
+ * fields plus the command's name, optional preallocated ids and the new
+ * body's name.
+ */
+export type StandardPartInput = Omit<
+  Extract<FeatureData, { featureKind: 'standard-part' }>,
   'featureKind'
 > & {
   name: string;
@@ -3558,6 +3576,7 @@ function addBodyResultFeature(
     | 'gear'
     | 'thread'
     | 'sheet-metal'
+    | 'standard-part'
     | 'shell'
     | 'solid-offset'
     | 'loft'
@@ -3577,6 +3596,7 @@ function addBodyResultFeature(
         | 'gear'
         | 'thread'
         | 'sheet-metal'
+        | 'standard-part'
         | 'shell'
         | 'solid-offset'
         | 'loft'
@@ -3793,6 +3813,30 @@ export function sheetMetalBody(
     name,
     'sheet-metal',
     deepClone({ featureKind: 'sheet-metal', ...parameters }),
+    ids,
+    bodyName
+  );
+}
+
+/**
+ * Adds an M17 standard part: one new body generated from its standard's
+ * table at `origin` along `axis`. No body is consumed.
+ */
+export function standardPartBody(
+  document: ProjectDocument,
+  input: StandardPartInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  const { name, ids, bodyName, ...parameters } = input;
+  // Written to a document that declares an older schema, the feature would
+  // be dropped by the readers that schema admits.
+  assertStandardPartSchema(document.schemaVersion);
+  const problem = standardPartProblem(parameters);
+  if (problem) throw new Error(problem);
+  return addBodyResultFeature(
+    document,
+    name,
+    'standard-part',
+    deepClone({ featureKind: 'standard-part', ...parameters }),
     ids,
     bodyName
   );
@@ -4473,6 +4517,9 @@ export function getParameterHiddenBodyIds(
       for (const bodyId of parameter.toggle.bodyIds) hidden.add(bodyId);
     }
   }
+  // F06: a body the active configuration hides is hidden the same way.
+  for (const bodyId of configurationHiddenBodyIds(document.configurations))
+    hidden.add(bodyId);
   return hidden;
 }
 
@@ -4873,7 +4920,7 @@ export function getParameterScope(
 }
 
 /** Recomputes the cached `value` field of every parameter node. */
-function refreshParameterValues(document: ProjectDocument): void {
+export function refreshParameterValues(document: ProjectDocument): void {
   const { scope } = getParameterScope(document);
   for (const parameter of listParameters(document)) {
     const value = ownEntry(scope, parameter.name);
@@ -5003,6 +5050,16 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'runoutStart',
     'runoutEnd',
     'pipeSize'
+  ],
+  'standard-part': [
+    'partKind',
+    'system',
+    'size',
+    'head',
+    'length',
+    'origin',
+    'axis',
+    'xDirection'
   ],
   // `secondBodyId` is body wiring, not a parameter: never patchable.
   split: ['targetBodyId', 'plane', 'keepOriginal'],

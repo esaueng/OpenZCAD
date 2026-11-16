@@ -46,6 +46,20 @@ export function assertPrintClearanceSchema(version: unknown): void {
 }
 
 /**
+ * F06 configurations (schema v72): `configurations` and its commands. An
+ * older reader would show and export the bodies the active row hides.
+ */
+export const CONFIGURATION_SCHEMA_VERSION = 72;
+
+export function assertConfigurationSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    CONFIGURATION_SCHEMA_VERSION,
+    'Configurations'
+  );
+}
+
+/**
  * M15 thread runouts and pipe threads (schema v57): a thread carrying either
  * needs a document that declares it, or an older reader would build a plain
  * end or a cylindrical thread in its place.
@@ -112,6 +126,91 @@ export function assertHoleContentSchema(data: unknown, version: unknown): void {
  */
 export function assertSheetMetalSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 58, 'Sheet-metal features');
+}
+
+/**
+ * D02 dimension tolerances, prefixes and suffixes (schema v68): a drawing
+ * annotation carrying any needs a document that declares it, or an older
+ * reader would print the bare value and drop them on its next save.
+ */
+export function assertDrawingDimensionFormatSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    68,
+    'Dimension tolerances, prefixes and suffixes'
+  );
+}
+
+/**
+ * Whether `value` (a drawing set, a sheet, an annotation or a drawing
+ * command's payload) holds an annotation with a v68 field. Walks records and
+ * arrays only, once each.
+ */
+export function hasDrawingDimensionFormat(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (
+      typeof entry.annotationId === 'string' &&
+      (entry.tolerance !== undefined ||
+        entry.prefix !== undefined ||
+        entry.suffix !== undefined)
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/**
+ * M17 standard parts (schema v69): an older reader has no builder for the
+ * kind and would drop the body, so the document must declare the schema.
+ */
+export function assertStandardPartSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 69, 'Standard parts');
+}
+
+/**
+ * D02 drawing properties (schema v70): a sheet carrying `format` needs a
+ * document that declares it, or an older reader would print its dimensions
+ * in the document's units and drop the properties on its next save.
+ */
+export function assertDrawingFormatSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 70, 'Drawing properties');
+}
+
+/** Whether `value` holds a sheet, or a sheet update, that sets a format. */
+export function hasDrawingFormat(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    // A sheet, or a sheet update command's payload, which names its sheet
+    // beside the properties it sets (null clears them).
+    if (
+      typeof entry.sheetId === 'string' &&
+      entry.format !== undefined &&
+      entry.format !== null
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
 }
 
 function hasCouplings(assembly: unknown): boolean {
@@ -200,8 +299,27 @@ export function assertDocumentContentCommandSchema(
       assertAssemblyExplodeSchema(document.schemaVersion);
     if (command.kind === 'feature.sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
+    if (command.kind === 'feature.standard-part')
+      assertStandardPartSchema(document.schemaVersion);
     if (command.kind === 'printClearance.set')
       assertPrintClearanceSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('configuration.')
+    )
+      assertConfigurationSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingDimensionFormat(command.payload)
+    )
+      assertDrawingDimensionFormatSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingFormat(command.payload)
+    )
+      assertDrawingFormatSchema(document.schemaVersion);
     if (!record(command.payload)) continue;
     if (
       command.kind === 'sketch.composite.add' &&
@@ -275,6 +393,15 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         (change.before !== undefined || change.after !== undefined)
       )
         assertPrintClearanceSchema(document.schemaVersion);
+  if (document.configurations !== undefined)
+    assertConfigurationSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'configurations' &&
+        (change.before !== undefined || change.after !== undefined)
+      )
+        assertConfigurationSchema(document.schemaVersion);
   if (document.assembly !== undefined)
     assertAssemblySchema(document.schemaVersion);
   if (hasCouplings(document.assembly))
@@ -291,6 +418,25 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         if (hasExplode(change.before) || hasExplode(change.after))
           assertAssemblyExplodeSchema(document.schemaVersion);
       }
+  if (hasDrawingDimensionFormat(document.drawings))
+    assertDrawingDimensionFormatSchema(document.schemaVersion);
+  if (hasDrawingFormat(document.drawings))
+    assertDrawingFormatSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingDimensionFormat(change.before) ||
+          hasDrawingDimensionFormat(change.after))
+      )
+        assertDrawingDimensionFormatSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingFormat(change.before) || hasDrawingFormat(change.after))
+      )
+        assertDrawingFormatSchema(document.schemaVersion);
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch-object')
       assertSketchObjectContentSchema(
@@ -306,6 +452,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       assertHoleContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'standard-part')
+      assertStandardPartSchema(document.schemaVersion);
     if (
       node.kind === 'sketch' &&
       Array.isArray(node.composites) &&

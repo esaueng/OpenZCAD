@@ -18,10 +18,12 @@ import {
 } from './lib/localHistoryAppend';
 import {
   documentPrintClearance,
+  effectiveConfigurationRow,
   repairLegacyBracketModel,
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
 import type { PrintClearanceState } from './components/PrintClearanceRow';
+import type { ConfigurationActions } from './components/ConfigurationTable';
 import {
   noteProjectMigrating,
   registerProjectFlush,
@@ -206,6 +208,7 @@ import {
   duplicateFeatureRefusal,
   isParameterRetype,
   isAssemblyOnlyCommand,
+  isConfigurationTableOnlyCommand,
   isDrawingCommand,
   isObjectFolderCommandKind,
   isReferenceImageCommandKind,
@@ -277,6 +280,7 @@ import type {
   FaceGeometry,
   FaceRecognitionSummary,
   ParamValue,
+  ConfigurationSet,
   FaceTopology,
   ProjectCheckpoint,
   PlaneId,
@@ -679,7 +683,7 @@ import {
   ViewModeRail
 } from './components/ViewModeRail';
 import { StartScreen } from './components/StartScreen';
-import { SharePage, type SharePageState } from './components/SharePage';
+import type { SharePageState } from './components/SharePage';
 import { StartupScreen } from './components/StartupScreen';
 import { SettingsPlaceholder } from './components/SettingsPlaceholder';
 import {
@@ -1221,6 +1225,13 @@ function withSuspense<P extends object>(Lazy: JSXElementConstructor<P>) {
   };
 }
 
+// A share link's landing page: only a share link opens it, so it waits in
+// its own chunk, outside the entry chunk, which runs at its budget.
+const SharePage = preloadableSlot('Shared link', () =>
+  import('./components/SharePage').then((module) => ({
+    default: module.SharePage
+  }))
+);
 const LazyNumericKeypad = preloadableLazy(() =>
   import('./components/NumericKeypad').then((module) => ({
     default: module.NumericKeypad
@@ -2999,7 +3010,7 @@ export function App() {
   // Where the model panels live (U08). Read before anything can write the
   // new key: on a device that has none, the v1 drawer state it migrates
   // from is what `loadPanelState` just read, untouched. A device with
-  // neither starts in the two-sided Essentials.
+  // neither starts with Objects above History in one right column.
   const [panelLayout, setPanelLayout] = useState<PanelLayout>(() =>
     loadPanelLayout(undefined, undefined, { leftDock: true })
   );
@@ -8506,6 +8517,15 @@ export function App() {
     () => requiredValueResolver(parameterScope.scope, doc?.units),
     [parameterScope.scope, doc?.units]
   );
+  // F06: the variant table as it reads, the active row as the model holds it.
+  const configurationView = useMemo((): ConfigurationSet | undefined => {
+    const set = doc?.configurations;
+    if (!doc || !set) return undefined;
+    return {
+      ...set,
+      rows: set.rows.map((row) => effectiveConfigurationRow(doc, row.id) ?? row)
+    };
+  }, [doc]);
   // L09: the document's print clearance, as the Parameters panel shows it.
   const printClearance = useMemo((): PrintClearanceState | undefined => {
     if (!doc) return undefined;
@@ -10700,7 +10720,8 @@ export function App() {
         isDrawingCommand(command) ||
         isReferenceImageCommandKind(command.kind) ||
         isObjectFolderCommandKind(command.kind) ||
-        isAssemblyOnlyCommand(command)
+        isAssemblyOnlyCommand(command) ||
+        isConfigurationTableOnlyCommand(command, beforeDocument)
       )
         geometry.retainReadyGeometry(next);
       if (derived) {
@@ -18872,30 +18893,37 @@ export function App() {
     }
   }
 
-  /** One sketch's exact curves as an SVG at 1:1 in document units. */
+  /**
+   * One sketch's exact curves as an SVG at 1:1 in document units, or (D04)
+   * as a DXF drawing in millimetres.
+   */
   async function handleExportSketchSvg(options: SvgExportOptions) {
+    const format = options.format ?? 'svg';
     // No rebuild guard: the sketch is read from the saved document, and the
     // worker queues the export behind any rebuild in flight. The dialog
     // offers SVG while the model updates, so it must be able to deliver it.
     if (!doc) {
       return;
     }
-    const fileName = `${exportFileStem(doc.name)}-sketch.svg`;
+    const fileName = `${exportFileStem(doc.name)}-sketch.${format}`;
+    const name = format.toUpperCase();
     try {
-      setStatus('Exporting the sketch as SVG…');
-      const result = await geometry.exportModel('svg', doc, [], {
+      setStatus(`Exporting the sketch ${name}…`);
+      const result = await geometry.exportModel(format, doc, [], {
         sketchId: options.sketchId as SketchId,
         transparent: options.transparent
       });
       if (!('text' in result)) {
-        throw new Error('The SVG export returned no text.');
+        throw new Error(`${name} export returned no text.`);
       }
-      const saved = await saveCadTextFile(fileName, 'svg', result.text);
+      const saved = await saveCadTextFile(fileName, format, result.text);
       setStatus(
-        saved ? `Exported the sketch to ${fileName}.` : 'SVG export cancelled.'
+        saved
+          ? `Exported the sketch to ${fileName}.`
+          : `${name} export cancelled.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'SVG export failed.'));
+      setStatus(errorMessage(error, `${name} export failed.`));
     }
   }
 
@@ -20027,7 +20055,12 @@ export function App() {
             candidate.topologyId === selection.topologyId ||
             (selection.hash !== undefined && candidate.hash === selection.hash)
         )?.geometry;
-        const on = geometry?.centroid ?? geometry?.center ?? detail?.point;
+        // A standard part stands where the face was clicked.
+        const on =
+          (command.spec.planeAtClick ? detail?.point : undefined) ??
+          geometry?.centroid ??
+          geometry?.center ??
+          detail?.point;
         if (
           geometry?.normal &&
           on &&
@@ -23699,6 +23732,74 @@ export function App() {
    * real. An assistant patch already landing is awaited first, since its
    * commit is what the edit must be checked against.
    */
+  /**
+   * F06: runs one configuration command, checked against the document first
+   * so a refusal is answered (and nothing is committed) rather than thrown.
+   */
+  function runConfigurationCommand(command: AnyCommand): string | null {
+    const manager = managerRef.current;
+    if (!manager) return 'Editing is unavailable.';
+    try {
+      command.validate(manager.document);
+      command.apply(manager.document);
+    } catch (error) {
+      return error instanceof Error
+        ? error.message
+        : 'The configurations were not changed.';
+    }
+    return executeCommand(command)
+      ? null
+      : 'The configurations were not changed.';
+  }
+
+  const configurationActions: ConfigurationActions = {
+    create: (name) =>
+      runConfigurationCommand(
+        commandFactories.createConfigurations({
+          rowId: `configuration_${crypto.randomUUID()}`,
+          name
+        })
+      ),
+    remove: () =>
+      runConfigurationCommand(commandFactories.deleteConfigurations()),
+    addRow: (name) =>
+      runConfigurationCommand(
+        commandFactories.addConfigurationRow({
+          rowId: `configuration_${crypto.randomUUID()}`,
+          name
+        })
+      ),
+    renameRow: (rowId, name) =>
+      runConfigurationCommand(
+        commandFactories.renameConfigurationRow({ rowId, name })
+      ),
+    deleteRow: (rowId) =>
+      runConfigurationCommand(
+        commandFactories.deleteConfigurationRow({ rowId })
+      ),
+    addColumn: (column) =>
+      runConfigurationCommand(
+        commandFactories.addConfigurationColumn({ column })
+      ),
+    deleteColumn: (column) =>
+      runConfigurationCommand(
+        commandFactories.deleteConfigurationColumn({ column })
+      ),
+    setCell: (rowId, column, value) =>
+      runConfigurationCommand(
+        commandFactories.setConfigurationCell({ rowId, column, value })
+      ),
+    activate: (rowId) => {
+      const row = doc?.configurations?.rows.find((entry) => entry.id === rowId);
+      return runConfigurationCommand(
+        commandFactories.activateConfiguration(
+          { rowId },
+          row ? `Switch to ${row.name}` : undefined
+        )
+      );
+    }
+  };
+
   /** L09: sets or clears the print clearance; answers with a refusal. */
   function handleSetPrintClearance(value: ParamValue | null): string | null {
     const manager = managerRef.current;
@@ -24463,6 +24564,12 @@ export function App() {
           name,
           bodyName,
           ...request.sheet
+        });
+      case 'standard-part':
+        return commandFactories.standardPartBody({
+          name,
+          bodyName,
+          ...request.part
         });
       case 'modeling': {
         // Through the card's own submission builder, so a face operation
@@ -34567,6 +34674,11 @@ export function App() {
         handleSetParameter(name, expression)
       }
       printClearance={printClearance}
+      configurationTable={{
+        configurations: configurationView,
+        features,
+        ...(editDisabledReason ? {} : { actions: configurationActions })
+      }}
       onSetPrintClearance={
         editDisabledReason ? undefined : handleSetPrintClearance
       }

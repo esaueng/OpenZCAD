@@ -15,6 +15,7 @@
   "collaboration-lease-recovery.spec.ts": 19,
   "collaboration.spec.ts": 20,
   "command-bar-names.spec.ts": 8,
+  "configurations.spec.ts": 12,
   "coplanar-bodies.spec.ts": 55,
   "cylinder-preview.spec.ts": 23,
   "deep-design-polish.spec.ts": 63,
@@ -22,7 +23,10 @@
   "direct-edit-ownership.spec.ts": 58,
   "direct-edit-parity-wiring.spec.ts": 4,
   "drawing-dimensions.spec.ts": 10,
+  "drawing-dxf-export.spec.ts": 10,
+  "drawing-properties.spec.ts": 12,
   "drawing-sections.spec.ts": 25,
+  "drawing-tolerances.spec.ts": 14,
   "drawings.spec.ts": 16,
   "edge-form-preview.spec.ts": 9,
   "edge-overlay-growth.spec.ts": 8,
@@ -75,6 +79,7 @@
   "open-in-slicer.spec.ts": 16,
   "orbit-mode-setting.spec.ts": 16,
   "overlay-reach.spec.ts": 5,
+  "panel-dock.spec.ts": 7,
   "panel-float.spec.ts": 11,
   "panel-suspension.spec.ts": 48,
   "parts-list-scroll.spec.ts": 17,
@@ -105,6 +110,7 @@
   "sphere-cylinder-union.spec.ts": 36,
   "staged-geometry.spec.ts": 6,
   "standalone-gear-height.spec.ts": 24,
+  "standard-parts.spec.ts": 20,
   "start-screen-import-rename.spec.ts": 20,
   "start-screen-refresh.spec.ts": 7,
   "start-screen-responsive.spec.ts": 3,
@@ -129,5 +135,6 @@
   "viewport.spec.ts": 13,
   "visual-selection-fillet-edit.spec.ts": 12,
   "visual-selection-live-preview.spec.ts": 12,
-  "workspace-empty-state.spec.ts": 8
+  "workspace-empty-state.spec.ts": 8,
+  "workspace-tour.spec.ts": 7
 }

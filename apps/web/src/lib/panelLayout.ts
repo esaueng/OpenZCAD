@@ -259,9 +259,8 @@ export const PANEL_PRESET_IDS: readonly PanelPresetId[] = [
 ];
 /**
  * Essentials while only the right dock shipped: Objects over Parameters in
- * one right column. The default for `leftDock: false`, which the app no
- * longer asks for since the left dock shipped (U08 slice 4); not a menu
- * entry.
+ * one right column. Kept as a historical preset; no longer the new-device
+ * default and not a menu entry.
  */
 export const ESSENTIALS_RIGHT_PRESET = 'essentials-right';
 export type PanelPreset = PanelPresetId | typeof ESSENTIALS_RIGHT_PRESET;
@@ -879,16 +878,16 @@ export function notePanelUsed(layout: PanelLayout, id: PanelId): PanelLayout {
 }
 
 /**
- * A new device's layout. Essentials docks Objects on the left; until the left
- * dock ships (`leftDock: false`) it is the right-only form instead.
+ * A new device's layout: Objects above History in one right column. The
+ * historical left-dock rollout option is kept for callers, but no longer
+ * changes the default. Named presets and stored layouts remain independent.
  */
-export function defaultPanelLayout({
-  leftDock = false
-}: { leftDock?: boolean } = {}): PanelLayout {
-  return presetLayout(
-    leftDock ? 'essentials' : ESSENTIALS_RIGHT_PRESET,
-    DEFAULT_OPTIONS
-  );
+export function defaultPanelLayout(
+  _options: { leftDock?: boolean } = {}
+): PanelLayout {
+  const layout = emptyLayout();
+  layout.right = [['bodies', 'history']];
+  return layout;
 }
 
 export function setOption<K extends keyof PanelLayoutOptions>(
@@ -3024,9 +3023,8 @@ function readLegacy(storage: PanelLayoutStorage): PanelState | null {
 
 export interface LoadPanelLayoutOptions {
   /**
-   * Whether the left dock ships. It decides only a new device's default —
-   * two-sided Essentials, or the right-only form until then — and never
-   * rewrites a layout already stored.
+   * Historical left-dock rollout flag, retained for existing callers.
+   * Fresh devices now use the same right-hand stack with either value.
    */
   leftDock?: boolean;
 }

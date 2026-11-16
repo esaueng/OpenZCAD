@@ -67,6 +67,19 @@ export interface SheetPage {
   heightMm: number;
   strokes: SheetStroke[];
   texts: SheetText[];
+  /**
+   * D02 (schema v70): the sheet's own print weights, by stroke kind; absent
+   * kinds (and a page without any) use {@link SHEET_STROKE_WIDTH_MM}.
+   */
+  strokeWidthsMm?: Partial<Record<SheetStrokeKind, number>>;
+}
+
+/** A page's print weight for `kind`. */
+export function sheetStrokeWidthMm(
+  page: Pick<SheetPage, 'strokeWidthsMm'>,
+  kind: SheetStrokeKind
+): number {
+  return page.strokeWidthsMm?.[kind] ?? SHEET_STROKE_WIDTH_MM[kind];
 }
 
 /** Stroke weights in paper millimetres (ISO 128 0.35/0.25 pair). */
@@ -364,6 +377,28 @@ export interface SheetPageContext {
    * Absent reads as a set of one.
    */
   sheetNumber?: { index: number; count: number };
+  /**
+   * D02: the DATE cell's automatic value, until the title block sets one:
+   * the project's latest saved revision (see {@link titleBlockAutoDate}).
+   */
+  date?: string;
+}
+
+/** The ISO date (YYYY-MM-DD) of the project's latest revision, if any. */
+export function titleBlockAutoDate(
+  revisions: readonly { createdAt: string }[]
+): string | undefined {
+  let latest: string | undefined;
+  for (const { createdAt } of revisions) {
+    const day = /^\d{4}-\d{2}-\d{2}/.exec(createdAt)?.[0];
+    if (day && (!latest || day > latest)) latest = day;
+  }
+  return latest;
+}
+
+/** The SIZE cell: the paper, short ("A3", "ANSI B"). */
+export function titleBlockSizeText(paper: DrawingSheet['paper']): string {
+  return paper.size.replace('-', ' ');
 }
 
 /**
@@ -416,22 +451,26 @@ function titleBlock(
     bold: true,
     text: fitText(title, 5, box.width - 4, true)
   });
+  // The units dimensions print in (v70), else the document's.
   const unitLabel = {
     mm: 'Millimetres',
     cm: 'Centimetres',
     m: 'Metres',
     inch: 'Inches'
-  }[context.units];
+  }[sheet.format?.units ?? context.units];
   const rows: [string, string][][] = [
     [
       ['DWG NO.', block.drawingNumber ?? ''],
       ['REV', block.revision ?? ''],
-      ['SCALE', formatDrawingScale(sheet.scale)],
+      [
+        'SCALE · SIZE',
+        `${formatDrawingScale(sheet.scale)} · ${titleBlockSizeText(sheet.paper)}`
+      ],
       ['SHEET', titleBlockSheetText(sheet, context.sheetNumber)]
     ],
     [
       ['DRAWN', block.author ?? ''],
-      ['DATE', block.date ?? ''],
+      ['DATE', block.date ?? context.date ?? ''],
       ['UNITS', unitLabel],
       [
         'PROJECTION',
@@ -614,9 +653,13 @@ export function composeSheetPage(
     maxX: paper.width,
     maxY: paper.height
   };
+  const weights = sheet.format?.lineWidthsMm;
   return {
     widthMm: paper.width,
     heightMm: paper.height,
+    ...(weights && Object.keys(weights).length > 0
+      ? { strokeWidthsMm: { ...weights } }
+      : {}),
     strokes: [
       ...strokes,
       ...marks.strokes,
@@ -1049,9 +1092,7 @@ export function freeViewCenter(
   const halfW = size.width / 2 + FIT_INSET_MM;
   const halfH = size.height / 2 + FIT_INSET_MM;
   const reachX = Math.floor((area.width / 2 - halfW) / FREE_PLACEMENT_STEP_MM);
-  const reachY = Math.floor(
-    (area.height / 2 - halfH) / FREE_PLACEMENT_STEP_MM
-  );
+  const reachY = Math.floor((area.height / 2 - halfH) / FREE_PLACEMENT_STEP_MM);
   if (reachX < 0 || reachY < 0) return centre;
   const clear = (x: number, y: number) =>
     taken.every(

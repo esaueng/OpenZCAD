@@ -130,8 +130,11 @@ The menu replaces the rail's Layout button. It shipped as "View options" and
 was renamed: it holds only panel layout controls, and the view options are the
 rail's own buttons.
 
+- **Fresh-device default (16 November):** Objects above History in one right
+  column, both pinned. Objects hugs its content and History fills the rest.
+  Saved layouts and the v1 drawer migration keep their existing arrangement.
 - **Presets:**
-  - **Essentials** (the default): Objects left, Parameters right
+  - **Essentials**: Objects left, Parameters right
   - **Full workspace**: Objects over History left, Parameters over Revisions
     right (Revisions about a quarter of the column)
   - **Modeling**: Objects over a taller History left, Parameters right
@@ -221,12 +224,13 @@ rail's own buttons.
      restores the old drawer.
    - First load migrates: a device whose drawer was open starts with a right
      column of the sections it had open; a device whose drawer was closed starts
-     in Model only. New devices start in Essentials.
+     in Model only. New devices start with Objects above History on the right.
    - Until slice 4 ships the left dock, new devices start in a transitional
      right-only Essentials: Objects over Parameters in one right column.
      Slice 4 switches the default to the two-sided form for devices that
-     have not stored a layout yet. A layout already stored is never
-     rewritten; the preset menu in slice 5 offers the two-sided form.
+     have not stored a layout yet. The 16 November default above supersedes
+     those rollout defaults. A layout already stored is never rewritten;
+     the preset menu in slice 5 offers the two-sided form.
    - Migration runs in the same slice that first reads the new layout
      (slice 3), before anything writes the new key. Its absence is the signal
      to migrate, so a stored default must never come first and hide the old
