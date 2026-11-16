@@ -8,8 +8,11 @@ import {
   exactBooleanRefusalReason,
   exactCut,
   exactFuse,
-  exactFuseAll
+  exactFuseAll,
+  exactIntersect,
+  EMPTY_INTERSECTION_CODE
 } from './exact-boolean-refusal';
+import { exactIntersectWithCancellation } from './exact-cancellation';
 
 /** Row-major rigid translation, matching `copyAndTransformSolid`. */
 function translation(x: number, y: number, z: number): Float64Array {
@@ -231,6 +234,70 @@ describe('typed boolean refusal', () => {
     expect(outcome.status).toBe('refused');
     if (outcome.status !== 'refused') return;
     expect(outcome.refusal.category).toBe('invalid_input');
+  });
+});
+
+describe('an intersection that leaves no material', () => {
+  // The kernel answers these with an empty solid rather than a refusal, and
+  // an empty solid's box and measures throw an untyped "solid has no
+  // vertices" that took the whole document sync down.
+  function disjointBoxes(kernel: RemusKernel): [number, number] {
+    const a = kernel.makeBox(10, 10, 10);
+    const b = kernel.copyAndTransformSolid(
+      kernel.makeBox(10, 10, 10),
+      translation(20, 0, 0)
+    );
+    return [a, b];
+  }
+
+  it.each([
+    ['exactIntersect', exactIntersect],
+    [
+      'exactIntersectWithCancellation',
+      (kernel: RemusKernel, a: number, b: number, names: string[]) =>
+        exactIntersectWithCancellation(kernel, a, b, undefined, names)
+    ]
+  ] as const)('%s refuses it by name', (_label, intersect) => {
+    const kernel = new RemusKernel();
+    const [a, b] = disjointBoxes(kernel);
+    let thrown: unknown;
+    try {
+      intersect(kernel, a, b, ['Box 1', 'Box 2']);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ExactBooleanRefusal);
+    const refusal = thrown as ExactBooleanRefusal;
+    const [sentence, detail] = refusal.message.split('\n');
+    expect(sentence).toBe(
+      'Intersect refused: "Box 1" and "Box 2" do not overlap, so nothing ' +
+        'would be left. Move the bodies so they overlap, then try again.'
+    );
+    expect(detail).toBe(
+      `Kernel refusal ${EMPTY_INTERSECTION_CODE} (invalid_input): empty result: the operands share no volume`
+    );
+    expect(refusal.category).toBe('invalid_input');
+  });
+
+  it('still answers the probe with the empty solid', () => {
+    // The clash probe reads an empty intersection as "no shared volume".
+    const kernel = new RemusKernel();
+    const [a, b] = disjointBoxes(kernel);
+    const outcome = exactBooleanOutcome(kernel, 'intersect', a, b);
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(kernel.getSolidFaces(outcome.solid)).toHaveLength(0);
+  });
+
+  it('returns an overlapping intersection unchanged', () => {
+    const kernel = new RemusKernel();
+    const a = kernel.makeBox(10, 10, 10);
+    const b = kernel.copyAndTransformSolid(
+      kernel.makeBox(10, 10, 10),
+      translation(5, 0, 0)
+    );
+    const solid = exactIntersect(kernel, a, b);
+    expect(kernel.volume(solid, 0.08)).toBeCloseTo(500, 9);
   });
 });
 

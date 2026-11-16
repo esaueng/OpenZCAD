@@ -25,6 +25,7 @@ import { KernelRefusal, kernelRefusalCategoryOf } from './kernel-refusal';
 import {
   ExactBooleanRefusal,
   exactBooleanOutcome,
+  refuseEmptyIntersection,
   type ExactBooleanOperation,
   type ExactBooleanOutcome
 } from './exact-boolean-refusal';
@@ -296,5 +297,5 @@ export function exactIntersectWithCancellation(
   if (outcome.status === 'refused') {
     throw outcome.refusal;
   }
-  return outcome.solid;
+  return refuseEmptyIntersection(kernel, outcome.solid, operands);
 }
