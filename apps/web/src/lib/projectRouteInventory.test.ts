@@ -73,6 +73,7 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
   '/api/auth/desktop/start': [['/api/auth/desktop/start', 'none']],
   '/api/auth/email/start': [['/api/auth/email/start', 'none']],
   '/api/auth/email/verify': [['/api/auth/email/verify', 'none']],
+  '/api/auth/qa-turnstile': [['/api/auth/qa-turnstile', 'none']],
   '/api/auth/logout': [['/api/auth/logout', 'none']],
   '/api/collaboration/config': [['/api/collaboration/config', 'read']],
   '/api/glimpse/account-consent': [['/api/glimpse/account-consent', 'none']],
