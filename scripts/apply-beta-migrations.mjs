@@ -3,26 +3,31 @@ import { resolve } from 'node:path';
 import process from 'node:process';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { parseFlags } from './cli-flags.mjs';
 
-function cliValue(name) {
-  const index = process.argv.indexOf(name);
-  return index === -1 ? undefined : process.argv[index + 1];
+/**
+ * The database and config to migrate: beta's by default; stable's deploy
+ * passes both --database openzcad-stable and --config
+ * ../../wrangler.stable.jsonc. One without the other is refused, so a
+ * half-written command cannot migrate one database with another's config.
+ */
+export function migrationTarget(argv) {
+  const flags = parseFlags(argv, ['--database', '--config']);
+  const database = flags['--database'];
+  const config = flags['--config'];
+  if ((database === undefined) !== (config === undefined)) {
+    throw new Error('Pass --database and --config together, or neither');
+  }
+  return {
+    database: database ?? 'openzcad-beta',
+    config: config ?? '../../wrangler.jsonc'
+  };
 }
 
-// The beta Worker's database by default; stable's deploy passes
-// --database openzcad-stable --config ../../wrangler.stable.jsonc.
-function runWrangler() {
+function runWrangler({ database, config }) {
   const result = spawnSync(
     'wrangler',
-    [
-      'd1',
-      'migrations',
-      'apply',
-      cliValue('--database') ?? 'openzcad-beta',
-      '--remote',
-      '--config',
-      cliValue('--config') ?? '../../wrangler.jsonc'
-    ],
+    ['d1', 'migrations', 'apply', database, '--remote', '--config', config],
     { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }
   );
   process.stdout.write(result.stdout ?? '');
@@ -36,7 +41,8 @@ function runWrangler() {
 }
 
 export async function applyBetaMigrations({
-  run = runWrangler,
+  target = { database: 'openzcad-beta', config: '../../wrangler.jsonc' },
+  run = () => runWrangler(target),
   sleep = setTimeout,
   random = Math.random,
   warn = console.warn
@@ -62,5 +68,11 @@ if (
   process.argv[1] &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-  process.exitCode = await applyBetaMigrations();
+  try {
+    const target = migrationTarget(process.argv.slice(2));
+    process.exitCode = await applyBetaMigrations({ target });
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
+  }
 }

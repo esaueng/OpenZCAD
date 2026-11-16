@@ -7,6 +7,8 @@ import {
   validateDeploymentConfig
 } from '../scripts/validate-deployment-config.mjs';
 import { planPromotion, promote } from '../scripts/promote-stable.mjs';
+import { migrationTarget } from '../scripts/apply-beta-migrations.mjs';
+import { verificationOrigin } from '../scripts/verify-beta-deployment.mjs';
 
 type Config = Record<string, any>;
 
@@ -18,7 +20,8 @@ function read(path: string): Config {
 const options = {
   target: 'stable' as const,
   originUrl: 'https://github.com/esaueng/OpenZCAD.git',
-  configOnly: true
+  configOnly: true,
+  betaConfig: read('wrangler.jsonc')
 };
 
 describe('stable channel configuration', () => {
@@ -98,12 +101,37 @@ describe('stable channel configuration', () => {
     );
   });
 
+  it('refuses beta analytics and rate-limit budgets on stable', () => {
+    const beta = read('wrangler.jsonc');
+    const stable = read('wrangler.stable.jsonc');
+    stable.services = beta.services;
+    stable.ratelimits = beta.ratelimits;
+    stable.vars.GLIMPSE_BASIC_ENABLED = 'true';
+    stable.vars.GLIMPSE_USAGE_ENABLED = 'true';
+    const errors = validateDeploymentConfig(stable, options);
+    expect(errors).toEqual(
+      expect.arrayContaining([
+        "stable service binding GLIMPSE would share beta's",
+        'vars.GLIMPSE_BASIC_ENABLED must be off on stable until the cutover',
+        'vars.GLIMPSE_USAGE_ENABLED must be off on stable until the cutover',
+        `stable rate limit ${beta.ratelimits[0].name} shares beta namespace ${beta.ratelimits[0].namespace_id}`
+      ])
+    );
+    const { betaConfig: _beta, ...withoutBeta } = options;
+    expect(
+      validateDeploymentConfig(read('wrangler.stable.jsonc'), withoutBeta)
+    ).toEqual([
+      'stable validation needs the beta config (wrangler.jsonc) to compare rate-limit namespaces'
+    ]);
+  });
+
   it('deploys stable from the stable branch only', () => {
     const stable = read('wrangler.stable.jsonc');
     expect(
       validateDeploymentConfig(stable, {
         target: 'stable',
         originUrl: 'https://github.com/esaueng/OpenZCAD.git',
+        betaConfig: read('wrangler.jsonc'),
         environment: {
           GITHUB_ACTIONS: 'true',
           GITHUB_REPOSITORY: 'esaueng/OpenZCAD',
@@ -137,6 +165,52 @@ describe('stable channel configuration', () => {
     expect(command).not.toMatch(
       /openzcad-beta\b|--config \.\.\/\.\.\/wrangler\.jsonc/
     );
+  });
+});
+
+describe('deploy script flags', () => {
+  it('migrates beta by default and stable only when both flags name it', () => {
+    expect(migrationTarget([])).toEqual({
+      database: 'openzcad-beta',
+      config: '../../wrangler.jsonc'
+    });
+    expect(
+      migrationTarget([
+        '--database',
+        'openzcad-stable',
+        '--config',
+        '../../wrangler.stable.jsonc'
+      ])
+    ).toEqual({
+      database: 'openzcad-stable',
+      config: '../../wrangler.stable.jsonc'
+    });
+  });
+
+  it.each([
+    [
+      ['--database=openzcad-stable', '--config=../../wrangler.stable.jsonc'],
+      /Unknown argument/
+    ],
+    [['--database'], /needs a value/],
+    [['--database', '--config', 'x'], /needs a value/],
+    [['--database', 'openzcad-stable'], /together, or neither/],
+    [['--database', 'a', '--database', 'b', '--config', 'c'], /given twice/]
+  ])('refuses %j instead of falling back to beta', (argv, message) => {
+    expect(() => migrationTarget(argv)).toThrow(message);
+  });
+
+  it('verifies the named origin and refuses a malformed one', () => {
+    expect(verificationOrigin([], {})).toBe('https://zcad.app');
+    expect(
+      verificationOrigin(['--origin', 'https://stable.zcad.app'], {})
+    ).toBe('https://stable.zcad.app');
+    expect(() =>
+      verificationOrigin(['--origin=https://stable.zcad.app'], {})
+    ).toThrow(/Unknown argument/);
+    expect(() =>
+      verificationOrigin(['--origin', 'stable.zcad.app'], {})
+    ).toThrow(/https origin/);
   });
 });
 

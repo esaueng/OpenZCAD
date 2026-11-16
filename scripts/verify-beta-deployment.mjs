@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import process from 'node:process';
+import { parseFlags } from './cli-flags.mjs';
 
 const DEFAULT_ORIGIN = 'https://zcad.app';
 const DEFAULT_ATTEMPTS = 18;
@@ -114,9 +115,18 @@ export async function verifyBetaDeployment(options = {}) {
   );
 }
 
-function cliValue(name) {
-  const index = process.argv.indexOf(name);
-  return index === -1 ? undefined : process.argv[index + 1];
+/** The origin to verify: beta's by default; stable passes --origin. */
+export function verificationOrigin(argv, env = process.env) {
+  const origin =
+    parseFlags(argv, ['--origin'])['--origin'] ??
+    env.OPENZCAD_BETA_ORIGIN ??
+    DEFAULT_ORIGIN;
+  if (!/^https:\/\/[a-z0-9.-]+$/i.test(origin)) {
+    throw new Error(
+      `--origin must be an https origin with no path; got ${origin}`
+    );
+  }
+  return origin;
 }
 
 if (process.argv[1]?.endsWith('verify-beta-deployment.mjs')) {
@@ -130,12 +140,8 @@ if (process.argv[1]?.endsWith('verify-beta-deployment.mjs')) {
   );
   try {
     await verifyBetaDeployment({
-      // --origin names the channel being verified (stable passes
-      // https://stable.zcad.app); the default is the beta Worker's.
-      origin:
-        cliValue('--origin') ??
-        process.env.OPENZCAD_BETA_ORIGIN ??
-        DEFAULT_ORIGIN,
+      origin: verificationOrigin(process.argv.slice(2)),
+
       expectedCommit: currentCommit(),
       attempts,
       delayMs

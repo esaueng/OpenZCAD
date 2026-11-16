@@ -34,6 +34,8 @@ export function validateDeploymentConfig(
     configOnly?: boolean;
     originUrl?: string;
     environment?: Record<string, string | undefined>;
+    /** Required for `stable`: beta's config, to compare shared budgets. */
+    betaConfig?: Record<string, any>;
   }
 ): string[];
 

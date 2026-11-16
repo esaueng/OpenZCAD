@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import process from 'node:process';
 import ts from 'typescript';
 
@@ -496,7 +497,13 @@ function officialOriginUrl(originUrl) {
 
 export function validateDeploymentConfig(
   config,
-  { target, originUrl = '', environment = {}, configOnly = false }
+  {
+    target,
+    originUrl = '',
+    environment = {},
+    configOnly = false,
+    betaConfig = undefined
+  }
 ) {
   if (target === 'dev') {
     const errors = [];
@@ -614,6 +621,42 @@ export function validateDeploymentConfig(
       if (values.some((value) => betaValues.includes(value))) {
         errors.push('stable references a beta resource');
       }
+      // Service bindings reach another Worker's production deployment (the
+      // Glimpse collector beta reports to); stable has none until the
+      // cutover decides which channel reports.
+      for (const item of config.services ?? []) {
+        errors.push(
+          `stable service binding ${item?.binding} would share beta's`
+        );
+      }
+      for (const flag of ['GLIMPSE_BASIC_ENABLED', 'GLIMPSE_USAGE_ENABLED']) {
+        const value = config.vars?.[flag];
+        if (flagEnabled(value) || value === true) {
+          errors.push(`vars.${flag} must be off on stable until the cutover`);
+        }
+      }
+      // Rate-limit namespaces are account-wide budgets: one shared with beta
+      // lets beta traffic spend stable's limit. They can only be compared
+      // against beta's actual config.
+      if (!betaConfig) {
+        errors.push(
+          'stable validation needs the beta config (wrangler.jsonc) to compare rate-limit namespaces'
+        );
+      } else {
+        const betaNamespaces = new Set(
+          [
+            ...(betaConfig.ratelimits ?? []),
+            ...(betaConfig.previews?.ratelimits ?? [])
+          ].map((limit) => limit?.namespace_id)
+        );
+        for (const limit of config.ratelimits ?? []) {
+          if (betaNamespaces.has(limit?.namespace_id)) {
+            errors.push(
+              `stable rate limit ${limit.name} shares beta namespace ${limit.namespace_id}`
+            );
+          }
+        }
+      }
     } else {
       errors.push(...validateOfficialPreviews(config));
     }
@@ -706,8 +749,14 @@ if (process.argv[1]?.endsWith('validate-deployment-config.mjs')) {
 
   try {
     const config = parseConfig(configPath);
+    // Stable is checked against the beta config beside it (wrangler.jsonc).
+    const betaConfig =
+      target === 'stable'
+        ? parseConfig(join(dirname(configPath), 'wrangler.jsonc'))
+        : undefined;
     const errors = validateDeploymentConfig(config, {
       target,
+      betaConfig,
       originUrl: readOriginUrl(),
       environment: process.env,
       configOnly: process.argv.includes('--config-only')
