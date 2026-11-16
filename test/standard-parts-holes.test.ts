@@ -8,6 +8,7 @@ import {
   findSketch,
   holeBody,
   listFeaturesInOrder,
+  setNodeMetadata,
   standardPartBody,
   type HoleInput,
   type StandardPartInput
@@ -17,6 +18,7 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import {
+  FEATURE_SUPPRESSED_METADATA_KEY,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   matchedStandardLengthMm,
   standardPartForHole,
@@ -244,6 +246,27 @@ describe('M17 holes: document contract', () => {
     );
   });
 
+  it('takes a part out of its hole when it is placed on a face', () => {
+    const { document, holeId } = holed();
+    const inHole = standardPartBody(document, part(holeId)).document;
+    const partNode = listFeaturesInOrder(inHole).at(-1)!;
+    const onFace = commandFactories
+      .updateFeature({
+        featureId: partNode.featureId,
+        data: {
+          featureKind: 'standard-part',
+          length: 20,
+          origin: { x: 5, y: 5, z: 10 }
+        },
+        clearData: ['hole']
+      })
+      .apply(inHole);
+    const data = listFeaturesInOrder(onFace).at(-1)!.data;
+    expect(data).toMatchObject({ length: 20, origin: { x: 5, y: 5, z: 10 } });
+    expect(data).not.toHaveProperty('hole');
+    expect(() => assertDocumentContentSchema(onFace)).not.toThrow();
+  });
+
   it.each([
     [
       'a missing hole',
@@ -424,6 +447,20 @@ describe('M17 holes: exact build', () => {
     });
     const one = await inserted(single.document, single.holeId);
     expect(body.volume).toBeCloseTo(2 * one.body.volume, 6);
+  }, 900_000);
+
+  it('refuses a part in a suppressed hole', async () => {
+    const { document, holeId } = await drilled(plate(), {});
+    const { document: withScrew } = await inserted(document, holeId);
+    const hole = listFeaturesInOrder(withScrew).find(
+      (feature) => feature.featureId === holeId
+    )!;
+    const suppressed = setNodeMetadata(withScrew, {
+      nodeId: hole.id,
+      metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+    });
+    const derived = await adapter.syncDocument(suppressed);
+    expect(failures(derived)).toMatch(/The hole this part is in is suppressed/);
   }, 900_000);
 
   it('fills a blind hole with a dowel pin and refuses a hole resized under it', async () => {

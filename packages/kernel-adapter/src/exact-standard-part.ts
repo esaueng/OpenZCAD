@@ -16,6 +16,7 @@
  */
 import {
   defaultGearXDirection,
+  isFeatureSuppressed,
   millimetresPerUnit,
   standardPartGeometry,
   standardPartMinimumLengthMm,
@@ -200,6 +201,19 @@ function holePlacements(
     features.findIndex((candidate) => candidate.featureId === feature.featureId)
   ) {
     throw new Error('The hole this part is in comes after it in History.');
+  }
+  // A hole left out of the model (suppressed, or failed and passed through)
+  // drilled nothing, so nothing stands in it.
+  if (isFeatureSuppressed(hole)) {
+    throw new Error('The hole this part is in is suppressed.');
+  }
+  if (
+    ctx.result.featureWarnings.some(
+      (warning) =>
+        warning.featureId === hole.featureId && warning.kind === 'build-failed'
+    )
+  ) {
+    throw new Error('The hole this part is in did not build.');
   }
   const holeData = hole.data;
   const { bores, targetSolid } = holeToolSpecFor(ctx, holeData);
