@@ -192,10 +192,12 @@ import {
 } from './preview-face-geometry-cache';
 import {
   hasRefusingFeatureWarning,
+  crossedFaceLoopsAdvisory,
   displayMeshGapsAdvisory,
   raiseFeatureWarning
 } from './exact-feature-warnings';
 import { adapterRefusalRecord } from './adapter-refusal';
+import { crossingFaceLoops } from './face-loop-crossing';
 import {
   collectRecognizedImportedFeatures,
   importedProofDisplayDimensions,
@@ -4700,10 +4702,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               (face) => surfaceTypeOf(kernel, face) === 'bspline'
             )
           );
+          // The validator passes a face whose loops cross, and its holes are
+          // in the model, so the sentence above must not call it valid.
+          const loopsCross = crossingFaceLoops(kernel, shape.solids) !== null;
           raiseFeatureWarning(
             build,
             feature,
-            displayMeshGapsAdvisory(hasNurbsFace),
+            loopsCross
+              ? crossedFaceLoopsAdvisory()
+              : displayMeshGapsAdvisory(hasNurbsFace),
             'advisory'
           );
         }
