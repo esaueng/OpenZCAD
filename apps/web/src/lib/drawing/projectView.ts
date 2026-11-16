@@ -67,6 +67,8 @@ export interface ProjectionBodyInput {
 
 export interface ViewProjectionInput {
   orientation: DrawingViewOrientation;
+  /** D03 (v81): an auxiliary view's own frame, in place of the orientation's. */
+  frame?: DrawingViewFrame;
   hiddenLines: boolean;
   bodies: readonly ProjectionBodyInput[];
 }
@@ -1187,7 +1189,7 @@ function bodyDiagonal(body: ProjectionBodyInput): number {
 
 /** Projects the bodies of one view into visible and hidden polylines. */
 export function projectView(input: ViewProjectionInput): ViewProjection {
-  const frame = DRAWING_VIEW_FRAMES[input.orientation];
+  const frame = input.frame ?? DRAWING_VIEW_FRAMES[input.orientation];
   const project = (x: number, y: number, z: number) =>
     [
       dot(frame.x, x, y, z),

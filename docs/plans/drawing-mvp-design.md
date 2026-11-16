@@ -677,6 +677,31 @@ principal view. Detail views remain open.
   it. The panel edits the detail's scale and radius.
 - **Schema.** v78, built on v77, gated below it.
 
+## Auxiliary views (D03, schema v81)
+
+- **Shape.** `DrawingView.auxiliary`: `sourceViewId`, a label from the
+  shared section/detail sequence, and the view's frame: a unit `direction`
+  of sight square to the source's own, and page-right `x` square to it.
+  Page-up is `x × direction`, which the tool makes the source's direction of
+  sight, as a view folded from it. The frame is stored, not derived from an
+  edge, so neither view moving nor an edit turns it. It keeps its source's
+  orientation and bodies, is placed freely, and is not the source of a
+  section, detail, projected or auxiliary view.
+- **Frames.** One helper, `drawingViewFrame(view)`, returns a named
+  orientation's frame or an auxiliary view's stored one; every projection,
+  measurement, pick and leader reads it, and the projection worker takes the
+  frame with the view. Auto-dimension and the dimension check consider only
+  principal views.
+- **Page.** The source shows an arrow along the direction of sight from
+  outside its footprint, with the letter at its tail; the view is captioned
+  `VIEW A` beneath. Dimensions on it read true lengths where an edge lies in
+  its plane.
+- **Tool.** Auxiliary view (U): pick a straight edge a front, top or side
+  view draws true length and inclined (a horizontal or vertical one is
+  refused: a principal view already sees it), then click on the side to see
+  it from (third angle; the opposite side in first angle) to place it.
+- **Schema.** v81, built on v80, gated below it.
+
 ### Drawing entry and visibility (2026-11-01)
 
 Entering Draw without a retained sheet choice prefers the unique saved sheet

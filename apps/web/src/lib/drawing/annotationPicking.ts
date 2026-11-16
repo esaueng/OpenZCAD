@@ -1,5 +1,5 @@
 import {
-  DRAWING_VIEW_FRAMES,
+  drawingViewFrame,
   drawingEdgeRefError,
   drawingFaceRefError,
   projectToView,
@@ -93,7 +93,7 @@ export function pickableEdges(
   for (const { view, projection } of views) {
     if (!projection.bounds) continue;
     const toPage = viewPageTransform(view, projection.bounds, sheet, units);
-    const frame = DRAWING_VIEW_FRAMES[view.orientation];
+    const frame = drawingViewFrame(view);
     const k = viewPaperPerModelUnit(view, sheet, units);
     const coincidenceMm = drawnCoincidence(bodies, view.bodyIds, k) * k;
     for (const bodyId of view.bodyIds) {
@@ -141,7 +141,7 @@ export function pickableFaces(
   for (const { view, projection } of views) {
     if (!projection.bounds || view.orientation === 'iso') continue;
     const toPage = viewPageTransform(view, projection.bounds, sheet, units);
-    const frame = DRAWING_VIEW_FRAMES[view.orientation];
+    const frame = drawingViewFrame(view);
     const page = (point: Vector3): XY => {
       const p = projectToView(frame, point);
       return toPage(p.u, p.v);
@@ -797,7 +797,7 @@ function nearerSide(
 function isFaceOnCircle(view: DrawingView, edge: EdgeTopology): boolean {
   const circle = edge.curve?.circle;
   if (!circle) return false;
-  const d = DRAWING_VIEW_FRAMES[view.orientation].direction;
+  const d = drawingViewFrame(view).direction;
   return (
     Math.abs(
       Math.abs(
@@ -979,7 +979,7 @@ export function applyAnnotationPick(
         else {
           // The polyline runs the kernel's way; its start is the page's
           // `first` end when it lies there.
-          const start = projectToView(DRAWING_VIEW_FRAMES[view.orientation], {
+          const start = projectToView(drawingViewFrame(view), {
             x: hit.edge.points[0]!,
             y: hit.edge.points[1]!,
             z: hit.edge.points[2]!
@@ -1043,7 +1043,7 @@ export function applyAnnotationPick(
       }
       // `ends` are in page order; the polyline runs the kernel's way, so
       // match its start to one of them.
-      const start = projectToView(DRAWING_VIEW_FRAMES[view.orientation], {
+      const start = projectToView(drawingViewFrame(view), {
         x: hit.edge.points[0]!,
         y: hit.edge.points[1]!,
         z: hit.edge.points[2]!
@@ -1184,7 +1184,7 @@ export function applyAnnotationPick(
           }
         };
       }
-      const start = projectToView(DRAWING_VIEW_FRAMES[view.orientation], {
+      const start = projectToView(drawingViewFrame(view), {
         x: hit.edge.points[0]!,
         y: hit.edge.points[1]!,
         z: hit.edge.points[2]!

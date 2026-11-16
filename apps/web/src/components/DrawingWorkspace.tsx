@@ -36,6 +36,7 @@ import {
   CircleDashed,
   X,
   ZoomIn,
+  SquareArrowOutUpRight,
   ZoomOut,
   type LucideIcon
 } from 'lucide-react';
@@ -49,6 +50,7 @@ import {
   updateDrawingView
 } from '@openzcad/document-core';
 import {
+  drawingViewFrame,
   createDrawingAnnotationId,
   createDrawingViewId,
   MAX_DRAWING_DIMENSION_AFFIX_LENGTH,
@@ -128,6 +130,7 @@ import {
   composeSheetPage,
   sectionCaption,
   detailCaption,
+  auxiliaryCaption,
   sectionLineOnPage,
   SHEET_STROKE_ORDER,
   type ComposedView,
@@ -232,6 +235,10 @@ import {
   sectionSourceAt,
   type SectionLine
 } from '../lib/drawing/sectionTool';
+import {
+  auxiliaryDraft,
+  auxiliaryEdgeRefusal
+} from '../lib/drawing/auxiliaryTool';
 import {
   detailDraft,
   detailRegionFromDrag,
@@ -393,7 +400,13 @@ function sheetStatus(
 /** What a view draws, independent of the model state it draws it from. */
 function viewIntentKey(view: DrawingView): string {
   const cut = view.section ? `|section:${view.section.depth}` : '';
-  return `${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}${cut}`;
+  // D03 (v81): an auxiliary view projects in its own frame.
+  const aux = view.auxiliary
+    ? `|aux:${[view.auxiliary.direction, view.auxiliary.x]
+        .map((v) => `${v.x},${v.y},${v.z}`)
+        .join('|')}`
+    : '';
+  return `${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}${cut}${aux}`;
 }
 
 function projectionKey(fingerprint: string, view: DrawingView): string {
@@ -598,6 +611,7 @@ function useViewProjections(
         views.push({
           key,
           orientation: view.orientation,
+          ...(view.auxiliary ? { frame: drawingViewFrame(view) } : {}),
           hiddenLines: view.hiddenLines,
           // In the key's order: the lines come out in body order, and a view
           // whose bodies were removed and re-added must export the same bytes
@@ -835,7 +849,9 @@ function viewLabel(view: DrawingView): string {
     ? sectionCaption(view.section.label).replace('SECTION', 'Section')
     : view.detail
       ? `Detail ${view.detail.label}`
-      : DRAWING_VIEW_LABELS[view.orientation];
+      : view.auxiliary
+        ? `View ${view.auxiliary.label}`
+        : DRAWING_VIEW_LABELS[view.orientation];
 }
 
 function statusMessage(status: SheetStatus): string | null {
@@ -1016,6 +1032,8 @@ const ANNOTATION_TOOL_KEYS: Readonly<Record<AnnotationToolKind, string>> = {
 const SECTION_TOOL_KEY = 'S';
 /** D03 (v78): the detail view tool's key. */
 const DETAIL_TOOL_KEY = 'K';
+/** D03 (v81): the auxiliary view tool's key. */
+const AUXILIARY_TOOL_KEY = 'U';
 
 const DARK_PAPER_STORAGE_KEY = 'openzcad.drawing.darkPaper';
 
@@ -2059,8 +2077,15 @@ function DrawingToolRail(props: {
     disabledReason: string;
     onToggle: () => void;
   };
+  /** D03 (v81): the auxiliary view tool. */
+  auxiliary: {
+    active: boolean;
+    usable: boolean;
+    disabledReason: string;
+    onToggle: () => void;
+  };
 }) {
-  const { tool, section, detail } = props;
+  const { tool, section, detail, auxiliary } = props;
   const groups: AnnotationToolKind[][] = [
     ['horizontal', 'vertical', 'aligned', 'distance'],
     ['radius', 'diameter', 'angle', 'chamfer'],
@@ -2151,6 +2176,22 @@ function DrawingToolRail(props: {
           onClick={detail.onToggle}
         >
           <ZoomIn size={16} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className={`drawing-rail-button${auxiliary.active ? ' active' : ''}`}
+          aria-label="Auxiliary view"
+          aria-pressed={auxiliary.active}
+          aria-keyshortcuts={AUXILIARY_TOOL_KEY}
+          disabled={!auxiliary.usable}
+          title={
+            auxiliary.usable
+              ? `Auxiliary view: pick an inclined edge, then the side to see it from (${AUXILIARY_TOOL_KEY})`
+              : auxiliary.disabledReason
+          }
+          onClick={auxiliary.onToggle}
+        >
+          <SquareArrowOutUpRight size={16} aria-hidden="true" />
         </button>
       </div>
     </div>
@@ -2526,6 +2567,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       center: { u: number; v: number };
       radius: number;
     } | null;
+    pointer: [number, number] | null;
+  } | null>(null);
+  /**
+   * D03 (v81) auxiliary tool: the inclined edge picked, then the view
+   * follows the pointer, seen from its side of the edge, until a click.
+   */
+  const [auxiliaryTool, setAuxiliaryTool] = useState<{
+    edge: PickableEdge | null;
     pointer: [number, number] | null;
   } | null>(null);
   const [selectedAnnotationId, setSelectedAnnotationId] =
@@ -3048,6 +3097,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     setTool(next && pinnedTool(next));
     setSectionTool(null);
     setDetailTool(null);
+    setAuxiliaryTool(null);
     setHover(null);
     if (next) {
       setPropertiesOpen(false);
@@ -3055,7 +3105,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         `${ANNOTATION_TOOL_LABELS[next.kind]} placement started.`,
         { immediate: true }
       );
-    } else if (tool || sectionTool || detailTool) {
+    } else if (tool || sectionTool || detailTool || auxiliaryTool) {
       props.onStatus('Placement canceled.', { immediate: true });
     }
     if (next) canvasRef.current?.focus();
@@ -3068,7 +3118,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   shortcutRef.current = (event: KeyboardEvent) => {
     if (!sheet || !drawingShortcutTarget(event, workspaceRef.current)) return;
     if (event.key === 'Escape') {
-      if (sectionTool || detailTool) chooseTool(null);
+      if (sectionTool || detailTool || auxiliaryTool) chooseTool(null);
       else if (shownAutoPlan) setAutoPlan(null);
       else if (tool) {
         chooseTool(null);
@@ -3091,6 +3141,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       event.preventDefault();
       event.stopPropagation();
       toggleDetailTool();
+      return;
+    }
+    if (event.key.toLowerCase() === AUXILIARY_TOOL_KEY.toLowerCase()) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleAuxiliaryTool();
       return;
     }
     const kind = ANNOTATION_TOOLS.find(
@@ -3666,7 +3722,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       const extent =
         state?.state === 'ready' && state.projection.bounds
           ? state.projection.bounds
-          : estimateViewExtent(bodies, view.bodyIds, view.orientation);
+          : estimateViewExtent(
+              bodies,
+              view.bodyIds,
+              view.orientation,
+              view.auxiliary ? drawingViewFrame(view) : undefined
+            );
       if (extent) extents.set(view.viewId, extent);
     }
     return extents;
@@ -4111,6 +4172,70 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     : !sheetReady
       ? 'Update the sheet to add a section.'
       : 'Add a front, top or side view to cut a section from.';
+  // D03 (v81) auxiliary tool.
+  const canAuxiliary = canSection;
+  const auxiliaryDisabledReason = sectionDisabledReason.replace(
+    'a section',
+    'an auxiliary view'
+  );
+  function toggleAuxiliaryTool() {
+    if (auxiliaryTool) {
+      chooseTool(null);
+      return;
+    }
+    if (!canAuxiliary) {
+      props.onStatus(auxiliaryDisabledReason);
+      return;
+    }
+    setTool(null);
+    setSectionTool(null);
+    setDetailTool(null);
+    setHover(null);
+    setPropertiesOpen(false);
+    setAuxiliaryTool({ edge: null, pointer: null });
+    props.onStatus('Auxiliary view placement started.', { immediate: true });
+    canvasRef.current?.focus();
+  }
+  /** The auxiliary view the tool would place now, as a preview. */
+  const auxiliaryPreview =
+    auxiliaryTool?.edge && auxiliaryTool.pointer && shownSheet
+      ? auxiliaryDraft(shownSheet, auxiliaryTool.edge, auxiliaryTool.pointer)
+      : null;
+  const onAuxiliaryPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (event.button !== 0 || !auxiliaryTool || !shownSheet) return;
+    const at = paperPoint(event);
+    if (!at) return;
+    if (auxiliaryTool.edge) {
+      const draft = auxiliaryDraft(shownSheet, auxiliaryTool.edge, at.point);
+      setAuxiliaryTool(null);
+      if (!draft) return;
+      const view: DrawingView = { ...draft, viewId: createDrawingViewId() };
+      if (
+        run(
+          commandFactories.addDrawingView({ sheetId: shownSheet.sheetId, view })
+        )
+      )
+        setSelectedViewId(view.viewId);
+      return;
+    }
+    const hit = edgeAt(at.point, at.pxPerMm);
+    if (!hit) {
+      props.onStatus('Pick an inclined straight edge of a view.');
+      return;
+    }
+    const refusal = auxiliaryEdgeRefusal(hit);
+    if (refusal) {
+      props.onStatus(refusal);
+      return;
+    }
+    setAuxiliaryTool({ edge: hit, pointer: at.point });
+  };
+  const onAuxiliaryPointerMove = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (!auxiliaryTool?.edge) return;
+    const at = paperPoint(event);
+    if (at) setAuxiliaryTool({ ...auxiliaryTool, pointer: at.point });
+  };
+
   // D03 (v78) detail tool.
   const canDetail =
     sheetReady &&
@@ -4132,6 +4257,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     }
     setTool(null);
     setSectionTool(null);
+    setAuxiliaryTool(null);
     setHover(null);
     setPropertiesOpen(false);
     setDetailTool({ drag: null, region: null, pointer: null });
@@ -4243,6 +4369,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     }
     setTool(null);
     setDetailTool(null);
+    setAuxiliaryTool(null);
     setHover(null);
     setPropertiesOpen(false);
     setSectionTool({ drag: null, line: null, pointer: null });
@@ -5103,7 +5230,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 state?.state === 'ready' && state.projection.bounds
                   ? state.projection.bounds
                   : (ghostView?.projection.bounds ??
-                    estimateViewExtent(bodies, view.bodyIds, view.orientation));
+                    estimateViewExtent(
+                      bodies,
+                      view.bodyIds,
+                      view.orientation,
+                      view.auxiliary ? drawingViewFrame(view) : undefined
+                    ));
               if (!extent) return null;
               const box = viewPageBox(view, extent, shownSheet, document.units);
               const pad = 3;
@@ -5394,6 +5526,57 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   </g>
                 );
               })()}
+            {auxiliaryPreview?.auxiliary &&
+              (() => {
+                const extent = estimateViewExtent(
+                  bodies,
+                  auxiliaryPreview.bodyIds,
+                  auxiliaryPreview.orientation,
+                  drawingViewFrame(auxiliaryPreview)
+                );
+                const k = drawingPaperPerModelUnit(
+                  shownSheet.scale,
+                  document.units
+                );
+                const width = extent ? (extent.maxU - extent.minU) * k : 20;
+                const height = extent ? (extent.maxV - extent.minV) * k : 20;
+                return (
+                  <g className="drawing-section-draft">
+                    <rect
+                      className="drawing-section-ghost"
+                      x={auxiliaryPreview.centerMm.x - width / 2}
+                      y={
+                        paper.height - auxiliaryPreview.centerMm.y - height / 2
+                      }
+                      width={width}
+                      height={height}
+                    />
+                    <text
+                      className="drawing-view-label"
+                      x={auxiliaryPreview.centerMm.x - width / 2}
+                      y={
+                        paper.height -
+                        auxiliaryPreview.centerMm.y +
+                        height / 2 +
+                        4
+                      }
+                      fontSize={3}
+                    >
+                      {auxiliaryCaption(auxiliaryPreview.auxiliary.label)}
+                    </text>
+                  </g>
+                );
+              })()}
+            {auxiliaryTool && (
+              <rect
+                className="drawing-section-surface"
+                aria-label="Auxiliary view edge"
+                width={paper.width}
+                height={paper.height}
+                onPointerDown={onAuxiliaryPointerDown}
+                onPointerMove={onAuxiliaryPointerMove}
+              />
+            )}
             {detailTool && (
               <rect
                 className="drawing-section-surface"
@@ -5436,7 +5619,29 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               disabledReason: detailDisabledReason,
               onToggle: toggleDetailTool
             }}
+            auxiliary={{
+              active: auxiliaryTool !== null,
+              usable: canAuxiliary,
+              disabledReason: auxiliaryDisabledReason,
+              onToggle: toggleAuxiliaryTool
+            }}
           />
+          {auxiliaryTool && (
+            <div className="drawing-tool-hint" role="status">
+              <span>
+                {auxiliaryTool.edge
+                  ? 'Move to the side to see the edge from, then click to place the view.'
+                  : 'Pick an inclined straight edge of a front, top or side view.'}
+              </span>
+              <button
+                type="button"
+                className="drawing-tool-hint-cancel"
+                onClick={() => chooseTool(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          )}
           {detailTool && (
             <div className="drawing-tool-hint" role="status">
               <span>
@@ -5702,8 +5907,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                     checked={selectedView.bodyIds.includes(id)}
                     disabled={
                       !editable ||
-                      // A detail draws its source's bodies (v78).
+                      // A detail or auxiliary view draws its source's bodies.
                       selectedView.detail !== undefined ||
+                      selectedView.auxiliary !== undefined ||
                       // Not offered for removal until the rebuild says
                       // whether it is really gone.
                       (geometryPending && !liveBodies.includes(id)) ||
