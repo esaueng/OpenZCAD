@@ -5,6 +5,7 @@ import {
   addSketchFeature,
   createProjectDocument,
   findSketch,
+  holeBody,
   listFeaturesInOrder,
   patternBody
 } from '@openzcad/document-core';
@@ -180,6 +181,46 @@ it('makes the sketch a pattern stands on a parent of it (M02 review)', () => {
   expect(
     graph.downstream(named('Points')).map((feature) => feature.name)
   ).toEqual(['On points']);
+});
+
+it('makes the sketch a hole is drilled at a parent of it (M01)', () => {
+  const block = addPrimitiveFeature(
+    createProjectDocument('Points', toUserId('user_points')),
+    {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 40, height: 40, depth: 10 }
+    }
+  );
+  const points = addSketchFeature(block, {
+    name: 'Points',
+    plane: 'XY',
+    offset: 10,
+    objects: [
+      { objectKind: 'point', x: 5, y: 5 },
+      { objectKind: 'point', x: 30, y: 5 }
+    ]
+  });
+  const pointIds = findSketch(points.document, points.sketchId)!.objectIds.map(
+    String
+  );
+  const holed = holeBody(points.document, {
+    name: 'Holes',
+    targetBodyId: block.bodyOrder[0]!,
+    faceHash: 1,
+    style: 'simple',
+    diameter: 3,
+    depthMode: 'through',
+    position: { u: 0, v: 0 },
+    points: { sketchId: points.sketchId, pointIds }
+  });
+  const graph = featureHistory(holed.document);
+  const named = (name: string) =>
+    graph.features.find((feature) => feature.name === name)!.featureId;
+  expect(graph.parents.get(named('Holes'))).toContain(named('Points'));
+  expect(
+    graph.downstream(named('Points')).map((feature) => feature.name)
+  ).toEqual(['Holes']);
 });
 
 it('makes a guide rail sketch a parent of the sweep it steers', () => {

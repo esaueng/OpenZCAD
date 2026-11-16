@@ -11649,8 +11649,9 @@ export function App() {
           sketchId,
           entityId,
           feature.data.featureKind === 'sheet-metal',
-          feature.data.featureKind === 'pattern' &&
-            feature.data.patternKind === 'points'
+          (feature.data.featureKind === 'pattern' &&
+            feature.data.patternKind === 'points') ||
+            feature.data.featureKind === 'hole'
         ),
       body: (bodyId) => inPlaceBodyPick(bodyId),
       laterTransforms: laterInPlaceSteps(current, feature),
@@ -25960,6 +25961,8 @@ export function App() {
         : null,
     [inPlaceSpec, inPlace.slots, inPlace.axisCandidates]
   );
+  // M01: where the Hole tool places its hole; sketch points are picked.
+  const inPlacePlace = inPlace.options.place;
   const inPlaceCurveCandidates = useMemo(() => {
     if (!doc || !inPlaceSpec?.wantsPath) return null;
     const resolve = sketchValueResolver(parameterScope.scope, doc.units);
@@ -25985,6 +25988,20 @@ export function App() {
         resolve(value)
       );
     }
+    // M01: a hole drilled at sketch points picks them too, only once so
+    // placed; an edit offers only sketches made before it.
+    if (inPlaceSpec.id === 'hole') {
+      if (inPlacePlace !== 'points') return null;
+      const views = inPlaceEditing
+        ? availableSketchViews.filter((view) =>
+            featurePrecedes(
+              producingFeatureOf({ sketchId: view.sketchId }),
+              inPlaceEditing.featureId
+            )
+          )
+        : availableSketchViews;
+      return sketchPointCandidates(doc, views, (value) => resolve(value));
+    }
     // Every sketch's curves, the profile's own included: one sketch may hold
     // both a closed profile and the open spine it sweeps along. An edit
     // offers only sketches made before its feature, as it takes profiles.
@@ -25997,7 +26014,14 @@ export function App() {
         )
       : availableSketchViews;
     return sketchCurveCandidates(doc, views, (value) => resolve(value));
-  }, [doc, inPlaceSpec, availableSketchViews, parameterScope, inPlaceEditing]);
+  }, [
+    doc,
+    inPlaceSpec,
+    availableSketchViews,
+    parameterScope,
+    inPlaceEditing,
+    inPlacePlace
+  ]);
   const inPlaceCurvePicker = useMemo(
     () =>
       inPlaceCurveCandidates
@@ -26179,7 +26203,7 @@ export function App() {
             pick.sketchId,
             pick.entityId,
             inPlace.tool === 'bend',
-            inPlace.tool === 'point-pattern'
+            inPlace.tool === 'point-pattern' || inPlace.tool === 'hole'
           ),
         inPlace.tool === 'bend'
       );

@@ -21,6 +21,7 @@ export * from './assembly-kinematics';
 export * from './body-clash';
 export * from './gear-mesh-types';
 export * from './gear-mesh';
+export * from './hole-points';
 import type { DocumentHistory } from './document-history';
 import { ownEntry } from './document-validation';
 import type { KeymapOverrides } from './keymap-settings';
@@ -274,7 +275,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // point the original stands on. An older client has no such arrangement and
 // would build a linear pattern in its place, so it must refuse. Builds on
 // v62.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 63 as const;
+// v64 adds M01 holes on sketch points (`points` on the `hole` feature): one
+// bore at each picked I01 point entity, each read on its sketch plane and
+// dropped onto the hole's entry face. Absent keeps the one stored position,
+// so every older document builds unchanged. An older client would drill a
+// single hole at the stored position, so it must refuse. Builds on v63.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 64 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -391,6 +397,15 @@ export interface PatternPoints {
   pointIds: string[];
   /** Where the original stands; it makes no copy and cannot be skipped. */
   referencePointId: string;
+}
+
+/**
+ * M01 (schema v64): the sketch points a hole is drilled at, one bore each.
+ */
+export interface HolePoints {
+  sketchId: SketchId;
+  /** Point entity ids of that sketch, each once, in the order picked. */
+  pointIds: string[];
 }
 export type AxisId = 'x' | 'y' | 'z';
 
@@ -1975,6 +1990,14 @@ export type FeatureData =
        * that is never read back would be exactly that stale world point.
        */
       positionAnchor?: 'centroid';
+      /**
+       * M01 (schema v64): drill one bore, of this same size and depth, at
+       * each of these point entities of an earlier sketch whose plane is
+       * parallel to the entry face, each point dropped onto the face along
+       * its normal. A point moved in its sketch carries its bore with it.
+       * Present, `position` and `positionAnchor` are stored but not read.
+       */
+      points?: HolePoints;
     }
   | {
       /**

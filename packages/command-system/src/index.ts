@@ -196,6 +196,7 @@ import {
   type ParameterToggleInput,
   patternBody,
   validatePatternDefinition,
+  validateHolePoints,
   type PatternInput,
   type PrimitiveInput,
   renameNode,
@@ -1152,8 +1153,14 @@ function validateSplitInput(
   }
 }
 
-function validateHoleInput(document: ProjectDocument, input: HoleInput): void {
+function validateHoleInput(
+  document: ProjectDocument,
+  input: HoleInput,
+  ownFeatureId: FeatureId | null = null
+): void {
   validateBodyTarget(document, input.targetBodyId);
+  // M01 (schema v64): the sketch points, at the hole's history position.
+  validateHolePoints(document, input.points, ownFeatureId);
   const diameter = resolvedModelingValue(
     document,
     'hole diameter',
@@ -1162,8 +1169,12 @@ function validateHoleInput(document: ProjectDocument, input: HoleInput): void {
   if (!(diameter > 0)) {
     throw new Error('Hole diameter must resolve to a positive value.');
   }
-  resolvedModelingValue(document, 'hole position U', input.position.u);
-  resolvedModelingValue(document, 'hole position V', input.position.v);
+  // On sketch points (M01) the position is stored but not read, so a
+  // parameter it names may be gone without breaking the hole.
+  if (!input.points) {
+    resolvedModelingValue(document, 'hole position U', input.position.u);
+    resolvedModelingValue(document, 'hole position V', input.position.v);
+  }
   if (input.depthMode === 'blind') {
     if (input.depth === undefined) {
       throw new Error('A blind hole needs a depth.');
@@ -2233,10 +2244,14 @@ function validateModelingFeatureUpdate(
       });
       break;
     case 'hole':
-      validateHoleInput(preview, {
-        name: feature.name,
-        ...feature.data
-      });
+      validateHoleInput(
+        preview,
+        {
+          name: feature.name,
+          ...feature.data
+        },
+        feature.featureId
+      );
       break;
     case 'gear': {
       const { featureKind: _kind, ...gear } = feature.data;

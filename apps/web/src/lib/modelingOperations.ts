@@ -23,6 +23,7 @@ import {
   type FeatureId,
   type FeatureKind,
   type FeatureNode,
+  type HolePoints,
   type ParamValue,
   type SketchPathReference,
   type SketchSectionReference
@@ -164,6 +165,11 @@ export interface HoleFormState {
   countersinkAngleDeg: string;
   /** Axis position in the face frame; (0, 0) is the face centre. */
   position: { u: string; v: string };
+  /**
+   * M01 (schema v64): drill at these sketch points instead; `position` is
+   * then stored but not read.
+   */
+  points?: HolePoints;
 }
 
 export interface ThickenFormState {
@@ -475,7 +481,15 @@ export function modelingFormStateFromFeature(
           position: {
             u: text(data.position.u, '0'),
             v: text(data.position.v, '0')
-          }
+          },
+          ...(data.points
+            ? {
+                points: {
+                  sketchId: data.points.sketchId,
+                  pointIds: [...data.points.pointIds]
+                }
+              }
+            : {})
         }
       };
     case 'mirror':
@@ -1057,7 +1071,8 @@ export function modelingFormValidationReason(
       }
       const expressions = [
         state.value.diameter,
-        ...Object.values(state.value.position),
+        // On sketch points (M01) the position is stored but not read.
+        ...(state.value.points ? [] : Object.values(state.value.position)),
         ...(state.value.depthMode === 'blind' ? [state.value.depth] : []),
         ...(state.value.style === 'counterbore'
           ? [state.value.counterboreDiameter, state.value.counterboreDepth]
@@ -1337,7 +1352,15 @@ export function buildModelingOperationSubmission(
         // existed. A face whose boundary could not be walked reports no
         // centroid and keeps the old anchor, which the absent marker then
         // tells the rebuild to reuse.
-        ...(entry!.hasCentroid ? { positionAnchor: 'centroid' as const } : {})
+        ...(entry!.hasCentroid ? { positionAnchor: 'centroid' as const } : {}),
+        ...(state.value.points
+          ? {
+              points: {
+                sketchId: state.value.points.sketchId,
+                pointIds: [...state.value.points.pointIds]
+              }
+            }
+          : {})
       }
     };
   }

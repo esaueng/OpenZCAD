@@ -1545,6 +1545,49 @@ describe('an untouched edit writes the feature back as stored', () => {
     ).not.toHaveProperty('counterboreDiameter');
   });
 
+  it('hole on sketch points (M01): its points reopen as picks; moved off them, they clear', () => {
+    const SKETCH_P = 'sketch_points' as SketchId;
+    const saved: FeatureData = {
+      featureKind: 'hole',
+      targetBodyId: BODY,
+      faceHash: 11,
+      style: 'simple',
+      diameter: 6,
+      depthMode: 'through',
+      position: { u: 0, v: 0 },
+      points: { sketchId: SKETCH_P, pointIds: ['p_a', 'p_b'] }
+    };
+    const armed = inPlaceEditSeed(
+      feature(saved, 'body_h' as BodyId),
+      EDIT_CTX
+    )!;
+    expect(armed.tool).toBe('hole');
+    expect(armed.seed.options.place).toBe('points');
+    expect(armed.seed.slots.path).toEqual([
+      { sketchId: SKETCH_P, entityId: 'p_a' },
+      { sketchId: SKETCH_P, entityId: 'p_b' }
+    ]);
+    expect(untouched(feature(saved, 'body_h' as BodyId))).toMatchObject({
+      tool: 'modeling',
+      state: { value: { points: saved.points } }
+    });
+    // Kept on points, the patch clears nothing.
+    const kept = {
+      featureId: 'feat_1' as FeatureId,
+      data: { ...saved }
+    } as unknown as FeatureUpdateInput;
+    expect(keepAbsentHoleSteps(kept, saved, [])).not.toHaveProperty(
+      'clearData'
+    );
+    // Moved back to one position, the patch clears them.
+    const { points: _points, ...single } = saved;
+    const moved = {
+      featureId: 'feat_1' as FeatureId,
+      data: single
+    } as unknown as FeatureUpdateInput;
+    expect(keepAbsentHoleSteps(moved, saved, []).clearData).toEqual(['points']);
+  });
+
   it('boolean: its bodies, operation and kept inputs', () => {
     const data: FeatureData = {
       featureKind: 'boolean',
@@ -1850,6 +1893,13 @@ describe('inPlaceEditSourceSketchIds', () => {
         featureKind: 'shell'
       } as unknown as FeatureData)
     ).toEqual([]);
+    // M01: so does a hole drilled at them.
+    expect(
+      inPlaceEditSourceSketchIds({
+        featureKind: 'hole',
+        points: { sketchId: SKETCH, pointIds: ['a'] }
+      } as unknown as FeatureData)
+    ).toEqual([SKETCH]);
     // M02: a pattern on sketch points shows its sketch, hidden or not.
     expect(
       inPlaceEditSourceSketchIds({

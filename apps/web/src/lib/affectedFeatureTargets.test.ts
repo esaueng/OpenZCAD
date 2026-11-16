@@ -237,6 +237,46 @@ describe('affected feature targets', () => {
     ]);
   });
 
+  it('counts a hole on sketch points as affected by an edit to its sketch (M01)', () => {
+    const block = addPrimitiveFeature(
+      createProjectDocument('Points', toUserId('user_points')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 40, height: 40, depth: 10 }
+      }
+    );
+    const points = addSketchFeature(block, {
+      name: 'Points',
+      plane: 'XY',
+      offset: 10,
+      objects: [
+        { objectKind: 'point', x: 5, y: 5 },
+        { objectKind: 'point', x: 30, y: 5 }
+      ]
+    });
+    const pointIds = findSketch(
+      points.document,
+      points.sketchId
+    )!.objectIds.map(String);
+    const holed = holeBody(points.document, {
+      name: 'Holes',
+      targetBodyId: block.bodyOrder[0]!,
+      faceHash: 1,
+      style: 'simple',
+      diameter: 3,
+      depthMode: 'through',
+      position: { u: 0, v: 0 },
+      points: { sketchId: points.sketchId, pointIds }
+    });
+    const sketchFeature = listFeaturesInOrder(holed.document).find(
+      (feature) => feature.name === 'Points'
+    )!;
+    expect(
+      affectedFeatureTargets(holed.document, sketchFeature.featureId)
+    ).toMatchObject([{ featureName: 'Holes', resultBodyId: holed.bodyId }]);
+  });
+
   it('counts a sweep as affected by an edit to its guide rail sketch', () => {
     // A guide rail is a sketch the sweep's geometry depends on exactly as its
     // path is. Leaving it out of this walk means the pre-save downstream

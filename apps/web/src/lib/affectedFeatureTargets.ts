@@ -267,8 +267,9 @@ export function affectedFeatureTargets(
           featureDatumAxisRefs(data).some((ref) =>
             affectedDatums.has(ref.datumFeatureId)
           ) ||
-          // M02: a pattern on sketch points moves with its sketch.
-          (data.featureKind === 'pattern' &&
+          // M02: a pattern on sketch points moves with its sketch, and so
+          // does an M01 hole drilled at them.
+          ((data.featureKind === 'pattern' || data.featureKind === 'hole') &&
             data.points !== undefined &&
             affectedSketches.has(data.points.sketchId));
         break;

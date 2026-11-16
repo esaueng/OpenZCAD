@@ -462,6 +462,16 @@ export function inPlaceEditSeed(
       value('positionV', data.position.v);
       seed.options.depthMode = data.depthMode;
       seed.options.style = data.style;
+      // M01 (schema v64): drilled at sketch points, which reopen as picks.
+      if (data.points) {
+        seed.options.place = 'points';
+        for (const pointId of data.points.pointIds) {
+          seed.slots.path.push({
+            sketchId: data.points.sketchId,
+            entityId: pointId
+          });
+        }
+      }
       break;
     }
     case 'gear': {
@@ -1327,8 +1337,10 @@ export function inPlaceEditSourceSketchIds(data: FeatureData): SketchId[] {
     // The in-place Extrude edits an extrude (U09): its profile's sketch.
     case 'extrude':
       return [data.sketchId];
-    // M02: a pattern on sketch points shows the sketch its points are on.
+    // M02: a pattern on sketch points shows the sketch its points are on,
+    // and so does an M01 hole drilled at them.
     case 'pattern':
+    case 'hole':
       return data.points ? [data.points.sketchId] : [];
     default:
       return [];
@@ -1613,8 +1625,16 @@ export function keepAbsentHoleSteps(
 ): FeatureUpdateInput {
   if (saved.featureKind !== 'hole') return update;
   const stored = saved as unknown as Record<string, unknown>;
+  // M01: a hole moved off its sketch points drops them, which a patch
+  // without the key would keep.
+  const clearPoints =
+    saved.points !== undefined &&
+    (update.data as Record<string, unknown> | undefined)?.points === undefined;
   return {
     ...update,
+    ...(clearPoints
+      ? { clearData: [...(update.clearData ?? []), 'points'] }
+      : {}),
     data: Object.fromEntries(
       Object.entries(update.data as Record<string, unknown>).filter(
         ([key]) =>

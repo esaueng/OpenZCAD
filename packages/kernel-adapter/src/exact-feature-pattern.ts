@@ -286,6 +286,8 @@ interface RepeatedHole {
   label: string;
   /** The hole feature it copies: two repeated holes share every label. */
   source: FeatureNode['featureId'];
+  /** M01: the sketch point of the hole's bore it copies, or null. */
+  pointId: string | null;
   spec: HoleToolSpec;
 }
 
@@ -300,7 +302,9 @@ export function buildFeaturePattern(
   target: ExactShape,
   copies: readonly FeaturePatternCopy[],
   repeat: RepeatTools,
-  holeSpec: (data: FeatureDataOf<'hole'>) => { spec: HoleToolSpec }
+  holeSpec: (data: FeatureDataOf<'hole'>) => {
+    bores: readonly { spec: HoleToolSpec; pointId: string | null }[];
+  }
 ): void {
   const { kernel, document, result } = ctx;
   if (!feature.bodyId) throw new Error('Pattern has no result body.');
@@ -316,34 +320,36 @@ export function buildFeaturePattern(
     const sourceData = source.data;
     let seed: number[];
     let operation: 'add' | 'cut';
-    let hole: HoleToolSpec | null = null;
+    let bores: { spec: HoleToolSpec; pointId: string | null }[] = [];
     if (sourceData.featureKind === 'hole') {
-      const { spec } = holeSpec(sourceData);
       // A through hole drills clear of the body from its own entry point; a
       // copy needs the same from where it lands, so the one tool all copies
-      // share reaches the furthest of those.
-      let depth = spec.depth;
-      if (sourceData.depthMode === 'through') {
-        for (const copy of copies) {
-          const point = applyPoint(copy.matrix, spec.surfacePoint);
-          const axis = applyDirection(copy.matrix, spec.axis);
-          for (const corner of corners(targetBounds)) {
-            depth = Math.max(
-              depth,
-              dot(
-                {
-                  x: corner.x - point.x,
-                  y: corner.y - point.y,
-                  z: corner.z - point.z
-                },
-                axis
-              )
-            );
+      // share reaches the furthest of those. A hole on sketch points (M01)
+      // brings one tool per bore, all repeated together.
+      bores = holeSpec(sourceData).bores.map(({ spec, pointId }) => {
+        let depth = spec.depth;
+        if (sourceData.depthMode === 'through') {
+          for (const copy of copies) {
+            const point = applyPoint(copy.matrix, spec.surfacePoint);
+            const axis = applyDirection(copy.matrix, spec.axis);
+            for (const corner of corners(targetBounds)) {
+              depth = Math.max(
+                depth,
+                dot(
+                  {
+                    x: corner.x - point.x,
+                    y: corner.y - point.y,
+                    z: corner.z - point.z
+                  },
+                  axis
+                )
+              );
+            }
           }
         }
-      }
-      hole = { ...spec, depth };
-      seed = holeToolSolids(kernel, hole);
+        return { spec: { ...spec, depth }, pointId };
+      });
+      seed = bores.flatMap(({ spec }) => holeToolSolids(kernel, spec));
       operation = 'cut';
     } else if (sourceData.featureKind === 'extrude') {
       operation = sourceData.operation === 'add' ? 'add' : 'cut';
@@ -398,14 +404,15 @@ export function buildFeaturePattern(
             `Copy ${copy.label} of ${source.name} removes nothing from ${targetName}; skip it or change the pattern.`
           );
         }
-        if (hole) {
+        for (const { spec, pointId } of bores) {
           holes.push({
             label: copy.label,
             source: source.featureId,
+            pointId,
             spec: {
-              ...hole,
-              surfacePoint: applyPoint(copy.matrix, hole.surfacePoint),
-              axis: applyDirection(copy.matrix, hole.axis)
+              ...spec,
+              surfacePoint: applyPoint(copy.matrix, spec.surfacePoint),
+              axis: applyDirection(copy.matrix, spec.axis)
             }
           });
         }
@@ -454,10 +461,13 @@ export function buildFeaturePattern(
   // Faces the copies left alone keep their names; each copy's bore is named
   // by its own axis, the way a hole names its one.
   const lineage = carryAnalyticFaces(kernel, original, solid, target.lineage);
-  for (const { label, source, spec } of holes) {
+  for (const { label, source, pointId, spec } of holes) {
     // Named by copy and by the hole it copies, so a pattern repeating two
-    // holes gives each copy's bore a name of its own.
-    const name = `pattern.face.instance.${label}.source.${source}.hole.face`;
+    // holes gives each copy's bore a name of its own; a hole's bores on
+    // sketch points (M01) by their point too.
+    const name = `pattern.face.instance.${label}.source.${source}.hole.face${
+      pointId === null ? '' : `.at.${pointId}`
+    }`;
     assignCarrierFace(
       kernel,
       solid,

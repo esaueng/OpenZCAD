@@ -1485,8 +1485,20 @@ function buildHoleFeature(
   if (!feature.bodyId) {
     throw new Error('Hole has no result body.');
   }
-  const { spec: holeSpec, shape, targetSolid } = holeToolSpecFor(ctx, data);
-  const drilled = drillHole(kernel, targetSolid, holeSpec);
+  const { bores, shape, targetSolid } = holeToolSpecFor(ctx, data);
+  // One bore at a time, each proven as a single hole is: a bore that misses
+  // the body or cuts nothing refuses by its point, never silently dropped.
+  let drilled = targetSolid;
+  for (const { spec, pointId } of bores) {
+    try {
+      drilled = drillHole(kernel, drilled, spec);
+    } catch (error) {
+      if (pointId === null || !(error instanceof Error)) throw error;
+      throw new Error(`At sketch point ${pointId}: ${error.message}`, {
+        cause: error
+      });
+    }
+  }
   result.consumed.add(data.targetBodyId);
   result.shapes.set(feature.bodyId, {
     solids: [drilled],
@@ -1496,21 +1508,100 @@ function buildHoleFeature(
       drilled,
       shape.lineage,
       feature.featureId,
-      holeSpec
+      bores
     )
   });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
 
+/** One bore a hole drills: where, and the sketch point it stands on. */
+export interface HoleBore {
+  spec: HoleToolSpec;
+  /** M01 (schema v64): the point entity, or null for the stored position. */
+  pointId: string | null;
+}
+
+/** Below this the sketch plane is parallel to the entry face. */
+const HOLE_POINTS_PARALLEL_TOLERANCE = 1e-9;
+
+/**
+ * M01 (schema v64): where each of a hole's sketch points meets its entry
+ * face. A point is read on its sketch plane, which must be parallel to the
+ * face, and dropped onto the face along its normal, so a sketch drawn on the
+ * face, or on a plane offset from it, places its bores the same way.
+ */
+function holePointEntries(
+  ctx: FeatureBuildContext,
+  points: NonNullable<FeatureDataOf<'hole'>['points']>,
+  planePoint: Vec3,
+  normal: Vec3
+): { pointId: string; at: Vec3 }[] {
+  const sketch = findSketch(ctx.document, points.sketchId);
+  const basis = ctx.result.sketchBases.get(points.sketchId);
+  if (!sketch || !basis) {
+    throw new Error(
+      `The sketch this hole is drilled at${sketch ? ` (${sketch.name})` : ''} did not resolve.`
+    );
+  }
+  const sketchNormal = normalized(cross(basis.u, basis.v));
+  if (
+    !sketchNormal ||
+    1 - Math.abs(dot(sketchNormal, normal)) > HOLE_POINTS_PARALLEL_TOLERANCE
+  ) {
+    throw new Error(
+      `${sketch.name} is not parallel to the hole's entry face, so its points cannot place the hole.`
+    );
+  }
+  return points.pointIds.map((pointId) => {
+    const node = ownEntry(ctx.document.nodes, pointId);
+    if (
+      !(sketch.objectIds as readonly string[]).includes(pointId) ||
+      node?.kind !== 'sketch-object' ||
+      node.data.objectKind !== 'point'
+    ) {
+      throw new Error(
+        `A point this hole is drilled at is no longer a point of ${sketch.name}.`
+      );
+    }
+    const x = resolveParamValue(
+      node.data.x,
+      ctx.scope,
+      'point x',
+      ctx.document.units
+    );
+    const y = resolveParamValue(
+      node.data.y,
+      ctx.scope,
+      'point y',
+      ctx.document.units
+    );
+    const world = {
+      x: basis.origin.x + basis.u.x * x + basis.v.x * y,
+      y: basis.origin.y + basis.u.y * x + basis.v.y * y,
+      z: basis.origin.z + basis.u.z * x + basis.v.z * y
+    };
+    const height = dot(subtract(world, planePoint), normal);
+    return {
+      pointId,
+      at: {
+        x: world.x - normal.x * height,
+        y: world.y - normal.y * height,
+        z: world.z - normal.z * height
+      }
+    };
+  });
+}
+
 /**
  * Where a hole drills and what it cuts, resolved on its target body as this
  * build holds it: the hole's own build, and an M02 feature pattern that
- * repeats it, read the same entry face and the same stored position.
+ * repeats it, read the same entry face and the same stored position (or, on
+ * sketch points, the same points), one bore each.
  */
 export function holeToolSpecFor(
   ctx: FeatureBuildContext,
   data: FeatureDataOf<'hole'>
-): { spec: HoleToolSpec; shape: ExactShape; targetSolid: number } {
+): { bores: HoleBore[]; shape: ExactShape; targetSolid: number } {
   const { kernel, scope, result } = ctx;
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
@@ -1543,44 +1634,56 @@ export function holeToolSpecFor(
   if (!zAxis) {
     throw new Error('Hole entry face normal is degenerate.');
   }
-  const reference =
-    Math.abs(zAxis.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
-  const xAxis = normalized(cross(reference, zAxis))!;
-  const yAxis = cross(zAxis, xAxis);
-  const u = resolveParamValue(
-    data.position.u,
-    scope,
-    'hole position U',
-    ctx.document.units
-  );
-  const v = resolveParamValue(
-    data.position.v,
-    scope,
-    'hole position V',
-    ctx.document.units
-  );
-  // Which point (u, v) is measured from is versioned by the marker's
-  // presence, never by what this build can compute: `center` is the mean of
-  // the face's VERTICES, so on a face bounded by one closed circular edge it
-  // sits on the rim, a whole radius from the centroid. Re-anchoring a hole
-  // that was drilled against the rim would silently relocate it.
-  if (data.positionAnchor === 'centroid' && !geometry.centroid) {
-    throw new Error(
-      'The hole entry face no longer reports an area centroid, and this hole is positioned from one.'
-    );
-  }
-  const anchor =
-    data.positionAnchor === 'centroid' ? geometry.centroid! : geometry.center;
-  const surfacePoint = {
-    x: anchor.x + xAxis.x * u + yAxis.x * v,
-    y: anchor.y + xAxis.y * u + yAxis.y * v,
-    z: anchor.z + xAxis.z * u + yAxis.z * v
-  };
   const axis = {
     x: -zAxis.x,
     y: -zAxis.y,
     z: -zAxis.z
   };
+  let entries: { pointId: string | null; at: Vec3 }[];
+  if (data.points) {
+    // M01 (schema v64): the stored position is not read.
+    entries = holePointEntries(ctx, data.points, geometry.center, zAxis);
+  } else {
+    const reference =
+      Math.abs(zAxis.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+    const xAxis = normalized(cross(reference, zAxis))!;
+    const yAxis = cross(zAxis, xAxis);
+    const u = resolveParamValue(
+      data.position.u,
+      scope,
+      'hole position U',
+      ctx.document.units
+    );
+    const v = resolveParamValue(
+      data.position.v,
+      scope,
+      'hole position V',
+      ctx.document.units
+    );
+    // Which point (u, v) is measured from is versioned by the marker's
+    // presence, never by what this build can compute: `center` is the mean
+    // of the face's VERTICES, so on a face bounded by one closed circular
+    // edge it sits on the rim, a whole radius from the centroid.
+    // Re-anchoring a hole that was drilled against the rim would silently
+    // relocate it.
+    if (data.positionAnchor === 'centroid' && !geometry.centroid) {
+      throw new Error(
+        'The hole entry face no longer reports an area centroid, and this hole is positioned from one.'
+      );
+    }
+    const anchor =
+      data.positionAnchor === 'centroid' ? geometry.centroid! : geometry.center;
+    entries = [
+      {
+        pointId: null,
+        at: {
+          x: anchor.x + xAxis.x * u + yAxis.x * v,
+          y: anchor.y + xAxis.y * u + yAxis.y * v,
+          z: anchor.z + xAxis.z * u + yAxis.z * v
+        }
+      }
+    ];
+  }
   const diameter = resolveParamValue(
     data.diameter,
     scope,
@@ -1590,48 +1693,30 @@ export function holeToolSpecFor(
   if (!(diameter > 0)) {
     throw new Error('Hole diameter must be greater than zero.');
   }
-  let depth: number;
-  if (data.depthMode === 'through') {
-    // Far enough to clear the body from this entry point, however
-    // the body sits relative to the face.
-    const bounds = kernel.boundingBox(targetSolid);
-    const corners = [0, 1].flatMap((cx) =>
-      [0, 1].flatMap((cy) =>
-        [0, 1].map((cz) => ({
-          x: bounds[cx * 3]!,
-          y: bounds[cy * 3 + 1]!,
-          z: bounds[cz * 3 + 2]!
-        }))
-      )
-    );
-    depth = corners.reduce(
-      (maximum, corner) =>
-        Math.max(maximum, dot(subtract(corner, surfacePoint), axis)),
-      0
-    );
-    if (!(depth > 0)) {
-      throw new Error('The hole points away from the body.');
-    }
-  } else {
+  let blindDepth: number | null = null;
+  if (data.depthMode !== 'through') {
     if (data.depth === undefined) {
       throw new Error('A blind hole needs a depth.');
     }
-    depth = resolveParamValue(
+    blindDepth = resolveParamValue(
       data.depth,
       scope,
       'hole depth',
       ctx.document.units
     );
-    if (!(depth > 0)) {
+    if (!(blindDepth > 0)) {
       throw new Error('Hole depth must be greater than zero.');
     }
   }
-  // The overshoot heuristic resizeThroughHole already uses, so a
-  // bore through a slanted opening trims identically.
-  const extension = Math.max(
-    DIRECT_EDIT_TOLERANCE * 10,
-    depth * 0.02,
-    diameter * 0.01
+  const bounds = kernel.boundingBox(targetSolid);
+  const corners = [0, 1].flatMap((cx) =>
+    [0, 1].flatMap((cy) =>
+      [0, 1].map((cz) => ({
+        x: bounds[cx * 3]!,
+        y: bounds[cy * 3 + 1]!,
+        z: bounds[cz * 3 + 2]!
+      }))
+    )
   );
   const style = data.style;
   const resolveOptional = (
@@ -1649,33 +1734,61 @@ export function holeToolSpecFor(
     data.counterboreDiameter,
     'counterbore diameter'
   );
-  const holeSpec: HoleToolSpec = {
-    surfacePoint,
-    axis,
-    radius: diameter / 2,
-    depth,
-    style,
-    counterboreRadius:
-      counterboreDiameter === undefined ? undefined : counterboreDiameter / 2,
-    counterboreDepth: resolveOptional(
-      data.counterboreDepth,
-      'counterbore depth'
-    ),
-    countersinkRadius: (() => {
-      const value = resolveOptional(
-        data.countersinkDiameter,
-        'countersink diameter'
+  const counterboreDepth = resolveOptional(
+    data.counterboreDepth,
+    'counterbore depth'
+  );
+  const countersinkDiameter = resolveOptional(
+    data.countersinkDiameter,
+    'countersink diameter'
+  );
+  const bores = entries.map(({ pointId, at: surfacePoint }): HoleBore => {
+    // A through hole drills far enough to clear the body from this entry
+    // point, however the body sits relative to the face.
+    const depth =
+      blindDepth ??
+      corners.reduce(
+        (maximum, corner) =>
+          Math.max(maximum, dot(subtract(corner, surfacePoint), axis)),
+        0
       );
-      return value === undefined ? undefined : value / 2;
-    })(),
-    countersinkAngle:
-      countersinkAngleDeg === undefined
-        ? undefined
-        : (countersinkAngleDeg * Math.PI) / 180,
-    entryExtension: extension,
-    exitExtension: data.depthMode === 'through' ? extension : 0
-  };
-  return { spec: holeSpec, shape, targetSolid };
+    if (!(depth > 0)) {
+      throw new Error('The hole points away from the body.');
+    }
+    // The overshoot heuristic resizeThroughHole already uses, so a
+    // bore through a slanted opening trims identically.
+    const extension = Math.max(
+      DIRECT_EDIT_TOLERANCE * 10,
+      depth * 0.02,
+      diameter * 0.01
+    );
+    return {
+      pointId,
+      spec: {
+        surfacePoint,
+        axis,
+        radius: diameter / 2,
+        depth,
+        style,
+        counterboreRadius:
+          counterboreDiameter === undefined
+            ? undefined
+            : counterboreDiameter / 2,
+        counterboreDepth,
+        countersinkRadius:
+          countersinkDiameter === undefined
+            ? undefined
+            : countersinkDiameter / 2,
+        countersinkAngle:
+          countersinkAngleDeg === undefined
+            ? undefined
+            : (countersinkAngleDeg * Math.PI) / 180,
+        entryExtension: extension,
+        exitExtension: data.depthMode === 'through' ? extension : 0
+      }
+    };
+  });
+  return { bores, shape, targetSolid };
 }
 
 function buildSplitFeature(

@@ -89,6 +89,17 @@ export function assertPatternContentSchema(
 }
 
 /**
+ * M01 holes on sketch points (schema v64): a hole carrying them needs a
+ * document that declares it, or an older reader would drill one hole at the
+ * stored position in their place.
+ */
+export function assertHoleContentSchema(data: unknown, version: unknown): void {
+  if (!record(data)) return;
+  if (data.points !== undefined)
+    assertMinimumProjectSchema(version, 64, 'Holes on sketch points');
+}
+
+/**
  * M16 sheet-metal features (schema v58): an older reader has no builder for
  * the kind and would drop the body, so the document must declare the schema.
  */
@@ -195,6 +206,14 @@ export function assertDocumentContentCommandSchema(
       assertThreadContentSchema(command.payload, document.schemaVersion);
     if (command.kind === 'feature.pattern')
       assertPatternContentSchema(command.payload, document.schemaVersion);
+    if (command.kind === 'feature.hole')
+      assertHoleContentSchema(command.payload, document.schemaVersion);
+    // A hole patch names its kind (the History edit sends the whole data).
+    if (
+      record(command.payload.data) &&
+      command.payload.data.featureKind === 'hole'
+    )
+      assertHoleContentSchema(command.payload.data, document.schemaVersion);
     // Pattern-only fields, gated however the patch names its kind.
     if (
       record(command.payload.data) &&
@@ -276,6 +295,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       assertThreadContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'pattern')
       assertPatternContentSchema(node.data, document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'hole')
+      assertHoleContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
     if (
