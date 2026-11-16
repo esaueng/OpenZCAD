@@ -244,3 +244,55 @@ describe('the analysis panel for curvature and zebra (M09)', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 });
+
+describe('the Gaussian curvature legend (M09)', () => {
+  it('reads its sign as saddle and dome or bowl, never concave or convex', () => {
+    const report: SurfaceAnalysisReport = {
+      request: { kind: 'curvature', measure: 'gaussian' },
+      bodies: [
+        {
+          bodyId: 'body_a',
+          positions: new Float32Array(),
+          normals: new Float32Array(),
+          indices: new Uint32Array(),
+          values: Float32Array.from([-0.04, 0.02]),
+          faces: [
+            {
+              face: 0,
+              surface: 'torus',
+              min: -0.04,
+              max: 0.02,
+              samples: 40,
+              exact: false,
+              minRadius: 3,
+              minRadiusExact: true
+            }
+          ]
+        }
+      ],
+      unsupported: [],
+      missing: []
+    };
+    render(
+      <AnalysisPanel
+        request={{ kind: 'curvature', measure: 'gaussian' }}
+        run={{ kind: 'done', report }}
+        lengthUnit="mm"
+        nameOf={() => 'Ring'}
+        onChange={vi.fn()}
+        onOff={vi.fn()}
+      />
+    );
+    const legend = screen.getByRole('list', { name: 'Legend' });
+    expect(
+      within(legend)
+        .getAllByRole('listitem')
+        .map((item) => item.textContent)
+    ).toEqual([
+      'Negative (saddle) · -0.04 1/mm²',
+      'Zero (flat or developable) · 0',
+      'Positive (dome or bowl) · 0.04 1/mm²',
+      'Not evaluated'
+    ]);
+  });
+});

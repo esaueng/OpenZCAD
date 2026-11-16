@@ -200,6 +200,12 @@ describe('analysis overlay (M09)', () => {
     expect(material.vertexColors).toBe(true);
     expect(material.clipping).toBe(true);
     expect(material.fragmentShader).toContain('reflect(');
+    // Parallel rays in an orthographic view: no stripes across a flat face.
+    expect(material.fragmentShader).toContain('isOrthographic ?');
+    // A sample with no exact normal is drawn plain, never striped.
+    expect(material.fragmentShader).toContain(
+      'mix(vZebraColor, shade, evaluated)'
+    );
     applySectionPlane(root, sectionClippingPlane({ plane: 'XY', offset: 0 }));
     expect(material.clippingPlanes).toHaveLength(1);
   });

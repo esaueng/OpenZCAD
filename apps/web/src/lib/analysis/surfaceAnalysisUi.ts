@@ -298,6 +298,24 @@ export function curvatureUnit(
   return measure === 'gaussian' ? `1/${lengthUnit}²` : `1/${lengthUnit}`;
 }
 
+/**
+ * What each end of a curvature map means. Mean curvature's sign is convex
+ * or concave; Gaussian's is not: negative is a saddle, positive a dome or a
+ * bowl alike, and zero both a plane and any developable face (a cylinder).
+ */
+export const CURVATURE_LEGEND_LABELS: Record<
+  CurvatureMeasure,
+  { negative: string; zero: string; positive: string }
+> = {
+  gaussian: {
+    negative: 'Negative (saddle)',
+    zero: 'Zero (flat or developable)',
+    positive: 'Positive (dome or bowl)'
+  },
+  mean: { negative: 'Concave', zero: 'Flat', positive: 'Convex' },
+  maximum: { negative: 'Concave', zero: 'Flat', positive: 'Tightest' }
+};
+
 export const CURVATURE_MEASURE_LABELS: Record<CurvatureMeasure, string> = {
   gaussian: 'Gaussian',
   mean: 'Mean',

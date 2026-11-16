@@ -16,6 +16,7 @@ import {
 import {
   ANALYSIS_LABELS,
   CURVATURE_COLORS,
+  CURVATURE_LEGEND_LABELS,
   CURVATURE_MEASURE_LABELS,
   DRAFT_COLORS,
   DRAFT_VERDICT_LABELS,
@@ -168,6 +169,7 @@ function curvatureView(
   const unit = curvatureUnit(request.measure, lengthUnit);
   const signed = request.measure !== 'maximum';
   const end = (value: number) => `${formatCurvature(value)} ${unit}`;
+  const labels = CURVATURE_LEGEND_LABELS[request.measure];
   return {
     fields: (
       <label className="analysis-panel-field" htmlFor={ids.first}>
@@ -195,16 +197,17 @@ function curvatureView(
         {signed ? (
           <li>
             <Swatch color={CURVATURE_COLORS.concave} />
-            Concave{report ? ` · ${end(-scale)}` : ''}
+            {labels.negative}
+            {report ? ` · ${end(-scale)}` : ''}
           </li>
         ) : null}
         <li>
           <Swatch color={CURVATURE_COLORS.flat} />
-          Flat · 0
+          {labels.zero} · 0
         </li>
         <li>
           <Swatch color={CURVATURE_COLORS.convex} />
-          {signed ? 'Convex' : 'Tightest'}
+          {labels.positive}
           {report ? ` · ${end(scale)}` : ''}
         </li>
         <li>

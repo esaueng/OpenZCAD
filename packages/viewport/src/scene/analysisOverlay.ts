@@ -41,8 +41,9 @@ export interface AnalysisOverlayBody {
 
 /**
  * How the overlay is shaded: by its vertex colours, lit like the model, or
- * as zebra stripes reflected from the exact normals (each vertex colour then
- * tints the stripes; grey marks a sample the kernel did not evaluate).
+ * as zebra stripes reflected from the exact normals (a white vertex is an
+ * evaluated sample and is striped; any other colour, the grey of a sample
+ * the kernel did not evaluate, is drawn plain in that colour).
  */
 export type AnalysisOverlayShading =
   { kind: 'colors' } | { kind: 'zebra'; stripes: number };
@@ -83,10 +84,16 @@ void main() {
   #include <clipping_planes_fragment>
   vec3 n = normalize(vZebraNormal);
   if (!gl_FrontFacing) n = -n;
-  vec3 r = reflect(normalize(vZebraView), n);
+  // Orthographic views look along one direction everywhere; perspective
+  // views along the ray to each point.
+  vec3 view = isOrthographic ? vec3(0.0, 0.0, -1.0) : normalize(vZebraView);
+  vec3 r = reflect(view, n);
   float band = step(0.5, fract((r.y * 0.5 + 0.5) * stripes));
   vec3 shade = mix(vec3(0.06), vec3(0.96), band);
-  gl_FragColor = vec4(shade * vZebraColor, 1.0);
+  // White marks an evaluated sample; any other colour is a sample with no
+  // exact normal, drawn plain in that colour rather than striped.
+  float evaluated = step(0.999, min(min(vZebraColor.r, vZebraColor.g), vZebraColor.b));
+  gl_FragColor = vec4(mix(vZebraColor, shade, evaluated), 1.0);
 }
 `;
 
