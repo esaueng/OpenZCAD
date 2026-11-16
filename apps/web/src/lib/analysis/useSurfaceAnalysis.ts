@@ -33,7 +33,8 @@ export const ANALYSIS_SETTLE_MS = 250;
 
 /**
  * What the kernel measures for a request: the settings that only change how
- * values are drawn (draft's minimum, zebra's stripe count) are left out, so
+ * values are drawn (draft's minimum, zebra's stripe count, thickness's
+ * minimum wall) are left out, so
  * changing them redraws the last answer instead of asking again.
  */
 export function measuredPart(request: SurfaceAnalysisRequest): unknown {
@@ -43,6 +44,7 @@ export function measuredPart(request: SurfaceAnalysisRequest): unknown {
     case 'curvature':
       return { kind: request.kind, measure: request.measure };
     case 'zebra':
+    case 'thickness':
       return { kind: request.kind };
   }
 }

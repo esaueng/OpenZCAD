@@ -656,6 +656,11 @@ export function ViewerShell({
   // than the build put it withholds the overlay rather than paint the
   // build's colours over a shape that is not the build's.
   const analysisRequest = useAnalysisRuntime((s) => s.request);
+  // Defaults stated in millimetres (thickness's minimum wall) follow the
+  // document's units.
+  useEffect(() => {
+    analysisRuntime.setUnits(units);
+  }, [units]);
   const analysisBodyIds = useMemo(
     () => bodies.map((body) => body.bodyId),
     [bodies]

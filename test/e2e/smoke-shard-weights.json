@@ -3,6 +3,7 @@
   "assembly-bom.spec.ts": 20,
   "analysis-curvature-zebra.spec.ts": 20,
   "analysis-overlays.spec.ts": 20,
+  "analysis-thickness.spec.ts": 20,
   "assembly-interference.spec.ts": 25,
   "assembly.spec.ts": 68,
   "boolean-selection.spec.ts": 11,

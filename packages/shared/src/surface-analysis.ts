@@ -17,7 +17,7 @@ import type { Vector3 } from './index';
  * Lengths are in model units, angles in degrees.
  */
 
-export type SurfaceAnalysisKind = 'draft' | 'curvature' | 'zebra';
+export type SurfaceAnalysisKind = 'draft' | 'curvature' | 'zebra' | 'thickness';
 
 /**
  * Draft against a pull direction: the signed angle between each face and
@@ -63,8 +63,26 @@ export interface ZebraAnalysisRequest {
   stripes: number;
 }
 
+/**
+ * Wall thickness by the ray method: from the centre of each sample triangle
+ * on the surface, the distance through the material along the inward
+ * normal to the far wall. Every figure is approximate (sampled, and found
+ * to within the body's stated resolution) except a planar wall whose every
+ * sample reaches a parallel opposing plane, which is that exact separation.
+ * Thin walls are what 3D printing and moulding check; the minimum only
+ * recolours.
+ */
+export interface ThicknessAnalysisRequest {
+  kind: 'thickness';
+  /** The thinnest acceptable wall, in model units (> 0). */
+  minimum: number;
+}
+
 export type SurfaceAnalysisRequest =
-  DraftAnalysisRequest | CurvatureAnalysisRequest | ZebraAnalysisRequest;
+  | DraftAnalysisRequest
+  | CurvatureAnalysisRequest
+  | ZebraAnalysisRequest
+  | ThicknessAnalysisRequest;
 
 /**
  * A draft this close to zero (degrees) is zero: a vertical wall evaluates to
@@ -140,6 +158,11 @@ export interface SurfaceAnalysisFace {
    */
   minRadius?: number | null;
   minRadiusExact?: boolean;
+  /**
+   * Thickness only: where the face's thinnest sample is (the triangle
+   * centre it was measured from), in model coordinates.
+   */
+  thinnestAt?: Vector3;
 }
 
 /**
@@ -167,6 +190,11 @@ export interface SurfaceAnalysisBody {
   indices: Uint32Array;
   values: Float32Array;
   faces: SurfaceAnalysisFace[];
+  /**
+   * Thickness only: the length to which each ray-method sample is resolved
+   * (its error bound against the exact solid along that ray).
+   */
+  resolution?: number;
 }
 
 export interface SurfaceAnalysisReport {

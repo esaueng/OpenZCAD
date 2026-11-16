@@ -5,6 +5,7 @@ import type {
   DraftAnalysisRequest,
   SurfaceAnalysisReport,
   SurfaceAnalysisRequest,
+  ThicknessAnalysisRequest,
   ZebraAnalysisRequest
 } from '@openzcad/shared';
 import type { AnalysisRunState } from '../lib/analysis/useSurfaceAnalysis';
@@ -31,7 +32,11 @@ import {
   formatCurvature,
   formatDegrees,
   summarizeCurvature,
-  summarizeDraft
+  summarizeDraft,
+  THICKNESS_COLORS,
+  describeThicknessSummary,
+  formatLength,
+  summarizeThickness
 } from '../lib/analysis/surfaceAnalysisUi';
 
 const PULL_LABELS: Record<DraftPullId, string> = {
@@ -279,6 +284,71 @@ function zebraView(
   };
 }
 
+function thicknessView(
+  request: ThicknessAnalysisRequest,
+  report: SurfaceAnalysisReport | null,
+  onChange: OnChange,
+  ids: { first: string },
+  lengthUnit: string,
+  nameOf: (bodyId: string) => string
+): KindView {
+  const summary = report ? summarizeThickness(report, request.minimum) : null;
+  const minimum = formatLength(request.minimum, lengthUnit);
+  const twice = formatLength(request.minimum * 2, lengthUnit);
+  return {
+    fields: (
+      <label className="analysis-panel-field" htmlFor={ids.first}>
+        Minimum wall ({lengthUnit})
+        <input
+          id={ids.first}
+          type="number"
+          min={0}
+          step="any"
+          value={request.minimum}
+          onChange={(event) => {
+            const value = Number(event.target.value);
+            if (!Number.isFinite(value) || value <= 0) return;
+            onChange({ ...request, minimum: value });
+          }}
+        />
+      </label>
+    ),
+    legend: (
+      <>
+        <li>
+          <Swatch color={THICKNESS_COLORS.thin} />
+          Under {minimum}
+          {summary ? ` · ${summary.faces.thin}` : ''}
+        </li>
+        <li>
+          <Swatch color={THICKNESS_COLORS.marginal} />
+          {minimum} to {twice}
+          {summary ? ` · ${summary.faces.marginal}` : ''}
+        </li>
+        <li>
+          <Swatch color={THICKNESS_COLORS.ample} />
+          {twice} or more
+          {summary ? ` · ${summary.faces.ample}` : ''}
+        </li>
+        <li>
+          <Swatch color={THICKNESS_COLORS.unevaluated} />
+          Not measured
+        </li>
+      </>
+    ),
+    summary: summary
+      ? describeThicknessSummary(summary, request.minimum, lengthUnit, nameOf)
+      : '',
+    exactness: summary
+      ? `${
+          summary.resolution !== null
+            ? ` Resolution ${formatLength(summary.resolution, lengthUnit)}.`
+            : ''
+        } ${summary.exactFaces} of ${summary.totalFaces} face ranges exact.`
+      : ''
+  };
+}
+
 /**
  * M09: the analysis that is on, its settings, its legend, and what its
  * colours do and do not prove. Shown over the viewport while an analysis
@@ -318,7 +388,16 @@ export function AnalysisPanel({
             lengthUnit,
             nameOf
           )
-        : zebraView(request, report, onChange, { first });
+        : request.kind === 'zebra'
+          ? zebraView(request, report, onChange, { first })
+          : thicknessView(
+              request,
+              report,
+              onChange,
+              { first },
+              lengthUnit,
+              nameOf
+            );
   const unsupported = report
     ? [
         ...report.missing.map(

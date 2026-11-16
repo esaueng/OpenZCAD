@@ -5,6 +5,10 @@ import type {
   SurfaceAnalysisReport
 } from '@openzcad/shared';
 import {
+  THICKNESS_COLORS,
+  describeThicknessSummary,
+  summarizeThickness,
+  thicknessBandOf,
   CURVATURE_COLORS,
   curvatureColor,
   curvatureScale,
@@ -310,5 +314,100 @@ describe('zebra overlay (M09)', () => {
     expect(analysisLimits('zebra')).toMatch(
       /^Not covered: a certified continuity check/
     );
+  });
+});
+
+describe('thickness colours and summary (M09)', () => {
+  const thicknessReport = (): SurfaceAnalysisReport => ({
+    request: { kind: 'thickness', minimum: 1 },
+    bodies: [
+      {
+        bodyId: 'body_a',
+        positions: new Float32Array(12),
+        normals: new Float32Array(12),
+        indices: new Uint32Array([0, 1, 2, 3]),
+        values: Float32Array.from([0.8, 1.5, 3, Number.NaN]),
+        faces: [
+          {
+            face: 0,
+            surface: 'plane',
+            min: 2,
+            max: 2,
+            samples: 4,
+            exact: true
+          },
+          {
+            face: 1,
+            surface: 'cylinder',
+            min: 0.8,
+            max: 1.5,
+            samples: 9,
+            exact: false
+          },
+          { face: 2, surface: 'plane', min: 3, max: 3, samples: 4, exact: true }
+        ],
+        resolution: 0.004
+      }
+    ],
+    unsupported: [],
+    missing: []
+  });
+
+  it('bands each sample against the minimum, recoloured without measuring', () => {
+    expect(thicknessBandOf(0.8, 1)).toBe('thin');
+    expect(thicknessBandOf(1.5, 1)).toBe('marginal');
+    expect(thicknessBandOf(2, 1)).toBe('ample');
+    expect(thicknessBandOf(Number.NaN, 1)).toBe('unevaluated');
+    const report = thicknessReport();
+    const colors = analysisOverlayFor(report, { kind: 'thickness', minimum: 1 })
+      .bodies[0]!.colors;
+    expect([0, 1, 2, 3].map((at) => hex(colors, at))).toEqual([
+      THICKNESS_COLORS.thin,
+      THICKNESS_COLORS.marginal,
+      THICKNESS_COLORS.ample,
+      THICKNESS_COLORS.unevaluated
+    ]);
+    // A stricter minimum: the 1.5 wall is thin now. Nothing re-measured.
+    const strict = analysisOverlayFor(report, { kind: 'thickness', minimum: 2 })
+      .bodies[0]!.colors;
+    expect(hex(strict, 1)).toBe(THICKNESS_COLORS.thin);
+    expect(measuredPart({ kind: 'thickness', minimum: 1 })).toEqual(
+      measuredPart({ kind: 'thickness', minimum: 2 })
+    );
+  });
+
+  it('names the thinnest wall, approximate or exact, and what is below the minimum', () => {
+    const summary = summarizeThickness(thicknessReport(), 1);
+    expect(summary).toMatchObject({
+      belowMinimum: 1,
+      faces: { thin: 1, marginal: 0, ample: 2 },
+      exactFaces: 2,
+      totalFaces: 3,
+      resolution: 0.004
+    });
+    expect(describeThicknessSummary(summary, 1, 'mm', () => 'Bracket')).toBe(
+      'Thinnest wall 0.8 mm (approximate) on Bracket, face 2. 1 face below the 1 mm minimum.'
+    );
+    expect(
+      describeThicknessSummary(
+        summarizeThickness(thicknessReport(), 0.5),
+        0.5,
+        'mm',
+        () => 'Bracket'
+      )
+    ).toMatch(/Every face at least 0.5 mm\.$/);
+    expect(analysisProvenance('thickness')).toMatch(/^Approximate: /);
+    expect(analysisLimits('thickness')).toMatch(
+      /not a slicer’s or a simulation’s check/
+    );
+  });
+});
+
+describe('analysis defaults (M09)', () => {
+  it('states the default minimum wall as 1 mm in the document units', async () => {
+    const { defaultThicknessMinimum } = await import('./analysisRuntime');
+    expect(defaultThicknessMinimum('mm')).toBe(1);
+    expect(defaultThicknessMinimum('cm')).toBe(0.1);
+    expect(defaultThicknessMinimum('inch')).toBe(0.039);
   });
 });
