@@ -308,6 +308,37 @@ export function bodyChanges(
 }
 
 /**
+ * The contract is one undoable transaction, so the transaction's own undo
+ * entry must survive. ADR-023 bounds history to 100 steps and 8,000,000
+ * serialized bytes and drops the oldest entries first; an edit that alone
+ * exceeds the byte budget drops itself, leaving a change nothing can undo.
+ * Such a patch is refused before anything is written.
+ */
+export function assertRetainedUndo(
+  base: ProjectDocument,
+  next: ProjectDocument
+): void {
+  const history = next.editHistory;
+  const entry =
+    history && history.cursor > 0
+      ? history.entries[history.cursor - 1]
+      : undefined;
+  const earlier = new Set(
+    (base.editHistory?.entries ?? []).map((existing) => existing.id)
+  );
+  if (
+    !entry ||
+    entry.label !== AGENT_PATCH_UNDO_LABEL ||
+    earlier.has(entry.id) ||
+    history!.cursor !== history!.entries.length
+  )
+    throw new AgentToolError(
+      'refused',
+      'This change is too large for the undo history to keep, so it could not be undone in one step. Nothing was applied; split it into smaller proposals.'
+    );
+}
+
+/**
  * The agent API: the assistant's validated patch, exact preflight and single
  * transaction behind scope, rate limits and a one-job kernel gate. Transport
  * free; `createMcpSession` puts it on the wire.
@@ -501,6 +532,7 @@ export function createAgentApi(options: AgentApiOptions): AgentApi {
             'refused',
             'The proposal changes nothing. Nothing was applied.'
           );
+        assertRetainedUndo(base, next);
         // A timed-out call has already been reported as failed: never let it
         // write afterwards.
         if (signal.aborted)

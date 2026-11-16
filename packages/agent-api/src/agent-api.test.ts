@@ -5,11 +5,13 @@ import {
   createProjectDocument,
   listFeaturesInOrder
 } from '@openzcad/document-core';
+import { parseCadPatchProposal } from '@openzcad/ai-contracts';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
   AGENT_PATCH_UNDO_LABEL,
   AgentToolError,
   JSON_RPC_INVALID_PARAMS,
+  assertRetainedUndo,
   JSON_RPC_INVALID_REQUEST,
   JSON_RPC_METHOD_NOT_FOUND,
   JSON_RPC_PARSE_ERROR,
@@ -215,6 +217,65 @@ describe('agent API patch contract', () => {
     const undone = new CommandManager(after).undo();
     expect(feature(undone).dimensions.width).toBe(40);
     expect(undone.editHistory!.cursor).toBe(history.cursor - 1);
+  });
+
+  it('refuses a change whose undo entry the history cannot keep', async () => {
+    // A rename snapshots the whole node before and after. A node carrying a
+    // multi-megabyte payload turns a one-operation proposal into an undo
+    // entry over ADR-023's 8,000,000-byte budget, which the history drops.
+    const document = boxDocument();
+    const feature = listFeaturesInOrder(document)[0]!;
+    const heavy: ProjectDocument = {
+      ...document,
+      nodes: {
+        ...document.nodes,
+        [feature.id]: {
+          ...feature,
+          metadata: { payload: 'x'.repeat(4_100_000) }
+        }
+      }
+    };
+    const workspace = new MemoryWorkspace(heavy);
+    const edit = createAgentApi({
+      workspace,
+      preflight: commandPreflight,
+      scope: 'edit'
+    });
+    const result = await edit.call('apply_patch', {
+      project: 'block',
+      expectedVersion: heavy.version,
+      proposal: {
+        proposalId: 'rename',
+        summary: 'Rename the block',
+        assumptions: [],
+        operations: [
+          {
+            kind: 'rename_feature',
+            featureId: feature.featureId,
+            name: 'Base block'
+          }
+        ]
+      }
+    });
+    const refusal = parsed(result);
+    expect(refusal).toMatchObject({ ok: false, error: 'refused' });
+    expect(refusal.message).toMatch(/too large for the undo history/);
+    expect(workspace.commits).toHaveLength(0);
+  });
+
+  it('accepts only a transaction that kept its own newest undo entry', () => {
+    const base = boxDocument();
+    const kept = new CommandManager(base).runTransaction(
+      AGENT_PATCH_UNDO_LABEL,
+      commandsForCadPatch(base, parseCadPatchProposal(widthProposal(base, 60)))
+    );
+    expect(() => assertRetainedUndo(base, kept)).not.toThrow();
+    const dropped: ProjectDocument = {
+      ...kept,
+      editHistory: { ...kept.editHistory!, entries: [], cursor: 0, trimmed: 1 }
+    };
+    expect(() => assertRetainedUndo(base, dropped)).toThrow(/too large/);
+    expect(() => assertRetainedUndo(kept, kept)).toThrow(/too large/);
   });
 
   it('preflights without writing', async () => {
