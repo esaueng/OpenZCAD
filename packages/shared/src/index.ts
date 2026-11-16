@@ -5980,7 +5980,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   gear: '#c084fc',
   thread: '#84cc16',
   'sheet-metal': '#94a3b8',
-  'standard-part': '#a3a3a3',
+  'standard-part': '#c2b280',
   'direct-edit': '#2dd4bf',
   'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff',

@@ -133,6 +133,19 @@ describe('M17 Standard part command', () => {
     ).toBe('608');
   });
 
+  it('designates a length in the document units (review)', () => {
+    const options = { partKind: 'screw', system: 'ansi' };
+    expect(
+      standardPartSpec.summary!({ options, numbers: { length: 0.75 } }, 'inch')
+    ).toBe('ASME B18.3 1/4-20 UNC × 3/4" socket head cap screw');
+    expect(
+      standardPartSpec.summary!(
+        { options: SCREW, numbers: { length: 20 } },
+        'mm'
+      )
+    ).toBe('ISO 4762 M6×1 × 20 socket head cap screw');
+  });
+
   it('refuses a screw too short to thread', () => {
     expect(
       standardPartSpec.refuseValue!('length', 4, {}, undefined, {

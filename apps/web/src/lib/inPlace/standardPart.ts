@@ -239,11 +239,16 @@ export const standardPartSpec: InPlaceToolSpec = {
       ]
     }
   ],
-  summary: (state) => {
+  summary: (state, units) => {
     const choice = standardPartChoice(state.options);
+    // The designation reads millimetres; the panel's length is in the
+    // document's units.
+    const length = state.numbers.length;
     return standardPartDesignation(
       choice,
-      standardPartHasLength(choice.partKind) ? state.numbers.length : undefined
+      standardPartHasLength(choice.partKind) && length !== undefined
+        ? length * millimetresPerUnit(units)
+        : undefined
     );
   },
   defaults(_slots, ctx, _numbers, options) {
