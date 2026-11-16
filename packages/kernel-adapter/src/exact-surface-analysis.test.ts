@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { subdivideTriangles, surfaceCrossings } from './exact-surface-analysis';
+import {
+  rayThickness,
+  subdivideTriangles,
+  surfaceCrossings,
+  type RayFace
+} from './exact-surface-analysis';
 
 describe('closed-form ray crossings (M09 thickness)', () => {
   it('meets a plane, a cylinder and a sphere where they are', () => {
@@ -86,5 +91,138 @@ describe('thickness sampling mesh', () => {
     expect(
       subdivideTriangles(positions, [0, 1, 2, 0, 2, 3], 0.01, 100)
     ).toBeNull();
+  });
+});
+
+/**
+ * A stand-in kernel for the ray method: infinite planes at given heights
+ * and optional traced faces, each with its own distance, over material the
+ * test describes by height along +Z.
+ */
+function slabKernel(options: {
+  inside(z: number): boolean;
+  planes: Record<number, number>;
+  traced?: Record<number, (z: number) => number>;
+}) {
+  return {
+    classifyPoint: (_solid: number, _x: number, _y: number, z: number) =>
+      options.inside(z) ? 'inside' : 'outside',
+    pointToFaceDistance: (_x: number, _y: number, z: number, face: number) => {
+      const plane = options.planes[face];
+      if (plane !== undefined) return Float64Array.from([Math.abs(z - plane)]);
+      return Float64Array.from([options.traced![face]!(z)]);
+    }
+  } as unknown as Parameters<typeof rayThickness>[0];
+}
+
+const plane = (handle: number, z: number): RayFace => ({
+  handle,
+  kind: 'plane',
+  normal: [0, 0, 1],
+  offset: z
+});
+
+describe('the ray method (M09 thickness)', () => {
+  // From z = 0 along +Z: the outward normal at the start points down.
+  const start: [number, number, number] = [0, 0, 0];
+  const down = [0, 0, -1];
+
+  it('measures a plate to its far plane', () => {
+    const kernel = slabKernel({
+      inside: (z) => z > 0 && z < 2,
+      planes: { 1: 0, 2: 2 }
+    });
+    const ray = rayThickness(
+      kernel,
+      0,
+      [plane(1, 0), plane(2, 2)],
+      1,
+      start,
+      down,
+      0.001,
+      20
+    );
+    expect(ray.thickness).toBeCloseTo(2, 12);
+  });
+
+  it('refuses a wall thinner than the opening probe rather than step over it', () => {
+    // Material at [0, 0.0005] and [0.001, 10]: the probe at 0.002 is inside
+    // the second slab, so only the crossings tell the first wall is there.
+    const kernel = slabKernel({
+      inside: (z) => (z > 0 && z < 0.0005) || (z > 0.001 && z < 10),
+      planes: { 1: 0, 2: 0.0005, 3: 0.001, 4: 10 }
+    });
+    expect(() =>
+      rayThickness(
+        kernel,
+        0,
+        [plane(1, 0), plane(2, 0.0005), plane(3, 0.001), plane(4, 10)],
+        1,
+        start,
+        down,
+        0.001,
+        20
+      )
+    ).toThrow(/thinner here than the resolution/);
+  });
+
+  it('refuses a ray that only runs close to a traced wall', () => {
+    // A frustum's cone 0.00052 from the ray all the way up: near it, never
+    // through it. The top cap at 10 is the real wall; no guess is given.
+    const kernel = slabKernel({
+      inside: (z) => z > 0 && z < 10,
+      planes: { 1: 0, 4: 10 },
+      traced: { 5: () => 0.00052 }
+    });
+    expect(() =>
+      rayThickness(
+        kernel,
+        0,
+        [plane(1, 0), plane(4, 10), { handle: 5, kind: 'traced' }],
+        1,
+        start,
+        down,
+        0.001,
+        20
+      )
+    ).toThrow();
+    // Starting from the cone itself, the same grazing is caught by the
+    // crossing test instead of the opening probe.
+    const fromCone = slabKernel({
+      inside: (z) => z > 0 && z < 10,
+      planes: { 4: 10 },
+      traced: { 5: (z) => (z < 0.01 ? z : 0.0005) }
+    });
+    expect(() =>
+      rayThickness(
+        fromCone,
+        0,
+        [plane(4, 10), { handle: 5, kind: 'traced' }],
+        5,
+        start,
+        down,
+        0.001,
+        20
+      )
+    ).toThrow(/runs alongside a curved wall/);
+  });
+
+  it('measures through a traced wall it really crosses, to the resolution', () => {
+    const kernel = slabKernel({
+      inside: (z) => z > 0 && z < 7,
+      planes: { 1: 0 },
+      traced: { 6: (z) => Math.abs(7 - z) }
+    });
+    const ray = rayThickness(
+      kernel,
+      0,
+      [plane(1, 0), { handle: 6, kind: 'traced' }],
+      1,
+      start,
+      down,
+      0.001,
+      20
+    );
+    expect(Math.abs(ray.thickness - 7)).toBeLessThanOrEqual(0.001 + 1e-12);
   });
 });

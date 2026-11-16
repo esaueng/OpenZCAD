@@ -631,6 +631,7 @@ export function rayThickness(
   kernel: RemusKernel,
   solid: number,
   faces: readonly RayFace[],
+  startFace: number,
   start: Point,
   normal: readonly number[],
   resolution: number,
@@ -642,7 +643,11 @@ export function rayThickness(
     start[1] + direction[1] * t,
     start[2] + direction[2] * t
   ];
+  const tooThin = () =>
+    new Error('The wall is thinner here than the resolution can measure.');
   const first = resolution * 2;
+  // The start itself sits on the surface: crossings this close are it.
+  const own = resolution * 1e-3;
   const probe = at(first);
   if (
     kernel.classifyPoint(
@@ -653,12 +658,15 @@ export function rayThickness(
       resolution / 10
     ) !== 'inside'
   ) {
-    throw new Error('The wall is too thin at this point to probe.');
+    throw tooThin();
   }
+  // Closed-form crossings, confirmed on the trimmed face, in ray order. One
+  // inside the opening segment (start to probe) is a wall the probe stepped
+  // over: the sample is refused rather than measured past it.
   const crossings: { t: number; face: number }[] = [];
   for (const face of faces) {
     for (const t of surfaceCrossings(face, start, direction)) {
-      if (t > first && t <= reach) crossings.push({ t, face: face.handle });
+      if (t > own && t <= reach) crossings.push({ t, face: face.handle });
     }
   }
   crossings.sort((a, b) => a.t - b.t);
@@ -668,12 +676,25 @@ export function rayThickness(
     if (
       kernel.pointToFaceDistance(hit[0], hit[1], hit[2], face)[0]! <= resolution
     ) {
+      if (t <= first) throw tooThin();
       bound = t;
       break;
     }
   }
   const traced = faces.filter((face) => face.kind === 'traced');
   if (traced.length > 0) {
+    // A traced face, other than the one the ray starts on, within the
+    // opening segment's length of the probe could cross that segment.
+    for (const { handle } of traced) {
+      if (handle === startFace) continue;
+      const d = kernel.pointToFaceDistance(
+        probe[0],
+        probe[1],
+        probe[2],
+        handle
+      )[0]!;
+      if (!(d >= first)) throw tooThin();
+    }
     let t = first;
     let cleared = false;
     for (let step = 0; step < THICKNESS_MAX_STEPS; step += 1) {
@@ -691,7 +712,23 @@ export function rayThickness(
         throw new Error('The kernel returned no distance inside the wall.');
       }
       if (distance < resolution) {
-        const thickness = Math.min(t + distance, bound);
+        // Near a traced face is not through it: the ray crosses a wall
+        // only if a point two resolutions on lies outside the solid, and
+        // the crossing is then within a resolution of t + resolution.
+        const beyond = at(t + 2 * resolution);
+        const side = kernel.classifyPoint(
+          solid,
+          beyond[0],
+          beyond[1],
+          beyond[2],
+          resolution / 10
+        );
+        if (side === 'inside') {
+          throw new Error(
+            'The ray runs alongside a curved wall and cannot be measured past it.'
+          );
+        }
+        const thickness = Math.min(t + resolution, bound);
         return { thickness, hit: at(thickness) };
       }
       t += distance;
@@ -871,6 +908,7 @@ function analyzeBodyThickness(
             kernel,
             solid,
             walls,
+            face,
             placed.point,
             placed.normal,
             resolution,
