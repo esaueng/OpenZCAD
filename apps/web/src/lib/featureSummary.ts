@@ -8,7 +8,11 @@ import {
   type UnitSystem,
   type Vector3
 } from '@openzcad/shared';
-import { pipeThreadLabel, sheetMetalMaterialById } from '@openzcad/shared';
+import {
+  holeStandardLabel,
+  pipeThreadLabel,
+  sheetMetalMaterialById
+} from '@openzcad/shared';
 import { edgeSelectionName, storedLoopEdges } from './edgeLoops';
 import { unitLabel } from './measurements';
 import { evalParamValue, formatNumber } from './model';
@@ -359,11 +363,18 @@ export function featureValueSummary(
       const count = data.points
         ? ` at ${data.points.pointIds.length} points`
         : '';
+      // M01 (schema v65): a standard size reads by its name.
+      const size = data.standard
+        ? holeStandardLabel(data.standard)
+        : `⌀ ${diameter} ${unit}`;
       if (data.depthMode === 'through') {
-        return `⌀ ${diameter} ${unit} through${count}`;
+        return `${size} through${count}`;
       }
       const depth = num(data.depth);
-      return depth === null ? null : `⌀ ${diameter} × ${depth} ${unit}${count}`;
+      if (depth === null) return null;
+      return data.standard
+        ? `${size} × ${depth} ${unit}${count}`
+        : `⌀ ${diameter} × ${depth} ${unit}${count}`;
     }
     case 'shell':
     case 'thicken':

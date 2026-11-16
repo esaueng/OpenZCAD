@@ -53,6 +53,7 @@
   "hint-lane.spec.ts": 42,
   "history-local-append.spec.ts": 26,
   "hole-points.spec.ts": 12,
+  "hole-standards.spec.ts": 12,
   "import-formats.spec.ts": 2,
   "imported-box-shell.spec.ts": 20,
   "in-place-primitives.spec.ts": 16,

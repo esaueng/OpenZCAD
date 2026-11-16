@@ -6,7 +6,12 @@ import {
   type PlaneBasis
 } from '@openzcad/geometry';
 import {
+  ANSI_HOLE_SIZES,
+  ISO_HOLE_SIZES,
   MAX_HELICAL_SWEEP_TURNS,
+  holeStandardDiameter,
+  holeStandardFromChoices,
+  holeStandardLabel,
   type BodyId,
   type BooleanKeepOriginals,
   type BooleanOperation,
@@ -3333,6 +3338,78 @@ const hole: InPlaceToolSpec = {
         { value: 'countersink', label: 'Countersink' }
       ],
       initial: 'simple'
+    },
+    // M01 (schema v65): a standard size, whose table gives the diameter.
+    {
+      id: 'standard',
+      label: 'Standard',
+      choices: [
+        {
+          value: 'none',
+          label: 'Any',
+          tip: 'The diameter as dragged or typed'
+        },
+        { value: 'iso', label: 'ISO metric' },
+        { value: 'ansi', label: 'ANSI inch' }
+      ],
+      initial: 'none'
+    },
+    {
+      id: 'isoSize',
+      label: 'Screw',
+      choices: ISO_HOLE_SIZES.map((size) => ({ value: size, label: size })),
+      initial: 'M6',
+      when: (state) => state.options.standard === 'iso'
+    },
+    {
+      id: 'ansiSize',
+      label: 'Screw',
+      choices: ANSI_HOLE_SIZES.map((size) => ({ value: size, label: size })),
+      initial: '1/4',
+      when: (state) => state.options.standard === 'ansi'
+    },
+    {
+      id: 'holeFor',
+      label: 'For',
+      choices: [
+        {
+          value: 'clearance',
+          label: 'Clearance',
+          tip: 'The screw passes through'
+        },
+        {
+          value: 'tap-drill',
+          label: 'Tap drill',
+          tip: 'Drilled to be tapped for the screw'
+        }
+      ],
+      initial: 'clearance',
+      when: (state) => holeStandardOn(state.options)
+    },
+    {
+      id: 'fit',
+      label: 'Fit',
+      choices: [
+        { value: 'close', label: 'Close' },
+        { value: 'normal', label: 'Normal' },
+        { value: 'loose', label: 'Loose' }
+      ],
+      initial: 'normal',
+      when: (state) =>
+        state.options.standard === 'iso' &&
+        state.options.holeFor !== 'tap-drill'
+    },
+    {
+      id: 'ansiFit',
+      label: 'Fit',
+      choices: [
+        { value: 'close', label: 'Close' },
+        { value: 'normal', label: 'Free' }
+      ],
+      initial: 'normal',
+      when: (state) =>
+        state.options.standard === 'ansi' &&
+        state.options.holeFor !== 'tap-drill'
     }
   ],
   layout: [
@@ -3343,6 +3420,12 @@ const hole: InPlaceToolSpec = {
         'style',
         'depthMode',
         'place',
+        'standard',
+        'isoSize',
+        'ansiSize',
+        'holeFor',
+        'fit',
+        'ansiFit',
         'diameter',
         'depth',
         'counterboreDiameter',
@@ -3354,18 +3437,32 @@ const hole: InPlaceToolSpec = {
       ]
     }
   ],
-  defaults: (_slots, _ctx, numbers) => holeStepSizes(numbers.diameter ?? 6),
-  hint(slots, options) {
+  defaults: (_slots, ctx, numbers, options) =>
+    holeStepSizes(
+      (options && holeStandardChosenDiameter(options, ctx.units)) ??
+        numbers.diameter ??
+        6
+    ),
+  hint(slots, options, ctx) {
     if (slots.faces.length === 0) return 'Click a flat face';
+    // A standard size sets the diameter: there is none to drag.
+    const drag =
+      options && holeStandardOn(options)
+        ? ` · ${holeStandardLabel(holeStandardFromChoices(options)!)}${
+            ctx?.units
+              ? ` ⌀ ${formatHoleDiameter(holeStandardChosenDiameter(options, ctx.units)!)}`
+              : ''
+          }`
+        : ' · drag the diameter';
     if (options?.place === 'points') {
       return slots.path.length === 0
         ? 'Click the sketch points to drill at'
-        : 'Click more points · drag the diameter';
+        : `Click more points${drag}`;
     }
     if (options?.place === 'typed') {
-      return 'Tap U and V to place it · drag the diameter';
+      return `Tap U and V to place it${drag}`;
     }
-    return 'Click to move it · drag the diameter';
+    return `Click to move it${drag}`;
   },
   ready: (slots, options) =>
     slots.faces.length > 0 &&
@@ -3408,8 +3505,12 @@ const hole: InPlaceToolSpec = {
             : null;
     // Unset step sizes derive from the bore's value, a typed expression's
     // too; a chip's value, typed or derived, is stored as it stands.
+    // M01 (schema v65): a standard's table gives the diameter, stored too.
+    const standard = holeStandardFromChoices(options);
+    const standardDiameter = holeStandardChosenDiameter(options, ctx.units);
     const derived = holeStepSizes(
-      numbers?.diameter ??
+      standardDiameter ??
+        numbers?.diameter ??
         (typeof values.diameter === 'number' ? values.diameter : 6)
     );
     const step = (id: keyof typeof derived) => text(values[id], derived[id]);
@@ -3423,7 +3524,10 @@ const hole: InPlaceToolSpec = {
           faceHash: face.hash,
           style: (options.style ?? 'simple') as
             'simple' | 'counterbore' | 'countersink',
-          diameter: text(values.diameter, 6),
+          diameter:
+            standardDiameter === null
+              ? text(values.diameter, 6)
+              : formatHoleDiameter(standardDiameter),
           depthMode: (options.depthMode ?? 'through') as 'blind' | 'through',
           depth: text(values.depth, 10),
           counterboreDiameter: step('counterboreDiameter'),
@@ -3431,7 +3535,8 @@ const hole: InPlaceToolSpec = {
           countersinkDiameter: step('countersinkDiameter'),
           countersinkAngleDeg: text(values.countersinkAngleDeg, 90),
           position: position ?? { u: '0', v: '0' },
-          ...(points ? { points } : {})
+          ...(points ? { points } : {}),
+          ...(standard ? { standard } : {})
         }
       }
     };
@@ -3453,15 +3558,18 @@ const hole: InPlaceToolSpec = {
           : clicked;
     if (!entry) return [];
     const key = `${faceKey(face)}:${entry.x}:${entry.y}:${entry.z}`;
-    const handles: HandleSpec[] = [
-      {
-        valueId: 'diameter',
-        kind: 'linear',
-        key: `${key}:diameter`,
-        // A diameter's handle sits on the circle, at its radius.
-        params: { origin: entry, direction: axes.u, scale: 0.5 }
-      }
-    ];
+    // A standard size's table sets the diameter, so it has no handle.
+    const handles: HandleSpec[] = holeStandardOn(options)
+      ? []
+      : [
+          {
+            valueId: 'diameter',
+            kind: 'linear',
+            key: `${key}:diameter`,
+            // A diameter's handle sits on the circle, at its radius.
+            params: { origin: entry, direction: axes.u, scale: 0.5 }
+          }
+        ];
     if (options.depthMode === 'blind') {
       handles.push({
         valueId: 'depth',
@@ -3569,6 +3677,25 @@ function holePointsEntry(
     (spot.at.y - planePoint.y) * normal.y +
     (spot.at.z - planePoint.z) * normal.z;
   return offset(spot.at, normal, -height);
+}
+
+/** M01: whether the Hole's options size it by a standard. */
+function holeStandardOn(options: Readonly<Record<string, string>>): boolean {
+  return options.standard === 'iso' || options.standard === 'ansi';
+}
+
+/** M01 (schema v65): the diameter the chosen standard gives, or null. */
+function holeStandardChosenDiameter(
+  options: Readonly<Record<string, string>>,
+  units: UnitSystem | undefined
+): number | null {
+  const standard = holeStandardFromChoices(options);
+  return standard ? holeStandardDiameter(standard, units ?? 'mm') : null;
+}
+
+/** A table diameter as stored: to a micrometre's worth of digits. */
+function formatHoleDiameter(value: number): string {
+  return String(Math.round(value * 1e6) / 1e6);
 }
 
 /** Where a typed U and V put a hole on its face; null with no anchor. */

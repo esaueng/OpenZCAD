@@ -1588,6 +1588,49 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(keepAbsentHoleSteps(moved, saved, []).clearData).toEqual(['points']);
   });
 
+  it('hole sized by a standard (M01): it reopens as chosen; set to Any, it clears', () => {
+    const saved: FeatureData = {
+      featureKind: 'hole',
+      targetBodyId: BODY,
+      faceHash: 11,
+      style: 'simple',
+      diameter: 0.196,
+      depthMode: 'through',
+      position: { u: 0, v: 0 },
+      standard: { system: 'ansi', size: '#10', kind: 'clearance', fit: 'close' }
+    };
+    const armed = inPlaceEditSeed(
+      feature(saved, 'body_h' as BodyId),
+      EDIT_CTX
+    )!;
+    expect(armed.seed.options).toMatchObject({
+      standard: 'ansi',
+      ansiSize: '#10',
+      holeFor: 'clearance',
+      ansiFit: 'close'
+    });
+    expect(
+      untouched(
+        feature(saved, 'body_h' as BodyId),
+        {},
+        {
+          ...EDIT_CTX
+        }
+      )
+    ).toMatchObject({
+      tool: 'modeling',
+      state: { value: { standard: saved.standard } }
+    });
+    const { standard: _standard, ...plain } = saved;
+    const update = {
+      featureId: 'feat_1' as FeatureId,
+      data: plain
+    } as unknown as FeatureUpdateInput;
+    expect(keepAbsentHoleSteps(update, saved, []).clearData).toEqual([
+      'standard'
+    ]);
+  });
+
   it('boolean: its bodies, operation and kept inputs', () => {
     const data: FeatureData = {
       featureKind: 'boolean',

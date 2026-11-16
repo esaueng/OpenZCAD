@@ -54,6 +54,7 @@ import {
   FULL_REVOLVE_ANGLE_DEG,
   MAX_MESH_SOLID_CONVERSION_TRIANGLES,
   MAX_PATTERN_INSTANCES,
+  holeStandardDiameterMm,
   ownEntry,
   millimetresPerUnit,
   isDatumPlaneRef,
@@ -1684,12 +1685,17 @@ export function holeToolSpecFor(
       }
     ];
   }
-  const diameter = resolveParamValue(
-    data.diameter,
-    scope,
-    'hole diameter',
-    ctx.document.units
-  );
+  // M01 (schema v65): a standard hole's table gives its diameter, in the
+  // document's units; its stored diameter is not read.
+  const diameter = data.standard
+    ? holeStandardDiameterMm(data.standard) /
+      millimetresPerUnit(ctx.document.units)
+    : resolveParamValue(
+        data.diameter,
+        scope,
+        'hole diameter',
+        ctx.document.units
+      );
   if (!(diameter > 0)) {
     throw new Error('Hole diameter must be greater than zero.');
   }

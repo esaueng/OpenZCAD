@@ -24,6 +24,7 @@ import {
   type FeatureKind,
   type FeatureNode,
   type HolePoints,
+  type HoleStandard,
   type ParamValue,
   type SketchPathReference,
   type SketchSectionReference
@@ -170,6 +171,8 @@ export interface HoleFormState {
    * then stored but not read.
    */
   points?: HolePoints;
+  /** M01 (schema v65): the standard size whose table gives the diameter. */
+  standard?: HoleStandard;
 }
 
 export interface ThickenFormState {
@@ -489,7 +492,8 @@ export function modelingFormStateFromFeature(
                   pointIds: [...data.points.pointIds]
                 }
               }
-            : {})
+            : {}),
+          ...(data.standard ? { standard: { ...data.standard } } : {})
         }
       };
     case 'mirror':
@@ -1360,6 +1364,9 @@ export function buildModelingOperationSubmission(
                 pointIds: [...state.value.points.pointIds]
               }
             }
+          : {}),
+        ...(state.value.standard
+          ? { standard: { ...state.value.standard } }
           : {})
       }
     };

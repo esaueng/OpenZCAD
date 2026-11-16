@@ -462,6 +462,16 @@ export function inPlaceEditSeed(
       value('positionV', data.position.v);
       seed.options.depthMode = data.depthMode;
       seed.options.style = data.style;
+      // M01 (schema v65): sized by a standard, which reopens as chosen.
+      if (data.standard) {
+        const { system, size, kind, fit } = data.standard;
+        seed.options.standard = system;
+        seed.options[system === 'iso' ? 'isoSize' : 'ansiSize'] = size;
+        seed.options.holeFor = kind;
+        if (kind === 'clearance') {
+          seed.options[system === 'iso' ? 'fit' : 'ansiFit'] = fit ?? 'normal';
+        }
+      }
       // M01 (schema v64): drilled at sketch points, which reopen as picks.
       if (data.points) {
         seed.options.place = 'points';
@@ -1625,15 +1635,16 @@ export function keepAbsentHoleSteps(
 ): FeatureUpdateInput {
   if (saved.featureKind !== 'hole') return update;
   const stored = saved as unknown as Record<string, unknown>;
-  // M01: a hole moved off its sketch points drops them, which a patch
-  // without the key would keep.
-  const clearPoints =
-    saved.points !== undefined &&
-    (update.data as Record<string, unknown> | undefined)?.points === undefined;
+  // M01: a hole moved off its sketch points, or off a standard size, drops
+  // them, which a patch without the key would keep.
+  const patch = update.data as Record<string, unknown> | undefined;
+  const cleared = (['points', 'standard'] as const).filter(
+    (key) => saved[key] !== undefined && patch?.[key] === undefined
+  );
   return {
     ...update,
-    ...(clearPoints
-      ? { clearData: [...(update.clearData ?? []), 'points'] }
+    ...(cleared.length > 0
+      ? { clearData: [...(update.clearData ?? []), ...cleared] }
       : {}),
     data: Object.fromEntries(
       Object.entries(update.data as Record<string, unknown>).filter(

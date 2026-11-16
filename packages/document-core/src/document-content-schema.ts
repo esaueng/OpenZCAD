@@ -89,14 +89,17 @@ export function assertPatternContentSchema(
 }
 
 /**
- * M01 holes on sketch points (schema v64): a hole carrying them needs a
- * document that declares it, or an older reader would drill one hole at the
- * stored position in their place.
+ * M01 holes on sketch points (schema v64) and standard hole sizes (v65): a
+ * hole carrying either needs a document that declares it, or an older
+ * reader would drill one hole at the stored position, or drop the size, in
+ * their place.
  */
 export function assertHoleContentSchema(data: unknown, version: unknown): void {
   if (!record(data)) return;
   if (data.points !== undefined)
     assertMinimumProjectSchema(version, 64, 'Holes on sketch points');
+  if (data.standard !== undefined)
+    assertMinimumProjectSchema(version, 65, 'Standard hole sizes');
 }
 
 /**
