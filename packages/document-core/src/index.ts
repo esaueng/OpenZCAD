@@ -53,6 +53,7 @@ import {
   assertDocumentContentSchema,
   assertSheetMetalSchema,
   assertPatternContentSchema,
+  assertHoleContentSchema,
   assertSketchObjectContentSchema,
   assertThreadContentSchema
 } from './document-content-schema';
@@ -84,10 +85,12 @@ import {
   isReservedRecordKey,
   ownEntry,
   patternPointsProblem,
+  holePointsProblem,
   patternSourceProblem,
   skippedInstancesProblem,
   suppliedIds,
-  type PatternPoints
+  type PatternPoints,
+  type HolePoints
 } from '@openzcad/shared';
 import {
   BODY_COLOR_CHOSEN_METADATA_KEY,
@@ -559,6 +562,8 @@ export interface HoleInput {
   position: { u: ParamValue; v: ParamValue };
   /** Anchor `position` is measured from; see the `hole` feature data. */
   positionAnchor?: 'centroid';
+  /** M01 (schema v64): one bore at each of these sketch points. */
+  points?: HolePoints;
   ids?: BodyFeatureIds;
 }
 
@@ -3694,6 +3699,10 @@ export function holeBody(
   input: HoleInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   const { name, targetBodyId, ids: _ids, ...parameters } = input;
+  // Schema v64 sketch points are refused on a document that declares an
+  // older schema: written there, the document would no longer open.
+  assertHoleContentSchema(parameters, document.schemaVersion);
+  validateHolePoints(document, parameters.points, null);
   return addBodyResultFeature(
     document,
     name,
@@ -4005,6 +4014,55 @@ function validatePatternPoints(
     ) {
       throw new Error(
         `A point this pattern stands on is no longer a point of ${sketch.name}.`
+      );
+    }
+  }
+}
+
+/**
+ * M01 (schema v64): a hole's sketch points are point entities of an earlier
+ * sketch, at the hole's history position (`ownFeatureId`, or the end for a
+ * new hole). Where they stand, and whether they meet the entry face, is the
+ * build's to read.
+ */
+export function validateHolePoints(
+  document: ProjectDocument,
+  points: HolePoints | undefined,
+  ownFeatureId: FeatureId | null
+): void {
+  if (points === undefined) return;
+  const problem = holePointsProblem(points);
+  if (problem) throw new Error(problem);
+  const sketch = findSketch(document, points.sketchId);
+  if (!sketch) {
+    throw new Error('The sketch this hole is drilled at is no longer there.');
+  }
+  const sketchFeature = listFeaturesInOrder(document).find(
+    (feature) =>
+      feature.data.featureKind === 'sketch' &&
+      feature.data.sketchId === points.sketchId
+  );
+  const ownIndex =
+    ownFeatureId === null
+      ? document.featureOrder.length
+      : document.featureOrder.indexOf(ownFeatureId);
+  if (
+    !sketchFeature ||
+    document.featureOrder.indexOf(sketchFeature.featureId) >= ownIndex
+  ) {
+    throw new Error(
+      `${sketch.name} comes later in History; a hole can only be drilled at an earlier sketch's points.`
+    );
+  }
+  for (const pointId of points.pointIds) {
+    const node = ownEntry(document.nodes, pointId);
+    if (
+      !(sketch.objectIds as readonly string[]).includes(pointId) ||
+      node?.kind !== 'sketch-object' ||
+      node.data.objectKind !== 'point'
+    ) {
+      throw new Error(
+        `A point this hole is drilled at is no longer a point of ${sketch.name}.`
       );
     }
   }
@@ -4925,7 +4983,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'counterboreDepth',
     'countersinkDiameter',
     'countersinkAngleDeg',
-    'position'
+    'position',
+    'points'
   ],
   shell: [
     'targetBodyId',
@@ -5064,6 +5123,9 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   revolve: ['axisRef', 'profile'],
   pattern: ['axisRef', 'sourceFeatureIds', 'skippedInstances'],
   transform: ['axisRotation'],
+  // M01 (schema v64): clearing a hole's sketch points drills it at its one
+  // stored position again.
+  hole: ['points'],
   // Schema v53: every size and placement field falls back to the face or its
   // documented default; the custom-profile fields may go only off a custom
   // profile, which the thread validation enforces. A face picked again
@@ -5179,6 +5241,9 @@ export function updateFeature(
     if (feature.featureKind === 'pattern') {
       assertPatternContentSchema(input.data, document.schemaVersion);
     }
+    if (feature.featureKind === 'hole') {
+      assertHoleContentSchema(input.data, document.schemaVersion);
+    }
     const patch = { ...input.data } as Record<string, unknown>;
     if (
       'featureKind' in patch &&
@@ -5259,6 +5324,9 @@ export function updateFeature(
   validateFeatureDatumAxisRefs(next, feature.data, feature.featureId);
   if (feature.data.featureKind === 'pattern') {
     validatePatternDefinition(next, feature.data, feature.featureId);
+  }
+  if (feature.data.featureKind === 'hole') {
+    validateHolePoints(next, feature.data.points, feature.featureId);
   }
   // New Body has no dependency on the previous Add/Cut target. Undefined
   // patch values are normally ignored, so clear this semantic dependency here.

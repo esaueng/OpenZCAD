@@ -205,60 +205,70 @@ export function withBoundaryEdgeLineage(
   ]);
 }
 
+/**
+ * A drilled hole's lineage: the faces it left alone keep their names, and
+ * each bore is named by its role. A hole on sketch points (M01, schema v64)
+ * names each bore by its point, `hole.face.at.<point id>.bore`; faces of
+ * several bores that share one plane (their shoulders, their floors) match
+ * more than one face and stay unnamed, as a pattern's copies do.
+ */
 export function holeLineage(
   kernel: RemusKernel,
   sourceSolid: number,
   resultSolid: number,
   source: RemusLineageState | undefined,
   producer: FeatureId,
-  spec: HoleToolSpec
+  bores: readonly { spec: HoleToolSpec; pointId: string | null }[]
 ): RemusLineageState {
   const state = carryAnalyticFaces(kernel, sourceSolid, resultSolid, source);
-  assignCarrierFace(
-    kernel,
-    resultSolid,
-    state,
-    producer,
-    'hole.face.bore',
-    cylinderCarrier(spec.surfacePoint, spec.axis, spec.radius)
-  );
-  if (
-    spec.style === 'counterbore' &&
-    spec.counterboreRadius !== undefined &&
-    spec.counterboreDepth !== undefined
-  ) {
+  for (const { spec, pointId } of bores) {
+    const role = pointId === null ? 'hole.face' : `hole.face.at.${pointId}`;
     assignCarrierFace(
       kernel,
       resultSolid,
       state,
       producer,
-      'hole.face.counterbore',
-      cylinderCarrier(spec.surfacePoint, spec.axis, spec.counterboreRadius)
+      `${role}.bore`,
+      cylinderCarrier(spec.surfacePoint, spec.axis, spec.radius)
     );
-    assignCarrierFace(
-      kernel,
-      resultSolid,
-      state,
-      producer,
-      'hole.face.shoulder',
-      planeCarrier(
-        spec.axis,
-        add(spec.surfacePoint, scale(spec.axis, spec.counterboreDepth))
-      )
-    );
-  }
-  if (spec.exitExtension === 0) {
-    assignCarrierFace(
-      kernel,
-      resultSolid,
-      state,
-      producer,
-      'hole.face.floor',
-      planeCarrier(
-        spec.axis,
-        add(spec.surfacePoint, scale(spec.axis, spec.depth))
-      )
-    );
+    if (
+      spec.style === 'counterbore' &&
+      spec.counterboreRadius !== undefined &&
+      spec.counterboreDepth !== undefined
+    ) {
+      assignCarrierFace(
+        kernel,
+        resultSolid,
+        state,
+        producer,
+        `${role}.counterbore`,
+        cylinderCarrier(spec.surfacePoint, spec.axis, spec.counterboreRadius)
+      );
+      assignCarrierFace(
+        kernel,
+        resultSolid,
+        state,
+        producer,
+        `${role}.shoulder`,
+        planeCarrier(
+          spec.axis,
+          add(spec.surfacePoint, scale(spec.axis, spec.counterboreDepth))
+        )
+      );
+    }
+    if (spec.exitExtension === 0) {
+      assignCarrierFace(
+        kernel,
+        resultSolid,
+        state,
+        producer,
+        `${role}.floor`,
+        planeCarrier(
+          spec.axis,
+          add(spec.surfacePoint, scale(spec.axis, spec.depth))
+        )
+      );
+    }
   }
   return withBoundaryEdgeLineage(kernel, resultSolid, producer, state);
 }

@@ -355,11 +355,15 @@ export function featureValueSummary(
       if (diameter === null) {
         return null;
       }
+      // M01 (schema v64): one bore at each sketch point.
+      const count = data.points
+        ? ` at ${data.points.pointIds.length} points`
+        : '';
       if (data.depthMode === 'through') {
-        return `⌀ ${diameter} ${unit} through`;
+        return `⌀ ${diameter} ${unit} through${count}`;
       }
       const depth = num(data.depth);
-      return depth === null ? null : `⌀ ${diameter} × ${depth} ${unit}`;
+      return depth === null ? null : `⌀ ${diameter} × ${depth} ${unit}${count}`;
     }
     case 'shell':
     case 'thicken':

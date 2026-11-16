@@ -219,6 +219,70 @@ describe('face tools build the card state', () => {
     ).toEqual(['diameter']);
   });
 
+  it('hole on sketch points (M01): each clicked point is a bore, the handles on the first', () => {
+    const spec = IN_PLACE_TOOL_SPECS.hole;
+    const SKETCH = 'sketch_points' as SketchId;
+    const ctx: InPlaceContext = {
+      ...CTX,
+      // A sketch below the face: its points drop onto it along the normal.
+      sketchPoints: (sketchId) =>
+        sketchId === SKETCH
+          ? [
+              { id: 'p_a', at: { x: 4, y: 3, z: 0 } },
+              { id: 'p_b', at: { x: 16, y: 7, z: 0 } }
+            ]
+          : []
+    };
+    const options = { place: 'points', depthMode: 'through', style: 'simple' };
+    const pick = (entityId: string, sketchId = SKETCH) => ({
+      sketchId,
+      entityId
+    });
+    const face = { ...EMPTY, faces: [TOP] };
+    expect(spec.hint(face, options, ctx)).toBe(
+      'Click the sketch points to drill at'
+    );
+    // Placed on points, a face alone is not yet a hole.
+    expect(spec.ready(face, options, ctx)).toBe(false);
+    expect(spec.request(face, { diameter: 4 }, options, ctx)).toBeNull();
+    // A point of another sketch is not one of this hole's.
+    const slots = {
+      ...face,
+      path: [pick('p_a'), pick('p_b'), pick('p_c', 'sketch_other' as SketchId)]
+    };
+    expect(spec.ready(slots, options, ctx)).toBe(true);
+    expect(spec.hint(slots, options, ctx)).toBe(
+      'Click more points · drag the diameter'
+    );
+    expect(spec.request(slots, { diameter: 4 }, options, ctx)).toMatchObject({
+      tool: 'modeling',
+      state: {
+        operation: 'hole',
+        value: {
+          faceHash: 11,
+          diameter: '4',
+          position: { u: '0', v: '0' },
+          points: { sketchId: SKETCH, pointIds: ['p_a', 'p_b'] }
+        }
+      }
+    });
+    // The diameter handle stands on the first point, on the face.
+    const [diameter] = spec.handles(slots, { diameter: 4 }, ctx, options);
+    expect(diameter).toMatchObject({
+      valueId: 'diameter',
+      params: { origin: { x: 4, y: 3, z: 4 } }
+    });
+    // Clicked again, the hole drops its points.
+    expect(
+      spec.request(
+        slots,
+        { diameter: 4 },
+        { ...options, place: 'clicked' },
+        ctx
+      )
+    ).not.toHaveProperty('state.value.points');
+  });
+
   it('shell: every picked face opens, and the wall handle points inward', () => {
     const spec = IN_PLACE_TOOL_SPECS.shell;
     const slots = { ...EMPTY, faces: [TOP, { ...TOP, hash: 12 }] };

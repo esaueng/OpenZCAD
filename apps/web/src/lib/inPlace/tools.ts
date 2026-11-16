@@ -21,6 +21,7 @@ import {
   type ParamValue,
   type ParametricVector3,
   type PatternPoints,
+  type HolePoints,
   type PrimitiveKind,
   type ReferenceImage,
   type ReferenceImagePlane,
@@ -3236,7 +3237,9 @@ const hole: InPlaceToolSpec = {
   faceMode: 'one',
   faceFilter: 'planar',
   wantsAxis: false,
-  wantsPath: false,
+  // M01: its path is the sketch points it is drilled at, clicked one by one
+  // under Position → Sketch points.
+  wantsPath: true,
   values: [
     {
       id: 'diameter',
@@ -3303,7 +3306,12 @@ const hole: InPlaceToolSpec = {
       label: 'Position',
       choices: [
         { value: 'clicked', label: 'Clicked' },
-        { value: 'typed', label: 'Typed' }
+        { value: 'typed', label: 'Typed' },
+        {
+          value: 'points',
+          label: 'Sketch points',
+          tip: "One hole at each clicked point of a sketch on the face's plane"
+        }
       ],
       initial: 'clicked'
     },
@@ -3349,15 +3357,25 @@ const hole: InPlaceToolSpec = {
   defaults: (_slots, _ctx, numbers) => holeStepSizes(numbers.diameter ?? 6),
   hint(slots, options) {
     if (slots.faces.length === 0) return 'Click a flat face';
+    if (options?.place === 'points') {
+      return slots.path.length === 0
+        ? 'Click the sketch points to drill at'
+        : 'Click more points · drag the diameter';
+    }
     if (options?.place === 'typed') {
       return 'Tap U and V to place it · drag the diameter';
     }
     return 'Click to move it · drag the diameter';
   },
-  ready: (slots) => slots.faces.length > 0,
+  ready: (slots, options) =>
+    slots.faces.length > 0 &&
+    (options?.place !== 'points' || holePointsPicked(slots) !== null),
   request(slots, values, options, ctx, numbers) {
     const face = slots.faces[0];
     if (!face || !face.normal) return null;
+    // M01 (schema v64): the sketch points it is drilled at, if so placed.
+    const points = options.place === 'points' ? holePointsPicked(slots) : null;
+    if (options.place === 'points' && !points) return null;
     const saved = ctx.saved?.featureKind === 'hole' ? ctx.saved : null;
     // A new hole measures from the face's centroid; an edited one keeps the
     // anchor it was drilled against, which no edit may change.
@@ -3370,8 +3388,10 @@ const hole: InPlaceToolSpec = {
         : 'center';
     // Rounded to the sketch snap, exactly as the card placed a clicked hole;
     // a typed one as typed, expressions and all.
+    // On sketch points the position is stored as it was, but not read.
     const position =
-      options.place === 'typed'
+      options.place === 'typed' ||
+      (options.place === 'points' && !(face.savedPosition && saved))
         ? { u: text(values.positionU, 0), v: text(values.positionV, 0) }
         : face.savedPosition && saved
           ? {
@@ -3410,7 +3430,8 @@ const hole: InPlaceToolSpec = {
           counterboreDepth: step('counterboreDepth'),
           countersinkDiameter: step('countersinkDiameter'),
           countersinkAngleDeg: text(values.countersinkAngleDeg, 90),
-          position: position ?? { u: '0', v: '0' }
+          position: position ?? { u: '0', v: '0' },
+          ...(points ? { points } : {})
         }
       }
     };
@@ -3422,8 +3443,14 @@ const hole: InPlaceToolSpec = {
     const axes = holePositionAxes(face.normal);
     if (!axes) return [];
     const typed = options.place === 'typed';
-    // A typed hole's handles stand where its U and V put it.
-    const entry = typed ? typedHoleEntry(face, axes, values, ctx) : clicked;
+    // A typed hole's handles stand where its U and V put it; one on sketch
+    // points, on its first point.
+    const entry =
+      options.place === 'points'
+        ? holePointsEntry(slots, face, ctx)
+        : typed
+          ? typedHoleEntry(face, axes, values, ctx)
+          : clicked;
     if (!entry) return [];
     const key = `${faceKey(face)}:${entry.x}:${entry.y}:${entry.z}`;
     const handles: HandleSpec[] = [
@@ -3502,6 +3529,47 @@ const hole: InPlaceToolSpec = {
     return handles;
   }
 };
+
+/**
+ * M01 (schema v64): the sketch points a hole is drilled at, the ones picked
+ * on the first picked point's sketch, in order; null with none.
+ */
+function holePointsPicked(slots: InPlaceSlots): HolePoints | null {
+  const sketchId = slots.path[0]?.sketchId;
+  if (!sketchId) return null;
+  const pointIds = [
+    ...new Set(
+      slots.path
+        .filter((pick) => pick.sketchId === sketchId)
+        .map((pick) => pick.entityId)
+    )
+  ];
+  return pointIds.length > 0 ? { sketchId, pointIds } : null;
+}
+
+/**
+ * Where a hole on sketch points enters its face at its first point: the
+ * point dropped onto the face along its normal. Null until it resolves.
+ */
+function holePointsEntry(
+  slots: InPlaceSlots,
+  face: FacePick,
+  ctx: InPlaceContext
+): Vector3 | null {
+  const first = slots.path[0];
+  const planePoint = face.centroid ?? face.center ?? face.point;
+  if (!first || !face.normal || !planePoint) return null;
+  const spot = ctx
+    .sketchPoints?.(first.sketchId)
+    .find((candidate) => candidate.id === first.entityId);
+  if (!spot) return null;
+  const normal = unit(face.normal);
+  const height =
+    (spot.at.x - planePoint.x) * normal.x +
+    (spot.at.y - planePoint.y) * normal.y +
+    (spot.at.z - planePoint.z) * normal.z;
+  return offset(spot.at, normal, -height);
+}
 
 /** Where a typed U and V put a hole on its face; null with no anchor. */
 function typedHoleEntry(
