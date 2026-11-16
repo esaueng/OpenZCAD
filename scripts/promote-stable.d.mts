@@ -17,6 +17,8 @@ export function planPromotion(
 
 export const PROMOTE_COMMAND: string;
 
+export function gitAt(cwd: string | undefined): Git;
+
 export function promote(
   target: string | undefined,
   options?: {

@@ -1,4 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -6,7 +9,7 @@ import {
   OFFICIAL_STABLE,
   validateDeploymentConfig
 } from '../scripts/validate-deployment-config.mjs';
-import { planPromotion, promote } from '../scripts/promote-stable.mjs';
+import { gitAt, planPromotion, promote } from '../scripts/promote-stable.mjs';
 import { migrationTarget } from '../scripts/apply-beta-migrations.mjs';
 import { verificationOrigin } from '../scripts/verify-beta-deployment.mjs';
 
@@ -278,15 +281,23 @@ describe('stable promotion', () => {
       calls.push(args);
       const [command] = args;
       if (command === 'fetch') return '';
+      if (command === 'rev-parse' && args[1]!.startsWith('--disambiguate=')) {
+        const prefix = args[1]!.slice('--disambiguate='.length);
+        return [MAIN, OLD, OFF_MAIN]
+          .filter((sha) => sha.startsWith(prefix))
+          .join('\n');
+      }
+      if (command === 'cat-file') return 'commit';
       if (command === 'rev-parse') {
         const ref = args[2]!.replace('^{commit}', '');
-        if (ref === 'origin/stable') return stable;
-        return [MAIN, OLD, OFF_MAIN].includes(ref) ? ref : null;
+        if (ref === 'refs/remotes/origin/stable') return stable;
+        throw new Error(`unexpected rev-parse ${ref}`);
       }
       if (command === 'merge-base') {
         const [, , ancestor, descendant] = args;
         const ok =
-          (descendant === 'origin/main' && onMain.includes(ancestor!)) ||
+          (descendant === 'refs/remotes/origin/main' &&
+            onMain.includes(ancestor!)) ||
           ancestry.some(([a, d]) => a === ancestor && d === descendant);
         if (!ok && opts?.allowFailure) return null;
         return '';
@@ -375,6 +386,9 @@ describe('stable promotion', () => {
       'ssh-key: ${{ secrets.STABLE_PROMOTION_DEPLOY_KEY }}'
     );
     expect(workflow).toContain('if [[ "$REF" != refs/heads/main ]]');
+    // Run the code that was approved, not main as it is after approval.
+    expect(workflow).toContain('ref: ${{ github.sha }}');
+    expect(workflow).not.toMatch(/^\s+ref: main$/m);
     expect(workflow).toContain('node scripts/promote-stable.mjs');
     // Inputs reach the shell through env, never interpolated into a script.
     const inputLines = workflow
@@ -385,6 +399,42 @@ describe('stable promotion', () => {
       expect(line).toMatch(/^\s+[A-Z_]+: \$\{\{ inputs\.\w+ \}\}$/);
     }
     expect(workflow).toMatch(/^permissions:\n {2}contents: read$/m);
+  });
+
+  it('resolves a short SHA by object name, never by a ref that shadows it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'promote-stable-'));
+    try {
+      const git = gitAt(dir);
+      const env = {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'test',
+        GIT_AUTHOR_EMAIL: 'test@example.invalid',
+        GIT_COMMITTER_NAME: 'test',
+        GIT_COMMITTER_EMAIL: 'test@example.invalid'
+      };
+      // Plumbing only: commit-tree and update-ref run no hooks.
+      const run = (args: string[]) =>
+        execFileSync('git', args, { cwd: dir, env, encoding: 'utf8' }).trim();
+      run(['init', '--quiet', '--initial-branch=main']);
+      const tree = run(['mktree']);
+      const approved = run(['commit-tree', tree, '-m', 'approved']);
+      const newer = run(['commit-tree', tree, '-p', approved, '-m', 'newer']);
+      run(['update-ref', 'refs/heads/main', newer]);
+      run(['remote', 'add', 'origin', '.']);
+      const short = approved.slice(0, 12);
+      // A tag named like the approved short SHA, pointing at newer code;
+      // `git rev-parse <short>` would pick it.
+      run(['tag', short, newer]);
+      run(['tag', 'origin/main', approved]);
+      expect(run(['rev-parse', `${short}^{commit}`])).toBe(newer);
+
+      const plan = planPromotion(short, { git });
+      expect(plan.target).toBe(approved);
+      expect(plan.current).toBeNull();
+      expect(planPromotion(newer, { git }).target).toBe(newer);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('requires an explicit commit', () => {
