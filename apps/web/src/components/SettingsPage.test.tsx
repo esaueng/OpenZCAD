@@ -1813,6 +1813,17 @@ describe('settings desktop account section', () => {
       await waitFor(() => expect(codeField).toHaveValue(''));
       expect(codeField).toHaveFocus();
 
+      // The resend check stays folded until asked for, so no unanswered
+      // "Verify you are human" sits under Sign in.
+      expect(
+        screen.queryByRole('button', { name: /^Send a new code/ })
+      ).toBeNull();
+      const more = screen.getByRole('button', {
+        name: 'Didn’t get the code?'
+      });
+      expect(more).toHaveAttribute('aria-expanded', 'false');
+      await user.click(more);
+      expect(more).toHaveAttribute('aria-expanded', 'true');
       expect(
         screen.getByRole('button', { name: /^Send a new code/ })
       ).toBeDisabled();
@@ -1841,6 +1852,73 @@ describe('settings desktop account section', () => {
       script.remove();
       delete (window as Window & { turnstile?: unknown }).turnstile;
       vi.useRealTimers();
+    }
+  });
+
+  // Sign-in design review: the email field masked itself as a password
+  // field on blur, hiding the address and blocking password-manager fill,
+  // and Sign in sat small beside an equal-weight "Use another email".
+  it('keeps the sign-in email plain and fillable and makes Sign in the one button', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(
+          (
+            _container: HTMLElement,
+            options: { callback(token: string): void }
+          ) => {
+            options.callback('turnstile-token');
+            return 'widget-1';
+          }
+        ),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key'
+        },
+        authConfigStatus: 'ready',
+        onRequestLoginCode: vi.fn().mockResolvedValue({
+          challengeId: 'challenge-1',
+          expiresInSeconds: 600
+        }),
+        onVerifyLoginCode: vi.fn()
+      });
+      const email = screen.getByRole('textbox', { name: 'Email address' });
+      expect(email).toHaveAttribute('type', 'email');
+      expect(email).toHaveAttribute('autocomplete', 'username');
+      expect(email).toHaveAttribute('name', 'email');
+      await user.type(email, 'person@example.com');
+      await user.tab();
+      // Blurred, it still shows what was typed.
+      expect(email).toHaveAttribute('type', 'email');
+      expect(email).toHaveValue('person@example.com');
+
+      await user.click(screen.getByRole('button', { name: 'Email me a code' }));
+      const codeField = await screen.findByLabelText('Email sign-in code');
+      await waitFor(() => expect(codeField).toHaveFocus());
+      const signIn = screen.getByRole('button', { name: 'Sign in' });
+      expect(signIn).toHaveClass('primary');
+      // A direct child of the controls column, drawn as wide as the field,
+      // not one of a pair in a button row.
+      expect(signIn.parentElement).toHaveClass('settings-auth-controls');
+      const back = screen.getByRole('button', { name: 'Use another email' });
+      expect(back).toHaveClass('settings-auth-link');
+      expect(back).not.toHaveClass('primary');
+      expect(back).not.toHaveClass('secondary');
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
     }
   });
 
