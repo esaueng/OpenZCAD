@@ -6,20 +6,22 @@
  * main entry chunk does not carry it.
  */
 
+import { realmStorageName } from './deploymentRealm';
+
 /**
  * Fired after a sealed sync changed the account's agreed shelf state, so
  * the shelf re-lists and lays it over the account's rows.
  */
 export const SEALED_SHELF_APPLIED_EVENT = 'openzcad:sealed-shelf-applied';
 
-const EDITS_PREFIX = 'openzcad.library.shelf.edits.v1';
+const EDITS_PREFIX = realmStorageName('openzcad.library.shelf.edits.v1');
 
 /** Where this device journals the account's unsynced shelf edits. */
 export function shelfEditsKey(accountId: string): string {
   return `${EDITS_PREFIX}:${accountId}`;
 }
 
-const ROWS_PREFIX = 'openzcad.library.shelf.rows.v1';
+const ROWS_PREFIX = realmStorageName('openzcad.library.shelf.rows.v1');
 
 /** Where this device keeps the account's rows as last listed or written. */
 export function accountRowsKey(accountId: string): string {

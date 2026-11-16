@@ -96,6 +96,7 @@ import { prioritizeShelfEntries } from './projectShelf';
 import { loadLocalAppSettings, normalizeAppSettings } from './appSettings';
 import { mergeSettingsOntoAccount, sameSettings } from './settingsMerge';
 import { accountSettingsMerged } from './accountSettingsEvents';
+import { realmStorageName } from './deploymentRealm';
 
 /** Optional presentation updates; document opens still perform full verification. */
 export interface ProjectListingProgress {
@@ -1258,7 +1259,7 @@ interface SettingsMergeState {
   revision: number | null;
 }
 
-const MERGE_STATE_PREFIX = 'openzcad.settings.merge.v1';
+const MERGE_STATE_PREFIX = realmStorageName('openzcad.settings.merge.v1');
 /** This visit's copy, for a browser that refuses device storage. */
 const mergeStates = new Map<string, SettingsMergeState | null>();
 

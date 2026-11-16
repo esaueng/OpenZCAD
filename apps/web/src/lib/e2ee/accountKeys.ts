@@ -63,6 +63,7 @@ import type {
   E2eeWrapPurpose,
   E2eeWrapRecord
 } from '@openzcad/shared';
+import { DEVICE_LIST_REALM, inDeviceListRealm } from '../deploymentRealm';
 import type { E2eeApi } from './e2eeApi';
 import { confirmApprovalCancellation } from './approvalCancellation';
 import {
@@ -510,6 +511,8 @@ async function newIdentity(
   const issuedAt = now(ctx);
   const entry: DeviceListEntry = {
     userId: ctx.userId,
+    // Binds the new identity to this deployment (deploymentRealm.ts).
+    ...(DEVICE_LIST_REALM === undefined ? {} : { realm: DEVICE_LIST_REALM }),
     sequence: 0,
     previousEntryHash: null,
     issuedAt,
@@ -791,7 +794,11 @@ export async function loadEncryption(
   let list: VerifiedDeviceList;
   let identityChanged = false;
   try {
-    list = await verifyDeviceList(identityKey, chain, pin ? { pin } : {});
+    list = await verifyDeviceList(
+      identityKey,
+      chain,
+      inDeviceListRealm(pin ? { pin } : {})
+    );
     if (list.userId !== ctx.userId) {
       throw new EncryptionFlowError(
         'invalid-request',
@@ -807,7 +814,7 @@ export async function loadEncryption(
       (pin && isE2eeError(error, 'context-mismatch')) ||
       (error instanceof DeviceListPinConflict && error.reason === 'identity')
     ) {
-      list = await verifyDeviceList(identityKey, chain);
+      list = await verifyDeviceList(identityKey, chain, inDeviceListRealm({}));
       identityChanged = true;
     } else if (
       (pin && isE2eeError(error, 'chain-broken')) ||
@@ -1121,7 +1128,7 @@ async function acceptWrite(
   const list = await verifyDeviceList(
     expected.identityKey,
     decodeChain(current),
-    expected.pin ? { pin: expected.pin } : {}
+    inDeviceListRealm(expected.pin ? { pin: expected.pin } : {})
   );
   const writtenHash = await deviceListEntryHash(expected.written);
   if (!list.entries.some((entry) => sameBytes(entry.hash, writtenHash))) {
@@ -2594,7 +2601,11 @@ async function finishApproval(
   guard();
   let list: VerifiedDeviceList;
   try {
-    list = await verifyDeviceList(identityKey, chain, pin ? { pin } : {});
+    list = await verifyDeviceList(
+      identityKey,
+      chain,
+      inDeviceListRealm(pin ? { pin } : {})
+    );
     guard();
   } catch (error) {
     // A device re-approved after its identity was replaced pins the new one
@@ -2613,7 +2624,7 @@ async function finishApproval(
         'This device trusted different encryption keys, and a scanned approval cannot replace them. Enter the new recovery key here, or ask again and choose Compare codes on the other device.'
       );
     }
-    list = await verifyDeviceList(identityKey, chain);
+    list = await verifyDeviceList(identityKey, chain, inDeviceListRealm({}));
     guard();
   }
   // In the compare form the six digits authenticated the approver's key; in
@@ -2989,7 +3000,7 @@ async function currentDeviceList(
   const list = await verifyDeviceList(
     account.list.identityKey,
     decodeChain(current),
-    { pin: account.list.pin }
+    inDeviceListRealm({ pin: account.list.pin })
   );
   await persistDeviceList(ctx, list);
   return list;

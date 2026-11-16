@@ -171,7 +171,9 @@ export {
 export {
   DEVICE_LIST_VERSION_1,
   DEVICE_LIST_VERSION_2,
+  DEVICE_LIST_VERSION_3,
   MAX_DEVICE_LABEL_BYTES,
+  MAX_DEVICE_LIST_REALM_BYTES,
   MAX_DEVICE_LIST_ENTRIES,
   MAX_DEVICE_LIST_ENTRY_BYTES,
   MAX_LISTED_DEVICES,
@@ -198,6 +200,7 @@ export {
   encodeDeviceListEntry,
   encodeGroupReset,
   encodeRevocationCutoffs,
+  isDeviceListRealm,
   nextDeviceListEntry,
   publicKeyOfPrivateKey,
   recoveryTarget,

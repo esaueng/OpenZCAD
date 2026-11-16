@@ -12,6 +12,7 @@ import {
 } from '@openzcad/crypto';
 import type { AppSettings } from '@openzcad/shared';
 import { normalizeAppSettings } from '../appSettings';
+import { realmStorageName } from '../deploymentRealm';
 
 /**
  * Account settings sealed under the account key (ADR-024 amendment
@@ -23,7 +24,9 @@ export interface SettingsSequencePins {
   write(sequence: number): void;
 }
 
-const SEQUENCE_PREFIX = 'openzcad.settings.sealed.sequence.v1';
+const SEQUENCE_PREFIX = realmStorageName(
+  'openzcad.settings.sealed.sequence.v1'
+);
 /** Shared across reads even when persistent storage refuses a pin. */
 const sequenceFloors = new Map<string, number>();
 

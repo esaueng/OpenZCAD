@@ -44,11 +44,22 @@ import { ecdsaSign, type SigningPrivateKey } from './external-keys';
  * which must be live in the same entry. Entries that name one use format
  * version 2; every other entry keeps version 1, byte for byte, so lists
  * signed before version 2 existed verify unchanged.
+ *
+ * A first entry may name the deployment realm it belongs to (`realm`), in
+ * format version 3. Every later entry commits to it through the hash chain,
+ * so the whole list is bound to that realm, and a verifier that knows its
+ * own realm refuses a list made for another (`context-mismatch`). A first
+ * entry without one (versions 1 and 2) is not bound to any realm: lists
+ * made before realms existed verify unchanged everywhere.
  */
 
 export const DEVICE_LIST_VERSION_1 = 1;
 /** Version 1 plus a replacement device id on each revocation. */
 export const DEVICE_LIST_VERSION_2 = 2;
+/** Version 1 plus the deployment realm, on a first entry that names one. */
+export const DEVICE_LIST_VERSION_3 = 3;
+/** Longest realm name: lowercase ASCII letters, digits and hyphens. */
+export const MAX_DEVICE_LIST_REALM_BYTES = 32;
 const DEVICE_LIST_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x44); // "OZD"
 const TRANSITION_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x54); // "OZT"
 const GRANT_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x47); // "OZG"
@@ -108,6 +119,12 @@ export interface Revocation {
 
 export interface DeviceListEntry {
   readonly userId: string;
+  /**
+   * The deployment realm the list belongs to, named by its first entry
+   * only (`isDeviceListRealm`). Absent on later entries, which inherit it
+   * through the chain, and on first entries made before realms existed.
+   */
+  readonly realm?: string;
   /** 0 for the first entry, then +1 per entry. */
   readonly sequence: number;
   /** `deviceListEntryHash` of the previous entry; null for the first. */
@@ -184,12 +201,29 @@ function isDeviceLabel(value: unknown): value is string {
 
 const byId = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
+/**
+ * A realm name: 1–32 bytes, a lowercase letter first, then lowercase
+ * letters, digits and hyphens (`stable`, `beta`).
+ */
+export function isDeviceListRealm(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length <= MAX_DEVICE_LIST_REALM_BYTES &&
+    /^[a-z][a-z0-9-]*$/.test(value)
+  );
+}
+
 function checkEntry(entry: DeviceListEntry, code: E2eeErrorCode): void {
   const fail = (message: string): never => {
     throw new E2eeError(code, message);
   };
   if (entry === null || typeof entry !== 'object') fail('Expected an entry');
   if (!isEnvelopeId(entry.userId)) fail('Device list userId is not an id');
+  if (entry.realm !== undefined) {
+    if (!isDeviceListRealm(entry.realm))
+      fail('Device list realm is not a realm');
+    if (entry.sequence !== 0) fail('Only a first entry names its realm');
+  }
   if (!isUint(entry.sequence, MAX_U32)) fail('sequence must be a u32');
   if ((entry.sequence === 0) !== (entry.previousEntryHash === null)) {
     fail('Only the first entry (sequence 0) has no previous entry');
@@ -301,8 +335,13 @@ function checkEntry(entry: DeviceListEntry, code: E2eeErrorCode): void {
   }
 }
 
-/** Version 2 exactly when some revocation names a replacement. */
+/**
+ * Version 3 exactly when a first entry names its realm, version 2 exactly
+ * when some revocation names a replacement (a first entry revokes nothing,
+ * so the two never meet), version 1 otherwise.
+ */
 function entryVersion(entry: DeviceListEntry): number {
+  if (entry.realm !== undefined) return DEVICE_LIST_VERSION_3;
   return entry.revoked.some((r) => r.replacedBy !== undefined)
     ? DEVICE_LIST_VERSION_2
     : DEVICE_LIST_VERSION_1;
@@ -338,6 +377,9 @@ function readOptionalHash(reader: ByteReader): Bytes | null {
  * Version 2 is the same with `u8 length + replacement device id` (0 for
  * none) after each revocation's id, and is used exactly when at least one
  * revocation names a replacement, so every entry has one encoding.
+ *
+ * Version 3 is version 1 with `u8 length + realm` after the user id, and
+ * is used exactly when a first entry names its realm.
  */
 export function encodeDeviceListEntry(entry: DeviceListEntry): Bytes {
   checkEntry(entry, 'invalid-argument');
@@ -348,6 +390,7 @@ export function encodeDeviceListEntry(entry: DeviceListEntry): Bytes {
     .u32(entry.sequence);
   writeOptionalHash(writer, entry.previousEntryHash);
   writeId(writer, entry.userId);
+  if (version === DEVICE_LIST_VERSION_3) writeId(writer, entry.realm!);
   writer.u64(entry.issuedAt);
   writeOptionalHash(writer, entry.previousIdentityKeyHash);
   writer
@@ -418,7 +461,11 @@ export function decodeDeviceListEntry(bytes: Uint8Array): DeviceListEntry {
     throw new E2eeError('malformed', 'Not a device list entry');
   }
   const version = reader.u8();
-  if (version !== DEVICE_LIST_VERSION_1 && version !== DEVICE_LIST_VERSION_2) {
+  if (
+    version !== DEVICE_LIST_VERSION_1 &&
+    version !== DEVICE_LIST_VERSION_2 &&
+    version !== DEVICE_LIST_VERSION_3
+  ) {
     throw new E2eeError(
       'unsupported-version',
       `Device list version ${version} is not supported`
@@ -427,6 +474,7 @@ export function decodeDeviceListEntry(bytes: Uint8Array): DeviceListEntry {
   const sequence = reader.u32();
   const previousEntryHash = readOptionalHash(reader);
   const userId = readId(reader);
+  const realm = version === DEVICE_LIST_VERSION_3 ? readId(reader) : undefined;
   const issuedAt = reader.u64();
   const previousIdentityKeyHash = readOptionalHash(reader);
   const encryptionKey = copyBytes(reader.bytes(P256_PUBLIC_KEY_BYTES));
@@ -469,6 +517,7 @@ export function decodeDeviceListEntry(bytes: Uint8Array): DeviceListEntry {
   reader.end();
   const entry: DeviceListEntry = {
     userId,
+    ...(realm === undefined ? {} : { realm }),
     sequence,
     previousEntryHash,
     issuedAt,
@@ -634,6 +683,8 @@ export interface RevokedRecord {
 
 export interface VerifiedDeviceList {
   readonly userId: string;
+  /** The realm the first entry binds the list to; absent when unbound. */
+  readonly realm?: string;
   /**
    * The identity generation the list belongs to, when its caller knows it
    * (the account view, or the lookup that served the list): the chain does
@@ -816,11 +867,16 @@ function checkPin(pin: DeviceListPin): void {
  * and the chain must contain the pinned entry, so a rolled-back or forked
  * list fails with `chain-broken`. Accepting the result moves the pin to
  * `result.pin`.
+ *
+ * With `realm` (the deployment realm the verifier belongs to), a list whose
+ * first entry names another realm fails with `context-mismatch`: it was made
+ * for a different deployment. A list that names no realm predates realms
+ * and is accepted. Without `realm`, any list is accepted.
  */
 export async function verifyDeviceList(
   identityPublicKey: Uint8Array | CryptoKey,
   chain: readonly SignedDeviceListEntry[],
-  options: { readonly pin?: DeviceListPin } = {}
+  options: { readonly pin?: DeviceListPin; readonly realm?: string } = {}
 ): Promise<VerifiedDeviceList> {
   if (!Array.isArray(chain) || chain.length === 0) {
     broken('Device list is empty');
@@ -833,6 +889,10 @@ export async function verifyDeviceList(
   }
   const pin = options.pin;
   if (pin !== undefined) checkPin(pin);
+  const expectedRealm = options.realm;
+  if (expectedRealm !== undefined && !isDeviceListRealm(expectedRealm)) {
+    throw new E2eeError('invalid-argument', 'Not a device list realm');
+  }
   // Capture before the first await, including sparse or ill-typed entries.
   const captured = Array.from(
     chain as readonly SignedDeviceListEntry[],
@@ -891,6 +951,16 @@ export async function verifyDeviceList(
     if (!before) {
       if (entry.sequence !== 0)
         broken('Device list must start at its first entry');
+      if (
+        expectedRealm !== undefined &&
+        entry.realm !== undefined &&
+        entry.realm !== expectedRealm
+      ) {
+        throw new E2eeError(
+          'context-mismatch',
+          `The device list belongs to the ${entry.realm} realm, not ${expectedRealm}`
+        );
+      }
     } else {
       if (entry.userId !== before.entry.userId) {
         broken('Device list changes user');
@@ -976,8 +1046,10 @@ export async function verifyDeviceList(
       certifiedAt: certifiedAt.get(device.deviceId)!
     });
   }
+  const realm = entries[0]!.entry.realm;
   return {
     userId: last.entry.userId,
+    ...(realm === undefined ? {} : { realm }),
     identityKey,
     identityKeyHash,
     entries,

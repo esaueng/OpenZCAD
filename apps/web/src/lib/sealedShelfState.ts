@@ -24,6 +24,7 @@ import {
   SEALED_SHELF_APPLIED_EVENT,
   shelfEditsKey
 } from './sealedShelfCore';
+import { realmStorageName } from './deploymentRealm';
 
 export {
   accountRowsKey,
@@ -147,7 +148,7 @@ export async function shelfSealedOrSafe(
 
 // ── The agreed sealed record ──────────────────────────────────────────────
 
-const RECORD_PREFIX = 'openzcad.library.folders.sync.v2';
+const RECORD_PREFIX = realmStorageName('openzcad.library.folders.sync.v2');
 
 /** Where this device keeps the folder set it last agreed with the account. */
 export function folderSyncRecordKey(accountId: string): string {

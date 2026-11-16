@@ -10,10 +10,13 @@ import {
   DEVICE_APPROVAL_GRANT_VERSION_2,
   decodeGroupReset,
   decodeRevocationCutoffs,
+  DEVICE_LIST_VERSION_1,
+  DEVICE_LIST_VERSION_3,
   deviceListEntryHash,
   encodeDeviceListEntry,
   encodeGroupReset,
   encodeRevocationCutoffs,
+  isDeviceListRealm,
   MAX_REVOCATION_CUTOFFS,
   MAX_REVOCATION_CUTOFFS_BYTES,
   MAX_REVOCATION_CUTOFFS_V1_BYTES,
@@ -204,12 +207,15 @@ describe('device list entries', () => {
     trailing.set(bytes);
     throwsWith(() => decodeDeviceListEntry(trailing), 'malformed');
     const future = new Uint8Array(bytes);
-    future[3] = 3;
+    future[3] = 4;
     throwsWith(() => decodeDeviceListEntry(future), 'unsupported-version');
-    // Version 2 is reserved for entries that name a replacement.
-    const relabelled = new Uint8Array(bytes);
-    relabelled[3] = 2;
-    throwsWith(() => decodeDeviceListEntry(relabelled), 'malformed');
+    // Version 2 is reserved for entries that name a replacement, version 3
+    // for first entries that name a realm.
+    for (const version of [2, 3]) {
+      const relabelled = new Uint8Array(bytes);
+      relabelled[3] = version;
+      throwsWith(() => decodeDeviceListEntry(relabelled), 'malformed');
+    }
     const magic = new Uint8Array(bytes);
     magic[0] = 0;
     throwsWith(() => decodeDeviceListEntry(magic), 'malformed');
@@ -913,6 +919,132 @@ describe('replacement devices (entry version 2)', () => {
     const unknown = new Uint8Array(replaced);
     unknown.set(new TextEncoder().encode('dev_7'), tail + 1);
     throwsWith(() => decodeDeviceListEntry(unknown), 'malformed');
+  });
+});
+
+describe('deployment realms (entry version 3)', () => {
+  async function realmFixture(realm: string): Promise<Fixture> {
+    const base = await fixture();
+    const genesis: DeviceListEntry = { ...base.genesis, realm };
+    return {
+      ...base,
+      genesis,
+      chain: [await signDeviceListEntry(base.identity.privateKey, genesis)]
+    };
+  }
+
+  it('names realms with lowercase letters, digits and hyphens only', () => {
+    for (const realm of ['stable', 'beta', 'self-host-2', 'a'])
+      expect(isDeviceListRealm(realm), realm).toBe(true);
+    for (const realm of [
+      '',
+      'Stable',
+      '2beta',
+      '-beta',
+      'beta.zcad.app',
+      'stable ',
+      'x'.repeat(33),
+      undefined,
+      7
+    ])
+      expect(isDeviceListRealm(realm), String(realm)).toBe(false);
+  });
+
+  it('encodes a realm only on a first entry, as version 3, and decodes it', async () => {
+    const f = await realmFixture('stable');
+    const bytes = f.chain[0]!.entry;
+    expect([...bytes.subarray(0, 4)]).toEqual([
+      0x4f,
+      0x5a,
+      0x44,
+      DEVICE_LIST_VERSION_3
+    ]);
+    const decoded = decodeDeviceListEntry(bytes);
+    expect(decoded.realm).toBe('stable');
+    expect(encodeDeviceListEntry(decoded)).toEqual(bytes);
+    // Without a realm the same entry stays version 1, byte for byte.
+    const { realm: _realm, ...unbound } = decoded;
+    const legacy = encodeDeviceListEntry(unbound);
+    expect(legacy[3]).toBe(DEVICE_LIST_VERSION_1);
+    expect(decodeDeviceListEntry(legacy)).not.toHaveProperty('realm');
+    expect(legacy.byteLength).toBe(bytes.byteLength - 1 - 'stable'.length);
+    throwsWith(
+      () => encodeDeviceListEntry({ ...decoded, realm: 'Stable' }),
+      'invalid-argument'
+    );
+    const later = nextDeviceListEntry(
+      await verifyDeviceList(f.identityRaw, f.chain),
+      { issuedAt: 1_700_000_000_001, addDevices: [await device('dev_9')] }
+    );
+    expect(later).not.toHaveProperty('realm');
+    throwsWith(
+      () => encodeDeviceListEntry({ ...later, realm: 'stable' }),
+      'invalid-argument'
+    );
+  });
+
+  it('refuses version 3 bytes with an empty or invalid realm', async () => {
+    const f = await realmFixture('stable');
+    const bytes = f.chain[0]!.entry;
+    // The realm follows the user id: magic, version, sequence, the empty
+    // previous-hash length, then the user id behind its length byte.
+    const at = 3 + 1 + 4 + 1 + 1 + USER.length;
+    expect(bytes[at]).toBe('stable'.length);
+    const upper = new Uint8Array(bytes);
+    upper[at + 1] = 'S'.charCodeAt(0);
+    throwsWith(() => decodeDeviceListEntry(upper), 'malformed');
+    const empty = new Uint8Array([
+      ...bytes.subarray(0, at),
+      0,
+      ...bytes.subarray(at + 1 + 'stable'.length)
+    ]);
+    throwsWith(() => decodeDeviceListEntry(empty), 'malformed');
+  });
+
+  it('binds the whole chain to the first entry’s realm', async () => {
+    const f = await realmFixture('stable');
+    const chain = await append(f, async (list) =>
+      nextDeviceListEntry(list, {
+        issuedAt: 1_700_000_000_001,
+        addDevices: [await device('dev_9')]
+      })
+    );
+    const list = await verifyDeviceList(f.identityRaw, chain, {
+      realm: 'stable'
+    });
+    expect(list.realm).toBe('stable');
+    expect(list.devices.map((d) => d.deviceId)).toContain('dev_9');
+    await rejectsWith(
+      verifyDeviceList(f.identityRaw, chain, { realm: 'beta' }),
+      'context-mismatch'
+    );
+    await rejectsWith(
+      verifyDeviceList(f.identityRaw, chain, {
+        realm: 'beta',
+        pin: list.pin
+      }),
+      'context-mismatch'
+    );
+    // A verifier that names no realm accepts a bound list.
+    await expect(verifyDeviceList(f.identityRaw, chain)).resolves.toMatchObject(
+      { realm: 'stable' }
+    );
+  });
+
+  it('accepts a list made before realms in any realm', async () => {
+    const f = await fixture();
+    for (const realm of ['stable', 'beta']) {
+      const list = await verifyDeviceList(f.identityRaw, f.chain, { realm });
+      expect(list).not.toHaveProperty('realm');
+    }
+  });
+
+  it('refuses an invalid expected realm', async () => {
+    const f = await fixture();
+    await rejectsWith(
+      verifyDeviceList(f.identityRaw, f.chain, { realm: 'Not A Realm' }),
+      'invalid-argument'
+    );
   });
 });
 

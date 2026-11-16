@@ -48,6 +48,7 @@
  * stands in where IndexedDB is unavailable.
  */
 import type { E2eeKeyPackageRecord } from '@openzcad/shared';
+import { realmStorageName } from '../deploymentRealm';
 
 export interface InvitationEmail {
   readonly projectId: string;
@@ -320,7 +321,9 @@ export function memoryInvitationStore(): InvitationStore {
   };
 }
 
-export const INVITATION_DATABASE = 'openzcad-e2ee-invitations';
+export const INVITATION_DATABASE = realmStorageName(
+  'openzcad-e2ee-invitations'
+);
 const EMAILS = 'emails';
 const CLAIMS = 'claims';
 const PUBLISHED = 'published';
