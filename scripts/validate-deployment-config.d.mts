@@ -23,6 +23,7 @@ export const OFFICIAL_STABLE: Readonly<{
   databaseName: string;
   databaseId: string;
   bucketName: string;
+  sender: string;
   publicOrigins: readonly string[];
   branch: string;
 }>;

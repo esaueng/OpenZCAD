@@ -17,6 +17,7 @@ interface RateLimit {
 }
 interface Config {
   name?: string;
+  send_email?: unknown;
   vars: Record<string, string>;
   ratelimits: RateLimit[];
   services?: { binding: string; service: string }[];
@@ -66,13 +67,16 @@ describe('stable channel configuration', () => {
         'services',
         'd1_databases',
         'r2_buckets',
-        'ratelimits'
+        'ratelimits',
+        'send_email'
       ])
         delete copy[key];
       for (const key of [
         'GLIMPSE_BASIC_ENABLED',
         'GLIMPSE_USAGE_ENABLED',
-        'PUBLIC_APP_ORIGIN'
+        'PUBLIC_APP_ORIGIN',
+        'AUTH_EMAIL_FROM',
+        'PROJECT_INVITATION_EMAIL_FROM'
       ])
         delete copy.vars[key];
       return copy;
@@ -81,6 +85,33 @@ describe('stable channel configuration', () => {
     const limits = (config: Config) =>
       config.ratelimits.map(({ name, simple }) => ({ name, simple }));
     expect(limits(stable)).toEqual(limits(beta));
+  });
+
+  it('mails sign-in codes and invitations from each channel’s own domain', () => {
+    const beta = read('wrangler.jsonc');
+    const stable = read('wrangler.stable.jsonc');
+    for (const [config, sender] of [
+      [beta, 'noreply@beta.zcad.app'],
+      [stable, 'noreply@zcad.app']
+    ] as const) {
+      expect(config.vars.AUTH_EMAIL_FROM).toBe(sender);
+      expect(config.vars.PROJECT_INVITATION_EMAIL_FROM).toBe(sender);
+      expect(config.send_email).toEqual([
+        { name: 'EMAIL', allowed_sender_addresses: [sender] }
+      ]);
+    }
+    const previews = beta.previews as unknown as {
+      vars: Record<string, string>;
+      send_email: unknown;
+    };
+    expect(previews.vars.AUTH_EMAIL_FROM).toBe('noreply@beta.zcad.app');
+    expect(previews.send_email).toEqual(beta.send_email);
+
+    const crossed = read('wrangler.stable.jsonc');
+    crossed.vars.AUTH_EMAIL_FROM = 'noreply@beta.zcad.app';
+    expect(validateDeploymentConfig(crossed, options)).toContain(
+      'authentication sender changed from the official deployment value'
+    );
   });
 
   it('shares no data, rate-limit budget or analytics with beta', () => {

@@ -233,13 +233,13 @@ describe('beta deployment safety', () => {
   it('uses the onboarded noreply sender for authentication and project invitations', () => {
     const config = readFileSync('wrangler.jsonc', 'utf8');
 
-    expect(config).toContain('"AUTH_EMAIL_FROM": "noreply@zcad.esau.app"');
+    expect(config).toContain('"AUTH_EMAIL_FROM": "noreply@beta.zcad.app"');
     expect(config).toContain(
-      '"PROJECT_INVITATION_EMAIL_FROM": "noreply@zcad.esau.app"'
+      '"PROJECT_INVITATION_EMAIL_FROM": "noreply@beta.zcad.app"'
     );
     expect(config).toContain('"PUBLIC_APP_ORIGIN": "https://zcad.app"');
     expect(config).toMatch(
-      /"allowed_sender_addresses":\s*\[\s*"noreply@zcad\.esau\.app"\s*\]/
+      /"allowed_sender_addresses":\s*\[\s*"noreply@beta\.zcad\.app"\s*\]/
     );
   });
 });

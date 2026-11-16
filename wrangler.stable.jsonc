@@ -119,8 +119,8 @@
     "ENVIRONMENT": "beta",
     "AUTH_MODE": "email-code",
     "PRODUCTION_GUARD": "enabled",
-    "AUTH_EMAIL_FROM": "noreply@zcad.esau.app",
-    "PROJECT_INVITATION_EMAIL_FROM": "noreply@zcad.esau.app",
+    "AUTH_EMAIL_FROM": "noreply@zcad.app",
+    "PROJECT_INVITATION_EMAIL_FROM": "noreply@zcad.app",
     "PUBLIC_APP_ORIGIN": "https://stable.zcad.app",
     "AUTH_SESSION_DAYS": "30",
     "DESKTOP_AUTH_ENABLED": "true",
@@ -167,7 +167,7 @@
   "send_email": [
     {
       "name": "EMAIL",
-      "allowed_sender_addresses": ["noreply@zcad.esau.app"]
+      "allowed_sender_addresses": ["noreply@zcad.app"]
     }
   ],
   "durable_objects": {

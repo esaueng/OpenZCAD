@@ -185,17 +185,17 @@ The exact adapter and Remus WASM load lazily inside the geometry worker on the f
 
 Email sign-in uses Cloudflare Email Service and Turnstile. Before enabling a real beta login:
 
-- onboard the `zcad.esau.app` sending domain and keep the `EMAIL` binding restricted to `noreply@zcad.esau.app` for sign-in and project invitations;
+- onboard the `beta.zcad.app` and `zcad.app` sending domains and keep each channel's `EMAIL` binding restricted to its own sender (`noreply@beta.zcad.app` for beta, `noreply@zcad.app` for stable) for sign-in and project invitations;
 - create a managed Turnstile widget allowlisting `zcad.app`, `zcad.esau.app`, `dev.zcad.app` (Worker Previews), `localhost`, and `127.0.0.1`, then bind its site key as `TURNSTILE_SITE_KEY`;
 - review the pending remote D1 migrations before deploying with `pnpm deploy:beta`; that guarded command applies them before publishing the Worker and then verifies the live commit and every required readiness gate;
 - follow the [project cloud-sync release runbook](docs/runbooks/project-cloud-sync-release.md) for the migration gate and authenticated two-device canary;
-- set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, `AUTH_EMAIL_FROM=noreply@zcad.esau.app`, `PROJECT_INVITATION_EMAIL_FROM=noreply@zcad.esau.app`, and the canonical `PUBLIC_APP_ORIGIN=https://zcad.app` used for invitation links (the checked-in beta config also sets `PRODUCTION_GUARD`, which makes the worker refuse development auth outright);
+- set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, `AUTH_EMAIL_FROM` and `PROJECT_INVITATION_EMAIL_FROM` to that channel's sender, and the canonical `PUBLIC_APP_ORIGIN=https://zcad.app` used for invitation links (the checked-in beta config also sets `PRODUCTION_GUARD`, which makes the worker refuse development auth outright);
 - provide secrets, generated with `openssl rand -base64 32` where appropriate and set via `wrangler secret put`, never committed: `AUTH_OTP_PEPPER`, `TURNSTILE_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` (must stay stable across deploys), and `AI_IDENTITY_PEPPER`. The deployment preflight lists these required secret names without reading their values; verify the remote Worker secret list before deploying;
 - funding AI from the deployment's own provider key needs the provider secret. The built-in free OpenRouter model admits every verified account with `AI_DEPLOYMENT_FREE_ENABLED`; paid or private models require Premium membership or `AI_DEPLOYMENT_ALLOWED_EMAILS`. Without the provider key, users supply their own tokens instead.
 
 Login codes are single-use and expire after ten minutes. Requests are rate limited per IP, per email and IP, and per email; a throttled request sends no email and answers with the requester's own pending challenge, and a new code never voids an earlier one (a successful sign-in voids them all). Profile or account deletion clears that email's requester limits as well as its pending codes, while preserving the shared IP limit and other emails' limits. After 20 wrong codes for an email in 24 hours, each of its codes allows one try instead of five. Failure counts conservatively remain active until 24 hours after each code expires (at most ten extra minutes), so guesses near expiry cannot age out early. Sessions use a `Secure`, `HttpOnly`, `SameSite=Lax` host cookie; only a SHA-256 hash of the opaque token is stored. Turnstile responses must carry the `email-code` action, and every non-development verification pins the response hostname to the request hostname. `AUTH_LEGACY_OWNER_EMAIL` maps historical `user_beta_dev` projects to their owner's verified email without rewriting documents.
 
-Project invitations are delivered from `noreply@zcad.esau.app` as seven-day,
+Project invitations are delivered from the channel's sender (`noreply@beta.zcad.app` or `noreply@zcad.app`) as seven-day,
 single-use links. The opaque token is carried in the URL fragment, scrubbed
 from the address bar on arrival, and kept only in tab-scoped session storage
 while email-code sign-in completes. A failed email send revokes the invitation
