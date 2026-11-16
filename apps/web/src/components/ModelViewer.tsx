@@ -841,6 +841,11 @@ export type CommandHandleView = (
       params: Omit<CoilRigParams, 'turns' | 'minTurns' | 'maxTurns'>;
     }
   | { kind: 'chip'; params: { anchor: HandleVec3 } }
+  | {
+      /** M02: a pattern copy's skip toggle, where the copy stands. */
+      kind: 'instance';
+      params: { anchor: HandleVec3; label: string; skipped: boolean };
+    }
 ) & {
   valueId: string;
   key: string;
@@ -1356,6 +1361,8 @@ export interface ModelViewerProps {
   onCommandHandleRelease?(valueId: string, value: number): void;
   /** A handle's chip was tapped; true when a keypad opened. */
   onOpenCommandKeypad?(valueId: string, value: number): boolean;
+  /** M02: a pattern copy's chip clicked: skip that copy, or bring it back. */
+  onToggleCommandInstance?(label: string): void;
   /**
    * Which chip the open keypad rides, where an offset arrow and command
    * handles stand together (the in-place Extrude): `offset` the arrow's,
@@ -2458,6 +2465,7 @@ export function ModelViewer({
   onCommandHandlePreview,
   onCommandHandleRelease,
   onOpenCommandKeypad,
+  onToggleCommandInstance,
   commandSetterRef: commandSetterRefProp,
   keypadAnchorOwner,
   curvePicker = null,
@@ -2904,6 +2912,8 @@ export function ModelViewer({
   onCommandHandleReleaseRef.current = onCommandHandleRelease;
   const onOpenCommandKeypadRef = useRef(onOpenCommandKeypad);
   onOpenCommandKeypadRef.current = onOpenCommandKeypad;
+  const onToggleCommandInstanceRef = useRef(onToggleCommandInstance);
+  onToggleCommandInstanceRef.current = onToggleCommandInstance;
   const keypadAnchorOwnerRef = useRef(keypadAnchorOwner);
   keypadAnchorOwnerRef.current = keypadAnchorOwner;
   const ownCommandSetterRef = useRef<
@@ -5184,7 +5194,7 @@ export function ModelViewer({
         // value (a hole step's rim), which rebuilds no rig.
         const anchor = entry.rig
           ? entry.rig.chipAnchor(scale)
-          : view.kind === 'chip'
+          : view.kind === 'chip' || view.kind === 'instance'
             ? new THREE.Vector3(
                 view.params.anchor.x,
                 view.params.anchor.y,
@@ -15799,12 +15809,23 @@ export function ModelViewer({
         if (value !== undefined)
           onOpenCommandKeypadRef.current?.(valueId, value);
       };
-      prepareCommandChip(chip, openKeypad);
+      if (handle.kind === 'instance') {
+        // A copy's chip is a toggle: it skips the copy or brings it back.
+        const { label, skipped } = handle.params;
+        chip.classList.add('handle-instance-chip');
+        chip.classList.toggle('is-skipped', skipped);
+        chip.setAttribute('aria-pressed', skipped ? 'false' : 'true');
+        prepareCommandChip(chip, () =>
+          onToggleCommandInstanceRef.current?.(label)
+        );
+      } else {
+        prepareCommandChip(chip, openKeypad);
+      }
       rigs.set(handle.valueId, {
         key: handle.key,
         rig,
         anchor:
-          handle.kind === 'chip'
+          handle.kind === 'chip' || handle.kind === 'instance'
             ? new THREE.Vector3(
                 handle.params.anchor.x,
                 handle.params.anchor.y,

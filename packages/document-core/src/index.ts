@@ -52,6 +52,7 @@ export { assertSketchBoundaryTopologyPreserved } from './sketch-boundary-depende
 import {
   assertDocumentContentSchema,
   assertSheetMetalSchema,
+  assertPatternContentSchema,
   assertSketchObjectContentSchema,
   assertThreadContentSchema
 } from './document-content-schema';
@@ -82,6 +83,8 @@ import {
   isDocumentHistory,
   isReservedRecordKey,
   ownEntry,
+  patternSourceProblem,
+  skippedInstancesProblem,
   suppliedIds
 } from '@openzcad/shared';
 import {
@@ -690,6 +693,10 @@ export interface PatternInput {
   count2?: ParamValue;
   /** R01 (schema v28), circular only: turn about this earlier datum axis. */
   axisRef?: DatumAxisRef;
+  /** M02 (schema v62): repeat these earlier features, not the whole body. */
+  sourceFeatureIds?: FeatureId[];
+  /** M02 (schema v62): the copies left out, by instance label. */
+  skippedInstances?: string[];
   ids?: BodyFeatureIds;
 }
 
@@ -3913,6 +3920,10 @@ export function patternBody(
   document: ProjectDocument,
   input: PatternInput
 ): { document: ProjectDocument; bodyId: BodyId } {
+  // Schema v62 fields are refused on a document that declares an older
+  // schema, as thread runouts are: written there, it would no longer open.
+  assertPatternContentSchema(input, document.schemaVersion);
+  validatePatternDefinition(document, input, null);
   return addBodyResultFeature(
     document,
     input.name,
@@ -3929,10 +3940,65 @@ export function patternBody(
       ...(input.axis2 ? { axis2: input.axis2 } : {}),
       ...(input.spacing2 !== undefined ? { spacing2: input.spacing2 } : {}),
       ...(input.count2 !== undefined ? { count2: input.count2 } : {}),
-      ...(input.axisRef ? { axisRef: datumAxisRefOnly(input.axisRef) } : {})
+      ...(input.axisRef ? { axisRef: datumAxisRefOnly(input.axisRef) } : {}),
+      ...(input.sourceFeatureIds
+        ? { sourceFeatureIds: [...input.sourceFeatureIds] }
+        : {}),
+      ...(input.skippedInstances
+        ? { skippedInstances: [...input.skippedInstances] }
+        : {})
     },
     suppliedIds(input.ids)
   );
+}
+
+/**
+ * M02 (schema v62) structural checks on a pattern's repeated features and
+ * skipped copies, at its history position (`ownFeatureId`, or the end for a
+ * new pattern). Whether each feature lies on the target's body chain, and
+ * whether a skipped copy is one the counts reach, need the build and are
+ * refused there by name.
+ */
+export function validatePatternDefinition(
+  document: ProjectDocument,
+  data: Pick<
+    PatternInput,
+    'patternKind' | 'sourceFeatureIds' | 'skippedInstances'
+  >,
+  ownFeatureId: FeatureId | null
+): void {
+  const skipProblem = skippedInstancesProblem(
+    data.patternKind,
+    data.skippedInstances
+  );
+  if (skipProblem) throw new Error(skipProblem);
+  const sources = data.sourceFeatureIds;
+  if (sources === undefined) return;
+  if (!Array.isArray(sources) || sources.length === 0) {
+    throw new Error('A feature pattern repeats at least one feature.');
+  }
+  if (new Set(sources).size !== sources.length) {
+    throw new Error('A feature pattern names each feature it repeats once.');
+  }
+  const ownIndex =
+    ownFeatureId === null
+      ? document.featureOrder.length
+      : document.featureOrder.indexOf(ownFeatureId);
+  for (const featureId of sources) {
+    const source = findFeature(document, featureId);
+    if (!source || featureId === ownFeatureId) {
+      throw new Error(
+        'A feature this pattern repeats is no longer in History.'
+      );
+    }
+    const problem = patternSourceProblem(source.data, source.name);
+    if (problem) throw new Error(problem);
+    if (document.featureOrder.indexOf(featureId) >= ownIndex) {
+      throw new Error(
+        `${source.name} comes later in History; a pattern can only repeat an earlier feature.`
+      );
+    }
+  }
 }
 
 export function importMeshBody(
@@ -4843,7 +4909,9 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'axis2',
     'spacing2',
     'count2',
-    'axisRef'
+    'axisRef',
+    'sourceFeatureIds',
+    'skippedInstances'
   ],
   gear: [
     'gearType',
@@ -4932,7 +5000,7 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   // R01: clearing a datum axis returns to the sketch or world axis.
   // U09: clearing a revolve's region returns it to the first-object profile.
   revolve: ['axisRef', 'profile'],
-  pattern: ['axisRef'],
+  pattern: ['axisRef', 'sourceFeatureIds', 'skippedInstances'],
   transform: ['axisRotation'],
   // Schema v53: every size and placement field falls back to the face or its
   // documented default; the custom-profile fields may go only off a custom
@@ -5046,6 +5114,9 @@ export function updateFeature(
     if (feature.featureKind === 'thread') {
       assertThreadContentSchema(input.data, document.schemaVersion);
     }
+    if (feature.featureKind === 'pattern') {
+      assertPatternContentSchema(input.data, document.schemaVersion);
+    }
     const patch = { ...input.data } as Record<string, unknown>;
     if (
       'featureKind' in patch &&
@@ -5124,6 +5195,9 @@ export function updateFeature(
     validateModelingPlane(next, feature.data.plane, feature.featureId);
   }
   validateFeatureDatumAxisRefs(next, feature.data, feature.featureId);
+  if (feature.data.featureKind === 'pattern') {
+    validatePatternDefinition(next, feature.data, feature.featureId);
+  }
   // New Body has no dependency on the previous Add/Cut target. Undefined
   // patch values are normally ignored, so clear this semantic dependency here.
   if (

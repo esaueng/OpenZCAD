@@ -76,6 +76,11 @@ export interface InPlaceEditContext {
   /** Any planar face of a body, for a command any face names. */
   anyFace(bodyId: BodyId): FacePick | null;
   /**
+   * M02: a face of `bodyId` the feature made, standing for that feature in
+   * a feature pattern's picks; null when the body shows none of its faces.
+   */
+  featureFace?(bodyId: BodyId, featureId: FeatureId): FacePick | null;
+  /**
    * A body's edge by its stored identity (its lineage name when it has one,
    * else its hash), with where its handles stand.
    */
@@ -778,7 +783,26 @@ export function inPlaceEditSeed(
       break;
     }
     case 'pattern': {
-      body(data.targetBodyId);
+      if (data.sourceFeatureIds) {
+        // M02: each repeated feature stands as one of its faces, as a click
+        // picked it; one the body no longer shows is left to pick again.
+        seed.options.repeat = 'features';
+        const unseen: string[] = [];
+        for (const featureId of data.sourceFeatureIds) {
+          const face = ctx.featureFace?.(data.targetBodyId, featureId);
+          if (face) seed.slots.faces.push(face);
+          else unseen.push(featureId);
+        }
+        // One whose faces the model no longer shows (a boss a later cut
+        // removed) cannot be clicked back in or out: it is kept as stored,
+        // never dropped by an edit that only changed the spacing.
+        if (unseen.length > 0) seed.options.keepSources = unseen.join(',');
+      } else {
+        body(data.targetBodyId);
+      }
+      if (data.skippedInstances?.length) {
+        seed.options.skip = data.skippedInstances.join(',');
+      }
       value('count', data.count);
       if (data.patternKind === 'linear') {
         value('spacing', data.spacing);
@@ -1226,12 +1250,30 @@ export function inPlaceFeatureUpdate(
             ? { spacing2: request.spacing2 }
             : {}),
           ...(request.count2 !== undefined ? { count2: request.count2 } : {}),
-          ...(request.axisRef ? { axisRef: request.axisRef } : {})
+          ...(request.axisRef ? { axisRef: request.axisRef } : {}),
+          ...(request.sourceFeatureIds
+            ? { sourceFeatureIds: request.sourceFeatureIds }
+            : {}),
+          ...(request.skippedInstances
+            ? { skippedInstances: request.skippedInstances }
+            : {})
         },
-        // R01: the world axis is the absent datum axis.
-        ...(request.axisRef || request.patternKind !== 'circular'
-          ? {}
-          : { clearData: ['axisRef'] })
+        // R01: the world axis is the absent datum axis. M02: a pattern turned
+        // back to its body, or with every copy back, stores neither list.
+        ...(() => {
+          const cleared = [
+            ...(request.axisRef || request.patternKind !== 'circular'
+              ? []
+              : ['axisRef']),
+            ...(saved.sourceFeatureIds && !request.sourceFeatureIds
+              ? ['sourceFeatureIds']
+              : []),
+            ...(saved.skippedInstances && !request.skippedInstances
+              ? ['skippedInstances']
+              : [])
+          ];
+          return cleared.length > 0 ? { clearData: cleared } : {};
+        })()
       };
     }
     default:

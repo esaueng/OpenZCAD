@@ -195,6 +195,7 @@ import {
   type ParameterSetInput,
   type ParameterToggleInput,
   patternBody,
+  validatePatternDefinition,
   type PatternInput,
   type PrimitiveInput,
   renameNode,
@@ -2215,6 +2216,7 @@ function validateModelingFeatureUpdate(
     }
     case 'pattern':
       validateBodyTarget(preview, feature.data.targetBodyId);
+      validatePatternDefinition(preview, feature.data, feature.featureId);
       break;
     case 'mirror':
       validateMirrorInput(preview, {
@@ -2968,6 +2970,7 @@ export const commandFactories = {
       (document) => patternBody(document, withIds).document,
       (document) => {
         validateBodyTarget(document, payload.targetBodyId);
+        validatePatternDefinition(document, payload, null);
         if (payload.axisRef) {
           if (payload.patternKind !== 'circular') {
             throw new Error(

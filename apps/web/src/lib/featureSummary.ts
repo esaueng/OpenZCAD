@@ -436,12 +436,15 @@ export function featureValueSummary(
       if (count === null) {
         return null;
       }
+      // M02: copies left out are counted, so "× 5" never hides a gap.
+      const skipped = data.skippedInstances?.length ?? 0;
+      const gap = skipped > 0 ? ` · ${skipped} skipped` : '';
       if (data.patternKind === 'grid') {
         // Absent count2 reads as count (see FeatureData).
         const count2 = data.count2 === undefined ? count : num(data.count2);
-        return count2 === null ? null : `${count} × ${count2}`;
+        return count2 === null ? null : `${count} × ${count2}${gap}`;
       }
-      return `× ${count}`;
+      return `× ${count}${gap}`;
     }
     default:
       return null;

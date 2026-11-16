@@ -49,9 +49,11 @@ import {
   type PlaneBasis,
   type Vec3
 } from '@openzcad/geometry';
+import { buildFeaturePattern } from './exact-feature-pattern';
 import {
   FULL_REVOLVE_ANGLE_DEG,
   MAX_MESH_SOLID_CONVERSION_TRIANGLES,
+  MAX_PATTERN_INSTANCES,
   millimetresPerUnit,
   isDatumPlaneRef,
   type BodyId,
@@ -62,7 +64,11 @@ import {
   type ModelingPlaneReference,
   type ParamValue
 } from '@openzcad/shared';
-import type { ExactShape, ImportedStepDiagnostics } from './exact-types';
+import type {
+  ExactBuildResult,
+  ExactShape,
+  ImportedStepDiagnostics
+} from './exact-types';
 import {
   diagnoseImportedSolid,
   faceCandidatesForSolid,
@@ -1474,10 +1480,37 @@ function buildHoleFeature(
   feature: FeatureNode,
   data: FeatureDataOf<'hole'>
 ): void {
-  const { kernel, scope, result } = ctx;
+  const { kernel, result } = ctx;
   if (!feature.bodyId) {
     throw new Error('Hole has no result body.');
   }
+  const { spec: holeSpec, shape, targetSolid } = holeToolSpecFor(ctx, data);
+  const drilled = drillHole(kernel, targetSolid, holeSpec);
+  result.consumed.add(data.targetBodyId);
+  result.shapes.set(feature.bodyId, {
+    solids: [drilled],
+    lineage: holeLineage(
+      kernel,
+      targetSolid,
+      drilled,
+      shape.lineage,
+      feature.featureId,
+      holeSpec
+    )
+  });
+  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+}
+
+/**
+ * Where a hole drills and what it cuts, resolved on its target body as this
+ * build holds it: the hole's own build, and an M02 feature pattern that
+ * repeats it, read the same entry face and the same stored position.
+ */
+export function holeToolSpecFor(
+  ctx: FeatureBuildContext,
+  data: FeatureDataOf<'hole'>
+): { spec: HoleToolSpec; shape: ExactShape; targetSolid: number } {
+  const { kernel, scope, result } = ctx;
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
     throw new Error('Hole target is unavailable.');
@@ -1641,20 +1674,7 @@ function buildHoleFeature(
     entryExtension: extension,
     exitExtension: data.depthMode === 'through' ? extension : 0
   };
-  const drilled = drillHole(kernel, targetSolid, holeSpec);
-  result.consumed.add(data.targetBodyId);
-  result.shapes.set(feature.bodyId, {
-    solids: [drilled],
-    lineage: holeLineage(
-      kernel,
-      targetSolid,
-      drilled,
-      shape.lineage,
-      feature.featureId,
-      holeSpec
-    )
-  });
-  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+  return { spec: holeSpec, shape, targetSolid };
 }
 
 function buildSplitFeature(
@@ -3351,7 +3371,13 @@ function buildPatternFeature(
     throw new Error('Pattern count must be between 2 and 100.');
   }
   const totalInstances = count * count2;
-  if (target.solids.length * totalInstances > 100) {
+  // A feature pattern's copies are cut into one body, so only the copies
+  // count; a whole-body pattern makes every solid of the body again.
+  const featurePattern = data.sourceFeatureIds !== undefined;
+  if (
+    (featurePattern ? 1 : target.solids.length) * totalInstances >
+    MAX_PATTERN_INSTANCES
+  ) {
     throw new Error('A pattern may produce at most 100 solids.');
   }
   const direction =
@@ -3430,6 +3456,114 @@ function buildPatternFeature(
   const matrices = Array.from({ length: arm.total }, (_unused, index) =>
     arm.matrix(index)
   );
+  // M02: the copies left out keep their labels' places, so skipping one
+  // renames no other copy and every reference to the rest still resolves.
+  const skipped = skippedPatternInstances(result, feature, data, arm);
+  const kept = matrices
+    .map((_matrix, index) => index)
+    .filter((index) => !skipped.has(index));
+  if (kept.length < 2) {
+    throw new Error(
+      'A pattern must keep at least one copy besides the original.'
+    );
+  }
+  if (featurePattern) {
+    const copyIndices = kept.filter((index) => index !== 0);
+    buildFeaturePattern(
+      ctx,
+      feature,
+      data,
+      target,
+      copyIndices.map((index) => ({
+        label: arm.label(index),
+        matrix: matrices[index]!
+      })),
+      (seed) => {
+        const { perSource, declined } = patternCopies(
+          kernel,
+          arm,
+          seed,
+          matrices
+        );
+        return {
+          solids: copyIndices.map((index) =>
+            perSource.map((copies) => copies.solids[index]!)
+          ),
+          declined
+        };
+      },
+      (hole) => holeToolSpecFor(ctx, hole)
+    );
+    return;
+  }
+  const {
+    perSource: built,
+    declined,
+    usedKernel
+  } = patternCopies(kernel, arm, target.solids, matrices);
+  let perSource = built;
+  if (data.patternKind === 'linear' && usedKernel && !declined) {
+    perSource = linearPatternBoundaryCopies(kernel, target.solids, perSource);
+  }
+  const instances = patternInstances(arm, perSource).filter(
+    (_instance, index) => !skipped.has(index)
+  );
+  buildPatternBody(ctx, feature, data, target, arm, instances, kept, declined);
+}
+
+/**
+ * M02: the instance indices a pattern's skip list names. The original is
+ * never one; a label the counts no longer reach (a count lowered since) is
+ * ignored with an advisory rather than refusing the pattern.
+ */
+function skippedPatternInstances(
+  result: ExactBuildResult,
+  feature: FeatureNode,
+  data: FeatureDataOf<'pattern'>,
+  arm: PatternArm
+): Set<number> {
+  const skipped = new Set<number>();
+  if (!data.skippedInstances?.length) return skipped;
+  const indexOf = new Map(
+    Array.from({ length: arm.total }, (_unused, index) => [
+      arm.label(index),
+      index
+    ])
+  );
+  const missing: string[] = [];
+  for (const label of data.skippedInstances) {
+    const index = indexOf.get(label);
+    if (index === 0) throw new Error('A pattern cannot skip its original.');
+    if (index === undefined) missing.push(label);
+    else skipped.add(index);
+  }
+  if (missing.length > 0) {
+    raiseFeatureWarning(
+      result,
+      feature,
+      `Skipped ${missing.length === 1 ? 'copy' : 'copies'} ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not in this pattern any more, so ${missing.length === 1 ? 'it was' : 'they were'} ignored.`,
+      'advisory'
+    );
+  }
+  return skipped;
+}
+
+/**
+ * Every instance of each source solid, original first, through the kernel's
+ * pattern entry point where the instances cannot overlap, else as rigid
+ * copies; see `patternInstancesMayOverlap`.
+ */
+function patternCopies(
+  kernel: RemusKernel,
+  arm: PatternArm,
+  sourceSolids: readonly number[],
+  matrices: readonly Float64Array[]
+): {
+  perSource: KernelPatternCopies[];
+  declined: RemusLineageDiagnostic | null;
+  /** The kernel entry point was asked for the copies. */
+  usedKernel: boolean;
+} {
   // The kernel's pattern operations refuse an arrangement whose instances
   // interpenetrate, which this feature supports by fusing the copies itself,
   // so an overlapping pattern keeps the copy-and-fuse build. See
@@ -3445,7 +3579,7 @@ function buildPatternFeature(
   // transformed witnesses, and only the journal cross-check is lost. That loss
   // is recorded as a diagnostic rather than absorbed silently.
   const copyInstances = (): KernelPatternCopies[] =>
-    target.solids.map((solid) => ({
+    sourceSolids.map((solid) => ({
       solids: matrices.map((matrix, instance) =>
         instance === 0 ? solid : kernel.copyAndTransformSolid(solid, matrix)
       ),
@@ -3453,14 +3587,14 @@ function buildPatternFeature(
     }));
   const kernelCopies =
     arm.kernelCopies &&
-    !patternInstancesMayOverlap(kernel, target.solids, matrices)
+    !patternInstancesMayOverlap(kernel, sourceSolids, matrices)
       ? arm.kernelCopies
       : null;
   let declined: RemusLineageDiagnostic | null = null;
   let perSource: KernelPatternCopies[];
   if (kernelCopies) {
     try {
-      perSource = target.solids.map(kernelCopies);
+      perSource = sourceSolids.map(kernelCopies);
     } catch (error) {
       declined = {
         code: 'pattern-kernel-declined',
@@ -3472,10 +3606,25 @@ function buildPatternFeature(
   } else {
     perSource = copyInstances();
   }
-  if (data.patternKind === 'linear' && kernelCopies && !declined) {
-    perSource = linearPatternBoundaryCopies(kernel, target.solids, perSource);
-  }
-  const instances = patternInstances(arm, perSource);
+  return { perSource, declined, usedKernel: kernelCopies !== null };
+}
+
+/** A whole-body pattern's body: its kept instances, fused where they overlap. */
+function buildPatternBody(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'pattern'>,
+  target: ExactShape,
+  arm: PatternArm,
+  instances: readonly PatternInstanceBuild[],
+  /** Each instance's index in the whole pattern, parallel to `instances`. */
+  kept: readonly number[],
+  declined: RemusLineageDiagnostic | null
+): void {
+  const { kernel, scope, result } = ctx;
+  if (!feature.bodyId) throw new Error('Pattern has no result body.');
+  // The whole ring's count: a skipped copy leaves its place in the ring.
+  const count = arm.total;
   const solids = instances.flatMap((instance) => instance.solids);
   // Instances that interpenetrate have to become ONE solid before
   // anything measures them. Every consumer downstream — the volume
@@ -3513,7 +3662,8 @@ function buildPatternFeature(
     fullTurn
       ? (left, right) => {
           const width = target.solids.length;
-          const delta = Math.floor(right / width) - Math.floor(left / width);
+          const delta =
+            kept[Math.floor(right / width)]! - kept[Math.floor(left / width)]!;
           const direct = `${left % width}:${right % width}:${delta}`;
           const reversed = `${right % width}:${left % width}:${count - delta}`;
           return direct < reversed ? direct : reversed;
@@ -3537,7 +3687,7 @@ function buildPatternFeature(
       solids.map((_solid, index) =>
         index < solidsPerInstance
           ? 'the original'
-          : `instance ${Math.floor(index / solidsPerInstance) + 1}`
+          : `instance ${kept[Math.floor(index / solidsPerInstance)]! + 1}`
       )
     );
     const removed = summed - kernel.volume(fused, MEASUREMENT_DEFLECTION);

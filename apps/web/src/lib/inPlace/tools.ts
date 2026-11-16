@@ -215,6 +215,11 @@ export interface FacePick {
    */
   savedPosition?: true;
   /**
+   * M02: the hole, boss or cut that made the face, for a feature pattern's
+   * pick, which repeats that feature rather than the face.
+   */
+  feature?: { featureId: FeatureId; name: string };
+  /**
    * The lineage reference an edit found a stored face by, so a later
    * re-check finds it the same way when its hash moves.
    */
@@ -554,6 +559,10 @@ export type InPlaceRequest =
       axisRef?: InPlaceAxisRef;
       /** A linear pattern's own repeat vector, replacing `axis`. */
       direction?: ParametricVector3;
+      /** M02: the holes, bosses and cuts repeated, in place of the body. */
+      sourceFeatureIds?: FeatureId[];
+      /** M02: the copies left out, by instance label. */
+      skippedInstances?: string[];
     }
   | {
       /** An M14 gear, as the feature stores it. */
@@ -704,6 +713,16 @@ export type HandleSpec = (
       key: string;
       params: { anchor: Vector3 };
     }
+  | {
+      /**
+       * M02: one copy of a pattern, where it stands; a click skips it or
+       * brings it back. Its value is 1 while skipped.
+       */
+      valueId: string;
+      kind: 'instance';
+      key: string;
+      params: { anchor: Vector3; label: string; skipped: boolean };
+    }
 ) & {
   /**
    * The value's name on its chip and keypad when the picks decide it (a
@@ -792,6 +811,12 @@ export interface InPlaceToolSpec {
   };
   /** `planar` refuses curved faces; `cylindrical` takes cylinders only. */
   faceFilter?: 'planar' | 'cylindrical';
+  /**
+   * While this option has this value (a pattern's Repeat: Features), the
+   * command takes faces, many on one body, each naming the feature that made
+   * it, instead of the bodies `bodyMode` takes.
+   */
+  featureFaces?: { optionId: string; value: string };
   /**
    * While this option has this value, a click places a point (a draft's
    * clicked hinge): a picked face clicked again keeps its place in the set
@@ -4609,11 +4634,313 @@ function axisOf(value: string | undefined): 'x' | 'y' | 'z' {
 /** Float noise a picked direction drops, so an edge along X reads as X. */
 const DIRECTION_QUANTUM = 1e-9;
 
+/**
+ * The faces a command takes as its options now stand: its own face list, or
+ * a feature pattern's picks while Repeat is Features (M02).
+ */
+export function inPlaceFaceMode(
+  spec: InPlaceToolSpec | null | undefined,
+  options: Readonly<Record<string, string>> | undefined
+): 'one' | 'many' | undefined {
+  if (!spec) return undefined;
+  if (takesFeatureFaces(spec, options)) return 'many';
+  return spec.faceMode;
+}
+
+/** The bodies a command takes as its options now stand. */
+export function inPlaceBodyMode(
+  spec: InPlaceToolSpec | null | undefined,
+  options: Readonly<Record<string, string>> | undefined
+): 'one' | 'many' | undefined {
+  if (!spec || takesFeatureFaces(spec, options)) return undefined;
+  return spec.bodyMode;
+}
+
+/** Whether a face click names the feature that made it (M02). */
+export function takesFeatureFaces(
+  spec: InPlaceToolSpec | null | undefined,
+  options: Readonly<Record<string, string>> | undefined
+): boolean {
+  const rule = spec?.featureFaces;
+  return rule !== undefined && options?.[rule.optionId] === rule.value;
+}
+
+/** M02: what a pattern repeats, the whole body or features on it. */
+const REPEAT_OPTION: OptionSpec = {
+  id: 'repeat',
+  label: 'Repeat',
+  choices: [
+    { value: 'body', label: 'Body', tip: 'Copies the whole body' },
+    {
+      value: 'features',
+      label: 'Features',
+      tip: 'Copies holes, bosses and cuts on the body'
+    }
+  ],
+  initial: 'body'
+};
+
+const REPEAT_FEATURES = { optionId: 'repeat', value: 'features' } as const;
+
+function repeatsFeatures(options?: Readonly<Record<string, string>>): boolean {
+  return options?.repeat === 'features';
+}
+
+/** The features a pattern repeats, once each, in pick order. */
+function patternFeatureIds(slots: InPlaceSlots): FeatureId[] {
+  const ids: FeatureId[] = [];
+  for (const face of slots.faces) {
+    const id = face.feature?.featureId;
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * Where a pattern's handles stand: its body's box, or a box about the
+ * features it repeats, on their body. Null while nothing is picked.
+ */
+function patternSeed(
+  slots: InPlaceSlots,
+  options?: Readonly<Record<string, string>>,
+  ctx?: InPlaceContext
+): BodyPick | null {
+  if (!repeatsFeatures(options)) return slots.bodies[0] ?? null;
+  const faces = slots.faces.filter((face) => face.feature);
+  const points = faces.flatMap((face) => {
+    const point = face.centroid ?? face.center ?? face.point;
+    return point ? [point] : [];
+  });
+  if (points.length === 0) {
+    // An edit whose repeated features show no face stands on their body.
+    const source = patternSource(slots, options, ctx);
+    const box = source && ctx?.bodyBounds?.(source.targetBodyId);
+    return source && box ? { bodyId: source.targetBodyId, ...box } : null;
+  }
+  const reach = Math.max(2, ...faces.map((face) => face.cylinder?.radius ?? 0));
+  const bound = (
+    part: 'x' | 'y' | 'z',
+    pick: (...values: number[]) => number
+  ) => pick(...points.map((point) => point[part]));
+  return {
+    bodyId: faces[0]!.bodyId,
+    min: {
+      x: bound('x', Math.min) - reach,
+      y: bound('y', Math.min) - reach,
+      z: bound('z', Math.min) - reach
+    },
+    max: {
+      x: bound('x', Math.max) + reach,
+      y: bound('y', Math.max) + reach,
+      z: bound('z', Math.max) + reach
+    }
+  };
+}
+
+/**
+ * The repeated features an edit keeps although the model shows none of
+ * their faces to pick (a boss a later cut removed): they cannot be clicked
+ * out, so they are written back as stored rather than silently dropped.
+ */
+function keptPatternSources(
+  options?: Readonly<Record<string, string>>
+): FeatureId[] {
+  return (options?.keepSources ?? '')
+    .split(',')
+    .filter((id) => id !== '') as FeatureId[];
+}
+
+/** The pattern's target and repeated features, as the request stores them. */
+function patternSource(
+  slots: InPlaceSlots,
+  options?: Readonly<Record<string, string>>,
+  ctx?: InPlaceContext
+): { targetBodyId: BodyId; sourceFeatureIds?: FeatureId[] } | null {
+  if (!repeatsFeatures(options)) {
+    const body = slots.bodies[0];
+    return body ? { targetBodyId: body.bodyId } : null;
+  }
+  const picked = patternFeatureIds(slots);
+  const face = slots.faces.find((candidate) => candidate.feature);
+  const savedTarget =
+    ctx?.saved?.featureKind === 'pattern' ? ctx.saved.targetBodyId : null;
+  // Kept only while the pattern stays on the body they were made on: a
+  // feature picked on another body starts the set over there.
+  const kept =
+    savedTarget !== null && (!face || face.bodyId === savedTarget)
+      ? keptPatternSources(options).filter((id) => !picked.includes(id))
+      : [];
+  const sourceFeatureIds = [...picked, ...kept];
+  const targetBodyId =
+    face?.bodyId ?? (kept.length > 0 ? (savedTarget ?? undefined) : undefined);
+  return targetBodyId && sourceFeatureIds.length > 0
+    ? { targetBodyId, sourceFeatureIds }
+    : null;
+}
+
+function patternHint(
+  slots: InPlaceSlots,
+  options: Readonly<Record<string, string>> | undefined
+): string | null {
+  if (repeatsFeatures(options)) {
+    return patternFeatureIds(slots).length === 0 &&
+      keptPatternSources(options).length === 0
+      ? 'Click a hole, boss or cut to repeat'
+      : null;
+  }
+  return slots.bodies.length === 0 ? 'Click the body to repeat' : null;
+}
+
+/** The skip list as the command holds it: labels, comma-separated. */
+export function skippedPatternLabels(
+  options?: Readonly<Record<string, string>>
+): string[] {
+  return (options?.skip ?? '').split(',').filter((label) => label !== '');
+}
+
+/** The skip list with `label` skipped, or brought back if it was. */
+export function toggledPatternSkip(
+  skip: string | undefined,
+  label: string
+): string {
+  const labels = (skip ?? '').split(',').filter((entry) => entry !== '');
+  return (
+    labels.includes(label)
+      ? labels.filter((entry) => entry !== label)
+      : [...labels, label]
+  ).join(',');
+}
+
+/**
+ * The skip list a request stores: only copies the counts now reach, so a
+ * lowered count leaves no stale label behind.
+ */
+function skipRequest(
+  options: Readonly<Record<string, string>> | undefined,
+  /** Null while a count is an expression that does not resolve: all kept. */
+  copies: readonly { label: string }[] | null
+): { skippedInstances?: string[] } {
+  const live = copies && new Set(copies.map((copy) => copy.label));
+  const skipped = skippedPatternLabels(options).filter(
+    (label) => !live || live.has(label)
+  );
+  return skipped.length > 0 ? { skippedInstances: skipped } : {};
+}
+
+/** A copy's label needs no position: where the request lists labels. */
+const ORIGIN: Vector3 = { x: 0, y: 0, z: 0 };
+
+/** Most copies a pattern draws a skip toggle for. */
+const MAX_INSTANCE_TOGGLES = 100;
+
+function wholeCount(value: number | undefined, fallback: number): number {
+  const count = Math.round(value ?? fallback);
+  return Number.isFinite(count) ? Math.min(Math.max(count, 1), 100) : 1;
+}
+
+function offset(point: Vector3, by: Vector3, times: number): Vector3 {
+  return {
+    x: point.x + by.x * times,
+    y: point.y + by.y * times,
+    z: point.z + by.z * times
+  };
+}
+
+/** `point` turned `angleDeg` about the line, right-handed (Rodrigues). */
+function turnedAbout(
+  point: Vector3,
+  origin: Vector3,
+  direction: Vector3,
+  angleDeg: number
+): Vector3 {
+  const k = unit(direction);
+  const v = {
+    x: point.x - origin.x,
+    y: point.y - origin.y,
+    z: point.z - origin.z
+  };
+  const angle = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const along = dot(k, v) * (1 - cos);
+  const cross = {
+    x: k.y * v.z - k.z * v.y,
+    y: k.z * v.x - k.x * v.z,
+    z: k.x * v.y - k.y * v.x
+  };
+  return {
+    x: origin.x + v.x * cos + cross.x * sin + k.x * along,
+    y: origin.y + v.y * cos + cross.y * sin + k.y * along,
+    z: origin.z + v.z * cos + cross.z * sin + k.z * along
+  };
+}
+
+interface PatternCopySpot {
+  label: string;
+  point: Vector3;
+}
+
+/** Each copy's label along a row, the original's left out. */
+function rowCopies(count: number, at: (index: number) => Vector3) {
+  return Array.from({ length: Math.max(count - 1, 0) }, (_unused, index) => ({
+    label: String(index + 1),
+    point: at(index + 1)
+  }));
+}
+
+/** Each copy of a grid, column-major as the build labels them. */
+function gridCopies(
+  columns: number,
+  rows: number,
+  at: (column: number, row: number) => Vector3
+): PatternCopySpot[] {
+  const copies: PatternCopySpot[] = [];
+  for (let column = 0; column < columns; column += 1) {
+    for (let row = 0; row < rows; row += 1) {
+      if (column === 0 && row === 0) continue;
+      copies.push({ label: `${column}-${row}`, point: at(column, row) });
+    }
+  }
+  return copies;
+}
+
+/** A skip toggle on every copy, where it stands. */
+function instanceHandles(
+  seed: BodyPick,
+  copies: readonly PatternCopySpot[],
+  options: Readonly<Record<string, string>>
+): HandleSpec[] {
+  if (copies.length > MAX_INSTANCE_TOGGLES) return [];
+  const skipped = new Set(skippedPatternLabels(options));
+  return copies.map(({ label, point }) => {
+    const off = skipped.has(label);
+    return {
+      valueId: `instance:${label}`,
+      kind: 'instance' as const,
+      // The chip is drawn anew when it is skipped or brought back.
+      key: `${bodyKey(seed)}:instance:${label}:${off ? 'skipped' : 'kept'}`,
+      params: { anchor: point, label, skipped: off }
+    };
+  });
+}
+
+/** Where a linear pattern's copies stand. */
+function linearCopies(
+  seed: BodyPick,
+  vector: Vector3,
+  spacing: number,
+  count: number
+): PatternCopySpot[] {
+  const origin = centre(seed);
+  return rowCopies(count, (index) => offset(origin, vector, spacing * index));
+}
+
 const linearPattern: InPlaceToolSpec = {
   id: 'linear-pattern',
   title: 'Linear pattern',
   profileMode: 'none',
   bodyMode: 'one',
+  featureFaces: REPEAT_FEATURES,
   // Datum axes are drawn to pick as a direction, as an edge or a flat face
   // is; none is an axis slot the pattern needs.
   wantsAxis: true,
@@ -4660,6 +4987,7 @@ const linearPattern: InPlaceToolSpec = {
     { id: 'dirZ', label: 'Z', unit: 'count', initial: 0, vector: 'Direction' }
   ],
   options: [
+    REPEAT_OPTION,
     {
       ...AXIS_OPTION('x'),
       choices: [
@@ -4668,14 +4996,12 @@ const linearPattern: InPlaceToolSpec = {
       ]
     }
   ],
-  hint: (slots) =>
-    slots.bodies.length === 0
-      ? 'Click the body to repeat'
-      : 'Drag the spacing · pick an edge or face to aim it',
-  ready: (slots) => slots.bodies.length > 0,
-  request(slots, values, options, ctx) {
-    const body = slots.bodies[0];
-    if (!body) return null;
+  hint: (slots, options) =>
+    patternHint(slots, options) ?? 'Drag the spacing · tap a copy to skip it',
+  ready: (slots, options, ctx) => patternSource(slots, options, ctx) !== null,
+  request(slots, values, options, ctx, numbers) {
+    const source = patternSource(slots, options, ctx);
+    if (!source) return null;
     // A custom vector is stored as given, expressions and all; a picked
     // direction is one too, as its numbers.
     const direction =
@@ -4686,9 +5012,10 @@ const linearPattern: InPlaceToolSpec = {
             z: values.dirZ ?? 0
           }
         : null;
+    const count = numbers?.count;
     return {
       tool: 'pattern',
-      targetBodyId: body.bodyId,
+      ...source,
       patternKind: 'linear',
       count: values.count ?? 3,
       axis:
@@ -4696,11 +5023,17 @@ const linearPattern: InPlaceToolSpec = {
           ? ctx.saved.axis
           : axisOf(options.axis),
       spacing: values.spacing ?? 20,
-      ...(direction ? { direction } : {})
+      ...(direction ? { direction } : {}),
+      ...skipRequest(
+        options,
+        count === undefined
+          ? null
+          : rowCopies(wholeCount(count, 3), () => ORIGIN)
+      )
     };
   },
-  handles(slots, values, _ctx, options) {
-    const body = slots.bodies[0];
+  handles(slots, values, ctx, options) {
+    const body = patternSeed(slots, options, ctx);
     if (!body) return [];
     const custom = options.axis === 'custom';
     const typed = {
@@ -4741,7 +5074,17 @@ const linearPattern: InPlaceToolSpec = {
               }
             }
           }))
-        : [])
+        : []),
+      ...instanceHandles(
+        body,
+        linearCopies(
+          body,
+          vector,
+          values.spacing ?? 20,
+          wholeCount(values.count, 3)
+        ),
+        options
+      )
     ];
   }
 };
@@ -4751,6 +5094,7 @@ const circularPattern: InPlaceToolSpec = {
   title: 'Circular pattern',
   profileMode: 'none',
   bodyMode: 'one',
+  featureFaces: REPEAT_FEATURES,
   wantsAxis: true,
   axisSource: 'world',
   axisPicks: true,
@@ -4778,6 +5122,7 @@ const circularPattern: InPlaceToolSpec = {
     }
   ],
   options: [
+    REPEAT_OPTION,
     {
       id: 'spacing',
       label: 'Spacing',
@@ -4797,17 +5142,19 @@ const circularPattern: InPlaceToolSpec = {
     }
   ],
   hint(slots, options) {
-    if (slots.bodies.length === 0) return 'Click the body to repeat';
+    const pick = patternHint(slots, options);
+    if (pick) return pick;
     if (!slots.axis) return 'Pick an axis: edge, cylinder, X/Y/Z or datum';
     return options?.spacing === 'step'
       ? 'Drag the step · tap the count'
       : 'Drag the angle · tap the count';
   },
-  ready: (slots) => slots.bodies.length > 0 && slots.axis !== null,
-  request(slots, values, options) {
-    const body = slots.bodies[0];
+  ready: (slots, options, ctx) =>
+    patternSource(slots, options, ctx) !== null && slots.axis !== null,
+  request(slots, values, options, ctx, numbers) {
+    const source = patternSource(slots, options, ctx);
     const choice = slots.axis?.choice;
-    if (!body || !choice) return null;
+    if (!source || !choice) return null;
     // A datum axis, or a picked line Done adds as one, replaces the world
     // axis the card stores beside it.
     const axisRef = 'world' in choice ? null : turnAxisRef(choice);
@@ -4815,7 +5162,7 @@ const circularPattern: InPlaceToolSpec = {
     const count = values.count ?? 6;
     return {
       tool: 'pattern',
-      targetBodyId: body.bodyId,
+      ...source,
       patternKind: 'circular',
       count,
       axis: 'world' in choice ? choice.world : 'z',
@@ -4823,15 +5170,38 @@ const circularPattern: InPlaceToolSpec = {
       angleDeg:
         options.spacing === 'step'
           ? stepTotal(values.step ?? 60, count)
-          : (values.angle ?? 360)
+          : (values.angle ?? 360),
+      ...skipRequest(
+        options,
+        numbers?.count === undefined
+          ? null
+          : rowCopies(wholeCount(numbers.count, 6), () => ORIGIN)
+      )
     };
   },
-  handles(slots, _values, _ctx, options) {
-    const body = slots.bodies[0];
+  handles(slots, values, ctx, options) {
+    const body = patternSeed(slots, options, ctx);
     if (!body || !slots.axis) return [];
     const placement = bodyTurnRig(body, slots.axis);
     const valueId = options.spacing === 'step' ? 'step' : 'angle';
     const key = `${bodyKey(body)}:${valueId}:${slots.axis.id}`;
+    const count = wholeCount(values.count, 6);
+    const total =
+      options.spacing === 'step'
+        ? (values.step ?? 60) * count
+        : (values.angle ?? 360);
+    // The build's step: a closed ring shares the turn among all copies,
+    // any other sweep among the gaps between them.
+    const step =
+      options.spacing === 'step'
+        ? (values.step ?? 60)
+        : Math.abs(Math.abs(total) - 360) <= 1e-9
+          ? total / count
+          : total / Math.max(count - 1, 1);
+    const axis = slots.axis;
+    const copies = rowCopies(count, (index) =>
+      turnedAbout(centre(body), axis.origin, axis.direction, step * index)
+    );
     return [
       // A body with no extent to turn a rig around types its angle.
       placement
@@ -4847,7 +5217,8 @@ const circularPattern: InPlaceToolSpec = {
         kind: 'chip',
         key: `${bodyKey(body)}:count`,
         params: { anchor: centre(body) }
-      }
+      },
+      ...instanceHandles(body, copies, options)
     ];
   }
 };
@@ -4874,6 +5245,7 @@ const gridPattern: InPlaceToolSpec = {
   title: 'Grid pattern',
   profileMode: 'none',
   bodyMode: 'one',
+  featureFaces: REPEAT_FEATURES,
   wantsAxis: false,
   wantsPath: false,
   values: [
@@ -4904,10 +5276,12 @@ const gridPattern: InPlaceToolSpec = {
     }
   ],
   options: [
+    REPEAT_OPTION,
     { ...AXIS_OPTION('x'), distinctFrom: 'axis2' },
     { ...AXIS_OPTION('y', 'axis2', 'Then along'), distinctFrom: 'axis' }
   ],
   layout: [
+    { items: ['repeat'] },
     {
       label: 'First',
       boxed: true,
@@ -4921,10 +5295,8 @@ const gridPattern: InPlaceToolSpec = {
       items: ['axis2', 'spacing2', 'count2']
     }
   ],
-  hint: (slots) =>
-    slots.bodies.length === 0
-      ? 'Click the body to repeat'
-      : 'Drag the spacings · tap the counts',
+  hint: (slots, options) =>
+    patternHint(slots, options) ?? 'Drag the spacings · tap a copy to skip it',
   // An edited grid whose second spacing or count is absent took the first's:
   // until the user sets it, it still follows the first.
   defaults(_slots, ctx, numbers) {
@@ -4941,10 +5313,10 @@ const gridPattern: InPlaceToolSpec = {
         : {})
     };
   },
-  ready: (slots) => slots.bodies.length > 0,
+  ready: (slots, options, ctx) => patternSource(slots, options, ctx) !== null,
   request(slots, values, options, ctx, numbers) {
-    const body = slots.bodies[0];
-    if (!body) return null;
+    const source = patternSource(slots, options, ctx);
+    if (!source) return null;
     // A second value still following the first (an edit's absent one, not
     // set since) is left out, so the edit keeps it absent.
     const saved = ctx.saved?.featureKind === 'pattern' ? ctx.saved : undefined;
@@ -4956,7 +5328,7 @@ const gridPattern: InPlaceToolSpec = {
       numbers[second] === numbers[first];
     return {
       tool: 'pattern',
-      targetBodyId: body.bodyId,
+      ...source,
       patternKind: 'grid',
       count: values.count ?? 3,
       axis: axisOf(options.axis),
@@ -4965,11 +5337,21 @@ const gridPattern: InPlaceToolSpec = {
       ...(follows('spacing2', 'spacing')
         ? {}
         : { spacing2: values.spacing2 ?? 20 }),
-      ...(follows('count2', 'count') ? {} : { count2: values.count2 ?? 3 })
+      ...(follows('count2', 'count') ? {} : { count2: values.count2 ?? 3 }),
+      ...skipRequest(
+        options,
+        numbers?.count === undefined
+          ? null
+          : gridCopies(
+              wholeCount(numbers.count, 3),
+              wholeCount(numbers.count2 ?? numbers.count, 3),
+              () => ORIGIN
+            )
+      )
     };
   },
-  handles(slots, _values, _ctx, options) {
-    const body = slots.bodies[0];
+  handles(slots, values, ctx, options) {
+    const body = patternSeed(slots, options, ctx);
     if (!body) return [];
     const first = axisOf(options.axis);
     const second = axisOf(options.axis2 ?? 'y');
@@ -5006,7 +5388,25 @@ const gridPattern: InPlaceToolSpec = {
         key: `${bodyKey(body)}:count2`,
         label: along(second, 'count'),
         params: { anchor: body.min }
-      }
+      },
+      ...instanceHandles(
+        body,
+        gridCopies(
+          wholeCount(values.count, 3),
+          wholeCount(values.count2, 3),
+          (column, row) =>
+            offset(
+              offset(
+                origin,
+                AXIS_VECTORS[first]!,
+                (values.spacing ?? 20) * column
+              ),
+              AXIS_VECTORS[second]!,
+              (values.spacing2 ?? values.spacing ?? 20) * row
+            )
+        ),
+        options
+      )
     ];
   }
 };

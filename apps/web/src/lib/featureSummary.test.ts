@@ -274,6 +274,19 @@ describe('featureValueSummary', () => {
         'mm'
       )
     ).toBe('× 4');
+    expect(
+      featureValueSummary(
+        feature({
+          featureKind: 'pattern',
+          patternKind: 'grid',
+          count: 3,
+          count2: 2,
+          skippedInstances: ['1-1', '2-0']
+        }),
+        {},
+        'mm'
+      )
+    ).toBe('3 × 2 · 2 skipped');
   });
 
   it('summarises a worm by its starts and a worm wheel by its worm', () => {

@@ -66,6 +66,27 @@ export function assertThreadContentSchema(
 }
 
 /**
+ * M02 feature patterns and skipped copies (schema v62): a pattern carrying
+ * either needs a document that declares it, or an older reader would copy
+ * the whole body, or build every copy, in its place.
+ */
+export function assertPatternContentSchema(
+  data: unknown,
+  version: unknown
+): void {
+  if (!record(data)) return;
+  if (
+    data.sourceFeatureIds !== undefined ||
+    data.skippedInstances !== undefined
+  )
+    assertMinimumProjectSchema(
+      version,
+      62,
+      'Feature patterns and skipped pattern copies'
+    );
+}
+
+/**
  * M16 sheet-metal features (schema v58): an older reader has no builder for
  * the kind and would drop the body, so the document must declare the schema.
  */
@@ -170,6 +191,15 @@ export function assertDocumentContentCommandSchema(
       assertSlotSchema(document.schemaVersion);
     if (command.kind === 'feature.thread')
       assertThreadContentSchema(command.payload, document.schemaVersion);
+    if (command.kind === 'feature.pattern')
+      assertPatternContentSchema(command.payload, document.schemaVersion);
+    // Pattern-only fields, gated however the patch names its kind.
+    if (
+      record(command.payload.data) &&
+      (command.payload.data.featureKind === undefined ||
+        command.payload.data.featureKind === 'pattern')
+    )
+      assertPatternContentSchema(command.payload.data, document.schemaVersion);
     // A feature patch (`feature.update`) need not name its kind, so a
     // partial `{ runoutEnd: true }` is gated by its fields: they are
     // thread-only, so any patch that is not another kind's carries them
@@ -242,6 +272,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       );
     if (node.kind === 'feature' && node.data.featureKind === 'thread')
       assertThreadContentSchema(node.data, document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'pattern')
+      assertPatternContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
     if (

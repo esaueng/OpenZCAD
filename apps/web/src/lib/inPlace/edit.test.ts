@@ -171,6 +171,19 @@ function untouched(
   return request && resolveNewAxis(request, null);
 }
 
+const EMPTY_SLOTS_FOR_EDIT: InPlaceSlots = {
+  profiles: [],
+  axis: null,
+  path: [],
+  guide: [],
+  faces: [],
+  bodies: [],
+  plane: null,
+  edges: [],
+  refs: [],
+  image: null
+};
+
 describe('which in-place command edits a stored feature', () => {
   it('maps kinds, booleans by operation and patterns by kind', () => {
     expect(
@@ -1129,6 +1142,129 @@ describe('an untouched edit writes the feature back as stored', () => {
         request
       )?.data
     ).toMatchObject({ direction: { x: 1, y: 2, z: 0 } });
+  });
+
+  it('M02 feature pattern: a repeated feature with no face to show is kept (review)', () => {
+    const boss = 'feat_boss' as FeatureId;
+    const hole = 'feat_hole' as FeatureId;
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      spacing: 12,
+      angleDeg: 0,
+      sourceFeatureIds: [boss, hole]
+    };
+    const node = feature(data, 'body_p' as BodyId);
+    // A later cut removed the boss: the model shows only the hole's faces.
+    const context: InPlaceEditContext = {
+      ...EDIT_CTX,
+      featureFace: (bodyId, featureId) =>
+        featureId === hole
+          ? { ...TOP, bodyId, feature: { featureId, name: 'Hole' } }
+          : null
+    };
+    const armed = inPlaceEditSeed(node, context)!;
+    expect(armed.seed.slots.faces).toHaveLength(1);
+    expect(armed.seed.options.keepSources).toBe(boss);
+    // A spacing change writes both back, not only the one on screen.
+    const request = untouched(node, { spacing: 20 }, context) as Extract<
+      ResolvedInPlaceRequest,
+      { tool: 'pattern' }
+    >;
+    expect(request.sourceFeatureIds).toEqual([hole, boss]);
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: node.featureId, name: node.name, data },
+        request
+      )?.data
+    ).toMatchObject({ spacing: 20, sourceFeatureIds: [hole, boss] });
+    // A feature picked on another body starts the set over there: the boss,
+    // made on this body, is not carried to one it is not on (re-check).
+    const elsewhere = IN_PLACE_TOOL_SPECS['linear-pattern'].request(
+      {
+        ...EMPTY_SLOTS_FOR_EDIT,
+        faces: [
+          {
+            ...TOP,
+            bodyId: 'body_other' as BodyId,
+            feature: { featureId: 'feat_other' as FeatureId, name: 'Other' }
+          }
+        ]
+      },
+      { count: 3, spacing: 20 },
+      { ...armed.seed.options },
+      {
+        sketchViews: [],
+        datumAxes: undefined,
+        datumLabel: () => 'Axis',
+        saved: data
+      },
+      { count: 3, spacing: 20 }
+    );
+    expect(elsewhere).toMatchObject({
+      targetBodyId: 'body_other',
+      sourceFeatureIds: ['feat_other']
+    });
+  });
+
+  it('M02 feature pattern: its features and skipped copies round-trip unchanged', () => {
+    const hole = 'feat_hole' as FeatureId;
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'linear',
+      count: 4,
+      axis: 'x',
+      spacing: 12,
+      angleDeg: 0,
+      sourceFeatureIds: [hole],
+      skippedInstances: ['2']
+    };
+    const node = feature(data, 'body_p' as BodyId);
+    const context: InPlaceEditContext = {
+      ...EDIT_CTX,
+      featureFace: (bodyId, featureId) => ({
+        ...TOP,
+        bodyId,
+        feature: { featureId, name: 'Hole' }
+      })
+    };
+    const armed = inPlaceEditSeed(node, context)!;
+    expect(armed.tool).toBe('linear-pattern');
+    expect(armed.seed.options).toMatchObject({
+      repeat: 'features',
+      skip: '2'
+    });
+    expect(armed.seed.slots.bodies).toEqual([]);
+    const request = untouched(node, {}, context) as Extract<
+      ResolvedInPlaceRequest,
+      { tool: 'pattern' }
+    >;
+    expect(request).toMatchObject({
+      targetBodyId: BODY,
+      sourceFeatureIds: [hole],
+      skippedInstances: ['2']
+    });
+    const update = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      request
+    );
+    expect(update?.data).toMatchObject({
+      sourceFeatureIds: [hole],
+      skippedInstances: ['2']
+    });
+    expect(update).not.toHaveProperty('clearData');
+    // Every copy brought back: the stored list is cleared, not left behind.
+    const { skippedInstances: _skipped, ...kept } = request;
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: node.featureId, name: node.name, data },
+        kept
+      )?.clearData
+    ).toEqual(['skippedInstances']);
   });
 
   it('loft: a stored apex opens as a point, each coordinate editable', () => {
