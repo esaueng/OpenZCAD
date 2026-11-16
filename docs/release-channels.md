@@ -24,6 +24,33 @@ stable config that names a beta resource, shares a rate-limit namespace,
 binds a service, turns Glimpse on, defines Previews, or uses another
 channel's sender or origin. CI dry-runs both deploys on every PR.
 
+## Realms: each channel's state in the browser
+
+The same email signs in as the same user id on both channels, with a
+different account behind it. A browser keeps per-account state under that
+id, so each channel is a realm (`apps/web/src/lib/deploymentRealm.ts`):
+
+- The page takes its realm from its own hostname: `beta.zcad.app` is
+  `beta`; `zcad.app` and `stable.zcad.app` are `stable`. The desktop app
+  takes the realm of the hosted API it calls. Previews, development and
+  self-hosted deployments have none.
+- Encryption databases and per-account local state (device keys and
+  device-list pins, contact, version and preference pins, sealed-settings
+  and folder sequences, the sealed shelf, settings merge state) are named
+  per realm. Beta keeps the names they had before realms, because zcad.app
+  and beta.zcad.app both served beta until the stable cutover; stable's
+  are `<name>@stable`.
+- A new identity's device list names its realm in its first entry (device
+  list format version 3), and a browser refuses a list made for another
+  realm. Lists made before realms name none and verify everywhere.
+
+Moving an address to another Worker changes which realm its pages are
+in: update `HOSTED_REALMS` with the routes. `test/deployment-realms.test.ts`
+fails until they agree. Without that, a browser reads the old channel's
+state as the new channel's: when zcad.app moved to stable, beta's
+device-list pin made stable's empty key store look like a rollback, and
+encryption could not be set up there.
+
 ## Promoting stable
 
 `stable` only fast-forwards to a commit already on `main`, so it never

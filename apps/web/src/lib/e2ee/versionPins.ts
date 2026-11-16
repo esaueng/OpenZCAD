@@ -20,6 +20,8 @@
  * before read with none.
  */
 
+import { realmStorageName } from '../deploymentRealm';
+
 /** A replaced envelope's pin: its sequence and lowercase hex hash. */
 export interface EnvelopePin {
   readonly sequence: number;
@@ -325,7 +327,7 @@ export function memoryVersionPins(): VersionPinStore {
   };
 }
 
-export const VERSION_PIN_DATABASE = 'openzcad-e2ee-versions';
+export const VERSION_PIN_DATABASE = realmStorageName('openzcad-e2ee-versions');
 const PINS = 'pins';
 
 let opening: Promise<IDBDatabase> | null = null;

@@ -8,6 +8,7 @@ import {
   isKeySessionActive,
   subscribeKeySession
 } from './e2ee/keySession';
+import { realmStorageName } from './deploymentRealm';
 
 interface NameHint {
   name: string;
@@ -19,8 +20,9 @@ let current:
   | { accountId: string; revision: number; names: Map<string, NameHint> }
   | undefined;
 let timer: ReturnType<typeof setTimeout> | undefined;
+const ACCOUNT_PREFIX = realmStorageName(SHELF_NAMES_PREFIX);
 const key = (accountId: string) =>
-  SHELF_NAMES_PREFIX + encodeURIComponent(accountId);
+  ACCOUNT_PREFIX + encodeURIComponent(accountId);
 
 function persist(scope: NonNullable<typeof current>): void {
   if (current !== scope || !isCurrentKeySession(scope.revision)) return;

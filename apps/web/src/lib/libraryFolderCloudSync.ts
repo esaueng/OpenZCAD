@@ -33,6 +33,7 @@ import {
   resetLegacyShelfRows,
   shelfSealedOrSafe
 } from './sealedShelfState';
+import { realmStorageName } from './deploymentRealm';
 
 export { folderSyncRecordKey };
 
@@ -368,7 +369,9 @@ export function browserFolderSyncHost(
   };
 }
 
-const SEQUENCE_PREFIX = 'openzcad.library.folders.sequence.v1';
+const SEQUENCE_PREFIX = realmStorageName(
+  'openzcad.library.folders.sequence.v1'
+);
 /** Shared across sync rounds even when persistent storage refuses a pin. */
 const sequenceFloors = new Map<string, number>();
 

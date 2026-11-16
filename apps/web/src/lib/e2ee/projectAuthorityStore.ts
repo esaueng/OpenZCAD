@@ -1,5 +1,6 @@
 /** Durable owner intent and accepted authority pins, scoped to this account. */
 import type { E2eeProjectAuthorityRecord } from '@openzcad/shared';
+import { realmStorageName } from '../deploymentRealm';
 
 export interface ExpectedProjectOwner {
   readonly userId: string;
@@ -95,7 +96,9 @@ export function memoryProjectAuthorityStore(): ProjectAuthorityStore {
   };
 }
 
-export const PROJECT_AUTHORITY_DATABASE = 'openzcad-e2ee-project-authority';
+export const PROJECT_AUTHORITY_DATABASE = realmStorageName(
+  'openzcad-e2ee-project-authority'
+);
 let opening: Promise<IDBDatabase> | undefined;
 function database(): Promise<IDBDatabase> {
   opening ??= new Promise((resolve, reject) => {
