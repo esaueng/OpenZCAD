@@ -25,6 +25,7 @@
   "drawing-centerlines.spec.ts": 12,
   "drawing-dimensions.spec.ts": 10,
   "drawing-dxf-export.spec.ts": 10,
+  "drawing-distances.spec.ts": 14,
   "drawing-properties.spec.ts": 12,
   "drawing-sections.spec.ts": 25,
   "drawing-tolerances.spec.ts": 14,

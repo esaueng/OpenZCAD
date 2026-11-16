@@ -337,7 +337,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // kinds) and a mark as a dimension point (`anchor: 'mark'`). An older client
 // would refuse the unknown kinds, so it must refuse the document. Builds on
 // v72.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 73 as const;
+// v75 adds the D02 distance dimension (`kind: 'distance'`): point to line,
+// line to line, and to a circle's centre or its near or far side, where a
+// line may be a straight edge or a centreline. An older client would refuse
+// the unknown kind, so it must refuse the document. Builds on v74
+// (M17 standard parts in holes, #1644).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 75 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
