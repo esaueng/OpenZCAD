@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as KeysModule from '../../lib/e2ee/accountKeys';
 import type * as PasskeysModule from '../../lib/e2ee/passkeys';
 import type * as PreferencesModule from '../../lib/e2ee/projectPreferences';
+import type * as UnlockedKeysModule from '../../lib/e2ee/unlockedKeys';
 import type {
   AccountView,
   E2eeContext,
@@ -11,8 +12,15 @@ import type {
 import { testRun } from '../../test/encryptionRun';
 
 const keys = vi.hoisted(() => ({
-  setUpEncryption: vi.fn(),
-  addPasskey: vi.fn()
+  setUpEncryption:
+    vi.fn<
+      (
+        ctx: unknown,
+        options: { recoverySecret: Uint8Array; label: string }
+      ) => Promise<unknown>
+    >(),
+  addPasskey:
+    vi.fn<(ctx: unknown, account: unknown, auth: unknown) => Promise<unknown>>()
 }));
 const prf = vi.hoisted(() => vi.fn());
 const preferences = vi.hoisted(() => ({
@@ -35,7 +43,7 @@ vi.mock('../../lib/e2ee/projectPreferences', async (original) => ({
   saveProjectPreference: preferences.save
 }));
 vi.mock('../../lib/e2ee/unlockedKeys', async (original) => ({
-  ...(await original<typeof import('../../lib/e2ee/unlockedKeys')>()),
+  ...(await original<typeof UnlockedKeysModule>()),
   unlockedAccount: () => ({ accountKey: new Uint8Array(32) })
 }));
 const { SetupDialog } = await import('./SetupDialog');
@@ -68,7 +76,7 @@ function open() {
 
 async function throughConfirm() {
   fireEvent.click(await screen.findByRole('button', { name: 'Start' }));
-  const shown = screen.getByLabelText('Recovery key').textContent!;
+  const shown = screen.getByLabelText('Recovery key').textContent ?? '';
   const continueButton = screen.getByRole('button', { name: 'Continue' });
   // The acknowledgement comes first (design review I80).
   expect(continueButton).toBeDisabled();
