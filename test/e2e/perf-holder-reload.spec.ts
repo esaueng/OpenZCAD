@@ -20,6 +20,7 @@ import {
   benchmarkCheckout
 } from '../support/benchmarkCheckout';
 import { privateArtifactPaths } from '../support/privateArtifacts';
+import { hostSnapshot, perfBrowserArgs } from '../../scripts/perf-host.mjs';
 
 /**
  * H02 measurement probe (ROADMAP.md): the first parameter edit after a reload
@@ -54,6 +55,8 @@ import { privateArtifactPaths } from '../support/privateArtifacts';
  * time to exact plus one warm edit plus 250 ms.
  */
 test.skip(!process.env.OZ_PERF, 'Performance probe; set OZ_PERF=1 to run it.');
+// OZ_PERF_ANGLE=vulkan (or gl) renders on the GPU; unset keeps SwiftShader.
+test.use({ launchOptions: { args: perfBrowserArgs() } });
 
 const fixture = (file: string) =>
   fileURLToPath(new URL(`../fixtures/hammer-holder/${file}`, import.meta.url));
@@ -530,6 +533,7 @@ for (const scenario of scenarios) {
   }, testInfo) => {
     test.setTimeout(600_000);
     privatePaths?.artifactDirectory(testInfo.project.outputDir);
+    const hostBefore = hostSnapshot();
     const checkout = benchmarkCheckout({
       requireClean: !!process.env.H02_CACHE_MODE
     });
@@ -728,6 +732,17 @@ for (const scenario of scenarios) {
       // Adapter byte accounting and WASM capacity are recorded in cacheEvents.
       // Neither is a worker retained-heap measurement.
       workerHeap: await retainedWorkerHeap(page),
+      angle: process.env.OZ_PERF_ANGLE ?? null,
+      webglRenderer: await page.evaluate(() => {
+        const gl = document.createElement('canvas').getContext('webgl2');
+        const debug = gl?.getExtension('WEBGL_debug_renderer_info');
+        const renderer: unknown = debug
+          ? gl?.getParameter(debug.UNMASKED_RENDERER_WEBGL)
+          : null;
+        gl?.getExtension('WEBGL_lose_context')?.loseContext();
+        return typeof renderer === 'string' ? renderer : null;
+      }),
+      host: { before: hostBefore, after: hostSnapshot() },
       exactCounts: await page.evaluate(() => window.__ozExactCounts ?? null),
       repeat: testInfo.repeatEachIndex,
       fixture: scenario.fixture,

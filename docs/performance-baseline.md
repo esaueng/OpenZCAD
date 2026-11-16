@@ -1185,17 +1185,17 @@ measurements. Separate attribution runs used identical tracing/query settings
 in both arms. The 128-body scene submits about 215k rendered triangles, with
 261–262 model-scene draws and 277 geometries in both arms.
 
-| Workload | Baseline | Candidate | Interpretation |
-| --- | ---: | ---: | --- |
-| 32 bodies, traced hover shader diagnostic time | 168.2 ms; 5 links | no call above 0.3 ms; 0 links | Prepared programs reused on first hover |
-| 32 bodies, traced worst hover callback | 150.1 ms | 11.1 ms | 92.6% less callback time at the worst sample |
-| 32 bodies, traced zoom p99 | 75.0 ms | 33.3 ms | 55.6% lower tail latency |
-| 32 bodies, traced diagnostics-orbit p99 | 75.1 ms | 41.9 ms | 44.2% lower tail latency |
-| 32 bodies, quiet repeat zoom mean / p99 | 35.6 / 79.2 ms | 17.9 / 37.5 ms | About 2x throughput; 52.7% lower p99 |
-| 128 bodies, quiet A zoom mean / p99 | 81.2 / 141.7 ms | 19.4 / 50.1 ms | 4.18x throughput; 64.6% lower p99 |
-| 128 bodies, quiet B zoom mean / p99 | 75.7 / 104.2 ms | 19.6 / 54.2 ms | 3.85x throughput; 48.0% lower p99 |
-| 128 bodies, quiet A diagnostics-orbit p99 | 95.9 ms | 58.5 ms | 39.0% lower tail latency |
-| 128 bodies, quiet B diagnostics-orbit p99 | 100.0 ms | 54.2 ms | 45.8% lower tail latency |
+| Workload                                       |          Baseline |                     Candidate | Interpretation                               |
+| ---------------------------------------------- | ----------------: | ----------------------------: | -------------------------------------------- |
+| 32 bodies, traced hover shader diagnostic time | 168.2 ms; 5 links | no call above 0.3 ms; 0 links | Prepared programs reused on first hover      |
+| 32 bodies, traced worst hover callback         |          150.1 ms |                       11.1 ms | 92.6% less callback time at the worst sample |
+| 32 bodies, traced zoom p99                     |           75.0 ms |                       33.3 ms | 55.6% lower tail latency                     |
+| 32 bodies, traced diagnostics-orbit p99        |           75.1 ms |                       41.9 ms | 44.2% lower tail latency                     |
+| 32 bodies, quiet repeat zoom mean / p99        |    35.6 / 79.2 ms |                17.9 / 37.5 ms | About 2x throughput; 52.7% lower p99         |
+| 128 bodies, quiet A zoom mean / p99            |   81.2 / 141.7 ms |                19.4 / 50.1 ms | 4.18x throughput; 64.6% lower p99            |
+| 128 bodies, quiet B zoom mean / p99            |   75.7 / 104.2 ms |                19.6 / 54.2 ms | 3.85x throughput; 48.0% lower p99            |
+| 128 bodies, quiet A diagnostics-orbit p99      |           95.9 ms |                       58.5 ms | 39.0% lower tail latency                     |
+| 128 bodies, quiet B diagnostics-orbit p99      |          100.0 ms |                       54.2 ms | 45.8% lower tail latency                     |
 
 The traced 32-body zoom spent 4,805.6 ms in layout before and 105.2 ms after
 (97.8% less across the phase); the worst layout fell from 63.7 to 2.3 ms.
@@ -1313,16 +1313,16 @@ orbit starts on unobstructed canvas and asserts that the camera actually moved.
 Each gesture contains the same 180 input moves; long-task counts are per gesture
 and use the browser's 50 ms threshold, distinct from the HUD's 25 ms hitch count.
 
-| Measurement | Baseline A → candidate A | Baseline B → candidate B |
-| --- | ---: | ---: |
-| Largest cold highlight reflection task | 127.1 → 14.4 ms | 39.9 → 0.8 ms |
-| Entire highlight preparation span, including async waits | 702.4 → 524.5 ms | 900.4 → 308.1 ms |
-| Diagnostics-orbit mean frame interval | 22.0 → 17.3 ms | 19.5 → 19.5 ms |
-| Diagnostics-orbit p99 | 66.7 → 54.0 ms | 67.2 → 50.0 ms |
-| Diagnostics-orbit worst frame interval | 116.6 → 75.0 ms | 91.5 → 58.5 ms |
-| Diagnostics-orbit browser long tasks | 35 → 2 | 28 → 1 |
-| Ordinary orbit mean frame interval | 17.5 → 16.7 ms | 17.1 → 16.6 ms |
-| Ordinary orbit p99 | 37.7 → 41.9 ms | 42.3 → 37.7 ms |
+| Measurement                                              | Baseline A → candidate A | Baseline B → candidate B |
+| -------------------------------------------------------- | -----------------------: | -----------------------: |
+| Largest cold highlight reflection task                   |          127.1 → 14.4 ms |            39.9 → 0.8 ms |
+| Entire highlight preparation span, including async waits |         702.4 → 524.5 ms |         900.4 → 308.1 ms |
+| Diagnostics-orbit mean frame interval                    |           22.0 → 17.3 ms |           19.5 → 19.5 ms |
+| Diagnostics-orbit p99                                    |           66.7 → 54.0 ms |           67.2 → 50.0 ms |
+| Diagnostics-orbit worst frame interval                   |          116.6 → 75.0 ms |           91.5 → 58.5 ms |
+| Diagnostics-orbit browser long tasks                     |                   35 → 2 |                   28 → 1 |
+| Ordinary orbit mean frame interval                       |           17.5 → 16.7 ms |           17.1 → 16.6 ms |
+| Ordinary orbit p99                                       |           37.7 → 41.9 ms |           42.3 → 37.7 ms |
 
 All four final captures had zero page/console errors. Separate paired cold-start
 checks measured largest tasks of 37.9 → 1.2 ms and 41.9 → 8.1 ms. Ordinary orbit
@@ -1354,6 +1354,13 @@ notice transitions and sustained gesture frames before choosing a fix. Repeat
 on other GPUs/DPR settings and imported assemblies, and measure refused direct
 edits before extending the variable-scope change to other notice heights. H02's
 broader geometry/cache acceptance remains Partial.
+
+## Active 1 edit-speed baselines (2026-11-15, H02 / W01)
+
+First edit after reload, the W01 100 ms interaction target and a 10 × 10
+pattern preview, measured three times each on a quiet host with GPU
+rendering, with a budget for each and a script that reruns and checks them:
+[2026-11-15 Active 1 baselines](performance/2026-11-15-active1-baselines.md).
 
 ## Kernel compile and warm-up on the first rebuild (2026-11-12, W01)
 

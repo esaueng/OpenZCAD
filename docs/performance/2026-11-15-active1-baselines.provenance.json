@@ -1,0 +1,547 @@
+{
+  "record": "docs/performance/2026-11-15-active1-baselines.md",
+  "source": {
+    "openzcadMain": "90c163c62",
+    "appSourceChangedByThisPr": false,
+    "remusWasm": "2026.1.141",
+    "remusLock": "3c489d7d3429615b78f3c266317b1cf280ed45a6",
+    "wasmSha256": "e6df603baee7837cde72abd5133b109449b5cca120f55592ffcdda0e651a1175",
+    "wasmBytes": 13729389
+  },
+  "machine": {
+    "cpu": "AMD Ryzen 5 5600 6-Core Processor",
+    "threads": 12,
+    "memoryBytes": 16144953344,
+    "os": "Linux 7.0.0-43-generic",
+    "gpu": "AMD Radeon RX 6600 (Navi 23), discrete; no integrated GPU on this machine",
+    "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+    "chromium": "156.0.8078.4",
+    "angle": "vulkan",
+    "node": "v24.22.2"
+  },
+  "command": "node scripts/measure-active1-baselines.mjs --runs 3 --angle vulkan",
+  "summary": [
+    {
+      "measurement": "H02 reload → exact ready (synthetic holder: opening and mounting holes)",
+      "runs": 3,
+      "median": 647.9,
+      "min": 646.5,
+      "max": 669.5,
+      "budget": 1000,
+      "unit": "ms",
+      "withinBudget": true
+    },
+    {
+      "measurement": "H02 first edit after settled reload (synthetic holder: opening and mounting holes)",
+      "runs": 3,
+      "median": 556.3,
+      "min": 537.6,
+      "max": 567.6,
+      "budget": 850,
+      "unit": "ms",
+      "withinBudget": true
+    },
+    {
+      "measurement": "H02 edit typed during reload (synthetic holder: opening and mounting holes)",
+      "runs": 3,
+      "median": 853.9,
+      "min": 852.1,
+      "max": 856.1,
+      "budget": 1300,
+      "unit": "ms",
+      "withinBudget": true
+    },
+    {
+      "measurement": "H02 reload → exact ready (lettered holder: height with separated text)",
+      "runs": 3,
+      "median": 460.6,
+      "min": 441.3,
+      "max": 492.3,
+      "budget": 700,
+      "unit": "ms",
+      "withinBudget": true
+    },
+    {
+      "measurement": "H02 first edit after settled reload (lettered holder: height with separated text)",
+      "runs": 3,
+      "median": 260.1,
+      "min": 236.6,
+      "max": 278.3,
+      "budget": 400,
+      "unit": "ms",
+      "withinBudget": true
+    },
+    {
+      "measurement": "H02 edit typed during reload (lettered holder: height with separated text)",
+      "runs": 3,
+      "median": 576.5,
+      "min": 549.8,
+      "max": 592.5,
+      "budget": 900,
+      "unit": "ms",
+      "withinBudget": true
+    },
+    {
+      "measurement": "W01 input → frame median (simple box)",
+      "runs": 3,
+      "median": 37.6,
+      "min": 37.5,
+      "max": 37.9,
+      "budget": 60,
+      "unit": "ms",
+      "withinBudget": true
+    },
+    {
+      "measurement": "W01 input → frame p95 (simple box)",
+      "runs": 3,
+      "median": 41.7,
+      "min": 40.6,
+      "max": 42.3,
+      "budget": 100,
+      "unit": "ms",
+      "withinBudget": true
+    },
+    {
+      "measurement": "W01 input → frame median (100-feature history, isolated part)",
+      "runs": 3,
+      "median": 121.1,
+      "min": 120.9,
+      "max": 123,
+      "budget": 150,
+      "unit": "ms",
+      "withinBudget": true
+    },
+    {
+      "measurement": "W01 input → frame p95 (100-feature history, isolated part)",
+      "runs": 3,
+      "median": 131.5,
+      "min": 131.3,
+      "max": 134.1,
+      "budget": 170,
+      "unit": "ms",
+      "withinBudget": true
+    },
+    {
+      "measurement": "Pattern preview, Node adapter (3x3)",
+      "runs": 3,
+      "median": 598.1,
+      "min": 595.3,
+      "max": 611.2,
+      "budget": null,
+      "unit": "ms",
+      "withinBudget": null
+    },
+    {
+      "measurement": "Pattern preview, Node adapter (3x10)",
+      "runs": 3,
+      "median": 1737,
+      "min": 1733.5,
+      "max": 1757.7,
+      "budget": null,
+      "unit": "ms",
+      "withinBudget": null
+    },
+    {
+      "measurement": "Pattern preview, Node adapter (10x10)",
+      "runs": 3,
+      "median": 7612.5,
+      "min": 7601.8,
+      "max": 7634.4,
+      "budget": 10000,
+      "unit": "ms",
+      "withinBudget": true
+    },
+    {
+      "measurement": "Pattern preview, browser (3x3)",
+      "runs": 3,
+      "median": 655.4,
+      "min": 655.2,
+      "max": 656.2,
+      "budget": null,
+      "unit": "ms",
+      "withinBudget": null
+    },
+    {
+      "measurement": "Pattern preview, browser (10x3)",
+      "runs": 3,
+      "median": 2265.9,
+      "min": 2260,
+      "max": 2274.1,
+      "budget": null,
+      "unit": "ms",
+      "withinBudget": null
+    },
+    {
+      "measurement": "Pattern preview, browser (10x10)",
+      "runs": 3,
+      "median": 7523.8,
+      "min": 7508.7,
+      "max": 7529.9,
+      "budget": 10000,
+      "unit": "ms",
+      "withinBudget": true
+    }
+  ],
+  "runs": [
+    {
+      "probe": "h02",
+      "round": 0,
+      "status": 0,
+      "wallMs": 86689,
+      "hostBefore": {
+        "recordedAt": "2026-11-15T23:49:02.906Z",
+        "loadAverage1m": 1.7,
+        "loadAverage5m": 1.51,
+        "freeMemoryBytes": 10150547456,
+        "availableMemoryBytes": 10150547456,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      },
+      "hostAfter": {
+        "recordedAt": "2026-11-15T23:50:29.594Z",
+        "loadAverage1m": 0.59,
+        "loadAverage5m": 1.19,
+        "freeMemoryBytes": 9918128128,
+        "availableMemoryBytes": 9918128128,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      }
+    },
+    {
+      "probe": "w01-box",
+      "round": 0,
+      "status": 0,
+      "wallMs": 74229,
+      "hostBefore": {
+        "recordedAt": "2026-11-15T23:50:29.614Z",
+        "loadAverage1m": 0.59,
+        "loadAverage5m": 1.19,
+        "freeMemoryBytes": 9921855488,
+        "availableMemoryBytes": 9921855488,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      },
+      "hostAfter": {
+        "recordedAt": "2026-11-15T23:51:43.841Z",
+        "loadAverage1m": 0.75,
+        "loadAverage5m": 1.12,
+        "freeMemoryBytes": 10169831424,
+        "availableMemoryBytes": 10169831424,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      }
+    },
+    {
+      "probe": "w01-history",
+      "round": 0,
+      "status": 0,
+      "wallMs": 84879,
+      "hostBefore": {
+        "recordedAt": "2026-11-15T23:51:43.860Z",
+        "loadAverage1m": 0.75,
+        "loadAverage5m": 1.12,
+        "freeMemoryBytes": 10177843200,
+        "availableMemoryBytes": 10177843200,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      },
+      "hostAfter": {
+        "recordedAt": "2026-11-15T23:53:08.738Z",
+        "loadAverage1m": 0.76,
+        "loadAverage5m": 1.04,
+        "freeMemoryBytes": 10169667584,
+        "availableMemoryBytes": 10169667584,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      }
+    },
+    {
+      "probe": "pattern-node",
+      "round": 0,
+      "status": 0,
+      "wallMs": 11723,
+      "hostBefore": {
+        "recordedAt": "2026-11-15T23:53:08.756Z",
+        "loadAverage1m": 0.76,
+        "loadAverage5m": 1.04,
+        "freeMemoryBytes": 10201452544,
+        "availableMemoryBytes": 10201452544,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      },
+      "hostAfter": {
+        "recordedAt": "2026-11-15T23:53:20.478Z",
+        "loadAverage1m": 0.94,
+        "loadAverage5m": 1.07,
+        "freeMemoryBytes": 10175893504,
+        "availableMemoryBytes": 10175893504,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      }
+    },
+    {
+      "probe": "pattern-browser",
+      "round": 0,
+      "status": 0,
+      "wallMs": 13632,
+      "hostBefore": {
+        "recordedAt": "2026-11-15T23:53:20.496Z",
+        "loadAverage1m": 0.94,
+        "loadAverage5m": 1.07,
+        "freeMemoryBytes": 10205917184,
+        "availableMemoryBytes": 10205917184,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      },
+      "hostAfter": {
+        "recordedAt": "2026-11-15T23:53:34.126Z",
+        "loadAverage1m": 0.95,
+        "loadAverage5m": 1.06,
+        "freeMemoryBytes": 10078822400,
+        "availableMemoryBytes": 10078822400,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      }
+    },
+    {
+      "probe": "h02",
+      "round": 1,
+      "status": 0,
+      "wallMs": 86381,
+      "hostBefore": {
+        "recordedAt": "2026-11-15T23:53:34.144Z",
+        "loadAverage1m": 0.95,
+        "loadAverage5m": 1.06,
+        "freeMemoryBytes": 10107449344,
+        "availableMemoryBytes": 10107449344,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      },
+      "hostAfter": {
+        "recordedAt": "2026-11-15T23:55:00.524Z",
+        "loadAverage1m": 0.81,
+        "loadAverage5m": 0.99,
+        "freeMemoryBytes": 10180730880,
+        "availableMemoryBytes": 10180730880,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      }
+    },
+    {
+      "probe": "w01-box",
+      "round": 1,
+      "status": 0,
+      "wallMs": 74148,
+      "hostBefore": {
+        "recordedAt": "2026-11-15T23:55:00.542Z",
+        "loadAverage1m": 0.81,
+        "loadAverage5m": 0.99,
+        "freeMemoryBytes": 10180939776,
+        "availableMemoryBytes": 10180939776,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      },
+      "hostAfter": {
+        "recordedAt": "2026-11-15T23:56:14.688Z",
+        "loadAverage1m": 0.32,
+        "loadAverage5m": 0.79,
+        "freeMemoryBytes": 10299199488,
+        "availableMemoryBytes": 10299199488,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      }
+    },
+    {
+      "probe": "w01-history",
+      "round": 1,
+      "status": 0,
+      "wallMs": 84913,
+      "hostBefore": {
+        "recordedAt": "2026-11-15T23:56:14.707Z",
+        "loadAverage1m": 0.32,
+        "loadAverage5m": 0.79,
+        "freeMemoryBytes": 10309050368,
+        "availableMemoryBytes": 10309050368,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      },
+      "hostAfter": {
+        "recordedAt": "2026-11-15T23:57:39.618Z",
+        "loadAverage1m": 0.63,
+        "loadAverage5m": 0.78,
+        "freeMemoryBytes": 9985351680,
+        "availableMemoryBytes": 9985351680,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      }
+    },
+    {
+      "probe": "pattern-node",
+      "round": 1,
+      "status": 0,
+      "wallMs": 11755,
+      "hostBefore": {
+        "recordedAt": "2026-11-15T23:57:39.637Z",
+        "loadAverage1m": 0.63,
+        "loadAverage5m": 0.78,
+        "freeMemoryBytes": 9993031680,
+        "availableMemoryBytes": 9993031680,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      },
+      "hostAfter": {
+        "recordedAt": "2026-11-15T23:57:51.390Z",
+        "loadAverage1m": 0.98,
+        "loadAverage5m": 0.86,
+        "freeMemoryBytes": 10214285312,
+        "availableMemoryBytes": 10214285312,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      }
+    },
+    {
+      "probe": "pattern-browser",
+      "round": 1,
+      "status": 0,
+      "wallMs": 13589,
+      "hostBefore": {
+        "recordedAt": "2026-11-15T23:57:51.408Z",
+        "loadAverage1m": 0.98,
+        "loadAverage5m": 0.86,
+        "freeMemoryBytes": 10221150208,
+        "availableMemoryBytes": 10221150208,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      },
+      "hostAfter": {
+        "recordedAt": "2026-11-15T23:58:04.996Z",
+        "loadAverage1m": 1.07,
+        "loadAverage5m": 0.88,
+        "freeMemoryBytes": 10255679488,
+        "availableMemoryBytes": 10255679488,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      }
+    },
+    {
+      "probe": "h02",
+      "round": 2,
+      "status": 0,
+      "wallMs": 86731,
+      "hostBefore": {
+        "recordedAt": "2026-11-15T23:58:05.014Z",
+        "loadAverage1m": 1.07,
+        "loadAverage5m": 0.88,
+        "freeMemoryBytes": 10254487552,
+        "availableMemoryBytes": 10254487552,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      },
+      "hostAfter": {
+        "recordedAt": "2026-11-15T23:59:31.743Z",
+        "loadAverage1m": 0.58,
+        "loadAverage5m": 0.78,
+        "freeMemoryBytes": 10201018368,
+        "availableMemoryBytes": 10201018368,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      }
+    },
+    {
+      "probe": "w01-box",
+      "round": 2,
+      "status": 0,
+      "wallMs": 74159,
+      "hostBefore": {
+        "recordedAt": "2026-11-15T23:59:31.761Z",
+        "loadAverage1m": 0.58,
+        "loadAverage5m": 0.78,
+        "freeMemoryBytes": 10211692544,
+        "availableMemoryBytes": 10211692544,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      },
+      "hostAfter": {
+        "recordedAt": "2026-11-16T00:00:45.919Z",
+        "loadAverage1m": 0.48,
+        "loadAverage5m": 0.71,
+        "freeMemoryBytes": 10341376000,
+        "availableMemoryBytes": 10341376000,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      }
+    },
+    {
+      "probe": "w01-history",
+      "round": 2,
+      "status": 0,
+      "wallMs": 84550,
+      "hostBefore": {
+        "recordedAt": "2026-11-16T00:00:45.937Z",
+        "loadAverage1m": 0.48,
+        "loadAverage5m": 0.71,
+        "freeMemoryBytes": 10342711296,
+        "availableMemoryBytes": 10342711296,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      },
+      "hostAfter": {
+        "recordedAt": "2026-11-16T00:02:10.486Z",
+        "loadAverage1m": 0.26,
+        "loadAverage5m": 0.58,
+        "freeMemoryBytes": 10195693568,
+        "availableMemoryBytes": 10195693568,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      }
+    },
+    {
+      "probe": "pattern-node",
+      "round": 2,
+      "status": 0,
+      "wallMs": 11694,
+      "hostBefore": {
+        "recordedAt": "2026-11-16T00:02:10.504Z",
+        "loadAverage1m": 0.26,
+        "loadAverage5m": 0.58,
+        "freeMemoryBytes": 10212044800,
+        "availableMemoryBytes": 10212044800,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      },
+      "hostAfter": {
+        "recordedAt": "2026-11-16T00:02:22.197Z",
+        "loadAverage1m": 0.49,
+        "loadAverage5m": 0.62,
+        "freeMemoryBytes": 10242273280,
+        "availableMemoryBytes": 10242273280,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      }
+    },
+    {
+      "probe": "pattern-browser",
+      "round": 2,
+      "status": 0,
+      "wallMs": 13604,
+      "hostBefore": {
+        "recordedAt": "2026-11-16T00:02:22.215Z",
+        "loadAverage1m": 0.49,
+        "loadAverage5m": 0.62,
+        "freeMemoryBytes": 10242002944,
+        "availableMemoryBytes": 10242002944,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      },
+      "hostAfter": {
+        "recordedAt": "2026-11-16T00:02:35.818Z",
+        "loadAverage1m": 0.94,
+        "loadAverage5m": 0.71,
+        "freeMemoryBytes": 10194755584,
+        "availableMemoryBytes": 10194755584,
+        "totalMemoryBytes": 16144953344,
+        "busyProcesses": []
+      }
+    }
+  ]
+}

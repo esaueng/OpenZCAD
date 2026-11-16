@@ -67,6 +67,17 @@ enable Web Inspector (Settings → Apps → Safari → Advanced) and record
 Safari's Timelines on the open project; the `oz:viewer.bodies` measure
 appears under User Timing, and the rendering frames show per-frame cost.
 
+## Active 1 edit-speed baselines
+
+`scripts/measure-active1-baselines.mjs` re-runs the H02 first-edit-after-reload,
+W01 interaction and large pattern-preview baselines on a quiet host, and with
+`--check` compares their medians with `scripts/active1-budgets.mjs`. It uses
+`perf-holder-reload`, `perf-cad-edit`, `perf-pattern-preview` (the Grid pattern
+card on the ×50 bar) and the Node probe `test/perf/pattern-preview.bench.ts`.
+`OZ_PERF_ANGLE=vulkan` (or `gl`) makes those browser probes render on the
+machine's GPU, and each sample records its WebGL renderer and the host's load
+and memory. See the [baseline record](performance/2026-11-15-active1-baselines.md).
+
 ## Sharding and timing
 
 Both suites use the existing six shards and required E2E completion gate.
