@@ -3843,7 +3843,9 @@ function buildPatternFeature(
           declined
         };
       },
-      (hole) => holeToolSpecFor(ctx, hole)
+      (hole) => holeToolSpecFor(ctx, hole),
+      // M01 (schema v66): a tapped hole's copies are tapped as it is.
+      (hole, solid, bores) => tapHoleBores(ctx, feature, hole, solid, bores)
     );
     return;
   }

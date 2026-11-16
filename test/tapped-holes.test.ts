@@ -8,6 +8,7 @@ import {
   findSketch,
   holeBody,
   listFeaturesInOrder,
+  patternBody,
   setPrintClearance,
   threadBody,
   type HoleInput
@@ -319,6 +320,33 @@ describe('M01 tapped holes: exact build', () => {
     );
     // Two identical tapped bores take twice what one takes.
     expect(40 * 40 * 10 - both).toBeCloseTo(2 * (40 * 40 * 10 - one), 6);
+  }, 180_000);
+
+  it('taps the copies a feature pattern makes of a tapped hole (review)', async () => {
+    const base = plate('mm', 40, 10);
+    const tapped = await tapDrill(base, { tapped: {} });
+    const one = 40 * 40 * 10 - (await volume(tapped));
+    const holeId = listFeaturesInOrder(tapped).at(-1)!.featureId;
+    const row = patternBody(tapped, {
+      name: 'Row',
+      targetBodyId: last(tapped),
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      spacing: 8,
+      sourceFeatureIds: [holeId]
+    }).document;
+    const derived = await adapter.syncDocument(row);
+    expect(failures(derived)).toBe('');
+    // Three threaded holes, not one threaded and two plain Ø5 bores. A
+    // helical surface's volume is measured on its tessellation, which each
+    // copy's phase samples a little differently (0.03% here); a plain copy
+    // would take about 35 mm³ less.
+    const removed =
+      40 * 40 * 10 - derived.bodyRepresentations[last(row)]!.volume;
+    expect(Math.abs(removed - 3 * one)).toBeLessThan(0.5);
+    const plainBore = Math.PI * 2.5 ** 2 * 10;
+    expect(removed - (one + 2 * plainBore)).toBeGreaterThan(50);
   }, 180_000);
 
   it('refuses a thread longer than its bore, by the thread generator', async () => {

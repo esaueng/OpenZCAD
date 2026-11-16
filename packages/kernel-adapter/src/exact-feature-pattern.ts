@@ -289,6 +289,8 @@ interface RepeatedHole {
   /** M01: the sketch point of the hole's bore it copies, or null. */
   pointId: string | null;
   spec: HoleToolSpec;
+  /** M01: threaded, so no plain bore is left to prove or name. */
+  tapped: boolean;
 }
 
 /**
@@ -304,7 +306,16 @@ export function buildFeaturePattern(
   repeat: RepeatTools,
   holeSpec: (data: FeatureDataOf<'hole'>) => {
     bores: readonly { spec: HoleToolSpec; pointId: string | null }[];
-  }
+  },
+  /**
+   * M01 (schema v66): threads `bores` of a tapped hole into `solid`, as the
+   * hole's own build does, and returns the result.
+   */
+  tapHole?: (
+    data: FeatureDataOf<'hole'>,
+    solid: number,
+    bores: readonly { spec: HoleToolSpec; pointId: string | null }[]
+  ) => number
 ): void {
   const { kernel, document, result } = ctx;
   if (!feature.bodyId) throw new Error('Pattern has no result body.');
@@ -413,11 +424,33 @@ export function buildFeaturePattern(
               ...spec,
               surfacePoint: applyPoint(copy.matrix, spec.surfacePoint),
               axis: applyDirection(copy.matrix, spec.axis)
-            }
+            },
+            tapped: false
           });
         }
       });
       solid = unifyBooleanFaces(kernel, solid);
+      // M01 (schema v66): the copies of a tapped hole are tapped as it is,
+      // each bore checked to be one plain cylinder before it is threaded.
+      if (sourceData.featureKind === 'hole' && sourceData.tapped) {
+        if (!tapHole) {
+          throw new Error(
+            `${source.name} is tapped, and this pattern cannot tap its copies.`
+          );
+        }
+        const copied = holes.filter((hole) => hole.source === source.featureId);
+        // Proven plain first, as an untapped copy is below.
+        for (const { label, spec } of copied) {
+          const missing = missingHoleBore(kernel, solid, spec);
+          if (missing !== null) {
+            throw new Error(
+              `Copy ${label}'s ${missing * 2} bore did not come back as an analytic cylinder.`
+            );
+          }
+        }
+        solid = tapHole(sourceData, solid, copied);
+        for (const hole of copied) hole.tapped = true;
+      }
     } else {
       const tools = repeated.solids.flat();
       const union = fuseUniformSolidChecked(
@@ -450,7 +483,7 @@ export function buildFeaturePattern(
   if (!(kernel.volume(solid, MEASUREMENT_DEFLECTION) > 0)) {
     throw new Error(`The feature pattern removed all of ${targetName}.`);
   }
-  for (const { label, spec } of holes) {
+  for (const { label, spec } of holes.filter((hole) => !hole.tapped)) {
     const missing = missingHoleBore(kernel, solid, spec);
     if (missing !== null) {
       throw new Error(
