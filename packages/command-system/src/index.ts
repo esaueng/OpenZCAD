@@ -1705,7 +1705,7 @@ function validateStandardPartInput(
     resolvedModelingValue(document, `standard part ${label}`, param);
   if (input.hole !== undefined) validateStandardPartHole(document, input);
   if (standardPartHasLength(input.partKind)) {
-    // M17 (schema v74): in a hole, an absent length is matched to it.
+    // M17 (schema v77): in a hole, an absent length is matched to it.
     if (input.length === undefined) {
       if (input.hole !== undefined) return validatePlacement();
       throw new Error(`A ${standardPartNoun(input)} needs a length.`);
@@ -1750,7 +1750,7 @@ function validateStandardPartInput(
 }
 
 /**
- * M17 (schema v74): a part inserted into a hole names an M01 hole feature,
+ * M17 (schema v77): a part inserted into a hole names an M01 hole feature,
  * is a screw or a dowel pin, and is the size the hole takes: a screw the
  * hole's standard size, a dowel pin the hole's diameter.
  */

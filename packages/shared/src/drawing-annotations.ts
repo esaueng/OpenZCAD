@@ -48,6 +48,10 @@ import type { DrawingViewId } from './drawings';
  * Schema v73 (D02) adds geometry annotations — centre marks, intersection
  * marks and centrelines (through two points, midway between two lines, or a
  * circle through three points) — and a mark as a dimension point.
+ *
+ * Schema v75 (D02) adds the distance dimension: point to line, line to
+ * line, and to a circle's centre or its near or far side (min/max), where a
+ * line may be a straight edge or a centreline.
  */
 
 export type DrawingAnnotationId = Brand<string, 'DrawingAnnotationId'>;
@@ -347,6 +351,31 @@ export type DrawingCenterline = DrawingAnnotationBase & {
       }
   );
 
+/**
+ * v75: what a distance dimension measures from or to: a point (an edge end,
+ * a circle's centre or a mark), a straight edge seen true length, a
+ * `points` or `lines` centreline of the same view, or a circle seen face-on
+ * (its centre, or with `extent` its near or far side).
+ */
+export type DrawingDistanceTarget =
+  | { point: DrawingPointRef }
+  | { line: DrawingEdgeRef }
+  | { centerline: DrawingAnnotationId }
+  | { circle: DrawingEdgeRef };
+
+/**
+ * v75: the distance between two targets in the view, measured square to a
+ * line when there is one, else along the line between the two. `extent`
+ * measures to each circle's near (`min`) or far (`max`) side instead of its
+ * centre: two holes' wall gap, or their overall span.
+ */
+export interface DrawingDistanceDimension extends DrawingDimensionBase {
+  kind: 'distance';
+  from: DrawingDistanceTarget;
+  to: DrawingDistanceTarget;
+  extent?: 'min' | 'max';
+}
+
 /** v73: the annotations that mark geometry rather than state a value. */
 export type DrawingGeometryAnnotation =
   DrawingCenterMark | DrawingIntersectionMark | DrawingCenterline;
@@ -372,6 +401,7 @@ export function isDrawingDimension(
 }
 
 export type DrawingDimension =
+  | DrawingDistanceDimension
   | DrawingLinearDimension
   | DrawingRadialDimension
   | DrawingBlendRadiusDimension
@@ -625,6 +655,32 @@ function pointRefError(value: unknown): string | null {
   }
 }
 
+/** Why `value` is not a stored {@link DrawingDistanceTarget}, or null. */
+function distanceTargetError(value: unknown): string | null {
+  if (!isRecord(value) || Object.keys(value).length !== 1)
+    return 'names a distance target that is not one point, line, centreline or circle';
+  if ('point' in value) return centerlinePointError(value.point);
+  if ('line' in value) return edgeRefError(value.line);
+  if ('circle' in value) return edgeRefError(value.circle);
+  if ('centerline' in value)
+    return typeof value.centerline === 'string' &&
+      value.centerline.startsWith(DRAWING_ANNOTATION_ID_PREFIX) &&
+      value.centerline.length <= 64
+      ? null
+      : 'names no centreline';
+  return 'names a distance target that is not one point, line, centreline or circle';
+}
+
+/** v75: the edges and faces a distance target refers to. */
+function distanceTargetReferences(
+  target: DrawingDistanceTarget
+): (DrawingEdgeRef | DrawingFaceRef)[] {
+  if ('point' in target) return pointReferences(target.point);
+  if ('line' in target) return [target.line];
+  if ('circle' in target) return [target.circle];
+  return [];
+}
+
 /** A point a centreline may pass through: an end, a centre or a mark. */
 function centerlinePointError(value: unknown): string | null {
   const error = pointRefError(value);
@@ -872,6 +928,20 @@ export function drawingAnnotationError(
     if (error) return fail(error);
   }
   switch (value.kind) {
+    case 'distance': {
+      const targets = [value.from, value.to];
+      for (const target of targets) {
+        const error = distanceTargetError(target);
+        if (error) return fail(error);
+      }
+      if (value.extent !== undefined) {
+        if (value.extent !== 'min' && value.extent !== 'max')
+          return `${where} has an unknown extent.`;
+        if (!targets.some((target) => isRecord(target) && 'circle' in target))
+          return `${where} measures to a side of a circle but names none.`;
+      }
+      return null;
+    }
     case 'linear':
       if (
         value.direction !== 'horizontal' &&
@@ -963,6 +1033,11 @@ export function drawingAnnotationEdges(
       );
     case 'chamfer':
       return [];
+    case 'distance':
+      // Its points are ends, centres and marks: every reference an edge.
+      return [annotation.from, annotation.to].flatMap(
+        distanceTargetReferences
+      ) as DrawingEdgeRef[];
     case 'centerline':
       return annotation.mode === 'lines'
         ? [...annotation.edges]
@@ -1015,6 +1090,11 @@ export function drawingAnnotationReferences(
       return [annotation.face];
     case 'note':
       return annotation.leader ? [annotation.leader] : [];
+    case 'distance':
+      return [
+        ...distanceTargetReferences(annotation.from),
+        ...distanceTargetReferences(annotation.to)
+      ];
     case 'center-mark':
       return [annotation.edge];
     case 'intersection-mark':
@@ -1037,6 +1117,17 @@ export function centerlinePoints(
       : [];
 }
 
+/** v75: the centrelines a distance dimension measures to, by id. */
+export function drawingAnnotationCenterlines(
+  annotation: DrawingAnnotation
+): DrawingAnnotationId[] {
+  return annotation.kind === 'distance'
+    ? [annotation.from, annotation.to].flatMap((target) =>
+        'centerline' in target ? [target.centerline] : []
+      )
+    : [];
+}
+
 /** v73: the marks an annotation measures to, by id. */
 export function drawingAnnotationMarks(
   annotation: DrawingAnnotation
@@ -1046,7 +1137,11 @@ export function drawingAnnotationMarks(
       ? [annotation.from, annotation.to]
       : annotation.kind === 'centerline'
         ? centerlinePoints(annotation)
-        : [];
+        : annotation.kind === 'distance'
+          ? [annotation.from, annotation.to].flatMap((target) =>
+              'point' in target ? [target.point] : []
+            )
+          : [];
   return points.flatMap((point) =>
     point.anchor === 'mark' ? [point.annotationId] : []
   );

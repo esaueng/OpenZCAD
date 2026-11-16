@@ -1,6 +1,6 @@
 /**
  * M17: where a standard part stands and which row it is, from a tool's
- * choices and picks: on a picked plane, or (schema v74) in a picked bore of
+ * choices and picks: on a picked plane, or (schema v77) in a picked bore of
  * an M01 hole, sized and length-matched by the hole. Pure: the Standard
  * part command reads it, and the kernel build shares its fit rule
  * (`standardHoleFit`).

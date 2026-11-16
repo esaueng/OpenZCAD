@@ -5225,7 +5225,7 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   // M17: a screw's head goes off a part that is no longer a screw, a length
   // off a part that has none (or, in a hole, is matched again), the
   // x-direction back to the default, and the hole when the part is placed
-  // on a face instead (schema v74).
+  // on a face instead (schema v77).
   'standard-part': ['head', 'length', 'xDirection', 'hole'],
   // Schema v53: every size and placement field falls back to the face or its
   // documented default; the custom-profile fields may go only off a custom
@@ -7638,7 +7638,7 @@ export {
 export { resolvedSketchDocument } from './sketch-geometry';
 
 /**
- * M17 (schema v74): an M01 hole feature a standard part can go into: its
+ * M17 (schema v77): an M01 hole feature a standard part can go into: its
  * name, its stored data, and its entry face's outward normal as `bodies`
  * (the derived body representations) show it. Null for anything else.
  */

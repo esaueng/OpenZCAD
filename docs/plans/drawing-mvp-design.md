@@ -502,6 +502,30 @@ notes to D01 sheets:
   points below v73. Point-to-line and min/max distances measured to marks
   and centrelines are the next D02 slice.
 
+## Distance dimensions (D02, schema v75)
+
+- **Shape.** `kind: 'distance'` measures between two targets in its view: a
+  point (an edge end, a face-on circle's centre or a v73 mark), a straight
+  edge seen true length, a `points` or `lines` centreline of the same view
+  (by id), or a face-on circle. `extent: 'min' | 'max'` measures to each
+  circle's near or far side instead of its centre (a wall between two
+  holes, their overall span); it needs a circle. Takes decimals, tolerance,
+  prefix and suffix like any dimension.
+- **Reading.** With a line, the span is square to it (from a line's
+  midpoint to the other when both are lines, which must be parallel:
+  `not-parallel`); otherwise it runs between the two centres, which must lie
+  in one plane parallel to the view like an aligned dimension's
+  (`foreshortened`). A span of zero, or a near-side extent where circles
+  overlap, is `degenerate`; a deleted centreline is `mark-missing`. The
+  result lays out as an aligned linear dimension along the span, so it
+  draws and exports through the same page model. The isometric view refuses
+  it.
+- **Tool.** Distance (T): two picks — a straight edge picked away from its
+  ends is a line, a face-on circle a circle, an end a point, a mark a
+  point, a straight centreline a line — then a placement click. The panel's
+  "Measure circles to" picks centres, near or far sides.
+- **Schema.** v75, built on v74, with a content gate below it.
+
 ## Finishing-body update repair
 
 When a finishing feature consumes a drawing's body, the sheet offers the

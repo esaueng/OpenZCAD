@@ -180,7 +180,7 @@ export function assertStandardPartSchema(
 ): void {
   assertMinimumProjectSchema(version, 69, 'Standard parts');
   if (record(data) && data.hole !== undefined)
-    assertMinimumProjectSchema(version, 74, 'Parts inserted into holes');
+    assertMinimumProjectSchema(version, 77, 'Parts inserted into holes');
 }
 
 /**
@@ -254,6 +254,31 @@ export function hasDrawingGeometry(value: unknown): boolean {
         GEOMETRY_KINDS.includes(entry.kind)) ||
       entry.anchor === 'mark'
     )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/** D02 distance dimensions (schema v75). */
+export function assertDrawingDistanceSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 75, 'Distance dimensions');
+}
+
+/** Whether `value` holds a v75 distance dimension. */
+export function hasDrawingDistance(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (typeof entry.annotationId === 'string' && entry.kind === 'distance')
       return true;
     pending.push(...Object.values(entry));
   }
@@ -373,6 +398,12 @@ export function assertDocumentContentCommandSchema(
       hasDrawingGeometry(command.payload)
     )
       assertDrawingGeometrySchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingDistance(command.payload)
+    )
+      assertDrawingDistanceSchema(document.schemaVersion);
     if (!record(command.payload)) continue;
     if (
       command.kind === 'sketch.composite.add' &&
@@ -409,7 +440,7 @@ export function assertDocumentContentCommandSchema(
         command.payload.data.featureKind === 'thread')
     )
       assertThreadContentSchema(command.payload.data, document.schemaVersion);
-    // M17 (schema v74): `hole` is a standard part's only, so a patch that
+    // M17 (schema v77): `hole` is a standard part's only, so a patch that
     // carries one and is not another kind's inserts the part into a hole.
     if (
       record(command.payload.data) &&
@@ -419,7 +450,7 @@ export function assertDocumentContentCommandSchema(
     )
       assertMinimumProjectSchema(
         document.schemaVersion,
-        74,
+        77,
         'Parts inserted into holes'
       );
     switch (command.kind) {
@@ -490,6 +521,15 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
     assertDrawingFormatSchema(document.schemaVersion);
   if (hasDrawingGeometry(document.drawings))
     assertDrawingGeometrySchema(document.schemaVersion);
+  if (hasDrawingDistance(document.drawings))
+    assertDrawingDistanceSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingDistance(change.before) || hasDrawingDistance(change.after))
+      )
+        assertDrawingDistanceSchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
     for (const change of entry.changes)
       if (

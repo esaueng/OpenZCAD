@@ -103,7 +103,7 @@ function vectorOf(v: Vector3): ParametricVector3 {
   return { x: v.x || 0, y: v.y || 0, z: v.z || 0 };
 }
 
-/** M17 (schema v74): whether the options put the part into a hole. */
+/** M17 (schema v77): whether the options put the part into a hole. */
 function intoHole(options: Readonly<Record<string, string>>): boolean {
   const kind = chosenRow(options).partKind;
   return options.place === 'hole' && (kind === 'screw' || kind === 'dowel');
@@ -163,7 +163,7 @@ export const standardPartSpec: InPlaceToolSpec = {
   profileMode: 'none',
   wantsPlane: true,
   planeAtClick: true,
-  // M17 (schema v74): Into a hole takes the bore a hole feature drilled.
+  // M17 (schema v77): Into a hole takes the bore a hole feature drilled.
   featureFaces: { optionId: 'place', value: 'hole' },
   wantsAxis: false,
   wantsPath: false,
@@ -381,7 +381,7 @@ export const standardPartSpec: InPlaceToolSpec = {
 };
 
 /**
- * M17 (schema v74): the request for a part in a hole. Its row is the one
+ * M17 (schema v77): the request for a part in a hole. Its row is the one
  * the hole takes; its length is stored only once set (dragged, typed, or
  * stored by an edit), and otherwise matched to the hole at every rebuild.
  */

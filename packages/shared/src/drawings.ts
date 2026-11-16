@@ -2,6 +2,7 @@ import { millimetresPerUnit } from './index';
 import type { BodyId, Brand, UnitSystem, Vector3 } from './index';
 import {
   drawingAnnotationError,
+  drawingAnnotationCenterlines,
   drawingAnnotationMarks,
   MAX_DRAWING_ANNOTATIONS,
   type DrawingAnnotation
@@ -830,6 +831,18 @@ export function drawingSheetError(value: unknown): string | null {
             mark.viewId !== annotation.viewId)
         )
           return `${where} annotation ${annotation.annotationId} measures to ${markId}, which is not a mark on its view.`;
+      }
+    // v75: a centreline measured to is a straight one on the same view.
+    for (const annotation of annotations)
+      for (const lineId of drawingAnnotationCenterlines(annotation)) {
+        const line = byId.get(lineId);
+        if (
+          line &&
+          (line.kind !== 'centerline' ||
+            line.mode === 'circle' ||
+            line.viewId !== annotation.viewId)
+        )
+          return `${where} annotation ${annotation.annotationId} measures to ${lineId}, which is not a straight centreline on its view.`;
       }
   }
   return null;

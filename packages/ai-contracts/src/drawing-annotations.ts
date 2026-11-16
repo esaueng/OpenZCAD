@@ -135,12 +135,13 @@ export interface CadDigestDrawingView {
 export interface CadDigestDrawingAnnotation {
   annotationId: string;
   /**
-   * A sheet may hold a v48 chamfer and v73 marks and centrelines, which
-   * proposals cannot author yet.
+   * A sheet may hold a v48 chamfer, v73 marks and centrelines and v75
+   * distances, which proposals cannot author yet.
    */
   kind:
     | CadDrawingAnnotationKind
     | 'chamfer'
+    | 'distance'
     | 'center-mark'
     | 'intersection-mark'
     | 'centerline';

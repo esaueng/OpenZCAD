@@ -338,13 +338,18 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // kinds) and a mark as a dimension point (`anchor: 'mark'`). An older client
 // would refuse the unknown kinds, so it must refuse the document. Builds on
 // v72.
-// v74 adds M17 parts inserted into M01 holes (`hole` on a standard part):
+// v75 adds the D02 distance dimension (`kind: 'distance'`): point to line,
+// line to line, and to a circle's centre or its near or far side, where a
+// line may be a straight edge or a centreline. An older client would refuse
+// the unknown kind, so it must refuse the document. Builds on v74
+// (M17 standard parts in holes, #1644).
+// v76 is claimed by D03 detail views (#1651).
+// v77 adds M17 parts inserted into M01 holes (`hole` on a standard part):
 // the part stands in each of the hole's bores and takes its matched length
 // where it stores none. An older client would build one part at the stored
 // origin, or none without a length, so it must refuse. (M17 first claimed
-// v71, which F06 left free, but a v72 client has no `hole` either.)
-// Builds on v73.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 74 as const;
+// v71 and then v74, but clients up to v75 have no `hole`.) Builds on v75.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 77 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

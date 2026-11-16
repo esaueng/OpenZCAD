@@ -25,6 +25,7 @@ import {
   type DrawingAngleFormat,
   type DrawingCenterMark,
   type DrawingDimension,
+  type DrawingDistanceTarget,
   type DrawingGeometryAnnotation,
   type DrawingIntersectionMark,
   isDrawingGeometryAnnotation,
@@ -1151,6 +1152,162 @@ function markPoint(
   return { ok: true, point: pointAt(frame, crossed.point, crossed.depth) };
 }
 
+/** v75: a distance target in the view: a disc (a point is one of radius 0) or a line. */
+type DistanceShape =
+  | { kind: 'disc'; center: UV; depth: number; radius: number }
+  | { kind: 'line'; a: UV; b: UV };
+
+type DistanceEnd =
+  { ok: true; end: DistanceShape } | { ok: false; reason: AnnotationBreak };
+
+/** What a v75 distance target is in `view` of the current model. */
+function distanceEnd(
+  target: DrawingDistanceTarget,
+  view: DrawingView,
+  bodies: AnnotationBodies,
+  marks: MarkLookup | undefined
+): DistanceEnd {
+  if ('point' in target) {
+    const found = pointOf(view, target.point, bodies, null, null, marks);
+    if (!found.ok) return found;
+    return {
+      ok: true,
+      end: {
+        kind: 'disc',
+        center: found.point.uv,
+        depth: found.point.depth,
+        radius: 0
+      }
+    };
+  }
+  if ('line' in target) {
+    const found = lookupEdge(target.line, view, bodies);
+    if (!found.ok) return found;
+    const straight = straightEnds(view, found.edge);
+    if (!straight.ok) return straight;
+    return {
+      ok: true,
+      end: { kind: 'line', a: straight.ends[0], b: straight.ends[1] }
+    };
+  }
+  if ('circle' in target) {
+    const found = lookupEdge(target.circle, view, bodies);
+    if (!found.ok) return found;
+    const circle = faceOnCircle(view, found.edge);
+    if (!circle.ok) return circle;
+    return {
+      ok: true,
+      end: {
+        kind: 'disc',
+        center: circle.center,
+        depth: circle.depth,
+        radius: circle.radius
+      }
+    };
+  }
+  const line = marks?.(target.centerline);
+  if (
+    !line ||
+    line.kind !== 'centerline' ||
+    line.mode === 'circle' ||
+    line.viewId !== view.viewId
+  )
+    return { ok: false, reason: 'mark-missing' };
+  const drawn = resolveGeometryAnnotation(line, view, bodies, marks);
+  if (!drawn.ok) return { ok: false, reason: drawn.reason };
+  const segment =
+    drawn.resolved.kind === 'centerline' ? drawn.resolved.segment : undefined;
+  if (!segment) return { ok: false, reason: 'mark-missing' };
+  return { ok: true, end: { kind: 'line', a: segment[0], b: segment[1] } };
+}
+
+/**
+ * The two feet a distance spans: square to a line when either end is one
+ * (from a line's midpoint when both are, which must then be parallel), else
+ * along the line between two centres. `extent` moves each circle's foot to
+ * its near (`min`) or far (`max`) side; a point is a circle of radius 0, so
+ * it moves only circles.
+ */
+function distanceFeet(
+  from: DistanceShape,
+  to: DistanceShape,
+  extent: 'min' | 'max' | undefined
+): { ok: true; from: UV; to: UV } | { ok: false; reason: AnnotationBreak } {
+  const sign = extent === 'max' ? -1 : 1;
+  const radius = (shape: DistanceShape) =>
+    shape.kind === 'disc' && extent ? shape.radius : 0;
+  const foot = (p: UV, a: UV, b: UV): UV => {
+    const d: UV = [b[0] - a[0], b[1] - a[1]];
+    const t =
+      ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / (d[0] ** 2 + d[1] ** 2);
+    return [a[0] + t * d[0], a[1] + t * d[1]];
+  };
+  if (from.kind === 'line' && to.kind === 'line') {
+    const e1: UV = [from.b[0] - from.a[0], from.b[1] - from.a[1]];
+    const e2: UV = [to.b[0] - to.a[0], to.b[1] - to.a[1]];
+    if (
+      Math.abs(e1[0] * e2[1] - e1[1] * e2[0]) >
+      1e-6 * Math.hypot(...e1) * Math.hypot(...e2)
+    )
+      return { ok: false, reason: 'not-parallel' };
+    const middle: UV = [
+      (from.a[0] + from.b[0]) / 2,
+      (from.a[1] + from.b[1]) / 2
+    ];
+    const at = foot(middle, to.a, to.b);
+    if (Math.hypot(at[0] - middle[0], at[1] - middle[1]) < 1e-9)
+      return { ok: false, reason: 'degenerate' };
+    return { ok: true, from: middle, to: at };
+  }
+  if (from.kind === 'line' || to.kind === 'line') {
+    const line = (from.kind === 'line' ? from : to) as Extract<
+      DistanceShape,
+      { kind: 'line' }
+    >;
+    const disc = (from.kind === 'disc' ? from : to) as Extract<
+      DistanceShape,
+      { kind: 'disc' }
+    >;
+    const at = foot(disc.center, line.a, line.b);
+    const away: UV = [disc.center[0] - at[0], disc.center[1] - at[1]];
+    const length = Math.hypot(...away);
+    const r = radius(disc);
+    if (length < 1e-9 || length - sign * r <= 1e-9)
+      return { ok: false, reason: 'degenerate' };
+    const w: UV = [away[0] / length, away[1] / length];
+    const side: UV = [
+      disc.center[0] - sign * w[0] * r,
+      disc.center[1] - sign * w[1] * r
+    ];
+    return from.kind === 'line'
+      ? { ok: true, from: at, to: side }
+      : { ok: true, from: side, to: at };
+  }
+  const span: UV = [
+    to.center[0] - from.center[0],
+    to.center[1] - from.center[1]
+  ];
+  const length = Math.hypot(...span);
+  if (length < 1e-9) return { ok: false, reason: 'degenerate' };
+  // Between two points, the span is true only in one plane parallel to the
+  // view, as an aligned dimension's.
+  if (Math.abs(to.depth - from.depth) > 1e-6 * Math.max(1, length))
+    return { ok: false, reason: 'foreshortened' };
+  const u: UV = [span[0] / length, span[1] / length];
+  const r1 = radius(from);
+  const r2 = radius(to);
+  if (length - sign * (r1 + r2) <= 1e-9)
+    return { ok: false, reason: 'degenerate' };
+  return {
+    ok: true,
+    from: [
+      from.center[0] + sign * u[0] * r1,
+      from.center[1] + sign * u[1] * r1
+    ],
+    to: [to.center[0] - sign * u[0] * r2, to.center[1] - sign * u[1] * r2]
+  };
+}
+
 /** v73: a centre mark, an intersection mark or a centreline, in its view. */
 function resolveGeometryAnnotation(
   annotation: DrawingGeometryAnnotation,
@@ -1342,7 +1499,9 @@ export function resolveDrawingAnnotation(
   // face-on there is true size and may still be dimensioned.
   if (
     view.orientation === 'iso' &&
-    (annotation.kind === 'linear' || annotation.kind === 'angle')
+    (annotation.kind === 'linear' ||
+      annotation.kind === 'angle' ||
+      annotation.kind === 'distance')
   )
     return failure('foreshortened');
   const decimals =
@@ -1362,6 +1521,30 @@ export function resolveDrawingAnnotation(
     kind: 'length'
   });
   switch (annotation.kind) {
+    case 'distance': {
+      const ends: Extract<DistanceEnd, { ok: true }>[] = [];
+      for (const target of [annotation.from, annotation.to]) {
+        const end = distanceEnd(target, view, bodies, marks);
+        if (!end.ok) return failure(end.reason);
+        ends.push(end);
+      }
+      const feet = distanceFeet(ends[0]!.end, ends[1]!.end, annotation.extent);
+      if (!feet.ok) return failure(feet.reason);
+      const du = feet.to[0] - feet.from[0];
+      const dv = feet.to[1] - feet.from[1];
+      const value = Math.hypot(du, dv);
+      return {
+        ok: true,
+        resolved: {
+          kind: 'linear',
+          axis: [du / value, dv / value],
+          from: feet.from,
+          to: feet.to,
+          value,
+          ...formatDimension(annotation, measuredLength('', value), format)
+        }
+      };
+    }
     case 'linear': {
       const frame = DRAWING_VIEW_FRAMES[view.orientation];
       const [along, across] =
@@ -1955,6 +2138,7 @@ export function annotationModelReading(
   if (
     !view ||
     annotation.kind === 'note' ||
+    annotation.kind === 'distance' ||
     isDrawingGeometryAnnotation(annotation)
   )
     return null;
