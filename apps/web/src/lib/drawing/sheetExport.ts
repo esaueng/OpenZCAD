@@ -5,8 +5,10 @@ import {
   sheetSafeText,
   textWidthMm,
   type SheetPage,
+  type SheetStrokeKind,
   type SheetText
 } from './sheetPage';
+import { writeDxf, type DxfEntity, type DxfLayer } from '@openzcad/io-dxf';
 import { exportFileStem } from '../model';
 
 /** The longest file name the desktop save dialog accepts, in bytes. */
@@ -22,7 +24,7 @@ const SHEET_STEM_LIMIT = 60;
 export function drawingExportFileName(
   projectName: string,
   sheetName: string,
-  format: 'pdf' | 'svg'
+  format: 'pdf' | 'svg' | 'dxf'
 ): string {
   const extension = `.${format}`;
   const room = MAX_EXPORT_FILE_NAME_BYTES - extension.length - 1;
@@ -213,4 +215,93 @@ export function sheetPageToPdf(page: SheetPage, title: string): Uint8Array {
   const bytes = new Uint8Array(body.length);
   for (let i = 0; i < body.length; i += 1) bytes[i] = body.charCodeAt(i) & 0xff;
   return bytes;
+}
+
+/**
+ * D04: each stroke kind's DXF layer. R12 has no line weights, so a kind is
+ * told apart by its layer's colour (a plotter pen) and line type: hidden
+ * edges dashed, the cutting-plane line long-dash-dot, as on the PDF.
+ */
+const DXF_LAYERS: Readonly<Record<SheetStrokeKind, DxfLayer>> = {
+  visible: { name: 'VISIBLE', color: 7 },
+  hidden: { name: 'HIDDEN', color: 8, lineType: 'HIDDEN' },
+  border: { name: 'BORDER', color: 7 },
+  thin: { name: 'THIN', color: 9 },
+  dimension: { name: 'DIMENSION', color: 3 },
+  hatch: { name: 'HATCH', color: 8 },
+  chain: { name: 'CENTER', color: 4, lineType: 'CENTER' },
+  cutting: { name: 'CUTTING', color: 1 }
+};
+const DXF_TEXT_LAYER: DxfLayer = { name: 'TEXT', color: 7 };
+
+/**
+ * D04: the composed page as a DXF R12 drawing, one-to-one in paper
+ * millimetres, so it lands on the sheet as printed (views at the sheet's
+ * scale, the title block, every dimension). Each stroke is a LINE or a
+ * POLYLINE on its kind's layer, each filled arrowhead a SOLID, and each text
+ * a TEXT on `TEXT` at its cap height, aligned and turned as drawn. Curves
+ * are the page's polylines: the exact edges sampled to the display
+ * tolerance, as the PDF draws them. Deterministic, like the other writers.
+ */
+export function sheetPageToDxf(page: SheetPage): string {
+  const entities: DxfEntity[] = [];
+  const used = new Set<SheetStrokeKind>();
+  for (const kind of SHEET_STROKE_ORDER) {
+    const layer = DXF_LAYERS[kind].name;
+    for (const stroke of page.strokes) {
+      if (stroke.kind !== kind) continue;
+      const points: [number, number][] = [];
+      for (let i = 0; i + 1 < stroke.points.length; i += 2)
+        points.push([stroke.points[i]!, stroke.points[i + 1]!]);
+      if (points.length < 2) continue;
+      used.add(kind);
+      if (stroke.filled && (points.length === 3 || points.length === 4))
+        entities.push({
+          kind: 'solid',
+          layer,
+          points: points as [
+            [number, number],
+            [number, number],
+            [number, number]
+          ]
+        });
+      else if (points.length === 2 && !stroke.closed && !stroke.filled)
+        entities.push({
+          kind: 'line',
+          layer,
+          start: points[0]!,
+          end: points[1]!
+        });
+      else
+        entities.push({
+          kind: 'polyline',
+          layer,
+          points,
+          closed: stroke.closed === true || stroke.filled === true
+        });
+    }
+  }
+  for (const text of page.texts) {
+    if (!text.text) continue;
+    entities.push({
+      kind: 'text',
+      layer: DXF_TEXT_LAYER.name,
+      position: [text.x, text.y],
+      height: text.sizeMm,
+      text: text.text,
+      ...(text.angleDeg ? { rotationDeg: text.angleDeg } : {}),
+      ...(text.align === 'middle'
+        ? { align: 'center' as const }
+        : text.align === 'end'
+          ? { align: 'right' as const }
+          : {})
+    });
+  }
+  const layers = [
+    ...SHEET_STROKE_ORDER.filter((kind) => used.has(kind)).map(
+      (kind) => DXF_LAYERS[kind]
+    ),
+    ...(page.texts.length > 0 ? [DXF_TEXT_LAYER] : [])
+  ];
+  return writeDxf(entities, { units: 'mm', layers });
 }

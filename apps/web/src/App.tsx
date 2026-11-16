@@ -18873,30 +18873,37 @@ export function App() {
     }
   }
 
-  /** One sketch's exact curves as an SVG at 1:1 in document units. */
+  /**
+   * One sketch's exact curves as an SVG at 1:1 in document units, or (D04)
+   * as a DXF drawing in millimetres.
+   */
   async function handleExportSketchSvg(options: SvgExportOptions) {
+    const format = options.format ?? 'svg';
     // No rebuild guard: the sketch is read from the saved document, and the
     // worker queues the export behind any rebuild in flight. The dialog
     // offers SVG while the model updates, so it must be able to deliver it.
     if (!doc) {
       return;
     }
-    const fileName = `${exportFileStem(doc.name)}-sketch.svg`;
+    const fileName = `${exportFileStem(doc.name)}-sketch.${format}`;
+    const name = format.toUpperCase();
     try {
-      setStatus('Exporting the sketch as SVG…');
-      const result = await geometry.exportModel('svg', doc, [], {
+      setStatus(`Exporting the sketch ${name}…`);
+      const result = await geometry.exportModel(format, doc, [], {
         sketchId: options.sketchId as SketchId,
         transparent: options.transparent
       });
       if (!('text' in result)) {
-        throw new Error('The SVG export returned no text.');
+        throw new Error(`${name} export returned no text.`);
       }
-      const saved = await saveCadTextFile(fileName, 'svg', result.text);
+      const saved = await saveCadTextFile(fileName, format, result.text);
       setStatus(
-        saved ? `Exported the sketch to ${fileName}.` : 'SVG export cancelled.'
+        saved
+          ? `Exported the sketch to ${fileName}.`
+          : `${name} export cancelled.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'SVG export failed.'));
+      setStatus(errorMessage(error, `${name} export failed.`));
     }
   }
 

@@ -139,6 +139,7 @@ import {
 import {
   drawingExportFileName,
   sheetPageToPdf,
+  sheetPageToDxf,
   sheetPageToSvg,
   sheetTextStart
 } from '../lib/drawing/sheetExport';
@@ -2979,7 +2980,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       setSelectedViewId(view.viewId);
   };
 
-  const exportSheet = async (format: 'pdf' | 'svg') => {
+  const exportSheet = async (format: 'pdf' | 'svg' | 'dxf') => {
     if (!sheet || !sheetReady) return;
     const viewStates = sheet.views.map((view) => {
       const state = projections.get(view.viewId);
@@ -3018,8 +3019,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             )
           : await saveCadTextFile(
               fileName,
-              'svg',
-              sheetPageToSvg(page, sheet.name)
+              format,
+              format === 'dxf'
+                ? sheetPageToDxf(page)
+                : sheetPageToSvg(page, sheet.name)
             );
       props.onStatus(
         saved
@@ -4315,6 +4318,21 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 onClick={() => void exportSheet('svg')}
               >
                 SVG
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                aria-label="Export DXF"
+                disabled={exportReason !== null}
+                title={
+                  exportReason ??
+                  (outdated
+                    ? 'Export this sheet as DXF, as drawn before the latest model change'
+                    : 'Export this sheet as DXF (R12, paper millimetres, a layer per line kind)')
+                }
+                onClick={() => void exportSheet('dxf')}
+              >
+                DXF
               </button>
             </div>
           </div>
