@@ -18,10 +18,12 @@ import {
 } from './lib/localHistoryAppend';
 import {
   documentPrintClearance,
+  effectiveConfigurationRow,
   repairLegacyBracketModel,
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
 import type { PrintClearanceState } from './components/PrintClearanceRow';
+import type { ConfigurationActions } from './components/ConfigurationTable';
 import {
   noteProjectMigrating,
   registerProjectFlush,
@@ -206,6 +208,7 @@ import {
   duplicateFeatureRefusal,
   isParameterRetype,
   isAssemblyOnlyCommand,
+  isConfigurationTableOnlyCommand,
   isDrawingCommand,
   isObjectFolderCommandKind,
   isReferenceImageCommandKind,
@@ -277,6 +280,7 @@ import type {
   FaceGeometry,
   FaceRecognitionSummary,
   ParamValue,
+  ConfigurationSet,
   FaceTopology,
   ProjectCheckpoint,
   PlaneId,
@@ -8507,6 +8511,15 @@ export function App() {
     () => requiredValueResolver(parameterScope.scope, doc?.units),
     [parameterScope.scope, doc?.units]
   );
+  // F06: the variant table as it reads, the active row as the model holds it.
+  const configurationView = useMemo((): ConfigurationSet | undefined => {
+    const set = doc?.configurations;
+    if (!doc || !set) return undefined;
+    return {
+      ...set,
+      rows: set.rows.map((row) => effectiveConfigurationRow(doc, row.id) ?? row)
+    };
+  }, [doc]);
   // L09: the document's print clearance, as the Parameters panel shows it.
   const printClearance = useMemo((): PrintClearanceState | undefined => {
     if (!doc) return undefined;
@@ -10701,7 +10714,8 @@ export function App() {
         isDrawingCommand(command) ||
         isReferenceImageCommandKind(command.kind) ||
         isObjectFolderCommandKind(command.kind) ||
-        isAssemblyOnlyCommand(command)
+        isAssemblyOnlyCommand(command) ||
+        isConfigurationTableOnlyCommand(command, beforeDocument)
       )
         geometry.retainReadyGeometry(next);
       if (derived) {
@@ -23712,6 +23726,74 @@ export function App() {
    * real. An assistant patch already landing is awaited first, since its
    * commit is what the edit must be checked against.
    */
+  /**
+   * F06: runs one configuration command, checked against the document first
+   * so a refusal is answered (and nothing is committed) rather than thrown.
+   */
+  function runConfigurationCommand(command: AnyCommand): string | null {
+    const manager = managerRef.current;
+    if (!manager) return 'Editing is unavailable.';
+    try {
+      command.validate(manager.document);
+      command.apply(manager.document);
+    } catch (error) {
+      return error instanceof Error
+        ? error.message
+        : 'The configurations were not changed.';
+    }
+    return executeCommand(command)
+      ? null
+      : 'The configurations were not changed.';
+  }
+
+  const configurationActions: ConfigurationActions = {
+    create: (name) =>
+      runConfigurationCommand(
+        commandFactories.createConfigurations({
+          rowId: `configuration_${crypto.randomUUID()}`,
+          name
+        })
+      ),
+    remove: () =>
+      runConfigurationCommand(commandFactories.deleteConfigurations()),
+    addRow: (name) =>
+      runConfigurationCommand(
+        commandFactories.addConfigurationRow({
+          rowId: `configuration_${crypto.randomUUID()}`,
+          name
+        })
+      ),
+    renameRow: (rowId, name) =>
+      runConfigurationCommand(
+        commandFactories.renameConfigurationRow({ rowId, name })
+      ),
+    deleteRow: (rowId) =>
+      runConfigurationCommand(
+        commandFactories.deleteConfigurationRow({ rowId })
+      ),
+    addColumn: (column) =>
+      runConfigurationCommand(
+        commandFactories.addConfigurationColumn({ column })
+      ),
+    deleteColumn: (column) =>
+      runConfigurationCommand(
+        commandFactories.deleteConfigurationColumn({ column })
+      ),
+    setCell: (rowId, column, value) =>
+      runConfigurationCommand(
+        commandFactories.setConfigurationCell({ rowId, column, value })
+      ),
+    activate: (rowId) => {
+      const row = doc?.configurations?.rows.find((entry) => entry.id === rowId);
+      return runConfigurationCommand(
+        commandFactories.activateConfiguration(
+          { rowId },
+          row ? `Switch to ${row.name}` : undefined
+        )
+      );
+    }
+  };
+
   /** L09: sets or clears the print clearance; answers with a refusal. */
   function handleSetPrintClearance(value: ParamValue | null): string | null {
     const manager = managerRef.current;
@@ -34586,6 +34668,11 @@ export function App() {
         handleSetParameter(name, expression)
       }
       printClearance={printClearance}
+      configurationTable={{
+        configurations: configurationView,
+        features,
+        ...(editDisabledReason ? {} : { actions: configurationActions })
+      }}
       onSetPrintClearance={
         editDisabledReason ? undefined : handleSetPrintClearance
       }

@@ -22,6 +22,7 @@ import {
   inertiaSiKgM2,
   massKg,
   normalizeMassDensitySelection,
+  configurationMaterial,
   parseCustomDensityKgPerM3,
   resolveDensityKgPerM3
 } from '@openzcad/shared';
@@ -419,6 +420,10 @@ export function BodyStats({
     setCustomDraft('');
     setCustomError(null);
   }, [projectId]);
+  // F06: a configuration table with a material column decides the material;
+  // the remembered per-browser choice applies only without one.
+  const configuredMaterial = configurationMaterial(document?.configurations);
+  const shownSelection = configuredMaterial ?? densitySelection;
   const workerRef = useRef(worker);
   workerRef.current = worker;
   useEffect(() => {
@@ -482,7 +487,7 @@ export function BodyStats({
   const mass =
     body.massProperties ??
     (currentQuery?.status === 'ready' ? currentQuery.properties : undefined);
-  const densityKgPerM3 = resolveDensityKgPerM3(densitySelection);
+  const densityKgPerM3 = resolveDensityKgPerM3(shownSelection);
   // Physical mass comes from the published exact volume, not from the
   // kernel's own volume field, which the shared type deliberately withholds
   // as the less accurate of the two.
@@ -525,10 +530,10 @@ export function BodyStats({
     }
   }
   const densityControlValue =
-    densitySelection.kind === 'unit'
+    shownSelection.kind === 'unit'
       ? 'unit'
-      : densitySelection.kind === 'preset'
-        ? `preset:${densitySelection.presetId}`
+      : shownSelection.kind === 'preset'
+        ? `preset:${shownSelection.presetId}`
         : 'custom';
   function onDensityControlChange(value: string): void {
     if (value === 'unit') {
@@ -613,7 +618,7 @@ export function BodyStats({
         title={
           densityKgPerM3 === null
             ? 'Mass properties (at unit density)'
-            : `Mass properties (${describeMassDensitySelection(densitySelection)})`
+            : `Mass properties (${describeMassDensitySelection(shownSelection)})`
         }
         onToggle={setMassOpen}
       >
@@ -623,6 +628,12 @@ export function BodyStats({
             <select
               aria-label="Material density"
               value={densityControlValue}
+              disabled={configuredMaterial !== null}
+              title={
+                configuredMaterial
+                  ? 'Set by the active configuration'
+                  : undefined
+              }
               onChange={(event) => onDensityControlChange(event.target.value)}
             >
               <option value="unit">Unit density</option>
@@ -634,7 +645,7 @@ export function BodyStats({
               <option value="custom">Custom…</option>
             </select>
           </span>
-          {densitySelection.kind === 'custom' && (
+          {shownSelection.kind === 'custom' && !configuredMaterial && (
             <>
               <b>custom density</b>
               <span>
@@ -750,7 +761,7 @@ export function BodyStats({
         <p className="muted">
           {densityKgPerM3 === null
             ? 'Kernel-integrated over face geometry — no tessellation. Trim outlines on curved faces are sampled.'
-            : `${describeMassDensitySelection(densitySelection)} · kernel-integrated over face geometry — no tessellation. Trim outlines on curved faces are sampled.`}
+            : `${describeMassDensitySelection(shownSelection)} · kernel-integrated over face geometry — no tessellation. Trim outlines on curved faces are sampled.`}
         </p>
       </CollapsibleSection>
     </>

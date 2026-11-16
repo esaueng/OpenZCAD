@@ -15,6 +15,7 @@ import {
   isRevisionRecord,
   objectFolderSetError,
   printClearanceError,
+  configurationSetError,
   assemblySetError,
   referenceImageSetError,
   reservedIdentifierError,
@@ -289,6 +290,12 @@ export function assertStorableDocument(value: unknown): ProjectDocument {
       record.printClearance === undefined
         ? null
         : printClearanceError(record.printClearance)
+    ],
+    [
+      'configurations',
+      record.configurations === undefined
+        ? null
+        : configurationSetError(record.configurations)
     ]
   ] as const) {
     if (error)

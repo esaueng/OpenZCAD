@@ -46,6 +46,20 @@ export function assertPrintClearanceSchema(version: unknown): void {
 }
 
 /**
+ * F06 configurations (schema v72): `configurations` and its commands. An
+ * older reader would show and export the bodies the active row hides.
+ */
+export const CONFIGURATION_SCHEMA_VERSION = 72;
+
+export function assertConfigurationSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    CONFIGURATION_SCHEMA_VERSION,
+    'Configurations'
+  );
+}
+
+/**
  * M15 thread runouts and pipe threads (schema v57): a thread carrying either
  * needs a document that declares it, or an older reader would build a plain
  * end or a cylindrical thread in its place.
@@ -291,6 +305,11 @@ export function assertDocumentContentCommandSchema(
       assertPrintClearanceSchema(document.schemaVersion);
     if (
       typeof command.kind === 'string' &&
+      command.kind.startsWith('configuration.')
+    )
+      assertConfigurationSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
       command.kind.startsWith('drawing.') &&
       hasDrawingDimensionFormat(command.payload)
     )
@@ -374,6 +393,15 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         (change.before !== undefined || change.after !== undefined)
       )
         assertPrintClearanceSchema(document.schemaVersion);
+  if (document.configurations !== undefined)
+    assertConfigurationSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'configurations' &&
+        (change.before !== undefined || change.after !== undefined)
+      )
+        assertConfigurationSchema(document.schemaVersion);
   if (document.assembly !== undefined)
     assertAssemblySchema(document.schemaVersion);
   if (hasCouplings(document.assembly))

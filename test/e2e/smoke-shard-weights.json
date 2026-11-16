@@ -15,6 +15,7 @@
   "collaboration-lease-recovery.spec.ts": 19,
   "collaboration.spec.ts": 20,
   "command-bar-names.spec.ts": 8,
+  "configurations.spec.ts": 12,
   "coplanar-bodies.spec.ts": 55,
   "cylinder-preview.spec.ts": 23,
   "deep-design-polish.spec.ts": 63,
