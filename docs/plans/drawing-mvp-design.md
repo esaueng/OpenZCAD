@@ -388,7 +388,9 @@ notes to D01 sheets:
 
 - **Shape.** A dimension gains an optional `tolerance` — `symmetric`
   (`value > 0`), `deviation` or `limits` (`upper > lower`, both signed) or
-  `basic` — and an optional `prefix` and `suffix` (one trimmed line of at most
+  `basic` — stated to at most six decimals (what a label prints, so a
+  stored tolerance never reads as zero), and an optional `prefix` and
+  `suffix` (one trimmed line of at most
   40 characters, printed with a space between). Tolerances are stored as
   deviations from the measured value in document units (degrees on an
   angle), never as a value, so `limits` prints the measured value plus each

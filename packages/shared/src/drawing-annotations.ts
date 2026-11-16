@@ -556,11 +556,19 @@ function countError(value: unknown, kind: unknown, where: string) {
   return null;
 }
 
+/**
+ * A tolerance amount: finite, bounded, and stated to at most
+ * {@link MAX_DRAWING_DIMENSION_DECIMALS} decimals, the most a label prints.
+ * A finer amount would print as zero (`±0.000000`), or limits as two equal
+ * bounds, while the sheet stores a tolerance.
+ */
 function isDeviation(value: unknown): value is number {
   return (
     typeof value === 'number' &&
     Number.isFinite(value) &&
-    Math.abs(value) <= MAX_DRAWING_TOLERANCE
+    Math.abs(value) <= MAX_DRAWING_TOLERANCE &&
+    Math.abs(Number(value.toFixed(MAX_DRAWING_DIMENSION_DECIMALS)) - value) <=
+      1e-9 * Math.max(1, Math.abs(value))
   );
 }
 
@@ -573,13 +581,13 @@ export function drawingToleranceError(value: unknown): string | null {
         return 'has a symmetric tolerance with unknown fields';
       return isDeviation(value.value) && value.value > 0
         ? null
-        : 'has a symmetric tolerance that is not a positive amount';
+        : 'has a symmetric tolerance that is not a positive amount of at most six decimals';
     case 'deviation':
     case 'limits':
       if (Object.keys(value).length !== 3)
         return `has a ${value.kind} tolerance with unknown fields`;
       if (!isDeviation(value.upper) || !isDeviation(value.lower))
-        return `has a ${value.kind} tolerance with an invalid deviation`;
+        return `has a ${value.kind} tolerance with an invalid deviation (finite, at most six decimals)`;
       return value.upper > value.lower
         ? null
         : `has a ${value.kind} tolerance whose upper deviation is not above its lower`;

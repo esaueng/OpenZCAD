@@ -39,6 +39,10 @@ import {
   resolveDrawingAnnotation,
   resolveSheetAnnotations
 } from '../apps/web/src/lib/drawing/annotations';
+import {
+  repairedAnnotation,
+  startAnnotationTool
+} from '../apps/web/src/lib/drawing/annotationPicking';
 import { parseSaveProjectDocumentRequest } from '../apps/web/worker/validation';
 
 /**
@@ -198,6 +202,7 @@ describe('D02 dimension tolerances (schema v68)', () => {
       { kind: 'deviation', upper: 0.1, lower: -0.05 },
       { kind: 'deviation', upper: 0, lower: -0.1 },
       { kind: 'limits', upper: 0.2, lower: 0.1 },
+      { kind: 'symmetric', value: 0.000001 },
       { kind: 'basic' }
     ];
     for (const tolerance of good)
@@ -210,6 +215,10 @@ describe('D02 dimension tolerances (schema v68)', () => {
       [{ kind: 'limits', upper: 0.1, lower: 0.1 }, /not above/],
       [{ kind: 'deviation', upper: Infinity, lower: 0 }, /invalid deviation/],
       [{ kind: 'limits', upper: 1e7, lower: 0 }, /invalid deviation/],
+      // Finer than a label prints: it would read as no tolerance at all.
+      [{ kind: 'symmetric', value: 1e-7 }, /at most six decimals/],
+      [{ kind: 'limits', upper: 1e-7, lower: -1e-7 }, /at most six decimals/],
+      [{ kind: 'deviation', upper: 0.1, lower: 1 / 3 }, /at most six decimals/],
       [{ kind: 'basic', value: 1 }, /unknown fields/],
       [{ kind: 'fit' }, /unknown tolerance kind/],
       ['±0.1', /not a record/]
@@ -338,6 +347,29 @@ describe('D02 dimension tolerances (schema v68)', () => {
     expect(
       formatDimension(width(ref, { suffix: 'TYP' }), '1 × 45°').label
     ).toBe('1 × 45° TYP');
+  });
+
+  it('keeps the tolerance, prefix and suffix through a re-pick', () => {
+    const lost: DrawingEdgeRef = { bodyId: 'body_x' as BodyId, hash: 7 };
+    const picked: DrawingEdgeRef = { bodyId: 'body_x' as BodyId, hash: 8 };
+    const previous = width(lost, {
+      tolerance: { kind: 'deviation', upper: 0.1, lower: -0.05 },
+      prefix: '2×',
+      suffix: 'TYP',
+      decimals: 3
+    });
+    const tool = {
+      ...startAnnotationTool('horizontal', previous.annotationId, frontId),
+      points: [
+        { edge: picked, anchor: 'first' as const },
+        { edge: picked, anchor: 'second' as const }
+      ]
+    };
+    expect(repairedAnnotation(previous, tool)).toEqual({
+      ...previous,
+      from: { edge: picked, anchor: 'first' },
+      to: { edge: picked, anchor: 'second' }
+    });
   });
 
   it('reads limits from the model, so they follow a widened box after Update', async () => {
