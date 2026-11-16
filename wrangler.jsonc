@@ -14,14 +14,13 @@
   "build": { "command": "pnpm -w run check:release-build" },
   // Domains. Every deploy replaces the dashboard's routes and workers.dev
   // toggles with these, so change them here, not in the dashboard.
-  // beta.zcad.app is this channel's own address. zcad.app stays here until
-  // the cutover moves it to the stable Worker. dev.zcad.app serves Previews
+  // beta.zcad.app is this channel's address; zcad.app belongs to the stable
+  // Worker (wrangler.stable.jsonc). dev.zcad.app serves Previews
   // only, at <preview-name>.dev.zcad.app (Cloudflare adds the *.dev.zcad.app
   // record and certificate). Both workers.dev URLs stay off: without
   // `workers_dev: false` a deploy would turn this Worker's back on.
   "workers_dev": false,
   "routes": [
-    { "pattern": "zcad.app", "custom_domain": true },
     { "pattern": "beta.zcad.app", "custom_domain": true },
     {
       "pattern": "dev.zcad.app",
@@ -74,7 +73,7 @@
     "PRODUCTION_GUARD": "enabled",
     "AUTH_EMAIL_FROM": "noreply@beta.zcad.app",
     "PROJECT_INVITATION_EMAIL_FROM": "noreply@beta.zcad.app",
-    "PUBLIC_APP_ORIGIN": "https://zcad.app",
+    "PUBLIC_APP_ORIGIN": "https://beta.zcad.app",
     "AUTH_SESSION_DAYS": "30",
     "DESKTOP_AUTH_ENABLED": "true",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAD_j6Y7NvXKtcxNX",

@@ -209,7 +209,7 @@ describe('stable channel configuration', () => {
     expect(command).toContain(
       'apply-beta-migrations.mjs --database openzcad-stable --config ../../wrangler.stable.jsonc && wrangler deploy --config ../../wrangler.stable.jsonc'
     );
-    expect(command).toContain('--origin https://stable.zcad.app');
+    expect(command).toContain('--origin https://zcad.app');
     expect(command).not.toMatch(
       /openzcad-beta\b|--config \.\.\/\.\.\/wrangler\.jsonc/
     );
@@ -249,7 +249,7 @@ describe('deploy script flags', () => {
   });
 
   it('verifies the named origin and refuses a malformed one', () => {
-    expect(verificationOrigin([], {})).toBe('https://zcad.app');
+    expect(verificationOrigin([], {})).toBe('https://beta.zcad.app');
     expect(
       verificationOrigin(['--origin', 'https://stable.zcad.app'], {})
     ).toBe('https://stable.zcad.app');

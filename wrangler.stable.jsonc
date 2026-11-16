@@ -4,10 +4,10 @@
 // secrets and rate-limit namespaces are its own; nothing is shared with the
 // beta Worker in wrangler.jsonc. docs/release-channels.md describes both.
 //
-// Until the cutover it serves stable.zcad.app only, with Glimpse off and no
-// GLIMPSE service binding: both Workers report as app "openzcad", so leaving
-// it on would mix two user bases in one census. The cutover moves zcad.app
-// here and decides which channel reports to Glimpse.
+// It serves zcad.app (production) and stable.zcad.app. Glimpse stays off
+// with no GLIMPSE service binding: both Workers report as app "openzcad",
+// so turning it on here would mix two user bases in one census while beta
+// still reports.
 //
 // Keep it in step with wrangler.jsonc: test/release-channels.test.ts fails
 // on any difference beyond the ones listed there.
@@ -22,6 +22,10 @@
   },
   "workers_dev": false,
   "routes": [
+    {
+      "pattern": "zcad.app",
+      "custom_domain": true
+    },
     {
       "pattern": "stable.zcad.app",
       "custom_domain": true
@@ -121,7 +125,7 @@
     "PRODUCTION_GUARD": "enabled",
     "AUTH_EMAIL_FROM": "noreply@zcad.app",
     "PROJECT_INVITATION_EMAIL_FROM": "noreply@zcad.app",
-    "PUBLIC_APP_ORIGIN": "https://stable.zcad.app",
+    "PUBLIC_APP_ORIGIN": "https://zcad.app",
     "AUTH_SESSION_DAYS": "30",
     "DESKTOP_AUTH_ENABLED": "true",
     "TURNSTILE_SITE_KEY": "0x4AAAAAAD_j6Y7NvXKtcxNX",
