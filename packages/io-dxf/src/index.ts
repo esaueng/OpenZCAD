@@ -45,6 +45,12 @@ export interface DxfPolyline {
   readonly kind: 'polyline';
   readonly points: ReadonlyArray<readonly [number, number]>;
   readonly closed: boolean;
+  /**
+   * Run a dashed line type's pattern on along the whole polyline (flag
+   * 128) instead of restarting it at every vertex, where a finely sampled
+   * curve would otherwise draw solid. Absent writes the flags as before.
+   */
+  readonly continuousLinetype?: true;
 }
 
 /**
@@ -180,6 +186,22 @@ function layerName(layer: string | undefined): string {
  */
 /** Readers (AutoCAD among them) reject a file with a longer string value. */
 const MAX_DXF_STRING_LENGTH = 256;
+/** The most characters one TEXT may hold once encoded (see `dxfTextLength`). */
+export const MAX_DXF_TEXT_LENGTH = MAX_DXF_STRING_LENGTH;
+
+/**
+ * How long `text` is once written as a TEXT value: printable ASCII is one
+ * character, anything else its 7-character `\U+XXXX` escape. A caller with
+ * longer text splits it into several entities.
+ */
+export function dxfTextLength(text: string): number {
+  let length = 0;
+  for (const char of text) {
+    const code = char.codePointAt(0)!;
+    length += code >= 0x20 && code < 0x7f ? 1 : 7;
+  }
+  return length;
+}
 
 function dxfTextValue(text: string): string {
   if (/[\r\n]/.test(text)) {
@@ -296,7 +318,10 @@ function polylineEntity(entity: DxfPolyline): string[] {
     ...group(8, layer),
     // 66=1: vertices follow as separate entities (required in R12).
     ...group(66, '1'),
-    ...group(70, entity.closed ? '1' : '0')
+    ...group(
+      70,
+      String((entity.closed ? 1 : 0) | (entity.continuousLinetype ? 128 : 0))
+    )
   ];
   for (const [x, y] of entity.points) {
     out.push(

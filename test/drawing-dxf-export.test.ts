@@ -20,6 +20,7 @@ import { projectionBodyInput } from '../apps/web/src/lib/drawing/sheetSources';
 import { composeSheetPage } from '../apps/web/src/lib/drawing/sheetPage';
 import {
   drawingExportFileName,
+  dxfTextPieces,
   sheetPageToDxf
 } from '../apps/web/src/lib/drawing/sheetExport';
 import {
@@ -222,6 +223,57 @@ describe('D04 drawing DXF export', () => {
     expect(imported.dropped.TEXT).toBe(
       page.texts.filter((text) => text.text).length
     );
+  });
+
+  it('runs dashes on along sampled hidden curves, and splits text longer than a TEXT holds', async () => {
+    const { page: drawnPage } = await drawn();
+    // A hidden arc sampled into segments far shorter than its 3 mm dash.
+    const arc: number[] = [];
+    for (let i = 0; i <= 24; i += 1)
+      arc.push(
+        100 + 5 * Math.cos((Math.PI * i) / 24),
+        100 + 5 * Math.sin((Math.PI * i) / 24)
+      );
+    const page = {
+      ...drawnPage,
+      strokes: [...drawnPage.strokes, { kind: 'hidden' as const, points: arc }]
+    };
+    const records = entities(sheetPageToDxf(page));
+    // Every hidden polyline carries flag 128; continuous ones do not.
+    const hidden = records.filter(
+      (record) =>
+        record.type === 'POLYLINE' && record.groups.get(8)?.[0] === 'HIDDEN'
+    );
+    expect(hidden.length).toBeGreaterThan(0);
+    for (const record of hidden)
+      expect(Number(record.groups.get(70)![0]) & 128).toBe(128);
+    for (const record of records.filter(
+      (entry) =>
+        entry.type === 'POLYLINE' && entry.groups.get(8)?.[0] === 'VISIBLE'
+    ))
+      expect(Number(record.groups.get(70)![0]) & 128).toBe(0);
+
+    // A valid 200-character note of Ø, each escaped to 7 characters, would
+    // overrun one TEXT's 256: it is written as consecutive pieces.
+    const note = 'Ø'.repeat(200);
+    const long = {
+      ...page,
+      texts: [{ x: 20, y: 30, sizeMm: 3, text: note, align: 'middle' as const }]
+    };
+    const pieces = dxfTextPieces(note);
+    expect(pieces.join('')).toBe(note);
+    expect(pieces.length).toBe(Math.ceil(200 / 36));
+    const texts = entities(sheetPageToDxf(long)).filter(
+      (record) => record.type === 'TEXT'
+    );
+    expect(texts).toHaveLength(pieces.length);
+    const xs = texts.map((record) => Number(record.groups.get(10)![0]));
+    // Centred as a whole: left of the anchor to right of it, in order.
+    expect(xs[0]).toBeLessThan(20);
+    for (let i = 1; i < xs.length; i += 1)
+      expect(xs[i]).toBeGreaterThan(xs[i - 1]!);
+    for (const record of texts)
+      expect(record.groups.get(1)![0]!.length).toBeLessThanOrEqual(256);
   });
 
   it('names the file .dxf and keeps the writer’s older layer tables byte-identical', () => {

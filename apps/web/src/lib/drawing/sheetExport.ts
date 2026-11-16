@@ -8,7 +8,13 @@ import {
   type SheetStrokeKind,
   type SheetText
 } from './sheetPage';
-import { writeDxf, type DxfEntity, type DxfLayer } from '@openzcad/io-dxf';
+import {
+  dxfTextLength,
+  MAX_DXF_TEXT_LENGTH,
+  writeDxf,
+  type DxfEntity,
+  type DxfLayer
+} from '@openzcad/io-dxf';
 import { exportFileStem } from '../model';
 
 /** The longest file name the desktop save dialog accepts, in bytes. */
@@ -235,6 +241,24 @@ const DXF_LAYERS: Readonly<Record<SheetStrokeKind, DxfLayer>> = {
 const DXF_TEXT_LAYER: DxfLayer = { name: 'TEXT', color: 7 };
 
 /**
+ * `text` cut, between characters, into the fewest pieces that each fit one
+ * DXF TEXT once encoded (non-ASCII characters take seven characters each).
+ */
+export function dxfTextPieces(text: string): string[] {
+  const pieces: string[] = [];
+  let piece = '';
+  for (const char of text) {
+    if (dxfTextLength(piece + char) > MAX_DXF_TEXT_LENGTH) {
+      pieces.push(piece);
+      piece = '';
+    }
+    piece += char;
+  }
+  if (piece) pieces.push(piece);
+  return pieces;
+}
+
+/**
  * D04: the composed page as a DXF R12 drawing, one-to-one in paper
  * millimetres, so it lands on the sheet as printed (views at the sheet's
  * scale, the title block, every dimension). Each stroke is a LINE or a
@@ -277,25 +301,54 @@ export function sheetPageToDxf(page: SheetPage): string {
           kind: 'polyline',
           layer,
           points,
-          closed: stroke.closed === true || stroke.filled === true
+          closed: stroke.closed === true || stroke.filled === true,
+          // A sampled curve's segments are shorter than a dash: the pattern
+          // runs on along it, or a hidden circle would draw solid.
+          ...(DXF_LAYERS[kind].lineType
+            ? { continuousLinetype: true as const }
+            : {})
         });
     }
   }
   for (const text of page.texts) {
     if (!text.text) continue;
-    entities.push({
-      kind: 'text',
-      layer: DXF_TEXT_LAYER.name,
-      position: [text.x, text.y],
-      height: text.sizeMm,
-      text: text.text,
-      ...(text.angleDeg ? { rotationDeg: text.angleDeg } : {}),
-      ...(text.align === 'middle'
-        ? { align: 'center' as const }
+    const pieces = dxfTextPieces(text.text);
+    const align =
+      text.align === 'middle'
+        ? ('center' as const)
         : text.align === 'end'
-          ? { align: 'right' as const }
-          : {})
-    });
+          ? ('right' as const)
+          : undefined;
+    if (pieces.length === 1) {
+      entities.push({
+        kind: 'text',
+        layer: DXF_TEXT_LAYER.name,
+        position: [text.x, text.y],
+        height: text.sizeMm,
+        text: text.text,
+        ...(text.angleDeg ? { rotationDeg: text.angleDeg } : {}),
+        ...(align ? { align } : {})
+      });
+      continue;
+    }
+    // Longer than one TEXT holds once encoded: consecutive left-aligned
+    // pieces along the same baseline, starting where the whole would.
+    const total = textWidthMm(text.text, text.sizeMm, text.bold);
+    const radians = ((text.angleDeg ?? 0) * Math.PI) / 180;
+    const along: [number, number] = [Math.cos(radians), Math.sin(radians)];
+    let at =
+      text.align === 'middle' ? -total / 2 : text.align === 'end' ? -total : 0;
+    for (const piece of pieces) {
+      entities.push({
+        kind: 'text',
+        layer: DXF_TEXT_LAYER.name,
+        position: [text.x + along[0] * at, text.y + along[1] * at],
+        height: text.sizeMm,
+        text: piece,
+        ...(text.angleDeg ? { rotationDeg: text.angleDeg } : {})
+      });
+      at += textWidthMm(piece, text.sizeMm, text.bold);
+    }
   }
   const layers = [
     ...SHEET_STROKE_ORDER.filter((kind) => used.has(kind)).map(
