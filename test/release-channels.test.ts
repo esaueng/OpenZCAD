@@ -10,7 +10,25 @@ import { planPromotion, promote } from '../scripts/promote-stable.mjs';
 import { migrationTarget } from '../scripts/apply-beta-migrations.mjs';
 import { verificationOrigin } from '../scripts/verify-beta-deployment.mjs';
 
-type Config = Record<string, any>;
+interface RateLimit {
+  name: string;
+  namespace_id: string;
+  simple: unknown;
+}
+interface Config {
+  name?: string;
+  vars: Record<string, string>;
+  ratelimits: RateLimit[];
+  services?: { binding: string; service: string }[];
+  d1_databases: {
+    binding: string;
+    database_name: string;
+    database_id: string;
+  }[];
+  r2_buckets: { binding: string; bucket_name: string }[];
+  previews?: { ratelimits?: RateLimit[] } & Record<string, unknown>;
+  [key: string]: unknown;
+}
 
 function read(path: string): Config {
   return ts.parseConfigFileTextToJson(path, readFileSync(path, 'utf8'))
@@ -61,9 +79,7 @@ describe('stable channel configuration', () => {
     };
     expect(strip(stable)).toEqual(strip(beta));
     const limits = (config: Config) =>
-      (config.ratelimits as { name: string; simple: unknown }[]).map(
-        ({ name, simple }) => ({ name, simple })
-      );
+      config.ratelimits.map(({ name, simple }) => ({ name, simple }));
     expect(limits(stable)).toEqual(limits(beta));
   });
 
@@ -78,8 +94,8 @@ describe('stable channel configuration', () => {
       );
     const betaIds = ids(beta);
     for (const id of ids(stable)) expect(betaIds.has(id), id).toBe(false);
-    expect(stable.d1_databases[0].database_id).not.toBe(OFFICIAL.databaseId);
-    expect(stable.r2_buckets[0].bucket_name).not.toBe(OFFICIAL.bucketName);
+    expect(stable.d1_databases[0]!.database_id).not.toBe(OFFICIAL.databaseId);
+    expect(stable.r2_buckets[0]!.bucket_name).not.toBe(OFFICIAL.bucketName);
     expect(stable.services).toBeUndefined();
     expect(stable.vars.GLIMPSE_BASIC_ENABLED).toBe('false');
     expect(stable.vars.GLIMPSE_USAGE_ENABLED).toBe('false');
@@ -87,8 +103,8 @@ describe('stable channel configuration', () => {
 
   it('refuses beta resources, Previews and a foreign origin on stable', () => {
     const stable = read('wrangler.stable.jsonc');
-    stable.d1_databases[0].database_id = OFFICIAL.databaseId;
-    stable.d1_databases[0].database_name = OFFICIAL.databaseName;
+    stable.d1_databases[0]!.database_id = OFFICIAL.databaseId;
+    stable.d1_databases[0]!.database_name = OFFICIAL.databaseName;
     stable.previews = {};
     stable.vars.PUBLIC_APP_ORIGIN = 'https://beta.zcad.app';
     expect(validateDeploymentConfig(stable, options)).toEqual(
@@ -114,7 +130,7 @@ describe('stable channel configuration', () => {
         "stable service binding GLIMPSE would share beta's",
         'vars.GLIMPSE_BASIC_ENABLED must be off on stable until the cutover',
         'vars.GLIMPSE_USAGE_ENABLED must be off on stable until the cutover',
-        `stable rate limit ${beta.ratelimits[0].name} shares beta namespace ${beta.ratelimits[0].namespace_id}`
+        `stable rate limit ${beta.ratelimits[0]!.name} shares beta namespace ${beta.ratelimits[0]!.namespace_id}`
       ])
     );
     const { betaConfig: _beta, ...withoutBeta } = options;
@@ -145,15 +161,16 @@ describe('stable channel configuration', () => {
 
   it('keeps self-hosting and dev configs off stable resources', () => {
     const dev = read('apps/web/wrangler.jsonc');
-    dev.d1_databases[0].database_id = OFFICIAL_STABLE.databaseId;
+    dev.d1_databases[0]!.database_id = OFFICIAL_STABLE.databaseId;
     expect(validateDeploymentConfig(dev, { target: 'dev' })).toContain(
       'Development configuration references an official resource.'
     );
   });
 
   it('deploys stable with its own migrations, config and origin', () => {
-    const scripts = JSON.parse(readFileSync('apps/web/package.json', 'utf8'))
-      .scripts as Record<string, string>;
+    const { scripts } = JSON.parse(
+      readFileSync('apps/web/package.json', 'utf8')
+    ) as { scripts: Record<string, string> };
     const command = scripts['deploy:stable']!;
     expect(scripts['predeploy:stable']).toContain(
       '--config ../../wrangler.stable.jsonc --target stable'
@@ -220,7 +237,7 @@ describe('stable promotion', () => {
   const OFF_MAIN = 'c'.repeat(40);
 
   function fakeGit({
-    stable = OLD as string | null,
+    stable = OLD,
     onMain = [MAIN, OLD],
     ancestry = [[OLD, MAIN]] as [string, string][]
   } = {}) {
