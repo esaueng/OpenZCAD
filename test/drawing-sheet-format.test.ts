@@ -260,6 +260,23 @@ describe('D02 drawing properties (schema v70)', () => {
         dms
       ).text?.stack
     ).toEqual([`+0°30'0"`, '0']);
+    // A tolerance finer than the seconds shown keeps the decimals it needs:
+    // 0.000001° is 0.0036", never ±0°0'0".
+    expect(
+      formatDimension(
+        angled({ tolerance: { kind: 'symmetric', value: 0.000001 } }),
+        angle(30),
+        dms
+      ).label
+    ).toBe(`30°0'0" ±0°0'0.0036"`);
+    const limits = formatDimension(
+      angled({
+        tolerance: { kind: 'limits', upper: 0.000001, lower: -0.000001 }
+      }),
+      angle(30),
+      dms
+    ).text?.stack;
+    expect(limits).toEqual([`30°0'0.0036"`, `29°59'59.9964"`]);
     // The default stays decimal degrees with a point.
     expect(
       formatDimension(

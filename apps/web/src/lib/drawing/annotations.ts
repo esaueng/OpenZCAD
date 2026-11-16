@@ -463,11 +463,15 @@ export function formatDimension(
     const write = (n: number, d: number, trim: boolean) =>
       writeNumber(n, d, kind, format, trim);
     const nominal = `${symbol}${write(value, decimals, true)}`;
-    // Decimal degrees and lengths keep a finer tolerance's decimals; D°M'S"
-    // decimals are the seconds'.
+    // A tolerance keeps the decimals it needs, so a stored one never prints
+    // as zero: a length's or decimal degree's own, a D°M'S" amount's in
+    // seconds (0.000001° is 0.0036").
     const tolerant = (...amounts: number[]) =>
       kind === 'angle' && format.angleFormat === 'dms'
-        ? decimals
+        ? Math.max(
+            decimals,
+            ...amounts.map((amount) => significantDecimals(amount * 3600))
+          )
         : Math.max(decimals, ...amounts.map(significantDecimals));
     switch (tolerance?.kind) {
       case undefined:
