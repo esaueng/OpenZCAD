@@ -47,8 +47,12 @@ Three options were considered.
 
 **Phase 1 is a stdio MCP server, `openzcad-mcp`, that operates on
 `.openzcad` project files the user names when configuring it.** It is a Node
-program in this repository (`apps/agent-bridge`), built into one ES module
-with the kernel loaded from its own `remus-wasm` dependency. The agent host
+program in this repository (`apps/agent-bridge`) that runs from the
+checkout's TypeScript sources through Vite's server-side module runner, so
+every package resolves its own dependencies and the kernel loads the same
+pinned `remus-wasm` build as the app, through that package's Node entry. The
+runner is created in middleware mode with no HMR socket and no file watcher.
+The agent host
 starts it as a child process; JSON-RPC 2.0 messages travel one per line on
 stdin and stdout, and diagnostics go to stderr. It opens no listener, makes no
 network request, and holds no OpenZCAD account credentials or keys.
@@ -95,6 +99,9 @@ What Phase 1 does enforce:
 - It refuses a file that is not a plaintext `openzcad-project` backup — an
   ADR-024 envelope or any other ciphertext is rejected by format before
   parsing — so it cannot be pointed at encrypted data it has no key for.
+- On POSIX systems it refuses a granted file that another user owns or that
+  group or other users can write: the server acts with the launching user's
+  authority, so it does not accept a file another account could swap.
 - It refuses to start with stdin attached to a terminal, so a stray
   interactive launch does not sit waiting with edit scope.
 
@@ -141,10 +148,20 @@ loop can retry fast. Limits protect the machine, not a server:
   error with a `retryAfterMs` the agent can honour. Flags may lower these
   defaults, never raise them.
 - **Per-call budgets.** A request line is at most 2 MiB of JSON; a proposal is
-  at most `MAX_PATCH_OPERATIONS` operations (the parser's existing bound); a
-  derivation is cancelled after 120 s through the adapter's cancellation
-  signal; `get_document` answers at most 4 MiB and otherwise tells the agent
-  to use the digest. A project file is at most the backup reader's 256 MB.
+  at most `MAX_PATCH_OPERATIONS` operations (the parser's existing bound);
+  `get_document` answers at most 4 MiB and otherwise tells the agent to use
+  the digest. A project file is at most the backup reader's 256 MB.
+- **A cooperative deadline, not a hard one.** A derivation is signalled to
+  stop after 120 s through the adapter's cancellation signal, which is checked
+  between indivisible kernel operations. A single running WASM call cannot
+  observe it, and it holds Node's event loop, so one very expensive boolean or
+  fillet can run past the deadline and the server answers nothing until it
+  returns. When the deadline fires the call is reported as timed out and
+  never writes, even if its derivation finishes later; the kernel stays held
+  until it does, so no second derivation starts beside it. The agent host's
+  own request timeout, and ending the server process, remain the backstop. A
+  hard deadline would need the kernel in a separately terminable worker; that
+  is a later refinement, not a Phase 1 promise.
 
 ## Operation surface
 
@@ -152,20 +169,39 @@ All tools take a `project` (alias or id). Every model-changing call names the
 document `expectedVersion` it was planned against, as the app's version fence
 does.
 
-| Tool               | Does                                                                                                                                                                                                                                                                                                                                                           |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list_projects`    | Alias, `projectId`, name, units, version and schema version of each granted project, and the server's scope.                                                                                                                                                                                                                                                   |
-| `get_document`     | The canonical `ProjectDocument` without its derived projection, edit history or embedded source bytes.                                                                                                                                                                                                                                                         |
-| `get_digest`       | `createCadDocumentDigest` of the exactly derived document: the same compact summary the assistant sends, with measured faces, edges and editable dimensions.                                                                                                                                                                                                   |
-| `get_patch_schema` | `CAD_PATCH_JSON_SCHEMA`, the enabled operation kinds and `MAX_PATCH_OPERATIONS`. The same schema is the `proposal` input schema of the two patch tools, so a host that constrains tool arguments constrains the patch.                                                                                                                                         |
-| `preflight_patch`  | `parseCadPatchProposal` against the digest, then `preflightCadPatch` on the exact kernel. Returns each operation's description, the result bodies it proved, each changed body's volume and bounds before and after, and the candidate version — or the exact refusal text. Writes nothing.                                                                    |
-| `apply_patch`      | Re-reads the file, refuses if its bytes or version moved since `expectedVersion`, then runs the same validation and preflight and commits the preflight's commands with `CommandManager.runTransaction('Apply agent patch', …)`: one `editHistory` entry. Writes the backup atomically (temporary file, `fsync`, rename) with the derived projection stripped. |
+| Tool               | Does                                                                                                                                                                                                                                                                                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `list_projects`    | Alias, `projectId`, name, units, version and schema version of each granted project, and the server's scope.                                                                                                                                                                                                                                     |
+| `get_document`     | The canonical `ProjectDocument` without its derived projection or edit history.                                                                                                                                                                                                                                                                  |
+| `get_digest`       | `createCadDocumentDigest` of the exactly derived document: the same compact summary the assistant sends, with measured faces, edges and editable dimensions.                                                                                                                                                                                     |
+| `get_patch_schema` | `CAD_PATCH_JSON_SCHEMA`, the enabled operation kinds and `MAX_PATCH_OPERATIONS`. The same schema is the `proposal` input schema of the two patch tools, so a host that constrains tool arguments constrains the patch.                                                                                                                           |
+| `preflight_patch`  | `parseCadPatchProposal` against the digest, then `preflightCadPatch` on the exact kernel. Returns each operation's description, the result bodies it proved, each changed body's volume and bounds before and after, and the candidate version — or the exact refusal text. Writes nothing.                                                      |
+| `apply_patch`      | Re-reads the file, refuses if its version moved since `expectedVersion`, then runs the same validation and preflight and commits the preflight's commands with `CommandManager.runTransaction('Apply agent patch', …)`: one `editHistory` entry. Writes the backup atomically with the derived projection stripped, under the write rules below. |
 
 `apply_patch` never reuses an earlier `preflight_patch` result: it preflights
 again against the bytes it is about to replace, so nothing applies that the
-exact kernel has not just checked. Phase 1 writes the file only; the agent
-cannot undo through the API, and the user undoes in the app once they import
-the result, where the change is one step.
+exact kernel has not just checked.
+
+Write rules:
+
+- **No lost updates.** Preflight can take a while, and another server
+  instance or a person can save the same file meanwhile. The SHA-256 of the
+  bytes the call loaded is its revision fence: the commit re-hashes the file
+  before writing the temporary copy and again immediately before the rename,
+  and refuses with `conflict`, writing nothing, if either differs. The
+  temporary file sits in the same directory, is created exclusively with the
+  original's mode, and is `fsync`ed before the rename. What remains is the
+  interval between the last hash and the rename, which no portable advisory
+  lock closes against editors that do not take it; the user grants a file to
+  one agent at a time.
+- **The undo entry must survive.** ADR-023 bounds history to 100 steps and
+  8,000,000 serialized bytes and drops the oldest entries first, so an edit
+  that alone exceeds the byte budget drops its own entry. A proposal can be
+  tiny and still do that (renaming a node snapshots the whole node). The
+  commit refuses, before writing, unless the transaction's own entry is the
+  newest kept step. Phase 1 writes the file only; the agent
+  cannot undo through the API, and the user undoes in the app once they import
+  the result, where the change is one step.
 
 ## E2EE plaintext boundary
 
@@ -217,13 +253,16 @@ These bind whichever transport the owner chooses; they are not decided here.
    protocol negotiation, malformed and oversized input, scope refusals and
    limits.
 3. **stdio host** (`apps/agent-bridge`): the file workspace, Node kernel
-   wiring, atomic write, the `openzcad-mcp` entry and its build. An end-to-end
-   test spawns the built server over stdio, drives a real edit on a sample
+   wiring, atomic write and the `openzcad-mcp` launcher. An end-to-end
+   test spawns the real server over stdio, drives a real edit on a sample
    project (initialize, digest, preflight, apply), and checks the file gained
    exactly one undo entry whose undo restores the original model, that a
    refused patch leaves the file byte-identical, and that no network call was
    made.
 4. **Evidence.** An `l14--…` fragment with the tests and PRs.
+
+Slices 2 and 3 may land in one pull request: the core has no other host to
+exercise it end to end yet.
 
 Phase 2 is a separate row decision after the owner chooses its transport.
 
