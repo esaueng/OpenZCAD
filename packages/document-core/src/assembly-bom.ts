@@ -1,7 +1,11 @@
 import {
   ownEntry,
   isFeatureSuppressed,
+  millimetresPerUnit,
+  standardPartDesignation,
+  standardPartProblem,
   type BodyId,
+  type FeatureData,
   type FeatureNode,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -64,6 +68,48 @@ export function isLiveAssemblyBody(
 }
 
 /**
+ * M17: a standard part's row, from its catalogue designation, and how many
+ * parts its body holds (one per bore of a hole it is in). The length is the
+ * one the exact build placed (a hole-matched length included), else a
+ * literal stored one; with neither, the designation names no length. Parts
+ * of one designation are one part, whichever feature placed them.
+ */
+interface StandardPartRow {
+  designation: string;
+  count: number;
+}
+
+function standardPartRow(
+  document: ProjectDocument,
+  feature: FeatureNode & {
+    data: Extract<FeatureData, { featureKind: 'standard-part' }>;
+  }
+): StandardPartRow | null {
+  const data = feature.data;
+  if (standardPartProblem(data) !== null) return null;
+  const built = document.derived.standardParts?.[feature.featureId];
+  const stored =
+    typeof data.length === 'number'
+      ? data.length * millimetresPerUnit(document.units)
+      : null;
+  const lengths = built?.lengthsMm ?? [stored];
+  const distinct = [
+    ...new Set(
+      lengths.map((length) =>
+        length === null ? null : Number(length.toPrecision(9))
+      )
+    )
+  ];
+  const length = distinct.length === 1 ? (distinct[0] ?? undefined) : undefined;
+  const designation = standardPartDesignation(data, length);
+  return {
+    designation:
+      distinct.length > 1 ? `${designation} (mixed lengths)` : designation,
+    count: Math.max(1, lengths.length)
+  };
+}
+
+/**
  * Shape identities at each point in history. A rigid copy inherits its
  * source's identity at the time it is made, not the source's final identity:
  * a later in-place scale or edit of that source cannot change an earlier
@@ -72,13 +118,18 @@ export function isLiveAssemblyBody(
  * Expression-backed scales are conservative: only an absent or literal 1
  * proves a rigid placement without evaluating geometry or parameter units.
  */
-function partIdentities(document: ProjectDocument): Map<BodyId, string> {
+function partIdentities(document: ProjectDocument): {
+  identities: Map<BodyId, string>;
+  standard: Map<BodyId, StandardPartRow>;
+} {
   const features = new Map(
     Object.values(document.nodes)
       .filter((node): node is FeatureNode => node.kind === 'feature')
       .map((node) => [node.featureId, node])
   );
   const identities = new Map<BodyId, string>();
+  // M17: the standard part each body shows, which a rigid copy keeps.
+  const standard = new Map<BodyId, StandardPartRow>();
   for (const id of document.featureOrder) {
     const feature = features.get(id);
     if (!feature || isFeatureSuppressed(feature)) continue;
@@ -93,17 +144,28 @@ function partIdentities(document: ProjectDocument): Map<BodyId, string> {
             feature.bodyId,
             (rigid && identities.get(data.targetBodyId)) || own
           );
+          const source = rigid ? standard.get(data.targetBodyId) : undefined;
+          if (source) standard.set(feature.bodyId, source);
         }
       } else if (!rigid) {
         identities.set(data.targetBodyId, own);
+        standard.delete(data.targetBodyId);
       }
+    } else if (data.featureKind === 'standard-part' && feature.bodyId) {
+      const row = standardPartRow(
+        document,
+        feature as FeatureNode & { data: typeof data }
+      );
+      identities.set(feature.bodyId, row ? `standard:${row.designation}` : own);
+      if (row) standard.set(feature.bodyId, row);
     } else if (feature.bodyId) {
       identities.set(feature.bodyId, own);
     } else if (data.featureKind === 'direct-edit') {
       identities.set(data.targetBodyId, own);
+      standard.delete(data.targetBodyId);
     }
   }
-  return identities;
+  return { identities, standard };
 }
 
 export function deriveAssemblyBom(
@@ -114,7 +176,7 @@ export function deriveAssemblyBom(
   const components = document.assembly?.components ?? [];
   if (components.length === 0) return { rows: [], totalQuantity: 0 };
   const resolved = assemblyComponentBodies(document, isLive);
-  const identities = partIdentities(document);
+  const { identities, standard } = partIdentities(document);
   const bodyNames = new Map<BodyId, string>();
   for (const node of Object.values(document.nodes))
     if (node.kind === 'body') bodyNames.set(node.bodyId, node.name);
@@ -127,9 +189,12 @@ export function deriveAssemblyBom(
       status === 'missing'
         ? `missing:${bodyId}`
         : `ready:${identities.get(bodyId) ?? `body:${bodyId}`}`;
+    // M17: a standard part is listed by its designation, once per part.
+    const part = status === 'ready' ? standard.get(bodyId) : undefined;
     let row = rows.get(key);
     if (!row) {
       const name =
+        part?.designation ||
         bodyNames.get(bodyId)?.trim() ||
         ownEntry(document.derived.bodyRepresentations, bodyId)?.name.trim() ||
         component.name;
@@ -143,7 +208,7 @@ export function deriveAssemblyBom(
       };
       rows.set(key, row);
     }
-    row.quantity += 1;
+    row.quantity += part?.count ?? 1;
     row.instances.push({ componentId: component.id, name: component.name });
   }
   const list = [...rows.values()];
