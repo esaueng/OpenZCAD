@@ -1,7 +1,7 @@
 {
   "summary": {
-    "qualified": 38,
-    "typed-refusal": 4,
+    "qualified": 39,
+    "typed-refusal": 3,
     "untyped-refusal": 0,
     "wrong": 0,
     "timeout": 0
@@ -47,7 +47,7 @@
     "box×torus/aligned/union/no-modifier/none": "qualified",
     "box×torus/aligned/subtract/no-modifier/none": "qualified",
     "box×sphere/aligned/subtract/no-modifier/none": "typed-refusal",
-    "box×sphere/raised/union/no-modifier/none": "typed-refusal",
+    "box×sphere/raised/union/no-modifier/none": "qualified",
     "box×box/coincident/union/no-modifier/none": "qualified"
   }
 }
