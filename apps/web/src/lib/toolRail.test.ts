@@ -187,7 +187,12 @@ describe('the tool drawer', () => {
     expect(drawerGroups(IDLE, READY, 'fits', 'pattern')).toEqual([
       {
         label: 'Pattern',
-        tools: ['linear-pattern', 'circular-pattern', 'grid-pattern']
+        tools: [
+          'linear-pattern',
+          'circular-pattern',
+          'grid-pattern',
+          'point-pattern'
+        ]
       }
     ]);
     expect(drawerGroups(IDLE, READY, 'all', 'no such tool')).toEqual([]);
