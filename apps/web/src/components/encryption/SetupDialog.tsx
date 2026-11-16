@@ -302,7 +302,12 @@ export function SetupDialog({
       { onError: setError }
     );
 
-  const finish = () =>
+  /**
+   * Saves the projects choice, then leaves: closing, or going on to Encrypt
+   * existing projects. Only after the save succeeds, so a failure is said
+   * here instead of in a dialog that has already gone (review finding).
+   */
+  const finish = (then: () => void = onClose) =>
     void run(
       async () => {
         const unlocked = unlockedAccount(userId);
@@ -325,7 +330,7 @@ export function SetupDialog({
             encryptionStateChanged(userId);
           }
         }
-        onClose();
+        then();
       },
       { onError: setError }
     );
@@ -500,10 +505,7 @@ export function SetupDialog({
             className="secondary"
             type="button"
             disabled={busy}
-            onClick={() => {
-              void finish();
-              onEncryptExisting();
-            }}
+            onClick={() => finish(onEncryptExisting)}
           >
             Encrypt existing projects…
           </button>
@@ -511,7 +513,7 @@ export function SetupDialog({
             className="primary"
             type="button"
             disabled={busy}
-            onClick={finish}
+            onClick={() => finish()}
           >
             Done
           </button>

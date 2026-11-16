@@ -39,6 +39,7 @@ vi.mock('../../lib/e2ee/unlockedKeys', async (original) => ({
   unlockedAccount: () => ({ accountKey: new Uint8Array(32) })
 }));
 const { SetupDialog } = await import('./SetupDialog');
+const { EncryptionFlowError } = await import('../../lib/e2ee/accountKeys');
 
 const ready = {
   kind: 'ready',
@@ -51,6 +52,7 @@ afterEach(() => {
 
 function open() {
   const onClose = vi.fn();
+  const onEncryptExisting = vi.fn();
   render(
     <SetupDialog
       ctx={{ userId: 'user_alice' } as E2eeContext}
@@ -58,10 +60,10 @@ function open() {
       run={testRun()}
       userId="user_alice"
       onClose={onClose}
-      onEncryptExisting={vi.fn()}
+      onEncryptExisting={onEncryptExisting}
     />
   );
-  return { onClose };
+  return { onClose, onEncryptExisting };
 }
 
 async function throughConfirm() {
@@ -155,5 +157,33 @@ describe('the setup dialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Turn on encryption' }));
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
     expect(keys.addPasskey).not.toHaveBeenCalled();
+  });
+
+  it('stays open and says why when saving the choice fails before Encrypt existing', async () => {
+    prf.mockResolvedValue('unsupported');
+    preferences.config.mockResolvedValue({
+      enabled: true,
+      projectsEnabled: true
+    });
+    preferences.load.mockResolvedValue({ kind: 'unset', pinned: null });
+    preferences.save.mockRejectedValue(
+      new EncryptionFlowError('invalid-request', 'The setting was not saved.')
+    );
+    keys.setUpEncryption.mockResolvedValue(ready);
+    const { onClose, onEncryptExisting } = open();
+    await waitFor(() => expect(prf).toHaveBeenCalled());
+    const shown = await throughConfirm();
+    fireEvent.change(screen.getByLabelText('Confirm recovery key'), {
+      target: { value: shown }
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Turn on encryption' }));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Encrypt existing projects…' })
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'The setting was not saved.'
+    );
+    expect(onEncryptExisting).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
