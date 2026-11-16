@@ -2971,8 +2971,8 @@ function buildEdgeModifierFeature(
       : rootPrimitive === 'box'
         ? rederiveBoxModifierLineage(kernel, modified, feature)
         : null;
-  const evolutionLineage = evolution
-    ? createRemusModifierEvolutionLineage({
+  const evolutionInput = evolution
+    ? {
         producingFeatureId: feature.featureId,
         operation: data.featureKind,
         payload: evolution,
@@ -2991,9 +2991,26 @@ function buildEdgeModifierFeature(
               isBlendFace(kernel, modified, face)
           )
         )
-      })
+      }
+    : null;
+  const evolutionLineage = evolutionInput
+    ? createRemusModifierEvolutionLineage(evolutionInput)
+    : null;
+  // The supports this blend re-trimmed keep their names (a chamfer band a
+  // later fillet trims stays its Chamfer's), beneath every name derived
+  // below: a primitive's modifier roles and exact carriers win a face both
+  // name. Its diagnostics duplicate `evolutionLineage`'s, so they are dropped.
+  const trimmedSupportLineage = evolutionInput
+    ? {
+        ...createRemusModifierEvolutionLineage({
+          ...evolutionInput,
+          trimmedSupports: 'only'
+        }),
+        diagnostics: []
+      }
     : null;
   const verifiedLineages = [
+    trimmedSupportLineage,
     carryAnalyticFaces(kernel, target, modified, storedTarget.lineage),
     primitiveFallbackLineage,
     evolutionLineage
