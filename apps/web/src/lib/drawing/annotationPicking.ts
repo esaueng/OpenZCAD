@@ -7,6 +7,7 @@ import {
   type BodyId,
   type DrawingAnnotation,
   type DrawingAnnotationId,
+  type DrawingDistanceTarget,
   type DrawingEdgeRef,
   type DrawingExtremeSide,
   type DrawingFaceRef,
@@ -508,6 +509,8 @@ export type AnnotationToolKind =
   | 'horizontal'
   | 'vertical'
   | 'aligned'
+  /** v75: a distance square to a line, or between circles' sides. */
+  | 'distance'
   | 'radius'
   | 'diameter'
   | 'angle'
@@ -537,6 +540,7 @@ export const ANNOTATION_TOOL_LABELS: Readonly<
   horizontal: 'Horizontal',
   vertical: 'Vertical',
   aligned: 'Aligned',
+  distance: 'Distance',
   radius: 'Radius',
   diameter: 'Diameter',
   angle: 'Angle',
@@ -575,6 +579,8 @@ export function annotationToolHint(tool: AnnotationTool): string {
       return 'Chamfer: pick the chamfer’s outline, seen side-on or edge-on.';
     case 'note':
       return 'Note: pick an edge for its leader, or click empty paper to place it.';
+    case 'distance':
+      return `Distance: pick ${(tool.targets ?? []).length === 0 ? 'what it measures from' : 'what it measures to'}: a straight edge or centreline (away from its ends), a circle, an edge end or a mark.`;
     case 'center-mark':
       return 'Centre mark: pick a circle or arc seen face-on.';
     case 'intersection-mark':
@@ -603,6 +609,8 @@ export interface AnnotationTool {
    * virtual sharp is a linear dimension's next point.
    */
   faces: DrawingFaceRef[];
+  /** v75: a distance dimension's picks so far. */
+  targets?: DrawingDistanceTarget[];
   /** A note's free placement, once clicked on empty paper. */
   placed?: { x: number; y: number };
   /** Re-picking the references of this broken annotation. */
@@ -659,6 +667,8 @@ export function pickedEnough(tool: AnnotationTool): boolean {
       return tool.faces.length === 1;
     case 'note':
       return tool.edges.length === 1 || tool.placed !== undefined;
+    case 'distance':
+      return (tool.targets ?? []).length === 2;
     case 'center-mark':
       return tool.edges.length === 1;
     case 'intersection-mark':
@@ -784,9 +794,33 @@ export function applyAnnotationPick(
   markHit: {
     annotationId: DrawingAnnotationId;
     viewId: DrawingViewId;
+    /** v75: a straight centreline, which only Distance measures to. */
+    centerline?: boolean;
   } | null = null
 ): PickResult {
   if (pickedEnough(tool)) return { ok: true, tool };
+  if (markHit && tool.kind === 'distance') {
+    if (tool.viewId && markHit.viewId !== tool.viewId)
+      return {
+        ok: false,
+        message: tool.repairId
+          ? 'Re-pick in the view this annotation belongs to.'
+          : 'Pick in the same view as the first pick.'
+      };
+    const target: DrawingDistanceTarget = markHit.centerline
+      ? { centerline: markHit.annotationId }
+      : { point: { anchor: 'mark', annotationId: markHit.annotationId } };
+    return {
+      ok: true,
+      tool: {
+        ...tool,
+        viewId: markHit.viewId,
+        targets: [...(tool.targets ?? []), target]
+      }
+    };
+  }
+  // Only Distance measures to a centreline.
+  if (markHit?.centerline) markHit = null;
   // A mark is a point: the linear tools and the centrelines take it.
   if (
     markHit &&
@@ -879,6 +913,51 @@ export function applyAnnotationPick(
     };
   const next = { ...tool, viewId: view.viewId };
   switch (tool.kind) {
+    case 'distance': {
+      const targets = tool.targets ?? [];
+      const ends = edgeEndsInPageOrder(view, hit.edge);
+      let target: DrawingDistanceTarget;
+      if (!ends) {
+        if (!isFaceOnCircle(view, hit.edge))
+          return {
+            ok: false,
+            message:
+              'Pick a straight edge, a circle seen face-on, an edge end or a mark.'
+          };
+        target = { circle: ref };
+      } else {
+        const first = hit.page[0]!;
+        const last = hit.page[hit.page.length - 1]!;
+        const length = Math.hypot(last[0] - first[0], last[1] - first[1]);
+        const toFirst = Math.hypot(point[0] - first[0], point[1] - first[1]);
+        const toLast = Math.hypot(point[0] - last[0], point[1] - last[1]);
+        if (
+          hit.edge.curve?.type === 'LINE' &&
+          Math.min(toFirst, toLast) > 0.25 * length
+        )
+          target = { line: ref };
+        else {
+          // The polyline runs the kernel's way; its start is the page's
+          // `first` end when it lies there.
+          const start = projectToView(DRAWING_VIEW_FRAMES[view.orientation], {
+            x: hit.edge.points[0]!,
+            y: hit.edge.points[1]!,
+            z: hit.edge.points[2]!
+          });
+          const startIsFirst =
+            Math.hypot(start.u - ends[0][0], start.v - ends[0][1]) <=
+            Math.hypot(start.u - ends[1][0], start.v - ends[1][1]);
+          const nearStart = toFirst <= toLast;
+          target = {
+            point: {
+              edge: ref,
+              anchor: nearStart === startIsFirst ? 'first' : 'second'
+            }
+          };
+        }
+      }
+      return { ok: true, tool: { ...next, targets: [...targets, target] } };
+    }
     case 'horizontal':
     case 'vertical':
     case 'aligned': {
@@ -1199,6 +1278,14 @@ export function draftAnnotation(
         ...(tool.viewId ? { viewId: tool.viewId } : {}),
         ...(tool.edges[0] ? { leader: tool.edges[0] } : {})
       };
+    case 'distance':
+      return {
+        ...base,
+        kind: 'distance',
+        viewId: tool.viewId!,
+        from: tool.targets![0]!,
+        to: tool.targets![1]!
+      };
     case 'center-mark':
       return {
         ...base,
@@ -1270,9 +1357,16 @@ export function repairedAnnotation(
     'reference',
     'tolerance',
     'prefix',
-    'suffix'
+    'suffix',
+    'extent'
   ])
     if (format[key] !== undefined) kept[key] = format[key];
+  // A circle's side means nothing once the re-picked targets hold no circle.
+  if (
+    draft.kind === 'distance' &&
+    ![draft.from, draft.to].some((target) => 'circle' in target)
+  )
+    delete kept.extent;
   return { ...draft, ...kept };
 }
 

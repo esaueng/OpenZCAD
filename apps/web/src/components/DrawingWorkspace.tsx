@@ -943,6 +943,7 @@ const ANNOTATION_TOOLS: readonly AnnotationToolKind[] = [
   'horizontal',
   'vertical',
   'aligned',
+  'distance',
   'radius',
   'diameter',
   'angle',
@@ -959,6 +960,7 @@ const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
     horizontal: MoveHorizontal,
     vertical: MoveVertical,
     aligned: MoveDiagonal2,
+    distance: Ruler,
     radius: Radius,
     diameter: Diameter,
     angle: Angle,
@@ -975,6 +977,7 @@ const ANNOTATION_TOOL_KEYS: Readonly<Record<AnnotationToolKind, string>> = {
   horizontal: 'H',
   vertical: 'V',
   aligned: 'A',
+  distance: 'T',
   radius: 'R',
   diameter: 'D',
   angle: 'G',
@@ -1029,6 +1032,7 @@ const ANNOTATION_KIND_LABELS: Readonly<
   Record<DrawingAnnotation['kind'], string>
 > = {
   linear: 'Dimension',
+  distance: 'Distance',
   radius: 'Radius',
   diameter: 'Diameter',
   angle: 'Angle',
@@ -1713,6 +1717,30 @@ function DimensionFormat(props: {
           />
         </label>
       )}
+      {selected.kind === 'distance' &&
+        [selected.from, selected.to].some((target) => 'circle' in target) && (
+          <label className="drawing-field">
+            <span>Measure circles to</span>
+            <select
+              value={selected.extent ?? ''}
+              disabled={!editable}
+              onChange={(event) => {
+                const { extent: _previous, ...rest } = selected;
+                const extent = event.target.value;
+                props.onUpdate(
+                  extent === 'min' || extent === 'max'
+                    ? { ...rest, extent }
+                    : rest,
+                  'Format dimension'
+                );
+              }}
+            >
+              <option value="">Centres</option>
+              <option value="min">Near sides (minimum)</option>
+              <option value="max">Far sides (maximum)</option>
+            </select>
+          </label>
+        )}
       {selected.kind === 'linear' && (
         <label className="drawing-check">
           <input
@@ -1985,7 +2013,7 @@ function DrawingToolRail(props: {
 }) {
   const { tool, section } = props;
   const groups: AnnotationToolKind[][] = [
-    ['horizontal', 'vertical', 'aligned'],
+    ['horizontal', 'vertical', 'aligned', 'distance'],
     ['radius', 'diameter', 'angle', 'chamfer'],
     ['center-mark', 'intersection-mark', 'centerline', 'circle-centerline'],
     ['note']
@@ -3693,13 +3721,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const { faces, outlines } = currentPickable();
     return hitFace(faces, point, pickTolerance(pxPerMm), outlines);
   };
-  /** v73: the centre or intersection mark whose box holds `point`, if any. */
+  /**
+   * v73: the centre or intersection mark (or, v75, the straight centreline)
+   * whose box holds `point`, if any.
+   */
   const markAt = (point: [number, number]) => {
     if (!composed || composed.ghost || !shownSheet) return null;
     for (const annotation of shownSheet.annotations ?? []) {
+      const centerline =
+        annotation.kind === 'centerline' && annotation.mode !== 'circle';
       if (
         annotation.kind !== 'center-mark' &&
-        annotation.kind !== 'intersection-mark'
+        annotation.kind !== 'intersection-mark' &&
+        !centerline
       )
         continue;
       if (!resolutions.get(annotation.annotationId)?.ok) continue;
@@ -3713,7 +3747,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       )
         return {
           annotationId: annotation.annotationId,
-          viewId: annotation.viewId
+          viewId: annotation.viewId,
+          ...(centerline ? { centerline: true } : {})
         };
     }
     return null;

@@ -78,7 +78,8 @@ export function duplicateDrawingSheet(
   }));
   if (copy.annotations) {
     // New ids, and every reference one annotation makes to another (a mark
-    // a dimension or centreline measures to) follows its new id.
+    // a dimension or centreline measures to, v75's centreline a distance
+    // measures to) follows its new id.
     const annotationIds = new Map(
       copy.annotations.map((annotation) => [
         annotation.annotationId,
@@ -92,8 +93,8 @@ export function duplicateDrawingSheet(
       const out: Record<string, unknown> = {};
       for (const [key, inner] of Object.entries(entry))
         out[key] =
-          entry.anchor === 'mark' &&
-          key === 'annotationId' &&
+          ((entry.anchor === 'mark' && key === 'annotationId') ||
+            key === 'centerline') &&
           typeof inner === 'string'
             ? (annotationIds.get(inner as DrawingAnnotationId) ?? inner)
             : remap(inner);
