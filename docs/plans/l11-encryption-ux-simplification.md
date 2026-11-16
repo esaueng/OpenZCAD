@@ -137,8 +137,8 @@ Proposed:
 
 ### T4. Setting up means encrypting new projects
 
-- The last setup step has **Encrypt new projects** ticked. Unticking it is
-  allowed.
+- The last setup step has **Encrypt new projects** ticked (owner decision
+  2026-11-16). Unticking it is allowed.
 - The same step offers **Also encrypt my N existing cloud projects**, which
   runs the existing Phase 7 migration.
 - If someone unticks it, the headline says **Keys ready · new projects aren't
@@ -358,9 +358,9 @@ strength. Where copy changes, tests read the shared strings from `copy.ts`.
    key at hand, is "unlock the new device with its own recovery key" an
    acceptable answer, or should read-only approval stay as a hidden escape
    hatch?
-2. **T4 default.** Tick "Encrypt new projects" by default in setup? This
-   affects only accounts that chose to set up. Product default-on stays
-   behind the outside review.
+2. ~~**T4 default.**~~ Decided 2026-11-16: "Encrypt new projects" is ticked
+   by default in setup. This affects only accounts that chose to set up.
+   Product default-on stays behind the outside review.
 3. **Layout.** Four folded groups on one page (proposed), or sub-tabs inside
    Settings › Encryption?
 4. **Timing.** Land T1 and T3 before the review tag is frozen, so the
