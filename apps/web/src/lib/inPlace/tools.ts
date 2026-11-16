@@ -4702,7 +4702,8 @@ function patternFeatureIds(slots: InPlaceSlots): FeatureId[] {
  */
 function patternSeed(
   slots: InPlaceSlots,
-  options?: Readonly<Record<string, string>>
+  options?: Readonly<Record<string, string>>,
+  ctx?: InPlaceContext
 ): BodyPick | null {
   if (!repeatsFeatures(options)) return slots.bodies[0] ?? null;
   const faces = slots.faces.filter((face) => face.feature);
@@ -4710,7 +4711,12 @@ function patternSeed(
     const point = face.centroid ?? face.center ?? face.point;
     return point ? [point] : [];
   });
-  if (points.length === 0) return null;
+  if (points.length === 0) {
+    // An edit whose repeated features show no face stands on their body.
+    const source = patternSource(slots, options, ctx);
+    const box = source && ctx?.bodyBounds?.(source.targetBodyId);
+    return source && box ? { bodyId: source.targetBodyId, ...box } : null;
+  }
   const reach = Math.max(2, ...faces.map((face) => face.cylinder?.radius ?? 0));
   const bound = (
     part: 'x' | 'y' | 'z',
@@ -4731,19 +4737,40 @@ function patternSeed(
   };
 }
 
+/**
+ * The repeated features an edit keeps although the model shows none of
+ * their faces to pick (a boss a later cut removed): they cannot be clicked
+ * out, so they are written back as stored rather than silently dropped.
+ */
+function keptPatternSources(
+  options?: Readonly<Record<string, string>>
+): FeatureId[] {
+  return (options?.keepSources ?? '')
+    .split(',')
+    .filter((id) => id !== '') as FeatureId[];
+}
+
 /** The pattern's target and repeated features, as the request stores them. */
 function patternSource(
   slots: InPlaceSlots,
-  options?: Readonly<Record<string, string>>
+  options?: Readonly<Record<string, string>>,
+  ctx?: InPlaceContext
 ): { targetBodyId: BodyId; sourceFeatureIds?: FeatureId[] } | null {
   if (!repeatsFeatures(options)) {
     const body = slots.bodies[0];
     return body ? { targetBodyId: body.bodyId } : null;
   }
-  const sourceFeatureIds = patternFeatureIds(slots);
+  const picked = patternFeatureIds(slots);
+  const kept = keptPatternSources(options).filter((id) => !picked.includes(id));
+  const sourceFeatureIds = [...picked, ...kept];
   const face = slots.faces.find((candidate) => candidate.feature);
-  return face && sourceFeatureIds.length > 0
-    ? { targetBodyId: face.bodyId, sourceFeatureIds }
+  const targetBodyId =
+    face?.bodyId ??
+    (kept.length > 0 && ctx?.saved?.featureKind === 'pattern'
+      ? ctx.saved.targetBodyId
+      : undefined);
+  return targetBodyId && sourceFeatureIds.length > 0
+    ? { targetBodyId, sourceFeatureIds }
     : null;
 }
 
@@ -4752,7 +4779,8 @@ function patternHint(
   options: Readonly<Record<string, string>> | undefined
 ): string | null {
   if (repeatsFeatures(options)) {
-    return patternFeatureIds(slots).length === 0
+    return patternFeatureIds(slots).length === 0 &&
+      keptPatternSources(options).length === 0
       ? 'Click a hole, boss or cut to repeat'
       : null;
   }
@@ -4966,9 +4994,9 @@ const linearPattern: InPlaceToolSpec = {
   ],
   hint: (slots, options) =>
     patternHint(slots, options) ?? 'Drag the spacing · tap a copy to skip it',
-  ready: (slots, options) => patternSource(slots, options) !== null,
+  ready: (slots, options, ctx) => patternSource(slots, options, ctx) !== null,
   request(slots, values, options, ctx, numbers) {
-    const source = patternSource(slots, options);
+    const source = patternSource(slots, options, ctx);
     if (!source) return null;
     // A custom vector is stored as given, expressions and all; a picked
     // direction is one too, as its numbers.
@@ -5000,8 +5028,8 @@ const linearPattern: InPlaceToolSpec = {
       )
     };
   },
-  handles(slots, values, _ctx, options) {
-    const body = patternSeed(slots, options);
+  handles(slots, values, ctx, options) {
+    const body = patternSeed(slots, options, ctx);
     if (!body) return [];
     const custom = options.axis === 'custom';
     const typed = {
@@ -5117,10 +5145,10 @@ const circularPattern: InPlaceToolSpec = {
       ? 'Drag the step · tap the count'
       : 'Drag the angle · tap the count';
   },
-  ready: (slots, options) =>
-    patternSource(slots, options) !== null && slots.axis !== null,
-  request(slots, values, options, _ctx, numbers) {
-    const source = patternSource(slots, options);
+  ready: (slots, options, ctx) =>
+    patternSource(slots, options, ctx) !== null && slots.axis !== null,
+  request(slots, values, options, ctx, numbers) {
+    const source = patternSource(slots, options, ctx);
     const choice = slots.axis?.choice;
     if (!source || !choice) return null;
     // A datum axis, or a picked line Done adds as one, replaces the world
@@ -5147,8 +5175,8 @@ const circularPattern: InPlaceToolSpec = {
       )
     };
   },
-  handles(slots, values, _ctx, options) {
-    const body = patternSeed(slots, options);
+  handles(slots, values, ctx, options) {
+    const body = patternSeed(slots, options, ctx);
     if (!body || !slots.axis) return [];
     const placement = bodyTurnRig(body, slots.axis);
     const valueId = options.spacing === 'step' ? 'step' : 'angle';
@@ -5281,9 +5309,9 @@ const gridPattern: InPlaceToolSpec = {
         : {})
     };
   },
-  ready: (slots, options) => patternSource(slots, options) !== null,
+  ready: (slots, options, ctx) => patternSource(slots, options, ctx) !== null,
   request(slots, values, options, ctx, numbers) {
-    const source = patternSource(slots, options);
+    const source = patternSource(slots, options, ctx);
     if (!source) return null;
     // A second value still following the first (an edit's absent one, not
     // set since) is left out, so the edit keeps it absent.
@@ -5318,8 +5346,8 @@ const gridPattern: InPlaceToolSpec = {
       )
     };
   },
-  handles(slots, values, _ctx, options) {
-    const body = patternSeed(slots, options);
+  handles(slots, values, ctx, options) {
+    const body = patternSeed(slots, options, ctx);
     if (!body) return [];
     const first = axisOf(options.axis);
     const second = axisOf(options.axis2 ?? 'y');

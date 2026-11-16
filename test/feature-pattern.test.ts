@@ -277,13 +277,61 @@ describe('M02 feature patterns: exact build', () => {
     expect(boreXs(derived, last(row))).toEqual([10, 30, 50, 70, 90]);
     expect(boreNames(derived, last(row))).toEqual([
       'hole.face.bore',
-      'pattern.face.instance.1.hole.face.bore',
-      'pattern.face.instance.2.hole.face.bore',
-      'pattern.face.instance.3.hole.face.bore',
-      'pattern.face.instance.4.hole.face.bore'
+      `pattern.face.instance.1.source.${holeId}.hole.face.bore`,
+      `pattern.face.instance.2.source.${holeId}.hole.face.bore`,
+      `pattern.face.instance.3.source.${holeId}.hole.face.bore`,
+      `pattern.face.instance.4.source.${holeId}.hole.face.bore`
     ]);
     // The plate is still one body, and the pattern consumed the drilled one.
     expect(row.bodyOrder).toHaveLength(3);
+  }, 120_000);
+
+  it('names the copies of each repeated hole apart (review: two holes, one label)', async () => {
+    const first = await drilled(adapter, 10);
+    // A second hole on the drilled plate, 10 further along X.
+    const built = await adapter.syncDocument(first.document);
+    const { face, body } = topFace(built, last(first.document));
+    const centreX = (body.bbox.min.x + body.bbox.max.x) / 2;
+    const both = holeBody(first.document, {
+      name: 'Hole 2',
+      targetBodyId: last(first.document),
+      faceHash: face.hash,
+      ...(face.reference ? { faceReference: face.reference } : {}),
+      style: 'simple',
+      diameter: 2 * HOLE_R,
+      depthMode: 'through',
+      position: { u: 0, v: 20 - centreX },
+      positionAnchor: 'centroid'
+    }).document;
+    const secondId = lastFeature(both);
+    const row = pattern(both, {
+      patternKind: 'linear',
+      count: 2,
+      axis: 'x',
+      spacing: 50,
+      sourceFeatureIds: [first.holeId, secondId]
+    });
+    const derived = await adapter.syncDocument(row);
+    expect(derived.warnings).toEqual([]);
+    expect(boreXs(derived, last(row))).toEqual([10, 20, 60, 70]);
+    const names = boreNames(derived, last(row));
+    // Every bore named, and no two references alike (a reference is its
+    // producer and name), so each finds exactly one face.
+    const references = derived.bodyRepresentations[
+      last(row)
+    ]!.topology!.faces.flatMap((face) =>
+      face.reference?.lineageName.includes('hole.face.bore')
+        ? [`${face.reference.producingFeatureId}|${face.reference.lineageName}`]
+        : []
+    );
+    expect(references).toHaveLength(4);
+    expect(new Set(references).size).toBe(4);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        `pattern.face.instance.1.source.${first.holeId}.hole.face.bore`,
+        `pattern.face.instance.1.source.${secondId}.hole.face.bore`
+      ])
+    );
   }, 120_000);
 
   it('skips a copy without renaming the others', async () => {
@@ -305,9 +353,9 @@ describe('M02 feature patterns: exact build', () => {
     expect(boreXs(derived, last(row))).toEqual([10, 30, 70, 90]);
     expect(boreNames(derived, last(row))).toEqual([
       'hole.face.bore',
-      'pattern.face.instance.1.hole.face.bore',
-      'pattern.face.instance.3.hole.face.bore',
-      'pattern.face.instance.4.hole.face.bore'
+      `pattern.face.instance.1.source.${holeId}.hole.face.bore`,
+      `pattern.face.instance.3.source.${holeId}.hole.face.bore`,
+      `pattern.face.instance.4.source.${holeId}.hole.face.bore`
     ]);
   }, 120_000);
 

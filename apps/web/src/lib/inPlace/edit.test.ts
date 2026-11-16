@@ -1131,6 +1131,45 @@ describe('an untouched edit writes the feature back as stored', () => {
     ).toMatchObject({ direction: { x: 1, y: 2, z: 0 } });
   });
 
+  it('M02 feature pattern: a repeated feature with no face to show is kept (review)', () => {
+    const boss = 'feat_boss' as FeatureId;
+    const hole = 'feat_hole' as FeatureId;
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      spacing: 12,
+      angleDeg: 0,
+      sourceFeatureIds: [boss, hole]
+    };
+    const node = feature(data, 'body_p' as BodyId);
+    // A later cut removed the boss: the model shows only the hole's faces.
+    const context: InPlaceEditContext = {
+      ...EDIT_CTX,
+      featureFace: (bodyId, featureId) =>
+        featureId === hole
+          ? { ...TOP, bodyId, feature: { featureId, name: 'Hole' } }
+          : null
+    };
+    const armed = inPlaceEditSeed(node, context)!;
+    expect(armed.seed.slots.faces).toHaveLength(1);
+    expect(armed.seed.options.keepSources).toBe(boss);
+    // A spacing change writes both back, not only the one on screen.
+    const request = untouched(node, { spacing: 20 }, context) as Extract<
+      ResolvedInPlaceRequest,
+      { tool: 'pattern' }
+    >;
+    expect(request.sourceFeatureIds).toEqual([hole, boss]);
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: node.featureId, name: node.name, data },
+        request
+      )?.data
+    ).toMatchObject({ spacing: 20, sourceFeatureIds: [hole, boss] });
+  });
+
   it('M02 feature pattern: its features and skipped copies round-trip unchanged', () => {
     const hole = 'feat_hole' as FeatureId;
     const data: FeatureData = {

@@ -787,10 +787,16 @@ export function inPlaceEditSeed(
         // M02: each repeated feature stands as one of its faces, as a click
         // picked it; one the body no longer shows is left to pick again.
         seed.options.repeat = 'features';
+        const unseen: string[] = [];
         for (const featureId of data.sourceFeatureIds) {
           const face = ctx.featureFace?.(data.targetBodyId, featureId);
           if (face) seed.slots.faces.push(face);
+          else unseen.push(featureId);
         }
+        // One whose faces the model no longer shows (a boss a later cut
+        // removed) cannot be clicked back in or out: it is kept as stored,
+        // never dropped by an edit that only changed the spacing.
+        if (unseen.length > 0) seed.options.keepSources = unseen.join(',');
       } else {
         body(data.targetBodyId);
       }

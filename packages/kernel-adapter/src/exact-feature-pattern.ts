@@ -284,6 +284,8 @@ function throughAllToolFeature(
 
 interface RepeatedHole {
   label: string;
+  /** The hole feature it copies: two repeated holes share every label. */
+  source: FeatureNode['featureId'];
   spec: HoleToolSpec;
 }
 
@@ -399,6 +401,7 @@ export function buildFeaturePattern(
         if (hole) {
           holes.push({
             label: copy.label,
+            source: source.featureId,
             spec: {
               ...hole,
               surfacePoint: applyPoint(copy.matrix, hole.surfacePoint),
@@ -451,8 +454,10 @@ export function buildFeaturePattern(
   // Faces the copies left alone keep their names; each copy's bore is named
   // by its own axis, the way a hole names its one.
   const lineage = carryAnalyticFaces(kernel, original, solid, target.lineage);
-  for (const { label, spec } of holes) {
-    const name = `pattern.face.instance.${label}.hole.face`;
+  for (const { label, source, spec } of holes) {
+    // Named by copy and by the hole it copies, so a pattern repeating two
+    // holes gives each copy's bore a name of its own.
+    const name = `pattern.face.instance.${label}.source.${source}.hole.face`;
     assignCarrierFace(
       kernel,
       solid,
