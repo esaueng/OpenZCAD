@@ -171,6 +171,19 @@ function untouched(
   return request && resolveNewAxis(request, null);
 }
 
+const EMPTY_SLOTS_FOR_EDIT: InPlaceSlots = {
+  profiles: [],
+  axis: null,
+  path: [],
+  guide: [],
+  faces: [],
+  bodies: [],
+  plane: null,
+  edges: [],
+  refs: [],
+  image: null
+};
+
 describe('which in-place command edits a stored feature', () => {
   it('maps kinds, booleans by operation and patterns by kind', () => {
     expect(
@@ -1168,6 +1181,33 @@ describe('an untouched edit writes the feature back as stored', () => {
         request
       )?.data
     ).toMatchObject({ spacing: 20, sourceFeatureIds: [hole, boss] });
+    // A feature picked on another body starts the set over there: the boss,
+    // made on this body, is not carried to one it is not on (re-check).
+    const elsewhere = IN_PLACE_TOOL_SPECS['linear-pattern'].request(
+      {
+        ...EMPTY_SLOTS_FOR_EDIT,
+        faces: [
+          {
+            ...TOP,
+            bodyId: 'body_other' as BodyId,
+            feature: { featureId: 'feat_other' as FeatureId, name: 'Other' }
+          }
+        ]
+      },
+      { count: 3, spacing: 20 },
+      { ...armed.seed.options },
+      {
+        sketchViews: [],
+        datumAxes: undefined,
+        datumLabel: () => 'Axis',
+        saved: data
+      },
+      { count: 3, spacing: 20 }
+    );
+    expect(elsewhere).toMatchObject({
+      targetBodyId: 'body_other',
+      sourceFeatureIds: ['feat_other']
+    });
   });
 
   it('M02 feature pattern: its features and skipped copies round-trip unchanged', () => {

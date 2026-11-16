@@ -4778,14 +4778,18 @@ function patternSource(
     return body ? { targetBodyId: body.bodyId } : null;
   }
   const picked = patternFeatureIds(slots);
-  const kept = keptPatternSources(options).filter((id) => !picked.includes(id));
-  const sourceFeatureIds = [...picked, ...kept];
   const face = slots.faces.find((candidate) => candidate.feature);
+  const savedTarget =
+    ctx?.saved?.featureKind === 'pattern' ? ctx.saved.targetBodyId : null;
+  // Kept only while the pattern stays on the body they were made on: a
+  // feature picked on another body starts the set over there.
+  const kept =
+    savedTarget !== null && (!face || face.bodyId === savedTarget)
+      ? keptPatternSources(options).filter((id) => !picked.includes(id))
+      : [];
+  const sourceFeatureIds = [...picked, ...kept];
   const targetBodyId =
-    face?.bodyId ??
-    (kept.length > 0 && ctx?.saved?.featureKind === 'pattern'
-      ? ctx.saved.targetBodyId
-      : undefined);
+    face?.bodyId ?? (kept.length > 0 ? (savedTarget ?? undefined) : undefined);
   return targetBodyId && sourceFeatureIds.length > 0
     ? { targetBodyId, sourceFeatureIds }
     : null;
