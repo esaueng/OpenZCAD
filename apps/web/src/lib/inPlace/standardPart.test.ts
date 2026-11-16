@@ -333,4 +333,28 @@ describe('M17 Standard part into a hole (schema v71)', () => {
     ).toMatch(/No ISO dowel pin/);
     expect(standardPartSpec.ready(SLOTS, options, ctx)).toBe(false);
   });
+
+  it('takes a part out of its hole when the edit places it on a face (regression)', () => {
+    const saved = {
+      featureKind: 'standard-part',
+      partKind: 'screw',
+      system: 'iso',
+      size: 'M6',
+      origin: { x: 20, y: 15, z: 20 },
+      axis: { x: 0, y: 0, z: -1 },
+      hole: { featureId: HOLE_ID }
+    } as Extract<FeatureData, { featureKind: 'standard-part' }>;
+    const onFace = standardPartSpec.request(
+      { ...SLOTS, plane: TOP },
+      { length: 20 },
+      { partKind: 'screw', place: 'face' },
+      { ...ctx, saved }
+    )!;
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: 'feat_part' as FeatureId, name: 'Screw', data: saved },
+        onFace as StandardPartUpdateRequest
+      )
+    ).toMatchObject({ clearData: ['hole'] });
+  });
 });
