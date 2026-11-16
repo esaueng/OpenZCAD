@@ -37,7 +37,8 @@ const FILTER_BY_TOOL: Partial<Record<ToolId, SelectionFilter>> = {
   'gear-teeth': 'face',
   thread: 'face',
   'sheet-metal': 'sketch',
-  bend: 'body'
+  bend: 'body',
+  'standard-part': 'face'
 };
 
 export function inferredSelectionFilter(tool: ToolId | null): SelectionFilter {

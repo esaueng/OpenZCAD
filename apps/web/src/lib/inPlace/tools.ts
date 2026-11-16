@@ -68,11 +68,13 @@ import { datumAxis, datumPlane, type RefKind, type RefPick } from './datums';
 import { faceSpan, threadSpec, type ThreadRequest } from './thread';
 import { referenceImage, type ImageSlot } from './image';
 import { bendSpec, sheetMetalSpec, type SheetMetalRequest } from './sheetMetal';
+import { standardPartSpec, type StandardPartRequest } from './standardPart';
 
 export type { RefPick } from './datums';
 export type { ThreadRequest } from './thread';
 export type { ImagePlacement, ImageSlot } from './image';
 export type { SheetMetalRequest } from './sheetMetal';
+export type { StandardPartRequest } from './standardPart';
 
 /**
  * The in-place commands (U09), as data.
@@ -95,6 +97,7 @@ export type InPlaceToolId =
   | 'thread'
   | 'sheet-metal'
   | 'bend'
+  | 'standard-part'
   | 'shell'
   | 'thicken'
   | 'solid-offset'
@@ -128,6 +131,7 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'thread',
   'sheet-metal',
   'bend',
+  'standard-part',
   'shell',
   'thicken',
   'solid-offset',
@@ -607,6 +611,11 @@ export type InPlaceRequest =
       sheet: SheetMetalRequest;
     }
   | {
+      /** An M17 standard part (schema v68), as the feature stores it. */
+      tool: 'standard-part';
+      part: StandardPartRequest;
+    }
+  | {
       /** A primitive and its placement, as the card's Create built them. */
       tool: 'primitive';
       kind: PrimitiveKind;
@@ -776,6 +785,11 @@ export interface InPlaceToolSpec {
   edgeMode?: 'many';
   /** Takes a plane: a ghost principal plane, a datum plane or a flat face. */
   wantsPlane?: boolean;
+  /**
+   * A flat face's plane stands where it was clicked (a standard part), not
+   * on the face's centroid (a new gear).
+   */
+  planeAtClick?: boolean;
   /** The datum sources its picks may be, and how a pick joins the others. */
   refKinds?: readonly RefKind[];
   takeRef?(refs: readonly RefPick[], ref: RefPick): RefPick[];
@@ -6317,6 +6331,7 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   thread: threadSpec,
   'sheet-metal': sheetMetalSpec,
   bend: bendSpec,
+  'standard-part': standardPartSpec,
   shell,
   thicken,
   'solid-offset': solidOffset,

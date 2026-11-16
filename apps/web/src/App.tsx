@@ -19994,7 +19994,12 @@ export function App() {
             candidate.topologyId === selection.topologyId ||
             (selection.hash !== undefined && candidate.hash === selection.hash)
         )?.geometry;
-        const on = geometry?.centroid ?? geometry?.center ?? detail?.point;
+        // A standard part stands where the face was clicked.
+        const on =
+          (command.spec.planeAtClick ? detail?.point : undefined) ??
+          geometry?.centroid ??
+          geometry?.center ??
+          detail?.point;
         if (
           geometry?.normal &&
           on &&
@@ -24430,6 +24435,12 @@ export function App() {
           name,
           bodyName,
           ...request.sheet
+        });
+      case 'standard-part':
+        return commandFactories.standardPartBody({
+          name,
+          bodyName,
+          ...request.part
         });
       case 'modeling': {
         // Through the card's own submission builder, so a face operation
