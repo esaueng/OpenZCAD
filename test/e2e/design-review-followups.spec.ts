@@ -70,9 +70,9 @@ async function openPart(
 /**
  * Every tool in the catalog (`TOOL_META`): the More tools sheet holds one
  * tile each, and its All filter counts them. 37 since M16 added Sheet metal
- * and Bend.
+ * and Bend; 38 since M02 added Point pattern.
  */
-const TOOL_TILES = 37;
+const TOOL_TILES = 38;
 
 async function capture(page: Page, testInfo: TestInfo, name: string) {
   const path = testInfo.outputPath(`${name}.png`);
