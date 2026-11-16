@@ -109,6 +109,7 @@
   "perf-face-drag.spec.ts": 0,
   "perf-frame-timing.spec.ts": 0,
   "perf-holder-reload.spec.ts": 0,
+  "perf-pattern-preview.spec.ts": 0,
   "perf-probe.spec.ts": 0,
   "perf-profile.spec.ts": 0,
   "phone-stage.spec.ts": 45,

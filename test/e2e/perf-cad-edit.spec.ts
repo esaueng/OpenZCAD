@@ -20,6 +20,7 @@ import {
   transformBody
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
+import { hostSnapshot, perfBrowserArgs } from '../../scripts/perf-host.mjs';
 
 type EditSample = {
   inputToWorkerRequestMs: number;
@@ -39,6 +40,8 @@ test.skip(
   process.env.OZ_PERF !== '1',
   'CAD edit performance probe; set OZ_PERF=1 to run it.'
 );
+// OZ_PERF_ANGLE=vulkan (or gl) renders on the GPU; unset keeps SwiftShader.
+test.use({ launchOptions: { args: perfBrowserArgs() } });
 
 test.afterEach(async ({ page }) => {
   if (!['failed', 'timedOut'].includes(test.info().status ?? '')) return;
@@ -85,6 +88,7 @@ test('measures an applied edit through worker response and viewport frame', asyn
   browser
 }) => {
   test.setTimeout(300_000);
+  const hostBefore = hostSnapshot();
   const provenance = kernelProvenance();
   const runtimeErrors: string[] = [];
   page.on('pageerror', (error) => runtimeErrors.push(error.message));
@@ -471,6 +475,8 @@ test('measures an applied edit through worker response and viewport frame', asyn
     osRelease: release(),
     cpuModel: cpus()[0]?.model,
     browserVersion: browser.version(),
+    angle: process.env.OZ_PERF_ANGLE ?? null,
+    host: { before: hostBefore, after: hostSnapshot() },
     ...provenance
   };
   const artifact = { environment, report, summaries, runtimeErrors };
@@ -556,6 +562,26 @@ async function completedSample(
               );
               return;
             }
+            // A validated commit now adopts its own validation sync as the
+            // live result, so no broadcast follows it. With none 2 s after
+            // that sync answered, it is the edit's geometry; the
+            // revision-matched marks below still prove it was presented.
+            const adopted = probe.records
+              .filter(
+                (candidate) =>
+                  candidate.actionIndex === index &&
+                  candidate.featureCount > 0 &&
+                  candidate.requestId !== undefined &&
+                  candidate.ok === true &&
+                  candidate.responseAt !== undefined &&
+                  (expectedWidth === undefined ||
+                    candidate.canonicalInput.includes(
+                      `"width":${expectedWidth}`
+                    ))
+              )
+              .at(-1);
+            if (adopted && performance.now() - adopted.responseAt! > 2_000)
+              return resolve(adopted);
             if (performance.now() >= deadline)
               return reject(
                 new Error('No non-empty geometry sync followed the edit.')
@@ -599,6 +625,45 @@ async function completedSample(
           `Worker input did not contain the applied width ${expectedWidth}.`
         );
       }
+      // A broadcast is published under its own version. An adopted
+      // validation sync ran as the candidate and is published as the
+      // committed revision after it: the lowest framed version at or above
+      // the candidate's (versions only grow). Wait for that frame, which can
+      // land well after the sync answered, before fixing the revision.
+      const revision =
+        record.requestId === undefined
+          ? record.version
+          : await new Promise<number>((resolve, reject) => {
+              const deadline = performance.now() + 60_000;
+              const check = () => {
+                const framed = performance
+                  .getEntriesByName('oz:edit.frame', 'measure')
+                  .map(
+                    (entry) =>
+                      (entry as PerformanceMeasure).detail as {
+                        projectId?: string;
+                        version?: number;
+                      } | null
+                  )
+                  .filter(
+                    (detail) =>
+                      detail?.projectId === record.projectId &&
+                      typeof detail.version === 'number' &&
+                      detail.version >= record.version
+                  )
+                  .map((detail) => detail!.version!)
+                  .sort((a, b) => a - b)[0];
+                if (framed !== undefined) return resolve(framed);
+                if (performance.now() >= deadline)
+                  return reject(
+                    new Error(
+                      `No frame followed adopted sync ${record.version}.`
+                    )
+                  );
+                setTimeout(check, 10);
+              };
+              check();
+            });
       const bodyMeasure = await waitForRevisionMeasure('oz:edit.installed');
       const bodyDoneAt = bodyMeasure.startTime + bodyMeasure.duration;
       const frameMeasure = await waitForRevisionMeasure('oz:edit.frame');
@@ -613,7 +678,7 @@ async function completedSample(
           } | null;
           return (
             detail?.projectId === record.projectId &&
-            detail.version === record.version
+            detail.version === revision
           );
         });
       const acceptance = geometry ?? analysis;
@@ -624,10 +689,13 @@ async function completedSample(
         );
       return {
         projectId: record.projectId,
-        version: record.version,
+        version: revision,
+        syncVersion: record.version,
         featureCount: record.featureCount,
         canonicalInput: record.canonicalInput,
         actionLabel: action.label,
+        syncKind:
+          record.requestId === undefined ? 'broadcast' : 'adopted-validation',
         ok: record.ok === true,
         warningCount: record.warningCount ?? null,
         bodyWidth: record.bodyWidth ?? null,
@@ -659,14 +727,14 @@ async function completedSample(
                 } | null;
                 return (
                   detail?.projectId === record.projectId &&
-                  detail.version === record.version
+                  detail.version === revision
                 );
               }) as PerformanceMeasure | undefined;
             if (match) return resolve(match);
             if (performance.now() >= deadline)
               return reject(
                 new Error(
-                  `${name} did not match geometry revision ${record.version}. ` +
+                  `${name} did not match geometry revision ${revision}. ` +
                     JSON.stringify(
                       Object.fromEntries(
                         [
