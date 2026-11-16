@@ -4,6 +4,13 @@ import process from 'node:process';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
+function cliValue(name) {
+  const index = process.argv.indexOf(name);
+  return index === -1 ? undefined : process.argv[index + 1];
+}
+
+// The beta Worker's database by default; stable's deploy passes
+// --database openzcad-stable --config ../../wrangler.stable.jsonc.
 function runWrangler() {
   const result = spawnSync(
     'wrangler',
@@ -11,10 +18,10 @@ function runWrangler() {
       'd1',
       'migrations',
       'apply',
-      'openzcad-beta',
+      cliValue('--database') ?? 'openzcad-beta',
       '--remote',
       '--config',
-      '../../wrangler.jsonc'
+      cliValue('--config') ?? '../../wrangler.jsonc'
     ],
     { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }
   );

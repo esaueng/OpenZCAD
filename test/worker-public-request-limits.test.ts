@@ -472,7 +472,7 @@ describe('Workers rate-limit bindings', () => {
   });
 
   it('match the limits each Wrangler configuration declares', () => {
-    for (const path of ['wrangler.jsonc', 'wrangler.selfhost.example.jsonc']) {
+    for (const path of ['wrangler.jsonc', 'wrangler.stable.jsonc', 'wrangler.selfhost.example.jsonc']) {
       const parsed = ts.parseConfigFileTextToJson(
         path,
         readFileSync(path, 'utf8')

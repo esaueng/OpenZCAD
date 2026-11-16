@@ -18,10 +18,19 @@ export const OFFICIAL: Readonly<{
   sender: string;
 }>;
 
+export const OFFICIAL_STABLE: Readonly<{
+  workerName: string;
+  databaseName: string;
+  databaseId: string;
+  bucketName: string;
+  publicOrigins: readonly string[];
+  branch: string;
+}>;
+
 export function validateDeploymentConfig(
   config: Record<string, any>,
   options: {
-    target: 'official' | 'selfhost' | 'example' | 'dev';
+    target: 'official' | 'stable' | 'selfhost' | 'example' | 'dev';
     configOnly?: boolean;
     originUrl?: string;
     environment?: Record<string, string | undefined>;

@@ -126,7 +126,8 @@ describe('beta deployment safety', () => {
     for (const path of [
       'apps/web/wrangler.jsonc',
       'wrangler.selfhost.example.jsonc',
-      'wrangler.jsonc'
+      'wrangler.jsonc',
+      'wrangler.stable.jsonc'
     ]) {
       expect(cleanupCrons(path), path).toEqual([UPLOAD_CLEANUP_CRON]);
     }

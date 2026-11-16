@@ -37,6 +37,8 @@
     "check:release-build": "node scripts/check-release-build.mjs",
     "deploy:selfhost": "pnpm selfhost:check && pnpm build && pnpm check:release-build && pnpm --filter @openzcad/web exec wrangler d1 migrations apply DB --remote --config ../../wrangler.selfhost.jsonc && pnpm --filter @openzcad/web exec wrangler deploy --config ../../wrangler.selfhost.jsonc",
     "deploy:beta": "pnpm --filter @openzcad/web deploy:beta",
+    "deploy:stable": "pnpm --filter @openzcad/web deploy:stable",
+    "promote:stable": "node scripts/promote-stable.mjs",
     "audit:dependencies": "pnpm audit --audit-level=high"
   },
   "pnpm": {

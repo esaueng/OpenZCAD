@@ -114,6 +114,11 @@ export async function verifyBetaDeployment(options = {}) {
   );
 }
 
+function cliValue(name) {
+  const index = process.argv.indexOf(name);
+  return index === -1 ? undefined : process.argv[index + 1];
+}
+
 if (process.argv[1]?.endsWith('verify-beta-deployment.mjs')) {
   const attempts = positiveInteger(
     process.env.OPENZCAD_VERIFY_ATTEMPTS,
@@ -125,7 +130,12 @@ if (process.argv[1]?.endsWith('verify-beta-deployment.mjs')) {
   );
   try {
     await verifyBetaDeployment({
-      origin: process.env.OPENZCAD_BETA_ORIGIN ?? DEFAULT_ORIGIN,
+      // --origin names the channel being verified (stable passes
+      // https://stable.zcad.app); the default is the beta Worker's.
+      origin:
+        cliValue('--origin') ??
+        process.env.OPENZCAD_BETA_ORIGIN ??
+        DEFAULT_ORIGIN,
       expectedCommit: currentCommit(),
       attempts,
       delayMs
