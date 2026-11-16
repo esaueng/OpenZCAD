@@ -26,7 +26,7 @@ import type {
 } from './tools';
 
 /**
- * M17 (schema v68): the Standard part command. Pick a flat face or a plane
+ * M17 (schema v69): the Standard part command. Pick a flat face or a plane
  * and the part stands where it was clicked: a screw, threaded insert or
  * dowel pin goes into the face, a nut, washer or bearing sits on it. Kind,
  * head, system and size are Options; a screw's or dowel pin's length is a

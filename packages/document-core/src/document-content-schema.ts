@@ -115,11 +115,11 @@ export function assertSheetMetalSchema(version: unknown): void {
 }
 
 /**
- * M17 standard parts (schema v68): an older reader has no builder for the
+ * M17 standard parts (schema v69): an older reader has no builder for the
  * kind and would drop the body, so the document must declare the schema.
  */
 export function assertStandardPartSchema(version: unknown): void {
-  assertMinimumProjectSchema(version, 68, 'Standard parts');
+  assertMinimumProjectSchema(version, 69, 'Standard parts');
 }
 
 function hasCouplings(assembly: unknown): boolean {

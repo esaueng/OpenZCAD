@@ -611,7 +611,7 @@ export type InPlaceRequest =
       sheet: SheetMetalRequest;
     }
   | {
-      /** An M17 standard part (schema v68), as the feature stores it. */
+      /** An M17 standard part (schema v69), as the feature stores it. */
       tool: 'standard-part';
       part: StandardPartRequest;
     }

@@ -36,7 +36,7 @@ import {
 } from '@openzcad/shared';
 
 /**
- * M17 standard parts (schema v68): the catalogue's tables, the feature's
+ * M17 standard parts (schema v69): the catalogue's tables, the feature's
  * document contract, and the exact parts the generator builds on the
  * kernel, checked against closed forms and their tables' dimensions.
  */
@@ -186,7 +186,7 @@ describe('M17 catalogue', () => {
             if (partKind !== 'bearing') {
               expect(nominal, label).toBeGreaterThan(previous);
             } else {
-              expect(g.boreMm, label).toBeGreaterThanOrEqual(previous);
+              expect(nominal, label).toBeGreaterThanOrEqual(previous);
             }
             previous = nominal;
           }
@@ -277,8 +277,8 @@ describe('M17 standard parts: document contract', () => {
     length: 20
   } as const;
 
-  it('stores the part at schema v68', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(68);
+  it('stores the part at schema v69', () => {
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(69);
     const document = part('mm', screw);
     expect(listFeaturesInOrder(document).at(-1)!.data).toMatchObject({
       featureKind: 'standard-part',
@@ -288,10 +288,10 @@ describe('M17 standard parts: document contract', () => {
     expect(() => assertDocumentContentSchema(document)).not.toThrow();
   });
 
-  it('refuses a part on a document that declares schema v67', () => {
+  it('refuses a part on a document that declares schema v68', () => {
     const old = {
       ...createProjectDocument('Parts', toUserId('user_m17'), 'mm'),
-      schemaVersion: 67
+      schemaVersion: 68
     } as unknown as ProjectDocument;
     expect(() =>
       standardPartBody(old, {
@@ -300,7 +300,7 @@ describe('M17 standard parts: document contract', () => {
         origin: ORIGIN,
         axis: UP
       })
-    ).toThrow(/Standard parts require project schema v68/);
+    ).toThrow(/Standard parts require project schema v69/);
   });
 
   const blank = () =>

@@ -309,11 +309,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // thread is described for drawings and callouts but not cut, so the bore
 // stays its tap drill. An older client would cut the thread, so it must
 // refuse. Builds on v66.
-// v68 adds M17 standard parts (`featureKind: 'standard-part'`): a screw,
+// v68 is claimed by D02 dimension tolerances, prefixes and suffixes (#1618).
+// v69 adds M17 standard parts (`featureKind: 'standard-part'`): a screw,
 // nut, washer, threaded insert, dowel pin or ball bearing generated from its
 // standard's table as a new body. An older client has no builder for the
-// kind and would drop the body on rebuild, so it must refuse. Builds on v67.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 68 as const;
+// kind and would drop the body on rebuild, so it must refuse.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 69 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2333,7 +2334,7 @@ export type FeatureData =
     }
   | {
       /**
-       * M17 (schema v68): a standard part, generated as a new body from its
+       * M17 (schema v69): a standard part, generated as a new body from its
        * standard's table (`standard-parts.ts`): a screw, nut, washer,
        * threaded insert, dowel pin or deep groove ball bearing. Threads are
        * modeled by the M15 thread generator and an insert's knurl by the M14

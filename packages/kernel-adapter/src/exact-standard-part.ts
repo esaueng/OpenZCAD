@@ -1,5 +1,5 @@
 /**
- * M17 (schema v68) standard parts: screws, nuts, washers, threaded inserts,
+ * M17 (schema v69) standard parts: screws, nuts, washers, threaded inserts,
  * dowel pins and deep groove ball bearings, generated as exact solids from
  * the catalogue rows in `@openzcad/shared` (`standard-parts.ts`).
  *

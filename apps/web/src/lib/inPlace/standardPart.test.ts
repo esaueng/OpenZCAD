@@ -16,7 +16,17 @@ import {
   standardPartSizeOptionId,
   standardPartSpec
 } from './standardPart';
-import type { InPlaceContext, InPlaceSlots, PlanePick } from './tools';
+import type {
+  InPlaceContext,
+  InPlaceSlots,
+  PlanePick,
+  ResolvedInPlaceRequest
+} from './tools';
+
+type StandardPartUpdateRequest = Extract<
+  ResolvedInPlaceRequest,
+  { tool: 'standard-part' }
+>;
 
 /**
  * M17: the Standard part command — where a picked face puts the part and
@@ -198,7 +208,7 @@ describe('M17 Standard part command', () => {
     // Untouched, it writes back exactly as stored, expressions and all.
     const update = inPlaceFeatureUpdate(
       { featureId: feature.featureId, name: feature.name, data },
-      request as Exclude<typeof request, { tool: 'modeling' | 'edge-modifier' }>
+      request as StandardPartUpdateRequest
     );
     expect(update).toEqual({
       featureId: 'feat_part',
@@ -215,7 +225,7 @@ describe('M17 Standard part command', () => {
     expect(
       inPlaceFeatureUpdate(
         { featureId: feature.featureId, name: feature.name, data },
-        washer as Exclude<typeof washer, { tool: 'modeling' | 'edge-modifier' }>
+        washer as StandardPartUpdateRequest
       )
     ).toMatchObject({
       data: { partKind: 'washer', size: 'M6' },

@@ -619,7 +619,7 @@ export type SheetMetalInput = Omit<
 };
 
 /**
- * M17 (schema v68): a standard part's input — its {@link FeatureData}
+ * M17 (schema v69): a standard part's input — its {@link FeatureData}
  * fields plus the command's name, optional preallocated ids and the new
  * body's name.
  */

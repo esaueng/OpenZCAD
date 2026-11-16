@@ -1,5 +1,5 @@
 /**
- * M17 (schema v68): the standard parts catalogue. Parametric ISO metric and
+ * M17 (schema v69): the standard parts catalogue. Parametric ISO metric and
  * ANSI inch screws, nuts, washers, threaded inserts, dowel pins and deep
  * groove ball bearings, each a size row of its standard's own table, in the
  * standard's own units. The exact geometry is generated from these rows by
