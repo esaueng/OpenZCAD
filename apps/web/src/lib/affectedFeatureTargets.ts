@@ -266,7 +266,11 @@ export function affectedFeatureTargets(
           affectedBodies.has(data.targetBodyId) ||
           featureDatumAxisRefs(data).some((ref) =>
             affectedDatums.has(ref.datumFeatureId)
-          );
+          ) ||
+          // M02: a pattern on sketch points moves with its sketch.
+          (data.featureKind === 'pattern' &&
+            data.points !== undefined &&
+            affectedSketches.has(data.points.sketchId));
         break;
       case 'gear':
         affected =

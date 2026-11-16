@@ -1850,6 +1850,18 @@ describe('inPlaceEditSourceSketchIds', () => {
         featureKind: 'shell'
       } as unknown as FeatureData)
     ).toEqual([]);
+    // M02: a pattern on sketch points shows its sketch, hidden or not.
+    expect(
+      inPlaceEditSourceSketchIds({
+        featureKind: 'pattern',
+        patternKind: 'points',
+        points: {
+          sketchId: SKETCH,
+          pointIds: ['a', 'b'],
+          referencePointId: 'a'
+        }
+      } as unknown as FeatureData)
+    ).toEqual([SKETCH]);
   });
 });
 

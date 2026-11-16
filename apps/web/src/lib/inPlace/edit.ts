@@ -1327,6 +1327,9 @@ export function inPlaceEditSourceSketchIds(data: FeatureData): SketchId[] {
     // The in-place Extrude edits an extrude (U09): its profile's sketch.
     case 'extrude':
       return [data.sketchId];
+    // M02: a pattern on sketch points shows the sketch its points are on.
+    case 'pattern':
+      return data.points ? [data.points.sketchId] : [];
     default:
       return [];
   }
