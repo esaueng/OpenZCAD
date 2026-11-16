@@ -161,3 +161,15 @@ describe('settings heading', () => {
     expect(rule('.settings-head-title:focus')).toMatch(/outline:\s*none/);
   });
 });
+
+describe('settings sign-in security check', () => {
+  it('stretches the resend check to the column so it renders full size', () => {
+    // `.settings-auth-resend` starts its items, which shrank the check's
+    // empty slot below the 300px TurnstileWidget measures for, so the resend
+    // step drew Turnstile's square compact widget instead of the normal one.
+    expect(rule('.settings-auth-resend')).toMatch(/justify-items:\s*start/);
+    expect(rule('.settings-auth-resend > .settings-turnstile-shell')).toMatch(
+      /justify-self:\s*stretch/
+    );
+  });
+});

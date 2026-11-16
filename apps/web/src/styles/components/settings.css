@@ -994,6 +994,13 @@
   border-top: var(--border-thin);
 }
 
+/* The check takes the column's width, not its content's: shrunk to its
+   empty slot it measured under 300px and Turnstile drew the 150px square
+   compact widget beside the full-width code field. */
+.settings-auth-resend > .settings-turnstile-shell {
+  justify-self: stretch;
+}
+
 .settings-auth-controls label {
   display: grid;
   gap: var(--sp-1);
