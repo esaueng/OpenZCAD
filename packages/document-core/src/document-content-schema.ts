@@ -164,6 +164,41 @@ export function assertStandardPartSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 69, 'Standard parts');
 }
 
+/**
+ * D02 drawing properties (schema v70): a sheet carrying `format` needs a
+ * document that declares it, or an older reader would print its dimensions
+ * in the document's units and drop the properties on its next save.
+ */
+export function assertDrawingFormatSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 70, 'Drawing properties');
+}
+
+/** Whether `value` holds a sheet, or a sheet update, that sets a format. */
+export function hasDrawingFormat(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    // A sheet, or a sheet update command's payload, which names its sheet
+    // beside the properties it sets (null clears them).
+    if (
+      typeof entry.sheetId === 'string' &&
+      entry.format !== undefined &&
+      entry.format !== null
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
 function hasCouplings(assembly: unknown): boolean {
   return record(assembly) && assembly.couplings !== undefined;
 }
@@ -260,6 +295,12 @@ export function assertDocumentContentCommandSchema(
       hasDrawingDimensionFormat(command.payload)
     )
       assertDrawingDimensionFormatSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingFormat(command.payload)
+    )
+      assertDrawingFormatSchema(document.schemaVersion);
     if (!record(command.payload)) continue;
     if (
       command.kind === 'sketch.composite.add' &&
@@ -351,6 +392,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       }
   if (hasDrawingDimensionFormat(document.drawings))
     assertDrawingDimensionFormatSchema(document.schemaVersion);
+  if (hasDrawingFormat(document.drawings))
+    assertDrawingFormatSchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
     for (const change of entry.changes)
       if (
@@ -359,6 +402,13 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
           hasDrawingDimensionFormat(change.after))
       )
         assertDrawingDimensionFormatSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingFormat(change.before) || hasDrawingFormat(change.after))
+      )
+        assertDrawingFormatSchema(document.schemaVersion);
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch-object')
       assertSketchObjectContentSchema(

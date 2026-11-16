@@ -22,6 +22,9 @@ import {
   type DrawingPointRef,
   type DrawingView,
   type DrawingViewFrame,
+  type DrawingAngleFormat,
+  type DrawingSheetFormat,
+  millimetresPerUnit,
   MAX_DRAWING_DIMENSION_DECIMALS,
   type EdgeTopology,
   type EdgeTopologyReferenceV5,
@@ -320,12 +323,52 @@ export interface DimensionText {
   framed?: true;
 }
 
-/** What a dimension measures, before its format: `Ø` and `12.5`, `°`. */
+/**
+ * What a dimension measures, before its format: `Ø` and 12.5 (a length in
+ * the sheet's printed units), or 30 (an angle, in degrees).
+ */
 interface Measured {
   symbol: string;
   value: number;
   decimals: number;
-  unit: string;
+  kind: 'length' | 'angle';
+}
+
+/**
+ * D02 (schema v70): how a sheet writes numbers, from its drawing
+ * properties and the document's units. Lengths are measured in document
+ * units and printed in `units` (`lengthFactor` converts).
+ */
+export interface DrawingNumberFormat {
+  units: UnitSystem;
+  lengthFactor: number;
+  lengthDecimals: number;
+  angleDecimals: number;
+  angleFormat: DrawingAngleFormat;
+  comma: boolean;
+}
+
+export function drawingNumberFormat(
+  format: DrawingSheetFormat | undefined,
+  documentUnits: UnitSystem
+): DrawingNumberFormat {
+  const units = format?.units ?? documentUnits;
+  return {
+    units,
+    lengthFactor: millimetresPerUnit(documentUnits) / millimetresPerUnit(units),
+    lengthDecimals: format?.decimals ?? LENGTH_DECIMALS[units],
+    angleDecimals: format?.angleDecimals ?? ANGLE_DECIMALS,
+    angleFormat: format?.angleFormat ?? 'decimal',
+    comma: format?.decimalSeparator === 'comma'
+  };
+}
+
+/** The sheet's number format (absent properties: the document's). */
+export function sheetNumberFormat(
+  sheet: Pick<DrawingSheet, 'format'>,
+  documentUnits: UnitSystem
+): DrawingNumberFormat {
+  return drawingNumberFormat(sheet.format, documentUnits);
 }
 
 /** The fewest decimals (at most the bound) that state `value` exactly. */
@@ -345,11 +388,48 @@ function fixedNumber(value: number, decimals: number): string {
   return /^-0(\.0*)?$/.test(fixed) ? fixed.slice(1) : fixed;
 }
 
+/**
+ * A number in the sheet's format: trimmed like {@link formatDrawingNumber}
+ * or fixed (a tolerance), with its decimal separator; an angle with its
+ * degree sign, or as degrees, minutes and seconds to `decimals` on the
+ * seconds.
+ */
+function writeNumber(
+  value: number,
+  decimals: number,
+  kind: Measured['kind'],
+  format: DrawingNumberFormat,
+  trim: boolean
+): string {
+  const plain = (n: number, d: number) =>
+    trim ? formatDrawingNumber(n, d) : fixedNumber(n, d);
+  const separate = (text: string) =>
+    format.comma ? text.replace('.', ',') : text;
+  if (kind === 'length') return separate(plain(value, decimals));
+  if (format.angleFormat === 'decimal')
+    return `${separate(plain(value, decimals))}°`;
+  // Rounded once, in seconds, so 29°59'59.96" to one decimal is 30°0'0".
+  const step = 10 ** decimals;
+  let seconds = Math.round(Math.abs(value) * 3600 * step) / step;
+  const degrees = Math.floor(seconds / 3600 + 1e-9);
+  seconds -= degrees * 3600;
+  const minutes = Math.floor(seconds / 60 + 1e-9);
+  seconds = Math.max(0, seconds - minutes * 60);
+  const sign = value < 0 && degrees + minutes + seconds > 0 ? '-' : '';
+  return `${sign}${degrees}°${minutes}'${separate(plain(seconds, decimals))}"`;
+}
+
 /** A deviation: signed, and a bare `0` for none (ISO 129-1, ASME Y14.5). */
-function signedDeviation(value: number, decimals: number): string {
-  const fixed = fixedNumber(value, decimals);
-  if (Number(fixed) === 0) return '0';
-  return fixed.startsWith('-') ? fixed : `+${fixed}`;
+function signedDeviation(
+  value: number,
+  decimals: number,
+  kind: Measured['kind'],
+  format: DrawingNumberFormat
+): string {
+  const step = kind === 'angle' && format.angleFormat === 'dms' ? 3600 : 1;
+  if (Math.abs(value * step) < 0.5 * 10 ** -decimals) return '0';
+  const text = writeNumber(value, decimals, kind, format, false);
+  return value < 0 ? text : `+${text}`;
 }
 
 /**
@@ -363,7 +443,8 @@ function signedDeviation(value: number, decimals: number): string {
  */
 export function formatDimension(
   annotation: Exclude<DrawingAnnotation, { kind: 'note' }>,
-  measured: string | Measured
+  measured: string | Measured,
+  format: DrawingNumberFormat = drawingNumberFormat(undefined, 'mm')
 ): { label: string; text?: DimensionText } {
   const count =
     'count' in annotation && annotation.count !== undefined
@@ -378,37 +459,41 @@ export function formatDimension(
   let gap = '';
   if (typeof measured === 'string') lead = measured;
   else {
-    const { symbol, value, decimals, unit } = measured;
-    const nominal = `${symbol}${formatDrawingNumber(value, decimals)}${unit}`;
+    const { symbol, value, decimals, kind } = measured;
+    const write = (n: number, d: number, trim: boolean) =>
+      writeNumber(n, d, kind, format, trim);
+    const nominal = `${symbol}${write(value, decimals, true)}`;
+    // Decimal degrees and lengths keep a finer tolerance's decimals; D°M'S"
+    // decimals are the seconds'.
+    const tolerant = (...amounts: number[]) =>
+      kind === 'angle' && format.angleFormat === 'dms'
+        ? decimals
+        : Math.max(decimals, ...amounts.map(significantDecimals));
     switch (tolerance?.kind) {
       case undefined:
       case 'basic':
         lead = nominal;
         break;
       case 'symmetric': {
-        const d = Math.max(decimals, significantDecimals(tolerance.value));
-        lead = `${nominal} ±${fixedNumber(tolerance.value, d)}${unit}`;
+        const d = tolerant(tolerance.value);
+        lead = `${nominal} ±${write(tolerance.value, d, false)}`;
         break;
       }
       case 'deviation':
       case 'limits': {
-        const d = Math.max(
-          decimals,
-          significantDecimals(tolerance.upper),
-          significantDecimals(tolerance.lower)
-        );
+        const d = tolerant(tolerance.upper, tolerance.lower);
         if (tolerance.kind === 'deviation') {
           lead = nominal;
           gap = ' ';
           stack = [
-            `${signedDeviation(tolerance.upper, d)}${unit}`,
-            `${signedDeviation(tolerance.lower, d)}${unit}`
+            signedDeviation(tolerance.upper, d, kind, format),
+            signedDeviation(tolerance.lower, d, kind, format)
           ];
         } else {
           lead = symbol;
           stack = [
-            `${fixedNumber(value + tolerance.upper, d)}${unit}`,
-            `${fixedNumber(value + tolerance.lower, d)}${unit}`
+            write(value + tolerance.upper, d, false),
+            write(value + tolerance.lower, d, false)
           ];
         }
         break;
@@ -938,7 +1023,9 @@ export function resolveDrawingAnnotation(
   bodies: AnnotationBodies,
   units: UnitSystem,
   /** M01: a hole's callout data, by the hole's feature id. */
-  holes?: HoleCalloutLookup
+  holes?: HoleCalloutLookup,
+  /** D02 v70: the sheet's number format; absent prints in `units`. */
+  format: DrawingNumberFormat = drawingNumberFormat(undefined, units)
 ): AnnotationResolution {
   if (annotation.kind === 'note') {
     const label = annotation.text;
@@ -973,7 +1060,21 @@ export function resolveDrawingAnnotation(
   )
     return failure('foreshortened');
   const decimals =
-    annotation.decimals ?? defaultDimensionDecimals(annotation.kind, units);
+    annotation.decimals ??
+    (annotation.kind === 'angle'
+      ? format.angleDecimals
+      : format.lengthDecimals);
+  /** A length in document units, printed. */
+  const length = (n: number, d = decimals) =>
+    writeNumber(n * format.lengthFactor, d, 'length', format, true);
+  const angle = (n: number, d: number) =>
+    writeNumber(n, d, 'angle', format, true);
+  const measuredLength = (symbol: string, n: number): Measured => ({
+    symbol,
+    value: n * format.lengthFactor,
+    decimals,
+    kind: 'length'
+  });
   switch (annotation.kind) {
     case 'linear': {
       const frame = DRAWING_VIEW_FRAMES[view.orientation];
@@ -1016,12 +1117,11 @@ export function resolveDrawingAnnotation(
           from: from.point.uv,
           to: to.point.uv,
           value,
-          ...formatDimension(annotation, {
-            symbol: annotation.diameter ? 'Ø' : '',
-            value,
-            decimals,
-            unit: ''
-          })
+          ...formatDimension(
+            annotation,
+            measuredLength(annotation.diameter ? 'Ø' : '', value),
+            format
+          )
         }
       };
     }
@@ -1046,12 +1146,11 @@ export function resolveDrawingAnnotation(
             radius: tube.radius,
             ...(tube.arc ? { arc: tube.arc } : {}),
             value: tube.radius,
-            ...formatDimension(annotation, {
-              symbol: 'R',
-              value: tube.radius,
-              decimals,
-              unit: ''
-            })
+            ...formatDimension(
+              annotation,
+              measuredLength('R', tube.radius),
+              format
+            )
           }
         };
       }
@@ -1072,7 +1171,7 @@ export function resolveDrawingAnnotation(
           body?.topology?.faces ?? []
         );
         if (!reading.ok) return failure(reading.reason);
-        const number = (n: number) => formatDrawingNumber(n, decimals);
+        const number = (n: number) => length(n);
         const hole = reading.through
           ? `Ø${number(value)} THRU`
           : `Ø${number(value)} × ${number(reading.holeDepth)} DEEP`;
@@ -1085,7 +1184,8 @@ export function resolveDrawingAnnotation(
             value,
             ...formatDimension(
               annotation,
-              `${hole}, CSK Ø${number(2 * reading.rim.radius)} × ${formatDrawingNumber(reading.angleDeg, ANGLE_DECIMALS)}°`
+              `${hole}, CSK Ø${number(2 * reading.rim.radius)} × ${angle(reading.angleDeg, format.angleDecimals)}`,
+              format
             )
           }
         };
@@ -1101,7 +1201,7 @@ export function resolveDrawingAnnotation(
           body?.topology?.faces ?? []
         );
         if (!reading.ok) return failure(reading.reason);
-        const number = (n: number) => formatDrawingNumber(n, decimals);
+        const number = (n: number) => length(n);
         const hole = reading.through
           ? `Ø${number(value)} THRU`
           : `Ø${number(value)} × ${number(reading.holeDepth)} DEEP`;
@@ -1114,7 +1214,8 @@ export function resolveDrawingAnnotation(
             value,
             ...formatDimension(
               annotation,
-              `${hole}, CBORE Ø${number(2 * reading.bore.radius)} × ${number(reading.depth)} DEEP`
+              `${hole}, CBORE Ø${number(2 * reading.bore.radius)} × ${number(reading.depth)} DEEP`,
+              format
             )
           }
         };
@@ -1145,15 +1246,9 @@ export function resolveDrawingAnnotation(
           ...formatDimension(
             annotation,
             callout
-              ? holeCalloutLabel(callout, (n) =>
-                  formatDrawingNumber(n, decimals)
-                )
-              : {
-                  symbol: annotation.kind === 'radius' ? 'R' : 'Ø',
-                  value,
-                  decimals,
-                  unit: ''
-                }
+              ? holeCalloutLabel(callout, (n) => length(n))
+              : measuredLength(annotation.kind === 'radius' ? 'R' : 'Ø', value),
+            format
           )
         }
       };
@@ -1202,8 +1297,7 @@ export function resolveDrawingAnnotation(
           return failure('foreshortened');
         segments = [chamfer.ends.map((end) => project(end.point)) as [UV, UV]];
       }
-      const lengthDecimals =
-        annotation.decimals ?? defaultDimensionDecimals('chamfer', units);
+      const lengthDecimals = annotation.decimals ?? format.lengthDecimals;
       return {
         ok: true,
         resolved: {
@@ -1213,7 +1307,8 @@ export function resolveDrawingAnnotation(
           angle: chamfer.angleDeg,
           ...formatDimension(
             annotation,
-            `${formatDrawingNumber(chamfer.size, lengthDecimals)} × ${formatDrawingNumber(chamfer.angleDeg, ANGLE_DECIMALS)}°`
+            `${length(chamfer.size, lengthDecimals)} × ${angle(chamfer.angleDeg, format.angleDecimals)}`,
+            format
           )
         }
       };
@@ -1272,12 +1367,11 @@ export function resolveDrawingAnnotation(
           vertex,
           rays: ordered,
           value,
-          ...formatDimension(annotation, {
-            symbol: '',
-            value,
-            decimals,
-            unit: '°'
-          }),
+          ...formatDimension(
+            annotation,
+            { symbol: '', value, decimals, kind: 'angle' },
+            format
+          ),
           ...(outside !== undefined
             ? { outside: { index: outside, from: near! } }
             : {})
@@ -2464,7 +2558,8 @@ export function resolveSheetAnnotations(
         annotation.viewId ? views.get(annotation.viewId) : undefined,
         bodies,
         units,
-        holes
+        holes,
+        sheetNumberFormat(sheet, units)
       )
     ])
   );

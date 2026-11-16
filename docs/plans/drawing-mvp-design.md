@@ -392,8 +392,9 @@ notes to D01 sheets:
   stored tolerance never reads as zero), and an optional `prefix` and
   `suffix` (one trimmed line of at most
   40 characters, printed with a space between). Tolerances are stored as
-  deviations from the measured value in document units (degrees on an
-  angle), never as a value, so `limits` prints the measured value plus each
+  deviations from the measured value in the units the dimension prints in
+  (the document's until v70's sheet units; degrees on an angle), never as a
+  value, so `limits` prints the measured value plus each
   deviation and follows the model through the sheet's explicit Update. A
   reference dimension, a chamfer's `size × angle` and a counterbore or
   countersink callout take no tolerance (refused by the validator); marking a
@@ -439,6 +440,33 @@ notes to D01 sheets:
 - **Sketch DXF.** The export dialog's DXF option writes one saved sketch
   through the existing exact sketch exporter (`exportSketchDxf`): the sketch
   menu entry the D04 row left open.
+
+## Drawing properties and title-block fields (D02, schema v70)
+
+- **Shape.** `DrawingSheet.format`, absent when every property is its
+  default: `units` (dimensions are measured in document units and printed
+  in these), `decimals` and `angleDecimals` (the defaults when an annotation
+  sets none), `angleFormat` (`decimal` or `dms`, degrees, minutes and
+  seconds with the decimals on the seconds), `decimalSeparator` (`comma`;
+  absent is a point) and `lineWidthsMm`, a print weight per line class
+  (visible, hidden, thin, border, dimension, hatch, chain, cutting) within
+  0.05–2 mm. `drawing.sheet.update` replaces it whole; null clears it.
+- **Numbers.** One sheet number format writes every dimension, callout and
+  tolerance: a value converts from document to printed units, a tolerance's
+  deviations are amounts in the printed units (degrees on an angle), and a
+  D°M'S" angle is rounded once in seconds so no 60" carries into a label.
+  Values the sheet measures stay in model units; only text changes.
+- **Weights.** The page carries the sheet's weights only when it sets any,
+  and the SVG and PDF writers read a kind's weight from the page before the
+  ISO 128 default, so a sheet without them exports byte-identical. The
+  on-screen preview keeps its screen weights.
+- **Title block.** The SCALE cell reads `SCALE · SIZE` (`1:1 · A3`), UNITS
+  names the printed units, and DATE shows the date of the project's latest
+  saved revision until one is typed. Title, scale, size, units and
+  projection were already read from the sheet; they cannot disagree with it.
+- **Schema.** v70, built on v69 (M17 standard parts). A content gate refuses `format` on a sheet
+  or in a sheet update in a document, its history or its commands that
+  declares v69 or older.
 
 ## Finishing-body update repair
 

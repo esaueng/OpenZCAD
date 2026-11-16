@@ -319,7 +319,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // nut, washer, threaded insert, dowel pin or ball bearing generated from its
 // standard's table as a new body. An older client has no builder for the
 // kind and would drop the body on rebuild, so it must refuse. Builds on v68.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 69 as const;
+// v70 adds D02 drawing properties (`format` on a drawing sheet): the units,
+// precision, angle format and decimal separator its dimensions print in and
+// per-class line weights. Absent keeps every default, so every older sheet
+// draws unchanged. An older client would print in the document's units and
+// drop them on its next save, so it must refuse. Builds on v69.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 70 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
