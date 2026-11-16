@@ -43,10 +43,14 @@ import { updateDrawingView } from '@openzcad/document-core';
 import {
   createDrawingAnnotationId,
   createDrawingViewId,
+  MAX_DRAWING_DIMENSION_AFFIX_LENGTH,
   MAX_DRAWING_DIMENSION_COUNT,
+  drawingToleranceError,
   MAX_DRAWING_DIMENSION_DECIMALS,
   MAX_DRAWING_NOTE_LENGTH,
   type DrawingAnnotation,
+  type DrawingTolerance,
+  type DrawingToleranceKind,
   type DrawingAnnotationId,
   DRAWING_PAPER_LABELS,
   DRAWING_PAPER_SIZES_MM,
@@ -1678,16 +1682,217 @@ function DimensionFormat(props: {
           type="checkbox"
           checked={selected.reference === true}
           disabled={!editable}
-          onChange={(event) =>
-            props.onUpdate(
-              flag('reference', event.target.checked),
-              'Format dimension'
-            )
-          }
+          onChange={(event) => {
+            // A reference dimension is stated for information and takes no
+            // tolerance (v68): marking one drops it.
+            const marked = flag('reference', event.target.checked);
+            if (event.target.checked && 'tolerance' in marked) {
+              const { tolerance: _dropped, ...rest } = marked;
+              props.onUpdate(rest, 'Format dimension');
+            } else props.onUpdate(marked, 'Format dimension');
+          }}
         />
         <span>Reference dimension (in brackets)</span>
       </label>
+      <TextField
+        label="Prefix"
+        value={selected.prefix ?? ''}
+        placeholder="None"
+        maxLength={MAX_DRAWING_DIMENSION_AFFIX_LENGTH}
+        printed
+        disabled={!editable}
+        onCommit={(text) =>
+          props.onUpdate(affixed(selected, 'prefix', text), 'Format dimension')
+        }
+      />
+      <TextField
+        label="Suffix"
+        value={selected.suffix ?? ''}
+        placeholder="None"
+        maxLength={MAX_DRAWING_DIMENSION_AFFIX_LENGTH}
+        printed
+        disabled={!editable}
+        onCommit={(text) =>
+          props.onUpdate(affixed(selected, 'suffix', text), 'Format dimension')
+        }
+      />
+      <ToleranceFields
+        selected={selected}
+        editable={editable}
+        onUpdate={props.onUpdate}
+      />
     </>
+  );
+}
+
+/** v68: `selected` with its prefix or suffix set, or cleared when blank. */
+function affixed(
+  selected: Exclude<DrawingAnnotation, { kind: 'note' }>,
+  key: 'prefix' | 'suffix',
+  text: string
+): DrawingAnnotation {
+  const { [key]: _previous, ...rest } = selected;
+  const trimmed = text.trim();
+  return trimmed ? { ...rest, [key]: trimmed } : rest;
+}
+
+const TOLERANCE_LABELS: Readonly<Record<DrawingToleranceKind, string>> = {
+  symmetric: 'Symmetric (±)',
+  deviation: 'Deviation (+/−)',
+  limits: 'Limits',
+  basic: 'Basic (framed)'
+};
+
+/**
+ * v68: a dimension's tolerance. Amounts are deviations from the measured
+ * value in the document's units (degrees on an angle), so Limits print the
+ * value plus each and follow the model through every Update.
+ */
+function ToleranceFields(props: {
+  selected: Exclude<DrawingAnnotation, { kind: 'note' }>;
+  editable: boolean;
+  onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
+}) {
+  const { selected, editable } = props;
+  const callout =
+    selected.kind === 'chamfer' ||
+    ('counterbore' in selected && selected.counterbore !== undefined) ||
+    ('countersink' in selected && selected.countersink !== undefined);
+  if (callout) return null;
+  const tolerance = selected.tolerance;
+  const set = (next: DrawingTolerance | null) => {
+    const { tolerance: _previous, ...rest } = selected;
+    if (next && drawingToleranceError(next)) return;
+    props.onUpdate(
+      next ? { ...rest, tolerance: next } : rest,
+      'Tolerance dimension'
+    );
+  };
+  if (selected.reference)
+    return (
+      <p className="drawing-hint">A reference dimension takes no tolerance.</p>
+    );
+  return (
+    <>
+      <label className="drawing-field">
+        <span>Tolerance</span>
+        <select
+          value={tolerance?.kind ?? ''}
+          disabled={!editable}
+          onChange={(event) => {
+            const kind = event.target.value as DrawingToleranceKind | '';
+            const step = 0.1;
+            if (kind === '') set(null);
+            else if (kind === 'basic') set({ kind });
+            else if (kind === 'symmetric')
+              set({
+                kind,
+                value:
+                  tolerance && 'upper' in tolerance
+                    ? Math.max(
+                        Math.abs(tolerance.upper),
+                        Math.abs(tolerance.lower)
+                      )
+                    : step
+              });
+            else
+              set({
+                kind,
+                ...(tolerance && 'upper' in tolerance
+                  ? { upper: tolerance.upper, lower: tolerance.lower }
+                  : tolerance?.kind === 'symmetric'
+                    ? { upper: tolerance.value, lower: -tolerance.value }
+                    : { upper: step, lower: -step })
+              });
+          }}
+        >
+          <option value="">None</option>
+          {(Object.keys(TOLERANCE_LABELS) as DrawingToleranceKind[]).map(
+            (kind) => (
+              <option key={kind} value={kind}>
+                {TOLERANCE_LABELS[kind]}
+              </option>
+            )
+          )}
+        </select>
+      </label>
+      {tolerance?.kind === 'symmetric' && (
+        <AmountField
+          label="±"
+          value={tolerance.value}
+          disabled={!editable}
+          onCommit={(value) => set({ kind: 'symmetric', value })}
+        />
+      )}
+      {(tolerance?.kind === 'deviation' || tolerance?.kind === 'limits') && (
+        <div className="drawing-field-row">
+          <AmountField
+            label="Upper"
+            value={tolerance.upper}
+            disabled={!editable}
+            onCommit={(upper) => set({ ...tolerance, upper })}
+          />
+          <AmountField
+            label="Lower"
+            value={tolerance.lower}
+            disabled={!editable}
+            onCommit={(lower) => set({ ...tolerance, lower })}
+          />
+        </div>
+      )}
+      {tolerance &&
+        tolerance.kind !== 'basic' &&
+        drawingToleranceError(tolerance) === null && (
+          <p className="drawing-hint">
+            {tolerance.kind === 'symmetric'
+              ? 'Plus or minus this amount.'
+              : tolerance.kind === 'deviation'
+                ? 'Signed deviations from the measured value, upper over lower.'
+                : 'The measured value plus each deviation, upper over lower.'}
+          </p>
+        )}
+    </>
+  );
+}
+
+/**
+ * A tolerance amount as typed: kept as text until committed, so "-0.05"
+ * survives its intermediate "-" and "-0.0"; a value the tolerance refuses
+ * (an upper below its lower, a non-positive ±) reverts.
+ */
+function AmountField(props: {
+  label: string;
+  value: number;
+  disabled: boolean;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(props.value));
+  useEffect(() => setDraft(String(props.value)), [props.value]);
+  const commit = () => {
+    const value = Number(draft);
+    if (draft.trim() !== '' && Number.isFinite(value) && value !== props.value)
+      props.onCommit(value);
+    // Accepted, the new value replaces this on its way back; refused, the
+    // stored one does.
+    setDraft(String(props.value));
+  };
+  return (
+    <label className="drawing-field">
+      <span>{props.label}</span>
+      <input
+        type="number"
+        step="any"
+        value={draft}
+        disabled={props.disabled}
+        aria-label={`Tolerance ${props.label === '±' ? 'amount' : props.label.toLowerCase()}`}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') commit();
+          if (event.key === 'Escape') setDraft(String(props.value));
+        }}
+      />
+    </label>
   );
 }
 

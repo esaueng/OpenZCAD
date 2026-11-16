@@ -115,6 +115,48 @@ export function assertSheetMetalSchema(version: unknown): void {
 }
 
 /**
+ * D02 dimension tolerances, prefixes and suffixes (schema v68): a drawing
+ * annotation carrying any needs a document that declares it, or an older
+ * reader would print the bare value and drop them on its next save.
+ */
+export function assertDrawingDimensionFormatSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    68,
+    'Dimension tolerances, prefixes and suffixes'
+  );
+}
+
+/**
+ * Whether `value` (a drawing set, a sheet, an annotation or a drawing
+ * command's payload) holds an annotation with a v68 field. Walks records and
+ * arrays only, once each.
+ */
+export function hasDrawingDimensionFormat(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (
+      typeof entry.annotationId === 'string' &&
+      (entry.tolerance !== undefined ||
+        entry.prefix !== undefined ||
+        entry.suffix !== undefined)
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/**
  * M17 standard parts (schema v69): an older reader has no builder for the
  * kind and would drop the body, so the document must declare the schema.
  */
@@ -212,6 +254,12 @@ export function assertDocumentContentCommandSchema(
       assertStandardPartSchema(document.schemaVersion);
     if (command.kind === 'printClearance.set')
       assertPrintClearanceSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingDimensionFormat(command.payload)
+    )
+      assertDrawingDimensionFormatSchema(document.schemaVersion);
     if (!record(command.payload)) continue;
     if (
       command.kind === 'sketch.composite.add' &&
@@ -301,6 +349,16 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         if (hasExplode(change.before) || hasExplode(change.after))
           assertAssemblyExplodeSchema(document.schemaVersion);
       }
+  if (hasDrawingDimensionFormat(document.drawings))
+    assertDrawingDimensionFormatSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingDimensionFormat(change.before) ||
+          hasDrawingDimensionFormat(change.after))
+      )
+        assertDrawingDimensionFormatSchema(document.schemaVersion);
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch-object')
       assertSketchObjectContentSchema(

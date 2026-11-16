@@ -309,11 +309,16 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // thread is described for drawings and callouts but not cut, so the bore
 // stays its tap drill. An older client would cut the thread, so it must
 // refuse. Builds on v66.
-// v68 is claimed by D02 dimension tolerances, prefixes and suffixes (#1618).
+// v68 adds D02 dimension tolerances, prefixes and suffixes (`tolerance`,
+// `prefix` and `suffix` on a drawing dimension): symmetric, deviation, limits
+// and basic tolerances read against the measured value each time the sheet is
+// drawn. Absent keeps the bare value, so every older sheet draws unchanged.
+// An older client would print the bare value and drop them on its next save,
+// so it must refuse. Builds on v67.
 // v69 adds M17 standard parts (`featureKind: 'standard-part'`): a screw,
 // nut, washer, threaded insert, dowel pin or ball bearing generated from its
 // standard's table as a new body. An older client has no builder for the
-// kind and would drop the body on rebuild, so it must refuse.
+// kind and would drop the body on rebuild, so it must refuse. Builds on v68.
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 69 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;

@@ -440,6 +440,15 @@ describe('M01 cosmetic threads: exact build and D02 callout', () => {
         holes
       );
       expect(called.ok && called.resolved.label).toBe(text);
+      // D02 v68: a toleranced diameter states the diameter it tolerances.
+      const toleranced = resolveDrawingAnnotation(
+        { ...annotation, tolerance: { kind: 'symmetric', value: 0.05 } },
+        view,
+        bodies,
+        'mm',
+        holes
+      );
+      expect(toleranced.ok && toleranced.resolved.label).toBe('Ø5 ±0.05');
       // Without the document's holes it is the bare diameter, as before.
       const bare = resolveDrawingAnnotation(annotation, view, bodies, 'mm');
       expect(bare.ok && bare.resolved.label).toBe('Ø5');

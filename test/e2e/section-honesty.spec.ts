@@ -54,6 +54,14 @@ test('the bracket says which faces stop the exact cut, and Build shows a cut lef
   const chip = page.getByRole('group', { name: 'Section view on' });
   await expect(chip).toBeVisible();
   await expect(chip).toContainText(/Section · (XY|XZ|YZ) plane/);
+  // The chip stands over the cube, and the right lane (where the Measure
+  // workbench docks) stops above it: under the lane, at 1440 × 700, the
+  // workbench footer took Turn off's click.
+  const chipTop = (await chip.boundingBox())!.y;
+  const laneBottom = await page
+    .locator('.stage-right')
+    .evaluate((lane) => lane.getBoundingClientRect().bottom);
+  expect(laneBottom).toBeLessThanOrEqual(chipTop);
   await chip.getByRole('button', { name: 'Turn off' }).click();
   await expect(toggle).toHaveAttribute('aria-pressed', 'false');
   await expect(chip).toBeHidden();

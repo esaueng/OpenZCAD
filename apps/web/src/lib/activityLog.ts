@@ -1,10 +1,15 @@
 import { useSyncExternalStore } from 'react';
+import { trimComponentStack } from './crashDiagnostics';
 
 /**
  * The session's activity log: every status message, geometry phase, notice
  * and uncaught error, kept in memory for the life of the tab. It lives
  * outside React so the workspace, the start screen and Settings › Activity
  * log all read one record, and so a page that is not mounted still records.
+ *
+ * Errors alone also outlive the tab's memory: the newest few are kept in
+ * localStorage, and `activityLogPersistence` puts them back at the head of the
+ * next page load's log, marked as from an earlier load.
  */
 
 export type ActivityLevel = 'ready' | 'running' | 'warning' | 'error';
@@ -56,12 +61,76 @@ function publish(next: ActivityLogSnapshot) {
   }
 }
 
+/** Publishes `all`, dropping the oldest past the bound and counting them. */
+function publishBounded(all: ActivityLogEntry[]) {
+  const overflow = Math.max(0, all.length - MAX_ACTIVITY_LOG_ENTRIES);
+  publish({
+    entries: overflow > 0 ? all.slice(overflow) : all,
+    dropped: snapshot.dropped + overflow,
+    startedAt: snapshot.startedAt
+  });
+}
+
 /** Where later entries happen; stamped on each as it is recorded. */
 export function setActivityContext(next: ActivityContext): void {
   context = {
     ...(next.workspace ? { workspace: next.workspace } : {}),
     ...(next.project ? { project: next.project } : {})
   };
+}
+
+/** Where errors are kept across reloads (by `activityLogPersistence`). */
+export const PERSISTED_ERRORS_KEY = 'openzcad-activity-errors:v1';
+
+/** localStorage, or null where it is blocked. */
+export function activityErrorStore(): Storage | null {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    // Storage blocked (private mode, sandboxed frame): memory only.
+    return null;
+  }
+}
+
+/**
+ * The kept errors as stored, or null. Startup reads this before the page
+ * records anything, so an error this load raises is never shown back to it
+ * as one from an earlier load.
+ */
+export function readStoredErrors(): string | null {
+  try {
+    return activityErrorStore()?.getItem(PERSISTED_ERRORS_KEY) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Errors reach storage through the sink `activityLogPersistence` installs
+// once it has loaded, just after startup; it first keeps the errors this load
+// recorded before then, which are still in the log.
+let errorSink: ((entry: ActivityLogEntry) => void) | null = null;
+
+/** Installs (or, with null, removes) where errors are kept. */
+export function setActivityErrorSink(
+  sink: ((entry: ActivityLogEntry) => void) | null
+): void {
+  errorSink = sink;
+}
+
+/**
+ * Puts entries at the head of the log: the errors restored from earlier page
+ * loads and the page-load line, which arrive (lazily) after this load may
+ * already have recorded something.
+ */
+export function prependActivity(
+  entries: readonly Omit<ActivityLogEntry, 'id'>[]
+): void {
+  if (entries.length === 0) return;
+  const all = [
+    ...entries.map((entry) => ({ id: nextId++, ...entry })),
+    ...snapshot.entries
+  ];
+  publishBounded(all);
 }
 
 export function recordActivity(
@@ -82,12 +151,8 @@ export function recordActivity(
     ...context
   };
   const all = [...snapshot.entries, recorded];
-  const overflow = Math.max(0, all.length - MAX_ACTIVITY_LOG_ENTRIES);
-  publish({
-    entries: overflow > 0 ? all.slice(overflow) : all,
-    dropped: snapshot.dropped + overflow,
-    startedAt: snapshot.startedAt
-  });
+  publishBounded(all);
+  if (recorded.level === 'error') errorSink?.(recorded);
 }
 
 /** The newest entry from one source, if any. */
@@ -104,6 +169,11 @@ export function lastActivity(
 }
 
 export function clearActivityLog(): void {
+  try {
+    activityErrorStore()?.removeItem(PERSISTED_ERRORS_KEY);
+  } catch {
+    // Blocked storage kept nothing to forget.
+  }
   publish({ entries: [], dropped: 0, startedAt: Date.now() });
 }
 
@@ -277,18 +347,19 @@ export function recordCaughtError(
       : typeof error === 'string'
         ? error
         : 'Unknown error';
-  const components = componentStack
-    ?.split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(0, 8)
-    .join('\n');
+  // Innermost first: the component that threw (or looped) leads.
+  const components = trimComponentStack(componentStack);
   recordActivity({
     level: 'error',
     source: 'error',
     message: `${label} crashed: ${message}`,
     ...optionalDetail(
-      [errorDetail(error), components].filter(Boolean).join('\n') || undefined
+      [
+        errorDetail(error),
+        components ? `Component stack:\n${components}` : undefined
+      ]
+        .filter(Boolean)
+        .join('\n') || undefined
     )
   });
 }

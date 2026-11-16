@@ -1040,11 +1040,20 @@ export function repairedAnnotation(
   if (!draft || draft.kind !== previous.kind) return null;
   if (previous.kind === 'note' && draft.kind === 'note')
     return { ...previous, ...(draft.leader ? { leader: draft.leader } : {}) };
-  // A re-pick keeps the format (decimals, count, Ø, reference) but makes the
+  // A re-pick keeps the format (decimals, count, Ø, reference, and v68's
+  // tolerance, prefix and suffix) but makes the
   // dimension the person's own: it no longer carries generated provenance.
   const format = previous as unknown as Record<string, unknown>;
   const kept: Record<string, unknown> = {};
-  for (const key of ['decimals', 'count', 'diameter', 'reference'])
+  for (const key of [
+    'decimals',
+    'count',
+    'diameter',
+    'reference',
+    'tolerance',
+    'prefix',
+    'suffix'
+  ])
     if (format[key] !== undefined) kept[key] = format[key];
   return { ...draft, ...kept };
 }
