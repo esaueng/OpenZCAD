@@ -40,6 +40,10 @@ import type { DrawingViewId } from './drawings';
  * Schema v51 adds a countersunk hole's callout ("Ø THRU, CSK Ø × 90°", the
  * cone's outer rim) and the outside angle: one ray of an angle dimension
  * turned onto its edge's extension.
+ *
+ * Schema v68 (D02) adds a tolerance and a prefix and suffix to a dimension
+ * (see {@link DrawingTolerance}). Each is optional and absent on every older
+ * annotation.
  */
 
 export type DrawingAnnotationId = Brand<string, 'DrawingAnnotationId'>;
@@ -170,6 +174,28 @@ interface DrawingAnnotationBase {
   provenance?: DrawingAnnotationProvenance;
 }
 
+/**
+ * v68: a dimension's tolerance. Deviations are signed amounts from the
+ * measured value, in the document's length units (degrees on an angle), so
+ * a toleranced dimension stays associative: `limits` prints the measured
+ * value plus each deviation, read from the model each time it is drawn.
+ *
+ * - `symmetric`: `10 ±0.05`; `value` is positive.
+ * - `deviation`: `10` with `+0.1` over `-0.05` stacked after it.
+ * - `limits`: `10.1` over `9.95`, the value plus `upper` over plus `lower`.
+ * - `basic`: the theoretically exact value, framed.
+ *
+ * `upper` is strictly greater than `lower`. A reference dimension takes no
+ * tolerance, and a chamfer's `size × angle` callout takes none.
+ */
+export type DrawingTolerance =
+  | { kind: 'symmetric'; value: number }
+  | { kind: 'deviation'; upper: number; lower: number }
+  | { kind: 'limits'; upper: number; lower: number }
+  | { kind: 'basic' };
+
+export type DrawingToleranceKind = DrawingTolerance['kind'];
+
 interface DrawingDimensionBase extends DrawingAnnotationBase {
   viewId: DrawingViewId;
   /** Decimal places shown, trailing zeros trimmed; absent uses the units' default. */
@@ -179,6 +205,12 @@ interface DrawingDimensionBase extends DrawingAnnotationBase {
    * information although others already fix it. Absent is a dimension.
    */
   reference?: true;
+  /** v68: the dimension's tolerance; absent states the value alone. */
+  tolerance?: DrawingTolerance;
+  /** v68: text printed before the value, separated by a space ("4×", "SR"). */
+  prefix?: string;
+  /** v68: text printed after the value and tolerance, after a space ("TYP"). */
+  suffix?: string;
 }
 
 export interface DrawingLinearDimension extends DrawingDimensionBase {
@@ -277,6 +309,10 @@ export const MAX_DRAWING_NOTE_LENGTH = 200;
 export const MAX_DRAWING_DIMENSION_DECIMALS = 6;
 /** A count is at least two like features; the bound keeps it a label. */
 export const MAX_DRAWING_DIMENSION_COUNT = 999;
+/** v68: a prefix or suffix is a short label, not a note. */
+export const MAX_DRAWING_DIMENSION_AFFIX_LENGTH = 40;
+/** v68: a tolerance's deviations, in document units or degrees. */
+export const MAX_DRAWING_TOLERANCE = 1e6;
 const MAX_REQUIREMENT_LENGTH = 200;
 /** Placement bound, in paper millimetres. */
 const MAX_PLACEMENT_MM = 10_000;
@@ -521,6 +557,64 @@ function countError(value: unknown, kind: unknown, where: string) {
 }
 
 /**
+ * A tolerance amount: finite, bounded, and stated to at most
+ * {@link MAX_DRAWING_DIMENSION_DECIMALS} decimals, the most a label prints.
+ * A finer amount would print as zero (`±0.000000`), or limits as two equal
+ * bounds, while the sheet stores a tolerance.
+ */
+function isDeviation(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    Math.abs(value) <= MAX_DRAWING_TOLERANCE &&
+    Math.abs(Number(value.toFixed(MAX_DRAWING_DIMENSION_DECIMALS)) - value) <=
+      1e-9 * Math.max(1, Math.abs(value))
+  );
+}
+
+/** Why `value` is not a stored {@link DrawingTolerance}, or null. */
+export function drawingToleranceError(value: unknown): string | null {
+  if (!isRecord(value)) return 'has a tolerance that is not a record';
+  switch (value.kind) {
+    case 'symmetric':
+      if (Object.keys(value).length !== 2)
+        return 'has a symmetric tolerance with unknown fields';
+      return isDeviation(value.value) && value.value > 0
+        ? null
+        : 'has a symmetric tolerance that is not a positive amount of at most six decimals';
+    case 'deviation':
+    case 'limits':
+      if (Object.keys(value).length !== 3)
+        return `has a ${value.kind} tolerance with unknown fields`;
+      if (!isDeviation(value.upper) || !isDeviation(value.lower))
+        return `has a ${value.kind} tolerance with an invalid deviation (finite, at most six decimals)`;
+      return value.upper > value.lower
+        ? null
+        : `has a ${value.kind} tolerance whose upper deviation is not above its lower`;
+    case 'basic':
+      return Object.keys(value).length === 1
+        ? null
+        : 'has a basic tolerance with unknown fields';
+    default:
+      return 'has an unknown tolerance kind';
+  }
+}
+
+/** A prefix or suffix: printable, trimmed, one line, short. */
+function affixError(value: unknown, name: string): string | null {
+  if (value === undefined) return null;
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > MAX_DRAWING_DIMENSION_AFFIX_LENGTH ||
+    value.trim() !== value ||
+    [...value].some((char) => char < ' ' || char === '\u007f')
+  )
+    return `has a ${name} that is not one trimmed line of at most ${MAX_DRAWING_DIMENSION_AFFIX_LENGTH} characters`;
+  return null;
+}
+
+/**
  * Why `value` is not a valid annotation of a sheet whose views are
  * `viewIds`, or null. Shape only: the edges may be gone from the model.
  */
@@ -571,6 +665,12 @@ export function drawingAnnotationError(
     if (value.reference !== undefined)
       return `${where} is a note, which cannot be a reference dimension.`;
     if (
+      value.tolerance !== undefined ||
+      value.prefix !== undefined ||
+      value.suffix !== undefined
+    )
+      return `${where} is a note, which takes no tolerance, prefix or suffix.`;
+    if (
       typeof value.text !== 'string' ||
       value.text.trim().length === 0 ||
       value.text.length > MAX_DRAWING_NOTE_LENGTH
@@ -598,6 +698,23 @@ export function drawingAnnotationError(
     return `${where} marks a reference dimension with anything but true.`;
   if (!isFlag(value.diameter))
     return `${where} marks a Ø prefix with anything but true.`;
+  {
+    const error =
+      affixError(value.prefix, 'prefix') ?? affixError(value.suffix, 'suffix');
+    if (error) return fail(error);
+  }
+  if (value.tolerance !== undefined) {
+    if (value.reference !== undefined)
+      return `${where} is a reference dimension, which takes no tolerance.`;
+    if (
+      value.kind === 'chamfer' ||
+      value.counterbore !== undefined ||
+      value.countersink !== undefined
+    )
+      return `${where} is a callout, which takes no tolerance.`;
+    const error = drawingToleranceError(value.tolerance);
+    if (error) return fail(error);
+  }
   switch (value.kind) {
     case 'linear':
       if (
