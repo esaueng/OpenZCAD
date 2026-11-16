@@ -5,10 +5,10 @@ import {
   clearUnresolvedConflict,
   conflictFromDocuments,
   readUnresolvedConflict,
-  resolveProjectConflict,
   type ConflictResolutionHandlers,
   type ProjectConflict
 } from './conflictRecovery';
+import { resolveProjectConflict } from './conflictResolution';
 
 const owner = toUserId('user_owner');
 const base = createProjectDocument('Bracket', owner);

@@ -1989,7 +1989,6 @@ import {
   reaskConflict,
   hasUnresolvedConflict,
   conflictCopyNote,
-  resolveProjectConflict,
   type ConflictResolution,
   type ConflictResolutionHandlers,
   type ProjectConflict
@@ -7096,6 +7095,9 @@ export function App() {
     }
     setBusy(true);
     try {
+      // Loaded with the choice: only a conflict being resolved needs it.
+      const { resolveProjectConflict } =
+        await import('./lib/conflictResolution');
       await resolveProjectConflict(
         accountConflict,
         resolution,
@@ -7123,6 +7125,9 @@ export function App() {
     }
     setBusy(true);
     try {
+      // Loaded with the choice: only a conflict being resolved needs it.
+      const { resolveProjectConflict } =
+        await import('./lib/conflictResolution');
       await resolveProjectConflict(
         conflict,
         resolution,
