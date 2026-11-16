@@ -1171,6 +1171,7 @@ function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
  * BEFORE it (unsupported extension, a lone `.shapr`) stay synchronous.
  */
 const stepImportRun = () => import('./lib/stepImportRun');
+const featureDeletionRun = () => import('./lib/featureDeletionRun');
 const projectInsertRun = () => import('./lib/projectInsertRun');
 
 /**
@@ -29969,6 +29970,35 @@ export function App() {
    * part, which has no history to delete, or a face a subtract cut, whose
    * inferred feature (the cutting tool) the cut still needs.
    */
+  /** The delete gestures' collaborators, bound to the manager they began on. */
+  function deletionHost(manager: CommandManager, base: ProjectDocument) {
+    return {
+      manager,
+      base,
+      isCurrent: () => managerRef.current === manager,
+      runTransaction: validatedFeature.runTransaction,
+      executeTransaction,
+      setStatus: (message: string) => setStatus(message),
+      announce: (message: string) => announce(message),
+      healed: (message: string) => {
+        clearSelection();
+        announce(message, { label: 'Undo', run: handleUndo });
+      },
+      offerDetailCascade: (
+        name: string,
+        featureIds: readonly FeatureId[],
+        dependents: readonly { featureId: FeatureId; name: string }[],
+        message: string
+      ) => offerDetailCascade(manager, name, featureIds, dependents, message)
+    };
+  }
+
+  /**
+   * Heals one face by a replayable direct edit: a face of an imported STEP
+   * part, which has no history to delete, a face a subtract cut, whose
+   * inferred feature (the cutting tool) the cut still needs, or a face no
+   * step can be shown to own.
+   */
   function handleDeleteImportedFace(
     selection: TopologySelection,
     origin: 'imported' | 'cut' | 'orphan' = 'imported'
@@ -29978,46 +30008,11 @@ export function App() {
     if (!requireDisplayedGeometryComplete()) return;
     const manager = managerRef.current;
     const base = manager?.document;
-    if (!base) return;
-    void import('./lib/featureDeletion')
-      .then(({ importedFaceDeletion, cutFaceDeletion, orphanFaceDeletion }) => {
-        const current = manager.document;
-        if (
-          managerRef.current !== manager ||
-          current.projectId !== base.projectId ||
-          current.version !== base.version
-        ) {
-          setStatus(
-            'The model changed. Select the face again before deleting it.'
-          );
-          return;
-        }
-        const removal =
-          origin === 'cut'
-            ? cutFaceDeletion(current, selection)
-            : origin === 'orphan'
-              ? orphanFaceDeletion(current, selection)
-              : importedFaceDeletion(current, selection);
-        void validatedFeature.runTransaction([removal.command], {
-          label: removal.command.label,
-          targets: [removal.target],
-          validatingMessage:
-            origin === 'cut'
-              ? 'Checking the cut removal…'
-              : origin === 'orphan'
-                ? 'Checking the face removal…'
-                : 'Checking imported feature removal…',
-          successMessage: removal.successMessage,
-          onFailure: (message) => announce(message),
-          onSuccess: () => {
-            clearSelection();
-            announce(removal.successMessage, {
-              label: 'Undo',
-              run: handleUndo
-            });
-          }
-        });
-      })
+    if (!manager || !base) return;
+    void featureDeletionRun()
+      .then((run) =>
+        run.deleteFace(deletionHost(manager, base), selection, origin)
+      )
       .catch((error: unknown) =>
         setStatus(
           errorMessage(
@@ -30041,37 +30036,10 @@ export function App() {
     if (!requireDisplayedGeometryComplete()) return;
     const manager = managerRef.current;
     const base = manager?.document;
-    if (!base) return;
+    if (!manager || !base) return;
     const faces = selections.map((selection) => ({ ...selection }));
-    void import('./lib/featureDeletion')
-      .then(({ faceSetDeletion }) => {
-        const current = manager.document;
-        if (
-          managerRef.current !== manager ||
-          current.projectId !== base.projectId ||
-          current.version !== base.version
-        ) {
-          setStatus(
-            'The model changed. Select the faces again before deleting them.'
-          );
-          return;
-        }
-        const removal = faceSetDeletion(current, faces);
-        void validatedFeature.runTransaction([removal.command], {
-          label: removal.command.label,
-          targets: [removal.target],
-          validatingMessage: `Checking the removal of ${faces.length} faces…`,
-          successMessage: removal.successMessage,
-          onFailure: (message) => announce(message),
-          onSuccess: () => {
-            clearSelection();
-            announce(removal.successMessage, {
-              label: 'Undo',
-              run: handleUndo
-            });
-          }
-        });
-      })
+    void featureDeletionRun()
+      .then((run) => run.deleteFaces(deletionHost(manager, base), faces))
       .catch((error: unknown) =>
         setStatus(errorMessage(error, 'Could not delete these faces.'))
       );
@@ -30123,42 +30091,17 @@ export function App() {
     const manager = managerRef.current;
     const base = manager?.document;
     const feature = base && findFeature(base, featureId);
-    if (base && feature && isRemovableDetail(feature)) {
-      void import('./lib/featureDeletion')
-        .then(({ nativeFeatureDeletion, detailCascade }) => {
-          const current = manager.document;
-          if (
-            managerRef.current !== manager ||
-            current.projectId !== base.projectId ||
-            current.version !== base.version
-          ) {
-            setStatus(
-              'The model changed. Select the feature again before deleting it.'
-            );
-            return;
-          }
-          // A geometry-only echo may replace the document object while the
-          // module loads. Its project/revision still owns this deletion.
-          const removal = nativeFeatureDeletion(current, feature);
-          let cascade: readonly FeatureNode[] | null = null;
-          void validatedFeature.runTransaction([removal.command], {
-            label: `Delete ${name}`,
-            targets: [],
-            validateDerived: (derived) => {
-              try {
-                removal.validateDerived(derived);
-              } catch (error) {
-                cascade = detailCascade(error);
-                throw error;
-              }
-            },
-            validatingMessage: `Checking removal of ${name}…`,
-            successMessage: deleteFeatureToastMessage(name, dependentCount),
-            onFailure: (message) =>
-              offerDetailCascade(manager, name, [featureId], cascade, message),
-            onSuccess: finish
-          });
-        })
+    if (manager && base && feature && isRemovableDetail(feature)) {
+      void featureDeletionRun()
+        .then((run) =>
+          run.deleteDetail(
+            deletionHost(manager, base),
+            feature,
+            name,
+            dependentCount,
+            finish
+          )
+        )
         .catch((error: unknown) =>
           setStatus(errorMessage(error, 'Could not remove this feature.'))
         );
@@ -30217,36 +30160,24 @@ export function App() {
    * pause its branch. Any other refusal is announced as before.
    */
   function offerDetailCascade(
-    owner: CommandManager | null | undefined,
+    owner: CommandManager,
     name: string,
     featureIds: readonly FeatureId[],
-    cascade: readonly FeatureNode[] | null,
+    dependents: readonly { featureId: FeatureId; name: string }[],
     message: string
   ) {
-    const document = owner?.document;
-    const requested = new Set<FeatureId>(featureIds);
-    const dependents = (cascade ?? []).filter(
-      (dependent) => !requested.has(dependent.featureId)
-    );
-    if (
-      !owner ||
-      !document ||
-      managerRef.current !== owner ||
-      dependents.length === 0
-    ) {
+    if (managerRef.current !== owner || dependents.length === 0) {
       announce(message);
       return;
     }
+    const { projectId, version } = owner.document;
     setPendingDetailCascade({
-      projectId: document.projectId,
-      version: document.version,
+      projectId,
+      version,
       manager: owner,
       name,
       featureIds: [...featureIds],
-      dependents: dependents.map(({ featureId, name: dependentName }) => ({
-        featureId,
-        name: dependentName
-      }))
+      dependents: [...dependents]
     });
   }
 
@@ -30278,51 +30209,16 @@ export function App() {
         { repeatsStatusAt: lastStatusAtRef.current }
       );
     };
-    void import('./lib/featureDeletion')
-      .then(({ batchFeatureDeletion, detailCascade }) => {
-        const current = manager.document;
-        if (
-          managerRef.current !== manager ||
-          current.projectId !== base.projectId ||
-          current.version !== base.version
-        ) {
-          setStatus(
-            'The model changed. Select the features again before deleting them.'
-          );
-          return;
-        }
-        const removal = batchFeatureDeletion(current, featureIds);
-        const { validateDerived } = removal;
-        if (validateDerived) {
-          let cascade: readonly FeatureNode[] | null = null;
-          void validatedFeature.runTransaction(removal.commands, {
-            label: removal.label,
-            targets: [],
-            validateDerived: (derived) => {
-              try {
-                validateDerived(derived);
-              } catch (error) {
-                cascade = detailCascade(error);
-                throw error;
-              }
-            },
-            validatingMessage: `Checking removal of ${countLabel(featureIds.length, 'feature', 'features')}…`,
-            successMessage: message,
-            onFailure: (failure) =>
-              offerDetailCascade(
-                manager,
-                cascadeName ??
-                  countLabel(featureIds.length, 'feature', 'features'),
-                featureIds,
-                cascade,
-                failure
-              ),
-            onSuccess: finish
-          });
-          return;
-        }
-        if (executeTransaction(removal.label, removal.commands)) finish();
-      })
+    void featureDeletionRun()
+      .then((run) =>
+        run.deleteFeatures(
+          deletionHost(manager, base),
+          featureIds,
+          message,
+          cascadeName,
+          finish
+        )
+      )
       .catch((error: unknown) =>
         setStatus(errorMessage(error, 'Could not delete these features.'))
       );
@@ -31120,38 +31016,13 @@ export function App() {
             : feature
               ? null
               : 'orphan';
-    const deleteItem =
-      selection.kind === 'body'
-        ? null
-        : faceHeal
-          ? {
-              label: faceHeal === 'cut' ? 'Fill cut' : 'Delete face',
-              run: runCurrent((handlers) => {
-                if (
-                  handlers.validateSelectionEdit({ acceptCompleteCommit: true })
-                )
-                  handlers.handleDeleteImportedFace(
-                    menuSelection.selection,
-                    faceHeal
-                  );
-              })
-            }
-          : feature
-            ? {
-                label: `Delete ${feature.name}`,
-                run: runCurrent((handlers) => {
-                  if (
-                    handlers.validateSelectionEdit({
-                      acceptCompleteCommit: true
-                    })
-                  )
-                    handlers.handleDeleteFeature(
-                      feature.featureId,
-                      feature.name
-                    );
-                })
-              }
-            : null;
+    const deleteLabel = faceHeal
+      ? faceHeal === 'cut'
+        ? 'Fill cut'
+        : 'Delete face'
+      : feature && selection.kind !== 'body'
+        ? `Delete ${feature.name}`
+        : null;
     // M16: a sheet-metal body (or one a later feature carried on) offers
     // its flat pattern.
     const sheetSource = sheetMetalFeatureForBody(current, selection.bodyId);
@@ -31277,18 +31148,35 @@ export function App() {
               }
             ]
           : []),
-        ...(deleteItem
+        ...(deleteLabel
           ? [
               {
                 item: {
                   id: 'delete',
-                  label: deleteItem.label,
+                  label: deleteLabel,
                   icon: <Trash2 size={13} aria-hidden="true" />,
                   shortcut: 'Del',
                   danger: true,
                   section: !feature
                 },
-                run: deleteItem.run
+                run: runCurrent((handlers) => {
+                  if (
+                    !handlers.validateSelectionEdit({
+                      acceptCompleteCommit: true
+                    })
+                  )
+                    return;
+                  if (faceHeal)
+                    handlers.handleDeleteImportedFace(
+                      menuSelection.selection,
+                      faceHeal
+                    );
+                  else if (feature)
+                    handlers.handleDeleteFeature(
+                      feature.featureId,
+                      feature.name
+                    );
+                })
               }
             ]
           : [])

@@ -57,6 +57,39 @@ export function detailCascade(error: unknown): readonly FeatureNode[] | null {
     : null;
 }
 
+/** A later step a refused detail delete offers to delete with it. */
+export interface CascadeDependent {
+  featureId: FeatureId;
+  name: string;
+}
+
+/**
+ * Wraps a delete's `validateDerived` so a refusal it throws is remembered as
+ * the steps the delete could take with it (none when any refused step is not
+ * a detail or a direct edit). `requested` steps are never offered again.
+ */
+function withCascade(
+  requested: readonly FeatureId[],
+  validate: (derived: ProjectDocument['derived']) => void
+) {
+  let cascade: CascadeDependent[] = [];
+  return {
+    validateDerived(derived: ProjectDocument['derived']) {
+      cascade = [];
+      try {
+        validate(derived);
+      } catch (error) {
+        const asked = new Set(requested);
+        cascade = (detailCascade(error) ?? [])
+          .filter((dependent) => !asked.has(dependent.featureId))
+          .map(({ featureId, name }) => ({ featureId, name }));
+        throw error;
+      }
+    },
+    cascade: (): readonly CascadeDependent[] => cascade
+  };
+}
+
 /** STEP has no feature history to delete: append a validated, undoable heal. */
 export function importedFaceDeletion(
   document: ProjectDocument,
@@ -267,45 +300,48 @@ export function nativeFeatureDeletion(
     .downstream(feature.featureId)
     .filter((dependent) => !isFeatureSuppressed(dependent));
   const survivors = listFeaturesInOrder(candidate);
+  const tracked = withCascade([feature.featureId], (derived) => {
+    const refused = dependents.filter((dependent) => {
+      const live = survivors.find(
+        (entry) => entry.featureId === dependent.featureId
+      )!;
+      return (
+        refusingWarning(
+          live.name,
+          derived.warnings,
+          derived.featureWarnings,
+          live.featureId
+        ) ||
+        featureResultBodyIds(live).some(
+          (id) => !ownEntry(derived.bodyRepresentations, id)
+        )
+      );
+    });
+    if (refused.length) {
+      const names = refused
+        .slice(0, 3)
+        .map((entry) => `"${entry.name}"`)
+        .join(', ');
+      throw new DetailDeletionRefusal(
+        `Cannot remove "${feature.name}": ${names}${refused.length > 3 ? ` and ${refused.length - 3} more features` : ''} still need its geometry. Edit or remove those features first.`,
+        feature.featureId,
+        feature.name,
+        refused
+      );
+    }
+    if (!ownEntry(derived.bodyRepresentations, data.targetBodyId)) {
+      throw new FeatureBuildError(
+        `Cannot remove "${feature.name}": its original body could not rebuild.`,
+        feature.featureId,
+        feature.name
+      );
+    }
+  });
   return {
     command: commandFactories.deleteFeature(input, `Delete ${feature.name}`),
-    validateDerived(derived: ProjectDocument['derived']) {
-      const refused = dependents.filter((dependent) => {
-        const live = survivors.find(
-          (entry) => entry.featureId === dependent.featureId
-        )!;
-        return (
-          refusingWarning(
-            live.name,
-            derived.warnings,
-            derived.featureWarnings,
-            live.featureId
-          ) ||
-          featureResultBodyIds(live).some(
-            (id) => !ownEntry(derived.bodyRepresentations, id)
-          )
-        );
-      });
-      if (refused.length) {
-        const names = refused
-          .slice(0, 3)
-          .map((entry) => `"${entry.name}"`)
-          .join(', ');
-        throw new DetailDeletionRefusal(
-          `Cannot remove "${feature.name}": ${names}${refused.length > 3 ? ` and ${refused.length - 3} more features` : ''} still need its geometry. Edit or remove those features first.`,
-          feature.featureId,
-          feature.name,
-          refused
-        );
-      }
-      if (!ownEntry(derived.bodyRepresentations, data.targetBodyId)) {
-        throw new FeatureBuildError(
-          `Cannot remove "${feature.name}": its original body could not rebuild.`,
-          feature.featureId,
-          feature.name
-        );
-      }
-    }
+    validateDerived: tracked.validateDerived,
+    /** After a refusal: the steps to offer deleting with this detail. */
+    cascade: tracked.cascade
   };
 }
 
@@ -381,8 +417,8 @@ export function batchFeatureDeletion(
     const input = detailInput(detail);
     if (detail.bodyId && input) detailInputs.set(detail.bodyId, input);
   }
-  const validateDerived = details.length
-    ? (derived: ProjectDocument['derived']) => {
+  const tracked = details.length
+    ? withCascade(featureIds, (derived) => {
         for (const detail of details) {
           const refused = history
             .downstream(detail.featureId)
@@ -437,14 +473,16 @@ export function batchFeatureDeletion(
             );
           }
         }
-      }
+      })
     : undefined;
   return {
     label,
     commands,
     names: selected.map((feature) => feature.name),
     dependents,
-    validateDerived
+    validateDerived: tracked?.validateDerived,
+    /** After a refusal: the steps to offer deleting with these. */
+    cascade: (): readonly CascadeDependent[] => tracked?.cascade() ?? []
   };
 }
 
