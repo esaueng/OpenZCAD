@@ -414,6 +414,31 @@ notes to D01 sheets:
   document, its edit history or a drawing command that declares v67 or
   older. Drawing-level units, precision and decimal separator remain the
   next D02 slice.
+## Drawing DXF export (D04)
+
+- **What.** Export DXF writes the composed sheet — the same `SheetPage` the
+  preview, PDF and SVG draw — as a DXF R12 drawing, one-to-one in paper
+  millimetres (`$INSUNITS` 4), so it lands as printed: views at the sheet's
+  scale, sections and their hatching, dimensions, notes and the title
+  block. Exports are refused under the same conditions as PDF and SVG.
+- **Layers.** One layer per stroke kind, since R12 has no line weights:
+  `VISIBLE` (7), `HIDDEN` (8, line type `HIDDEN` 3/1.5 mm), `BORDER`,
+  `THIN`, `DIMENSION` (3), `HATCH`, `CENTER` (4, `CENTER` 12/1.5/0.5/1.5
+  mm, ISO 128 type 04) and `CUTTING` (1), plus `TEXT`; only the layers the
+  page uses are declared.
+- **Entities.** A two-point stroke is a LINE, a longer one a POLYLINE
+  (closed when the stroke is), a filled arrowhead a SOLID, and each text a
+  TEXT at its cap height, centred or right-aligned and turned as drawn.
+  Characters outside ASCII use the writer's `\U+XXXX` escapes (Ø is
+  `\U+00D8`). Curves are the page's polylines — exact edges sampled to the
+  display tolerance — as the PDF draws them; an exact-arc view export is not
+  this slice.
+- **Writer.** `@openzcad/io-dxf` gains SOLID and the `HIDDEN`/`CENTER`
+  line types; a file naming only `DASHED` (flat patterns) writes the same
+  bytes as before. The export is deterministic.
+- **Sketch DXF.** The export dialog's DXF option writes one saved sketch
+  through the existing exact sketch exporter (`exportSketchDxf`): the sketch
+  menu entry the D04 row left open.
 
 ## Finishing-body update repair
 

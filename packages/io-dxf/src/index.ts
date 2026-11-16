@@ -45,6 +45,12 @@ export interface DxfPolyline {
   readonly kind: 'polyline';
   readonly points: ReadonlyArray<readonly [number, number]>;
   readonly closed: boolean;
+  /**
+   * Run a dashed line type's pattern on along the whole polyline (flag
+   * 128) instead of restarting it at every vertex, where a finely sampled
+   * curve would otherwise draw solid. Absent writes the flags as before.
+   */
+  readonly continuousLinetype?: true;
 }
 
 /**
@@ -96,8 +102,38 @@ export interface DxfText {
   readonly align?: 'left' | 'center' | 'right';
 }
 
+/**
+ * A filled triangle or quadrilateral (R12 SOLID): a dimension's arrowhead.
+ * Corners go round the outline in order; the writer emits them in the
+ * SOLID's own 1-2-4-3 order.
+ */
+export interface DxfSolid {
+  readonly kind: 'solid';
+  /** Layer name; absent is `0`. */
+  readonly layer?: string;
+  readonly points:
+    | readonly [
+        readonly [number, number],
+        readonly [number, number],
+        readonly [number, number]
+      ]
+    | readonly [
+        readonly [number, number],
+        readonly [number, number],
+        readonly [number, number],
+        readonly [number, number]
+      ];
+}
+
 export type DxfEntity =
-  DxfText | DxfLine | DxfCircle | DxfArc | DxfPolyline | DxfEllipse | DxfSpline;
+  | DxfText
+  | DxfLine
+  | DxfCircle
+  | DxfArc
+  | DxfPolyline
+  | DxfEllipse
+  | DxfSpline
+  | DxfSolid;
 
 /**
  * DXF forbids exponent notation, so plain `toString` (which yields `1e-7`
@@ -150,6 +186,22 @@ function layerName(layer: string | undefined): string {
  */
 /** Readers (AutoCAD among them) reject a file with a longer string value. */
 const MAX_DXF_STRING_LENGTH = 256;
+/** The most characters one TEXT may hold once encoded (see `dxfTextLength`). */
+export const MAX_DXF_TEXT_LENGTH = MAX_DXF_STRING_LENGTH;
+
+/**
+ * How long `text` is once written as a TEXT value: printable ASCII is one
+ * character, anything else its 7-character `\U+XXXX` escape. A caller with
+ * longer text splits it into several entities.
+ */
+export function dxfTextLength(text: string): number {
+  let length = 0;
+  for (const char of text) {
+    const code = char.codePointAt(0)!;
+    length += code >= 0x20 && code < 0x7f ? 1 : 7;
+  }
+  return length;
+}
 
 function dxfTextValue(text: string): string {
   if (/[\r\n]/.test(text)) {
@@ -243,6 +295,22 @@ function arcEntity(entity: DxfArc): string[] {
   ];
 }
 
+function solidEntity(entity: DxfSolid): string[] {
+  const [a, b, c, d = c] = entity.points;
+  // SOLID fills 1-2-3 and 2-3-4 (its third and fourth corners swap
+  // against the outline's order); a triangle repeats its last corner.
+  const corners = [a, b, d, c];
+  const out = [...group(0, 'SOLID'), ...group(8, layerName(entity.layer))];
+  corners.forEach(([x, y], index) => {
+    out.push(
+      ...group(10 + index, x),
+      ...group(20 + index, y),
+      ...group(30 + index, 0)
+    );
+  });
+  return out;
+}
+
 function polylineEntity(entity: DxfPolyline): string[] {
   const layer = layerName(entity.layer);
   const out = [
@@ -250,7 +318,10 @@ function polylineEntity(entity: DxfPolyline): string[] {
     ...group(8, layer),
     // 66=1: vertices follow as separate entities (required in R12).
     ...group(66, '1'),
-    ...group(70, entity.closed ? '1' : '0')
+    ...group(
+      70,
+      String((entity.closed ? 1 : 0) | (entity.continuousLinetype ? 128 : 0))
+    )
   ];
   for (const [x, y] of entity.points) {
     out.push(
@@ -274,8 +345,22 @@ function polylineEntity(entity: DxfPolyline): string[] {
 export interface DxfLayer {
   readonly name: string;
   readonly color?: number;
-  readonly lineType?: 'CONTINUOUS' | 'DASHED';
+  /**
+   * `DASHED` (0.5/0.25 mm, the flat-pattern bend lines), `HIDDEN` (ISO 128
+   * type 02, 3/1.5 mm) or `CENTER` (ISO 128 type 04 long-dash-dot,
+   * 12/1.5/0.5/1.5 mm); absent is `CONTINUOUS`.
+   */
+  readonly lineType?: 'CONTINUOUS' | 'DASHED' | 'HIDDEN' | 'CENTER';
 }
+
+/** The patterns of the non-continuous line types, in drawing units. */
+const LINE_TYPE_PATTERNS: Readonly<
+  Record<'DASHED' | 'HIDDEN' | 'CENTER', { text: string; dashes: number[] }>
+> = {
+  DASHED: { text: 'Dashed __ __ __', dashes: [0.5, -0.25] },
+  HIDDEN: { text: 'Hidden __ __ __', dashes: [3, -1.5] },
+  CENTER: { text: 'Center ____ _ ____', dashes: [12, -1.5, 0.5, -1.5] }
+};
 
 function layerTables(layers: readonly DxfLayer[]): string[] {
   // Layer names are case-insensitive: readers merge `BEND_UP` and `bend_up`
@@ -297,11 +382,15 @@ function layerTables(layers: readonly DxfLayer[]): string[] {
       );
     }
   }
-  const usesDashed = layers.some((layer) => layer.lineType === 'DASHED');
+  // Each pattern used, once, in a fixed order, so a file that names only
+  // DASHED writes the bytes it always has.
+  const patterns = (['DASHED', 'HIDDEN', 'CENTER'] as const).filter((type) =>
+    layers.some((layer) => layer.lineType === type)
+  );
   const lineTypes: string[] = [
     ...group(0, 'TABLE'),
     ...group(2, 'LTYPE'),
-    ...group(70, usesDashed ? '2' : '1'),
+    ...group(70, String(1 + patterns.length)),
     ...group(0, 'LTYPE'),
     ...group(2, 'CONTINUOUS'),
     ...group(70, '0'),
@@ -310,17 +399,20 @@ function layerTables(layers: readonly DxfLayer[]): string[] {
     ...group(73, '0'),
     ...group(40, 0)
   ];
-  if (usesDashed) {
+  for (const type of patterns) {
+    const { text, dashes } = LINE_TYPE_PATTERNS[type];
     lineTypes.push(
       ...group(0, 'LTYPE'),
-      ...group(2, 'DASHED'),
+      ...group(2, type),
       ...group(70, '0'),
-      ...group(3, 'Dashed __ __ __'),
+      ...group(3, text),
       ...group(72, '65'),
-      ...group(73, '2'),
-      ...group(40, 0.75),
-      ...group(49, 0.5),
-      ...group(49, -0.25)
+      ...group(73, String(dashes.length)),
+      ...group(
+        40,
+        dashes.reduce((total, dash) => total + Math.abs(dash), 0)
+      ),
+      ...dashes.flatMap((dash) => group(49, dash))
     );
   }
   lineTypes.push(...group(0, 'ENDTAB'));
@@ -407,6 +499,9 @@ export function writeDxf(
         break;
       case 'polyline':
         lines.push(...polylineEntity(entity));
+        break;
+      case 'solid':
+        lines.push(...solidEntity(entity));
         break;
       case 'ellipse':
       case 'spline':
