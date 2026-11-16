@@ -2983,6 +2983,13 @@
   white-space: nowrap;
 }
 
+/* No room above inside the shelf's clip: under the card instead. Its gap
+   matches MERGE_HINT_GAP_PX in StartScreen.tsx. */
+.start-tile-merge-hint.is-below {
+  top: calc(100% + 6px);
+  bottom: auto;
+}
+
 .start-tile-merge-hint.is-armed {
   color: var(--color-selected-text);
   background: var(--color-accent-dim);

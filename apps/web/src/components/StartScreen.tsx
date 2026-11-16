@@ -597,6 +597,49 @@ function folderIdOf(tileId: string): string | null {
     : null;
 }
 
+/** Space between the dragged card and the hint it carries, in CSS pixels. */
+const MERGE_HINT_GAP_PX = 6;
+
+/**
+ * The make-a-folder hint, carried by the dragged card: centred on the card
+ * underneath, the dragged card covered it. It rides above the card, clear of
+ * the pointer, and drops below it while the shelf's top edge would cut it
+ * off (a first-row card held near its row).
+ */
+function MergeHint({ armed }: { armed: boolean }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const hint = ref.current;
+    const tile = hint?.parentElement;
+    if (!hint || !tile) return;
+    let frame = 0;
+    // The card follows the pointer outside React, so this checks each frame
+    // for as long as the hint is up.
+    const place = () => {
+      const shelf = hint.closest('.start-body');
+      const edge = shelf ? shelf.getBoundingClientRect().top : 0;
+      const room = tile.getBoundingClientRect().top - edge;
+      hint.classList.toggle(
+        'is-below',
+        room < hint.offsetHeight + MERGE_HINT_GAP_PX
+      );
+      frame = window.requestAnimationFrame(place);
+    };
+    place();
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+  return (
+    <span
+      ref={ref}
+      className={`start-tile-merge-hint${armed ? ' is-armed' : ''}`}
+      aria-hidden="true"
+    >
+      <FolderPlus size={14} aria-hidden="true" />
+      {armed ? 'Release to make a folder' : 'Hold to make a folder'}
+    </span>
+  );
+}
+
 function tileMenuOpener(tile: HTMLElement | undefined) {
   return (
     tile?.querySelector<HTMLButtonElement>('.start-tile-menu-button') ?? null
@@ -2512,8 +2555,7 @@ export function StartScreen({
       reorder.dropTarget?.target === `merge:${project.projectId}`
         ? reorder.dropTarget
         : null;
-    // The hint rides on the dragged card: on the card under it, the dragged
-    // card covered it (15 Nov 2026 recording).
+    // The make-a-folder hint rides on the dragged card (see MergeHint).
     const carriedMerge =
       dragging && reorder.dropTarget?.target.startsWith('merge:')
         ? reorder.dropTarget
@@ -2636,17 +2678,7 @@ export function StartScreen({
           {isSelected && <Check size={12} aria-hidden="true" />}
         </button>
 
-        {carriedMerge && (
-          <span
-            className={`start-tile-merge-hint${carriedMerge.armed ? ' is-armed' : ''}`}
-            aria-hidden="true"
-          >
-            <FolderPlus size={14} aria-hidden="true" />
-            {carriedMerge.armed
-              ? 'Release to make a folder'
-              : 'Hold to make a folder'}
-          </span>
-        )}
+        {carriedMerge && <MergeHint armed={carriedMerge.armed} />}
 
         <div className="start-tile-actions">
           {shelf === 'active' && (
