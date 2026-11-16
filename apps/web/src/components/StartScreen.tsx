@@ -1,4 +1,5 @@
 import { ProjectImportButton } from './ProjectImportButton';
+import { TileName } from './TileName';
 import { labelWithKey, useKeymap } from '../lib/keymap';
 import {
   Fragment,
@@ -1938,11 +1939,7 @@ export function StartScreen({
 
   function renderFolderName(folder: LibraryFolder) {
     if (renamingFolderId !== folder.id) {
-      return (
-        <strong className="start-tile-name" title={folder.name}>
-          {folder.name}
-        </strong>
-      );
+      return <TileName name={folder.name} />;
     }
     return (
       <input
@@ -2342,9 +2339,7 @@ export function StartScreen({
           {renamingProject?.projectId === project.projectId ? (
             <span className="start-folder-rename-slot" />
           ) : (
-            <strong className="start-tile-name" title={project.name}>
-              {project.name}
-            </strong>
+            <TileName name={project.name} />
           )}
           <small className="start-tile-meta">
             {/* Quiet marks for the project's standing traits, ahead of the date

@@ -1712,7 +1712,9 @@
 }
 
 /* Two lines, not one: parts named in series ("PRM-0401-2026-1…") differ
-   only at the end, which a single clipped line hid. */
+   only at the end, which a single clipped line hid. TileName shortens a
+   longer name in the middle to fit; the clamp is the fallback before it
+   measures. Folders keep it too: a block name ran to five lines. */
 .start-tile-name {
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -1939,6 +1941,20 @@
 
 .start-tile-grid.is-list .start-tile-open:focus-visible .start-tile-name {
   -webkit-line-clamp: unset;
+}
+
+/* A middle-shortened name (TileName) carries its full form beside the short
+   one; the row's keyboard focus swaps them, as it lifts the clamp above. */
+.start-tile-name-full {
+  display: none;
+}
+
+.start-tile-grid.is-list .start-tile-open:focus-visible .start-tile-name-short {
+  display: none;
+}
+
+.start-tile-grid.is-list .start-tile-open:focus-visible .start-tile-name-full {
+  display: inline;
 }
 
 .start-tile-grid.is-list .start-tile-flags {
@@ -2904,10 +2920,6 @@
     var(--color-accent) 45%,
     var(--color-surface-2)
   );
-}
-
-.start-tile-folder .start-tile-name {
-  display: block;
 }
 
 .start-folder-thumb {
