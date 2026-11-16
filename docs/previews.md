@@ -1,7 +1,7 @@
 # Worker Previews
 
-The official Worker (`openzcad`) serves production at `zcad.app` and Worker
-Previews at `<preview-name>.dev.zcad.app`. A Preview runs a branch's code
+The beta Worker (`openzcad-beta`) serves `zcad.app` and `beta.zcad.app`, and
+Worker Previews at `<preview-name>.dev.zcad.app`. A Preview runs a branch's code
 against staging resources, never production data. Cloudflare Access protects
 Preview hostnames, so opening one asks for an Access sign-in first.
 

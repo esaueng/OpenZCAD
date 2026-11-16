@@ -220,7 +220,7 @@ class SnapshotTests(unittest.TestCase):
         validate_restore_target(SOURCE, target)
         for field, value in [('database', SOURCE['database']),
                              ('database', '7263c6f1-8781-40d1-a0fa-ea03ce874ef2'),
-                             ('bucket', 'openzcad-beta-artifacts'), ('worker', 'openzcad'),
+                             ('bucket', 'openzcad-beta-artifacts'), ('worker', 'openzcad-beta'), ('worker', 'openzcad-stable'),
                              ('origin', 'https://zcad.app'), ('origin', 'http://'+worker+'.example.workers.dev')]:
             with self.subTest(field=field), self.assertRaises(SnapshotError):
                 validate_restore_target(SOURCE, {**target, field: value})

@@ -3,7 +3,8 @@
   // This file contains non-secret resource identifiers used by the official
   // OpenZCAD deployment. They do not grant access to those resources.
   // Self-hosters must use the separate configuration in docs/SELF_HOSTING.md.
-  "name": "openzcad",
+  // The beta channel (docs/release-channels.md); wrangler.stable.jsonc is stable.
+  "name": "openzcad-beta",
   "main": "./apps/web/worker/index.ts",
   "compatibility_date": "2026-04-12",
   "compatibility_flags": ["nodejs_compat"],
@@ -13,13 +14,15 @@
   "build": { "command": "pnpm -w run check:release-build" },
   // Domains. Every deploy replaces the dashboard's routes and workers.dev
   // toggles with these, so change them here, not in the dashboard.
-  // zcad.app serves production. dev.zcad.app serves Previews only, at
-  // <preview-name>.dev.zcad.app (Cloudflare adds the *.dev.zcad.app record
-  // and certificate). Both workers.dev URLs stay off: without
-  // `workers_dev: false` a deploy would turn production's back on.
+  // beta.zcad.app is this channel's own address. zcad.app stays here until
+  // the cutover moves it to the stable Worker. dev.zcad.app serves Previews
+  // only, at <preview-name>.dev.zcad.app (Cloudflare adds the *.dev.zcad.app
+  // record and certificate). Both workers.dev URLs stay off: without
+  // `workers_dev: false` a deploy would turn this Worker's back on.
   "workers_dev": false,
   "routes": [
     { "pattern": "zcad.app", "custom_domain": true },
+    { "pattern": "beta.zcad.app", "custom_domain": true },
     {
       "pattern": "dev.zcad.app",
       "custom_domain": true,
@@ -69,8 +72,8 @@
     "ENVIRONMENT": "beta",
     "AUTH_MODE": "email-code",
     "PRODUCTION_GUARD": "enabled",
-    "AUTH_EMAIL_FROM": "noreply@zcad.esau.app",
-    "PROJECT_INVITATION_EMAIL_FROM": "noreply@zcad.esau.app",
+    "AUTH_EMAIL_FROM": "noreply@beta.zcad.app",
+    "PROJECT_INVITATION_EMAIL_FROM": "noreply@beta.zcad.app",
     "PUBLIC_APP_ORIGIN": "https://zcad.app",
     "AUTH_SESSION_DAYS": "30",
     "DESKTOP_AUTH_ENABLED": "true",
@@ -157,7 +160,7 @@
   "send_email": [
     {
       "name": "EMAIL",
-      "allowed_sender_addresses": ["noreply@zcad.esau.app"]
+      "allowed_sender_addresses": ["noreply@beta.zcad.app"]
     }
   ],
   "durable_objects": {
@@ -193,8 +196,8 @@
       "ENVIRONMENT": "beta",
       "AUTH_MODE": "email-code",
       "PRODUCTION_GUARD": "enabled",
-      "AUTH_EMAIL_FROM": "noreply@zcad.esau.app",
-      "PROJECT_INVITATION_EMAIL_FROM": "noreply@zcad.esau.app",
+      "AUTH_EMAIL_FROM": "noreply@beta.zcad.app",
+      "PROJECT_INVITATION_EMAIL_FROM": "noreply@beta.zcad.app",
       // PUBLIC_APP_ORIGIN is left unset: each Preview has its own hostname,
       // and invitation links must not send people to production. Invitation
       // email therefore answers 503 in Previews.
@@ -244,7 +247,7 @@
     "send_email": [
       {
         "name": "EMAIL",
-        "allowed_sender_addresses": ["noreply@zcad.esau.app"]
+        "allowed_sender_addresses": ["noreply@beta.zcad.app"]
       }
     ],
     "durable_objects": {

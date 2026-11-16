@@ -22,7 +22,7 @@ export const REQUIRED_SECRETS = [
 export const RELEASE_BUILD_CHECK = 'pnpm -w run check:release-build';
 export const OFFICIAL = Object.freeze({
   repository: 'esaueng/OpenZCAD',
-  workerName: 'openzcad',
+  workerName: 'openzcad-beta',
   databaseBinding: 'DB',
   databaseName: 'openzcad-beta',
   databaseId: '7263c6f1-8781-40d1-a0fa-ea03ce874ef2',
@@ -33,7 +33,7 @@ export const OFFICIAL = Object.freeze({
   assetBinding: 'ASSETS',
   turnstileSiteKey: '0x4AAAAAAD_j6Y7NvXKtcxNX',
   publicOrigin: 'https://zcad.app',
-  sender: 'noreply@zcad.esau.app'
+  sender: 'noreply@beta.zcad.app'
 });
 
 /**
@@ -43,11 +43,15 @@ export const OFFICIAL = Object.freeze({
  * OFFICIAL. Its public origin is stable.zcad.app until the cutover moves
  * zcad.app to it (docs/release-channels.md).
  */
+/** The sender both channels used before each got its own domain. */
+const LEGACY_SENDER = 'noreply@zcad.esau.app';
+
 export const OFFICIAL_STABLE = Object.freeze({
   workerName: 'openzcad-stable',
   databaseName: 'openzcad-stable',
   databaseId: '3b5fb65e-0af0-46a8-a50c-b7b5bd69c56b',
   bucketName: 'openzcad-stable-artifacts',
+  sender: 'noreply@zcad.app',
   publicOrigins: Object.freeze(['https://stable.zcad.app', 'https://zcad.app']),
   branch: 'stable'
 });
@@ -518,7 +522,9 @@ export function validateDeploymentConfig(
       OFFICIAL_STABLE.bucketName,
       OFFICIAL.publicOrigin,
       OFFICIAL.turnstileSiteKey,
-      OFFICIAL.sender
+      OFFICIAL.sender,
+      OFFICIAL_STABLE.sender,
+      LEGACY_SENDER
     ];
     const values = [
       config.name,
@@ -577,11 +583,18 @@ export function validateDeploymentConfig(
               'public origin'
             ]
           ]),
-      [config.vars?.AUTH_EMAIL_FROM, OFFICIAL.sender, 'authentication sender'],
+      // Each channel mails from its own domain: noreply@beta.zcad.app for
+      // beta, noreply@zcad.app for stable.
+      [config.vars?.AUTH_EMAIL_FROM, resources.sender, 'authentication sender'],
       [
         config.vars?.PROJECT_INVITATION_EMAIL_FROM,
-        OFFICIAL.sender,
+        resources.sender,
         'invitation sender'
+      ],
+      [
+        JSON.stringify(email?.allowed_sender_addresses),
+        JSON.stringify([resources.sender]),
+        'allowed email sender'
       ]
     ];
     for (const [actual, expected, label] of checks) {
@@ -698,8 +711,12 @@ export function validateDeploymentConfig(
       [bucket?.bucket_name, OFFICIAL.bucketName],
       [config.vars?.TURNSTILE_SITE_KEY, OFFICIAL.turnstileSiteKey],
       [config.vars?.PUBLIC_APP_ORIGIN, OFFICIAL.publicOrigin],
-      [config.vars?.AUTH_EMAIL_FROM, OFFICIAL.sender],
-      [config.vars?.PROJECT_INVITATION_EMAIL_FROM, OFFICIAL.sender]
+      ...[OFFICIAL.sender, OFFICIAL_STABLE.sender, LEGACY_SENDER].flatMap(
+        (sender) => [
+          [config.vars?.AUTH_EMAIL_FROM, sender],
+          [config.vars?.PROJECT_INVITATION_EMAIL_FROM, sender]
+        ]
+      )
     ];
     for (const [actual, value] of checks) {
       if (actual === value) {
