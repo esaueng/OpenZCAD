@@ -833,6 +833,13 @@ function unboundAssistantStatus(
   email?: string
 ): EffectiveAssistantSettings {
   if (!settings.assistant.enabled) {
+    // The built-in assistant's model is the deployment's, whatever the
+    // personal-token model in settings says. A signed-out caller reaches this
+    // through the defaults (assistant off), and would otherwise be shown that
+    // personal default instead of the model the deployment actually serves.
+    if (settings.assistant.credentialSource === 'deployment') {
+      return { ...deploymentEffective(env), configured: false };
+    }
     return {
       configured: false,
       source: settings.assistant.credentialSource,
