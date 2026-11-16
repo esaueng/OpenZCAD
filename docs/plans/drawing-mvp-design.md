@@ -628,6 +628,29 @@ principal view. Detail views remain open.
   a dimension survives an edit that moves them; exact cuts the pinned kernel
   refuses (a Remus robustness ask).
 
+## Detail views (D03, schema v78)
+
+- **Shape.** `DrawingView.detail`: `sourceViewId`, a label from the shared
+  section/detail sequence, the circle's `center` in the source's model
+  (u, v) and `radius` in model units, and the detail's own `scale`. The view
+  keeps the source's orientation and bodies (the validator refuses any
+  other; a body change on the source carries to its details, and a detail's
+  own bodies cannot be edited) and its own hidden-line setting. A detail is
+  not the source of a section, a projected view or another detail, and goes
+  with its source when that is deleted.
+- **Page.** The detail's transform centres the circle's centre on the view
+  at its own scale; its footprint is the circle's square. Every stroke it
+  draws, every line it offers to pick and every leader target is cut to the
+  circle on the paper. The source shows the circle as a thin line with the
+  bold letter outside it at 45°; the detail shows its own boundary circle
+  and the caption `DETAIL A (4:1)` beneath it. Dimensions on a detail
+  measure the model (true values, whatever the detail's scale).
+- **Tool.** Detail view (K): press at the centre of the region on a view,
+  drag to its rim (at least 2 mm), then the detail follows the pointer at
+  the smallest preset at least twice the sheet's scale until a click places
+  it. The panel edits the detail's scale and radius.
+- **Schema.** v78, built on v77, gated below it.
+
 ### Drawing entry and visibility (2026-11-01)
 
 Entering Draw without a retained sheet choice prefers the unique saved sheet

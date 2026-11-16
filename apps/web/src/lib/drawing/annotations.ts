@@ -51,6 +51,9 @@ import {
   topologyResolutionMessage
 } from '../topologyResolution';
 import {
+  viewPaperPerModelUnit,
+  clipPolylineToCircle,
+  viewClipCircle,
   sheetSafeText,
   textWidthMm,
   viewPageTransform,
@@ -3148,13 +3151,16 @@ export function drawnLines(
     const lines: XY[][] = [];
     // Physical edges only: a silhouette is no proof an edge is drawn.
     const runs = projection.edgeRuns ?? projection;
+    // A detail draws, and so offers, only what lies inside its circle.
+    const clip = viewClipCircle(view, units);
     for (const run of view.hiddenLines
       ? [...runs.visible, ...runs.hidden]
       : runs.visible) {
       const line: XY[] = [];
       for (let i = 0; i + 1 < run.length; i += 2)
         line.push(toPage(run[i]!, run[i + 1]!));
-      lines.push(line);
+      if (clip) lines.push(...clipPolylineToCircle(line, clip));
+      else lines.push(line);
     }
     out.set(view.viewId, lines);
   }
@@ -3215,7 +3221,6 @@ export function markHiddenLeaders(
   );
   if (leaders.length === 0) return out;
   const drawn = new Map(views.map((entry) => [entry.view.viewId, entry]));
-  const k = drawingPaperPerModelUnit(sheet.scale, units);
   for (const annotation of leaders) {
     const resolution = out.get(annotation.annotationId);
     const entry = annotation.viewId ? drawn.get(annotation.viewId) : undefined;
@@ -3226,11 +3231,23 @@ export function markHiddenLeaders(
       !entry?.projection.bounds
     )
       continue;
+    // A detail (v78) draws at its own scale and only inside its circle: a
+    // leader may point only at what it draws there.
+    const k = viewPaperPerModelUnit(entry.view, sheet, units);
+    const clip = viewClipCircle(entry.view, units);
+    const toPage = viewPageTransform(
+      entry.view,
+      entry.projection.bounds,
+      sheet,
+      units
+    );
     const pieces = ownedLeaderPieces(
       resolution.resolved,
       entry,
       bodies,
       drawnCoincidence(bodies, entry.view.bodyIds, k)
+    ).flatMap((piece) =>
+      clip ? clipPieceToCircle(piece, toPage, clip) : [piece]
     );
     out.set(
       annotation.annotationId,
@@ -3241,6 +3258,54 @@ export function markHiddenLeaders(
             resolved: { ...resolution.resolved, leaderPieces: pieces }
           }
     );
+  }
+  return out;
+}
+
+/**
+ * The parts of a flat `[u, v, …]` piece that lie inside a page circle, each
+ * a `[u0, v0, u1, v1]` segment: a detail (v78) draws only inside its
+ * circle, so a leader may end only there. The page transform is affine, so
+ * a segment's parameter is the same on the page as in (u, v).
+ */
+function clipPieceToCircle(
+  piece: readonly number[],
+  toPage: (u: number, v: number) => XY,
+  clip: { center: XY; radius: number }
+): number[][] {
+  const out: number[][] = [];
+  for (let i = 0; i + 3 < piece.length; i += 2) {
+    const u0 = piece[i]!;
+    const v0 = piece[i + 1]!;
+    const u1 = piece[i + 2]!;
+    const v1 = piece[i + 3]!;
+    const a = toPage(u0, v0);
+    const b = toPage(u1, v1);
+    const d: XY = [b[0] - a[0], b[1] - a[1]];
+    const f: XY = [a[0] - clip.center[0], a[1] - clip.center[1]];
+    const qa = d[0] * d[0] + d[1] * d[1];
+    const qb = 2 * (f[0] * d[0] + f[1] * d[1]);
+    const qc = f[0] * f[0] + f[1] * f[1] - clip.radius * clip.radius;
+    let t0: number;
+    let t1: number;
+    if (qa <= 1e-18) {
+      if (qc > 0) continue;
+      t0 = 0;
+      t1 = 1;
+    } else {
+      const disc = qb * qb - 4 * qa * qc;
+      if (disc < 0) continue;
+      const root = Math.sqrt(disc);
+      t0 = Math.max(0, (-qb - root) / (2 * qa));
+      t1 = Math.min(1, (-qb + root) / (2 * qa));
+      if (t1 < t0) continue;
+    }
+    out.push([
+      u0 + (u1 - u0) * t0,
+      v0 + (v1 - v0) * t0,
+      u0 + (u1 - u0) * t1,
+      v0 + (v1 - v0) * t1
+    ]);
   }
   return out;
 }
@@ -3422,17 +3487,19 @@ export function composeSheetAnnotations(
   const texts: SheetText[] = [];
   const boxes = new Map<DrawingAnnotationId, AnnotationBox>();
   const drawn = new Map(views.map((entry) => [entry.view.viewId, entry]));
-  const k = drawingPaperPerModelUnit(sheet.scale, units);
   for (const annotation of sheet.annotations ?? []) {
     const resolution = resolutions.get(annotation.annotationId);
     if (!resolution?.ok) continue;
     let toPage: ((u: number, v: number) => XY) | null = null;
     let view: DrawingView | undefined;
+    let k = drawingPaperPerModelUnit(sheet.scale, units);
     if (annotation.viewId) {
       const entry = drawn.get(annotation.viewId);
       if (!entry?.projection.bounds) continue;
       view = entry.view;
       toPage = viewPageTransform(view, entry.projection.bounds, sheet, units);
+      // A detail (v78) draws its circles at its own scale.
+      k = viewPaperPerModelUnit(view, sheet, units);
     }
     const layout = layoutAnnotation(
       resolution.resolved,

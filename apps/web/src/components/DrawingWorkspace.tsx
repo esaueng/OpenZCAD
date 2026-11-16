@@ -53,6 +53,7 @@ import {
   MAX_DRAWING_NOTE_LENGTH,
   type DrawingAnnotation,
   type DrawingTolerance,
+  type DrawingDetail,
   type DrawingDimension,
   isDrawingDimension,
   isDrawingGeometryAnnotation,
@@ -121,6 +122,7 @@ import {
   autoScaleSheet,
   composeSheetPage,
   sectionCaption,
+  detailCaption,
   sectionLineOnPage,
   SHEET_STROKE_ORDER,
   type ComposedView,
@@ -222,6 +224,11 @@ import {
   sectionSourceAt,
   type SectionLine
 } from '../lib/drawing/sectionTool';
+import {
+  detailDraft,
+  detailRegionFromDrag,
+  detailSourceAt
+} from '../lib/drawing/detailTool';
 import {
   drawingAssistantDigest,
   type DrawingAssistantSource
@@ -818,7 +825,9 @@ function useViewProjections(
 function viewLabel(view: DrawingView): string {
   return view.section
     ? sectionCaption(view.section.label).replace('SECTION', 'Section')
-    : DRAWING_VIEW_LABELS[view.orientation];
+    : view.detail
+      ? `Detail ${view.detail.label}`
+      : DRAWING_VIEW_LABELS[view.orientation];
 }
 
 function statusMessage(status: SheetStatus): string | null {
@@ -991,6 +1000,8 @@ const ANNOTATION_TOOL_KEYS: Readonly<Record<AnnotationToolKind, string>> = {
 
 /** D03: the section view tool's key, beside the annotation tools'. */
 const SECTION_TOOL_KEY = 'S';
+/** D03 (v78): the detail view tool's key. */
+const DETAIL_TOOL_KEY = 'K';
 
 const DARK_PAPER_STORAGE_KEY = 'openzcad.drawing.darkPaper';
 
@@ -2010,8 +2021,15 @@ function DrawingToolRail(props: {
     disabledReason: string;
     onToggle: () => void;
   };
+  /** D03 (v78): the detail view tool. */
+  detail: {
+    active: boolean;
+    usable: boolean;
+    disabledReason: string;
+    onToggle: () => void;
+  };
 }) {
-  const { tool, section } = props;
+  const { tool, section, detail } = props;
   const groups: AnnotationToolKind[][] = [
     ['horizontal', 'vertical', 'aligned', 'distance'],
     ['radius', 'diameter', 'angle', 'chamfer'],
@@ -2083,6 +2101,22 @@ function DrawingToolRail(props: {
           onClick={section.onToggle}
         >
           <Scissors size={16} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className={`drawing-rail-button${detail.active ? ' active' : ''}`}
+          aria-label="Detail view"
+          aria-pressed={detail.active}
+          aria-keyshortcuts={DETAIL_TOOL_KEY}
+          disabled={!detail.usable}
+          title={
+            detail.usable
+              ? `Detail view: drag a circle on a view, from its centre (${DETAIL_TOOL_KEY})`
+              : detail.disabledReason
+          }
+          onClick={detail.onToggle}
+        >
+          <ZoomIn size={16} aria-hidden="true" />
         </button>
       </div>
     </div>
@@ -2401,6 +2435,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const [sectionTool, setSectionTool] = useState<{
     drag: { start: [number, number]; current: [number, number] } | null;
     line: SectionLine | null;
+    pointer: [number, number] | null;
+  } | null>(null);
+  /**
+   * D03 (v78) detail tool: a circle dragged on a view (`drag`, from its
+   * centre), then the detail follows the pointer until a click places it.
+   */
+  const [detailTool, setDetailTool] = useState<{
+    drag: { start: [number, number]; current: [number, number] } | null;
+    region: {
+      sourceViewId: DrawingViewId;
+      center: { u: number; v: number };
+      radius: number;
+    } | null;
     pointer: [number, number] | null;
   } | null>(null);
   const [selectedAnnotationId, setSelectedAnnotationId] =
@@ -2910,6 +2957,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const chooseTool = (next: AnnotationTool | null) => {
     setTool(next && pinnedTool(next));
     setSectionTool(null);
+    setDetailTool(null);
     setHover(null);
     if (next) {
       setPropertiesOpen(false);
@@ -2917,7 +2965,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         `${ANNOTATION_TOOL_LABELS[next.kind]} placement started.`,
         { immediate: true }
       );
-    } else if (tool || sectionTool) {
+    } else if (tool || sectionTool || detailTool) {
       props.onStatus('Placement canceled.', { immediate: true });
     }
     if (next) canvasRef.current?.focus();
@@ -2930,7 +2978,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   shortcutRef.current = (event: KeyboardEvent) => {
     if (!sheet || !drawingShortcutTarget(event, workspaceRef.current)) return;
     if (event.key === 'Escape') {
-      if (sectionTool) chooseTool(null);
+      if (sectionTool || detailTool) chooseTool(null);
       else if (shownAutoPlan) setAutoPlan(null);
       else if (tool) {
         chooseTool(null);
@@ -2947,6 +2995,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       event.preventDefault();
       event.stopPropagation();
       toggleSectionTool();
+      return;
+    }
+    if (event.key.toLowerCase() === DETAIL_TOOL_KEY.toLowerCase()) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleDetailTool();
       return;
     }
     const kind = ANNOTATION_TOOLS.find(
@@ -3940,6 +3994,127 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     : !sheetReady
       ? 'Update the sheet to add a section.'
       : 'Add a front, top or side view to cut a section from.';
+  // D03 (v78) detail tool.
+  const canDetail =
+    sheetReady &&
+    editable &&
+    drawnViews.some(({ view }) => !view.section && !view.detail);
+  const detailDisabledReason = !editable
+    ? (editDisabledReason ?? 'Drawing edits are unavailable.')
+    : !sheetReady
+      ? 'Update the sheet to add a detail.'
+      : 'Add a view to take a detail from.';
+  function toggleDetailTool() {
+    if (detailTool) {
+      chooseTool(null);
+      return;
+    }
+    if (!canDetail) {
+      props.onStatus(detailDisabledReason);
+      return;
+    }
+    setTool(null);
+    setSectionTool(null);
+    setHover(null);
+    setPropertiesOpen(false);
+    setDetailTool({ drag: null, region: null, pointer: null });
+    props.onStatus('Detail view placement started.', { immediate: true });
+    canvasRef.current?.focus();
+  }
+  const detailSourceView = (viewId: DrawingViewId | undefined) =>
+    viewId
+      ? shownSheet?.views.find((entry) => entry.viewId === viewId)
+      : undefined;
+  /** The detail view the tool would place now, as a preview. */
+  const detailPreview =
+    detailTool?.region && detailTool.pointer && shownSheet
+      ? (() => {
+          const source = detailSourceView(detailTool.region.sourceViewId);
+          return source
+            ? detailDraft(
+                shownSheet,
+                source,
+                detailTool.region,
+                detailTool.pointer
+              )
+            : null;
+        })()
+      : null;
+  const onDetailPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (event.button !== 0 || !detailTool || !shownSheet) return;
+    const at = paperPoint(event);
+    if (!at) return;
+    if (detailTool.region) {
+      const source = detailSourceView(detailTool.region.sourceViewId);
+      if (!source) return;
+      const view: DrawingView = {
+        ...detailDraft(shownSheet, source, detailTool.region, at.point),
+        viewId: createDrawingViewId()
+      };
+      setDetailTool(null);
+      if (
+        run(
+          commandFactories.addDrawingView({ sheetId: shownSheet.sheetId, view })
+        )
+      )
+        setSelectedViewId(view.viewId);
+      return;
+    }
+    if (!detailSourceAt(shownSheet, drawnViews, at.point, document.units)) {
+      props.onStatus('Start the detail circle inside a view, at its centre.');
+      return;
+    }
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setDetailTool({
+      drag: { start: at.point, current: at.point },
+      region: null,
+      pointer: null
+    });
+  };
+  const onDetailPointerMove = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (!detailTool) return;
+    const at = paperPoint(event);
+    if (!at) return;
+    if (detailTool.drag)
+      setDetailTool({
+        ...detailTool,
+        drag: { ...detailTool.drag, current: at.point }
+      });
+    else if (detailTool.region)
+      setDetailTool({ ...detailTool, pointer: at.point });
+  };
+  const onDetailPointerUp = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (!detailTool?.drag || !shownSheet) return;
+    const at = paperPoint(event);
+    const end = at?.point ?? detailTool.drag.current;
+    const source = detailSourceAt(
+      shownSheet,
+      drawnViews,
+      detailTool.drag.start,
+      document.units
+    );
+    const region =
+      source &&
+      detailRegionFromDrag(
+        shownSheet,
+        source,
+        detailTool.drag.start,
+        end,
+        document.units
+      );
+    if (!source || !region) {
+      setDetailTool({ drag: null, region: null, pointer: null });
+      props.onStatus(
+        'Drag out from the centre of the region to its edge to circle it.'
+      );
+      return;
+    }
+    setDetailTool({
+      drag: null,
+      region: { sourceViewId: source.view.viewId, ...region },
+      pointer: end
+    });
+  };
   function toggleSectionTool() {
     if (sectionTool) {
       chooseTool(null);
@@ -3950,6 +4125,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return;
     }
     setTool(null);
+    setDetailTool(null);
     setHover(null);
     setPropertiesOpen(false);
     setSectionTool({ drag: null, line: null, pointer: null });
@@ -5056,6 +5232,58 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   </g>
                 );
               })()}
+            {detailTool?.drag && (
+              <circle
+                className="drawing-section-preview"
+                cx={detailTool.drag.start[0]}
+                cy={paper.height - detailTool.drag.start[1]}
+                r={Math.hypot(
+                  detailTool.drag.current[0] - detailTool.drag.start[0],
+                  detailTool.drag.current[1] - detailTool.drag.start[1]
+                )}
+              />
+            )}
+            {detailPreview?.detail &&
+              (() => {
+                const r =
+                  detailPreview.detail.radius *
+                  drawingPaperPerModelUnit(
+                    detailPreview.detail.scale,
+                    document.units
+                  );
+                return (
+                  <g className="drawing-section-draft">
+                    <circle
+                      className="drawing-section-ghost"
+                      cx={detailPreview.centerMm.x}
+                      cy={paper.height - detailPreview.centerMm.y}
+                      r={r}
+                    />
+                    <text
+                      className="drawing-view-label"
+                      x={detailPreview.centerMm.x - r}
+                      y={paper.height - detailPreview.centerMm.y + r + 4}
+                      fontSize={3}
+                    >
+                      {detailCaption(
+                        detailPreview.detail.label,
+                        detailPreview.detail.scale
+                      )}
+                    </text>
+                  </g>
+                );
+              })()}
+            {detailTool && (
+              <rect
+                className="drawing-section-surface"
+                aria-label="Detail circle"
+                width={paper.width}
+                height={paper.height}
+                onPointerDown={onDetailPointerDown}
+                onPointerMove={onDetailPointerMove}
+                onPointerUp={onDetailPointerUp}
+              />
+            )}
             {sectionTool && (
               <rect
                 className="drawing-section-surface"
@@ -5081,7 +5309,29 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               disabledReason: sectionDisabledReason,
               onToggle: toggleSectionTool
             }}
+            detail={{
+              active: detailTool !== null,
+              usable: canDetail,
+              disabledReason: detailDisabledReason,
+              onToggle: toggleDetailTool
+            }}
           />
+          {detailTool && (
+            <div className="drawing-tool-hint" role="status">
+              <span>
+                {detailTool.region
+                  ? 'Move the detail into place, then click.'
+                  : 'Drag a circle on a view, out from its centre.'}
+              </span>
+              <button
+                type="button"
+                className="drawing-tool-hint-cancel"
+                onClick={() => chooseTool(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          )}
           {sectionTool && (
             <div className="drawing-tool-hint" role="status">
               <span>
@@ -5225,6 +5475,69 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   </>
                 );
               })()}
+            {selectedView.detail &&
+              (() => {
+                const detail = selectedView.detail;
+                const source = sheet.views.find(
+                  (view) => view.viewId === detail.sourceViewId
+                );
+                const update = (
+                  patch: Partial<Pick<DrawingDetail, 'radius' | 'scale'>>,
+                  label: string
+                ) =>
+                  run(
+                    commandFactories.updateDrawingView(
+                      {
+                        sheetId: sheet.sheetId,
+                        viewId: selectedView.viewId,
+                        detail: patch
+                      },
+                      label
+                    )
+                  );
+                return (
+                  <>
+                    <label className="drawing-field">
+                      <span>Detail scale</span>
+                      <select
+                        value={formatDrawingScale(detail.scale)}
+                        disabled={!editable}
+                        onChange={(event) => {
+                          const scale = DRAWING_SCALE_PRESETS.find(
+                            (preset) =>
+                              formatDrawingScale(preset) === event.target.value
+                          );
+                          if (scale)
+                            update({ scale: { ...scale } }, 'Scale detail');
+                        }}
+                      >
+                        {DRAWING_SCALE_PRESETS.map((preset) => (
+                          <option
+                            key={formatDrawingScale(preset)}
+                            value={formatDrawingScale(preset)}
+                          >
+                            {formatDrawingScale(preset)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <NumberField
+                      label={`Circle radius (${document.units})`}
+                      value={detail.radius}
+                      disabled={!editable}
+                      onCommit={(value) =>
+                        value > 0 && update({ radius: value }, 'Resize detail')
+                      }
+                    />
+                    <p className="drawing-hint">
+                      The part of the{' '}
+                      {source ? viewLabel(source).toLowerCase() : 'source'} view
+                      inside circle {detail.label}, at its own scale. It moves
+                      freely; the circle stays on its source.
+                    </p>
+                  </>
+                );
+              })()}
             {selectedView.parentViewId && (
               <p className="drawing-hint">
                 Projected from the{' '}
@@ -5268,6 +5581,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                     checked={selectedView.bodyIds.includes(id)}
                     disabled={
                       !editable ||
+                      // A detail draws its source's bodies (v78).
+                      selectedView.detail !== undefined ||
                       // Not offered for removal until the rebuild says
                       // whether it is really gone.
                       (geometryPending && !liveBodies.includes(id)) ||

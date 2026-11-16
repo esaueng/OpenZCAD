@@ -329,6 +329,32 @@ export interface DrawingView {
    * drawn as a section line on its source view. Absent on every other view.
    */
   section?: DrawingSectionCut;
+  /**
+   * D03 (schema v78): this view is a detail of its source, enlarged: the
+   * part of the source inside a circle, at its own scale. Absent on every
+   * other view.
+   */
+  detail?: DrawingDetail;
+}
+
+/**
+ * A detail view (D03, schema v78): the region of its source view inside a
+ * circle, drawn at its own scale and cropped to the circle, with its own
+ * hidden-line setting. It looks the way its source looks (same orientation
+ * and bodies), stores the circle in the source's model (u, v) so moving
+ * either view never moves the region, and is placed freely on the sheet.
+ */
+export interface DrawingDetail {
+  /** A principal or isometric view, not a section or another detail. */
+  sourceViewId: DrawingViewId;
+  /** One or two capitals naming the detail ("A" for DETAIL A), unique per sheet with sections. */
+  label: string;
+  /** The circle's centre in the source view's model (u, v), model units. */
+  center: { u: number; v: number };
+  /** The circle's radius in model units. */
+  radius: number;
+  /** The detail's own scale, paper : model. */
+  scale: DrawingScale;
 }
 
 /**
@@ -419,12 +445,21 @@ export function drawingSectionOrientations(
   });
 }
 
-/** The first section label the sheet does not use yet: A, B, … Z, AA, AB … */
+/**
+ * The first section or detail label the sheet does not use yet: A, B, … Z,
+ * AA, AB … (sections and details share one sequence, as on a print).
+ */
 export function nextDrawingSectionLabel(
   sheet: Pick<DrawingSheet, 'views'>
 ): string {
   const used = new Set(
-    sheet.views.flatMap((view) => (view.section ? [view.section.label] : []))
+    sheet.views.flatMap((view) =>
+      view.section
+        ? [view.section.label]
+        : view.detail
+          ? [view.detail.label]
+          : []
+    )
   );
   // I, O and Q read as digits on a print; drafting practice skips them.
   const letters = 'ABCDEFGHJKLMNPRSTUVWXYZ';
@@ -601,7 +636,44 @@ function drawingViewError(view: unknown, where: string): string | null {
     if (view.parentViewId !== undefined)
       return `${where} cannot be both a section and a projected view.`;
   }
+  if (view.detail !== undefined) {
+    const detail = view.detail;
+    if (
+      !isRecord(detail) ||
+      typeof detail.sourceViewId !== 'string' ||
+      typeof detail.label !== 'string' ||
+      !SECTION_LABEL.test(detail.label) ||
+      !isRecord(detail.center) ||
+      !isCoordinateValue(detail.center.u) ||
+      !isCoordinateValue(detail.center.v) ||
+      Object.keys(detail.center).length !== 2 ||
+      typeof detail.radius !== 'number' ||
+      !Number.isFinite(detail.radius) ||
+      detail.radius <= 0 ||
+      detail.radius > MAX_DRAWING_SECTION_DEPTH ||
+      !isRecord(detail.scale) ||
+      !isScaleTerm(detail.scale.numerator) ||
+      !isScaleTerm(detail.scale.denominator) ||
+      Object.keys(detail.scale).length !== 2 ||
+      Object.keys(detail).some(
+        (key) =>
+          !['sourceViewId', 'label', 'center', 'radius', 'scale'].includes(key)
+      )
+    )
+      return `${where} has an invalid detail.`;
+    if (view.parentViewId !== undefined || view.section !== undefined)
+      return `${where} cannot be a detail and a projected or section view.`;
+  }
   return null;
+}
+
+/** A model coordinate a detail's circle may sit at. */
+function isCoordinateValue(value: unknown): boolean {
+  return (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    Math.abs(value) <= MAX_DRAWING_SECTION_DEPTH
+  );
 }
 
 const UNIT_SYSTEMS: readonly unknown[] = ['mm', 'cm', 'm', 'inch'];
@@ -732,7 +804,12 @@ export function drawingSheetError(value: unknown): string | null {
           view.orientation as DrawingViewOrientation
         )
       : null;
-    if (!parent || parent.parentViewId !== undefined || alignment === null)
+    if (
+      !parent ||
+      parent.parentViewId !== undefined ||
+      parent.detail !== undefined ||
+      alignment === null
+    )
       return `${where} has a projected view that cannot fold from its base.`;
     // Aligned on the shared axis, on the side the projection angle gives
     // it: anything else contradicts the projection the title block names.
@@ -755,6 +832,28 @@ export function drawingSheetError(value: unknown): string | null {
   }
   const labels = new Set<string>();
   for (const view of views.values()) {
+    const detail = view.detail as DrawingDetail | undefined;
+    if (!detail) continue;
+    if (labels.has(detail.label))
+      return `${where} names view ${detail.label} twice.`;
+    labels.add(detail.label);
+    const source = views.get(detail.sourceViewId);
+    const sameBodies = (a: unknown, b: unknown) =>
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      [...(a as string[])].sort().join('\u0000') ===
+        [...(b as string[])].sort().join('\u0000');
+    if (
+      !source ||
+      source.section !== undefined ||
+      source.detail !== undefined ||
+      source.orientation !== view.orientation ||
+      !sameBodies(source.bodyIds, view.bodyIds)
+    )
+      return `${where} has a detail that does not look as its source view does.`;
+  }
+  for (const view of views.values()) {
     const section = view.section as DrawingSectionCut | undefined;
     if (!section) continue;
     if (labels.has(section.label))
@@ -764,6 +863,7 @@ export function drawingSheetError(value: unknown): string | null {
     if (
       !source ||
       source.section !== undefined ||
+      source.detail !== undefined ||
       source.orientation === 'iso' ||
       drawingViewAlignment(
         source.orientation as DrawingViewOrientation,

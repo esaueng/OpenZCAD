@@ -74,6 +74,14 @@ export function duplicateDrawingSheet(
             sourceViewId: mapped(view.section.sourceViewId)
           }
         }
+      : {}),
+    ...(view.detail
+      ? {
+          detail: {
+            ...view.detail,
+            sourceViewId: mapped(view.detail.sourceViewId)
+          }
+        }
       : {})
   }));
   if (copy.annotations) {

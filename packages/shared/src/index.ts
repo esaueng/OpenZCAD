@@ -344,13 +344,16 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // line may be a straight edge or a centreline. An older client would refuse
 // the unknown kind, so it must refuse the document. Builds on v74
 // (M17 standard parts in holes, #1644).
-// v76 is claimed by D03 detail views (#1651).
 // v77 adds M17 parts inserted into M01 holes (`hole` on a standard part):
 // the part stands in each of the hole's bores and takes its matched length
 // where it stores none. An older client would build one part at the stored
 // origin, or none without a length, so it must refuse. (M17 first claimed
 // v71 and then v74, but clients up to v75 have no `hole`.) Builds on v75.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 77 as const;
+// v78 adds D03 detail views (`detail` on a drawing view): the region of a
+// source view inside a circle, at its own scale. An older client would draw
+// the whole view at the sheet's scale, uncropped, so it must refuse. Builds
+// on v77.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 78 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
