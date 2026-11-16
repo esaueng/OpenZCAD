@@ -479,7 +479,10 @@ describe('crossed-loop fillet through the build', { timeout: 120_000 }, () => {
     expect(derived.featureWarnings).toHaveLength(1);
     const [refusal] = derived.featureWarnings!;
     expect(refusal!.kind).toBe('build-failed');
-    expect(refusal!.kernelRefusal?.code).toBe('edge_modifier_refused');
+    // Remus 2026.1.144's blend cascade reports this as a measured cliff
+    // (`cliff-encountered`) rather than the generic `edge_modifier_refused`
+    // of 1.141; either way it is the kernel's typed refusal.
+    expect(refusal!.kernelRefusal?.code).toBe('cliff-encountered');
     expect(refusal!.blendAdvice).toMatchObject({
       kind: 'smaller-size',
       size: quoted
