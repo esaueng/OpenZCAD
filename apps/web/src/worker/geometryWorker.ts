@@ -33,6 +33,7 @@ import type {
   kernelSnapshotBuildId,
   MeshQualityReport,
   MassPropertiesRead,
+  ExportBodySummary,
   PersistedHistorySession,
   RebuildProgress,
   SectionOutlineReport,
@@ -236,6 +237,16 @@ export type GeometryWorkerRequest =
       requestId: string;
       document: ProjectDocument;
       bodyId: BodyId;
+    }
+  | {
+      /**
+       * F06: the bodies an export of this document writes, named and marked
+       * when they are mesh references: an export dialog for a configuration
+       * that is not shown lists and limits its formats from these.
+       */
+      type: 'export-bodies';
+      requestId: string;
+      document: ProjectDocument;
     }
   | {
       /**
@@ -448,6 +459,15 @@ export type GeometryMassPropertiesResult =
     }
   | { type: 'mass-properties'; ok: false; requestId: string; error: string };
 
+export type GeometryExportBodiesResult =
+  | {
+      type: 'export-bodies';
+      ok: true;
+      requestId: string;
+      bodies: ExportBodySummary[];
+    }
+  | { type: 'export-bodies'; ok: false; requestId: string; error: string };
+
 export type GeometrySheetMetalFoldResult =
   | {
       type: 'sheet-metal-fold';
@@ -600,6 +620,7 @@ export type GeometryWorkerResult =
   | GeometryMeshQualityResult
   | GeometryDrawingTessellationResult
   | GeometryMassPropertiesResult
+  | GeometryExportBodiesResult
   | GeometrySheetMetalFoldResult
   | GeometrySectionResult
   | GeometrySolveSketchResult
@@ -1145,6 +1166,28 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           });
         }, 150);
       }
+      return;
+    }
+
+    if (request.type === 'export-bodies') {
+      if (exactKernelStatus !== 'ready')
+        post(stateFor('loading-remus', request, { stale: true }));
+      const exact = await loadExactKernel();
+      if (!exact) {
+        throw exactKernelError instanceof Error
+          ? exactKernelError
+          : new Error('The exact Remus kernel failed to load.');
+      }
+      post(stateFor('rebuilding', request, { stale: true }));
+      await preloadDocumentFonts(document);
+      const bodies = await exact.documentExportBodies(document);
+      post({
+        type: 'export-bodies',
+        ok: true,
+        requestId: request.requestId,
+        bodies
+      });
+      post(stateFor('ready', request, { stale: false }));
       return;
     }
 
@@ -1793,6 +1836,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     } else if (request.type === 'mass-properties') {
       post({
         type: 'mass-properties',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'export-bodies') {
+      post({
+        type: 'export-bodies',
         ok: false,
         requestId: request.requestId,
         error: message

@@ -265,7 +265,10 @@ import {
   type PlaneBasis,
   type Vec2
 } from '@openzcad/geometry';
-import type { SketchSolveOutcome } from '@openzcad/kernel-adapter/exact';
+import type {
+  ExportBodySummary,
+  SketchSolveOutcome
+} from '@openzcad/kernel-adapter/exact';
 import type {
   ArtifactKind,
   AccountDeletionScope,
@@ -600,7 +603,6 @@ import {
 } from './lib/sketch/valueResolver';
 import { countClosedProfileSketches } from './lib/sketch/profileAvailability';
 import { useDocumentFonts } from './lib/textFonts';
-import { createProjectDiagnosticBundle } from './lib/projectDiagnostics';
 import type { DirectEditFixtureOutcome } from './lib/directEditFixture';
 import type * as InteractionDiagnostics from './lib/interactionDiagnostics';
 import { KERNEL_BUILD, supportsBlendGroupEdits } from './lib/kernelBuild';
@@ -1205,6 +1207,8 @@ const preflightCadPatch: typeof AiPatchPreflight.preflightCadPatch = (
  * read only for its Settings export, neither of which waits on the result.
  */
 const interactionDiagnostics = () => import('./lib/interactionDiagnostics');
+// Loaded on Export diagnostics only, as the interaction log is.
+const projectDiagnostics = () => import('./lib/projectDiagnostics');
 const closedOpenings = () => import('./lib/closedOpenings');
 /** A refused rebuild saved as a corpus fixture, on its Save reproduction. */
 const refusalReproduction = () => import('./lib/refusalReproduction');
@@ -3118,6 +3122,16 @@ export function App() {
    * the model as shown. Reset when the dialog closes.
    */
   const [exportRowId, setExportRowId] = useState<string | null>(null);
+  /**
+   * F06: what an export of `exportRowId` writes, asked of the kernel for the
+   * row built on its own. The mesh dialog lists these and limits its formats
+   * by them, not by the row on screen.
+   */
+  const [exportRowBodies, setExportRowBodies] = useState<{
+    rowId: string;
+    version: number;
+    bodies: ExportBodySummary[];
+  } | null>(null);
   /** A unitless import waiting for the user to say what its numbers mean. */
   const [importUnitsPrompt, setImportUnitsPrompt] = useState<Omit<
     ComponentProps<typeof LazyImportUnitsDialog>,
@@ -4858,6 +4872,9 @@ export function App() {
       setStatus(message);
     }
   });
+  // Read by effects that must not re-run whenever the hook's object changes.
+  const geometryRef = useRef(geometry);
+  geometryRef.current = geometry;
   useThumbnailCaptureActivity(
     sharedThumbnailCapture,
     geometryBusy ||
@@ -19663,12 +19680,13 @@ export function App() {
     }
   }
 
-  function handleExportDiagnostics() {
+  async function handleExportDiagnostics() {
     if (!doc) {
       reportSupportExport('Open a project before exporting diagnostics.');
       return;
     }
     try {
+      const { createProjectDiagnosticBundle } = await projectDiagnostics();
       const bundle = createProjectDiagnosticBundle(doc, {
         remusVersion: KERNEL_BUILD.packageVersion,
         remusCommit: KERNEL_BUILD.sourceCommit
@@ -23854,6 +23872,48 @@ export function App() {
   }
 
   /** F06: exports one configuration row, as STEP or from the mesh dialog. */
+  // F06: the bodies the mesh dialog's row writes, from that row's own build.
+  const exportRowDocument = meshExportOpen && exportRowId ? doc : null;
+  useEffect(() => {
+    if (!exportRowDocument || !exportRowId) return;
+    let current = true;
+    let target: ProjectDocument;
+    try {
+      target = documentForConfiguration(exportRowDocument, exportRowId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'That configuration cannot be built.'));
+      setExportRowBodies({
+        rowId: exportRowId,
+        version: exportRowDocument.version,
+        bodies: []
+      });
+      return;
+    }
+    void geometryRef.current
+      .exportBodies(target)
+      .then(
+        (bodies) => bodies,
+        (error: unknown) => {
+          if (current)
+            setStatus(
+              errorMessage(error, 'The configuration could not be built.')
+            );
+          return [];
+        }
+      )
+      .then((bodies) => {
+        if (current)
+          setExportRowBodies({
+            rowId: exportRowId,
+            version: exportRowDocument.version,
+            bodies
+          });
+      });
+    return () => {
+      current = false;
+    };
+  }, [exportRowDocument, exportRowId, setStatus]);
+
   function handleExportConfigurationRow(rowId: string, kind: 'step' | 'mesh') {
     if (kind === 'step') {
       void handleExportStep(rowId);
@@ -33232,7 +33292,7 @@ export function App() {
           onDeleteCloudData={handleDeleteCloudData}
           onReset={() => void handleResetAppSettings()}
           onApplyViewportDefaults={applyViewportDefaults}
-          onExportDiagnostics={handleExportDiagnostics}
+          onExportDiagnostics={() => void handleExportDiagnostics()}
           onExportInteractionLog={() => void handleExportInteractionLog()}
           onRegenerateThumbnails={() => void handleRegenerateThumbnails()}
           thumbnailRegeneration={thumbnailRegeneration}
@@ -33981,7 +34041,7 @@ export function App() {
       group: 'Support',
       keywords: ['troubleshooting', 'support', 'sanitized', 'json', 'report'],
       icon: <Download size={16} aria-hidden="true" />,
-      run: handleExportDiagnostics
+      run: () => void handleExportDiagnostics()
     },
     {
       id: 'file-export-interaction-log',
@@ -37742,8 +37802,11 @@ export function App() {
           )}
           {meshExportOpen &&
             doc &&
-            // Keep the dialog open if the last visible body is hidden.
-            (exportBodyIds.length > 0 ||
+            // A row that is not shown has its own bodies (listed below once
+            // the kernel answers); otherwise keep the dialog open if the
+            // last visible body is hidden.
+            (exportRowId !== null ||
+              exportBodyIds.length > 0 ||
               (exportScopeInfo?.hiddenExcluded ?? 0) > 0) && (
               <ExportDialog
                 scopeLabel={
@@ -37756,16 +37819,23 @@ export function App() {
                         ? exportScopeLabel(exportScopeInfo)
                         : `all bodies (${exportBodyIds.length})`
                 }
-                bodies={exportBodyIds.map((bodyId) => ({
-                  bodyId,
-                  name:
-                    ownEntry(doc.derived.bodyRepresentations, bodyId)?.name ??
-                    bodyId,
-                  meshReference: ownEntry(
-                    doc.derived.bodyRepresentations,
-                    bodyId
-                  )?.meshReference
-                }))}
+                bodies={
+                  exportRowId !== null
+                    ? exportRowBodies?.rowId === exportRowId &&
+                      exportRowBodies.version === doc.version
+                      ? exportRowBodies.bodies
+                      : []
+                    : exportBodyIds.map((bodyId) => ({
+                        bodyId,
+                        name:
+                          ownEntry(doc.derived.bodyRepresentations, bodyId)
+                            ?.name ?? bodyId,
+                        meshReference: ownEntry(
+                          doc.derived.bodyRepresentations,
+                          bodyId
+                        )?.meshReference
+                      }))
+                }
                 revision={doc.version}
                 key={exportRowId ?? 'active'}
                 onClose={() => {

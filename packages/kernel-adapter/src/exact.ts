@@ -841,6 +841,12 @@ export interface ExactKernelAdapter {
    */
   documentExportBodyIds(document: ProjectDocument): Promise<BodyId[]>;
   /**
+   * F06: the same bodies, each with its name and whether it is a mesh
+   * reference (exported as its original facets, STL only), so an export
+   * dialog for a configuration that is not shown can describe it exactly.
+   */
+  documentExportBodies(document: ProjectDocument): Promise<ExportBodySummary[]>;
+  /**
    * DXF R12 outline of one PLANAR face, in millimetres (or `options.units`)
    * — the laser-cutting export. Fails closed on non-planar faces and stale
    * face references.
@@ -5149,6 +5155,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * cannot know without building it.
    */
   async documentExportBodyIds(document: ProjectDocument): Promise<BodyId[]> {
+    return (await this.documentExportBodies(document)).map(
+      (body) => body.bodyId
+    );
+  }
+
+  async documentExportBodies(
+    document: ProjectDocument
+  ): Promise<ExportBodySummary[]> {
     return this.withExportBuild(document, (_kernel, build) => {
       const { written, skipped } = shownExportBodies(document, build);
       const meshes = new Set(
@@ -5156,9 +5170,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           .filter((entry) => entry.reason === 'mesh-reference')
           .map((entry) => entry.bodyId)
       );
-      return document.bodyOrder.filter(
-        (bodyId) => written.includes(bodyId) || meshes.has(bodyId)
+      const names = new Map(
+        listNodesByKind(document, 'body').map((body) => [
+          body.bodyId,
+          body.name
+        ])
       );
+      return document.bodyOrder
+        .filter((bodyId) => written.includes(bodyId) || meshes.has(bodyId))
+        .map((bodyId) => ({
+          bodyId,
+          name: names.get(bodyId) ?? bodyId,
+          ...(meshes.has(bodyId) ? { meshReference: true as const } : {})
+        }));
     });
   }
 
@@ -6352,6 +6376,13 @@ function draftDisplayCandidate(
  * not switched off by suppression, split into those with solids to write and
  * those skipped with the reason.
  */
+/** F06: one body an export writes, as an export dialog lists it. */
+export interface ExportBodySummary {
+  bodyId: BodyId;
+  name: string;
+  meshReference?: true;
+}
+
 function shownExportBodies(
   document: ProjectDocument,
   build: ExactBuildResult

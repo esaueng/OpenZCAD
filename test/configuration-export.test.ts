@@ -6,6 +6,7 @@ import {
   createConfigurations,
   createProjectDocument,
   documentForConfiguration,
+  importMeshBody,
   listParameters,
   setConfigurationCell,
   setParameter
@@ -15,6 +16,7 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import { toUserId, type FeatureNode } from '@openzcad/shared';
+import { coincidentBoxSoup } from './support/mesh-import-fixtures';
 import {
   RemusKernel,
   loadRemusTranslators
@@ -134,4 +136,42 @@ it('lists and writes the bodies each row shows, leaving the document alone', asy
     { format: '3mf', deflection: 0.1 }
   );
   expect(threeMf.byteLength).toBeGreaterThan(0);
+}, 90_000);
+
+it("describes each row's own bodies, mesh references included, for its export dialog", async () => {
+  // Small shows a mesh reference beside the plate; Large hides it. Large's
+  // dialog must offer every format, Small's only STL.
+  const { document: base, plate, tag } = bracket();
+  const imported = importMeshBody(base, {
+    name: 'Scan',
+    artifactId: 'artifact_scan',
+    sourceName: 'scan.stl',
+    ...coincidentBoxSoup()
+  });
+  let document = imported.document;
+  document = addConfigurationColumn(document, {
+    column: { kind: 'body', bodyId: imported.bodyId }
+  });
+  document = setConfigurationCell(document, {
+    rowId: 'large',
+    column: { kind: 'body', bodyId: imported.bodyId },
+    value: false
+  });
+  const small = await adapter.documentExportBodies(document);
+  expect(small.find((body) => body.bodyId === imported.bodyId)).toMatchObject({
+    bodyId: imported.bodyId,
+    meshReference: true
+  });
+  const large = await adapter.documentExportBodies(
+    documentForConfiguration(document, 'large')
+  );
+  expect(large.map((body) => body.bodyId)).toEqual([plate, tag]);
+  expect(large.every((body) => body.name.length > 0)).toBe(true);
+  expect(large.some((body) => body.meshReference)).toBe(false);
+  // The ids are the ones an export of the row writes.
+  expect(large.map((body) => body.bodyId)).toEqual(
+    await adapter.documentExportBodyIds(
+      documentForConfiguration(document, 'large')
+    )
+  );
 }, 90_000);

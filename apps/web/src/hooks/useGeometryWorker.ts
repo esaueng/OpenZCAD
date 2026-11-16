@@ -44,6 +44,7 @@ import type {
   ExactSectionPlane,
   MeshQualityReport,
   MassPropertiesRead,
+  ExportBodySummary,
   SectionOutlineReport,
   SheetMetalFlatPattern,
   SketchPlanarOperation,
@@ -336,6 +337,11 @@ export interface GeometryWorkerApi {
     options?: { signal?: AbortSignal }
   ): Promise<MassPropertiesRead>;
   /**
+   * F06: the bodies an export of `document` writes, named and marked when
+   * they are mesh references, for a configuration that is not shown.
+   */
+  exportBodies(document: ProjectDocument): Promise<ExportBodySummary[]>;
+  /**
    * M16: a sheet-metal feature folded to `fraction` of every bend (0 flat,
    * 1 as stored), as a view-only mesh; later features are not applied.
    */
@@ -462,6 +468,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const massPropertiesRequests = useRef(
     new Map<string, PendingRequest<MassPropertiesRead>>()
   );
+  const exportBodiesRequests = useRef(
+    new Map<string, PendingRequest<ExportBodySummary[]>>()
+  );
   const sheetMetalFoldRequests = useRef(
     new Map<string, PendingRequest<SheetMetalFoldPreview>>()
   );
@@ -554,6 +563,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       meshQualityRequests.current,
       drawingTessellationRequests.current,
       massPropertiesRequests.current,
+      exportBodiesRequests.current,
       sheetMetalFoldRequests.current,
       solveSketchRequests.current,
       interferenceRequests.current,
@@ -1000,6 +1010,14 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           );
           if (!pending) return;
           drawingTessellationRequests.current.delete(message.requestId);
+          if (message.ok) pending.resolve(message.bodies);
+          else pending.reject(new Error(message.error));
+          return;
+        }
+        if (message.type === 'export-bodies') {
+          const pending = exportBodiesRequests.current.get(message.requestId);
+          if (!pending) return;
+          exportBodiesRequests.current.delete(message.requestId);
           if (message.ok) pending.resolve(message.bodies);
           else pending.reject(new Error(message.error));
           return;
@@ -1568,6 +1586,15 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         plane,
         options?.signal
       ) as Promise<Record<BodyId, DrawingSectionBody>>;
+    },
+    exportBodies(document) {
+      const posted = postRequest(exportBodiesRequests.current, {
+        type: 'export-bodies',
+        document: documentForWorker(document)
+      });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker is unavailable.'));
     },
     massProperties(document, bodyId, options) {
       if (options?.signal?.aborted) {
