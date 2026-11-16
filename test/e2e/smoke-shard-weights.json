@@ -22,6 +22,7 @@
   "direct-edit-ownership.spec.ts": 58,
   "direct-edit-parity-wiring.spec.ts": 4,
   "drawing-dimensions.spec.ts": 10,
+  "drawing-dxf-export.spec.ts": 10,
   "drawing-sections.spec.ts": 25,
   "drawing-tolerances.spec.ts": 14,
   "drawings.spec.ts": 16,

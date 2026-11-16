@@ -104,6 +104,7 @@
     "test/drawing-auto-dimension.test.ts",
     "test/drawing-dimension-audit.test.ts",
     "test/drawing-dimension-tolerances.test.ts",
+    "test/drawing-dxf-export.test.ts",
     "test/e2e-shards.test.ts",
     "test/e2ee-authority-fork.test.ts",
     "test/e2ee-authority-trust.test.ts",

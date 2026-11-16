@@ -183,6 +183,7 @@ export function sketchSvgBounds(entities: readonly DxfEntity[]): Bounds {
         include(bounds, ...entity.end);
         break;
       case 'polyline':
+      case 'solid':
         for (const point of entity.points) include(bounds, ...point);
         break;
       case 'circle':
@@ -320,6 +321,8 @@ export function sketchSvgElement(entity: DxfEntity): string {
       return `<line x1="${num(entity.start[0])}" y1="${num(-entity.start[1])}" x2="${num(entity.end[0])}" y2="${num(-entity.end[1])}"/>`;
     case 'circle':
       return `<circle cx="${num(entity.center[0])}" cy="${num(-entity.center[1])}" r="${num(entity.radius)}"/>`;
+    case 'solid':
+      return `<polygon points="${entity.points.map((p) => `${num(p[0])},${num(-p[1])}`).join(' ')}" fill="#000000" stroke="none"/>`;
     case 'polyline': {
       const [first, ...rest] = entity.points;
       if (!first) return '';
