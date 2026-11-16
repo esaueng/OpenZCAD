@@ -65,6 +65,7 @@
   "library-list-polish.spec.ts": 4,
   "library-plain-failures.spec.ts": 15,
   "library-reload-stability.spec.ts": 10,
+  "library-tile-name-fit.spec.ts": 3,
   "measure.spec.ts": 7,
   "mixed-seam-fillet.spec.ts": 37,
   "modeling.spec.ts": 165,
