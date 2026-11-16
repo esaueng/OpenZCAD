@@ -236,6 +236,42 @@ describe('M01 standard hole sizes: document contract', () => {
     );
   });
 
+  it('stores the table diameter on add and edit, and keeps it when cleared (review)', () => {
+    const stored = (document: ProjectDocument) =>
+      (listFeaturesInOrder(document).at(-1)!.data as { diameter: number })
+        .diameter;
+    const document = plate('mm', 40, 10);
+    // Written with any diameter, a standard hole stores its table's.
+    const holed = holeBody(document, {
+      ...input(document),
+      diameter: 99
+    }).document;
+    expect(stored(holed)).toBe(6.6);
+    const featureId = listFeaturesInOrder(holed).at(-1)!.featureId;
+    const tapped = updateFeature(holed, {
+      featureId,
+      data: {
+        featureKind: 'hole',
+        standard: { system: 'iso', size: 'M8', kind: 'tap-drill' }
+      }
+    });
+    expect(stored(tapped)).toBe(6.8);
+    // Cleared, it keeps the bore it was drilled to.
+    expect(
+      stored(updateFeature(tapped, { featureId, clearData: ['standard'] }))
+    ).toBe(6.8);
+    // In inches, the inch table value.
+    const inch = plate('inch', 2, 0.5);
+    expect(
+      stored(
+        holeBody(inch, {
+          ...input(inch),
+          standard: { system: 'ansi', size: '1/4', kind: 'tap-drill' }
+        }).document
+      )
+    ).toBeCloseTo(0.201, 12);
+  });
+
   it('refuses a size the table does not have, on add and on edit', () => {
     const document = plate('mm', 40, 10);
     expect(() =>
@@ -298,11 +334,19 @@ describe('M01 standard hole sizes: exact build', () => {
   }
 
   it('drills an ISO clearance hole to its table diameter, not the stored one', async () => {
-    // The stored diameter is deliberately wrong: the table is what is read.
-    const document = await drill('mm', 40, 10, {
-      diameter: 99,
+    // A stored diameter left wrong (by another writer): the table is read.
+    const drilled = await drill('mm', 40, 10, {
       standard: { system: 'iso', size: 'M6', kind: 'clearance' }
     });
+    const document = structuredClone(drilled);
+    const node = Object.values(document.nodes).find(
+      (candidate) =>
+        candidate.kind === 'feature' && candidate.featureKind === 'hole'
+    );
+    if (node?.kind !== 'feature' || node.data.featureKind !== 'hole') {
+      throw new Error('no hole');
+    }
+    node.data.diameter = 99;
     const derived = await adapter.syncDocument(document);
     expect(warningText(derived)).toBe('');
     expect(boreRadii(derived, last(document))).toEqual([
@@ -314,7 +358,7 @@ describe('M01 standard hole sizes: exact build', () => {
     );
   }, 120_000);
 
-  it('drills a blind ISO tap drill, and returns to the stored diameter when cleared', async () => {
+  it('drills a blind ISO tap drill, and keeps its bore when cleared', async () => {
     const document = await drill('mm', 40, 10, {
       depthMode: 'blind',
       depth: 8,
@@ -331,7 +375,7 @@ describe('M01 standard hole sizes: exact build', () => {
       clearData: ['standard']
     });
     const plain = await adapter.syncDocument(cleared);
-    expect(boreRadii(plain, last(cleared))).toEqual([expect.closeTo(3, 9)]);
+    expect(boreRadii(plain, last(cleared))).toEqual([expect.closeTo(3.4, 9)]);
   }, 120_000);
 
   it('drills an ANSI tap drill in an inch document, in inches', async () => {

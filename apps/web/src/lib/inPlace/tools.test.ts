@@ -339,6 +339,20 @@ describe('face tools build the card state', () => {
     expect(spec.defaults!(slots, ctx, {}, iso)).toMatchObject({
       counterboreDiameter: 15.12
     });
+    // In a metre document the steps keep their size (review): M2's Ø2.4 mm
+    // counterbore suggestion is 4.32 mm, not 0.0043 m rounded to 0.
+    expect(
+      spec.defaults!(
+        slots,
+        { ...CTX, units: 'm' },
+        {},
+        { standard: 'iso', isoSize: 'M2', holeFor: 'clearance', fit: 'normal' }
+      )
+    ).toMatchObject({
+      counterboreDiameter: 0.00432,
+      counterboreDepth: 0.0012,
+      countersinkDiameter: 0.0048
+    });
     // Any size stores none.
     expect(
       spec.request(slots, { diameter: 4 }, { standard: 'none' }, ctx)

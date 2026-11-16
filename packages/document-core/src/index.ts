@@ -86,6 +86,7 @@ import {
   ownEntry,
   patternPointsProblem,
   holePointsProblem,
+  holeStandardDiameter,
   holeStandardProblem,
   patternSourceProblem,
   skippedInstancesProblem,
@@ -3712,7 +3713,18 @@ export function holeBody(
     document,
     name,
     'hole',
-    deepClone({ featureKind: 'hole', targetBodyId, ...parameters }),
+    deepClone({
+      featureKind: 'hole',
+      targetBodyId,
+      ...parameters,
+      // M01 (schema v65): a standard hole stores its table's diameter, so
+      // clearing the standard later keeps the bore it was drilled to.
+      ...(parameters.standard
+        ? {
+            diameter: holeStandardDiameter(parameters.standard, document.units)
+          }
+        : {})
+    }),
     suppliedIds(input.ids)
   );
 }
@@ -5341,6 +5353,14 @@ export function updateFeature(
   if (feature.data.featureKind === 'hole') {
     validateHolePoints(next, feature.data.points, feature.featureId);
     validateHoleStandard(feature.data.standard);
+    // M01 (schema v65): whatever the patch said, a standard hole stores its
+    // table's diameter (see `holeBody`).
+    if (feature.data.standard) {
+      feature.data.diameter = holeStandardDiameter(
+        feature.data.standard,
+        next.units
+      );
+    }
   }
   // New Body has no dependency on the previous Add/Cut target. Undefined
   // patch values are normally ignored, so clear this semantic dependency here.

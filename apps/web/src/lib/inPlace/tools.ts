@@ -3438,11 +3438,8 @@ const hole: InPlaceToolSpec = {
     }
   ],
   defaults: (_slots, ctx, numbers, options) =>
-    holeStepSizes(
-      (options && holeStandardChosenDiameter(options, ctx.units)) ??
-        numbers.diameter ??
-        6
-    ),
+    (options && holeStandardStepSizes(options, ctx.units)) ??
+    holeStepSizes(numbers.diameter ?? 6),
   hint(slots, options, ctx) {
     if (slots.faces.length === 0) return 'Click a flat face';
     // A standard size sets the diameter: there is none to drag.
@@ -3508,11 +3505,12 @@ const hole: InPlaceToolSpec = {
     // M01 (schema v65): a standard's table gives the diameter, stored too.
     const standard = holeStandardFromChoices(options);
     const standardDiameter = holeStandardChosenDiameter(options, ctx.units);
-    const derived = holeStepSizes(
-      standardDiameter ??
+    const derived =
+      holeStandardStepSizes(options, ctx.units) ??
+      holeStepSizes(
         numbers?.diameter ??
-        (typeof values.diameter === 'number' ? values.diameter : 6)
-    );
+          (typeof values.diameter === 'number' ? values.diameter : 6)
+      );
     const step = (id: keyof typeof derived) => text(values[id], derived[id]);
     return {
       tool: 'modeling',
@@ -3691,6 +3689,28 @@ function holeStandardChosenDiameter(
 ): number | null {
   const standard = holeStandardFromChoices(options);
   return standard ? holeStandardDiameter(standard, units ?? 'mm') : null;
+}
+
+/**
+ * M01: the step sizes a standard's bore suggests, worked out and rounded in
+ * millimetres as the card rounds them, then given in the document's units,
+ * so a metre document's small screw does not round its steps to nothing.
+ * Null for any size.
+ */
+function holeStandardStepSizes(
+  options: Readonly<Record<string, string>>,
+  units: UnitSystem | undefined
+): ReturnType<typeof holeStepSizes> | null {
+  const standard = holeStandardFromChoices(options);
+  if (!standard) return null;
+  const mm = millimetresPerUnit(units ?? 'mm');
+  const steps = holeStepSizes(holeStandardDiameter(standard, 'mm'));
+  const inUnits = (value: number) => Number((value / mm).toPrecision(12));
+  return {
+    counterboreDiameter: inUnits(steps.counterboreDiameter),
+    counterboreDepth: inUnits(steps.counterboreDepth),
+    countersinkDiameter: inUnits(steps.countersinkDiameter)
+  };
 }
 
 /** A table diameter as stored: to a micrometre's worth of digits. */
