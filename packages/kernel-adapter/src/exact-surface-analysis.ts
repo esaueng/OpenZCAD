@@ -666,7 +666,10 @@ export function rayThickness(
   const crossings: { t: number; face: number }[] = [];
   for (const face of faces) {
     for (const t of surfaceCrossings(face, start, direction)) {
-      if (t > own && t <= reach) crossings.push({ t, face: face.handle });
+      // Only the start face's own crossing at the start is skipped; any
+      // other crossing after the start is a wall.
+      if (face.handle === startFace ? t <= own : t <= 0) continue;
+      if (t <= reach) crossings.push({ t, face: face.handle });
     }
   }
   crossings.sort((a, b) => a.t - b.t);
@@ -686,14 +689,15 @@ export function rayThickness(
     // A traced face, other than the one the ray starts on, within the
     // opening segment's length of the probe could cross that segment.
     for (const { handle } of traced) {
-      if (handle === startFace) continue;
       const d = kernel.pointToFaceDistance(
         probe[0],
         probe[1],
         probe[2],
         handle
       )[0]!;
-      if (!(d >= first)) throw tooThin();
+      // The start face lies `first` behind the probe where it is locally
+      // flat; much nearer, it curls back across the opening segment.
+      if (!(d >= (handle === startFace ? first / 2 : first))) throw tooThin();
     }
     let t = first;
     let cleared = false;

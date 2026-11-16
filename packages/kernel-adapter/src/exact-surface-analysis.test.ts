@@ -225,4 +225,47 @@ describe('the ray method (M09 thickness)', () => {
     );
     expect(Math.abs(ray.thickness - 7)).toBeLessThanOrEqual(0.001 + 1e-12);
   });
+
+  it('refuses a first wall closer to the start than the self-crossing allowance', () => {
+    // Resolution 1: material at (0, 0.0005) and (0.0008, 10). Both early
+    // planes are other faces than the start, so neither is skipped.
+    const kernel = slabKernel({
+      inside: (z) => (z > 0 && z < 0.0005) || (z > 0.0008 && z < 10),
+      planes: { 1: 0, 2: 0.0005, 3: 0.0008, 4: 10 }
+    });
+    expect(() =>
+      rayThickness(
+        kernel,
+        0,
+        [plane(1, 0), plane(2, 0.0005), plane(3, 0.0008), plane(4, 10)],
+        1,
+        start,
+        down,
+        1,
+        40
+      )
+    ).toThrow(/thinner here than the resolution/);
+  });
+
+  it('refuses where the traced start face curls back across the opening segment', () => {
+    // A tiny torus tube: the face the ray starts on lies 0.2 resolutions
+    // from the probe, not the 2 a flat start would put it at.
+    const kernel = slabKernel({
+      inside: (z) => z > 1.8 && z < 3,
+      planes: {},
+      traced: { 7: (z) => (z >= 1.9 ? 0.2 : Math.abs(z - 0.8)) }
+    });
+    expect(() =>
+      rayThickness(
+        kernel,
+        0,
+        [{ handle: 7, kind: 'traced' }],
+        7,
+        start,
+        down,
+        1,
+        40
+      )
+    ).toThrow(/thinner here than the resolution/);
+  });
 });
