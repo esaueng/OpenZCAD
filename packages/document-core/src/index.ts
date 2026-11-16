@@ -86,11 +86,14 @@ import {
   ownEntry,
   patternPointsProblem,
   holePointsProblem,
+  holeStandardDiameter,
+  holeStandardProblem,
   patternSourceProblem,
   skippedInstancesProblem,
   suppliedIds,
   type PatternPoints,
-  type HolePoints
+  type HolePoints,
+  type HoleStandard
 } from '@openzcad/shared';
 import {
   BODY_COLOR_CHOSEN_METADATA_KEY,
@@ -564,6 +567,8 @@ export interface HoleInput {
   positionAnchor?: 'centroid';
   /** M01 (schema v64): one bore at each of these sketch points. */
   points?: HolePoints;
+  /** M01 (schema v65): the standard size whose table gives the diameter. */
+  standard?: HoleStandard;
   ids?: BodyFeatureIds;
 }
 
@@ -3703,11 +3708,23 @@ export function holeBody(
   // older schema: written there, the document would no longer open.
   assertHoleContentSchema(parameters, document.schemaVersion);
   validateHolePoints(document, parameters.points, null);
+  validateHoleStandard(parameters.standard);
   return addBodyResultFeature(
     document,
     name,
     'hole',
-    deepClone({ featureKind: 'hole', targetBodyId, ...parameters }),
+    deepClone({
+      featureKind: 'hole',
+      targetBodyId,
+      ...parameters,
+      // M01 (schema v65): a standard hole stores its table's diameter, so
+      // clearing the standard later keeps the bore it was drilled to.
+      ...(parameters.standard
+        ? {
+            diameter: holeStandardDiameter(parameters.standard, document.units)
+          }
+        : {})
+    }),
     suppliedIds(input.ids)
   );
 }
@@ -4066,6 +4083,12 @@ export function validateHolePoints(
       );
     }
   }
+}
+
+/** M01 (schema v65): a hole's standard names a size its table has. */
+export function validateHoleStandard(standard: HoleStandard | undefined): void {
+  const problem = holeStandardProblem(standard);
+  if (problem) throw new Error(problem);
 }
 
 /**
@@ -4984,7 +5007,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'countersinkDiameter',
     'countersinkAngleDeg',
     'position',
-    'points'
+    'points',
+    'standard'
   ],
   shell: [
     'targetBodyId',
@@ -5123,9 +5147,10 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   revolve: ['axisRef', 'profile'],
   pattern: ['axisRef', 'sourceFeatureIds', 'skippedInstances'],
   transform: ['axisRotation'],
-  // M01 (schema v64): clearing a hole's sketch points drills it at its one
-  // stored position again.
-  hole: ['points'],
+  // M01: clearing a hole's sketch points (schema v64) drills it at its one
+  // stored position again; clearing its standard (schema v65) drills its
+  // stored diameter.
+  hole: ['points', 'standard'],
   // Schema v53: every size and placement field falls back to the face or its
   // documented default; the custom-profile fields may go only off a custom
   // profile, which the thread validation enforces. A face picked again
@@ -5327,6 +5352,15 @@ export function updateFeature(
   }
   if (feature.data.featureKind === 'hole') {
     validateHolePoints(next, feature.data.points, feature.featureId);
+    validateHoleStandard(feature.data.standard);
+    // M01 (schema v65): whatever the patch said, a standard hole stores its
+    // table's diameter (see `holeBody`).
+    if (feature.data.standard) {
+      feature.data.diameter = holeStandardDiameter(
+        feature.data.standard,
+        next.units
+      );
+    }
   }
   // New Body has no dependency on the previous Add/Cut target. Undefined
   // patch values are normally ignored, so clear this semantic dependency here.

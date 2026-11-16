@@ -283,6 +283,82 @@ describe('face tools build the card state', () => {
     ).not.toHaveProperty('state.value.points');
   });
 
+  it('hole sized by a standard (M01): the table gives the diameter, which has no handle', () => {
+    const spec = IN_PLACE_TOOL_SPECS.hole;
+    const slots = { ...EMPTY, faces: [TOP] };
+    const iso = {
+      standard: 'iso',
+      isoSize: 'M8',
+      holeFor: 'clearance',
+      fit: 'close',
+      depthMode: 'blind',
+      style: 'simple'
+    };
+    const ctx: InPlaceContext = { ...CTX, units: 'mm' };
+    expect(
+      spec.request(slots, { diameter: 4, depth: 8 }, iso, ctx)
+    ).toMatchObject({
+      state: {
+        value: {
+          diameter: '8.4',
+          standard: {
+            system: 'iso',
+            size: 'M8',
+            kind: 'clearance',
+            fit: 'close'
+          }
+        }
+      }
+    });
+    expect(spec.hint(slots, iso, ctx)).toBe(
+      'Click to move it · M8 clearance (close) ⌀ 8.4'
+    );
+    // Only the depth is dragged: the table sets the diameter.
+    expect(
+      spec
+        .handles(slots, { depth: 8 }, ctx, iso)
+        .map((handle) => handle.valueId)
+    ).toEqual(['depth']);
+    // A tap drill has no fit; an inch document stores the inch diameter.
+    const tap = spec.request(
+      slots,
+      {},
+      { standard: 'ansi', ansiSize: '1/4', holeFor: 'tap-drill', fit: 'loose' },
+      { ...CTX, units: 'inch' }
+    );
+    expect(tap).toMatchObject({
+      state: {
+        value: {
+          diameter: '0.201',
+          standard: { system: 'ansi', size: '1/4', kind: 'tap-drill' }
+        }
+      }
+    });
+    expect(tap).not.toHaveProperty('state.value.standard.fit');
+    // The step sizes follow the table's bore.
+    expect(spec.defaults!(slots, ctx, {}, iso)).toMatchObject({
+      counterboreDiameter: 15.12
+    });
+    // In a metre document the steps keep their size (review): M2's Ø2.4 mm
+    // counterbore suggestion is 4.32 mm, not 0.0043 m rounded to 0.
+    expect(
+      spec.defaults!(
+        slots,
+        { ...CTX, units: 'm' },
+        {},
+        { standard: 'iso', isoSize: 'M2', holeFor: 'clearance', fit: 'normal' }
+      )
+    ).toMatchObject({
+      counterboreDiameter: 0.00432,
+      counterboreDepth: 0.0012,
+      countersinkDiameter: 0.0048
+    });
+    // Any size stores none.
+    expect(
+      spec.request(slots, { diameter: 4 }, { standard: 'none' }, ctx)
+    ).not.toHaveProperty('state.value.standard');
+  });
+
   it('shell: every picked face opens, and the wall handle points inward', () => {
     const spec = IN_PLACE_TOOL_SPECS.shell;
     const slots = { ...EMPTY, faces: [TOP, { ...TOP, hash: 12 }] };

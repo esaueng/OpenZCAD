@@ -76,6 +76,8 @@ import {
   datumAxisPointSources,
   type EntityId,
   type FeatureId,
+  holeStandardDiameterMm,
+  millimetresPerUnit,
   type FeatureNode,
   type ParamValue,
   type ParameterKind,
@@ -197,6 +199,7 @@ import {
   patternBody,
   validatePatternDefinition,
   validateHolePoints,
+  validateHoleStandard,
   type PatternInput,
   type PrimitiveInput,
   renameNode,
@@ -1161,11 +1164,12 @@ function validateHoleInput(
   validateBodyTarget(document, input.targetBodyId);
   // M01 (schema v64): the sketch points, at the hole's history position.
   validateHolePoints(document, input.points, ownFeatureId);
-  const diameter = resolvedModelingValue(
-    document,
-    'hole diameter',
-    input.diameter
-  );
+  validateHoleStandard(input.standard);
+  // M01 (schema v65): a standard hole's table gives its diameter.
+  const diameter = input.standard
+    ? holeStandardDiameterMm(input.standard) /
+      millimetresPerUnit(document.units)
+    : resolvedModelingValue(document, 'hole diameter', input.diameter);
   if (!(diameter > 0)) {
     throw new Error('Hole diameter must resolve to a positive value.');
   }

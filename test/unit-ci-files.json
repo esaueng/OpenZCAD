@@ -138,6 +138,7 @@
     "test/hash-only-reference-upgrade.test.ts",
     "test/helical-coil-cap-rims.test.ts",
     "test/hole-points.test.ts",
+    "test/hole-standards.test.ts",
     "test/imported-mesh-conversion-cache.test.ts",
     "test/imported-mesh.test.ts",
     "test/intersect-material-acceptance.test.ts",

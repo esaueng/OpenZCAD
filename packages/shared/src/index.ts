@@ -22,6 +22,7 @@ export * from './body-clash';
 export * from './gear-mesh-types';
 export * from './gear-mesh';
 export * from './hole-points';
+export * from './hole-standards';
 import type { DocumentHistory } from './document-history';
 import { ownEntry } from './document-validation';
 import type { KeymapOverrides } from './keymap-settings';
@@ -36,6 +37,11 @@ import type { SketchPromotion } from './sketch-promotions';
 import type { ObjectFolderSet } from './object-folders';
 import type { AssemblySet } from './assembly';
 import type { PipeThreadSize } from './pipe-threads';
+import type {
+  HoleClearanceFit,
+  HoleStandardKind,
+  HoleStandardSystem
+} from './hole-standards';
 export * from './drawing-annotations';
 export * from './topology-reference';
 export * from './reference-images';
@@ -280,7 +286,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // dropped onto the hole's entry face. Absent keeps the one stored position,
 // so every older document builds unchanged. An older client would drill a
 // single hole at the stored position, so it must refuse. Builds on v63.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 64 as const;
+// v65 adds M01 standard hole sizes (`standard` on the `hole` feature): an
+// ISO metric or ANSI inch size, as a clearance hole with its fit or as a tap
+// drill, whose table gives the bore's diameter. Absent keeps the stored
+// diameter, so every older document builds unchanged. An older client would
+// drill the stored diameter and drop the size on its next save, so it must
+// refuse. Builds on v64.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 65 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -406,6 +418,19 @@ export interface HolePoints {
   sketchId: SketchId;
   /** Point entity ids of that sketch, each once, in the order picked. */
   pointIds: string[];
+}
+
+/**
+ * M01 (schema v65): the standard size a hole is drilled to, for a screw to
+ * pass (`clearance`) or for a thread to be tapped (`tap-drill`).
+ */
+export interface HoleStandard {
+  system: HoleStandardSystem;
+  /** `M6` for ISO, `#10` or `1/4` for ANSI. */
+  size: string;
+  kind: HoleStandardKind;
+  /** A clearance hole's fit; absent is `'normal'`. ANSI has no `'loose'`. */
+  fit?: HoleClearanceFit;
 }
 export type AxisId = 'x' | 'y' | 'z';
 
@@ -1998,6 +2023,12 @@ export type FeatureData =
        * Present, `position` and `positionAnchor` are stored but not read.
        */
       points?: HolePoints;
+      /**
+       * M01 (schema v65): the standard size the bore is drilled to. Its
+       * table gives the diameter, converted to the document's units, so
+       * `diameter` is then stored (as that value) but not read.
+       */
+      standard?: HoleStandard;
     }
   | {
       /**
