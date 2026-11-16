@@ -185,6 +185,18 @@ export interface ExportDialogProps {
     deflection: number,
     options?: { angularTolerance?: number }
   ): void;
+  /**
+   * F06: the model's configurations, when it has more than one, and which
+   * one the export writes. Absent, the dialog writes the model as shown.
+   */
+  configuration?: ExportDialogConfiguration;
+}
+
+/** F06: the configuration picker of an export. */
+export interface ExportDialogConfiguration {
+  rows: readonly { id: string; name: string }[];
+  selectedRowId: string;
+  onSelect(rowId: string): void;
 }
 
 /** One place a 3MF can be handed to a slicer from (L09). */
@@ -212,7 +224,8 @@ export function ExportDialog({
   documentUnits = 'mm',
   onExportUnitsChange,
   slicerTargets = [],
-  onOpenInSlicer
+  onOpenInSlicer,
+  configuration
 }: ExportDialogProps) {
   const dialogRef = useRef<HTMLFormElement>(null);
   // Escape must still close the dialog when focus has fallen out of it (a
@@ -413,6 +426,22 @@ export function ExportDialog({
                 ? `in ${UNIT_NAMES[writtenUnits]}, declared in the package.`
                 : `in ${UNIT_NAMES[writtenUnits]}. The file does not record its unit.`}
         </p>
+        {configuration && (
+          <label className="export-dialog-configuration">
+            <span>Configuration</span>
+            <select
+              aria-label="Configuration to export"
+              value={configuration.selectedRowId}
+              onChange={(event) => configuration.onSelect(event.target.value)}
+            >
+              {configuration.rows.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <fieldset className="export-dialog-group">
           <legend>Format</legend>
           {stlOnly && (

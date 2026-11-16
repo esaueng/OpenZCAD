@@ -797,6 +797,19 @@
   font-size: var(--fs-sm);
 }
 
+/* F06: which configuration the export writes. */
+.export-dialog-configuration {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+}
+
+.export-dialog-configuration select {
+  flex: 1;
+  min-width: 0;
+}
+
 .export-dialog-group {
   display: grid;
   /* A long body name widened the implicit track past the group's border. */

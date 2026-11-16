@@ -835,6 +835,12 @@ export interface ExactKernelAdapter {
     options?: StepExportOptions
   ): Promise<StepBodiesExport>;
   /**
+   * F06: the bodies the document itself shows once built (as
+   * {@link exportStepBodies} chooses them, mesh references included), for
+   * exporting a configuration that was never displayed.
+   */
+  documentExportBodyIds(document: ProjectDocument): Promise<BodyId[]>;
+  /**
    * DXF R12 outline of one PLANAR face, in millimetres (or `options.units`)
    * — the laser-cutting export. Fails closed on non-planar faces and stale
    * face references.
@@ -5135,6 +5141,27 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     );
   }
 
+  /**
+   * F06: the bodies `document` itself shows once built, in body order: not
+   * hidden by a parameter or the active configuration, not consumed, not
+   * suppressed, with geometry to write (a mesh reference included). Lets a
+   * caller export a configuration it has not displayed, whose body list it
+   * cannot know without building it.
+   */
+  async documentExportBodyIds(document: ProjectDocument): Promise<BodyId[]> {
+    return this.withExportBuild(document, (_kernel, build) => {
+      const { written, skipped } = shownExportBodies(document, build);
+      const meshes = new Set(
+        skipped
+          .filter((entry) => entry.reason === 'mesh-reference')
+          .map((entry) => entry.bodyId)
+      );
+      return document.bodyOrder.filter(
+        (bodyId) => written.includes(bodyId) || meshes.has(bodyId)
+      );
+    });
+  }
+
   async exportStepBodies(
     document: ProjectDocument,
     options: StepExportOptions = {}
@@ -5142,42 +5169,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const units = options.units ?? 'mm';
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
-      const hidden = getParameterHiddenBodyIds(document);
-      const features = new Map(
-        listNodesByKind(document, 'feature').map((feature) => [
-          feature.featureId,
-          feature
-        ])
-      );
-      const bodyNodes = new Map(
-        listNodesByKind(document, 'body').map((body) => [body.bodyId, body])
-      );
-      const written: BodyId[] = [];
-      const skipped: StepBodiesExport['skipped'] = [];
-      for (const bodyId of document.bodyOrder) {
-        const body = bodyNodes.get(bodyId);
-        const feature = body ? features.get(body.featureId) : undefined;
-        // What the document itself shows: not hidden by a parameter, not
-        // replaced by a later boolean, not switched off by suppression.
-        if (
-          !body ||
-          hidden.has(bodyId) ||
-          build.consumed.has(bodyId) ||
-          (feature && isFeatureSuppressed(feature) && !build.shapes.has(bodyId))
-        ) {
-          continue;
-        }
-        const shape = build.shapes.get(bodyId);
-        const reason = !shape
-          ? 'failed'
-          : shape.referenceMesh
-            ? 'mesh-reference'
-            : shape.solids.length === 0
-              ? 'empty'
-              : null;
-        if (reason) skipped.push({ bodyId, reason });
-        else written.push(bodyId);
-      }
+      const { written, skipped } = shownExportBodies(document, build);
       if (written.length === 0) {
         throw new Error('The project has no solid body to write.');
       }
@@ -6352,4 +6344,51 @@ function draftDisplayCandidate(
     source: document.featureOrder.slice(0, -1).join(','),
     bodyId: data.targetBodyId
   };
+}
+
+/**
+ * What a document shows of a build, for writing: each body not hidden (by a
+ * parameter or the active configuration), not replaced by a later boolean and
+ * not switched off by suppression, split into those with solids to write and
+ * those skipped with the reason.
+ */
+function shownExportBodies(
+  document: ProjectDocument,
+  build: ExactBuildResult
+): { written: BodyId[]; skipped: StepBodiesExport['skipped'] } {
+  const hidden = getParameterHiddenBodyIds(document);
+  const features = new Map(
+    listNodesByKind(document, 'feature').map((feature) => [
+      feature.featureId,
+      feature
+    ])
+  );
+  const bodyNodes = new Map(
+    listNodesByKind(document, 'body').map((body) => [body.bodyId, body])
+  );
+  const written: BodyId[] = [];
+  const skipped: StepBodiesExport['skipped'] = [];
+  for (const bodyId of document.bodyOrder) {
+    const body = bodyNodes.get(bodyId);
+    const feature = body ? features.get(body.featureId) : undefined;
+    if (
+      !body ||
+      hidden.has(bodyId) ||
+      build.consumed.has(bodyId) ||
+      (feature && isFeatureSuppressed(feature) && !build.shapes.has(bodyId))
+    ) {
+      continue;
+    }
+    const shape = build.shapes.get(bodyId);
+    const reason = !shape
+      ? 'failed'
+      : shape.referenceMesh
+        ? 'mesh-reference'
+        : shape.solids.length === 0
+          ? 'empty'
+          : null;
+    if (reason) skipped.push({ bodyId, reason });
+    else written.push(bodyId);
+  }
+  return { written, skipped };
 }

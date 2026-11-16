@@ -177,4 +177,31 @@ describe('ConfigurationTable', () => {
       screen.queryByRole('button', { name: /Add configuration/ })
     ).toBeNull();
   });
+
+  it('exports any row, even read-only (F06 slice 2)', async () => {
+    const onExportRow = vi.fn();
+    render(
+      <ConfigurationTable
+        configurations={set}
+        parameters={[width]}
+        features={[lug]}
+        bodies={[lugBody]}
+        onExportRow={onExportRow}
+      />
+    );
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Export Large'), {
+        target: { value: 'step' }
+      });
+    });
+    expect(onExportRow).toHaveBeenCalledWith('large', 'step');
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Export Small'), {
+        target: { value: 'mesh' }
+      });
+    });
+    expect(onExportRow).toHaveBeenCalledWith('small', 'mesh');
+    // The picker resets, ready for the next export.
+    expect(screen.getByLabelText('Export Large')).toHaveValue('');
+  });
 });

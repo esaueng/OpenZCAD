@@ -656,4 +656,31 @@ describe('ExportDialog', () => {
       expect(onOpenInSlicer).toHaveBeenCalledWith('download', 0.08);
     });
   });
+
+  it('names the configuration it writes and lets another be picked (F06)', async () => {
+    const onSelect = vi.fn();
+    renderDialog({
+      configuration: {
+        rows: [
+          { id: 'small', name: 'Small' },
+          { id: 'large', name: 'Large' }
+        ],
+        selectedRowId: 'large',
+        onSelect
+      }
+    });
+    const picker = screen.getByRole('combobox', {
+      name: 'Configuration to export'
+    });
+    expect(picker).toHaveValue('large');
+    await userEvent.selectOptions(picker, 'small');
+    expect(onSelect).toHaveBeenCalledWith('small');
+  });
+
+  it('shows no configuration picker for a model without one', () => {
+    renderDialog();
+    expect(
+      screen.queryByRole('combobox', { name: 'Configuration to export' })
+    ).toBeNull();
+  });
 });

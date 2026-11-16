@@ -48,6 +48,11 @@ export interface ConfigurationTableProps {
   bodies: readonly BodyRepresentation[];
   /** Absent when the model cannot be edited: the table is read-only. */
   actions?: ConfigurationActions;
+  /**
+   * Exports one row, as STEP or through the mesh dialog. Separate from
+   * `actions`: exporting needs no edit access. Absent offers no export.
+   */
+  onExportRow?(rowId: string, kind: 'step' | 'mesh'): void;
 }
 
 function materialValue(selection: MassDensitySelection | undefined): string {
@@ -119,7 +124,8 @@ export function ConfigurationTable({
   parameters,
   features,
   bodies,
-  actions
+  actions,
+  onExportRow
 }: ConfigurationTableProps) {
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState('');
@@ -356,6 +362,22 @@ export function ConfigurationTable({
                           run(() => actions!.renameRow(row.id, name))
                         }
                       />
+                      {onExportRow && (
+                        <select
+                          className="configuration-export"
+                          aria-label={`Export ${row.name}`}
+                          value=""
+                          onChange={(event) => {
+                            const kind = event.target.value;
+                            if (kind === 'step' || kind === 'mesh')
+                              onExportRow(row.id, kind);
+                          }}
+                        >
+                          <option value="">Export…</option>
+                          <option value="step">STEP</option>
+                          <option value="mesh">3MF, STL…</option>
+                        </select>
+                      )}
                       {actions && !active && (
                         <button
                           type="button"

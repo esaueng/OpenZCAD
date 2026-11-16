@@ -284,6 +284,8 @@ export interface GeometryWorkerApi {
       transparent?: boolean;
       /** 'step' only: the name the file is saved under, for its header. */
       fileName?: string;
+      /** F06: write every body the document shows, ignoring `bodyIds`. */
+      allShownBodies?: boolean;
       signal?: AbortSignal;
       onState?(state: GeometryWorkerState): void;
     }
@@ -301,6 +303,8 @@ export interface GeometryWorkerApi {
     options?: {
       angularTolerance?: number;
       units?: UnitSystem;
+      /** F06: check every body the document shows, ignoring `bodyIds`. */
+      allShownBodies?: boolean;
       onState?(state: GeometryWorkerState): void;
     }
   ): Promise<MeshQualityReport>;
@@ -1529,7 +1533,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             : {}),
           ...(options?.fileName !== undefined
             ? { fileName: options.fileName }
-            : {})
+            : {}),
+          ...(options?.allShownBodies ? { allShownBodies: true } : {})
         });
       });
     },
@@ -1542,7 +1547,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         ...(options?.angularTolerance !== undefined
           ? { angularTolerance: options.angularTolerance }
           : {}),
-        ...(options?.units !== undefined ? { units: options.units } : {})
+        ...(options?.units !== undefined ? { units: options.units } : {}),
+        ...(options?.allShownBodies ? { allShownBodies: true } : {})
       });
       if (!posted.ok) {
         return Promise.reject(new Error('Geometry worker is unavailable.'));

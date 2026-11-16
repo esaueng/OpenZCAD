@@ -177,6 +177,12 @@ export type GeometryWorkerRequest =
       transparent?: boolean;
       /** 'step' only: the name the file is saved under, for its header. */
       fileName?: string;
+      /**
+       * F06: ignore `bodyIds` and write every body the document itself shows
+       * once built — a configuration that is not the displayed one, whose
+       * bodies the caller cannot list.
+       */
+      allShownBodies?: boolean;
     }
   | {
       /**
@@ -204,7 +210,8 @@ export type GeometryWorkerRequest =
       deflection: number;
       angularTolerance?: number;
       /** The space the writer tessellates in; millimetres when unset. */
-      units?: UnitSystem;
+      units?: UnitSystem; /** F06: as for an export, every body the document shows. */
+      allShownBodies?: boolean;
     }
   | {
       /**
@@ -1400,7 +1407,9 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       if (request.type === 'mesh-quality') {
         const report = await exact.meshQuality(
           document,
-          request.bodyIds,
+          request.allShownBodies
+            ? await exact.documentExportBodyIds(document)
+            : request.bodyIds,
           request.deflection,
           {
             ...(request.units ? { units: request.units } : {}),
@@ -1467,8 +1476,11 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         post(stateFor('ready', request, { stale: false }));
         return;
       }
+      const exportBodyIds = request.allShownBodies
+        ? await exact.documentExportBodyIds(document)
+        : request.bodyIds;
       if (request.format !== 'step' && request.format !== 'stl') {
-        const data = await exact.exportMesh(document, request.bodyIds, {
+        const data = await exact.exportMesh(document, exportBodyIds, {
           format: request.format,
           deflection: request.deflection ?? DEFAULT_EXPORT_DEFLECTION,
           ...(request.units ? { units: request.units } : {}),
@@ -1492,21 +1504,16 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       }
       const text =
         request.format === 'step'
-          ? await exact.exportStep(document, request.bodyIds, {
+          ? await exact.exportStep(document, exportBodyIds, {
               ...(request.units ? { units: request.units } : {}),
               ...(request.fileName ? { fileName: request.fileName } : {})
             })
-          : await exact.exportStl(
-              document,
-              request.bodyIds,
-              request.deflection,
-              {
-                ...(request.units ? { units: request.units } : {}),
-                ...(request.angularTolerance !== undefined
-                  ? { angularTolerance: request.angularTolerance }
-                  : {})
-              }
-            );
+          : await exact.exportStl(document, exportBodyIds, request.deflection, {
+              ...(request.units ? { units: request.units } : {}),
+              ...(request.angularTolerance !== undefined
+                ? { angularTolerance: request.angularTolerance }
+                : {})
+            });
       const result: GeometryExportResult = {
         type: 'export',
         ok: true,
