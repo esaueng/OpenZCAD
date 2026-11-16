@@ -374,19 +374,25 @@ describe('stable promotion', () => {
     }
   });
 
-  it('runs from main, behind the approved stable-promotion environment', () => {
+  it('runs from main in the stable-promotion environment, daily or by hand', () => {
     const workflow = readFileSync(
       '.github/workflows/promote-stable.yml',
       'utf8'
     );
-    expect(workflow).toMatch(/^on:\n {2}workflow_dispatch:/m);
+    expect(workflow).toMatch(
+      /^on:\n {2}schedule:\n {4}# .*\n {4}- cron: '0 10 \* \* \*'\n {2}workflow_dispatch:/m
+    );
+    // With no commit named, it takes the latest main by full ref name.
+    expect(workflow).toContain(
+      'COMMIT=$(git rev-parse --verify refs/remotes/origin/main^{commit})'
+    );
     expect(workflow).not.toMatch(/^ {2}(push|pull_request\w*|workflow_run):/m);
     expect(workflow).toContain('environment: stable-promotion');
     expect(workflow).toContain(
       'ssh-key: ${{ secrets.STABLE_PROMOTION_DEPLOY_KEY }}'
     );
     expect(workflow).toContain('if [[ "$REF" != refs/heads/main ]]');
-    // Run the code that was approved, not main as it is after approval.
+    // Run the workflow code the run started at, not main as it is later.
     expect(workflow).toContain('ref: ${{ github.sha }}');
     expect(workflow).not.toMatch(/^\s+ref: main$/m);
     expect(workflow).toContain('node scripts/promote-stable.mjs');
