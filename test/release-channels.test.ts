@@ -266,6 +266,7 @@ describe('stable promotion', () => {
   const MAIN = 'a'.repeat(40);
   const OLD = 'b'.repeat(40);
   const OFF_MAIN = 'c'.repeat(40);
+  const ACTIONS = { GITHUB_ACTIONS: 'true' };
 
   function fakeGit({
     stable = OLD,
@@ -301,7 +302,11 @@ describe('stable promotion', () => {
   it('fast-forwards to a commit on main and lists the migrations it applies', () => {
     const { git, calls } = fakeGit();
     const lines: string[] = [];
-    const plan = promote(MAIN, { git, log: (line) => lines.push(line) });
+    const plan = promote(MAIN, {
+      git,
+      log: (line) => lines.push(line),
+      environment: ACTIONS
+    });
     expect(plan.migrations).toEqual(['apps/web/migrations/0058_new.sql']);
     expect(lines.join('\n')).toContain('0058_new.sql');
     expect(calls).toContainEqual([
@@ -328,8 +333,58 @@ describe('stable promotion', () => {
     promote(MAIN, { git: dry.git, dryRun: true, log: () => {} });
     expect(dry.calls.some(([command]) => command === 'push')).toBe(false);
     const same = fakeGit({ stable: MAIN });
-    expect(promote(MAIN, { git: same.git, log: () => {} }).commits).toEqual([]);
+    expect(
+      promote(MAIN, { git: same.git, log: () => {}, environment: ACTIONS })
+        .commits
+    ).toEqual([]);
     expect(same.calls.some(([command]) => command === 'push')).toBe(false);
+  });
+
+  it('pushes only from GitHub Actions; a local run may only dry-run', () => {
+    const local = fakeGit();
+    expect(() =>
+      promote(MAIN, { git: local.git, log: () => {}, environment: {} })
+    ).toThrow(/Only the Promote stable workflow/);
+    expect(local.calls).toEqual([]);
+    promote(MAIN, {
+      git: local.git,
+      dryRun: true,
+      log: () => {},
+      environment: {}
+    });
+    expect(local.calls.some(([command]) => command === 'push')).toBe(false);
+  });
+
+  it('takes a commit SHA, never a ref or an option', () => {
+    for (const target of ['origin/main', 'stable', '--upload-pack=x', 'abc']) {
+      expect(() => planPromotion(target, { git: fakeGit().git })).toThrow(
+        /not a commit SHA/
+      );
+    }
+  });
+
+  it('runs from main, behind the approved stable-promotion environment', () => {
+    const workflow = readFileSync(
+      '.github/workflows/promote-stable.yml',
+      'utf8'
+    );
+    expect(workflow).toMatch(/^on:\n {2}workflow_dispatch:/m);
+    expect(workflow).not.toMatch(/^ {2}(push|pull_request\w*|workflow_run):/m);
+    expect(workflow).toContain('environment: stable-promotion');
+    expect(workflow).toContain(
+      'ssh-key: ${{ secrets.STABLE_PROMOTION_DEPLOY_KEY }}'
+    );
+    expect(workflow).toContain('if [[ "$REF" != refs/heads/main ]]');
+    expect(workflow).toContain('node scripts/promote-stable.mjs');
+    // Inputs reach the shell through env, never interpolated into a script.
+    const inputLines = workflow
+      .split('\n')
+      .filter((line) => line.includes('${{ inputs.'));
+    expect(inputLines.length).toBeGreaterThan(0);
+    for (const line of inputLines) {
+      expect(line).toMatch(/^\s+[A-Z_]+: \$\{\{ inputs\.\w+ \}\}$/);
+    }
+    expect(workflow).toMatch(/^permissions:\n {2}contents: read$/m);
   });
 
   it('requires an explicit commit', () => {

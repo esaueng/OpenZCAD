@@ -1,11 +1,15 @@
 // Promotes the stable (production) channel to a commit that beta already ran.
 //
-//   pnpm promote:stable <commit> [--dry-run]
+//   pnpm promote:stable <sha> --dry-run                            (preview)
+//   gh workflow run promote-stable.yml --ref main -f commit=<sha>  (release)
 //
 // Workers Builds deploys the openzcad-stable Worker from the `stable` branch,
-// so moving that branch is the release. It only ever fast-forwards: the
-// target must already be on origin/main (merged through the queue, deployed
-// to beta), and the current origin/stable must be its ancestor. Nothing is
+// so moving that branch is the release. Only the Promote stable workflow can
+// move it (a ruleset restricts updates to its deploy key), so a real push
+// runs only in GitHub Actions; locally the script plans and dry-runs. It
+// only ever fast-forwards: the target must already be on origin/main
+// (merged through the queue, deployed to beta), and the current
+// origin/stable must be its ancestor. Nothing is
 // committed to `stable` directly, so it never drifts from main.
 // docs/release-channels.md describes the channels.
 import { execFileSync } from 'node:child_process';
@@ -43,6 +47,11 @@ export function planPromotion(target, { git = realGit } = {}) {
   if (!target) {
     throw new Error(
       'Name the commit to promote, e.g. pnpm promote:stable <sha>. Use a commit beta has run.'
+    );
+  }
+  if (!/^[0-9a-f]{7,40}$/i.test(target)) {
+    throw new Error(
+      `${target} is not a commit SHA; name the commit, not a ref`
     );
   }
   git(['fetch', '--quiet', 'origin', 'main']);
@@ -95,10 +104,23 @@ export function planPromotion(target, { git = realGit } = {}) {
   return { target: sha, current, commits, migrations };
 }
 
+export const PROMOTE_COMMAND =
+  'gh workflow run promote-stable.yml --ref main -f commit=<sha>';
+
 export function promote(
   target,
-  { git = realGit, dryRun = false, log = console.log } = {}
+  {
+    git = realGit,
+    dryRun = false,
+    log = console.log,
+    environment = process.env
+  } = {}
 ) {
+  if (!dryRun && environment.GITHUB_ACTIONS !== 'true') {
+    throw new Error(
+      `Only the Promote stable workflow can move stable. Run: ${PROMOTE_COMMAND.replace('<sha>', target ?? '<sha>')} (or add --dry-run here to preview).`
+    );
+  }
   const plan = planPromotion(target, { git });
   if (plan.commits.length === 0) {
     log(`stable is already at ${plan.target}.`);
