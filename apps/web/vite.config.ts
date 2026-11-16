@@ -489,6 +489,14 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
             import.meta.url
           )
         ),
+        // M09's overlay drawing loads with the first analysis switched on,
+        // in its own chunk rather than the entry's.
+        '@openzcad/viewport/analysis-overlay': fileURLToPath(
+          new URL(
+            '../../packages/viewport/src/scene/analysisOverlay.ts',
+            import.meta.url
+          )
+        ),
         '@openzcad/viewport/types': fileURLToPath(
           new URL('../../packages/viewport/src/types.ts', import.meta.url)
         ),

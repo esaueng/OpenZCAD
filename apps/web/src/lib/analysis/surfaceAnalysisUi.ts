@@ -8,7 +8,7 @@ import {
   type SurfaceAnalysisRequest,
   type SurfaceAnalysisUnsupported
 } from '@openzcad/shared';
-import type { AnalysisOverlayDisplay } from '@openzcad/viewport';
+import type { AnalysisOverlayDisplay } from '@openzcad/viewport/analysis-overlay';
 import { formatNumber } from '../model';
 
 /**
@@ -17,9 +17,7 @@ import { formatNumber } from '../model';
  * does not cover, next to the legend that reads it.
  */
 
-export const ANALYSIS_LABELS: Record<SurfaceAnalysisKind, string> = {
-  draft: 'Draft'
-};
+export { ANALYSIS_LABELS } from './analysisRuntime';
 
 /** Legend bands, in sRGB hex; the overlay uses the same values. */
 export const DRAFT_COLORS: Record<
@@ -76,13 +74,21 @@ export function analysisOverlayFor(
   report: SurfaceAnalysisReport,
   request: SurfaceAnalysisRequest
 ): AnalysisOverlayDisplay {
+  // A face the kernel could not mesh leaves a hole in the overlay: that
+  // body keeps its own faces drawn under it.
+  const holed = new Set(
+    report.unsupported
+      .filter((entry) => entry.reason === 'not-tessellated')
+      .map((entry) => entry.bodyId)
+  );
   return {
     bodies: report.bodies.map((body) => ({
       bodyId: body.bodyId,
       positions: body.positions,
       normals: body.normals,
       indices: body.indices,
-      colors: analysisColors(body.values, request)
+      colors: analysisColors(body.values, request),
+      covers: !holed.has(body.bodyId)
     }))
   };
 }

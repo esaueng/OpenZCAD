@@ -112,7 +112,9 @@ describe('positioning against the host', () => {
     const layer = new HudLayer(host);
     const label = layer.create('sketch-dim-label');
 
-    expect(layer.showAtPointer(label, { clientX: 140, clientY: 110 }, 16, -28)).toBe(true);
+    expect(
+      layer.showAtPointer(label, { clientX: 140, clientY: 110 }, 16, -28)
+    ).toBe(true);
     expect(label.style.left).toBe('116px');
     expect(label.style.top).toBe('72px');
     expect(label.hidden).toBe(false);
@@ -122,11 +124,18 @@ describe('positioning against the host', () => {
   it('leaves the overlay hidden when the host cannot be measured', () => {
     // A detached or display:none host reports a zero rect; positioning then
     // would park the overlay at the corner instead of leaving it invisible.
-    const { host, restore } = makeHost({ left: 0, top: 0, width: 0, height: 0 });
+    const { host, restore } = makeHost({
+      left: 0,
+      top: 0,
+      width: 0,
+      height: 0
+    });
     const layer = new HudLayer(host);
     const label = layer.create('sketch-dim-label');
 
-    expect(layer.showAtPointer(label, { clientX: 10, clientY: 10 })).toBe(false);
+    expect(layer.showAtPointer(label, { clientX: 10, clientY: 10 })).toBe(
+      false
+    );
     expect(label.hidden).toBe(true);
     restore();
   });
@@ -137,12 +146,7 @@ describe('positioning against the host', () => {
     const popup = layer.create('topology-pick-list');
 
     expect(
-      layer.showAtPointerClamped(
-        popup,
-        { clientX: 830, clientY: 590 },
-        12,
-        12
-      )
+      layer.showAtPointerClamped(popup, { clientX: 830, clientY: 590 }, 12, 12)
     ).toBe(true);
     expect(popup.style.left).toBe('632px');
     expect(popup.style.top).toBe('472px');

@@ -83,6 +83,22 @@ describe('draft colours (M09)', () => {
     expect(hex(strict.bodies[0]!.colors, 0)).toBe(DRAFT_COLORS.insufficient);
     const loose = analysisOverlayFor(measured, draft(1));
     expect(hex(loose.bodies[0]!.colors, 0)).toBe(DRAFT_COLORS.positive);
+    expect(strict.bodies[0]!.covers).toBe(true);
+    const holed = analysisOverlayFor(
+      {
+        ...measured,
+        unsupported: [
+          {
+            bodyId: 'body_a',
+            face: 0,
+            reason: 'not-tessellated',
+            message: 'No mesh'
+          }
+        ]
+      },
+      draft(1)
+    );
+    expect(holed.bodies[0]!.covers).toBe(false);
     // The minimum is not part of what the kernel measures.
     expect(measuredPart(draft(1))).toEqual(measuredPart(draft(5)));
     expect(measuredPart(draft(1))).not.toEqual(

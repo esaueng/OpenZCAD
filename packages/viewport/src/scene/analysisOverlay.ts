@@ -2,12 +2,23 @@ import * as THREE from 'three';
 import { findBodyId, forEachMesh, type ViewerMesh } from '../pick/meshes';
 
 /**
- * M09 analysis overlays in the scene: one mesh per analysed body, drawn over
- * the body with the colours the app computed from the exact kernel's
- * samples. The overlay is a child of the body's own mesh, so it follows the
- * body's pose (Assemble) and its section cut; it is never picked (picks go
- * through to the body) and never counted as a viewer mesh, so selection
- * highlighting never tints it.
+ * M09 analysis overlays in the scene: one mesh per analysed body, drawn as
+ * the body's surface with the colours the app computed from the exact
+ * kernel's samples. The overlay is a child of the body's own mesh, so it
+ * follows the body's pose (Assemble) and its section cut; it is never picked
+ * (picks go through to the body) and never counted as a viewer mesh, so
+ * selection highlighting never tints it.
+ *
+ * The overlay stands IN FOR the body's shaded faces rather than over them.
+ * It is sampled more coarsely than the display mesh, so on a convex face its
+ * triangles lie slightly inside the display's; drawn over the body, the
+ * body's own faces would win the depth test across their interiors and the
+ * colours would show in patches at any zoom. While an overlay covers a body
+ * (every face meshed), the body's face material is switched off and the
+ * overlay writes depth in its place, so other bodies still hide it and it
+ * hides them. A body with a face the kernel could not mesh keeps its own
+ * faces drawn under the overlay, so no hole opens in it. Edges, section caps
+ * and selection fills are separate objects and stay as they are.
  *
  * Positions are in the body's model coordinates, which is the frame of its
  * display mesh.
@@ -21,17 +32,45 @@ export interface AnalysisOverlayBody {
   indices: Uint32Array;
   /** Linear RGB in [0, 1], three per vertex. */
   colors: Float32Array;
+  /**
+   * Whether the overlay meshes every face of the body, so it can stand in
+   * for the body's faces. Absent means true.
+   */
+  covers?: boolean;
 }
 
 export interface AnalysisOverlayDisplay {
   bodies: readonly AnalysisOverlayBody[];
 }
 
+/**
+ * Marks `host` as covered by an overlay: its faces stop drawing, and the
+ * visibility the display mode wants for them is kept aside until the
+ * overlay goes (`applyDisplayMode` keeps it current meanwhile).
+ */
+function coverHost(host: ViewerMesh) {
+  if (host.userData.analysisCovered === true) return;
+  host.userData.analysisCovered = true;
+  host.userData.analysisFacesVisible = host.material.visible;
+  host.material.visible = false;
+}
+
+function uncoverHost(host: THREE.Object3D) {
+  if (host.userData.analysisCovered !== true) return;
+  const visible = host.userData.analysisFacesVisible !== false;
+  delete host.userData.analysisCovered;
+  delete host.userData.analysisFacesVisible;
+  const material = (host as ViewerMesh).material as THREE.Material | undefined;
+  if (material) material.visible = visible;
+}
+
 /** Removes every analysis overlay under `root` and frees its GPU memory. */
 export function clearAnalysisOverlay(root: THREE.Object3D) {
   const previous: THREE.Object3D[] = [];
+  const covered: THREE.Object3D[] = [];
   root.traverse((child) => {
     if (child.userData.analysisOverlay === true) previous.push(child);
+    if (child.userData.analysisCovered === true) covered.push(child);
   });
   // Removing during traverse would skip siblings.
   for (const child of previous) {
@@ -40,6 +79,7 @@ export function clearAnalysisOverlay(root: THREE.Object3D) {
     mesh.geometry.dispose();
     (mesh.material as THREE.Material).dispose();
   }
+  for (const host of covered) uncoverHost(host);
 }
 
 /**
@@ -88,6 +128,12 @@ export function applyAnalysisOverlay(
     overlay.userData.analysisDisplay = display;
     overlay.raycast = () => undefined;
     overlay.renderOrder = 5;
+    if (body.covers !== false) coverHost(host);
+    // Shown where the body's faces would be: not in wireframe.
+    overlay.visible =
+      host.userData.analysisCovered === true
+        ? host.userData.analysisFacesVisible !== false
+        : host.material.visible;
     host.add(overlay);
     drawn.push(body.bodyId);
   }

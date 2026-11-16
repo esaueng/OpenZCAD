@@ -7,10 +7,10 @@ import { Tooltip } from './Tooltip';
 import { labelWithKey, useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import {
+  ANALYSIS_LABELS,
   analysisRuntime,
   useAnalysisRuntime
 } from '../lib/analysis/analysisRuntime';
-import { ANALYSIS_LABELS } from '../lib/analysis/surfaceAnalysisUi';
 import type { SurfaceAnalysisKind } from '@openzcad/shared';
 
 /** The M09 analyses the menu offers, in order, with their icons. */

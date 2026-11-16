@@ -1,3 +1,4 @@
+import type * as AnalysisUiTypes from './surfaceAnalysisUi';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   BodyId,
@@ -5,8 +6,16 @@ import type {
   SurfaceAnalysisReport,
   SurfaceAnalysisRequest
 } from '@openzcad/shared';
-import type { AnalysisOverlayDisplay } from '@openzcad/viewport';
-import { analysisOverlayFor } from './surfaceAnalysisUi';
+import type { AnalysisOverlayDisplay } from '@openzcad/viewport/analysis-overlay';
+
+type AnalysisUi = typeof AnalysisUiTypes;
+let analysisUi: Promise<AnalysisUi> | undefined;
+/**
+ * The colouring and wording load on demand, with the first analysis: they
+ * have no business in the entry chunk of a session that never turns one on.
+ */
+export const loadAnalysisUi = () =>
+  (analysisUi ??= import('./surfaceAnalysisUi'));
 
 export type AnalysisRunState =
   | { kind: 'running' }
@@ -103,14 +112,32 @@ export function useSurfaceAnalysis({
     return () => clearTimeout(timer);
   }, [key]);
 
+  const [ui, setUi] = useState<AnalysisUi | null>(null);
+  useEffect(() => {
+    if (key === null || ui) return;
+    let live = true;
+    loadAnalysisUi().then(
+      (module) => {
+        if (live) setUi(module);
+      },
+      () => {
+        // A failed chunk load leaves the overlay off; the panel, loaded the
+        // same way, reports the failure where it stands.
+      }
+    );
+    return () => {
+      live = false;
+    };
+  }, [key, ui]);
+
   const current = result !== null && result.key === key ? result.state : null;
   const report = current?.kind === 'done' ? current.report : null;
   const overlay = useMemo(
     () =>
-      report && request && !previewing
-        ? analysisOverlayFor(report, request)
+      ui && report && request && !previewing
+        ? ui.analysisOverlayFor(report, request)
         : null,
-    [report, request, previewing]
+    [ui, report, request, previewing]
   );
   return {
     state: key === null ? null : (current ?? { kind: 'running' }),

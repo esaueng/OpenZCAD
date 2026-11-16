@@ -81,7 +81,6 @@ export * from './scene/TopologyPickList';
 export * from './scene/objects';
 export * from './scene/exactSection';
 export * from './scene/sectionOverlap';
-export * from './scene/analysisOverlay';
 export * from './scene/drawnBodies';
 export * from './scene/moveCopyPreview';
 

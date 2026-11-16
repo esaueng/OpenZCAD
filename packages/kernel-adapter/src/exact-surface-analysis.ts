@@ -180,10 +180,12 @@ export function analyzeBodySurfaces(
           ANALYSIS_ANGULAR_DEFLECTION
         );
       } catch (error) {
+        // No mesh at all: the overlay has a hole here, so the viewport keeps
+        // the body's own surface drawn under it.
         unsupported.push({
           bodyId,
           face: index,
-          reason: 'kernel-refused',
+          reason: 'not-tessellated',
           message: messageOf(error)
         });
         continue;

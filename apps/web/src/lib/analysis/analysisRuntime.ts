@@ -28,6 +28,11 @@ export const DRAFT_PULL_DIRECTIONS = {
 
 export type DraftPullId = keyof typeof DRAFT_PULL_DIRECTIONS;
 
+/** The analyses' names, as the Display menu and the panel show them. */
+export const ANALYSIS_LABELS: Record<SurfaceAnalysisKind, string> = {
+  draft: 'Draft'
+};
+
 export const DEFAULT_DRAFT_MINIMUM_DEGREES = 1;
 
 export function defaultAnalysisRequest(

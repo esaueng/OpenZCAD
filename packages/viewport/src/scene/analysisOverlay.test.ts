@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { applySectionPlane, sectionClippingPlane } from './objects';
+import {
+  applyDisplayMode,
+  applySectionPlane,
+  sectionClippingPlane
+} from './objects';
 import {
   ANALYSIS_OVERLAY,
   applyAnalysisOverlay,
@@ -128,5 +132,42 @@ describe('analysis overlay (M09)', () => {
     expect(
       (overlays(root)[0]!.material as THREE.Material).clippingPlanes ?? []
     ).toHaveLength(0);
+  });
+
+  it("stands in for the body's faces, which come back when it goes", () => {
+    const root = new THREE.Group();
+    const a = body('body_a', root);
+    const b = body('body_b', root);
+    applyAnalysisOverlay(root, {
+      bodies: [
+        display('body_a').bodies[0]!,
+        // A face the kernel could not mesh: the body keeps its faces.
+        { ...display('body_b').bodies[0]!, covers: false }
+      ]
+    });
+    expect(a.mesh.material.visible).toBe(false);
+    expect(b.mesh.material.visible).toBe(true);
+    // Wireframe hides the faces, and the overlay with them; shaded brings
+    // the overlay back, never the covered faces.
+    applyDisplayMode(root, 'wireframe');
+    const overlayOf = (mesh: THREE.Object3D) =>
+      mesh.children.find((child) => child.name === ANALYSIS_OVERLAY)!;
+    expect(overlayOf(a.mesh).visible).toBe(false);
+    expect(a.mesh.material.visible).toBe(false);
+    applyDisplayMode(root, 'shaded-edges');
+    expect(overlayOf(a.mesh).visible).toBe(true);
+    expect(a.mesh.material.visible).toBe(false);
+    // Cleared in wireframe: the faces return as wireframe wants them.
+    applyDisplayMode(root, 'wireframe');
+    applyAnalysisOverlay(root, null);
+    expect(a.mesh.material.visible).toBe(false);
+    applyDisplayMode(root, 'shaded-edges');
+    expect(a.mesh.material.visible).toBe(true);
+    // Cleared in a shaded mode: straight back.
+    applyAnalysisOverlay(root, display('body_a'));
+    expect(a.mesh.material.visible).toBe(false);
+    clearAnalysisOverlay(root);
+    expect(a.mesh.material.visible).toBe(true);
+    expect(b.mesh.material.visible).toBe(true);
   });
 });

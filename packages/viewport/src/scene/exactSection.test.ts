@@ -9,7 +9,11 @@ import {
 } from './exactSection';
 import { SECTION_CAP } from './sectionCaps';
 import { SECTION_HATCH } from './sectionHatch';
-import { applyDisplayMode, applySectionPlane, sectionClippingPlane } from './objects';
+import {
+  applyDisplayMode,
+  applySectionPlane,
+  sectionClippingPlane
+} from './objects';
 import { isViewerMesh } from '../pick/meshes';
 
 /** One square region in the z = 1 plane, as the adapter would hand it over. */
@@ -122,25 +126,32 @@ describe('exact section geometry in the viewport', () => {
     }
   );
 
-  it.each([1, 0.6])('uses the body opacity for exact fills when X-ray is toggled (appearance: %s)', (appearance) => {
-    const { group, mesh } = body();
-    const plane = sectionClippingPlane({ plane: 'XY', offset: 1 });
-    for (const xray of [0.35, 1]) {
-      mesh.material.opacity = appearance * xray;
-      applySectionPlane(group, plane, shaded([region()]));
-      const fill = group.getObjectByName(`${EXACT_SECTION}-fill`) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshPhongMaterial>;
-      expect(fill.material.opacity).toBeCloseTo(appearance * xray, 12);
-      expect(fill.material.transparent).toBe(appearance * xray < 1);
-      expect(fill.material.depthWrite).toBe(appearance * xray >= 1);
+  it.each([1, 0.6])(
+    'uses the body opacity for exact fills when X-ray is toggled (appearance: %s)',
+    (appearance) => {
+      const { group, mesh } = body();
+      const plane = sectionClippingPlane({ plane: 'XY', offset: 1 });
+      for (const xray of [0.35, 1]) {
+        mesh.material.opacity = appearance * xray;
+        applySectionPlane(group, plane, shaded([region()]));
+        const fill = group.getObjectByName(
+          `${EXACT_SECTION}-fill`
+        ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshPhongMaterial>;
+        expect(fill.material.opacity).toBeCloseTo(appearance * xray, 12);
+        expect(fill.material.transparent).toBe(appearance * xray < 1);
+        expect(fill.material.depthWrite).toBe(appearance * xray >= 1);
+      }
     }
-  });
+  );
 
   it('draws the cut surface and its boundary curves', () => {
     const root = new THREE.Group();
     applyExactSection(root, shaded([region()]));
     const section = root.getObjectByName(EXACT_SECTION)!;
     expect(section).toBeDefined();
-    const fills = section.children.filter((child) => child instanceof THREE.Mesh);
+    const fills = section.children.filter(
+      (child) => child instanceof THREE.Mesh
+    );
     const curves = section.children.filter(
       (child) => child instanceof THREE.LineLoop
     );
@@ -326,11 +337,10 @@ describe('exact section geometry in the viewport', () => {
     // default to visible, showing the slate cut surface in wireframe until
     // the mode was cycled.
     applyDisplayMode(group, 'wireframe');
-    applySectionPlane(
-      group,
-      sectionClippingPlane({ plane: 'XY', offset: 1 }),
-      { regions: [region()], displayMode: 'wireframe' }
-    );
+    applySectionPlane(group, sectionClippingPlane({ plane: 'XY', offset: 1 }), {
+      regions: [region()],
+      displayMode: 'wireframe'
+    });
     const section = group.getObjectByName(EXACT_SECTION)!;
     const fill = section.children.find(
       (child) => child instanceof THREE.Mesh

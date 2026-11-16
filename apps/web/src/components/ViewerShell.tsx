@@ -25,6 +25,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type MutableRefObject,
   type ReactNode
 } from 'react';
@@ -109,7 +110,8 @@ import { ProjectThumbnailSyncAgent } from './ProjectThumbnailSyncAgent';
 import type { ProjectThumbnailRecord } from '../lib/localProjectStore';
 import type { ThumbnailCloudTransport } from '../lib/cloudThumbnail';
 import type { DimensionMode } from '../lib/keypad';
-import { AnalysisPanel } from './AnalysisPanel';
+import { createLazyPanel } from './LazyPanel';
+import type { AnalysisPanel as AnalysisPanelComponent } from './AnalysisPanel';
 import {
   analysisRuntime,
   useAnalysisRuntime
@@ -464,6 +466,15 @@ interface ViewerShellProps {
    */
   runSurfaceAnalysis?: RunSurfaceAnalysis;
 }
+
+/** M09's analysis panel, loaded with the first analysis switched on. */
+const AnalysisPanel = createLazyPanel<
+  ComponentProps<typeof AnalysisPanelComponent>
+>('Analysis panel', () =>
+  import('./AnalysisPanel').then((module) => ({
+    default: module.AnalysisPanel
+  }))
+);
 
 export function ViewerShell({
   projectId,

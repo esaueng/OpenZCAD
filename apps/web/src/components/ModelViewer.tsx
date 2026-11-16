@@ -1,3 +1,4 @@
+import type * as AnalysisOverlayTypes from '@openzcad/viewport/analysis-overlay';
 import type { ParameterVisualPreview } from '../lib/parameterVisualPreview';
 import {
   createChipEntryButton,
@@ -103,8 +104,6 @@ import {
   applyDisplayMode,
   applySectionPlane,
   type SectionOverlapPair,
-  type AnalysisOverlayDisplay,
-  syncAnalysisOverlay,
   exactSectionSnapshot,
   sectionClippingPlane,
   CameraController,
@@ -1033,6 +1032,15 @@ export interface ViewportContextMenuOptions {
   keyboard?: boolean;
 }
 
+type AnalysisOverlayModule = typeof AnalysisOverlayTypes;
+let analysisOverlayModule: Promise<AnalysisOverlayModule> | undefined;
+/**
+ * M09's overlay drawing loads with the first analysis switched on: it has no
+ * place in the entry chunk of a session that never turns one on.
+ */
+const loadAnalysisOverlay = () =>
+  (analysisOverlayModule ??= import('@openzcad/viewport/analysis-overlay'));
+
 export interface ModelViewerProps {
   parameterVisualPreview?: ParameterVisualPreview | null;
   bodies: GeometryBodyRepresentation[];
@@ -1159,7 +1167,7 @@ export interface ModelViewerProps {
    * M09 analysis overlay: per-body meshes coloured from the exact kernel's
    * samples, drawn over the bodies they analyse. Null draws none.
    */
-  analysisOverlay?: AnalysisOverlayDisplay | null;
+  analysisOverlay?: AnalysisOverlayTypes.AnalysisOverlayDisplay | null;
   /** Scroll-wheel auto-detection just proved a different pointing device. */
   onWheelDeviceLearned?(device: WheelDevice): void;
   /** Imperative sink for per-frame axis projections (no React re-render). */
@@ -2747,6 +2755,8 @@ export function ModelViewer({
   const sectionOverlapKeyRef = useRef('[]');
   const analysisOverlayRef = useRef(analysisOverlay);
   analysisOverlayRef.current = analysisOverlay;
+  // Null until the first analysis loads it; nothing to draw or clear before.
+  const analysisOverlayModuleRef = useRef<AnalysisOverlayModule | null>(null);
   /** Reports the section pass's overlap pairs when they change. */
   const reportSectionOverlap = (pairs: SectionOverlapPair[]) => {
     // Areas are display figures: a few significant digits are all a label
@@ -14242,7 +14252,10 @@ export function ModelViewer({
     );
     // A rebuilt body's mesh takes its M09 analysis overlay with it; draw it
     // again before the section pass gives it the cut.
-    syncAnalysisOverlay(context.bodyGroup, analysisOverlayRef.current);
+    analysisOverlayModuleRef.current?.syncAnalysisOverlay(
+      context.bodyGroup,
+      analysisOverlayRef.current
+    );
     // Rebuilt bodies and freshly created highlight geometry arrive without
     // clip planes; reapply so an active section survives both.
     reportSectionOverlap(
@@ -16864,11 +16877,25 @@ export function ModelViewer({
   }, [settings.sectionView, exactSection]);
 
   useEffect(() => {
-    const context = contextRef.current;
-    if (!context) return;
-    if (syncAnalysisOverlay(context.bodyGroup, analysisOverlay)) {
-      context.requestRender();
+    let live = true;
+    const draw = (module: AnalysisOverlayModule) => {
+      analysisOverlayModuleRef.current = module;
+      const context = contextRef.current;
+      if (!live || !context) return;
+      if (module.syncAnalysisOverlay(context.bodyGroup, analysisOverlay)) {
+        context.requestRender();
+      }
+    };
+    if (analysisOverlayModuleRef.current) {
+      draw(analysisOverlayModuleRef.current);
+    } else if (analysisOverlay) {
+      loadAnalysisOverlay().then(draw, () => {
+        // A failed chunk load draws no overlay; the panel still reports.
+      });
     }
+    return () => {
+      live = false;
+    };
   }, [analysisOverlay]);
 
   useEffect(() => {
