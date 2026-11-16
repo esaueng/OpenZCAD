@@ -11,6 +11,7 @@ import {
   holeOfBoreFace,
   listFeaturesInOrder,
   patternBody,
+  updateFeature,
   type HoleInput
 } from '@openzcad/document-core';
 import {
@@ -30,6 +31,7 @@ import {
 } from '@openzcad/shared';
 import {
   formatDrawingNumber,
+  holeCalloutLookup,
   resolveDrawingAnnotation
 } from '../apps/web/src/lib/drawing/annotations';
 
@@ -307,6 +309,63 @@ describe('M01 cosmetic threads: exact build and D02 callout', () => {
     expect(
       body.topology!.faces.map((face) => face.reference?.lineageName)
     ).toContain('hole.face.bore');
+  }, 180_000);
+
+  it('keeps a kept drawing’s callout to the document it was drawn from (review)', async () => {
+    const topId = 'dvw_top' as DrawingViewId;
+    const { document, derived } = await drilled({
+      depthMode: 'blind',
+      depth: 8,
+      tapped: { cosmetic: true }
+    });
+    const bodyId = last(document);
+    const bodies = derived.bodyRepresentations;
+    const rim = bodies[bodyId]!.topology!.edges.find(
+      (edge) =>
+        edge.curve?.circle &&
+        Math.abs(edge.curve.circle.radius - 2.5) < 1e-6 &&
+        Math.abs(edge.curve.circle.center.z - 10) < 1e-6
+    )!;
+    const annotation = {
+      annotationId: 'dan_d' as never,
+      kind: 'diameter' as const,
+      viewId: topId,
+      edge: {
+        bodyId,
+        hash: rim.hash,
+        ...(rim.reference ? { reference: rim.reference } : {})
+      },
+      placementMm: { x: 10, y: 10 }
+    };
+    const view = {
+      viewId: topId,
+      orientation: 'top' as const,
+      bodyIds: [bodyId],
+      centerMm: { x: 100, y: 120 },
+      hiddenLines: false
+    };
+    // Drawn from this document, the sheet is kept with its bodies and its
+    // lookup; the model then deepens the hole before any Update.
+    const drawn = holeCalloutLookup(document);
+    expect(drawn(lastFeature(document))?.depth).toBe(8);
+    const deeper = updateFeature(document, {
+      featureId: lastFeature(document),
+      data: { featureKind: 'hole', depth: 12 }
+    });
+    const label = (holes: ReturnType<typeof holeCalloutLookup>) => {
+      const resolved = resolveDrawingAnnotation(
+        annotation,
+        view,
+        bodies,
+        'mm',
+        holes
+      );
+      return resolved.ok ? resolved.resolved.label : null;
+    };
+    // The kept drawing reads what it drew; only the current model's lookup
+    // (after an Update redraws the bodies) would say 12.
+    expect(label(drawn)).toBe('M6×1 × 8 DEEP');
+    expect(label(holeCalloutLookup(deeper))).toBe('M6×1 × 12 DEEP');
   }, 180_000);
 
   it('leaves a feature pattern’s copies of a cosmetic thread as plain tap drills', async () => {

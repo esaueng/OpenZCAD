@@ -1,4 +1,8 @@
-import { holeOfBoreFace } from '@openzcad/document-core';
+import {
+  getParameterScope,
+  holeCallout,
+  holeOfBoreFace
+} from '@openzcad/document-core';
 import {
   DRAWING_VIEW_FRAMES,
   drawingPaperPerModelUnit,
@@ -23,6 +27,7 @@ import {
   type FaceTopology,
   type FaceTopologyReferenceV5,
   type GeometryBodyRepresentation,
+  type ProjectDocument,
   type UnitSystem,
   type Vector3
 } from '@openzcad/shared';
@@ -86,6 +91,24 @@ export function sectionBodyKey(viewId: DrawingViewId, bodyId: string): string {
 /** The body `view` draws for `bodyId`: its cut body when it is a section. */
 /** M01: a hole's callout data by the hole's feature id, else null. */
 export type HoleCalloutLookup = (featureId: FeatureId) => HoleCallout | null;
+
+/**
+ * M01: the hole callouts of `document`, read once per hole and bound to it:
+ * a drawing kept with this lookup calls its holes out as they were when it
+ * was drawn, however the model changes before its Update.
+ */
+export function holeCalloutLookup(
+  document: ProjectDocument
+): HoleCalloutLookup {
+  const scope = getParameterScope(document).scope;
+  const read = new Map<FeatureId, HoleCallout | null>();
+  return (featureId) => {
+    if (!read.has(featureId)) {
+      read.set(featureId, holeCallout(document, featureId, scope));
+    }
+    return read.get(featureId)!;
+  };
+}
 
 /** Below this a rim's radius is its bore's. */
 const BORE_RIM_TOLERANCE = 1e-6;
