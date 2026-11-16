@@ -15,7 +15,16 @@ export function planPromotion(
   options?: { git?: Git }
 ): PromotionPlan;
 
+export const PROMOTE_COMMAND: string;
+
+export function gitAt(cwd: string | undefined): Git;
+
 export function promote(
   target: string | undefined,
-  options?: { git?: Git; dryRun?: boolean; log?: (line: string) => void }
+  options?: {
+    git?: Git;
+    dryRun?: boolean;
+    log?: (line: string) => void;
+    environment?: Record<string, string | undefined>;
+  }
 ): PromotionPlan;

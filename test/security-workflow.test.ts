@@ -19,6 +19,7 @@ describe('workflow runner policy', () => {
       'desktop-native.yml': ['ubuntu-latest'],
       'mls-wasm.yml': ['ubuntu-latest'],
       'production-health.yml': ['ubuntu-latest'],
+      'promote-stable.yml': ['ubuntu-24.04'],
       'update-remus.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'dependency-audit.yml': Array(3).fill('ubuntu-latest'),
       'dependency-review.yml': ['ubuntu-latest']

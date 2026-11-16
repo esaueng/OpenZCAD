@@ -27,21 +27,43 @@ channel's sender or origin. CI dry-runs both deploys on every PR.
 ## Promoting stable
 
 `stable` only fast-forwards to a commit already on `main`, so it never
-drifts. Pick a commit beta has been running, then:
+drifts. The **Promote stable** workflow moves it:
+
+- **Daily**, at 10:00 UTC, to the latest `main` at that moment. A day with
+  nothing new pushes nothing.
+- **By hand**, to the latest `main` or to any commit on it:
 
 ```bash
-pnpm promote:stable <sha> --dry-run   # lists the commits and new D1 migrations
-pnpm promote:stable <sha>             # pushes stable; Workers Builds deploys it
+pnpm promote:stable <sha> --dry-run                            # commits and new D1 migrations
+gh workflow run promote-stable.yml --ref main                  # the latest main, now
+gh workflow run promote-stable.yml --ref main -f commit=<sha>  # a chosen commit
 ```
 
-The stable deploy applies that range's D1 migrations to `openzcad-stable`
-before publishing, then checks `https://zcad.app/api/health` and
-`build-meta.json` for the promoted commit. A GitHub ruleset blocks
-force-pushes and deletion of `stable`.
+The workflow runs in the `stable-promotion` environment and pushes
+`stable` with that environment's deploy key. Workers Builds then deploys
+it: the stable deploy applies that range's D1 migrations to
+`openzcad-stable` before publishing (including on the daily run), then
+checks `https://zcad.app/api/health` and `build-meta.json` for the
+promoted commit.
 
-An urgent fix merges to `main` like any change and is then promoted. To
-ship it without the commits before it, cherry-pick onto `stable` by hand;
-the next promotion then needs a merge instead of a fast-forward.
+Only that workflow can move `stable`:
+
+- The `Stable channel: fast-forward only` ruleset blocks deletion and
+  force-pushes, and restricts updates to deploy keys. It has no other
+  bypass actors, so neither an admin nor an agent session can push
+  `stable` directly.
+- The only deploy key with write access is the workflow's, stored as the
+  `STABLE_PROMOTION_DEPLOY_KEY` secret of the `stable-promotion`
+  environment. That environment accepts runs from `main` only. It needs no
+  approval, so the daily run is unattended; adding a required reviewer
+  makes every run, daily included, wait for one.
+- The script refuses a non-dry-run outside GitHub Actions, a ref instead of
+  a SHA, a commit not on `origin/main`, and anything but a fast-forward.
+
+An urgent fix merges to `main` like any change and is then promoted. There
+is no direct path onto `stable`: shipping a fix without the commits before
+it means editing the ruleset by hand, which should stay a rare,
+deliberate act.
 
 ## Deploying by hand
 

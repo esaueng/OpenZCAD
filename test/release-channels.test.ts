@@ -1,4 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -6,7 +9,7 @@ import {
   OFFICIAL_STABLE,
   validateDeploymentConfig
 } from '../scripts/validate-deployment-config.mjs';
-import { planPromotion, promote } from '../scripts/promote-stable.mjs';
+import { gitAt, planPromotion, promote } from '../scripts/promote-stable.mjs';
 import { migrationTarget } from '../scripts/apply-beta-migrations.mjs';
 import { verificationOrigin } from '../scripts/verify-beta-deployment.mjs';
 
@@ -266,6 +269,7 @@ describe('stable promotion', () => {
   const MAIN = 'a'.repeat(40);
   const OLD = 'b'.repeat(40);
   const OFF_MAIN = 'c'.repeat(40);
+  const ACTIONS = { GITHUB_ACTIONS: 'true' };
 
   function fakeGit({
     stable = OLD,
@@ -277,15 +281,23 @@ describe('stable promotion', () => {
       calls.push(args);
       const [command] = args;
       if (command === 'fetch') return '';
+      if (command === 'rev-parse' && args[1]!.startsWith('--disambiguate=')) {
+        const prefix = args[1]!.slice('--disambiguate='.length);
+        return [MAIN, OLD, OFF_MAIN]
+          .filter((sha) => sha.startsWith(prefix))
+          .join('\n');
+      }
+      if (command === 'cat-file') return 'commit';
       if (command === 'rev-parse') {
         const ref = args[2]!.replace('^{commit}', '');
-        if (ref === 'origin/stable') return stable;
-        return [MAIN, OLD, OFF_MAIN].includes(ref) ? ref : null;
+        if (ref === 'refs/remotes/origin/stable') return stable;
+        throw new Error(`unexpected rev-parse ${ref}`);
       }
       if (command === 'merge-base') {
         const [, , ancestor, descendant] = args;
         const ok =
-          (descendant === 'origin/main' && onMain.includes(ancestor!)) ||
+          (descendant === 'refs/remotes/origin/main' &&
+            onMain.includes(ancestor!)) ||
           ancestry.some(([a, d]) => a === ancestor && d === descendant);
         if (!ok && opts?.allowFailure) return null;
         return '';
@@ -301,7 +313,11 @@ describe('stable promotion', () => {
   it('fast-forwards to a commit on main and lists the migrations it applies', () => {
     const { git, calls } = fakeGit();
     const lines: string[] = [];
-    const plan = promote(MAIN, { git, log: (line) => lines.push(line) });
+    const plan = promote(MAIN, {
+      git,
+      log: (line) => lines.push(line),
+      environment: ACTIONS
+    });
     expect(plan.migrations).toEqual(['apps/web/migrations/0058_new.sql']);
     expect(lines.join('\n')).toContain('0058_new.sql');
     expect(calls).toContainEqual([
@@ -328,8 +344,103 @@ describe('stable promotion', () => {
     promote(MAIN, { git: dry.git, dryRun: true, log: () => {} });
     expect(dry.calls.some(([command]) => command === 'push')).toBe(false);
     const same = fakeGit({ stable: MAIN });
-    expect(promote(MAIN, { git: same.git, log: () => {} }).commits).toEqual([]);
+    expect(
+      promote(MAIN, { git: same.git, log: () => {}, environment: ACTIONS })
+        .commits
+    ).toEqual([]);
     expect(same.calls.some(([command]) => command === 'push')).toBe(false);
+  });
+
+  it('pushes only from GitHub Actions; a local run may only dry-run', () => {
+    const local = fakeGit();
+    expect(() =>
+      promote(MAIN, { git: local.git, log: () => {}, environment: {} })
+    ).toThrow(/Only the Promote stable workflow/);
+    expect(local.calls).toEqual([]);
+    promote(MAIN, {
+      git: local.git,
+      dryRun: true,
+      log: () => {},
+      environment: {}
+    });
+    expect(local.calls.some(([command]) => command === 'push')).toBe(false);
+  });
+
+  it('takes a commit SHA, never a ref or an option', () => {
+    for (const target of ['origin/main', 'stable', '--upload-pack=x', 'abc']) {
+      expect(() => planPromotion(target, { git: fakeGit().git })).toThrow(
+        /not a commit SHA/
+      );
+    }
+  });
+
+  it('runs from main in the stable-promotion environment, daily or by hand', () => {
+    const workflow = readFileSync(
+      '.github/workflows/promote-stable.yml',
+      'utf8'
+    );
+    expect(workflow).toMatch(
+      /^on:\n {2}schedule:\n {4}# .*\n {4}- cron: '0 10 \* \* \*'\n {2}workflow_dispatch:/m
+    );
+    // With no commit named, it takes the latest main by full ref name.
+    expect(workflow).toContain(
+      'COMMIT=$(git rev-parse --verify refs/remotes/origin/main^{commit})'
+    );
+    expect(workflow).not.toMatch(/^ {2}(push|pull_request\w*|workflow_run):/m);
+    expect(workflow).toContain('environment: stable-promotion');
+    expect(workflow).toContain(
+      'ssh-key: ${{ secrets.STABLE_PROMOTION_DEPLOY_KEY }}'
+    );
+    expect(workflow).toContain('if [[ "$REF" != refs/heads/main ]]');
+    // Run the workflow code the run started at, not main as it is later.
+    expect(workflow).toContain('ref: ${{ github.sha }}');
+    expect(workflow).not.toMatch(/^\s+ref: main$/m);
+    expect(workflow).toContain('node scripts/promote-stable.mjs');
+    // Inputs reach the shell through env, never interpolated into a script.
+    const inputLines = workflow
+      .split('\n')
+      .filter((line) => line.includes('${{ inputs.'));
+    expect(inputLines.length).toBeGreaterThan(0);
+    for (const line of inputLines) {
+      expect(line).toMatch(/^\s+[A-Z_]+: \$\{\{ inputs\.\w+ \}\}$/);
+    }
+    expect(workflow).toMatch(/^permissions:\n {2}contents: read$/m);
+  });
+
+  it('resolves a short SHA by object name, never by a ref that shadows it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'promote-stable-'));
+    try {
+      const git = gitAt(dir);
+      const env = {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'test',
+        GIT_AUTHOR_EMAIL: 'test@example.invalid',
+        GIT_COMMITTER_NAME: 'test',
+        GIT_COMMITTER_EMAIL: 'test@example.invalid'
+      };
+      // Plumbing only: commit-tree and update-ref run no hooks.
+      const run = (args: string[]) =>
+        execFileSync('git', args, { cwd: dir, env, encoding: 'utf8' }).trim();
+      run(['init', '--quiet', '--initial-branch=main']);
+      const tree = run(['mktree']);
+      const approved = run(['commit-tree', tree, '-m', 'approved']);
+      const newer = run(['commit-tree', tree, '-p', approved, '-m', 'newer']);
+      run(['update-ref', 'refs/heads/main', newer]);
+      run(['remote', 'add', 'origin', '.']);
+      const short = approved.slice(0, 12);
+      // A tag named like the approved short SHA, pointing at newer code;
+      // `git rev-parse <short>` would pick it.
+      run(['tag', short, newer]);
+      run(['tag', 'origin/main', approved]);
+      expect(run(['rev-parse', `${short}^{commit}`])).toBe(newer);
+
+      const plan = planPromotion(short, { git });
+      expect(plan.target).toBe(approved);
+      expect(plan.current).toBeNull();
+      expect(planPromotion(newer, { git }).target).toBe(newer);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('requires an explicit commit', () => {
