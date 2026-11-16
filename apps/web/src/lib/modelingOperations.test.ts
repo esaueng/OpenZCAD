@@ -179,6 +179,34 @@ describe('modeling operation form contracts', () => {
     ).toBe('Solid offset distance must resolve to a positive value.');
   });
 
+  it('does not read a stored position on sketch points (M01 review)', () => {
+    const hole = (points?: { sketchId: string; pointIds: string[] }) =>
+      modelingFormValidationReason(
+        {
+          operation: 'hole',
+          value: {
+            name: 'Hole',
+            targetBodyId: bodyId,
+            faceHash: 42,
+            style: 'simple',
+            diameter: '6',
+            depthMode: 'through',
+            depth: '10',
+            counterboreDiameter: '11',
+            counterboreDepth: '3',
+            countersinkDiameter: '12',
+            countersinkAngleDeg: '90',
+            // A parameter deleted since the hole was moved onto points.
+            position: { u: 'gone', v: '0' },
+            ...(points ? { points: points as never } : {})
+          }
+        },
+        {}
+      );
+    expect(hole()).toBe('Hole fields must be valid expressions.');
+    expect(hole({ sketchId: 'sketch_a', pointIds: ['p_a'] })).toBeNull();
+  });
+
   it('names every combination a guide rail or an apex point cannot take', () => {
     const sweep = (guideId: string, mode: 'standard' | 'smooth') =>
       modelingFormValidationReason(

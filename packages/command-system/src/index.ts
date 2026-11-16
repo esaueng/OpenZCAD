@@ -1169,8 +1169,12 @@ function validateHoleInput(
   if (!(diameter > 0)) {
     throw new Error('Hole diameter must resolve to a positive value.');
   }
-  resolvedModelingValue(document, 'hole position U', input.position.u);
-  resolvedModelingValue(document, 'hole position V', input.position.v);
+  // On sketch points (M01) the position is stored but not read, so a
+  // parameter it names may be gone without breaking the hole.
+  if (!input.points) {
+    resolvedModelingValue(document, 'hole position U', input.position.u);
+    resolvedModelingValue(document, 'hole position V', input.position.v);
+  }
   if (input.depthMode === 'blind') {
     if (input.depth === undefined) {
       throw new Error('A blind hole needs a depth.');

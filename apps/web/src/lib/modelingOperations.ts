@@ -1071,7 +1071,8 @@ export function modelingFormValidationReason(
       }
       const expressions = [
         state.value.diameter,
-        ...Object.values(state.value.position),
+        // On sketch points (M01) the position is stored but not read.
+        ...(state.value.points ? [] : Object.values(state.value.position)),
         ...(state.value.depthMode === 'blind' ? [state.value.depth] : []),
         ...(state.value.style === 'counterbore'
           ? [state.value.counterboreDiameter, state.value.counterboreDepth]

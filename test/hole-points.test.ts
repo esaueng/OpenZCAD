@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
+import { commandFactories } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
   addSketchFeature,
@@ -266,6 +267,22 @@ describe('M01 holes on sketch points: document contract', () => {
         schemaVersion: 63
       } as unknown as ProjectDocument)
     ).toThrow(/require project schema v64/);
+  });
+
+  it('does not read the stored position on sketch points (review)', () => {
+    const { document, input } = setup();
+    // A typed U naming a parameter that no longer exists: unread on points.
+    const command = commandFactories.holeBody({
+      ...input,
+      position: { u: 'gone_offset', v: 0 }
+    });
+    expect(() => command.validate(document)).not.toThrow();
+    const { points: _points, ...single } = input;
+    expect(() =>
+      commandFactories
+        .holeBody({ ...single, position: { u: 'gone_offset', v: 0 } })
+        .validate(document)
+    ).toThrow(/gone_offset/);
   });
 
   it('clears the points back to the one stored position', () => {
