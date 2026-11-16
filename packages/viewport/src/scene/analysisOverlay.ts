@@ -39,8 +39,86 @@ export interface AnalysisOverlayBody {
   covers?: boolean;
 }
 
+/**
+ * How the overlay is shaded: by its vertex colours, lit like the model, or
+ * as zebra stripes reflected from the exact normals (each vertex colour then
+ * tints the stripes; grey marks a sample the kernel did not evaluate).
+ */
+export type AnalysisOverlayShading =
+  { kind: 'colors' } | { kind: 'zebra'; stripes: number };
+
 export interface AnalysisOverlayDisplay {
   bodies: readonly AnalysisOverlayBody[];
+  shading?: AnalysisOverlayShading;
+}
+
+const ZEBRA_VERTEX = /* glsl */ `
+#include <common>
+#include <clipping_planes_pars_vertex>
+varying vec3 vZebraNormal;
+varying vec3 vZebraView;
+varying vec3 vZebraColor;
+void main() {
+  vZebraColor = color;
+  vZebraNormal = normalize(normalMatrix * normal);
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  vZebraView = mvPosition.xyz;
+  gl_Position = projectionMatrix * mvPosition;
+  #include <clipping_planes_vertex>
+}
+`;
+
+/**
+ * Stripes of the view direction reflected about the normal, banded by its
+ * vertical component: they move as the view turns, and a break or a kink in
+ * them across an edge is a break in position or tangency there.
+ */
+const ZEBRA_FRAGMENT = /* glsl */ `
+uniform float stripes;
+varying vec3 vZebraNormal;
+varying vec3 vZebraView;
+varying vec3 vZebraColor;
+#include <clipping_planes_pars_fragment>
+void main() {
+  #include <clipping_planes_fragment>
+  vec3 n = normalize(vZebraNormal);
+  if (!gl_FrontFacing) n = -n;
+  vec3 r = reflect(normalize(vZebraView), n);
+  float band = step(0.5, fract((r.y * 0.5 + 0.5) * stripes));
+  vec3 shade = mix(vec3(0.06), vec3(0.96), band);
+  gl_FragColor = vec4(shade * vZebraColor, 1.0);
+}
+`;
+
+function overlayMaterial(
+  shading: AnalysisOverlayShading,
+  clippingPlanes: THREE.Plane[] | null
+): THREE.Material {
+  if (shading.kind === 'zebra') {
+    return new THREE.ShaderMaterial({
+      name: 'm09-zebra',
+      vertexShader: ZEBRA_VERTEX,
+      fragmentShader: ZEBRA_FRAGMENT,
+      uniforms: { stripes: { value: shading.stripes } },
+      vertexColors: true,
+      clipping: true,
+      clippingPlanes,
+      side: THREE.FrontSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2
+    });
+  }
+  return new THREE.MeshLambertMaterial({
+    vertexColors: true,
+    side: THREE.FrontSide,
+    // Drawn over the body's own faces, which lie on the same surfaces.
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+    // Follow the body's cut, as its own material does.
+    clippingPlanes
+  });
 }
 
 /**
@@ -111,16 +189,10 @@ export function applyAnalysisOverlay(
     geometry.setAttribute('color', new THREE.BufferAttribute(body.colors, 3));
     geometry.setIndex(new THREE.BufferAttribute(body.indices, 1));
     geometry.computeBoundingSphere();
-    const material = new THREE.MeshLambertMaterial({
-      vertexColors: true,
-      side: THREE.FrontSide,
-      // Drawn over the body's own faces, which lie on the same surfaces.
-      polygonOffset: true,
-      polygonOffsetFactor: -2,
-      polygonOffsetUnits: -2,
-      // Follow the body's cut, as its own material does.
-      clippingPlanes: hostClippingPlanes(host)
-    });
+    const material = overlayMaterial(
+      display.shading ?? { kind: 'colors' },
+      hostClippingPlanes(host)
+    );
     const overlay = new THREE.Mesh(geometry, material);
     overlay.name = ANALYSIS_OVERLAY;
     overlay.userData.analysisOverlay = true;

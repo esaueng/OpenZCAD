@@ -43,7 +43,14 @@ describe('the Display menu (I52)', () => {
     fireEvent.click(trigger);
     const draft = menu().getByRole('button', { name: 'Draft analysis' });
     expect(draft).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(draft);
+    // Another analysis replaces it: one at a time.
+    fireEvent.click(menu().getByRole('button', { name: 'Zebra analysis' }));
+    expect(analysisRuntime.get().request).toEqual({
+      kind: 'zebra',
+      stripes: 12
+    });
+    fireEvent.click(trigger);
+    fireEvent.click(menu().getByRole('button', { name: 'Zebra analysis' }));
     expect(analysisRuntime.get().request).toBeNull();
   });
 
@@ -62,13 +69,17 @@ describe('the Display menu (I52)', () => {
       'Shaded',
       'Wireframe',
       expect.stringMatching(/^X-ray/),
-      'Draft'
+      'Draft',
+      'Curvature',
+      'Zebra'
     ]);
     expect(items.map((item) => item.getAttribute('aria-pressed'))).toEqual([
       'false',
       'true',
       'false',
       'true',
+      'false',
+      'false',
       'false'
     ]);
     expect(menu().getByRole('button', { name: 'X-ray (Shift+X)' })).toBe(

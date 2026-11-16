@@ -1,19 +1,35 @@
-import { useId } from 'react';
-import type { SurfaceAnalysisRequest } from '@openzcad/shared';
+import { useId, type ReactNode } from 'react';
+import type {
+  CurvatureAnalysisRequest,
+  CurvatureMeasure,
+  DraftAnalysisRequest,
+  SurfaceAnalysisReport,
+  SurfaceAnalysisRequest,
+  ZebraAnalysisRequest
+} from '@openzcad/shared';
 import type { AnalysisRunState } from '../lib/analysis/useSurfaceAnalysis';
 import {
   DRAFT_PULL_DIRECTIONS,
+  ZEBRA_STRIPE_LIMITS,
   type DraftPullId
 } from '../lib/analysis/analysisRuntime';
 import {
   ANALYSIS_LABELS,
+  CURVATURE_COLORS,
+  CURVATURE_MEASURE_LABELS,
   DRAFT_COLORS,
   DRAFT_VERDICT_LABELS,
   analysisLimits,
   analysisProvenance,
+  curvatureScale,
+  curvatureUnit,
+  describeCurvatureSummary,
   describeDraftSummary,
   describeUnsupported,
+  describeZebraSummary,
+  formatCurvature,
   formatDegrees,
+  summarizeCurvature,
   summarizeDraft
 } from '../lib/analysis/surfaceAnalysisUi';
 
@@ -26,12 +42,238 @@ const PULL_LABELS: Record<DraftPullId, string> = {
   '-x': '−X'
 };
 
-function pullIdOf(request: SurfaceAnalysisRequest): DraftPullId {
+function pullIdOf(request: DraftAnalysisRequest): DraftPullId {
   const { x, y, z } = request.pull;
   for (const [id, axis] of Object.entries(DRAFT_PULL_DIRECTIONS)) {
     if (axis.x === x && axis.y === y && axis.z === z) return id as DraftPullId;
   }
   return '+z';
+}
+
+function Swatch({ color }: { color: string }) {
+  return (
+    <span
+      className="analysis-swatch"
+      style={{ background: color }}
+      aria-hidden="true"
+    />
+  );
+}
+
+interface KindView {
+  fields: ReactNode;
+  legend: ReactNode;
+  /** The one-line result, once there is a report. */
+  summary: string;
+  /** Appended to the provenance note, once there is a report. */
+  exactness: string;
+}
+
+type OnChange = (request: SurfaceAnalysisRequest) => void;
+
+function draftView(
+  request: DraftAnalysisRequest,
+  report: SurfaceAnalysisReport | null,
+  onChange: OnChange,
+  ids: { first: string; second: string }
+): KindView {
+  const summary = report
+    ? summarizeDraft(report, request.minimumDegrees)
+    : null;
+  const minimum = formatDegrees(request.minimumDegrees);
+  return {
+    fields: (
+      <>
+        <label className="analysis-panel-field" htmlFor={ids.first}>
+          Pull
+          <select
+            id={ids.first}
+            value={pullIdOf(request)}
+            onChange={(event) =>
+              onChange({
+                ...request,
+                pull: DRAFT_PULL_DIRECTIONS[event.target.value as DraftPullId]
+              })
+            }
+          >
+            {Object.keys(DRAFT_PULL_DIRECTIONS).map((id) => (
+              <option key={id} value={id}>
+                {PULL_LABELS[id as DraftPullId]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="analysis-panel-field" htmlFor={ids.second}>
+          Minimum draft (°)
+          <input
+            id={ids.second}
+            type="number"
+            min={0}
+            max={89}
+            step={0.5}
+            value={request.minimumDegrees}
+            onChange={(event) => {
+              const value = Number(event.target.value);
+              if (!Number.isFinite(value) || value < 0 || value >= 90) return;
+              onChange({ ...request, minimumDegrees: value });
+            }}
+          />
+        </label>
+      </>
+    ),
+    legend: (
+      <>
+        <li>
+          <Swatch color={DRAFT_COLORS.positive} />≥ {minimum} toward the pull
+          {summary ? ` · ${summary.faces.positive}` : ''}
+        </li>
+        <li>
+          <Swatch color={DRAFT_COLORS.insufficient} />
+          Within ±{minimum}
+          {summary ? ` · ${summary.faces.insufficient}` : ''}
+        </li>
+        <li>
+          <Swatch color={DRAFT_COLORS.negative} />≥ {minimum} away (undercut)
+          {summary ? ` · ${summary.faces.negative}` : ''}
+        </li>
+        <li>
+          <Swatch color={DRAFT_COLORS.unevaluated} />
+          Not evaluated
+        </li>
+      </>
+    ),
+    summary: summary
+      ? `${describeDraftSummary(summary)}${
+          summary.faces.mixed > 0
+            ? ` ${DRAFT_VERDICT_LABELS.mixed}: the face changes band and needs splitting at a parting line.`
+            : ''
+        }`
+      : '',
+    exactness: summary
+      ? ` ${summary.exactFaces} of ${summary.totalFaces} face ranges exact.`
+      : ''
+  };
+}
+
+function curvatureView(
+  request: CurvatureAnalysisRequest,
+  report: SurfaceAnalysisReport | null,
+  onChange: OnChange,
+  ids: { first: string },
+  lengthUnit: string,
+  nameOf: (bodyId: string) => string
+): KindView {
+  const summary = report ? summarizeCurvature(report) : null;
+  const scale = report ? curvatureScale(report) : 0;
+  const unit = curvatureUnit(request.measure, lengthUnit);
+  const signed = request.measure !== 'maximum';
+  const end = (value: number) => `${formatCurvature(value)} ${unit}`;
+  return {
+    fields: (
+      <label className="analysis-panel-field" htmlFor={ids.first}>
+        Measure
+        <select
+          id={ids.first}
+          value={request.measure}
+          onChange={(event) =>
+            onChange({
+              ...request,
+              measure: event.target.value as CurvatureMeasure
+            })
+          }
+        >
+          {Object.entries(CURVATURE_MEASURE_LABELS).map(([id, label]) => (
+            <option key={id} value={id}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </label>
+    ),
+    legend: (
+      <>
+        {signed ? (
+          <li>
+            <Swatch color={CURVATURE_COLORS.concave} />
+            Concave{report ? ` · ${end(-scale)}` : ''}
+          </li>
+        ) : null}
+        <li>
+          <Swatch color={CURVATURE_COLORS.flat} />
+          Flat · 0
+        </li>
+        <li>
+          <Swatch color={CURVATURE_COLORS.convex} />
+          {signed ? 'Convex' : 'Tightest'}
+          {report ? ` · ${end(scale)}` : ''}
+        </li>
+        <li>
+          <Swatch color={CURVATURE_COLORS.unevaluated} />
+          Not evaluated
+        </li>
+      </>
+    ),
+    summary: summary
+      ? `${describeCurvatureSummary(summary, lengthUnit, nameOf)}${
+          summary.totalFaces > 0 && Number.isFinite(summary.min)
+            ? ` ${CURVATURE_MEASURE_LABELS[request.measure]} curvature ${end(summary.min)} to ${end(summary.max)}.`
+            : ''
+        }`
+      : '',
+    exactness: summary
+      ? ` ${summary.exactFaces} of ${summary.totalFaces} face ranges exact.`
+      : ''
+  };
+}
+
+function zebraView(
+  request: ZebraAnalysisRequest,
+  report: SurfaceAnalysisReport | null,
+  onChange: OnChange,
+  ids: { first: string }
+): KindView {
+  return {
+    fields: (
+      <label className="analysis-panel-field" htmlFor={ids.first}>
+        Stripes
+        <input
+          id={ids.first}
+          type="number"
+          min={ZEBRA_STRIPE_LIMITS.min}
+          max={ZEBRA_STRIPE_LIMITS.max}
+          step={1}
+          value={request.stripes}
+          onChange={(event) => {
+            const value = Number(event.target.value);
+            if (
+              !Number.isInteger(value) ||
+              value < ZEBRA_STRIPE_LIMITS.min ||
+              value > ZEBRA_STRIPE_LIMITS.max
+            )
+              return;
+            onChange({ ...request, stripes: value });
+          }}
+        />
+      </label>
+    ),
+    legend: (
+      <>
+        <li>
+          <span
+            className="analysis-swatch analysis-swatch-zebra"
+            aria-hidden="true"
+          />
+          Reflected stripes; they move as the view turns
+        </li>
+        <li>
+          <Swatch color={CURVATURE_COLORS.unevaluated} />
+          Not evaluated
+        </li>
+      </>
+    ),
+    summary: report ? describeZebraSummary(report) : '',
+    exactness: ''
+  };
 }
 
 /**
@@ -43,6 +285,7 @@ export function AnalysisPanel({
   request,
   run,
   previewing = false,
+  lengthUnit = 'mm',
   nameOf,
   onChange,
   onOff
@@ -51,16 +294,28 @@ export function AnalysisPanel({
   run: AnalysisRunState;
   /** A preview stands in for the build: the overlay is withheld. */
   previewing?: boolean;
+  /** The document's length unit label, for curvature figures. */
+  lengthUnit?: string;
   nameOf(bodyId: string): string;
-  onChange(request: SurfaceAnalysisRequest): void;
+  onChange: OnChange;
   onOff(): void;
 }) {
-  const pullId = useId();
-  const minimumId = useId();
+  const first = useId();
+  const second = useId();
   const report = run.kind === 'done' ? run.report : null;
-  const summary = report
-    ? summarizeDraft(report, request.minimumDegrees)
-    : null;
+  const view =
+    request.kind === 'draft'
+      ? draftView(request, report, onChange, { first, second })
+      : request.kind === 'curvature'
+        ? curvatureView(
+            request,
+            report,
+            onChange,
+            { first },
+            lengthUnit,
+            nameOf
+          )
+        : zebraView(request, report, onChange, { first });
   const unsupported = report
     ? [
         ...report.missing.map(
@@ -83,79 +338,9 @@ export function AnalysisPanel({
           Turn off
         </button>
       </div>
-      <div className="analysis-panel-fields">
-        <label className="analysis-panel-field" htmlFor={pullId}>
-          Pull
-          <select
-            id={pullId}
-            value={pullIdOf(request)}
-            onChange={(event) =>
-              onChange({
-                ...request,
-                pull: DRAFT_PULL_DIRECTIONS[event.target.value as DraftPullId]
-              })
-            }
-          >
-            {Object.keys(DRAFT_PULL_DIRECTIONS).map((id) => (
-              <option key={id} value={id}>
-                {PULL_LABELS[id as DraftPullId]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="analysis-panel-field" htmlFor={minimumId}>
-          Minimum draft (°)
-          <input
-            id={minimumId}
-            type="number"
-            min={0}
-            max={89}
-            step={0.5}
-            value={request.minimumDegrees}
-            onChange={(event) => {
-              const value = Number(event.target.value);
-              if (!Number.isFinite(value) || value < 0 || value >= 90) return;
-              onChange({ ...request, minimumDegrees: value });
-            }}
-          />
-        </label>
-      </div>
+      <div className="analysis-panel-fields">{view.fields}</div>
       <ul className="analysis-legend" aria-label="Legend">
-        <li>
-          <span
-            className="analysis-swatch"
-            style={{ background: DRAFT_COLORS.positive }}
-            aria-hidden="true"
-          />
-          ≥ {formatDegrees(request.minimumDegrees)} toward the pull
-          {summary ? ` · ${summary.faces.positive}` : ''}
-        </li>
-        <li>
-          <span
-            className="analysis-swatch"
-            style={{ background: DRAFT_COLORS.insufficient }}
-            aria-hidden="true"
-          />
-          Within ±{formatDegrees(request.minimumDegrees)}
-          {summary ? ` · ${summary.faces.insufficient}` : ''}
-        </li>
-        <li>
-          <span
-            className="analysis-swatch"
-            style={{ background: DRAFT_COLORS.negative }}
-            aria-hidden="true"
-          />
-          ≥ {formatDegrees(request.minimumDegrees)} away (undercut)
-          {summary ? ` · ${summary.faces.negative}` : ''}
-        </li>
-        <li>
-          <span
-            className="analysis-swatch"
-            style={{ background: DRAFT_COLORS.unevaluated }}
-            aria-hidden="true"
-          />
-          Not evaluated
-        </li>
+        {view.legend}
       </ul>
       <p className="analysis-panel-status" role="status">
         {previewing
@@ -164,19 +349,11 @@ export function AnalysisPanel({
             ? 'Analysing with the exact kernel…'
             : run.kind === 'failed'
               ? `The analysis failed: ${run.message}`
-              : summary
-                ? `${describeDraftSummary(summary)}${
-                    summary.faces.mixed > 0
-                      ? ` ${DRAFT_VERDICT_LABELS.mixed}: the face changes band and needs splitting at a parting line.`
-                      : ''
-                  }`
-                : ''}
+              : view.summary}
       </p>
       <p className="analysis-panel-note" role="note">
         {analysisProvenance(request.kind)}
-        {summary
-          ? ` ${summary.exactFaces} of ${summary.totalFaces} face ranges exact.`
-          : ''}
+        {view.exactness}
       </p>
       <p className="analysis-panel-note">{analysisLimits(request.kind)}</p>
       {unsupported.length > 0 ? (

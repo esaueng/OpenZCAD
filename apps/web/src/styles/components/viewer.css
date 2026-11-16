@@ -1776,3 +1776,8 @@
     max-height: 38%;
   }
 }
+
+/* M09 zebra legend: black and white bands, as the overlay draws them. */
+.analysis-swatch-zebra {
+  background: repeating-linear-gradient(90deg, #0f0f0f 0 2px, #f5f5f5 2px 4px);
+}

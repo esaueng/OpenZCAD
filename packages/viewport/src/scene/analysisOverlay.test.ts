@@ -186,4 +186,21 @@ describe('analysis overlay (M09)', () => {
     expect((cap!.material as THREE.Material).visible).toBe(true);
     expect(a.mesh.material.visible).toBe(false);
   });
+
+  it('draws zebra stripes with a clipped shader over the exact normals', () => {
+    const root = new THREE.Group();
+    body('body_a', root);
+    applyAnalysisOverlay(root, {
+      ...display('body_a'),
+      shading: { kind: 'zebra', stripes: 16 }
+    });
+    const material = overlays(root)[0]!.material as THREE.ShaderMaterial;
+    expect(material).toBeInstanceOf(THREE.ShaderMaterial);
+    expect(material.uniforms.stripes!.value).toBe(16);
+    expect(material.vertexColors).toBe(true);
+    expect(material.clipping).toBe(true);
+    expect(material.fragmentShader).toContain('reflect(');
+    applySectionPlane(root, sectionClippingPlane({ plane: 'XY', offset: 0 }));
+    expect(material.clippingPlanes).toHaveLength(1);
+  });
 });

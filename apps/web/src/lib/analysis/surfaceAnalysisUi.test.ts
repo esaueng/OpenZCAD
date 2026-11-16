@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import type {
-  SurfaceAnalysisReport,
-  SurfaceAnalysisRequest
+  DraftAnalysisRequest,
+  SurfaceAnalysisReport
 } from '@openzcad/shared';
 import {
+  CURVATURE_COLORS,
+  curvatureColor,
+  curvatureScale,
+  curvatureUnit,
+  describeCurvatureSummary,
+  describeZebraSummary,
+  formatCurvature,
+  summarizeCurvature,
   DRAFT_COLORS,
   analysisColors,
   analysisLimits,
@@ -17,7 +25,7 @@ import {
 } from './surfaceAnalysisUi';
 import { measuredPart } from './useSurfaceAnalysis';
 
-const draft = (minimumDegrees = 1): SurfaceAnalysisRequest => ({
+const draft = (minimumDegrees = 1): DraftAnalysisRequest => ({
   kind: 'draft',
   pull: { x: 0, y: 0, z: 1 },
   minimumDegrees
@@ -165,5 +173,142 @@ describe('draft summary (M09)', () => {
       'Other: not analysed (Too many samples).',
       'Bracket, face 1: partly evaluated (3 of 40 samples could not be evaluated: apex).'
     ]);
+  });
+});
+
+describe('curvature colours and summary (M09)', () => {
+  const curvatureReport = (): SurfaceAnalysisReport => ({
+    request: { kind: 'curvature', measure: 'mean' },
+    bodies: [
+      {
+        bodyId: 'body_a',
+        positions: new Float32Array(9),
+        normals: new Float32Array(9),
+        indices: new Uint32Array([0, 1, 2]),
+        values: Float32Array.from([-0.25, 0, 0.5]),
+        faces: [
+          {
+            face: 0,
+            surface: 'cylinder',
+            min: -0.25,
+            max: -0.25,
+            samples: 1,
+            exact: true,
+            minRadius: 2,
+            minRadiusExact: true
+          },
+          {
+            face: 1,
+            surface: 'plane',
+            min: 0,
+            max: 0,
+            samples: 1,
+            exact: true,
+            minRadius: null,
+            minRadiusExact: true
+          },
+          {
+            face: 2,
+            surface: 'bspline',
+            min: 0.5,
+            max: 0.5,
+            samples: 1,
+            exact: false,
+            minRadius: 1.5,
+            minRadiusExact: false
+          }
+        ]
+      }
+    ],
+    unsupported: [],
+    missing: []
+  });
+
+  it('spans one signed scale across bodies, concave blue to convex red', () => {
+    const report = curvatureReport();
+    expect(curvatureScale(report)).toBe(0.5);
+    const overlay = analysisOverlayFor(report, report.request);
+    expect(overlay.shading).toEqual({ kind: 'colors' });
+    const colors = overlay.bodies[0]!.colors;
+    expect(hex(colors, 1)).toBe(CURVATURE_COLORS.flat);
+    expect(hex(colors, 2)).toBe(CURVATURE_COLORS.convex);
+    // Half the scale toward concave: between flat and blue.
+    const half = curvatureColor(-0.25, 0.5, true);
+    const blue = curvatureColor(-0.5, 0.5, true);
+    expect(`#${new THREE.Color(...blue).getHexString()}`).toBe(
+      CURVATURE_COLORS.concave
+    );
+    expect(half[2]).toBeGreaterThan(half[0]);
+    // Unsigned: the tightest end is red, the middle amber.
+    expect(
+      `#${new THREE.Color(...curvatureColor(0.25, 0.5, false)).getHexString()}`
+    ).toBe(CURVATURE_COLORS.tight);
+    // An all-flat model is neutral rather than divided by zero.
+    expect(
+      `#${new THREE.Color(...curvatureColor(0, 0, true)).getHexString()}`
+    ).toBe(CURVATURE_COLORS.flat);
+    expect(
+      `#${new THREE.Color(...curvatureColor(Number.NaN, 1, true)).getHexString()}`
+    ).toBe(CURVATURE_COLORS.unevaluated);
+  });
+
+  it('names the tightest radius, exact or approximate, and the units', () => {
+    const summary = summarizeCurvature(curvatureReport());
+    expect(summary).toMatchObject({
+      min: -0.25,
+      max: 0.5,
+      exactFaces: 2,
+      totalFaces: 3
+    });
+    expect(describeCurvatureSummary(summary, 'mm', () => 'Bracket')).toBe(
+      'Tightest radius 1.5 mm (approximate) on Bracket, face 3.'
+    );
+    expect(curvatureUnit('mean', 'mm')).toBe('1/mm');
+    expect(curvatureUnit('gaussian', 'in')).toBe('1/in²');
+    expect(formatCurvature(0.08333333)).toBe('0.0833');
+    expect(formatCurvature(-0.00001234)).toBe('-1.23e-5');
+  });
+});
+
+describe('zebra overlay (M09)', () => {
+  it('draws stripes from the exact normals, grey where none was evaluated', () => {
+    const report: SurfaceAnalysisReport = {
+      request: { kind: 'zebra', stripes: 12 },
+      bodies: [
+        {
+          bodyId: 'body_a',
+          positions: new Float32Array(6),
+          normals: new Float32Array(6),
+          indices: new Uint32Array(),
+          values: Float32Array.from([0, Number.NaN]),
+          faces: [
+            {
+              face: 0,
+              surface: 'sphere',
+              min: 0,
+              max: 0,
+              samples: 1,
+              exact: true
+            }
+          ]
+        }
+      ],
+      unsupported: [],
+      missing: []
+    };
+    const overlay = analysisOverlayFor(report, { kind: 'zebra', stripes: 20 });
+    // The stripe count is drawing, not measuring: no new query for it.
+    expect(overlay.shading).toEqual({ kind: 'zebra', stripes: 20 });
+    expect(measuredPart({ kind: 'zebra', stripes: 4 })).toEqual(
+      measuredPart({ kind: 'zebra', stripes: 20 })
+    );
+    expect(hex(overlay.bodies[0]!.colors, 0)).toBe('#ffffff');
+    expect(hex(overlay.bodies[0]!.colors, 1)).toBe(
+      CURVATURE_COLORS.unevaluated
+    );
+    expect(describeZebraSummary(report)).toBe('1 exact normal on 1 face.');
+    expect(analysisLimits('zebra')).toMatch(
+      /^Not covered: a certified continuity check/
+    );
   });
 });

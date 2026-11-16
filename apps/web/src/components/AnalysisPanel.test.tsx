@@ -143,3 +143,104 @@ describe('the analysis panel (M09)', () => {
     );
   });
 });
+
+describe('the analysis panel for curvature and zebra (M09)', () => {
+  it('gives curvature its scale, units, tightest radius and limits', () => {
+    const onChange = vi.fn();
+    const report: SurfaceAnalysisReport = {
+      request: { kind: 'curvature', measure: 'mean' },
+      bodies: [
+        {
+          bodyId: 'body_a',
+          positions: new Float32Array(),
+          normals: new Float32Array(),
+          indices: new Uint32Array(),
+          values: Float32Array.from([-1 / 12, 0]),
+          faces: [
+            {
+              face: 0,
+              surface: 'cylinder',
+              min: -1 / 12,
+              max: -1 / 12,
+              samples: 40,
+              exact: true,
+              minRadius: 6,
+              minRadiusExact: true
+            },
+            {
+              face: 1,
+              surface: 'plane',
+              min: 0,
+              max: 0,
+              samples: 4,
+              exact: true,
+              minRadius: null,
+              minRadiusExact: true
+            }
+          ]
+        }
+      ],
+      unsupported: [],
+      missing: []
+    };
+    render(
+      <AnalysisPanel
+        request={{ kind: 'curvature', measure: 'mean' }}
+        run={{ kind: 'done', report }}
+        lengthUnit="mm"
+        nameOf={() => 'Plate'}
+        onChange={onChange}
+        onOff={vi.fn()}
+      />
+    );
+    const panel = screen.getByRole('region', { name: 'Curvature analysis' });
+    expect(within(panel).getByRole('status')).toHaveTextContent(
+      'Tightest radius 6 mm (exact) on Plate, face 1. Mean curvature -0.0833 1/mm to 0 1/mm.'
+    );
+    expect(
+      within(within(panel).getByRole('list', { name: 'Legend' }))
+        .getAllByRole('listitem')
+        .map((item) => item.textContent)
+    ).toEqual([
+      'Concave · -0.0833 1/mm',
+      'Flat · 0',
+      'Convex · 0.0833 1/mm',
+      'Not evaluated'
+    ]);
+    expect(within(panel).getByRole('note')).toHaveTextContent(
+      /2 of 2 face ranges exact\.$/
+    );
+    expect(panel).toHaveTextContent(/one tight face mutes the rest/);
+    fireEvent.change(within(panel).getByRole('combobox', { name: 'Measure' }), {
+      target: { value: 'gaussian' }
+    });
+    expect(onChange).toHaveBeenLastCalledWith({
+      kind: 'curvature',
+      measure: 'gaussian'
+    });
+  });
+
+  it('gives zebra its stripe count and says continuity is read by eye', () => {
+    const onChange = vi.fn();
+    render(
+      <AnalysisPanel
+        request={{ kind: 'zebra', stripes: 12 }}
+        run={{ kind: 'running' }}
+        nameOf={() => 'Plate'}
+        onChange={onChange}
+        onOff={vi.fn()}
+      />
+    );
+    const panel = screen.getByRole('region', { name: 'Zebra analysis' });
+    expect(within(panel).getByRole('note')).toHaveTextContent(
+      /^Stripes reflected from the kernel’s exact outward normals/
+    );
+    expect(panel).toHaveTextContent(/read by eye/);
+    const stripes = within(panel).getByRole('spinbutton', { name: 'Stripes' });
+    fireEvent.change(stripes, { target: { value: '20' } });
+    expect(onChange).toHaveBeenLastCalledWith({ kind: 'zebra', stripes: 20 });
+    onChange.mockClear();
+    fireEvent.change(stripes, { target: { value: '1' } });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});

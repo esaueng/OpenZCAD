@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
   createProjectDocument,
@@ -14,6 +15,7 @@ import {
   type BodyId,
   type PrimitiveKind,
   type ProjectDocument,
+  type CurvatureMeasure,
   type SurfaceAnalysisBody,
   type SurfaceAnalysisRequest
 } from '@openzcad/shared';
@@ -241,5 +243,153 @@ describe('draft bands', () => {
     // A vertical wall is insufficient even at a 0° minimum.
     expect(draftVerdict(1e-14, 1e-14, 0)).toBe('insufficient');
     expect(draftVerdict(0.01, 0.01, 0)).toBe('positive');
+  });
+});
+
+/** A 60 × 18 × 24 plate with a 12 mm bore through it. */
+function boredPlate(): ProjectDocument {
+  let document = createProjectDocument('Plate', owner);
+  document = addPrimitiveFeature(document, {
+    name: 'Plate',
+    primitiveKind: 'box',
+    dimensions: { width: 60, height: 18, depth: 24 }
+  });
+  const plate = document.bodyOrder.at(-1)!;
+  document = addPrimitiveFeature(document, {
+    name: 'Bore',
+    primitiveKind: 'cylinder',
+    dimensions: { radius: 6, height: 28 }
+  });
+  document = transformBody(document, {
+    name: 'Place the bore',
+    targetBodyId: document.bodyOrder.at(-1) as BodyId,
+    translation: { x: 30, y: 9, z: -2 },
+    rotationDeg: { x: 0, y: 0, z: 0 }
+  }).document;
+  const bore = document.bodyOrder.at(-1)!;
+  return new CommandManager(document).execute(
+    commandFactories.booleanBodies({
+      name: 'Drill',
+      operation: 'subtract',
+      targetBodyIds: [plate, bore]
+    })
+  );
+}
+
+const curvature = (measure: CurvatureMeasure): SurfaceAnalysisRequest => ({
+  kind: 'curvature',
+  measure
+});
+
+describe('curvature analysis', () => {
+  it('reads a sphere exactly: k1 = k2 = 1/r, smallest radius r in closed form', async () => {
+    const document = documentWith({
+      kind: 'sphere',
+      dimensions: { radius: 5 }
+    });
+    for (const [measure, expected] of [
+      ['gaussian', 0.04],
+      ['mean', 0.2],
+      ['maximum', 0.2]
+    ] as const) {
+      const report = await analyse(document, curvature(measure));
+      expect(
+        report.unsupported.filter((u) => u.reason !== 'partly-evaluated')
+      ).toEqual([]);
+      for (const face of report.bodies[0]!.faces) {
+        expect(face.surface).toBe('sphere');
+        expect(face.min).toBeCloseTo(expected, 9);
+        expect(face.max).toBeCloseTo(expected, 9);
+        expect(face.exact).toBe(face.samples > 0 && !report.unsupported.length);
+        expect(face.minRadius).toBeCloseTo(5, 9);
+        expect(face.minRadiusExact).toBe(true);
+      }
+    }
+  });
+
+  it('signs a bore concave and its plate flat', async () => {
+    const document = boredPlate();
+    const mean = await analyse(document, curvature('mean'));
+    // The bore tool and the plate before drilling are consumed: only the
+    // drilled plate has exact geometry to analyse.
+    expect(mean.bodies).toHaveLength(1);
+    expect(mean.unsupported).toEqual([]);
+    const body = mean.bodies.at(-1)!;
+    const bore = body.faces.filter((face) => face.surface === 'cylinder');
+    expect(bore).toHaveLength(1);
+    // Concave against the outward normal: −(1/6 + 0)/2.
+    expect(bore[0]!.min).toBeCloseTo(-1 / 12, 9);
+    expect(bore[0]!.max).toBeCloseTo(-1 / 12, 9);
+    expect(bore[0]!.exact).toBe(true);
+    expect(bore[0]!.minRadius).toBeCloseTo(6, 9);
+    expect(bore[0]!.minRadiusExact).toBe(true);
+    for (const face of body.faces.filter((f) => f.surface === 'plane')) {
+      expect([face.min, face.max, face.exact, face.minRadius]).toEqual([
+        0,
+        0,
+        true,
+        null
+      ]);
+    }
+    // A cylinder is developable: no Gaussian curvature; its tightest
+    // radius is the bore's.
+    const gaussian = await analyse(document, curvature('gaussian'));
+    const wall = gaussian.bodies
+      .at(-1)!
+      .faces.find((f) => f.surface === 'cylinder')!;
+    expect(Math.abs(wall.min)).toBeLessThan(1e-12);
+    expect(Math.abs(wall.max)).toBeLessThan(1e-12);
+    const maximum = await analyse(document, curvature('maximum'));
+    const tight = maximum.bodies
+      .at(-1)!
+      .faces.find((f) => f.surface === 'cylinder')!;
+    expect(tight.max).toBeCloseTo(1 / 6, 9);
+  });
+
+  it('samples a torus, whose curvature varies over the face', async () => {
+    const document = documentWith({
+      kind: 'torus',
+      dimensions: { majorRadius: 10, minorRadius: 3 }
+    });
+    const report = await analyse(document, curvature('gaussian'));
+    const faces = report.bodies[0]!.faces.filter((f) => f.surface === 'torus');
+    expect(faces.length).toBeGreaterThan(0);
+    for (const face of faces) {
+      // Outer equator: 1/3 · 1/13 > 0; inner: 1/3 · −1/7 < 0.
+      expect(face.exact).toBe(false);
+      expect(face.max).toBeLessThanOrEqual(1 / 39 + 1e-9);
+      expect(face.min).toBeGreaterThanOrEqual(-1 / 21 - 1e-9);
+      expect(face.minRadius).toBeCloseTo(3, 6);
+      expect(face.minRadiusExact).toBe(true);
+    }
+    const all = faces.flatMap((f) => [f.min, f.max]);
+    expect(Math.max(...all)).toBeGreaterThan(0);
+    expect(Math.min(...all)).toBeLessThan(0);
+  });
+});
+
+describe('zebra analysis', () => {
+  it('carries the exact outward unit normal at denser samples', async () => {
+    const document = documentWith({
+      kind: 'cylinder',
+      dimensions: { radius: 5, height: 20 }
+    });
+    const zebra = await analyse(document, { kind: 'zebra', stripes: 12 });
+    const draft = await analyse(document, draftUp());
+    const body = zebra.bodies[0]!;
+    expect(body.positions.length).toBeGreaterThan(
+      draft.bodies[0]!.positions.length
+    );
+    for (let index = 0; index < body.values.length; index += 1) {
+      expect(body.values[index]).toBe(0);
+      const n = [0, 1, 2].map((axis) => body.normals[index * 3 + axis]!);
+      expect(Math.hypot(...n)).toBeCloseTo(1, 6);
+      const p = [0, 1, 2].map((axis) => body.positions[index * 3 + axis]!);
+      // On the wall the normal is radial and outward.
+      const radial = Math.hypot(p[0]!, p[1]!);
+      if (Math.abs(radial - 5) < 1e-4 && Math.abs(n[2]!) < 1e-6) {
+        expect(n[0]! * p[0]! + n[1]! * p[1]!).toBeCloseTo(5, 3);
+      }
+    }
   });
 });

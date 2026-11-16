@@ -33,11 +33,18 @@ export const ANALYSIS_SETTLE_MS = 250;
 
 /**
  * What the kernel measures for a request: the settings that only change how
- * values are coloured (draft's minimum) are left out, so changing them
- * recolours the last answer instead of asking again.
+ * values are drawn (draft's minimum, zebra's stripe count) are left out, so
+ * changing them redraws the last answer instead of asking again.
  */
 export function measuredPart(request: SurfaceAnalysisRequest): unknown {
-  return { kind: request.kind, pull: request.pull };
+  switch (request.kind) {
+    case 'draft':
+      return { kind: request.kind, pull: request.pull };
+    case 'curvature':
+      return { kind: request.kind, measure: request.measure };
+    case 'zebra':
+      return { kind: request.kind };
+  }
 }
 
 /**

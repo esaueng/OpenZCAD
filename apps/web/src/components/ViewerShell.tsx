@@ -1123,6 +1123,7 @@ export function ViewerShell({
           request={analysisRequest}
           run={analysis.state}
           previewing={analysisPreviewing}
+          lengthUnit={units === 'inch' ? 'in' : units}
           nameOf={(bodyId) => analysisNames.get(bodyId) ?? 'A body'}
           onChange={analysisRuntime.update}
           onOff={analysisRuntime.off}
