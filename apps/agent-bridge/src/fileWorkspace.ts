@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants, type Stats } from 'node:fs';
-import { open, realpath, rename, stat, unlink } from 'node:fs/promises';
+import { lstat, open, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import {
   AgentToolError,
@@ -74,21 +74,50 @@ export function grantedFileProblem(info: Stats, label: string): string | null {
 }
 
 /**
- * Why the folder holding a granted file is unsafe, or null. Whoever can write
- * the folder can replace the file in it — with another file or a link to
- * one — unless the sticky bit reserves that to the file's owner. A folder
- * writable by its group is accepted only when that group is the user's own
- * primary group (the usual private-group setup).
+ * Why one folder on a granted file's path is unsafe, or null. Whoever can
+ * write a folder can rename or replace anything in it — the file, or a
+ * folder further down the path, with a link to somewhere else — unless the
+ * sticky bit reserves that to each entry's owner. A folder writable by its
+ * group is accepted only when that group is the user's own primary group
+ * (the usual private-group setup). A folder owned by another account other
+ * than root is refused too: its owner can change its permissions at will.
  */
 export function grantFolderProblem(info: Stats, label: string): string | null {
   const user = currentUser();
-  if (!user || (info.mode & 0o1000) !== 0) return null;
+  if (!user) return null;
+  if (!info.isDirectory())
+    return `A folder on the path to ${label} is not a plain folder.`;
+  if (info.uid !== user.uid && info.uid !== 0)
+    return `A folder on the path to ${label} belongs to another user, who could replace the file. Move it to a folder only you and the system control.`;
+  if ((info.mode & 0o1000) !== 0) return null;
   if (
     (info.mode & 0o002) !== 0 ||
     ((info.mode & 0o020) !== 0 && info.gid !== user.gid)
   )
-    return `The folder holding ${label} is writable by other users, who could replace the file. Move it to a folder only you can write.`;
+    return `A folder on the path to ${label} is writable by other users, who could replace the file. Move it to a folder only you can write.`;
   return null;
+}
+
+/**
+ * Checks every folder from the granted file's own up to the filesystem root
+ * (the strict-path rule): if no other account can rename or replace any
+ * component, no one else can swap the path between this check and the open
+ * that follows it. Each folder is read with `lstat`, so a component that is
+ * itself a link is refused rather than followed.
+ */
+export async function grantPathProblem(
+  path: string,
+  label: string
+): Promise<string | null> {
+  if (!currentUser()) return null;
+  let folder = dirname(path);
+  for (;;) {
+    const problem = grantFolderProblem(await lstat(folder), label);
+    if (problem) return problem;
+    const parent = dirname(folder);
+    if (parent === folder) return null;
+    folder = parent;
+  }
 }
 
 /**
@@ -113,7 +142,7 @@ export async function openGrants(
     seen.add(path);
     const problem =
       grantedFileProblem(await stat(path), requested) ??
-      grantFolderProblem(await stat(dirname(path)), requested);
+      (await grantPathProblem(path, requested));
     if (problem) throw new Error(problem);
     grants.push({ alias: aliasFor(path, taken), path });
   }
@@ -122,9 +151,10 @@ export async function openGrants(
 
 /**
  * Reads a granted file only if it is still the file that was granted: the
- * path must still resolve to itself (no component replaced by a link), the
- * final component is opened without following a link, and the opened file
- * and its folder pass the startup checks again.
+ * path must still resolve to itself (no component replaced by a link), every
+ * folder on it must still be one no other account can change, the final
+ * component is opened without following a link, and the opened file passes
+ * the startup checks again.
  */
 async function readGranted(grant: ProjectGrant): Promise<Uint8Array> {
   const gone = () =>
@@ -134,10 +164,7 @@ async function readGranted(grant: ProjectGrant): Promise<Uint8Array> {
     );
   const resolved = await realpath(grant.path).catch(() => null);
   if (resolved !== grant.path) throw gone();
-  const folder = grantFolderProblem(
-    await stat(dirname(grant.path)),
-    `"${grant.alias}"`
-  );
+  const folder = await grantPathProblem(grant.path, `"${grant.alias}"`);
   if (folder) throw new AgentToolError('refused', folder);
   const handle = await open(
     grant.path,

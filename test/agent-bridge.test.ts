@@ -1,8 +1,10 @@
 import {
   chmod,
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rm,
   stat,
   symlink,
@@ -22,6 +24,7 @@ import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import { parseBridgeArguments } from '../apps/agent-bridge/src/args';
 import {
   FileWorkspace,
+  grantPathProblem,
   openGrants
 } from '../apps/agent-bridge/src/fileWorkspace';
 import { installNetworkGuard } from '../apps/agent-bridge/src/main';
@@ -170,13 +173,64 @@ describe('openzcad-mcp file grants', () => {
       try {
         await chmod(directory, 0o777);
         await expect(openGrants([path])).rejects.toThrow(
-          /folder holding .* is writable by other users/
+          /folder on the path to .* is writable by other users/
         );
         await chmod(directory, 0o1777);
         await expect(openGrants([path])).resolves.toHaveLength(1);
       } finally {
         await chmod(directory, 0o700);
       }
+    }
+  );
+
+  it.runIf(posix)(
+    'refuses a grant beneath any ancestor folder others can write',
+    async () => {
+      // Another account that can write an ancestor could rename the folder
+      // below it and put a link to a private folder in its place, after the
+      // path was checked and before the file is opened (O_NOFOLLOW guards
+      // only the last name). Every ancestor is therefore checked.
+      const inner = join(directory, 'inner', 'deeper');
+      await mkdir(inner, { recursive: true, mode: 0o700 });
+      const path = join(inner, 'nested.openzcad');
+      await writeFile(path, backupText(blockDocument()));
+      await chmod(path, 0o600);
+      const workspace = new FileWorkspace(await openGrants([path]), noKernel);
+      await workspace.load('nested');
+      try {
+        await chmod(join(directory, 'inner'), 0o777);
+        await expect(openGrants([path])).rejects.toThrow(
+          /folder on the path to .* is writable by other users/
+        );
+        // A grant made before the ancestor opened up is refused on its next read.
+        const refusal = await workspace.load('nested').then(
+          () => null,
+          (error: { code: string; message: string }) => error
+        );
+        expect(refusal?.code).toBe('refused');
+        expect(refusal?.message).toMatch(/folder on the path/);
+        await chmod(join(directory, 'inner'), 0o1777);
+        await expect(openGrants([path])).resolves.toHaveLength(1);
+      } finally {
+        await chmod(join(directory, 'inner'), 0o700);
+      }
+    }
+  );
+
+  it.runIf(posix)(
+    'checks every folder up to the root, refusing a link in the path',
+    async () => {
+      const path = await project('linked.openzcad');
+      const link = join(directory, 'via-link');
+      await symlink(directory, link);
+      // The grant itself resolves links once, so it holds the real path…
+      const [grant] = await openGrants([join(link, 'linked.openzcad')]);
+      expect(grant!.path).toBe(await realpath(path));
+      // …and the strict-path walk reads each folder without following links.
+      expect(
+        await grantPathProblem(join(link, 'linked.openzcad'), 'x')
+      ).toMatch(/not a plain folder/);
+      expect(await grantPathProblem(await realpath(path), 'x')).toBeNull();
     }
   );
 
