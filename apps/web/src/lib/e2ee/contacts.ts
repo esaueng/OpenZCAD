@@ -34,6 +34,7 @@ import type {
   E2eeResealContactsRequest
 } from '@openzcad/shared';
 import { desktopFetch } from '../desktopBridge';
+import { inDeviceListRealm } from '../deploymentRealm';
 import {
   EncryptionFlowError,
   openAccountKeyChain,
@@ -550,7 +551,7 @@ export async function inspectContact(
   }
   let list: VerifiedDeviceList;
   try {
-    list = await verifyDeviceList(identityKey, chain);
+    list = await verifyDeviceList(identityKey, chain, inDeviceListRealm({}));
   } catch (error) {
     refused(error, 'device list');
   }
@@ -580,7 +581,11 @@ export async function inspectContact(
   }
   for (const each of pins) {
     try {
-      await verifyDeviceList(identityKey, chain, { pin: each });
+      await verifyDeviceList(
+        identityKey,
+        chain,
+        inDeviceListRealm({ pin: each })
+      );
     } catch (error) {
       refused(error, 'device list');
     }

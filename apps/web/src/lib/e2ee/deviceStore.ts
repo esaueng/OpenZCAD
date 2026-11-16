@@ -5,6 +5,7 @@ import type {
   SigningPrivateKey,
   VerifiedDeviceList
 } from '@openzcad/crypto';
+import { realmStorageName } from '../deploymentRealm';
 
 /**
  * This device's key material for one account, and the device-list pin.
@@ -321,7 +322,7 @@ export function memoryDeviceStore(): DeviceKeyStore {
   };
 }
 
-export const E2EE_DATABASE = 'openzcad-e2ee';
+export const E2EE_DATABASE = realmStorageName('openzcad-e2ee');
 const DEVICES = 'devices';
 const PINS = 'pins';
 

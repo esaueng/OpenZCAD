@@ -985,6 +985,37 @@
   justify-content: flex-start;
 }
 
+/* The code step's way back and resend: links, so Sign in is the one button. */
+.settings-auth-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.settings-auth-link {
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  color: var(--color-accent-hi);
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.settings-auth-link:hover:not(:disabled) {
+  color: var(--color-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.settings-auth-link:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 /* Resend under the code: its own security check, then a new code (I81). */
 .settings-auth-resend {
   display: grid;

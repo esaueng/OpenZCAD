@@ -1175,6 +1175,7 @@ function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
  * BEFORE it (unsupported extension, a lone `.shapr`) stay synchronous.
  */
 const stepImportRun = () => import('./lib/stepImportRun');
+const featureDeletionRun = () => import('./lib/featureDeletionRun');
 const projectInsertRun = () => import('./lib/projectInsertRun');
 
 /**
@@ -1462,6 +1463,11 @@ const LazyDeleteFeatureDialog = lazyWithStaleChunkNotice(() =>
     default: module.DeleteFeatureDialog
   }))
 );
+const LazyDeleteDependentsDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/DeleteDependentsDialog').then((module) => ({
+    default: module.DeleteDependentsDialog
+  }))
+);
 const LazySuppressFeatureDialog = lazyWithStaleChunkNotice(() =>
   import('./components/SuppressFeatureDialog').then((module) => ({
     default: module.SuppressFeatureDialog
@@ -1642,6 +1648,8 @@ const SharedLinkCopyDialog = withSuspense(LazySharedLinkCopyDialog);
 const SaveRevisionDialog = withSuspense(LazySaveRevisionDialog);
 
 const DeleteFeatureDialog = withSuspense(LazyDeleteFeatureDialog);
+
+const DeleteDependentsDialog = withSuspense(LazyDeleteDependentsDialog);
 
 const SuppressFeatureDialog = withSuspense(LazySuppressFeatureDialog);
 
@@ -3190,6 +3198,20 @@ export function App() {
     /** A History multi-selection deleted together, in history order. */
     batch?: FeatureId[];
   } | null>(null);
+  /**
+   * A refused hole, fillet or chamfer delete, asking whether to delete the
+   * later details and edits built on its geometry too. Valid only for the
+   * manager and document version it was refused against: a newer copy of the
+   * project (another device, a collaborator) may have changed those steps.
+   */
+  const [pendingDetailCascade, setPendingDetailCascade] = useState<{
+    projectId: ProjectDocument['projectId'];
+    version: number;
+    manager: CommandManager;
+    name: string;
+    featureIds: FeatureId[];
+    dependents: { featureId: FeatureId; name: string }[];
+  } | null>(null);
   /** A refused suppression, asking whether to pause its dependents too. */
   const [pendingSuppression, setPendingSuppression] = useState<{
     projectId: ProjectDocument['projectId'];
@@ -4592,6 +4614,8 @@ export function App() {
     launchTool,
     validateSelectionEdit,
     handleSelectFeatureFromTree,
+    handleDeleteFeature,
+    handleDeleteImportedFace,
     toggleBodyVisibility,
     isolateBody
   });
@@ -4599,6 +4623,8 @@ export function App() {
     launchTool,
     validateSelectionEdit,
     handleSelectFeatureFromTree,
+    handleDeleteFeature,
+    handleDeleteImportedFace,
     toggleBodyVisibility,
     isolateBody
   };
@@ -7527,6 +7553,7 @@ export function App() {
     // command the new, empty one was somehow in the middle of.
     dispatchInteraction({ type: 'clear' });
     setPendingFeatureDelete(null);
+    setPendingDetailCascade(null);
     setPendingSuppression(null);
     setPendingResume(null);
     setPendingToolSwitch(null);
@@ -30013,58 +30040,58 @@ export function App() {
    * part, which has no history to delete, or a face a subtract cut, whose
    * inferred feature (the cutting tool) the cut still needs.
    */
+  /** The delete gestures' collaborators, bound to the manager they began on. */
+  function deletionHost(manager: CommandManager, base: ProjectDocument) {
+    return {
+      manager,
+      base,
+      isCurrent: () => managerRef.current === manager,
+      runTransaction: validatedFeature.runTransaction,
+      executeTransaction,
+      setStatus: (message: string) => setStatus(message),
+      announce: (message: string) => announce(message),
+      healed: (message: string) => {
+        clearSelection();
+        announce(message, { label: 'Undo', run: handleUndo });
+      },
+      offerDetailCascade: (
+        name: string,
+        featureIds: readonly FeatureId[],
+        dependents: readonly { featureId: FeatureId; name: string }[],
+        message: string
+      ) => offerDetailCascade(manager, name, featureIds, dependents, message)
+    };
+  }
+
+  /**
+   * Heals one face by a replayable direct edit: a face of an imported STEP
+   * part, which has no history to delete, a face a subtract cut, whose
+   * inferred feature (the cutting tool) the cut still needs, or a face no
+   * step can be shown to own.
+   */
   function handleDeleteImportedFace(
     selection: TopologySelection,
-    origin: 'imported' | 'cut' = 'imported'
+    origin: 'imported' | 'cut' | 'orphan' = 'imported'
   ) {
     // A pick may demand lineage while a complete validated body is already
     // displayed. The candidate rebuild re-resolves its face before healing.
     if (!requireDisplayedGeometryComplete()) return;
     const manager = managerRef.current;
     const base = manager?.document;
-    if (!base) return;
-    void import('./lib/featureDeletion')
-      .then(({ importedFaceDeletion, cutFaceDeletion }) => {
-        const current = manager.document;
-        if (
-          managerRef.current !== manager ||
-          current.projectId !== base.projectId ||
-          current.version !== base.version
-        ) {
-          setStatus(
-            'The model changed. Select the face again before deleting it.'
-          );
-          return;
-        }
-        const removal =
-          origin === 'cut'
-            ? cutFaceDeletion(current, selection)
-            : importedFaceDeletion(current, selection);
-        void validatedFeature.runTransaction([removal.command], {
-          label: removal.command.label,
-          targets: [removal.target],
-          validatingMessage:
-            origin === 'cut'
-              ? 'Checking the cut removal…'
-              : 'Checking imported feature removal…',
-          successMessage: removal.successMessage,
-          onFailure: (message) => announce(message),
-          onSuccess: () => {
-            clearSelection();
-            announce(removal.successMessage, {
-              label: 'Undo',
-              run: handleUndo
-            });
-          }
-        });
-      })
+    if (!manager || !base) return;
+    void featureDeletionRun()
+      .then((run) =>
+        run.deleteFace(deletionHost(manager, base), selection, origin)
+      )
       .catch((error: unknown) =>
         setStatus(
           errorMessage(
             error,
             origin === 'cut'
               ? 'Could not fill this cut.'
-              : 'Could not remove this imported feature.'
+              : origin === 'orphan'
+                ? 'Could not delete this face.'
+                : 'Could not remove this imported feature.'
           )
         )
       );
@@ -30079,37 +30106,10 @@ export function App() {
     if (!requireDisplayedGeometryComplete()) return;
     const manager = managerRef.current;
     const base = manager?.document;
-    if (!base) return;
+    if (!manager || !base) return;
     const faces = selections.map((selection) => ({ ...selection }));
-    void import('./lib/featureDeletion')
-      .then(({ faceSetDeletion }) => {
-        const current = manager.document;
-        if (
-          managerRef.current !== manager ||
-          current.projectId !== base.projectId ||
-          current.version !== base.version
-        ) {
-          setStatus(
-            'The model changed. Select the faces again before deleting them.'
-          );
-          return;
-        }
-        const removal = faceSetDeletion(current, faces);
-        void validatedFeature.runTransaction([removal.command], {
-          label: removal.command.label,
-          targets: [removal.target],
-          validatingMessage: `Checking the removal of ${faces.length} faces…`,
-          successMessage: removal.successMessage,
-          onFailure: (message) => announce(message),
-          onSuccess: () => {
-            clearSelection();
-            announce(removal.successMessage, {
-              label: 'Undo',
-              run: handleUndo
-            });
-          }
-        });
-      })
+    void featureDeletionRun()
+      .then((run) => run.deleteFaces(deletionHost(manager, base), faces))
       .catch((error: unknown) =>
         setStatus(errorMessage(error, 'Could not delete these faces.'))
       );
@@ -30161,33 +30161,17 @@ export function App() {
     const manager = managerRef.current;
     const base = manager?.document;
     const feature = base && findFeature(base, featureId);
-    if (base && feature && isRemovableDetail(feature)) {
-      void import('./lib/featureDeletion')
-        .then(({ nativeFeatureDeletion }) => {
-          const current = manager.document;
-          if (
-            managerRef.current !== manager ||
-            current.projectId !== base.projectId ||
-            current.version !== base.version
-          ) {
-            setStatus(
-              'The model changed. Select the feature again before deleting it.'
-            );
-            return;
-          }
-          // A geometry-only echo may replace the document object while the
-          // module loads. Its project/revision still owns this deletion.
-          const removal = nativeFeatureDeletion(current, feature);
-          void validatedFeature.runTransaction([removal.command], {
-            label: `Delete ${name}`,
-            targets: [],
-            validateDerived: removal.validateDerived,
-            validatingMessage: `Checking removal of ${name}…`,
-            successMessage: deleteFeatureToastMessage(name, dependentCount),
-            onFailure: (message) => announce(message),
-            onSuccess: finish
-          });
-        })
+    if (manager && base && feature && isRemovableDetail(feature)) {
+      void featureDeletionRun()
+        .then((run) =>
+          run.deleteDetail(
+            deletionHost(manager, base),
+            feature,
+            name,
+            dependentCount,
+            finish
+          )
+        )
         .catch((error: unknown) =>
           setStatus(errorMessage(error, 'Could not remove this feature.'))
         );
@@ -30240,9 +30224,38 @@ export function App() {
     commitDeleteFeatures(featureIds, dependents.length);
   }
 
+  /**
+   * A detail delete refused because later details or edits were built on its
+   * geometry: offer to delete those too, as a refused suppression offers to
+   * pause its branch. Any other refusal is announced as before.
+   */
+  function offerDetailCascade(
+    owner: CommandManager,
+    name: string,
+    featureIds: readonly FeatureId[],
+    dependents: readonly { featureId: FeatureId; name: string }[],
+    message: string
+  ) {
+    if (managerRef.current !== owner || dependents.length === 0) {
+      announce(message);
+      return;
+    }
+    const { projectId, version } = owner.document;
+    setPendingDetailCascade({
+      projectId,
+      version,
+      manager: owner,
+      name,
+      featureIds: [...featureIds],
+      dependents: [...dependents]
+    });
+  }
+
   function commitDeleteFeatures(
     featureIds: readonly FeatureId[],
-    dependentCount: number
+    dependentCount: number,
+    /** The detail a cascade grew from, named again if it is refused. */
+    cascadeName?: string
   ) {
     const manager = managerRef.current;
     const base = manager?.document;
@@ -30266,34 +30279,16 @@ export function App() {
         { repeatsStatusAt: lastStatusAtRef.current }
       );
     };
-    void import('./lib/featureDeletion')
-      .then(({ batchFeatureDeletion }) => {
-        const current = manager.document;
-        if (
-          managerRef.current !== manager ||
-          current.projectId !== base.projectId ||
-          current.version !== base.version
-        ) {
-          setStatus(
-            'The model changed. Select the features again before deleting them.'
-          );
-          return;
-        }
-        const removal = batchFeatureDeletion(current, featureIds);
-        if (removal.validateDerived) {
-          void validatedFeature.runTransaction(removal.commands, {
-            label: removal.label,
-            targets: [],
-            validateDerived: removal.validateDerived,
-            validatingMessage: `Checking removal of ${countLabel(featureIds.length, 'feature', 'features')}…`,
-            successMessage: message,
-            onFailure: (failure) => announce(failure),
-            onSuccess: finish
-          });
-          return;
-        }
-        if (executeTransaction(removal.label, removal.commands)) finish();
-      })
+    void featureDeletionRun()
+      .then((run) =>
+        run.deleteFeatures(
+          deletionHost(manager, base),
+          featureIds,
+          message,
+          cascadeName,
+          finish
+        )
+      )
       .catch((error: unknown) =>
         setStatus(errorMessage(error, 'Could not delete these features.'))
       );
@@ -31074,6 +31069,30 @@ export function App() {
       selection.bodyId
     );
     const feature = selectionFeature(current, body, selection);
+    // Delete does what the Del key does with this pick: a STEP face or a
+    // subtract's cut is healed in place, a face or edge a step defines
+    // deletes that step, and a face no step can be shown to own is healed.
+    const faceHeal: 'imported' | 'cut' | 'orphan' | null =
+      selection.kind !== 'face'
+        ? null
+        : listFeaturesInOrder(current).some(
+              (candidate) =>
+                candidate.bodyId === selection.bodyId &&
+                candidate.data.featureKind === 'imported-step'
+            )
+          ? 'imported'
+          : isCutFace(current, selection)
+            ? 'cut'
+            : feature
+              ? null
+              : 'orphan';
+    const deleteLabel = faceHeal
+      ? faceHeal === 'cut'
+        ? 'Fill cut'
+        : 'Delete face'
+      : feature && selection.kind !== 'body'
+        ? `Delete ${feature.name}`
+        : null;
     // M16: a sheet-metal body (or one a later feature carried on) offers
     // its flat pattern.
     const sheetSource = sheetMetalFeatureForBody(current, selection.bodyId);
@@ -31195,6 +31214,38 @@ export function App() {
                 run: runCurrent((handlers) => {
                   if (handlers.validateSelectionEdit())
                     handlers.handleSelectFeatureFromTree(feature.id, false);
+                })
+              }
+            ]
+          : []),
+        ...(deleteLabel
+          ? [
+              {
+                item: {
+                  id: 'delete',
+                  label: deleteLabel,
+                  icon: <Trash2 size={13} aria-hidden="true" />,
+                  shortcut: 'Del',
+                  danger: true,
+                  section: !feature
+                },
+                run: runCurrent((handlers) => {
+                  if (
+                    !handlers.validateSelectionEdit({
+                      acceptCompleteCommit: true
+                    })
+                  )
+                    return;
+                  if (faceHeal)
+                    handlers.handleDeleteImportedFace(
+                      menuSelection.selection,
+                      faceHeal
+                    );
+                  else if (feature)
+                    handlers.handleDeleteFeature(
+                      feature.featureId,
+                      feature.name
+                    );
                 })
               }
             ]
@@ -31884,6 +31935,7 @@ export function App() {
     !meshExportOpen &&
     !importUnitsPrompt &&
     !pendingFeatureDelete &&
+    !activeResumePrompt(pendingDetailCascade, doc) &&
     !activeSuppressionPrompt(pendingSuppression, doc?.projectId) &&
     !activeResumePrompt(pendingResume, doc) &&
     !pendingToolSwitch;
@@ -32667,6 +32719,25 @@ export function App() {
               selectedFeature.featureId,
               selectedFeature.name
             );
+            return;
+          }
+          // A face no step can be shown to own (its name was lost to an
+          // earlier edit) is healed in place, as a STEP face is, rather than
+          // doing nothing or deleting a guessed feature.
+          if (
+            featureSelectionSource !== 'pinned' &&
+            !selectedFeature &&
+            selectedTopology?.kind === 'face' &&
+            selectedEdges.length === 0 &&
+            !(
+              isOperationState(interaction) &&
+              interaction.phase !== 'armed' &&
+              interaction.phase !== 'failed'
+            ) &&
+            validateSelectionEdit({ acceptCompleteCommit: true })
+          ) {
+            event.preventDefault();
+            handleDeleteImportedFace(selectedTopology, 'orphan');
           }
           return;
       }
@@ -37288,6 +37359,38 @@ export function App() {
               }}
             />
           )}
+          {pendingDetailCascade &&
+            activeResumePrompt(pendingDetailCascade, doc) && (
+              <DeleteDependentsDialog
+                name={pendingDetailCascade.name}
+                dependents={pendingDetailCascade.dependents.map(
+                  (dependent) => dependent.name
+                )}
+                onCancel={() => setPendingDetailCascade(null)}
+                onDeleteAll={() => {
+                  const { name, featureIds, dependents, manager } =
+                    pendingDetailCascade;
+                  setPendingDetailCascade(null);
+                  if (
+                    managerRef.current !== manager ||
+                    !activeResumePrompt(pendingDetailCascade, manager.document)
+                  ) {
+                    setStatus(
+                      'The model changed. Select the feature again before deleting it.'
+                    );
+                    return;
+                  }
+                  commitDeleteFeatures(
+                    [
+                      ...featureIds,
+                      ...dependents.map((dependent) => dependent.featureId)
+                    ],
+                    0,
+                    name
+                  );
+                }}
+              />
+            )}
           {pendingSuppression &&
             activeSuppressionPrompt(pendingSuppression, doc?.projectId) && (
               <SuppressFeatureDialog

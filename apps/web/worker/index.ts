@@ -155,7 +155,8 @@ import {
   destroyDesktopAuthorization,
   destroyEmailSession,
   exchangeDesktopAuthorization,
-  getAuthConfig,
+  getBrowserAuthConfig,
+  provisionQaTurnstileCookie,
   getDesktopAuthConfig,
   identifyAssistantIdentity,
   refreshDesktopAuthorization,
@@ -1075,7 +1076,9 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'GET' && pathname === '/api/auth/config') {
-    return json(getAuthConfig(env));
+    return json(await getBrowserAuthConfig(request, env), 200, {
+      'cache-control': 'private, no-store'
+    });
   }
 
   if (request.method === 'GET' && pathname === '/api/auth/desktop/config') {
@@ -1466,6 +1469,20 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       },
       503
     );
+  }
+
+  if (request.method === 'POST' && pathname === '/api/auth/qa-turnstile') {
+    await enforcePublicRequestRateLimit(
+      request,
+      env,
+      'qa-turnstile',
+      'AUTH_REQUEST_LIMITER'
+    );
+    const cookie = await provisionQaTurnstileCookie(request, env);
+    return new Response(null, {
+      status: 204,
+      headers: { 'set-cookie': cookie, 'cache-control': 'no-store' }
+    });
   }
 
   if (request.method === 'POST' && pathname === '/api/auth/email/start') {

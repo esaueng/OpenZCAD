@@ -4846,6 +4846,8 @@ export interface AuthConfigResponse {
   mode: 'development' | 'email-code' | 'unconfigured';
   emailCodeEnabled: boolean;
   turnstileSiteKey?: string;
+  /** Only returned to a browser holding the temporary beta QA capability. */
+  qaTurnstileBypassEmail?: string;
   /** Present only on the native readiness endpoint. Older Workers fail closed. */
   desktopAuthEnabled?: boolean;
 }

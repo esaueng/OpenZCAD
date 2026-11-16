@@ -6,6 +6,8 @@
  * code into the entry chunk.
  */
 
+import { realmStorageName } from '../deploymentRealm';
+
 /** The highest preference sequence this device has accepted, per account. */
 export interface PreferencePinStore {
   read(userId: string): Promise<number | null>;
@@ -28,10 +30,12 @@ export interface PreferencePinStore {
   pinnedValue(userId: string): Promise<boolean | null>;
 }
 
-const PIN_KEY = (userId: string) =>
-  `openzcad:e2ee-project-preference-pin:v1:${userId}`;
-const OPT_IN_KEY = (userId: string) =>
-  `openzcad:e2ee-project-preference-opt-in:v1:${userId}`;
+const PIN_PREFIX = realmStorageName('openzcad:e2ee-project-preference-pin:v1');
+const OPT_IN_PREFIX = realmStorageName(
+  'openzcad:e2ee-project-preference-opt-in:v1'
+);
+const PIN_KEY = (userId: string) => `${PIN_PREFIX}:${userId}`;
+const OPT_IN_KEY = (userId: string) => `${OPT_IN_PREFIX}:${userId}`;
 
 type Locks = Pick<LockManager, 'request'>;
 

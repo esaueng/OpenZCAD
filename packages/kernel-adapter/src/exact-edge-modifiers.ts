@@ -22,6 +22,7 @@ import {
   type BlendRefusal
 } from './exact-blend-refusal';
 import { ADAPTER_REFUSALS } from './adapter-refusal';
+import { crossingFaceLoops } from './face-loop-crossing';
 import { KernelRefusal } from './kernel-refusal';
 import { surfaceTypeOf } from './exact-sync-memo';
 import { MEASUREMENT_DEFLECTION, edgeSampleOf } from './exact-witnesses';
@@ -493,6 +494,28 @@ export function applyEdgeModifier(
         );
         return null;
       }
+    }
+  }
+  // A blend must not leave a face whose boundary loops cross. The kernel can
+  // move a planar face's outline (a fillet's spring line) across a hole or
+  // boss circle in the same face without trimming either, and its validator
+  // reports no error: on the pin, a 0.5 fillet along a plate edge 0.137
+  // outside a fused hub's base circle leaves the plate face's outer loop
+  // 0.363 inside that circle, two holes in the model and an open mesh. See
+  // `face-loop-crossing`. Refused here, the ladder below quotes the largest
+  // size that does build.
+  //
+  // Like the measurements above it is skipped on a display-only drag frame,
+  // and the checked rebuild at rest and on release runs it. A target whose
+  // own loops already cross is not this blend's fault, so it is not refused
+  // for them.
+  if (!displayOnlyBlendsActive()) {
+    const crossing = crossingFaceLoops(kernel, [modified]);
+    if (crossing && !crossingFaceLoops(kernel, [target])) {
+      reportRefusal?.(
+        `${featureKind} left a face whose boundary loops cross: one loop runs ${crossing.depth.toPrecision(3)} past another, so the result has holes in the model`
+      );
+      return null;
     }
   }
   if (evolution) {

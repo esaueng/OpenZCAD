@@ -121,7 +121,6 @@ import { describeFailure } from '../lib/plainFailure';
 import { DataDownload } from './DataDownload';
 import { ActivityLogSettings } from './ActivityLogSettings';
 import {
-  PrivateEmailInput,
   PrivateText,
   setPersonalInfoVisible,
   usePersonalInfoVisible
@@ -816,9 +815,17 @@ export function SettingsPage({
   // A new code can be asked for a short while after the last one was sent,
   // so a slow email is not answered with a flood of codes (I81).
   const [resendReady, setResendReady] = useState(false);
+  // The resend security check stays folded until asked for: shown under
+  // Sign in, an unanswered "Verify you are human" read as a step the
+  // sign-in itself still needed.
+  const [resendOpen, setResendOpen] = useState(false);
   useEffect(() => {
     setResendReady(false);
+    setResendOpen(false);
     if (!loginChallengeId) return;
+    // A new code moves the caret to its field, so the code can be typed or
+    // filled without a click.
+    loginCodeRef.current?.focus();
     const timer = window.setTimeout(
       () => setResendReady(true),
       LOGIN_CODE_RESEND_DELAY_MS
@@ -827,6 +834,13 @@ export function SettingsPage({
   }, [loginChallengeId]);
   const [turnstileToken, setTurnstileToken] = useState('');
   const [turnstileReset, setTurnstileReset] = useState(0);
+  const [qaBypassRefused, setQaBypassRefused] = useState(false);
+  const qaTurnstileBypass = Boolean(
+    !qaBypassRefused &&
+    authConfig?.qaTurnstileBypassEmail &&
+    loginEmail.trim().toLowerCase() === authConfig.qaTurnstileBypassEmail
+  );
+  const loginSecurityToken = qaTurnstileBypass ? 'qa-cookie' : turnstileToken;
   const [storageUsage, setStorageUsage] = useState<AccountStorageUsage | null>(
     null
   );
@@ -2575,17 +2589,20 @@ export function SettingsPage({
                                 {loginCodeError}
                               </small>
                             ) : null}
-                            <span className="settings-button-row">
+                            {/* Sign in is the step's one action, drawn as
+                              wide as the field like Email me a code; the
+                              way back and the resend are quiet links. */}
+                            <button
+                              className="primary"
+                              type="submit"
+                              disabled={busy || loginCode.length !== 6}
+                            >
+                              <LogIn size={14} aria-hidden="true" />
+                              Sign in
+                            </button>
+                            <span className="settings-auth-links">
                               <button
-                                className="primary"
-                                type="submit"
-                                disabled={busy || loginCode.length !== 6}
-                              >
-                                <LogIn size={14} aria-hidden="true" />
-                                Sign in
-                              </button>
-                              <button
-                                className="secondary"
+                                className="settings-auth-link"
                                 type="button"
                                 disabled={busy}
                                 onClick={() => {
@@ -2596,44 +2613,69 @@ export function SettingsPage({
                               >
                                 Use another email
                               </button>
+                              <button
+                                className="settings-auth-link"
+                                type="button"
+                                aria-expanded={resendOpen}
+                                aria-controls="settings-auth-resend"
+                                onClick={() => setResendOpen((open) => !open)}
+                              >
+                                Didn’t get the code?
+                              </button>
                             </span>
                             {/* Resend (design review I81): the email form's
                               security check, then a new code to the same
                               address, after a short wait. */}
-                            <div className="settings-auth-resend">
-                              <TurnstileWidget
-                                siteKey={authConfig.turnstileSiteKey}
-                                resetSignal={turnstileReset}
-                                onToken={setTurnstileToken}
-                              />
-                              <button
-                                className="secondary"
-                                type="button"
-                                disabled={
-                                  busy || !resendReady || !turnstileToken
-                                }
-                                onClick={() => {
-                                  void onRequestLoginCode(
-                                    loginEmail.trim(),
-                                    turnstileToken
-                                  )
-                                    .then((response) => {
-                                      setLoginCode('');
-                                      setLoginChallengeId(response.challengeId);
-                                    })
-                                    .catch(() => undefined)
-                                    .finally(() => {
-                                      setTurnstileToken('');
-                                      setTurnstileReset((value) => value + 1);
-                                    });
-                                }}
+                            {resendOpen ? (
+                              <div
+                                className="settings-auth-resend"
+                                id="settings-auth-resend"
                               >
-                                <Mail size={14} aria-hidden="true" />
-                                {resendReady
-                                  ? 'Send a new code'
-                                  : 'Send a new code (in a moment)'}
-                              </button>
-                            </div>
+                                {qaTurnstileBypass ? (
+                                  <small role="status">
+                                    QA security check enabled for this browser.
+                                  </small>
+                                ) : (
+                                  <TurnstileWidget
+                                    siteKey={authConfig.turnstileSiteKey}
+                                    resetSignal={turnstileReset}
+                                    onToken={setTurnstileToken}
+                                  />
+                                )}
+                                <button
+                                  className="secondary"
+                                  type="button"
+                                  disabled={
+                                    busy || !resendReady || !loginSecurityToken
+                                  }
+                                  onClick={() => {
+                                    void onRequestLoginCode(
+                                      loginEmail.trim(),
+                                      loginSecurityToken
+                                    )
+                                      .then((response) => {
+                                        setLoginCode('');
+                                        setLoginChallengeId(
+                                          response.challengeId
+                                        );
+                                      })
+                                      .catch(() => {
+                                        if (qaTurnstileBypass)
+                                          setQaBypassRefused(true);
+                                      })
+                                      .finally(() => {
+                                        setTurnstileToken('');
+                                        setTurnstileReset((value) => value + 1);
+                                      });
+                                  }}
+                                >
+                                  <Mail size={14} aria-hidden="true" />
+                                  {resendReady
+                                    ? 'Send a new code'
+                                    : 'Send a new code (in a moment)'}
+                                </button>
+                              </div>
+                            ) : null}
                           </div>
                         </form>
                       ) : (
@@ -2643,12 +2685,14 @@ export function SettingsPage({
                             event.preventDefault();
                             void onRequestLoginCode(
                               loginEmail.trim(),
-                              turnstileToken
+                              loginSecurityToken
                             )
                               .then((response) =>
                                 setLoginChallengeId(response.challengeId)
                               )
-                              .catch(() => undefined)
+                              .catch(() => {
+                                if (qaTurnstileBypass) setQaBypassRefused(true);
+                              })
                               .finally(() => {
                                 setTurnstileToken('');
                                 setTurnstileReset((value) => value + 1);
@@ -2667,10 +2711,18 @@ export function SettingsPage({
                           <div className="settings-auth-controls">
                             <label>
                               <span>Email</span>
-                              <PrivateEmailInput
-                                visible={personalInfoVisible}
+                              {/* Never masked: the screenshot mask turned this
+                                into a password field, which hid the address
+                                being typed and kept password managers from
+                                filling it. "username" is the token they fill
+                                a saved login's address into. */}
+                              <input
+                                type="email"
+                                name="email"
                                 value={loginEmail}
-                                autoComplete="email"
+                                autoComplete="username"
+                                autoCapitalize="none"
+                                spellCheck={false}
                                 aria-label="Email address"
                                 placeholder="you@example.com"
                                 onChange={(event) =>
@@ -2678,16 +2730,24 @@ export function SettingsPage({
                                 }
                               />
                             </label>
-                            <TurnstileWidget
-                              siteKey={authConfig.turnstileSiteKey}
-                              resetSignal={turnstileReset}
-                              onToken={setTurnstileToken}
-                            />
+                            {qaTurnstileBypass ? (
+                              <small role="status">
+                                QA security check enabled for this browser.
+                              </small>
+                            ) : (
+                              <TurnstileWidget
+                                siteKey={authConfig.turnstileSiteKey}
+                                resetSignal={turnstileReset}
+                                onToken={setTurnstileToken}
+                              />
+                            )}
                             <button
                               className="primary"
                               type="submit"
                               disabled={
-                                busy || !loginEmail.trim() || !turnstileToken
+                                busy ||
+                                !loginEmail.trim() ||
+                                !loginSecurityToken
                               }
                             >
                               <Mail size={14} aria-hidden="true" />

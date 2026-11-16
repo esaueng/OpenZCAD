@@ -18,6 +18,8 @@
  * in one readwrite transaction; a stale writer is refused and re-reads.
  */
 
+import { realmStorageName } from '../../deploymentRealm';
+
 export interface StoredPendingCommit {
   readonly commit: Uint8Array;
   readonly welcome: Uint8Array | null;
@@ -244,7 +246,7 @@ export function memoryMlsSessionStore(): MlsSessionStore {
   };
 }
 
-export const MLS_DATABASE = 'openzcad-e2ee-mls';
+export const MLS_DATABASE = realmStorageName('openzcad-e2ee-mls');
 const STATE_KEYS = 'stateKeys';
 const SESSIONS = 'sessions';
 

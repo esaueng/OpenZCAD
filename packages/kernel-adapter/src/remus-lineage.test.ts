@@ -255,11 +255,17 @@ describe('Remus modifier evolution lineage', () => {
       operation: 'direct-edit',
       resultCandidates: input([13]).resultCandidates.map((candidate) =>
         candidate.handle === 11
-          ? { ...candidate, witness: { ...FACE, perimeter: FACE.perimeter + 1 } }
+          ? {
+              ...candidate,
+              witness: { ...FACE, perimeter: FACE.perimeter + 1 }
+            }
           : candidate.handle === 12
             ? {
                 ...candidate,
-                witness: { ...OPPOSITE_FACE, perimeter: OPPOSITE_FACE.perimeter + 1 }
+                witness: {
+                  ...OPPOSITE_FACE,
+                  perimeter: OPPOSITE_FACE.perimeter + 1
+                }
               }
             : candidate
       )
@@ -278,11 +284,14 @@ describe('Remus modifier evolution lineage', () => {
     const duplicateSource: RemusLineageState = {
       faceReferences: new Map([
         [1, faceReference('duplicate.support')],
-        [2, {
-          ...faceReference('duplicate.support'),
-          witness: OPPOSITE_FACE,
-          currentHash: topologyHashOfWitness('face', OPPOSITE_FACE)
-        }]
+        [
+          2,
+          {
+            ...faceReference('duplicate.support'),
+            witness: OPPOSITE_FACE,
+            currentHash: topologyHashOfWitness('face', OPPOSITE_FACE)
+          }
+        ]
       ]),
       edgeReferences: new Map(),
       diagnostics: []
@@ -293,11 +302,17 @@ describe('Remus modifier evolution lineage', () => {
       sourceLineage: duplicateSource,
       resultCandidates: input([13]).resultCandidates.map((candidate) =>
         candidate.handle === 11
-          ? { ...candidate, witness: { ...FACE, perimeter: FACE.perimeter + 1 } }
+          ? {
+              ...candidate,
+              witness: { ...FACE, perimeter: FACE.perimeter + 1 }
+            }
           : candidate.handle === 12
             ? {
                 ...candidate,
-                witness: { ...OPPOSITE_FACE, perimeter: OPPOSITE_FACE.perimeter + 1 }
+                witness: {
+                  ...OPPOSITE_FACE,
+                  perimeter: OPPOSITE_FACE.perimeter + 1
+                }
               }
             : candidate
       )
@@ -351,7 +366,7 @@ describe('Remus modifier evolution lineage', () => {
     ]);
   });
 
-  it('retains an earlier blend only through unique unchanged construction ancestry', () => {
+  it('retains an earlier blend, and returns it re-witnessed when trimmed, only through unique construction ancestry', () => {
     const original = input([13]);
     const prior = createRemusSemanticLineage(FEATURE_ID, 'fillet', [
       {
@@ -380,7 +395,59 @@ describe('Remus modifier evolution lineage', () => {
           : candidate
       )
     });
+    // By default a modifier names only what it built and unchanged faces...
     expect(changed.faceReferences.has(11)).toBe(false);
+    // ...and returns the supports it re-trimmed on their own, for its builder
+    // to merge beneath every other name. The support is still one
+    // construction result, so it keeps its identity under the new witness: a
+    // chamfer band a later fillet trims stays its Chamfer's.
+    const trimmed = createRemusModifierEvolutionLineage({
+      ...original,
+      trimmedSupports: 'only',
+      sourceLineage: prior,
+      resultCandidates: original.resultCandidates.map((candidate) =>
+        candidate.handle === 11
+          ? {
+              ...candidate,
+              witness: { ...FACE, perimeter: FACE.perimeter + 1 }
+            }
+          : candidate
+      )
+    });
+    expect([...trimmed.faceReferences.keys()]).toEqual([11]);
+    expect(trimmed.faceReferences.get(11)).toMatchObject({
+      producingFeatureId: FEATURE_ID,
+      lineageName: 'modifier.fillet.face.band-between.a|b',
+      witness: { perimeter: FACE.perimeter + 1 }
+    });
+    const duplicate = createRemusModifierEvolutionLineage({
+      ...original,
+      trimmedSupports: 'only',
+      sourceLineage: {
+        faceReferences: new Map([
+          [1, prior.faceReferences.get(1)!],
+          [
+            2,
+            {
+              ...prior.faceReferences.get(1)!,
+              witness: OPPOSITE_FACE,
+              currentHash: topologyHashOfWitness('face', OPPOSITE_FACE)
+            }
+          ]
+        ]),
+        edgeReferences: new Map(),
+        diagnostics: []
+      },
+      resultCandidates: original.resultCandidates.map((candidate) =>
+        candidate.handle === 11
+          ? {
+              ...candidate,
+              witness: { ...FACE, perimeter: FACE.perimeter + 1 }
+            }
+          : candidate
+      )
+    });
+    expect(duplicate.faceReferences.has(11)).toBe(false);
     const split = createRemusModifierEvolutionLineage({
       ...original,
       sourceLineage: prior,

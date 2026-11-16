@@ -1627,6 +1627,127 @@ describe('settings desktop account section', () => {
     }
   });
 
+  it('uses the provisioned QA capability only for its email, including resend', async () => {
+    const user = userEvent.setup();
+    const timeouts = vi.spyOn(window, 'setTimeout');
+    const onRequestLoginCode = vi.fn().mockResolvedValue({
+      challengeId: 'qa-challenge',
+      expiresInSeconds: 600
+    });
+    const turnstile = {
+      render: vi.fn(() => 'widget-qa'),
+      remove: vi.fn(),
+      reset: vi.fn()
+    };
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: turnstile
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfigStatus: 'ready',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key',
+          qaTurnstileBypassEmail: 'qa@esau.bot'
+        },
+        onRequestLoginCode
+      });
+      const email = screen.getByLabelText('Email address');
+      await user.type(email, 'other@example.com');
+      expect(
+        screen.getByRole('button', { name: 'Email me a code' })
+      ).toBeDisabled();
+      expect(
+        screen.queryByText('QA security check enabled for this browser.')
+      ).not.toBeInTheDocument();
+      await user.clear(email);
+      await user.type(email, 'QA@ESAU.BOT');
+      expect(
+        screen.getByText('QA security check enabled for this browser.')
+      ).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Email me a code' }));
+      expect(onRequestLoginCode).toHaveBeenCalledWith(
+        'QA@ESAU.BOT',
+        'qa-cookie'
+      );
+      expect(await screen.findByLabelText('Email sign-in code')).toHaveFocus();
+      expect(screen.getByRole('button', { name: 'Sign in' })).toBeDisabled();
+      const resendTimer = timeouts.mock.calls.find(
+        (call) => call[1] === 30_000
+      )?.[0];
+      expect(typeof resendTimer).toBe('function');
+      await act(async () => {
+        if (typeof resendTimer === 'function') resendTimer();
+      });
+      await user.click(
+        screen.getByRole('button', { name: 'Didn’t get the code?' })
+      );
+      await user.click(screen.getByRole('button', { name: 'Send a new code' }));
+      expect(onRequestLoginCode).toHaveBeenCalledTimes(2);
+      expect(onRequestLoginCode).toHaveBeenLastCalledWith(
+        'QA@ESAU.BOT',
+        'qa-cookie'
+      );
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+    }
+  });
+
+  it('restores Turnstile when the server refuses a stale QA capability', async () => {
+    const user = userEvent.setup();
+    const onRequestLoginCode = vi
+      .fn()
+      .mockRejectedValue(new Error('The security check expired.'));
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(() => 'widget-stale'),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfigStatus: 'ready',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key',
+          qaTurnstileBypassEmail: 'qa@esau.bot'
+        },
+        onRequestLoginCode
+      });
+      await user.type(screen.getByLabelText('Email address'), 'qa@esau.bot');
+      expect(
+        screen.getByText('QA security check enabled for this browser.')
+      ).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Email me a code' }));
+      await waitFor(() =>
+        expect(
+          screen.queryByText('QA security check enabled for this browser.')
+        ).not.toBeInTheDocument()
+      );
+      expect(
+        screen.getByRole('button', { name: 'Email me a code' })
+      ).toBeDisabled();
+      expect(screen.getByText('Security check ready.')).toBeInTheDocument();
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+    }
+  });
+
   it('keeps all six digits when a copied code is pasted with whitespace', async () => {
     const user = userEvent.setup();
     const onVerifyLoginCode = vi.fn().mockResolvedValue(undefined);
@@ -1813,6 +1934,17 @@ describe('settings desktop account section', () => {
       await waitFor(() => expect(codeField).toHaveValue(''));
       expect(codeField).toHaveFocus();
 
+      // The resend check stays folded until asked for, so no unanswered
+      // "Verify you are human" sits under Sign in.
+      expect(
+        screen.queryByRole('button', { name: /^Send a new code/ })
+      ).toBeNull();
+      const more = screen.getByRole('button', {
+        name: 'Didn’t get the code?'
+      });
+      expect(more).toHaveAttribute('aria-expanded', 'false');
+      await user.click(more);
+      expect(more).toHaveAttribute('aria-expanded', 'true');
       expect(
         screen.getByRole('button', { name: /^Send a new code/ })
       ).toBeDisabled();
@@ -1841,6 +1973,73 @@ describe('settings desktop account section', () => {
       script.remove();
       delete (window as Window & { turnstile?: unknown }).turnstile;
       vi.useRealTimers();
+    }
+  });
+
+  // Sign-in design review: the email field masked itself as a password
+  // field on blur, hiding the address and blocking password-manager fill,
+  // and Sign in sat small beside an equal-weight "Use another email".
+  it('keeps the sign-in email plain and fillable and makes Sign in the one button', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(
+          (
+            _container: HTMLElement,
+            options: { callback(token: string): void }
+          ) => {
+            options.callback('turnstile-token');
+            return 'widget-1';
+          }
+        ),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key'
+        },
+        authConfigStatus: 'ready',
+        onRequestLoginCode: vi.fn().mockResolvedValue({
+          challengeId: 'challenge-1',
+          expiresInSeconds: 600
+        }),
+        onVerifyLoginCode: vi.fn()
+      });
+      const email = screen.getByRole('textbox', { name: 'Email address' });
+      expect(email).toHaveAttribute('type', 'email');
+      expect(email).toHaveAttribute('autocomplete', 'username');
+      expect(email).toHaveAttribute('name', 'email');
+      await user.type(email, 'person@example.com');
+      await user.tab();
+      // Blurred, it still shows what was typed.
+      expect(email).toHaveAttribute('type', 'email');
+      expect(email).toHaveValue('person@example.com');
+
+      await user.click(screen.getByRole('button', { name: 'Email me a code' }));
+      const codeField = await screen.findByLabelText('Email sign-in code');
+      await waitFor(() => expect(codeField).toHaveFocus());
+      const signIn = screen.getByRole('button', { name: 'Sign in' });
+      expect(signIn).toHaveClass('primary');
+      // A direct child of the controls column, drawn as wide as the field,
+      // not one of a pair in a button row.
+      expect(signIn.parentElement).toHaveClass('settings-auth-controls');
+      const back = screen.getByRole('button', { name: 'Use another email' });
+      expect(back).toHaveClass('settings-auth-link');
+      expect(back).not.toHaveClass('primary');
+      expect(back).not.toHaveClass('secondary');
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
     }
   });
 

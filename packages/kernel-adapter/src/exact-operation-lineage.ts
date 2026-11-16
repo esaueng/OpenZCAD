@@ -31,6 +31,7 @@ import {
   subtract
 } from './exact-math';
 import { faceVertexCentroid } from './exact-brep';
+import { curvedCarrierKey } from './exact-curved-carrier';
 import { GEOMETRY_LINEAR_TOLERANCE, type Vec3 } from '@openzcad/geometry';
 
 /**
@@ -42,7 +43,19 @@ import { GEOMETRY_LINEAR_TOLERANCE, type Vec3 } from '@openzcad/geometry';
  * the result, leaves every carrier match unproven: the fallback names nothing
  * rather than trust a count it cannot complete. An exact witness match is
  * unaffected, since an unreadable carrier is part of a different witness.
+ *
+ * Cones, tori and spheres have no analytic witness term; their carrier is
+ * read from the kernel's exact surface ({@link curvedCarrierKey}) under the
+ * same rule, so a chamfer cone a later edit re-trims keeps its name. A curved
+ * face of that type whose exact surface cannot be read leaves the count
+ * unproven in the same way.
  */
+const CURVED_CARRIERS: ReadonlySet<string> = new Set([
+  'cone',
+  'torus',
+  'sphere'
+]);
+
 export function carryAnalyticFaces(
   kernel: RemusKernel,
   sourceSolid: number,
@@ -69,6 +82,22 @@ export function carryAnalyticFaces(
       .filter((w) => w.analytic.kind === 'none')
       .map((w) => w.surfaceType)
   );
+  const curvedKeys = new Map<number, string | null>();
+  const curvedKeyOf = (handle: number) => {
+    if (!curvedKeys.has(handle))
+      curvedKeys.set(handle, curvedCarrierKey(kernel, handle));
+    return curvedKeys.get(handle)!;
+  };
+  const unreadCurved = new Set(
+    [...before, ...after]
+      .filter(
+        (c) =>
+          CURVED_CARRIERS.has((c.witness as FaceWitnessV1).surfaceType) &&
+          (c.witness as FaceWitnessV1).analytic.kind === 'none' &&
+          curvedKeyOf(c.handle) === null
+      )
+      .map((c) => (c.witness as FaceWitnessV1).surfaceType)
+  );
   for (const [handle, reference] of source.faceReferences) {
     const origin = before.find((c) => c.handle === handle);
     if (
@@ -85,6 +114,27 @@ export function carryAnalyticFaces(
       topologyWitnessesEqual('face', reference.witness, c.witness);
     let matches = after.filter(matchesWitness);
     if (before.filter(matchesWitness).length !== 1 || matches.length !== 1) {
+      if (
+        reference.witness.analytic.kind === 'none' &&
+        CURVED_CARRIERS.has(reference.witness.surfaceType)
+      ) {
+        const key = curvedKeyOf(handle);
+        if (key === null || unreadCurved.has(reference.witness.surfaceType))
+          continue;
+        const matchesCurved = (c: (typeof before)[number]) =>
+          curvedKeyOf(c.handle) === key;
+        matches = after.filter(matchesCurved);
+        if (before.filter(matchesCurved).length !== 1 || matches.length !== 1)
+          continue;
+        const candidate = matches[0]!;
+        const witness = candidate.witness as FaceWitnessV1;
+        state.faceReferences.set(candidate.handle, {
+          ...reference,
+          witness,
+          currentHash: topologyHashOfWitness('face', witness)
+        });
+        continue;
+      }
       if (
         reference.witness.analytic.kind !== 'plane' &&
         reference.witness.analytic.kind !== 'cylinder'

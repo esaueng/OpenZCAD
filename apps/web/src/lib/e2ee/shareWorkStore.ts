@@ -1,5 +1,6 @@
 /** Durable, account-scoped share follow-ups. Keys are stored only wrapped. */
 import type { ShareLinkMode } from '@openzcad/crypto';
+import { realmStorageName } from '../deploymentRealm';
 
 export interface ShareWorkLink {
   readonly shareId: string;
@@ -133,7 +134,7 @@ export function memoryShareWorkStore(): ShareWorkStore {
   };
 }
 
-export const SHARE_WORK_DATABASE = 'openzcad-e2ee-share-work';
+export const SHARE_WORK_DATABASE = realmStorageName('openzcad-e2ee-share-work');
 let opening: Promise<IDBDatabase> | undefined;
 function database(): Promise<IDBDatabase> {
   opening ??= new Promise((resolve, reject) => {
