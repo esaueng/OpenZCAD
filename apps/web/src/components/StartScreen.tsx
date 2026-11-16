@@ -113,16 +113,19 @@ import type { ProjectProperties } from '../lib/projectProperties';
 import { formatBytes } from '../lib/formatBytes';
 import {
   StorageBar,
-  StorageUsagePanel,
   storageFigure,
   storageSegments,
   useAccountStorageUsage,
   useDeviceStorageEstimate
-} from './StorageUsagePanel';
+} from './storageUsageShared';
 import { storageLevel, storageLimitOf, storedBytes } from '../lib/storageUsage';
 
 const ProjectPropertiesDialog = lazyWithStaleChunkNotice(async () => ({
   default: (await import('./ProjectPropertiesDialog')).ProjectPropertiesDialog
+}));
+/** Opened from the storage readout; the readout itself stays eager. */
+const StorageUsagePanel = lazyWithStaleChunkNotice(async () => ({
+  default: (await import('./StorageUsagePanel')).StorageUsagePanel
 }));
 const FileDropTarget = lazyWithStaleChunkNotice(async () => ({
   default: (await import('./FileDropTarget')).FileDropTarget
@@ -4479,32 +4482,34 @@ export function StartScreen({
             )}
           </div>
           {storageOpen && (
-            <StorageUsagePanel
-              id={storagePanelId}
-              signedIn={signedIn}
-              usage={storage.usage}
-              usageState={
-                signedIn && !loadStorageUsage ? 'failed' : storage.state
-              }
-              onRetryUsage={storage.refresh}
-              device={deviceStorage}
-              deviceProjectCount={userProjects.length}
-              localOnlyCount={localOnlyProjects.length}
-              anchorRef={storageButtonRef}
-              onClose={() => setStorageOpen(false)}
-              onShowTrash={() => {
-                selectShelf('deleted');
-                // The panel that held focus is going away; the Trash tab
-                // it led to takes it, as a click on the tab would.
-                globalThis.document
-                  .getElementById('start-shelf-tab-deleted')
-                  ?.focus();
-              }}
-              {...((onOpenAccountSettings ?? onSignIn) && {
-                onOpenAccountSettings: onOpenAccountSettings ?? onSignIn
-              })}
-              {...(onSignIn && { onSignIn })}
-            />
+            <Suspense fallback={null}>
+              <StorageUsagePanel
+                id={storagePanelId}
+                signedIn={signedIn}
+                usage={storage.usage}
+                usageState={
+                  signedIn && !loadStorageUsage ? 'failed' : storage.state
+                }
+                onRetryUsage={storage.refresh}
+                device={deviceStorage}
+                deviceProjectCount={userProjects.length}
+                localOnlyCount={localOnlyProjects.length}
+                anchorRef={storageButtonRef}
+                onClose={() => setStorageOpen(false)}
+                onShowTrash={() => {
+                  selectShelf('deleted');
+                  // The panel that held focus is going away; the Trash tab
+                  // it led to takes it, as a click on the tab would.
+                  globalThis.document
+                    .getElementById('start-shelf-tab-deleted')
+                    ?.focus();
+                }}
+                {...((onOpenAccountSettings ?? onSignIn) && {
+                  onOpenAccountSettings: onOpenAccountSettings ?? onSignIn
+                })}
+                {...(onSignIn && { onSignIn })}
+              />
+            </Suspense>
           )}
         </aside>
       </section>

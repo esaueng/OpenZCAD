@@ -397,7 +397,11 @@ function previewPreparedParameter(
           d.targetBodyId !== preview.bodyId ||
           !feature.bodyId ||
           d.patternKind === 'circular' ||
-          d.direction
+          d.direction ||
+          // M02: copies of features and copies left out are not a row of
+          // body copies; the exact build shows them.
+          d.sourceFeatureIds !== undefined ||
+          d.skippedInstances !== undefined
         )
           return null;
         const count = Math.round(evaluate(d.count, after.scope, base.units));
