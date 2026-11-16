@@ -209,7 +209,11 @@ it.skipIf(!run)(
         .map((result) => result.previewMs)
         .sort((a, b) => a - b);
       expect(tenByTen.length).toBeGreaterThan(0);
-      const median = tenByTen[Math.floor((tenByTen.length - 1) / 2)]!;
+      const middle = Math.floor(tenByTen.length / 2);
+      const median =
+        tenByTen.length % 2
+          ? tenByTen[middle]!
+          : (tenByTen[middle - 1]! + tenByTen[middle]!) / 2;
       expect(median).toBeLessThanOrEqual(budget);
     }
   }

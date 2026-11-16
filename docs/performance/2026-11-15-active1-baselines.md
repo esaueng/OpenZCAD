@@ -6,7 +6,10 @@ reproducible baselines, each with a proposed budget. No optimisation was
 made here. [Biggest contributors](#biggest-contributors) lists the work for
 later lanes, and the
 [provenance](2026-11-15-active1-baselines.provenance.json) keeps every run's
-host snapshot and summary row.
+host snapshot and summary row, and under `evidence` the per-run figures
+behind each contributor: H02 edit timings, history time and cache events;
+W01 stage summaries, all 90 input → frame samples per case and long-task
+counts; pattern preview times and each run's top kernel methods.
 
 | Measurement                                            | Baseline (median of 3 runs) | Budget (median) |
 | ------------------------------------------------------ | --------------------------: | --------------: |
@@ -104,8 +107,9 @@ which anyone can rerun.
 
 ## Results
 
-Medians of three runs, with the range across runs. Spread between runs is
-under 5% everywhere.
+Medians of three runs, with the range across runs. Every run falls within
+5% of its row's median except on the lettered holder: its first edit after
+reload spans −9% / +7% (237–278 ms around 260 ms), and its reload −4% / +7%.
 
 ### H02: first edit after reload
 
@@ -206,8 +210,8 @@ For later lanes; none was changed here.
 ## Budgets
 
 Each budget is a regression ceiling for this machine and renderer, set at
-about 1.3–1.6 times the baseline median so that load noise on a quiet run
-(under 5% here) never trips it. `scripts/active1-budgets.mjs` holds them, and
+about 1.3–1.6 times the baseline median, well above the run-to-run spread
+on a quiet host (at most −9% / +7% here), so that noise never trips it. `scripts/active1-budgets.mjs` holds them, and
 `measure-active1-baselines.mjs --check` enforces them.
 
 | Measurement                                               |      Baseline |                           Budget |

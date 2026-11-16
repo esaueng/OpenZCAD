@@ -22,7 +22,7 @@
   "command": "node scripts/measure-active1-baselines.mjs --runs 3 --angle vulkan",
   "summary": [
     {
-      "measurement": "H02 reload → exact ready (synthetic holder: opening and mounting holes)",
+      "measurement": "H02 reload \u2192 exact ready (synthetic holder: opening and mounting holes)",
       "runs": 3,
       "median": 647.9,
       "min": 646.5,
@@ -52,7 +52,7 @@
       "withinBudget": true
     },
     {
-      "measurement": "H02 reload → exact ready (lettered holder: height with separated text)",
+      "measurement": "H02 reload \u2192 exact ready (lettered holder: height with separated text)",
       "runs": 3,
       "median": 460.6,
       "min": 441.3,
@@ -82,7 +82,7 @@
       "withinBudget": true
     },
     {
-      "measurement": "W01 input → frame median (simple box)",
+      "measurement": "W01 input \u2192 frame median (simple box)",
       "runs": 3,
       "median": 37.6,
       "min": 37.5,
@@ -92,7 +92,7 @@
       "withinBudget": true
     },
     {
-      "measurement": "W01 input → frame p95 (simple box)",
+      "measurement": "W01 input \u2192 frame p95 (simple box)",
       "runs": 3,
       "median": 41.7,
       "min": 40.6,
@@ -102,7 +102,7 @@
       "withinBudget": true
     },
     {
-      "measurement": "W01 input → frame median (100-feature history, isolated part)",
+      "measurement": "W01 input \u2192 frame median (100-feature history, isolated part)",
       "runs": 3,
       "median": 121.1,
       "min": 120.9,
@@ -112,7 +112,7 @@
       "withinBudget": true
     },
     {
-      "measurement": "W01 input → frame p95 (100-feature history, isolated part)",
+      "measurement": "W01 input \u2192 frame p95 (100-feature history, isolated part)",
       "runs": 3,
       "median": 131.5,
       "min": 131.3,
@@ -543,5 +543,1339 @@
         "busyProcesses": []
       }
     }
-  ]
+  ],
+  "evidence": {
+    "h02": [
+      {
+        "scenario": "synthetic holder: opening and mounting holes",
+        "repeat": 0,
+        "featureCount": 15,
+        "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+        "reloadToReadyMs": 647.9,
+        "edits": [
+          {
+            "label": "first edit after assistant apply",
+            "exactMs": 560,
+            "preflightHistoryMs": 161.8,
+            "liveHistoryMs": 234.9,
+            "cacheEvents": [
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              }
+            ]
+          },
+          {
+            "label": "warm edit before reload",
+            "exactMs": 435.2,
+            "preflightHistoryMs": 132,
+            "liveHistoryMs": 118,
+            "cacheEvents": [
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              }
+            ]
+          },
+          {
+            "label": "first edit after reload",
+            "exactMs": 567.6,
+            "preflightHistoryMs": 184.3,
+            "liveHistoryMs": 140.8,
+            "cacheEvents": [
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              }
+            ]
+          },
+          {
+            "label": "second edit after reload",
+            "exactMs": 468.8,
+            "preflightHistoryMs": 150.7,
+            "liveHistoryMs": 124,
+            "cacheEvents": [
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              }
+            ]
+          },
+          {
+            "label": "immediate edit after reload",
+            "exactMs": 856.1,
+            "preflightHistoryMs": 420.9,
+            "liveHistoryMs": 131.7,
+            "cacheEvents": [
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 15
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "scenario": "lettered holder: height with separated text",
+        "repeat": 0,
+        "featureCount": 31,
+        "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+        "reloadToReadyMs": 460.6,
+        "edits": [
+          {
+            "label": "first edit after assistant apply",
+            "exactMs": 151.7,
+            "preflightHistoryMs": 57.4,
+            "liveHistoryMs": 0,
+            "cacheEvents": [
+              {
+                "kind": "independent-reuse",
+                "replayed": 12,
+                "restored": 16
+              },
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 31
+              }
+            ]
+          },
+          {
+            "label": "warm edit before reload",
+            "exactMs": 144.8,
+            "preflightHistoryMs": 61.2,
+            "liveHistoryMs": 0,
+            "cacheEvents": [
+              {
+                "kind": "independent-reuse",
+                "replayed": 12,
+                "restored": 16
+              },
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 31
+              }
+            ]
+          },
+          {
+            "label": "first edit after reload",
+            "exactMs": 236.6,
+            "preflightHistoryMs": 124.9,
+            "liveHistoryMs": 0,
+            "cacheEvents": [
+              {
+                "kind": "prefix-restore",
+                "replayed": 27,
+                "restored": 4
+              },
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 31
+              }
+            ]
+          },
+          {
+            "label": "second edit after reload",
+            "exactMs": 154.5,
+            "preflightHistoryMs": 66.3,
+            "liveHistoryMs": 0,
+            "cacheEvents": [
+              {
+                "kind": "independent-reuse",
+                "replayed": 12,
+                "restored": 16
+              },
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 31
+              }
+            ]
+          },
+          {
+            "label": "immediate edit after reload",
+            "exactMs": 549.8,
+            "preflightHistoryMs": 409.8,
+            "liveHistoryMs": 0,
+            "cacheEvents": [
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 31
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 31,
+                "restored": 0
+              },
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 31
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "scenario": "synthetic holder: opening and mounting holes",
+        "repeat": 0,
+        "featureCount": 15,
+        "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+        "reloadToReadyMs": 669.5,
+        "edits": [
+          {
+            "label": "first edit after assistant apply",
+            "exactMs": 530.3,
+            "preflightHistoryMs": 144.2,
+            "liveHistoryMs": 236.9,
+            "cacheEvents": [
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              }
+            ]
+          },
+          {
+            "label": "warm edit before reload",
+            "exactMs": 434.4,
+            "preflightHistoryMs": 137.7,
+            "liveHistoryMs": 115.2,
+            "cacheEvents": [
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              }
+            ]
+          },
+          {
+            "label": "first edit after reload",
+            "exactMs": 537.6,
+            "preflightHistoryMs": 179.5,
+            "liveHistoryMs": 129.3,
+            "cacheEvents": [
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              }
+            ]
+          },
+          {
+            "label": "second edit after reload",
+            "exactMs": 478.6,
+            "preflightHistoryMs": 152.5,
+            "liveHistoryMs": 119.8,
+            "cacheEvents": [
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              }
+            ]
+          },
+          {
+            "label": "immediate edit after reload",
+            "exactMs": 852.1,
+            "preflightHistoryMs": 408.4,
+            "liveHistoryMs": 138.2,
+            "cacheEvents": [
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 15
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "scenario": "lettered holder: height with separated text",
+        "repeat": 0,
+        "featureCount": 31,
+        "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+        "reloadToReadyMs": 492.3,
+        "edits": [
+          {
+            "label": "first edit after assistant apply",
+            "exactMs": 164.6,
+            "preflightHistoryMs": 57.2,
+            "liveHistoryMs": 0,
+            "cacheEvents": [
+              {
+                "kind": "independent-reuse",
+                "replayed": 12,
+                "restored": 16
+              },
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 31
+              }
+            ]
+          },
+          {
+            "label": "warm edit before reload",
+            "exactMs": 156,
+            "preflightHistoryMs": 60.1,
+            "liveHistoryMs": 0,
+            "cacheEvents": [
+              {
+                "kind": "independent-reuse",
+                "replayed": 12,
+                "restored": 16
+              },
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 31
+              }
+            ]
+          },
+          {
+            "label": "first edit after reload",
+            "exactMs": 278.3,
+            "preflightHistoryMs": 149.7,
+            "liveHistoryMs": 0,
+            "cacheEvents": [
+              {
+                "kind": "prefix-restore",
+                "replayed": 27,
+                "restored": 4
+              },
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 31
+              }
+            ]
+          },
+          {
+            "label": "second edit after reload",
+            "exactMs": 159.2,
+            "preflightHistoryMs": 71.5,
+            "liveHistoryMs": 0,
+            "cacheEvents": [
+              {
+                "kind": "independent-reuse",
+                "replayed": 12,
+                "restored": 16
+              },
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 31
+              }
+            ]
+          },
+          {
+            "label": "immediate edit after reload",
+            "exactMs": 592.5,
+            "preflightHistoryMs": 450.3,
+            "liveHistoryMs": 0,
+            "cacheEvents": [
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 31
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 31,
+                "restored": 0
+              },
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 31
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "scenario": "synthetic holder: opening and mounting holes",
+        "repeat": 0,
+        "featureCount": 15,
+        "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+        "reloadToReadyMs": 646.5,
+        "edits": [
+          {
+            "label": "first edit after assistant apply",
+            "exactMs": 564.5,
+            "preflightHistoryMs": 154.3,
+            "liveHistoryMs": 238.1,
+            "cacheEvents": [
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              }
+            ]
+          },
+          {
+            "label": "warm edit before reload",
+            "exactMs": 452.7,
+            "preflightHistoryMs": 134.7,
+            "liveHistoryMs": 122.7,
+            "cacheEvents": [
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              }
+            ]
+          },
+          {
+            "label": "first edit after reload",
+            "exactMs": 556.3,
+            "preflightHistoryMs": 178.3,
+            "liveHistoryMs": 139.6,
+            "cacheEvents": [
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              }
+            ]
+          },
+          {
+            "label": "second edit after reload",
+            "exactMs": 488,
+            "preflightHistoryMs": 149.3,
+            "liveHistoryMs": 117.1,
+            "cacheEvents": [
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              }
+            ]
+          },
+          {
+            "label": "immediate edit after reload",
+            "exactMs": 853.9,
+            "preflightHistoryMs": 424.6,
+            "liveHistoryMs": 135.4,
+            "cacheEvents": [
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 15
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              },
+              {
+                "kind": "full-rebuild",
+                "replayed": 15,
+                "restored": 0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "scenario": "lettered holder: height with separated text",
+        "repeat": 0,
+        "featureCount": 31,
+        "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+        "reloadToReadyMs": 441.3,
+        "edits": [
+          {
+            "label": "first edit after assistant apply",
+            "exactMs": 167.8,
+            "preflightHistoryMs": 58.2,
+            "liveHistoryMs": 0,
+            "cacheEvents": [
+              {
+                "kind": "independent-reuse",
+                "replayed": 12,
+                "restored": 16
+              },
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 31
+              }
+            ]
+          },
+          {
+            "label": "warm edit before reload",
+            "exactMs": 146.3,
+            "preflightHistoryMs": 57.4,
+            "liveHistoryMs": 0,
+            "cacheEvents": [
+              {
+                "kind": "independent-reuse",
+                "replayed": 12,
+                "restored": 16
+              },
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 31
+              }
+            ]
+          },
+          {
+            "label": "first edit after reload",
+            "exactMs": 260.1,
+            "preflightHistoryMs": 137.6,
+            "liveHistoryMs": 0,
+            "cacheEvents": [
+              {
+                "kind": "prefix-restore",
+                "replayed": 27,
+                "restored": 4
+              },
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 31
+              }
+            ]
+          },
+          {
+            "label": "second edit after reload",
+            "exactMs": 142.2,
+            "preflightHistoryMs": 59.6,
+            "liveHistoryMs": 0,
+            "cacheEvents": [
+              {
+                "kind": "independent-reuse",
+                "replayed": 12,
+                "restored": 16
+              },
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 31
+              }
+            ]
+          },
+          {
+            "label": "immediate edit after reload",
+            "exactMs": 576.5,
+            "preflightHistoryMs": 413.4,
+            "liveHistoryMs": 0,
+            "cacheEvents": [
+              {
+                "kind": "full-rebuild",
+                "replayed": 31,
+                "restored": 0
+              },
+              {
+                "kind": "prefix-restore",
+                "replayed": 0,
+                "restored": 31
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "w01": [
+      {
+        "run": "w01-box-r0",
+        "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+        "summaries": {
+          "inputToWorkerRequestMs": {
+            "medianMs": 0.4,
+            "p95Ms": 0.5
+          },
+          "requestToWorkerResponseMs": {
+            "medianMs": 16.4,
+            "p95Ms": 17.8
+          },
+          "workerResponseToBodiesMs": {
+            "medianMs": 9.2,
+            "p95Ms": 10.7
+          },
+          "bodyInstallationMs": {
+            "medianMs": 9.5,
+            "p95Ms": 11.1
+          },
+          "bodiesToNextFrameMs": {
+            "medianMs": 11.4,
+            "p95Ms": 14
+          },
+          "inputToFrameMs": {
+            "medianMs": 37.5,
+            "p95Ms": 40.6
+          },
+          "inputToAnalysisReadyMs": {
+            "medianMs": 16.7,
+            "p95Ms": 17.9
+          }
+        },
+        "inputToFrameMs": [
+          50.6, 40.6, 37.6, 38.7, 37.5, 39.6, 37.8, 37, 36.3, 37.6, 39.1, 36.8,
+          39.1, 37.2, 37, 36.5, 38.6, 38.4, 40.2, 35.5, 35.9, 40.3, 36.5, 39.3,
+          35.7, 35.8, 37.3, 36.8, 37.5, 36.4
+        ],
+        "syncKinds": ["adopted-validation"],
+        "longTasksWholeRun": {
+          "count": 3,
+          "maxMs": 96
+        }
+      },
+      {
+        "run": "w01-box-r1",
+        "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+        "summaries": {
+          "inputToWorkerRequestMs": {
+            "medianMs": 0.4,
+            "p95Ms": 0.5
+          },
+          "requestToWorkerResponseMs": {
+            "medianMs": 16.6,
+            "p95Ms": 16.9
+          },
+          "workerResponseToBodiesMs": {
+            "medianMs": 9.4,
+            "p95Ms": 10.7
+          },
+          "bodyInstallationMs": {
+            "medianMs": 9.7,
+            "p95Ms": 11
+          },
+          "bodiesToNextFrameMs": {
+            "medianMs": 11.4,
+            "p95Ms": 14.4
+          },
+          "inputToFrameMs": {
+            "medianMs": 37.9,
+            "p95Ms": 41.7
+          },
+          "inputToAnalysisReadyMs": {
+            "medianMs": 16.8,
+            "p95Ms": 17.1
+          }
+        },
+        "inputToFrameMs": [
+          48.9, 41.7, 38.5, 40.8, 37.3, 38.5, 40.5, 36.5, 37.9, 40.8, 35.6,
+          39.5, 37.7, 40.3, 36.5, 36.4, 38.1, 38.4, 38.9, 37.2, 38.5, 36.2,
+          37.4, 36, 37.9, 36.2, 37.9, 37.7, 37.9, 36.3
+        ],
+        "syncKinds": ["adopted-validation"],
+        "longTasksWholeRun": {
+          "count": 3,
+          "maxMs": 99
+        }
+      },
+      {
+        "run": "w01-box-r2",
+        "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+        "summaries": {
+          "inputToWorkerRequestMs": {
+            "medianMs": 0.4,
+            "p95Ms": 0.5
+          },
+          "requestToWorkerResponseMs": {
+            "medianMs": 16.6,
+            "p95Ms": 17.1
+          },
+          "workerResponseToBodiesMs": {
+            "medianMs": 9.2,
+            "p95Ms": 10.9
+          },
+          "bodyInstallationMs": {
+            "medianMs": 9.5,
+            "p95Ms": 11.3
+          },
+          "bodiesToNextFrameMs": {
+            "medianMs": 11.6,
+            "p95Ms": 15.3
+          },
+          "inputToFrameMs": {
+            "medianMs": 37.6,
+            "p95Ms": 42.3
+          },
+          "inputToAnalysisReadyMs": {
+            "medianMs": 16.7,
+            "p95Ms": 17.4
+          }
+        },
+        "inputToFrameMs": [
+          50.6, 42.3, 41.4, 38.5, 39.3, 41.5, 36.9, 39.1, 36.5, 37.2, 38.1,
+          37.7, 40.9, 36, 37.4, 38.3, 37.6, 41.4, 36.6, 35.9, 38.5, 36.8, 40.4,
+          36.6, 37.1, 39.8, 36.8, 37.3, 36.4, 37.2
+        ],
+        "syncKinds": ["adopted-validation"],
+        "longTasksWholeRun": {
+          "count": 3,
+          "maxMs": 101
+        }
+      },
+      {
+        "run": "w01-history-r0",
+        "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+        "summaries": {
+          "inputToWorkerRequestMs": {
+            "medianMs": 1.4,
+            "p95Ms": 1.6
+          },
+          "requestToWorkerResponseMs": {
+            "medianMs": 46.5,
+            "p95Ms": 52.2
+          },
+          "workerResponseToBodiesMs": {
+            "medianMs": 29.7,
+            "p95Ms": 33.1
+          },
+          "bodyInstallationMs": {
+            "medianMs": 31.9,
+            "p95Ms": 35.4
+          },
+          "bodiesToNextFrameMs": {
+            "medianMs": 44.3,
+            "p95Ms": 49.6
+          },
+          "inputToFrameMs": {
+            "medianMs": 123,
+            "p95Ms": 131.3
+          },
+          "inputToAnalysisReadyMs": {
+            "medianMs": 47.5,
+            "p95Ms": 52.9
+          }
+        },
+        "inputToFrameMs": [
+          142.3, 125.2, 122.1, 115.1, 117.8, 124.5, 118.1, 128.1, 115.7, 116.6,
+          127.1, 124.5, 122.6, 131.3, 111, 121.2, 124.6, 120.5, 118.5, 124.5,
+          126.1, 124.2, 117.3, 124.7, 111.9, 123, 127.2, 129.4, 112.8, 127.8
+        ],
+        "syncKinds": ["adopted-validation"],
+        "longTasksWholeRun": {
+          "count": 93,
+          "maxMs": 300
+        }
+      },
+      {
+        "run": "w01-history-r1",
+        "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+        "summaries": {
+          "inputToWorkerRequestMs": {
+            "medianMs": 1.4,
+            "p95Ms": 2.1
+          },
+          "requestToWorkerResponseMs": {
+            "medianMs": 46.8,
+            "p95Ms": 52.5
+          },
+          "workerResponseToBodiesMs": {
+            "medianMs": 29.5,
+            "p95Ms": 32.9
+          },
+          "bodyInstallationMs": {
+            "medianMs": 31.7,
+            "p95Ms": 35.5
+          },
+          "bodiesToNextFrameMs": {
+            "medianMs": 42.5,
+            "p95Ms": 48.1
+          },
+          "inputToFrameMs": {
+            "medianMs": 120.9,
+            "p95Ms": 131.5
+          },
+          "inputToAnalysisReadyMs": {
+            "medianMs": 47.6,
+            "p95Ms": 53.4
+          }
+        },
+        "inputToFrameMs": [
+          142.9, 128.4, 124.6, 115.2, 115.8, 117.9, 120.5, 116.4, 112.1, 113.1,
+          121.4, 124.9, 120.9, 130.6, 126.7, 116.3, 126.7, 118.4, 110.2, 130.2,
+          117.9, 121.6, 131.5, 117.2, 127.4, 120.9, 123.5, 116.9, 123.6, 124.8
+        ],
+        "syncKinds": ["adopted-validation"],
+        "longTasksWholeRun": {
+          "count": 92,
+          "maxMs": 326
+        }
+      },
+      {
+        "run": "w01-history-r2",
+        "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+        "summaries": {
+          "inputToWorkerRequestMs": {
+            "medianMs": 1.4,
+            "p95Ms": 2.2
+          },
+          "requestToWorkerResponseMs": {
+            "medianMs": 44.9,
+            "p95Ms": 53.6
+          },
+          "workerResponseToBodiesMs": {
+            "medianMs": 30,
+            "p95Ms": 34.3
+          },
+          "bodyInstallationMs": {
+            "medianMs": 32.2,
+            "p95Ms": 36.3
+          },
+          "bodiesToNextFrameMs": {
+            "medianMs": 43,
+            "p95Ms": 49.2
+          },
+          "inputToFrameMs": {
+            "medianMs": 121.1,
+            "p95Ms": 134.1
+          },
+          "inputToAnalysisReadyMs": {
+            "medianMs": 45.8,
+            "p95Ms": 55.1
+          }
+        },
+        "inputToFrameMs": [
+          149.5, 115.9, 128, 119.8, 114.7, 118, 129.3, 115.9, 116.3, 123.5,
+          117.8, 115.5, 134.1, 124.5, 122.6, 126.8, 121.1, 112.4, 121.6, 122.2,
+          115.3, 111.9, 123.3, 112.8, 111.4, 129.8, 121.1, 123.9, 119.3, 121.5
+        ],
+        "syncKinds": ["adopted-validation"],
+        "longTasksWholeRun": {
+          "count": 92,
+          "maxMs": 288
+        }
+      }
+    ],
+    "patternNode": [
+      {
+        "round": 0,
+        "grid": "3x3",
+        "previewMs": 598.1,
+        "previewKernelMs": 548.0,
+        "commitAfterPreviewMs": 8.5,
+        "commitCache": {
+          "kind": "prefix-restore",
+          "replayed": 0,
+          "restored": 3
+        },
+        "faces": 66,
+        "kernelTop": [
+          {
+            "method": "fuseAll",
+            "ms": 463,
+            "calls": 1
+          },
+          {
+            "method": "volume",
+            "ms": 27,
+            "calls": 20
+          },
+          {
+            "method": "tessellateSolidGroupedBinary",
+            "ms": 10.1,
+            "calls": 2
+          },
+          {
+            "method": "copyAndTransformSolid",
+            "ms": 9.3,
+            "calls": 9
+          },
+          {
+            "method": "getEdgeCurveType",
+            "ms": 6.9,
+            "calls": 7704
+          }
+        ]
+      },
+      {
+        "round": 0,
+        "grid": "3x10",
+        "previewMs": 1737.0,
+        "previewKernelMs": 1612.3,
+        "commitAfterPreviewMs": 22.3,
+        "commitCache": {
+          "kind": "prefix-restore",
+          "replayed": 0,
+          "restored": 3
+        },
+        "faces": 220,
+        "kernelTop": [
+          {
+            "method": "fuseAll",
+            "ms": 1370.2,
+            "calls": 1
+          },
+          {
+            "method": "volume",
+            "ms": 71.1,
+            "calls": 62
+          },
+          {
+            "method": "tessellateSolidGroupedBinary",
+            "ms": 62.8,
+            "calls": 2
+          },
+          {
+            "method": "copyAndTransformSolid",
+            "ms": 17.8,
+            "calls": 30
+          },
+          {
+            "method": "getEdgeCurveType",
+            "ms": 17.6,
+            "calls": 25680
+          }
+        ]
+      },
+      {
+        "round": 0,
+        "grid": "10x10",
+        "previewMs": 7612.5,
+        "previewKernelMs": 7457.9,
+        "commitAfterPreviewMs": 32.7,
+        "commitCache": {
+          "kind": "prefix-restore",
+          "replayed": 0,
+          "restored": 3
+        },
+        "faces": 780,
+        "kernelTop": [
+          {
+            "method": "fuseAll",
+            "ms": 6791.6,
+            "calls": 1
+          },
+          {
+            "method": "volume",
+            "ms": 362.8,
+            "calls": 552
+          },
+          {
+            "method": "tessellateSolidGroupedBinary",
+            "ms": 90.3,
+            "calls": 2
+          },
+          {
+            "method": "booleanWithQuality",
+            "ms": 59.7,
+            "calls": 450
+          },
+          {
+            "method": "copyAndTransformSolid",
+            "ms": 43.6,
+            "calls": 100
+          }
+        ]
+      },
+      {
+        "round": 0,
+        "grid": "3x3",
+        "previewMs": 611.2,
+        "previewKernelMs": 563.7,
+        "commitAfterPreviewMs": 8.5,
+        "commitCache": {
+          "kind": "prefix-restore",
+          "replayed": 0,
+          "restored": 3
+        },
+        "faces": 66,
+        "kernelTop": [
+          {
+            "method": "fuseAll",
+            "ms": 472,
+            "calls": 1
+          },
+          {
+            "method": "volume",
+            "ms": 27.7,
+            "calls": 20
+          },
+          {
+            "method": "tessellateSolidGroupedBinary",
+            "ms": 10.3,
+            "calls": 2
+          },
+          {
+            "method": "copyAndTransformSolid",
+            "ms": 9.7,
+            "calls": 9
+          },
+          {
+            "method": "getEdgeVertices",
+            "ms": 7.4,
+            "calls": 3852
+          }
+        ]
+      },
+      {
+        "round": 0,
+        "grid": "3x10",
+        "previewMs": 1757.7,
+        "previewKernelMs": 1625.9,
+        "commitAfterPreviewMs": 22.3,
+        "commitCache": {
+          "kind": "prefix-restore",
+          "replayed": 0,
+          "restored": 3
+        },
+        "faces": 220,
+        "kernelTop": [
+          {
+            "method": "fuseAll",
+            "ms": 1384.7,
+            "calls": 1
+          },
+          {
+            "method": "volume",
+            "ms": 71.5,
+            "calls": 62
+          },
+          {
+            "method": "tessellateSolidGroupedBinary",
+            "ms": 61.9,
+            "calls": 2
+          },
+          {
+            "method": "getEdgeCurveType",
+            "ms": 18.1,
+            "calls": 25680
+          },
+          {
+            "method": "copyAndTransformSolid",
+            "ms": 17.2,
+            "calls": 30
+          }
+        ]
+      },
+      {
+        "round": 0,
+        "grid": "10x10",
+        "previewMs": 7634.4,
+        "previewKernelMs": 7477.7,
+        "commitAfterPreviewMs": 32.9,
+        "commitCache": {
+          "kind": "prefix-restore",
+          "replayed": 0,
+          "restored": 3
+        },
+        "faces": 780,
+        "kernelTop": [
+          {
+            "method": "fuseAll",
+            "ms": 6807.2,
+            "calls": 1
+          },
+          {
+            "method": "volume",
+            "ms": 365.5,
+            "calls": 552
+          },
+          {
+            "method": "tessellateSolidGroupedBinary",
+            "ms": 89.4,
+            "calls": 2
+          },
+          {
+            "method": "booleanWithQuality",
+            "ms": 59,
+            "calls": 450
+          },
+          {
+            "method": "copyAndTransformSolid",
+            "ms": 43.6,
+            "calls": 100
+          }
+        ]
+      },
+      {
+        "round": 0,
+        "grid": "3x3",
+        "previewMs": 595.3,
+        "previewKernelMs": 546.8,
+        "commitAfterPreviewMs": 8.5,
+        "commitCache": {
+          "kind": "prefix-restore",
+          "replayed": 0,
+          "restored": 3
+        },
+        "faces": 66,
+        "kernelTop": [
+          {
+            "method": "fuseAll",
+            "ms": 461.7,
+            "calls": 1
+          },
+          {
+            "method": "volume",
+            "ms": 27.3,
+            "calls": 20
+          },
+          {
+            "method": "tessellateSolidGroupedBinary",
+            "ms": 10.3,
+            "calls": 2
+          },
+          {
+            "method": "copyAndTransformSolid",
+            "ms": 8.6,
+            "calls": 9
+          },
+          {
+            "method": "getEdgeCurveType",
+            "ms": 7.1,
+            "calls": 7704
+          }
+        ]
+      },
+      {
+        "round": 0,
+        "grid": "3x10",
+        "previewMs": 1733.5,
+        "previewKernelMs": 1606.3,
+        "commitAfterPreviewMs": 22.9,
+        "commitCache": {
+          "kind": "prefix-restore",
+          "replayed": 0,
+          "restored": 3
+        },
+        "faces": 220,
+        "kernelTop": [
+          {
+            "method": "fuseAll",
+            "ms": 1366.9,
+            "calls": 1
+          },
+          {
+            "method": "volume",
+            "ms": 71.2,
+            "calls": 62
+          },
+          {
+            "method": "tessellateSolidGroupedBinary",
+            "ms": 62.4,
+            "calls": 2
+          },
+          {
+            "method": "getEdgeCurveType",
+            "ms": 18,
+            "calls": 25680
+          },
+          {
+            "method": "copyAndTransformSolid",
+            "ms": 17.1,
+            "calls": 30
+          }
+        ]
+      },
+      {
+        "round": 0,
+        "grid": "10x10",
+        "previewMs": 7601.8,
+        "previewKernelMs": 7446.2,
+        "commitAfterPreviewMs": 32.1,
+        "commitCache": {
+          "kind": "prefix-restore",
+          "replayed": 0,
+          "restored": 3
+        },
+        "faces": 780,
+        "kernelTop": [
+          {
+            "method": "fuseAll",
+            "ms": 6782,
+            "calls": 1
+          },
+          {
+            "method": "volume",
+            "ms": 363,
+            "calls": 552
+          },
+          {
+            "method": "tessellateSolidGroupedBinary",
+            "ms": 89.9,
+            "calls": 2
+          },
+          {
+            "method": "booleanWithQuality",
+            "ms": 56.2,
+            "calls": 450
+          },
+          {
+            "method": "copyAndTransformSolid",
+            "ms": 42.8,
+            "calls": 100
+          }
+        ]
+      }
+    ],
+    "patternBrowser": [
+      {
+        "repeat": 0,
+        "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+        "openToBarMs": 1470,
+        "steps": [
+          {
+            "grid": "3x3",
+            "previewMs": 655.2,
+            "featureMs": 494.4
+          },
+          {
+            "grid": "10x3",
+            "previewMs": 2265.9,
+            "featureMs": 2178.5
+          },
+          {
+            "grid": "10x10",
+            "previewMs": 7508.7,
+            "featureMs": 7290.6
+          }
+        ]
+      },
+      {
+        "repeat": 1,
+        "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+        "openToBarMs": 1467,
+        "steps": [
+          {
+            "grid": "3x3",
+            "previewMs": 655.4,
+            "featureMs": 498
+          },
+          {
+            "grid": "10x3",
+            "previewMs": 2260,
+            "featureMs": 2184.5
+          },
+          {
+            "grid": "10x10",
+            "previewMs": 7529.9,
+            "featureMs": 7297.6
+          }
+        ]
+      },
+      {
+        "repeat": 2,
+        "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+        "openToBarMs": 1466,
+        "steps": [
+          {
+            "grid": "3x3",
+            "previewMs": 656.2,
+            "featureMs": 490.2
+          },
+          {
+            "grid": "10x3",
+            "previewMs": 2274.1,
+            "featureMs": 2194
+          },
+          {
+            "grid": "10x10",
+            "previewMs": 7523.8,
+            "featureMs": 7294.7
+          }
+        ]
+      }
+    ]
+  }
 }

@@ -628,27 +628,42 @@ async function completedSample(
       // A broadcast is published under its own version. An adopted
       // validation sync ran as the candidate and is published as the
       // committed revision after it: the lowest framed version at or above
-      // the candidate's (versions only grow).
+      // the candidate's (versions only grow). Wait for that frame, which can
+      // land well after the sync answered, before fixing the revision.
       const revision =
         record.requestId === undefined
           ? record.version
-          : (performance
-              .getEntriesByName('oz:edit.frame', 'measure')
-              .map(
-                (entry) =>
-                  (entry as PerformanceMeasure).detail as {
-                    projectId?: string;
-                    version?: number;
-                  } | null
-              )
-              .filter(
-                (detail) =>
-                  detail?.projectId === record.projectId &&
-                  typeof detail.version === 'number' &&
-                  detail.version >= record.version
-              )
-              .map((detail) => detail!.version!)
-              .sort((a, b) => a - b)[0] ?? record.version);
+          : await new Promise<number>((resolve, reject) => {
+              const deadline = performance.now() + 60_000;
+              const check = () => {
+                const framed = performance
+                  .getEntriesByName('oz:edit.frame', 'measure')
+                  .map(
+                    (entry) =>
+                      (entry as PerformanceMeasure).detail as {
+                        projectId?: string;
+                        version?: number;
+                      } | null
+                  )
+                  .filter(
+                    (detail) =>
+                      detail?.projectId === record.projectId &&
+                      typeof detail.version === 'number' &&
+                      detail.version >= record.version
+                  )
+                  .map((detail) => detail!.version!)
+                  .sort((a, b) => a - b)[0];
+                if (framed !== undefined) return resolve(framed);
+                if (performance.now() >= deadline)
+                  return reject(
+                    new Error(
+                      `No frame followed adopted sync ${record.version}.`
+                    )
+                  );
+                setTimeout(check, 10);
+              };
+              check();
+            });
       const bodyMeasure = await waitForRevisionMeasure('oz:edit.installed');
       const bodyDoneAt = bodyMeasure.startTime + bodyMeasure.duration;
       const frameMeasure = await waitForRevisionMeasure('oz:edit.frame');
