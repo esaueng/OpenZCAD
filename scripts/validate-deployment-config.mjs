@@ -22,7 +22,7 @@ export const REQUIRED_SECRETS = [
 export const RELEASE_BUILD_CHECK = 'pnpm -w run check:release-build';
 export const OFFICIAL = Object.freeze({
   repository: 'esaueng/OpenZCAD',
-  workerName: 'openzcad',
+  workerName: 'openzcad-beta',
   databaseBinding: 'DB',
   databaseName: 'openzcad-beta',
   databaseId: '7263c6f1-8781-40d1-a0fa-ea03ce874ef2',
