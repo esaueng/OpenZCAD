@@ -302,7 +302,10 @@ describe('M02 patterns on sketch points: exact build', () => {
         'hole.face.bore',
         ...ids
           .slice(1)
-          .map((id) => `pattern.face.instance.${id}.hole.face.bore`)
+          .map(
+            (id) =>
+              `pattern.face.instance.${id}.source.${holeId}.hole.face.bore`
+          )
       ].sort()
     );
   }, 120_000);

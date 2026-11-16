@@ -5252,7 +5252,7 @@ function pointPatternPlan(
   points: PatternPoints;
   copies: PatternCopySpot[];
 } | null {
-  const seed = patternSeed(slots, options);
+  const seed = patternSeed(slots, options, ctx);
   const sketchId = slots.path[0]?.sketchId;
   if (!seed || !sketchId) return null;
   const all = ctx?.sketchPoints?.(sketchId) ?? [];
@@ -5320,10 +5320,10 @@ const pointPattern: InPlaceToolSpec = {
       : 'Click a point besides the one the original stands on';
   },
   ready: (slots, options, ctx) =>
-    patternSource(slots, options) !== null &&
+    patternSource(slots, options, ctx) !== null &&
     pointPatternPlan(slots, options ?? {}, ctx) !== null,
   request(slots, _values, options, ctx) {
-    const source = patternSource(slots, options);
+    const source = patternSource(slots, options, ctx);
     const plan = pointPatternPlan(slots, options, ctx);
     if (!source || !plan) return null;
     return {
