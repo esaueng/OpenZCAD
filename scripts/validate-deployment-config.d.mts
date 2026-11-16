@@ -25,6 +25,7 @@ export const OFFICIAL_STABLE: Readonly<{
   bucketName: string;
   sender: string;
   publicOrigins: readonly string[];
+  servedOrigins: readonly string[];
   branch: string;
 }>;
 

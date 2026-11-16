@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import process from 'node:process';
 import { parseFlags } from './cli-flags.mjs';
 
-const DEFAULT_ORIGIN = 'https://zcad.app';
+const DEFAULT_ORIGIN = 'https://beta.zcad.app';
 const DEFAULT_ATTEMPTS = 18;
 const DEFAULT_DELAY_MS = 5_000;
 

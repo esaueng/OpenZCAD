@@ -237,7 +237,7 @@ describe('beta deployment safety', () => {
     expect(config).toContain(
       '"PROJECT_INVITATION_EMAIL_FROM": "noreply@beta.zcad.app"'
     );
-    expect(config).toContain('"PUBLIC_APP_ORIGIN": "https://zcad.app"');
+    expect(config).toContain('"PUBLIC_APP_ORIGIN": "https://beta.zcad.app"');
     expect(config).toMatch(
       /"allowed_sender_addresses":\s*\[\s*"noreply@beta\.zcad\.app"\s*\]/
     );

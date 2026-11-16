@@ -32,16 +32,16 @@ export const OFFICIAL = Object.freeze({
   durableObjectBinding: 'PROJECT_ROOM',
   assetBinding: 'ASSETS',
   turnstileSiteKey: '0x4AAAAAAD_j6Y7NvXKtcxNX',
-  publicOrigin: 'https://zcad.app',
+  publicOrigin: 'https://beta.zcad.app',
   sender: 'noreply@beta.zcad.app'
 });
 
 /**
  * The stable (production) channel, wrangler.stable.jsonc: its own Worker,
  * database and bucket, deployed from the `stable` branch. Everything not
- * listed here (asset binding, senders, Turnstile key, bindings) matches
- * OFFICIAL. Its public origin is stable.zcad.app until the cutover moves
- * zcad.app to it (docs/release-channels.md).
+ * listed here (asset binding, Turnstile key, bindings) matches OFFICIAL.
+ * It serves zcad.app (and stable.zcad.app); beta serves beta.zcad.app
+ * (docs/release-channels.md).
  */
 /** The sender both channels used before each got its own domain. */
 const LEGACY_SENDER = 'noreply@zcad.esau.app';
@@ -52,7 +52,10 @@ export const OFFICIAL_STABLE = Object.freeze({
   databaseId: '3b5fb65e-0af0-46a8-a50c-b7b5bd69c56b',
   bucketName: 'openzcad-stable-artifacts',
   sender: 'noreply@zcad.app',
-  publicOrigins: Object.freeze(['https://stable.zcad.app', 'https://zcad.app']),
+  // The one origin stable's invitation links may use, and every address it
+  // serves: Previews, dev and self-host configs must not send links to any.
+  publicOrigins: Object.freeze(['https://zcad.app']),
+  servedOrigins: Object.freeze(['https://zcad.app', 'https://stable.zcad.app']),
   branch: 'stable'
 });
 
@@ -457,7 +460,12 @@ function validateOfficialPreviews(config) {
   if (vars.PRODUCTION_GUARD !== 'enabled') {
     errors.push('previews.vars.PRODUCTION_GUARD must be enabled');
   }
-  if (sameOrigin(vars.PUBLIC_APP_ORIGIN, OFFICIAL.publicOrigin)) {
+  // Invitation links from a Preview must reach neither channel's users.
+  if (
+    [OFFICIAL.publicOrigin, ...OFFICIAL_STABLE.servedOrigins].some((origin) =>
+      sameOrigin(vars.PUBLIC_APP_ORIGIN, origin)
+    )
+  ) {
     errors.push(
       'previews.vars.PUBLIC_APP_ORIGIN must not send invitation links to production'
     );
@@ -521,6 +529,7 @@ export function validateDeploymentConfig(
       OFFICIAL_STABLE.databaseId,
       OFFICIAL_STABLE.bucketName,
       OFFICIAL.publicOrigin,
+      ...OFFICIAL_STABLE.servedOrigins,
       OFFICIAL.turnstileSiteKey,
       OFFICIAL.sender,
       OFFICIAL_STABLE.sender,
@@ -711,6 +720,10 @@ export function validateDeploymentConfig(
       [bucket?.bucket_name, OFFICIAL.bucketName],
       [config.vars?.TURNSTILE_SITE_KEY, OFFICIAL.turnstileSiteKey],
       [config.vars?.PUBLIC_APP_ORIGIN, OFFICIAL.publicOrigin],
+      ...OFFICIAL_STABLE.servedOrigins.map((origin) => [
+        config.vars?.PUBLIC_APP_ORIGIN,
+        origin
+      ]),
       ...[OFFICIAL.sender, OFFICIAL_STABLE.sender, LEGACY_SENDER].flatMap(
         (sender) => [
           [config.vars?.AUTH_EMAIL_FROM, sender],
