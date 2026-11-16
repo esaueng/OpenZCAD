@@ -121,6 +121,7 @@
     "test/exact-display-projection.test.ts",
     "test/exact-kernel-adapter.test.ts",
     "test/feature-pattern.test.ts",
+    "test/fillet-crossing-face-loops.test.ts",
     "test/fillet-rearm-adjacent.test.ts",
     "test/filleted-union-face-offset.test.ts",
     "test/flange-bolt-hole-resize.test.ts",
