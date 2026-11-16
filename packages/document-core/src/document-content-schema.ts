@@ -213,6 +213,48 @@ export function hasDrawingFormat(value: unknown): boolean {
   return false;
 }
 
+/**
+ * D02 geometry annotations (schema v73): centre and intersection marks,
+ * centrelines and mark points need a document that declares them.
+ */
+export function assertDrawingGeometrySchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    73,
+    'Centre marks, intersection marks and centrelines'
+  );
+}
+
+const GEOMETRY_KINDS: readonly unknown[] = [
+  'center-mark',
+  'intersection-mark',
+  'centerline'
+];
+
+/** Whether `value` holds a v73 geometry annotation or mark point. */
+export function hasDrawingGeometry(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (
+      (typeof entry.annotationId === 'string' &&
+        GEOMETRY_KINDS.includes(entry.kind)) ||
+      entry.anchor === 'mark'
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
 function hasCouplings(assembly: unknown): boolean {
   return record(assembly) && assembly.couplings !== undefined;
 }
@@ -320,6 +362,12 @@ export function assertDocumentContentCommandSchema(
       hasDrawingFormat(command.payload)
     )
       assertDrawingFormatSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingGeometry(command.payload)
+    )
+      assertDrawingGeometrySchema(document.schemaVersion);
     if (!record(command.payload)) continue;
     if (
       command.kind === 'sketch.composite.add' &&
@@ -422,6 +470,15 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
     assertDrawingDimensionFormatSchema(document.schemaVersion);
   if (hasDrawingFormat(document.drawings))
     assertDrawingFormatSchema(document.schemaVersion);
+  if (hasDrawingGeometry(document.drawings))
+    assertDrawingGeometrySchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingGeometry(change.before) || hasDrawingGeometry(change.after))
+      )
+        assertDrawingGeometrySchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
     for (const change of entry.changes)
       if (

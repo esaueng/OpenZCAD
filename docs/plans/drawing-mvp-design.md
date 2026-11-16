@@ -468,6 +468,40 @@ notes to D01 sheets:
   or in a sheet update in a document, its history or its commands that
   declares v69 or older.
 
+## Centre marks, intersection marks and centrelines (D02, schema v73)
+
+- **Shape.** Three annotation kinds that mark geometry and state no value:
+  `center-mark` (a circle or arc seen face-on), `intersection-mark` (two
+  straight edges whose lines cross in the view: a rounded or chamfered
+  corner's virtual sharp) and `centerline` in three modes — `points`
+  through two points, `lines` midway between two parallel straight edges
+  (spanning both along their direction), and `circle` through three points
+  (a bolt circle through three hole centres). They store edges and points
+  like dimensions, never positions, and take no decimals, tolerance or
+  affixes. A dimension or centreline point may be `{ anchor: 'mark' }`, a
+  centre or intersection mark of the same view, read through it each time
+  the sheet is drawn.
+- **Repair.** A mark that is deleted, or no longer marks a point, leaves
+  what measured to it broken (`mark-missing`) until re-picked; the
+  validator refuses only a mark point naming a non-mark or another view,
+  so deleting a mark never makes a sheet unstorable. Parallel edges make no
+  intersection, crossing edges no midline (`not-parallel`), and three
+  collinear points no circle (`collinear`).
+- **Page.** Centre lines are the `chain` stroke (ISO 128 type 04) run
+  2.5 mm past what they mark; one shorter than 12 mm, whose dash would not
+  show, is drawn thin and solid. A centre mark adds a 1.5 mm solid cross at
+  the centre; an intersection mark draws each edge's thin extension from
+  1 mm off its near end to 2 mm past the crossing. Marks have no text;
+  their 5 mm pick box sits on the point they mark, where a linear or
+  centreline tool picks them as a point.
+- **Tools.** Centre mark (M), Intersection mark (X), Centreline (L: two
+  points, or two straight edges each picked away from their ends) and
+  Circular centreline (B: three points). Each is made as soon as its picks
+  are in, with no placement click.
+- **Schema.** v73, built on v72. A content gate refuses the kinds and mark
+  points below v73. Point-to-line and min/max distances measured to marks
+  and centrelines are the next D02 slice.
+
 ## Finishing-body update repair
 
 When a finishing feature consumes a drawing's body, the sheet offers the

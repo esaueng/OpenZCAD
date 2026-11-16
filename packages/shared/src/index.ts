@@ -332,7 +332,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // means no table, so every older document builds unchanged. An older client
 // would show and export bodies the active row hides and drop the table on
 // its next save, so it must refuse. Builds on v70 (v71 is claimed by M17).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 72 as const;
+// v73 adds D02 geometry annotations: centre marks, intersection marks and
+// centrelines (`center-mark`, `intersection-mark`, `centerline` annotation
+// kinds) and a mark as a dimension point (`anchor: 'mark'`). An older client
+// would refuse the unknown kinds, so it must refuse the document. Builds on
+// v72.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 73 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
