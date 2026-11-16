@@ -8,92 +8,28 @@
  *
  * Loaded by the entry chunk: no crypto here.
  */
-import { projectLinkPath } from '../projectShareLink';
+import { fragmentLink } from './fragmentLink';
 
 export const ENCRYPTED_INVITATION_SESSION_KEY =
   'openzcad:pending-encrypted-invitation:v1';
-const PREFIX = '#encrypted-invite=';
-const TOKEN = /^[A-Za-z0-9_-]{40,128}$/;
 
-const listeners = new Set<() => void>();
+const link = fragmentLink(
+  'encrypted-invite',
+  ENCRYPTED_INVITATION_SESSION_KEY,
+  /^[A-Za-z0-9_-]{40,128}$/
+);
 
 /** The token of an `#encrypted-invite=` fragment, or null. */
-export function encryptedInvitationTokenFromHash(hash: string): string | null {
-  if (!hash.startsWith(PREFIX)) return null;
-  const parameters = new URLSearchParams(hash.slice(1));
-  const values = parameters.getAll('encrypted-invite');
-  if (
-    values.length !== 1 ||
-    [...parameters.keys()].some((key) => key !== 'encrypted-invite')
-  ) {
-    return null;
-  }
-  const token = values[0] ?? '';
-  return TOKEN.test(token) ? token : null;
-}
-
+export const encryptedInvitationTokenFromHash = link.fromHash;
 /** Whether the fragment is an encrypted invitation link, valid or not. */
-export function isEncryptedInvitationHash(hash: string): boolean {
-  return hash.startsWith(PREFIX);
-}
-
+export const isEncryptedInvitationHash = link.isHash;
 /**
  * Captures an encrypted invitation from the address bar: scrubs the
  * fragment and keeps a valid token for this tab. Null when there is none.
  */
-export function captureEncryptedInvitationLink(
-  location: Pick<
-    Location,
-    'hash' | 'pathname' | 'search'
-  > = globalThis.location,
-  history: Pick<History, 'replaceState' | 'state'> = globalThis.history,
-  storage: Pick<Storage, 'setItem'> = globalThis.sessionStorage
-): string | null {
-  if (!isEncryptedInvitationHash(location.hash)) return null;
-  const token = encryptedInvitationTokenFromHash(location.hash);
-  history.replaceState(history.state, '', projectLinkPath(location));
-  if (!token) return null;
-  try {
-    storage.setItem(ENCRYPTED_INVITATION_SESSION_KEY, token);
-  } catch {
-    // A blocked storage API keeps the token for this page only.
-    memoryToken = token;
-  }
-  for (const listener of listeners) listener();
-  return token;
-}
-
-let memoryToken: string | null = null;
-
+export const captureEncryptedInvitationLink = link.capture;
 /** The captured token this tab has not accepted yet. */
-export function pendingEncryptedInvitation(
-  storage: Pick<Storage, 'getItem'> = globalThis.sessionStorage
-): string | null {
-  try {
-    const stored = storage.getItem(ENCRYPTED_INVITATION_SESSION_KEY);
-    if (stored && TOKEN.test(stored)) return stored;
-  } catch {
-    // Fall back to this page's copy.
-  }
-  return memoryToken;
-}
-
-export function clearPendingEncryptedInvitation(
-  storage: Pick<Storage, 'removeItem'> = globalThis.sessionStorage
-): void {
-  memoryToken = null;
-  try {
-    storage.removeItem(ENCRYPTED_INVITATION_SESSION_KEY);
-  } catch {
-    // Nothing to clear.
-  }
-  for (const listener of listeners) listener();
-}
-
+export const pendingEncryptedInvitation = link.pending;
+export const clearPendingEncryptedInvitation = link.clear;
 /** Called when a token is captured or cleared. */
-export function subscribePendingEncryptedInvitation(
-  listener: () => void
-): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
+export const subscribePendingEncryptedInvitation = link.subscribe;
