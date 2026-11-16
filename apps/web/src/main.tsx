@@ -16,6 +16,7 @@ import '@fontsource/geist-sans/latin-600.css';
 import '@fontsource/geist-mono/latin-400.css';
 import '@fontsource/geist-mono/latin-500.css';
 import {
+  getActivityLogSnapshot,
   installRuntimeErrorCapture,
   readStoredErrors
 } from './lib/activityLog';
@@ -62,7 +63,7 @@ if (import.meta.env.VITE_E2E === '1') {
 // back at the head of the log with a line naming the build and browser. Both
 // load just after startup rather than weigh on the entry chunk.
 const storedErrors = readStoredErrors();
-const loadedAt = Date.now();
+const { startedAt: loadedAt } = getActivityLogSnapshot();
 void import('./lib/activityLogPersistence').then(
   ({ restoreActivityLog }) =>
     restoreActivityLog({ stored: storedErrors, loadedAt }),

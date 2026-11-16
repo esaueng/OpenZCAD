@@ -3,7 +3,6 @@ import {
   MAX_PERSISTED_ERRORS,
   PERSISTED_ERROR_MAX_AGE_MS,
   persistActivityErrors,
-  resetActivityPersistenceForTests,
   restoreActivityLog
 } from './activityLogPersistence';
 import { APP_BUILD_COMMIT } from './crashEnvironment';
@@ -267,7 +266,6 @@ describe('errors kept across reloads', () => {
   beforeEach(() => {
     resetActivityLogForTests();
     localStorage.removeItem(PERSISTED_ERRORS_KEY);
-    resetActivityPersistenceForTests();
     persistActivityErrors();
   });
   afterEach(() => {
@@ -279,8 +277,12 @@ describe('errors kept across reloads', () => {
   /** A page load: a fresh in-memory log over the same storage. */
   function reload(now = Date.now()) {
     resetActivityLogForTests();
-    const stored = readStoredErrors();
-    return restoreActivityLog({ stored, loadedAt: now, now, environment: [] });
+    return restoreActivityLog({
+      stored: readStoredErrors(),
+      loadedAt: getActivityLogSnapshot().startedAt,
+      now,
+      environment: []
+    });
   }
 
   it('brings a crash back after a reload, marked and with its build', () => {
@@ -330,9 +332,10 @@ describe('errors kept across reloads', () => {
     setActivityErrorSink(null);
     recordActivity({ level: 'ready', source: 'status', message: 'Opening…' });
     recordActivity({ level: 'error', source: 'error', message: 'during' });
-    expect(restoreActivityLog({ stored, loadedAt: 0, environment: [] })).toBe(
-      1
-    );
+    const { startedAt } = getActivityLogSnapshot();
+    expect(
+      restoreActivityLog({ stored, loadedAt: startedAt, environment: [] })
+    ).toBe(1);
     expect(
       getActivityLogSnapshot().entries.map((entry) => entry.message)
     ).toEqual([
@@ -354,8 +357,9 @@ describe('errors kept across reloads', () => {
         timestamp: 1_000 + index
       });
     }
-    // An error raised every frame, after the distinct ones.
-    for (let frame = 0; frame < 30; frame += 1) {
+    // An error raised every frame for a minute, after the distinct ones:
+    // kept once, so it never pushes them out.
+    for (let frame = 0; frame < 60 * 60; frame += 1) {
       recordActivity({
         level: 'error',
         source: 'error',
@@ -405,6 +409,38 @@ describe('errors kept across reloads', () => {
     expect(getActivityLogSnapshot().entries).toHaveLength(1);
   });
 
+  it('keeps what this load raises after a Clear, the same error included', () => {
+    recordActivity({ level: 'error', source: 'error', message: 'boom' });
+    clearActivityLog();
+    // Raised again at once: storage no longer has it, so it is kept again.
+    recordActivity({ level: 'error', source: 'error', message: 'boom' });
+    expect(keptMessages()).toEqual(['boom']);
+  });
+
+  it('leaves a Clear made before it loaded cleared', () => {
+    recordActivity({ level: 'error', source: 'error', message: 'old' });
+    resetActivityLogForTests();
+    setActivityErrorSink(null);
+    const stored = readStoredErrors();
+    const { startedAt } = getActivityLogSnapshot();
+    vi.useFakeTimers({ now: startedAt + 1_000 });
+    try {
+      // The user clears the log while the module is still on its way.
+      clearActivityLog();
+      recordActivity({ level: 'error', source: 'error', message: 'new' });
+      expect(
+        restoreActivityLog({ stored, loadedAt: startedAt, environment: [] })
+      ).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(
+      getActivityLogSnapshot().entries.map((entry) => entry.message)
+    ).toEqual(['new']);
+    // What came after the Clear is still kept.
+    expect(keptMessages()).toEqual(['new']);
+  });
+
   it('forgets kept errors when the log is cleared', () => {
     recordActivity({ level: 'error', source: 'error', message: 'boom' });
     expect(keptMessages()).toEqual(['boom']);
@@ -435,16 +471,17 @@ describe('the page-load line', () => {
   afterEach(() => setActivityErrorSink(null));
 
   it('opens the log with the build and the browser it runs on', () => {
+    const { startedAt } = getActivityLogSnapshot();
     restoreActivityLog({
       stored: null,
-      loadedAt: 42,
+      loadedAt: startedAt,
       environment: ['Browser Firefox/140', 'Window 1990×1480 @2x']
     });
     const [entry] = getActivityLogSnapshot().entries;
     expect(entry).toMatchObject({
       level: 'ready',
       source: 'status',
-      timestamp: 42
+      timestamp: startedAt
     });
     expect(entry!.message).toMatch(/^Page loaded · OpenZCAD .+ · Remus /);
     expect(entry!.detail).toBe('Browser Firefox/140\nWindow 1990×1480 @2x');

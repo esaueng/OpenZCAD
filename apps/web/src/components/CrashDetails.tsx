@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { getActivityLogSnapshot } from '../lib/activityLog';
+import { useMemo, useState } from 'react';
+import { useActivityLog, type ActivityLogEntry } from '../lib/activityLog';
 import { trimComponentStack } from '../lib/crashDiagnostics';
 import { explainReactError, formatCrashReport } from '../lib/crashReport';
 
@@ -20,8 +20,11 @@ interface LoggedCrash {
  * its component stack. Read from the log so the boundary, in the entry chunk,
  * keeps no copy of either.
  */
-function loggedCrash(label: string, message: string): LoggedCrash | null {
-  const entries = getActivityLogSnapshot().entries;
+function loggedCrash(
+  entries: readonly ActivityLogEntry[],
+  label: string,
+  message: string
+): LoggedCrash | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index]!;
     if (entry.message !== `${label} crashed: ${message}`) continue;
@@ -47,8 +50,13 @@ function loggedCrash(label: string, message: string): LoggedCrash | null {
  */
 export function CrashDetails({ label, message }: CrashDetailsProps) {
   const [copied, setCopied] = useState<'idle' | 'copied' | 'failed'>('idle');
-  // Read once: the card is about the crash it opened on.
-  const [logged] = useState(() => loggedCrash(label, message));
+  // Live, not read once: with this chunk already loaded the card renders
+  // before the boundary's componentDidCatch has logged the crash.
+  const { entries } = useActivityLog();
+  const logged = useMemo(
+    () => loggedCrash(entries, label, message),
+    [entries, label, message]
+  );
   const hint = explainReactError(message);
   const components = trimComponentStack(logged?.componentStack);
   const copy = () => {

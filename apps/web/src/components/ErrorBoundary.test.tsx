@@ -1,4 +1,10 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen
+} from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   getActivityLogSnapshot,
@@ -260,6 +266,24 @@ describe('ErrorBoundary', () => {
     expect(screen.getByTestId('error-component-stack').textContent).toMatch(
       /^at UpdateLoop/
     );
+  });
+
+  it('shows the stack when its details were loaded before the crash', async () => {
+    // The startup prefetch usually has the chunk: the card then renders
+    // before componentDidCatch has logged the crash it describes.
+    await renderLoop();
+    cleanup();
+    function Throws2(): never {
+      throw new Error('second failure');
+    }
+    render(
+      <ErrorBoundary label="OpenZCAD workspace" scope="page">
+        <Throws2 />
+      </ErrorBoundary>
+    );
+    expect(
+      (await screen.findByTestId('error-component-stack')).textContent
+    ).toMatch(/^at Throws2/);
   });
 
   it('copies the whole report for a bug report', async () => {

@@ -28,10 +28,6 @@ export const PERSISTED_ERROR_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // A component stack and an error stack fit well inside this; it bounds a
 // pathological message so ten of them stay small next to the storage quota.
 const MAX_PERSISTED_TEXT = 4000;
-// An error raised every frame must not rewrite storage every frame, nor push
-// the one distinct crash before it out of the ten kept: a repeat of the last
-// stored message inside this window is left to the in-memory log.
-const PERSIST_REPEAT_WINDOW_MS = 5_000;
 
 interface PersistedError {
   timestamp: number;
@@ -79,16 +75,7 @@ function clip(text: string): string {
     : text;
 }
 
-let lastPersisted: { message: string; at: number } | null = null;
-
 function persistError(entry: ActivityLogEntry) {
-  if (
-    lastPersisted?.message === entry.message &&
-    entry.timestamp - lastPersisted.at < PERSIST_REPEAT_WINDOW_MS
-  ) {
-    return;
-  }
-  lastPersisted = { message: entry.message, at: entry.timestamp };
   try {
     const store = activityErrorStore();
     if (!store) return;
@@ -96,9 +83,15 @@ function persistError(entry: ActivityLogEntry) {
       store.getItem(PERSISTED_ERRORS_KEY),
       entry.timestamp
     );
+    const message = clip(entry.message);
+    // A run of the same error (one raised every frame, a crash the automatic
+    // remount hit again) is kept once: repeats must not push the distinct
+    // errors before them out of the ten kept. Read from storage, not memory,
+    // so a run that a Clear interrupted is kept again.
+    if (kept.at(-1)?.message === message) return;
     kept.push({
       timestamp: entry.timestamp,
-      message: clip(entry.message),
+      message,
       ...(entry.detail ? { detail: clip(entry.detail) } : {}),
       ...(entry.workspace ? { workspace: entry.workspace } : {}),
       ...(entry.project ? { project: entry.project } : {}),
@@ -148,7 +141,8 @@ export function earlierErrorEntries(
 /**
  * Heads the log with the earlier errors and the page-load line, then keeps
  * this load's errors (including any raised before this module loaded).
- * `stored` is what startup read before recording anything. Kept errors stay
+ * `stored` is what startup read before recording anything, and `loadedAt`
+ * the log's `startedAt` then. Kept errors stay
  * stored until the log is cleared or they age out, so a second reload does
  * not lose them either. Returns how many errors were restored.
  */
@@ -163,9 +157,12 @@ export function restoreActivityLog({
   now?: number;
   environment?: string[];
 }): number {
-  const earlier = earlierErrorEntries(stored, now);
   // Before the earlier errors join the log: they are kept already.
   persistActivityErrors();
+  // Cleared since the page loaded (this module can arrive late): what was
+  // cleared stays cleared.
+  if (getActivityLogSnapshot().startedAt !== loadedAt) return 0;
+  const earlier = earlierErrorEntries(stored, now);
   prependActivity([
     ...earlier,
     {
@@ -177,9 +174,4 @@ export function restoreActivityLog({
     }
   ]);
   return earlier.length;
-}
-
-/** Test seam: forget the last kept message, so repeats are kept again. */
-export function resetActivityPersistenceForTests(): void {
-  lastPersisted = null;
 }
