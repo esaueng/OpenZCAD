@@ -3450,6 +3450,22 @@ const hole: InPlaceToolSpec = {
         { value: 'exact', label: 'Exact', tip: 'No clearance' }
       ],
       initial: 'document',
+      when: (state) =>
+        holeTappedChosen(state.options) && state.options.tapForm !== 'cosmetic'
+    },
+    // M01 (schema v67): a thread cut, or described for drawings only.
+    {
+      id: 'tapForm',
+      label: 'Thread form',
+      choices: [
+        { value: 'modeled', label: 'Modeled', tip: 'Cuts the thread' },
+        {
+          value: 'cosmetic',
+          label: 'Cosmetic',
+          tip: 'Keeps the tap-drill bore; drawings call the thread out'
+        }
+      ],
+      initial: 'modeled',
       when: (state) => holeTappedChosen(state.options)
     }
   ],
@@ -3468,6 +3484,7 @@ const hole: InPlaceToolSpec = {
         'fit',
         'ansiFit',
         'tap',
+        'tapForm',
         'tapFit',
         'diameter',
         'depth',
@@ -3810,8 +3827,11 @@ function holeTappedRequest(
   saved: Extract<FeatureData, { featureKind: 'hole' }> | null
 ): HoleTapped {
   const stored = saved?.tapped;
-  const clearance =
-    options.tapFit === 'exact'
+  // A cosmetic thread is not cut, so it keeps no clearance.
+  const cosmetic = options.tapForm === 'cosmetic';
+  const clearance = cosmetic
+    ? undefined
+    : options.tapFit === 'exact'
       ? 0
       : options.tapFit === 'document'
         ? undefined
@@ -3821,7 +3841,8 @@ function holeTappedRequest(
       ? { length: text(values.tapLength, 10) }
       : {}),
     ...(clearance !== undefined ? { clearance } : {}),
-    ...(stored?.hand ? { hand: stored.hand } : {})
+    ...(stored?.hand ? { hand: stored.hand } : {}),
+    ...(cosmetic ? { cosmetic: true as const } : {})
   };
 }
 

@@ -413,6 +413,35 @@ describe('face tools build the card state', () => {
     });
   });
 
+  it('cosmetic thread (M01): described, not cut, and keeps no clearance', () => {
+    const spec = IN_PLACE_TOOL_SPECS.hole;
+    const slots = { ...EMPTY, faces: [TOP] };
+    const options = {
+      standard: 'iso',
+      isoSize: 'M6',
+      holeFor: 'tap-drill',
+      tap: 'tapped',
+      tapForm: 'cosmetic',
+      tapFit: 'exact'
+    };
+    expect(
+      spec.request(slots, {}, options, { ...CTX, units: 'mm' })
+    ).toMatchObject({
+      state: { value: { tapped: { cosmetic: true } } }
+    });
+    expect(
+      spec.request(slots, {}, options, { ...CTX, units: 'mm' })
+    ).not.toHaveProperty('state.value.tapped.clearance');
+    expect(
+      spec.request(
+        slots,
+        {},
+        { ...options, tapForm: 'modeled' },
+        { ...CTX, units: 'mm' }
+      )
+    ).not.toHaveProperty('state.value.tapped.cosmetic');
+  });
+
   it('shell: every picked face opens, and the wall handle points inward', () => {
     const spec = IN_PLACE_TOOL_SPECS.shell;
     const slots = { ...EMPTY, faces: [TOP, { ...TOP, hash: 12 }] };

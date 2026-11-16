@@ -74,7 +74,12 @@ export function featureReadsPrintClearance(data: FeatureData): boolean {
   }
   // M01 (schema v66): a tapped hole's thread, as a Thread's.
   if (data.featureKind === 'hole') {
-    return data.tapped !== undefined && data.tapped.clearance === undefined;
+    // A cosmetic thread (schema v67) is not cut, so reads nothing.
+    return (
+      data.tapped !== undefined &&
+      !data.tapped.cosmetic &&
+      data.tapped.clearance === undefined
+    );
   }
   return data.featureKind === 'gear' && data.backlash === undefined;
 }

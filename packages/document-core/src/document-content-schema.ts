@@ -102,6 +102,8 @@ export function assertHoleContentSchema(data: unknown, version: unknown): void {
     assertMinimumProjectSchema(version, 65, 'Standard hole sizes');
   if (data.tapped !== undefined)
     assertMinimumProjectSchema(version, 66, 'Tapped holes');
+  if (record(data.tapped) && data.tapped.cosmetic !== undefined)
+    assertMinimumProjectSchema(version, 67, 'Cosmetic threads');
 }
 
 /**

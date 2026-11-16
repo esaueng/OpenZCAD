@@ -298,7 +298,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // plain tap-drill bore, so every older document builds unchanged. An older
 // client would drill the bore without its thread, so it must refuse. Builds
 // on v65.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 66 as const;
+// v67 adds M01 cosmetic threads (`tapped.cosmetic`): a tapped hole whose
+// thread is described for drawings and callouts but not cut, so the bore
+// stays its tap drill. An older client would cut the thread, so it must
+// refuse. Builds on v66.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 67 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -454,6 +458,11 @@ export interface HoleTapped {
   clearance?: ParamValue;
   /** Absent is `'right'`. */
   hand?: ThreadHand;
+  /**
+   * M01 (schema v67): a cosmetic thread, described (for drawings and
+   * callouts) but not cut: the bore stays its tap drill. Absent cuts it.
+   */
+  cosmetic?: true;
 }
 export type AxisId = 'x' | 'y' | 'z';
 

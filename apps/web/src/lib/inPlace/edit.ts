@@ -483,6 +483,7 @@ export function inPlaceEditSeed(
               ? 'exact'
               : 'stored';
         value('tapLength', data.tapped.length);
+        seed.options.tapForm = data.tapped.cosmetic ? 'cosmetic' : 'modeled';
       }
       // M01 (schema v64): drilled at sketch points, which reopen as picks.
       if (data.points) {

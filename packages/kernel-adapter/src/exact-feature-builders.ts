@@ -1508,8 +1508,9 @@ function buildHoleFeature(
       });
     }
   }
-  // M01 (schema v66): each bore tapped with the standard's thread.
-  if (data.tapped) {
+  // M01 (schema v66): each bore tapped with the standard's thread; a
+  // cosmetic one (schema v67) is described, not cut.
+  if (data.tapped && !data.tapped.cosmetic) {
     drilled = tapHoleBores(ctx, feature, data, drilled, bores);
   }
   result.consumed.add(data.targetBodyId);

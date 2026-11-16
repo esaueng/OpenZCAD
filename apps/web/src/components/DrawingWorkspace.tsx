@@ -39,7 +39,11 @@ import {
   composeCommands,
   type AnyCommand
 } from '@openzcad/command-system';
-import { updateDrawingView } from '@openzcad/document-core';
+import {
+  getParameterScope,
+  holeCallout,
+  updateDrawingView
+} from '@openzcad/document-core';
 import {
   createDrawingAnnotationId,
   createDrawingViewId,
@@ -70,6 +74,8 @@ import {
   type DrawingView,
   type DrawingViewId,
   type DrawingViewOrientation,
+  type FeatureId,
+  type HoleCallout,
   type ProjectDocument,
   type Vector3,
   hasDraftDisplay
@@ -2253,18 +2259,35 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // the kept one of a sheet not yet updated. Only a drawn sheet draws or
   // reports them. A leader whose edge its view no longer draws at all is
   // broken too.
+  // M01: a hole's callout data, read from the document by its feature id,
+  // for a diameter on its bore to call it out (standard, thread).
+  const holeCallouts = useMemo(() => {
+    const scope = getParameterScope(document).scope;
+    const read = new Map<FeatureId, HoleCallout | null>();
+    return (featureId: FeatureId) => {
+      if (!read.has(featureId)) {
+        read.set(featureId, holeCallout(document, featureId, scope));
+      }
+      return read.get(featureId)!;
+    };
+  }, [document]);
   const resolutions = useMemo(
     () =>
       shownSheet
         ? markHiddenLeaders(
             shownSheet,
-            resolveSheetAnnotations(shownSheet, drawBodies, document.units),
+            resolveSheetAnnotations(
+              shownSheet,
+              drawBodies,
+              document.units,
+              holeCallouts
+            ),
             drawnViews,
             document.units,
             drawBodies
           )
         : new Map<DrawingAnnotationId, AnnotationResolution>(),
-    [shownSheet, drawBodies, document.units, drawnViews]
+    [shownSheet, drawBodies, document.units, drawnViews, holeCallouts]
   );
   /** Drawn and usable: matches the model, or keeps its earlier drawing. */
   const sheetReady = status?.kind === 'ready' || keptDrawing !== null;
@@ -2582,7 +2605,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return null;
     }
     return [
-      ...remove.map((id) => commandFactories.deleteDrawingSheet({ sheetId: id })),
+      ...remove.map((id) =>
+        commandFactories.deleteDrawingSheet({ sheetId: id })
+      ),
       ...add.map((entry) => commandFactories.addDrawingSheet({ sheet: entry }))
     ];
   };
@@ -3789,7 +3814,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         resolveSheetAnnotations(
           { ...shownSheet, annotations: shownAutoPlan.annotations },
           drawBodies,
-          document.units
+          document.units,
+          holeCallouts
         ),
         document.units
       )
