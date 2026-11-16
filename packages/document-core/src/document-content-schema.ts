@@ -156,6 +156,14 @@ export function hasDrawingDimensionFormat(value: unknown): boolean {
   return false;
 }
 
+/**
+ * M17 standard parts (schema v69): an older reader has no builder for the
+ * kind and would drop the body, so the document must declare the schema.
+ */
+export function assertStandardPartSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 69, 'Standard parts');
+}
+
 function hasCouplings(assembly: unknown): boolean {
   return record(assembly) && assembly.couplings !== undefined;
 }
@@ -242,6 +250,8 @@ export function assertDocumentContentCommandSchema(
       assertAssemblyExplodeSchema(document.schemaVersion);
     if (command.kind === 'feature.sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
+    if (command.kind === 'feature.standard-part')
+      assertStandardPartSchema(document.schemaVersion);
     if (command.kind === 'printClearance.set')
       assertPrintClearanceSchema(document.schemaVersion);
     if (
@@ -364,6 +374,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       assertHoleContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'standard-part')
+      assertStandardPartSchema(document.schemaVersion);
     if (
       node.kind === 'sketch' &&
       Array.isArray(node.composites) &&

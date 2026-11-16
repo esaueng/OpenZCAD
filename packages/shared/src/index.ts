@@ -23,6 +23,7 @@ export * from './gear-mesh-types';
 export * from './gear-mesh';
 export * from './hole-points';
 export * from './hole-standards';
+export * from './standard-parts';
 import type { DocumentHistory } from './document-history';
 import { ownEntry } from './document-validation';
 import type { KeymapOverrides } from './keymap-settings';
@@ -37,6 +38,12 @@ import type { SketchPromotion } from './sketch-promotions';
 import type { ObjectFolderSet } from './object-folders';
 import type { AssemblySet } from './assembly';
 import type { PipeThreadSize } from './pipe-threads';
+import type {
+  StandardPartKind,
+  StandardPartSize,
+  StandardPartSystem,
+  StandardScrewHead
+} from './standard-parts';
 import type {
   HoleClearanceFit,
   HoleStandardKind,
@@ -308,7 +315,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // drawn. Absent keeps the bare value, so every older sheet draws unchanged.
 // An older client would print the bare value and drop them on its next save,
 // so it must refuse. Builds on v67.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 68 as const;
+// v69 adds M17 standard parts (`featureKind: 'standard-part'`): a screw,
+// nut, washer, threaded insert, dowel pin or ball bearing generated from its
+// standard's table as a new body. An older client has no builder for the
+// kind and would drop the body on rebuild, so it must refuse. Builds on v68.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 69 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -377,6 +388,7 @@ export type FeatureKind =
   | 'gear'
   | 'thread'
   | 'sheet-metal'
+  | 'standard-part'
   | 'direct-edit'
   | 'imported-step'
   | 'imported-mesh'
@@ -2324,6 +2336,37 @@ export type FeatureData =
        * tapers small toward it, a bore opens large at it.
        */
       pipeSize?: PipeThreadSize;
+    }
+  | {
+      /**
+       * M17 (schema v69): a standard part, generated as a new body from its
+       * standard's table (`standard-parts.ts`): a screw, nut, washer,
+       * threaded insert, dowel pin or deep groove ball bearing. Threads are
+       * modeled by the M15 thread generator and an insert's knurl by the M14
+       * gear generator. Nothing is consumed.
+       *
+       * Placement: `origin` is the part's seat and `axis` points the way it
+       * goes in. A screw's head stands behind the origin and its shank runs
+       * along `axis` (a countersunk head sinks along it from the origin, its
+       * top on the origin); a nut, washer, insert, dowel pin or bearing runs
+       * from the origin along `axis` for its height. `xDirection` turns a
+       * hex about the axis; absent is a deterministic perpendicular.
+       */
+      featureKind: 'standard-part';
+      partKind: StandardPartKind;
+      system: StandardPartSystem;
+      size: StandardPartSize;
+      /** Screws only; absent is `'socket'`. */
+      head?: StandardScrewHead;
+      /**
+       * Screws and dowel pins: the nominal length (under the head, or
+       * overall on a countersunk screw). Required on them, refused on the
+       * others, whose table fixes their height.
+       */
+      length?: ParamValue;
+      origin: ParametricVector3;
+      axis: ParametricVector3;
+      xDirection?: ParametricVector3;
     }
   /**
    * M16 (schema v58): a sheet-metal part. The sketch cells in `profiles`
@@ -5942,6 +5985,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   gear: '#c084fc',
   thread: '#84cc16',
   'sheet-metal': '#94a3b8',
+  'standard-part': '#c2b280',
   'direct-edit': '#2dd4bf',
   'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff',

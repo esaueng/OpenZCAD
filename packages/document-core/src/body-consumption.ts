@@ -81,6 +81,7 @@ export function replacedInputBodyId(data: FeatureData): BodyId | null {
     case 'sweep':
     case 'helical-sweep':
     case 'sheet-metal':
+    case 'standard-part':
     case 'imported-mesh':
     case 'imported-step':
     case 'datum-plane':

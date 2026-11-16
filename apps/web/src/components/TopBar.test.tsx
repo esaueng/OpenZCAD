@@ -1,8 +1,8 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AuthSession } from '@openzcad/shared';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
-import { TopBar } from './TopBar';
+import { TopBar, preloadEncryptionIndicator } from './TopBar';
 import type { EncryptionIndicatorProps } from './EncryptionIndicator';
 import { WORKSPACE_MODE_OPTIONS } from '../lib/topBarPresentation';
 
@@ -804,6 +804,9 @@ describe('TopBar project title', () => {
 });
 
 describe('TopBar encryption indicator', () => {
+  // The lock loads on demand, out of the entry chunk.
+  beforeAll(() => preloadEncryptionIndicator());
+
   const indicator = (
     status: EncryptionIndicatorProps['status'],
     extra: Partial<EncryptionIndicatorProps> = {}

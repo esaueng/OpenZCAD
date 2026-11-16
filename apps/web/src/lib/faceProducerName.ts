@@ -42,6 +42,7 @@ function startsBody(feature: FeatureNode): boolean {
     case 'imported-step':
     case 'imported-mesh':
     case 'sheet-metal':
+    case 'standard-part':
       return true;
     case 'extrude':
       return (
