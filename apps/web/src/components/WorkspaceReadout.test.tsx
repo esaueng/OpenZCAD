@@ -1070,6 +1070,60 @@ describe('WorkspaceReadout section line', () => {
     }
   });
 
+  it('comes back at once when a tool card takes the message, not after its dwell', () => {
+    vi.useFakeTimers();
+    try {
+      const section = {
+        label: 'Section · XY plane',
+        note: null,
+        onTurnOff: vi.fn()
+      };
+      const at = Date.now();
+      const { rerender } = render(readout('Added box.', at, section));
+      expect(screen.getByRole('status')).toHaveTextContent(/^Added box\.$/);
+      // Well inside the message's 1.2 s dwell, a tool card opens.
+      act(() => {
+        vi.advanceTimersByTime(STATUS_MIN_DWELL_MS / 4);
+      });
+      rerender(readout('Added box.', at, section, true));
+      expect(screen.getByRole('status')).toHaveTextContent(
+        /^Section · XY plane$/
+      );
+      expect(
+        screen.getByRole('button', { name: 'Turn off section view' })
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the way off beside a geometry line that holds the row', () => {
+    render(
+      <WorkspaceReadout
+        status=""
+        statusAt={0}
+        geometryStatus={{
+          phase: 'Exact geometry failed: kernel refused',
+          projection: 'showing the previous result until it finishes'
+        }}
+        section={{
+          label: 'Section · XZ plane',
+          note: null,
+          onTurnOff: vi.fn()
+        }}
+        tone="warning"
+        onOpenLog={vi.fn()}
+        {...SUMMARY}
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Exact geometry failed: kernel refused'
+    );
+    expect(
+      screen.getByRole('button', { name: 'Turn off section view' })
+    ).toHaveTextContent('Turn off section');
+  });
+
   it('points at an overlap in the cut and keeps the toolbox words for it (M09)', () => {
     const note =
       'Overlap in this cut: Blade A and Blade B (about 240 mm²). Display evidence from the meshes on screen, not an exact clash check.';

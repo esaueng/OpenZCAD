@@ -336,13 +336,25 @@ export function WorkspaceReadout({
   const quiet = !sectionShown && geometryStatus === null && expired;
   const shown = sectionShown || (!quiet && !muted && line !== '');
   // The log keeps every message; the toast holds each long enough to read.
+  // The cut's line is a state coming back, not news to read: held behind a
+  // retired message's dwell, the spent message came back with no Turn off.
   const paced = usePacedStatus(
     line,
     sectionShown ? 'ready' : tone,
     shown,
     isNotableStatus,
-    statusImmediate
+    statusImmediate || sectionShown
   );
+  const undoShown =
+    shown && !sectionShown && Boolean(onUndo) && paced.status === line;
+  // The geometry line keeps the row while the model is not ready, and a
+  // failed rebuild keeps it there for good: the cut's way off stays beside
+  // it, or a phone with its view tools folded had none.
+  const turnOffShown =
+    section !== null &&
+    (sectionShown
+      ? paced.status === line
+      : geometryStatus !== null && shown && !undoShown);
   // Only what the user would go back for earns a counter: rebuild stages
   // and saves passed over in a burst are routine, and "10 more in log"
   // after adding one box sent people looking for a problem there was not.
@@ -533,9 +545,9 @@ export function WorkspaceReadout({
             </span>
           ) : null}
         </button>
-        {sectionShown && section && paced.status === line ? (
+        {section && turnOffShown ? (
           <>
-            {section.note ? (
+            {sectionShown && section.note ? (
               // M09: the toolbox's words for the overlap, which the line
               // can only point at; read out, and on the line's tooltip.
               <span className="visually-hidden" role="note">
@@ -548,11 +560,11 @@ export function WorkspaceReadout({
               aria-label="Turn off section view"
               onClick={section.onTurnOff}
             >
-              Turn off
+              {sectionShown ? 'Turn off' : 'Turn off section'}
             </button>
           </>
         ) : null}
-        {shown && !sectionShown && onUndo && paced.status === line ? (
+        {undoShown ? (
           <button
             type="button"
             className="workspace-toast-undo"
