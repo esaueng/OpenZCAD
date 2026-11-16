@@ -678,7 +678,7 @@ import {
   ViewModeRail
 } from './components/ViewModeRail';
 import { StartScreen } from './components/StartScreen';
-import { SharePage, type SharePageState } from './components/SharePage';
+import type { SharePageState } from './components/SharePage';
 import { StartupScreen } from './components/StartupScreen';
 import { SettingsPlaceholder } from './components/SettingsPlaceholder';
 import {
@@ -1220,6 +1220,13 @@ function withSuspense<P extends object>(Lazy: JSXElementConstructor<P>) {
   };
 }
 
+// A share link's landing page: only a share link opens it, so it waits in
+// its own chunk, outside the entry chunk, which runs at its budget.
+const SharePage = preloadableSlot('Shared link', () =>
+  import('./components/SharePage').then((module) => ({
+    default: module.SharePage
+  }))
+);
 const LazyNumericKeypad = preloadableLazy(() =>
   import('./components/NumericKeypad').then((module) => ({
     default: module.NumericKeypad
