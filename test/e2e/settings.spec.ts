@@ -141,7 +141,7 @@ test('hides profile details by default, keeps disclosure across reopen and reset
   await expect(settings).not.toContainText('Screenshot Person');
 });
 
-test('suggests a part name without focusing it and retains its draft on reload', async ({
+test('suggests a part name without focusing it, a fresh one on reload, and keeps a typed name', async ({
   page
 }) => {
   await page.addInitScript(() => {
@@ -170,10 +170,18 @@ test('suggests a part name without focusing it and retains its draft on reload',
   await expect(projectName).not.toHaveValue('New Part');
   const initialName = await projectName.inputValue();
 
+  // A reload suggests a new name rather than the previous one (#1576).
   await page.reload();
   await expect(projectName).toBeVisible();
   await expect(projectName).not.toBeFocused();
-  await expect(projectName).toHaveValue(initialName);
+  await expect(projectName).not.toHaveValue('New Part');
+  await expect(projectName).not.toHaveValue(initialName);
+
+  // A name the user typed is a draft, and survives the reload.
+  await projectName.fill('Typed Bracket');
+  await page.reload();
+  await expect(projectName).toBeVisible();
+  await expect(projectName).toHaveValue('Typed Bracket');
 });
 
 test('keeps command names visible at the compact desktop breakpoint', async ({
