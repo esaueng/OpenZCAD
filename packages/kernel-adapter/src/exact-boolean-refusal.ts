@@ -324,7 +324,44 @@ export function exactIntersect(
   b: number,
   operands?: readonly string[]
 ): number {
-  return exactBoolean(kernel, 'intersect', a, b, operands);
+  return refuseEmptyIntersection(
+    kernel,
+    exactBoolean(kernel, 'intersect', a, b, operands),
+    operands
+  );
+}
+
+/**
+ * The adapter's code for an intersection that leaves no material. The kernel
+ * refuses an empty cut itself (`empty result: …`), but answers an
+ * intersection of bodies that share no volume with an empty solid.
+ */
+export const EMPTY_INTERSECTION_CODE = 'empty_result';
+
+/**
+ * Refuse an intersection that left no material, by name.
+ *
+ * An empty solid has no vertices, so its box, mesh and measures all throw an
+ * untyped `solid has no vertices` that took the whole document sync down
+ * with it. A modelling intersection that shares no volume is the user's
+ * answer to correct, not an internal failure, so it is refused with the
+ * sentence the empty-result wording already gives it. Probes that read an
+ * empty intersection as "no shared volume" call {@link exactBooleanOutcome}
+ * directly and are unaffected.
+ */
+export function refuseEmptyIntersection(
+  kernel: RemusKernel,
+  solid: number,
+  operands?: readonly string[]
+): number {
+  if (kernel.getSolidFaces(solid).length > 0) return solid;
+  throw new ExactBooleanRefusal({
+    operation: 'intersect',
+    category: 'invalid_input',
+    kernelCode: EMPTY_INTERSECTION_CODE,
+    kernelMessage: 'empty result: the operands share no volume',
+    operands
+  });
 }
 
 /**
