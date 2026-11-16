@@ -52,9 +52,7 @@ export class TopologyPickList {
       if (buttons.length === 0) {
         return;
       }
-      const current = buttons.indexOf(
-        document.activeElement as HTMLButtonElement
-      );
+      const current = buttons.indexOf(document.activeElement as HTMLButtonElement);
       let next: number | null = null;
       if (event.key === 'ArrowDown') {
         next = current < 0 ? 0 : (current + 1) % buttons.length;
@@ -130,7 +128,9 @@ export class TopologyPickList {
       return button;
     });
     this.element.replaceChildren(title, ...rows);
-    if (!this.options.hud.showAtPointerClamped(this.element, event, 12, 12)) {
+    if (
+      !this.options.hud.showAtPointerClamped(this.element, event, 12, 12)
+    ) {
       this.hide();
       return false;
     }

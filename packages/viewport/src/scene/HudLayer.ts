@@ -38,7 +38,10 @@ export class HudLayer {
   }
 
   /** Where a client point falls inside the host, or null if it cannot be measured. */
-  toLocal(clientX: number, clientY: number): { x: number; y: number } | null {
+  toLocal(
+    clientX: number,
+    clientY: number
+  ): { x: number; y: number } | null {
     const rect = this.host.getBoundingClientRect();
     if (!rect.width && !rect.height) {
       return null;
@@ -86,10 +89,7 @@ export class HudLayer {
     element.hidden = false;
     const hostRect = this.host.getBoundingClientRect();
     const elementRect = element.getBoundingClientRect();
-    const maxX = Math.max(
-      padding,
-      hostRect.width - elementRect.width - padding
-    );
+    const maxX = Math.max(padding, hostRect.width - elementRect.width - padding);
     const maxY = Math.max(
       padding,
       hostRect.height - elementRect.height - padding
@@ -112,10 +112,7 @@ export class HudLayer {
     }
     const hostRect = this.host.getBoundingClientRect();
     const elementRect = element.getBoundingClientRect();
-    const maxX = Math.max(
-      padding,
-      hostRect.width - elementRect.width - padding
-    );
+    const maxX = Math.max(padding, hostRect.width - elementRect.width - padding);
     const maxY = Math.max(
       padding,
       hostRect.height - elementRect.height - padding
