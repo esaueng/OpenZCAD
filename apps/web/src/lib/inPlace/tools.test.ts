@@ -359,6 +359,60 @@ describe('face tools build the card state', () => {
     ).not.toHaveProperty('state.value.standard');
   });
 
+  it('tapped hole (M01): the thread is the whole bore until its arrow is dragged', () => {
+    const spec = IN_PLACE_TOOL_SPECS.hole;
+    const slots = { ...EMPTY, faces: [TOP] };
+    const options = {
+      standard: 'iso',
+      isoSize: 'M6',
+      holeFor: 'tap-drill',
+      tap: 'tapped',
+      tapFit: 'document',
+      depthMode: 'blind'
+    };
+    const ctx: InPlaceContext = { ...CTX, units: 'mm' };
+    expect(
+      spec.request(slots, { depth: 12, tapLength: 12 }, options, ctx)
+    ).toMatchObject({
+      state: {
+        value: {
+          diameter: '5',
+          standard: { system: 'iso', size: 'M6', kind: 'tap-drill' },
+          tapped: {}
+        }
+      }
+    });
+    // Dragged short, and on an exact fit.
+    expect(
+      spec.request(
+        slots,
+        { depth: 12, tapLength: 8 },
+        { ...options, tapFit: 'exact' },
+        { ...ctx, touched: ['tapLength'] }
+      )
+    ).toMatchObject({
+      state: { value: { tapped: { length: '8', clearance: 0 } } }
+    });
+    // Its arrow stands beside the depth's, down the bore.
+    expect(
+      spec
+        .handles(slots, { depth: 12, tapLength: 12 }, ctx, options)
+        .map((handle) => handle.valueId)
+    ).toEqual(['depth', 'tapLength']);
+    // A drill only, or a clearance hole, is not tapped.
+    for (const other of [
+      { ...options, tap: 'none' },
+      { ...options, holeFor: 'clearance' }
+    ]) {
+      expect(spec.request(slots, {}, other, ctx)).not.toHaveProperty(
+        'state.value.tapped'
+      );
+    }
+    expect(spec.defaults!(slots, ctx, { depth: 12 }, options)).toMatchObject({
+      tapLength: 12
+    });
+  });
+
   it('shell: every picked face opens, and the wall handle points inward', () => {
     const spec = IN_PLACE_TOOL_SPECS.shell;
     const slots = { ...EMPTY, faces: [TOP, { ...TOP, hash: 12 }] };

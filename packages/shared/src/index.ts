@@ -292,7 +292,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // diameter, so every older document builds unchanged. An older client would
 // drill the stored diameter and drop the size on its next save, so it must
 // refuse. Builds on v64.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 65 as const;
+// v66 adds M01 tapped holes (`tapped` on a `hole` sized as a tap drill): the
+// standard's thread is cut into every bore by the M15 thread generator, with
+// the document print clearance where the hole sets none. Absent leaves the
+// plain tap-drill bore, so every older document builds unchanged. An older
+// client would drill the bore without its thread, so it must refuse. Builds
+// on v65.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 66 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -431,6 +437,23 @@ export interface HoleStandard {
   kind: HoleStandardKind;
   /** A clearance hole's fit; absent is `'normal'`. ANSI has no `'loose'`. */
   fit?: HoleClearanceFit;
+}
+
+/**
+ * M01 (schema v66): the thread a tap-drill hole is tapped with, the M15
+ * thread of its standard's size (ISO 261 coarse or UNC, both the ISO 68-1
+ * basic profile), cut into each bore from the end nearer the entry face.
+ */
+export interface HoleTapped {
+  /** Thread length from the bore's entry end; absent threads the whole bore. */
+  length?: ParamValue;
+  /**
+   * Radial allowance for a printed fit, as a Thread's; absent reads the
+   * document print clearance (L09), or none.
+   */
+  clearance?: ParamValue;
+  /** Absent is `'right'`. */
+  hand?: ThreadHand;
 }
 export type AxisId = 'x' | 'y' | 'z';
 
@@ -2029,6 +2052,11 @@ export type FeatureData =
        * `diameter` is then stored (as that value) but not read.
        */
       standard?: HoleStandard;
+      /**
+       * M01 (schema v66): tapped with its standard's thread; only on a hole
+       * whose `standard` is a tap drill.
+       */
+      tapped?: HoleTapped;
     }
   | {
       /**

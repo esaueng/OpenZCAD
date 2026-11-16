@@ -6,7 +6,12 @@ import { edgeSelectionKey } from './exact-edge-selection-transport';
 import { upstreamSnapshot } from './exact-carry-edit-gate';
 import { buildGearFeature } from './exact-gear';
 import { buildSheetMetalFeature } from './exact-sheet-metal';
-import { buildThreadFeature } from './exact-thread';
+import {
+  buildThreadFeature,
+  cutResolvedThread,
+  resolveThread,
+  threadPrintAdvisories
+} from './exact-thread';
 import { requireValidSolid } from './kernel-validation';
 import {
   cutKeptToolMaterialMeshRefusal,
@@ -27,6 +32,8 @@ import {
 import { type FaceEvolutionPayloadV1, type RemusKernel } from './remus-runtime';
 import {
   booleanConsumedBodyIds,
+  documentPrintClearance,
+  featureReadsPrintClearance,
   findSketch,
   listFeaturesInOrder,
   resolveParamValue,
@@ -55,6 +62,7 @@ import {
   MAX_MESH_SOLID_CONVERSION_TRIANGLES,
   MAX_PATTERN_INSTANCES,
   holeStandardDiameterMm,
+  holeStandardThread,
   ownEntry,
   millimetresPerUnit,
   isDatumPlaneRef,
@@ -1500,6 +1508,10 @@ function buildHoleFeature(
       });
     }
   }
+  // M01 (schema v66): each bore tapped with the standard's thread.
+  if (data.tapped) {
+    drilled = tapHoleBores(ctx, feature, data, drilled, bores);
+  }
   result.consumed.add(data.targetBodyId);
   result.shapes.set(feature.bodyId, {
     solids: [drilled],
@@ -1513,6 +1525,146 @@ function buildHoleFeature(
     )
   });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+}
+
+/** Below this a face lies on a bore's axis at its radius. */
+const BORE_FACE_TOLERANCE = 1e-6;
+
+/**
+ * The cylindrical face `spec`'s bore left in `solid`: on its axis, at its
+ * radius. A bore cut into pieces (or missing) has no single face to tap.
+ */
+function boreFaceOf(
+  kernel: RemusKernel,
+  solid: number,
+  spec: HoleToolSpec
+): {
+  face: number;
+  geometry: NonNullable<ReturnType<typeof measureFaceGeometry>>;
+} {
+  const tolerance = BORE_FACE_TOLERANCE * Math.max(1, spec.radius);
+  const matches = Array.from(kernel.getSolidFaces(solid)).flatMap((face) => {
+    const geometry = measureFaceGeometry(kernel, face);
+    if (
+      geometry?.surfaceType !== 'cylinder' ||
+      geometry.radius === undefined ||
+      geometry.axisStart === undefined ||
+      geometry.axisEnd === undefined ||
+      Math.abs(geometry.radius - spec.radius) > tolerance
+    ) {
+      return [];
+    }
+    const direction = normalized(
+      subtract(geometry.axisEnd, geometry.axisStart)
+    );
+    if (!direction || 1 - Math.abs(dot(direction, spec.axis)) > 1e-9) return [];
+    // The face's axis passes through the bore's entry point.
+    const offset = subtract(geometry.axisStart, spec.surfacePoint);
+    const along = dot(offset, spec.axis);
+    const off = Math.hypot(
+      offset.x - spec.axis.x * along,
+      offset.y - spec.axis.y * along,
+      offset.z - spec.axis.z * along
+    );
+    return off <= tolerance ? [{ face, geometry }] : [];
+  });
+  if (matches.length !== 1) {
+    throw new Error(
+      matches.length === 0
+        ? 'The tapped bore did not come back as one cylinder to thread.'
+        : 'The tapped bore is split into pieces, so it cannot be threaded as one.'
+    );
+  }
+  return matches[0]!;
+}
+
+/**
+ * M01 (schema v66): cuts the hole's standard thread into each bore with the
+ * M15 thread generator, from the bore's end nearer the entry face, the
+ * whole bore unless `tapped.length` stops it short. The thread is the
+ * standard's size and pitch with the ISO 68-1 internal form (the Unified
+ * basic profile is the same), its crest truncated by the tap-drill bore as
+ * a Thread's is; a hole that sets no clearance reads the document print
+ * clearance (L09), exactly as a Thread does.
+ */
+function tapHoleBores(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'hole'>,
+  solid: number,
+  bores: readonly HoleBore[]
+): number {
+  const { kernel, document, scope, result } = ctx;
+  const tapped = data.tapped!;
+  if (data.standard?.kind !== 'tap-drill') {
+    throw new Error('Only a hole sized as a standard tap drill can be tapped.');
+  }
+  const mm = millimetresPerUnit(document.units);
+  const { majorDiameterMm, pitchMm } = holeStandardThread(data.standard);
+  const values = {
+    optional: (value: ParamValue | undefined, label: string) =>
+      value === undefined
+        ? undefined
+        : resolveParamValue(value, scope, `tapped ${label}`, document.units)
+  };
+  const printClearance = featureReadsPrintClearance(data)
+    ? documentPrintClearance(document, scope)
+    : undefined;
+  let advised = false;
+  let tappedSolid = solid;
+  for (const { spec, pointId } of bores) {
+    try {
+      const { face, geometry } = boreFaceOf(kernel, tappedSolid, spec);
+      // The thread starts at the bore's end nearer the entry face.
+      const anchor =
+        dot(subtract(geometry.axisStart!, spec.surfacePoint), spec.axis) <=
+        dot(subtract(geometry.axisEnd!, spec.surfacePoint), spec.axis)
+          ? 'start'
+          : 'end';
+      const thread = resolveThread(
+        {
+          featureKind: 'thread',
+          targetBodyId: data.targetBodyId,
+          faceHash: 0,
+          profile: 'iso-metric',
+          majorDiameter: majorDiameterMm / mm,
+          pitch: pitchMm / mm,
+          anchor,
+          ...(tapped.length !== undefined ? { length: tapped.length } : {}),
+          ...(tapped.clearance !== undefined
+            ? { clearance: tapped.clearance }
+            : {}),
+          ...(tapped.hand !== undefined ? { hand: tapped.hand } : {})
+        },
+        values,
+        {
+          kind: 'internal',
+          radius: geometry.radius!,
+          faceLength: geometry.axialLength!
+        },
+        mm,
+        printClearance
+      );
+      tappedSolid = cutResolvedThread(kernel, tappedSolid, face, thread).solid;
+      // The same thread in every bore: its print advice is said once.
+      if (!advised) {
+        advised = true;
+        for (const advisory of threadPrintAdvisories(
+          thread,
+          mm,
+          document.units
+        )) {
+          raiseFeatureWarning(result, feature, advisory, 'advisory');
+        }
+      }
+    } catch (error) {
+      if (pointId === null || !(error instanceof Error)) throw error;
+      throw new Error(`At sketch point ${pointId}: ${error.message}`, {
+        cause: error
+      });
+    }
+  }
+  return tappedSolid;
 }
 
 /** One bore a hole drills: where, and the sketch point it stands on. */
@@ -3691,7 +3843,9 @@ function buildPatternFeature(
           declined
         };
       },
-      (hole) => holeToolSpecFor(ctx, hole)
+      (hole) => holeToolSpecFor(ctx, hole),
+      // M01 (schema v66): a tapped hole's copies are tapped as it is.
+      (hole, solid, bores) => tapHoleBores(ctx, feature, hole, solid, bores)
     );
     return;
   }

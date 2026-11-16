@@ -88,12 +88,14 @@ import {
   holePointsProblem,
   holeStandardDiameter,
   holeStandardProblem,
+  holeTappedProblem,
   patternSourceProblem,
   skippedInstancesProblem,
   suppliedIds,
   type PatternPoints,
   type HolePoints,
-  type HoleStandard
+  type HoleStandard,
+  type HoleTapped
 } from '@openzcad/shared';
 import {
   BODY_COLOR_CHOSEN_METADATA_KEY,
@@ -569,6 +571,8 @@ export interface HoleInput {
   points?: HolePoints;
   /** M01 (schema v65): the standard size whose table gives the diameter. */
   standard?: HoleStandard;
+  /** M01 (schema v66): tapped with the standard's thread. */
+  tapped?: HoleTapped;
   ids?: BodyFeatureIds;
 }
 
@@ -3708,7 +3712,7 @@ export function holeBody(
   // older schema: written there, the document would no longer open.
   assertHoleContentSchema(parameters, document.schemaVersion);
   validateHolePoints(document, parameters.points, null);
-  validateHoleStandard(parameters.standard);
+  validateHoleStandard(parameters.standard, parameters.tapped);
   return addBodyResultFeature(
     document,
     name,
@@ -4085,9 +4089,16 @@ export function validateHolePoints(
   }
 }
 
-/** M01 (schema v65): a hole's standard names a size its table has. */
-export function validateHoleStandard(standard: HoleStandard | undefined): void {
-  const problem = holeStandardProblem(standard);
+/**
+ * M01: a hole's standard names a size its table has (schema v65), and only a
+ * standard tap drill is tapped (schema v66).
+ */
+export function validateHoleStandard(
+  standard: HoleStandard | undefined,
+  tapped?: HoleTapped
+): void {
+  const problem =
+    holeStandardProblem(standard) ?? holeTappedProblem({ standard, tapped });
   if (problem) throw new Error(problem);
 }
 
@@ -5008,7 +5019,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'countersinkAngleDeg',
     'position',
     'points',
-    'standard'
+    'standard',
+    'tapped'
   ],
   shell: [
     'targetBodyId',
@@ -5150,7 +5162,7 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   // M01: clearing a hole's sketch points (schema v64) drills it at its one
   // stored position again; clearing its standard (schema v65) drills its
   // stored diameter.
-  hole: ['points', 'standard'],
+  hole: ['points', 'standard', 'tapped'],
   // Schema v53: every size and placement field falls back to the face or its
   // documented default; the custom-profile fields may go only off a custom
   // profile, which the thread validation enforces. A face picked again
@@ -5352,7 +5364,7 @@ export function updateFeature(
   }
   if (feature.data.featureKind === 'hole') {
     validateHolePoints(next, feature.data.points, feature.featureId);
-    validateHoleStandard(feature.data.standard);
+    validateHoleStandard(feature.data.standard, feature.data.tapped);
     // M01 (schema v65): whatever the patch said, a standard hole stores its
     // table's diameter (see `holeBody`).
     if (feature.data.standard) {

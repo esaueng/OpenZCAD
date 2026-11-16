@@ -203,6 +203,7 @@
     "test/step-preview-profile.test.ts",
     "test/subtract-curved-operands.test.ts",
     "test/synthetic-holder-fixtures.test.ts",
+    "test/tapped-holes.test.ts",
     "test/test-tools.test.ts",
     "test/thread-feature.test.ts",
     "test/thread-pipe-runout.test.ts",

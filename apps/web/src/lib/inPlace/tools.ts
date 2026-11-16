@@ -27,6 +27,7 @@ import {
   type ParametricVector3,
   type PatternPoints,
   type HolePoints,
+  type HoleTapped,
   type PrimitiveKind,
   type ReferenceImage,
   type ReferenceImagePlane,
@@ -3303,7 +3304,17 @@ const hole: InPlaceToolSpec = {
     },
     // A typed position, measured on the face from its anchor.
     { id: 'positionU', label: 'U', unit: 'length', initial: 0 },
-    { id: 'positionV', label: 'V', unit: 'length', initial: 0 }
+    { id: 'positionV', label: 'V', unit: 'length', initial: 0 },
+    // M01 (schema v66): how far a tapped hole's thread runs from the entry;
+    // the whole bore until it is dragged short.
+    {
+      id: 'tapLength',
+      label: 'Thread',
+      unit: 'length',
+      initial: 10,
+      min: 0,
+      exclusive: true
+    }
   ],
   options: [
     {
@@ -3410,6 +3421,36 @@ const hole: InPlaceToolSpec = {
       when: (state) =>
         state.options.standard === 'ansi' &&
         state.options.holeFor !== 'tap-drill'
+    },
+    // M01 (schema v66): a tap drill tapped with its standard's thread.
+    {
+      id: 'tap',
+      label: 'Thread',
+      choices: [
+        { value: 'none', label: 'Drill only' },
+        {
+          value: 'tapped',
+          label: 'Tapped',
+          tip: "Cuts the screw's thread into the bore"
+        }
+      ],
+      initial: 'none',
+      when: (state) =>
+        holeStandardOn(state.options) && state.options.holeFor === 'tap-drill'
+    },
+    {
+      id: 'tapFit',
+      label: 'Thread fit',
+      choices: [
+        {
+          value: 'document',
+          label: 'Document',
+          tip: "The document's print clearance, or none"
+        },
+        { value: 'exact', label: 'Exact', tip: 'No clearance' }
+      ],
+      initial: 'document',
+      when: (state) => holeTappedChosen(state.options)
     }
   ],
   layout: [
@@ -3426,6 +3467,8 @@ const hole: InPlaceToolSpec = {
         'holeFor',
         'fit',
         'ansiFit',
+        'tap',
+        'tapFit',
         'diameter',
         'depth',
         'counterboreDiameter',
@@ -3433,13 +3476,19 @@ const hole: InPlaceToolSpec = {
         'countersinkDiameter',
         'countersinkAngleDeg',
         'positionU',
-        'positionV'
+        'positionV',
+        'tapLength'
       ]
     }
   ],
-  defaults: (_slots, ctx, numbers, options) =>
-    (options && holeStandardStepSizes(options, ctx.units)) ??
-    holeStepSizes(numbers.diameter ?? 6),
+  defaults: (_slots, ctx, numbers, options) => ({
+    ...((options && holeStandardStepSizes(options, ctx.units)) ??
+      holeStepSizes(numbers.diameter ?? 6)),
+    // A thread stands at the bore's depth until it is dragged short.
+    ...(options && holeTappedChosen(options)
+      ? { tapLength: numbers.depth ?? 10 }
+      : {})
+  }),
   hint(slots, options, ctx) {
     if (slots.faces.length === 0) return 'Click a flat face';
     // A standard size sets the diameter: there is none to drag.
@@ -3534,7 +3583,10 @@ const hole: InPlaceToolSpec = {
           countersinkAngleDeg: text(values.countersinkAngleDeg, 90),
           position: position ?? { u: '0', v: '0' },
           ...(points ? { points } : {}),
-          ...(standard ? { standard } : {})
+          ...(standard ? { standard } : {}),
+          ...(standard && holeTappedChosen(options)
+            ? { tapped: holeTappedRequest(values, options, ctx, saved) }
+            : {})
         }
       }
     };
@@ -3574,6 +3626,24 @@ const hole: InPlaceToolSpec = {
         kind: 'linear',
         key: `${key}:depth`,
         params: { origin: entry, direction: scaled(unit(face.normal), -1) }
+      });
+    }
+    // M01: a tapped hole's thread length, down beside the bore, a diameter
+    // and a half off the depth's arrow so neither's chip covers the other.
+    if (holeTappedChosen(options)) {
+      const reach = -Math.max((values.diameter ?? 6) * 1.5, 1e-3);
+      handles.push({
+        valueId: 'tapLength',
+        kind: 'linear',
+        key: `${key}:tapLength`,
+        params: {
+          origin: {
+            x: entry.x + axes.v.x * reach,
+            y: entry.y + axes.v.y * reach,
+            z: entry.z + axes.v.z * reach
+          },
+          direction: scaled(unit(face.normal), -1)
+        }
       });
     }
     const style = options.style;
@@ -3716,6 +3786,43 @@ function holeStandardStepSizes(
 /** A table diameter as stored: to a micrometre's worth of digits. */
 function formatHoleDiameter(value: number): string {
   return String(Math.round(value * 1e6) / 1e6);
+}
+
+/** M01: whether the Hole's options tap its tap drill. */
+function holeTappedChosen(options: Readonly<Record<string, string>>): boolean {
+  return (
+    holeStandardOn(options) &&
+    options.holeFor === 'tap-drill' &&
+    options.tap === 'tapped'
+  );
+}
+
+/**
+ * M01 (schema v66): the thread a tapped hole stores. Its length only once
+ * dragged or typed (else the whole bore); its clearance none to read the
+ * document's, 0 for an exact fit, or as an edit stored it; its hand as
+ * stored.
+ */
+function holeTappedRequest(
+  values: Readonly<Record<string, number | string>>,
+  options: Readonly<Record<string, string>>,
+  ctx: InPlaceContext,
+  saved: Extract<FeatureData, { featureKind: 'hole' }> | null
+): HoleTapped {
+  const stored = saved?.tapped;
+  const clearance =
+    options.tapFit === 'exact'
+      ? 0
+      : options.tapFit === 'document'
+        ? undefined
+        : stored?.clearance;
+  return {
+    ...(ctx.touched?.includes('tapLength') && values.tapLength !== undefined
+      ? { length: text(values.tapLength, 10) }
+      : {}),
+    ...(clearance !== undefined ? { clearance } : {}),
+    ...(stored?.hand ? { hand: stored.hand } : {})
+  };
 }
 
 /** Where a typed U and V put a hole on its face; null with no anchor. */

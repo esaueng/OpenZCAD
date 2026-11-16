@@ -61,8 +61,8 @@ export function documentPrintClearance(
 /**
  * Whether a feature builds from the document's print clearance: a thread
  * that leaves its own `clearance` unset (a pipe thread never: it mates a
- * standard fitting, so it keeps its own fit), and a gear that leaves its
- * `backlash` unset.
+ * standard fitting, so it keeps its own fit), a tapped hole that leaves its
+ * thread's `clearance` unset, and a gear that leaves its `backlash` unset.
  */
 export function featureReadsPrintClearance(data: FeatureData): boolean {
   if (data.featureKind === 'thread') {
@@ -71,6 +71,10 @@ export function featureReadsPrintClearance(data: FeatureData): boolean {
       data.profile !== 'npt' &&
       data.profile !== 'bspt'
     );
+  }
+  // M01 (schema v66): a tapped hole's thread, as a Thread's.
+  if (data.featureKind === 'hole') {
+    return data.tapped !== undefined && data.tapped.clearance === undefined;
   }
   return data.featureKind === 'gear' && data.backlash === undefined;
 }

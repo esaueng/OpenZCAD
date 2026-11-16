@@ -16,7 +16,7 @@
  * minor diameter `D − 1.0825 P` and `D − P / 2`; a clearance hole clears the
  * nominal size, each fit wider than the one before), which the tests check.
  */
-import type { HoleStandard, UnitSystem } from './index';
+import type { HoleStandard, HoleTapped, UnitSystem } from './index';
 import { millimetresPerUnit } from './index';
 
 /** A screw thread standard a hole may be sized by. */
@@ -295,4 +295,27 @@ export function holeStandardFromChoices(choices: {
     ...(kind === 'clearance' ? { fit: fit as HoleClearanceFit } : {})
   };
   return holeStandardProblem(standard) === null ? standard : null;
+}
+
+/**
+ * M01 (schema v66): why a hole's tapping cannot be stored, else null: only a
+ * hole sized as a standard tap drill is tapped, by a right or left hand.
+ */
+export function holeTappedProblem(data: {
+  standard?: HoleStandard | undefined;
+  tapped?: HoleTapped | undefined;
+}): string | null {
+  const tapped = data.tapped as unknown;
+  if (tapped === undefined) return null;
+  if (!tapped || typeof tapped !== 'object' || Array.isArray(tapped)) {
+    return 'A tapped hole describes its thread.';
+  }
+  if (data.standard?.kind !== 'tap-drill') {
+    return 'Only a hole sized as a standard tap drill can be tapped.';
+  }
+  const { hand } = tapped as HoleTapped;
+  if (hand !== undefined && hand !== 'right' && hand !== 'left') {
+    return "A tapped hole's thread is right- or left-handed.";
+  }
+  return null;
 }

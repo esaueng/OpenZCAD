@@ -562,6 +562,45 @@ function formatted(value: number): string {
   return String(Number(value.toPrecision(6)));
 }
 
+/**
+ * Cuts a resolved thread into `face` of `solid` with the kernel's thread
+ * generator, and proves it was built as asked: a valid solid with every
+ * finished end and taper the kernel reports. A refusal throws, typed. The
+ * Thread feature and an M01 tapped hole share it.
+ */
+export function cutResolvedThread(
+  kernel: RemusKernel,
+  solid: number,
+  face: number,
+  thread: ResolvedThread
+): { solid: number; details: ThreadOkDetails } {
+  const spec = {
+    pitch: thread.pitch,
+    depth: thread.depth,
+    crestWidth: thread.crestWidth,
+    upperFlankAngle: thread.upperFlankAngleDeg,
+    lowerFlankAngle: thread.lowerFlankAngleDeg,
+    starts: thread.starts,
+    hand: thread.hand,
+    majorDiameter: thread.majorDiameter,
+    offset: thread.offset,
+    length: thread.length,
+    phase: thread.phaseDeg,
+    // Sent only for a finished end, so a plain thread builds on a kernel
+    // from before chamfers.
+    ...threadEndSpec(thread),
+    // Schema v57: only a pipe thread tapers.
+    ...(thread.taper ? { taper: thread.taper } : {})
+  };
+  const result = unwrap(
+    threadKernel(kernel).cutThreadDetailed(solid, face, JSON.stringify(spec)),
+    thread.taper !== undefined
+  );
+  requireBuiltAsAsked(thread, result.details);
+  validateGeneratedSolid(kernel, result.solid, 'Thread');
+  return result;
+}
+
 /** The printability advisories for a resolved thread, in document units. */
 export function threadPrintAdvisories(
   thread: ResolvedThread,
@@ -664,34 +703,12 @@ export function buildThreadFeature(
     { radius: geometry.radius, faceLength: geometry.axialLength },
     document.units
   );
-  const spec = {
-    pitch: thread.pitch,
-    depth: thread.depth,
-    crestWidth: thread.crestWidth,
-    upperFlankAngle: thread.upperFlankAngleDeg,
-    lowerFlankAngle: thread.lowerFlankAngleDeg,
-    starts: thread.starts,
-    hand: thread.hand,
-    majorDiameter: thread.majorDiameter,
-    offset: thread.offset,
-    length: thread.length,
-    phase: thread.phaseDeg,
-    // Sent only for a finished end, so a plain thread builds on a kernel
-    // from before chamfers.
-    ...threadEndSpec(thread),
-    // Schema v57: only a pipe thread tapers.
-    ...(thread.taper ? { taper: thread.taper } : {})
-  };
-  const { solid, details } = unwrap(
-    threadKernel(kernel).cutThreadDetailed(
-      targetSolid,
-      face,
-      JSON.stringify(spec)
-    ),
-    thread.taper !== undefined
+  const { solid, details } = cutResolvedThread(
+    kernel,
+    targetSolid,
+    face,
+    thread
   );
-  requireBuiltAsAsked(thread, details);
-  validateGeneratedSolid(kernel, solid, 'Thread');
   for (const advisory of threadPrintAdvisories(thread, mm, document.units)) {
     raiseFeatureWarning(result, feature, advisory, 'advisory');
   }
