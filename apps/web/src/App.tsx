@@ -227,6 +227,7 @@ import {
   listObjectFolders,
   getParameterHiddenBodyIds,
   findFeature,
+  standardPartHoleSource,
   findSketch,
   getParameterScope,
   resolvedSketchDocument,
@@ -20016,7 +20017,9 @@ export function App() {
         selection?.kind === 'face' &&
         command.spec?.wantsPlane &&
         !command.spec.bodyMode &&
-        !command.spec.faceMode
+        !command.spec.faceMode &&
+        // M17: a part going into a hole takes the bore's face instead.
+        !takesFeatureFaces(command.spec, command.options)
       ) {
         // A command that takes only a plane (a new gear) stands on a flat
         // face as clicked, the way a Mirror's plane does.
@@ -24808,6 +24811,9 @@ export function App() {
           )
         : [],
     bodyBounds: (bodyId) => inPlaceBodyPick(bodyId),
+    // M17 (schema v71): the hole a standard part is inserted into.
+    holeFeature: (featureId) =>
+      doc ? standardPartHoleSource(doc, representations, featureId) : null,
     liveBodyIds: () =>
       Object.values(representations)
         .filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId))

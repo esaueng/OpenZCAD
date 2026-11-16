@@ -3827,7 +3827,7 @@ export function standardPartBody(
   const { name, ids, bodyName, ...parameters } = input;
   // Written to a document that declares an older schema, the feature would
   // be dropped by the readers that schema admits.
-  assertStandardPartSchema(document.schemaVersion);
+  assertStandardPartSchema(document.schemaVersion, parameters);
   const problem = standardPartProblem(parameters);
   if (problem) throw new Error(problem);
   return addBodyResultFeature(
@@ -5054,7 +5054,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'length',
     'origin',
     'axis',
-    'xDirection'
+    'xDirection',
+    'hole'
   ],
   // `secondBodyId` is body wiring, not a parameter: never patchable.
   split: ['targetBodyId', 'plane', 'keepOriginal'],
@@ -7625,3 +7626,44 @@ export {
 } from './imported-payload-key';
 
 export { resolvedSketchDocument } from './sketch-geometry';
+
+/**
+ * M17 (schema v71): an M01 hole feature a standard part can go into: its
+ * name, its stored data, and its entry face's outward normal as `bodies`
+ * (the derived body representations) show it. Null for anything else.
+ */
+export function standardPartHoleSource(
+  document: ProjectDocument,
+  bodies: Readonly<
+    Record<
+      string,
+      | {
+          topology?: {
+            faces: readonly {
+              hash: number;
+              geometry?: { normal?: { x: number; y: number; z: number } };
+            }[];
+          };
+        }
+      | undefined
+    >
+  >,
+  featureId: FeatureId
+): {
+  name: string;
+  data: Extract<FeatureData, { featureKind: 'hole' }>;
+  entryNormal: { x: number; y: number; z: number } | null;
+} | null {
+  const feature = findFeature(document, featureId);
+  if (!feature || feature.data.featureKind !== 'hole') return null;
+  const data = feature.data;
+  const hash = data.faceReference?.currentHash ?? data.faceHash;
+  const entry = bodies[data.targetBodyId]?.topology?.faces.find(
+    (face) => face.hash === hash
+  );
+  return {
+    name: feature.name,
+    data,
+    entryNormal: entry?.geometry?.normal ?? null
+  };
+}

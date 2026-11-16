@@ -24,6 +24,7 @@ export * from './gear-mesh';
 export * from './hole-points';
 export * from './hole-standards';
 export * from './standard-parts';
+export * from './standard-part-placement';
 import type { DocumentHistory } from './document-history';
 import { ownEntry } from './document-validation';
 import type { KeymapOverrides } from './keymap-settings';
@@ -319,7 +320,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // nut, washer, threaded insert, dowel pin or ball bearing generated from its
 // standard's table as a new body. An older client has no builder for the
 // kind and would drop the body on rebuild, so it must refuse. Builds on v68.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 69 as const;
+// v70 is claimed by D02 per-sheet drawing properties (#1641).
+// v71 adds M17 parts inserted into M01 holes (`hole` on a standard part):
+// the part stands in each of the hole's bores and takes its matched length
+// where it stores none. An older client would build one part at the stored
+// origin, or none without a length, so it must refuse.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 71 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2367,6 +2373,18 @@ export type FeatureData =
       origin: ParametricVector3;
       axis: ParametricVector3;
       xDirection?: ParametricVector3;
+      /**
+       * M17 slice 2 (schema v71): the M01 hole the part is inserted into.
+       * The part then stands in every bore that hole drills (one solid
+       * each), on the bore's seat (a counterbore's floor, the entry face,
+       * or a countersunk head's top on the entry face) along the bore, and
+       * follows the hole when it moves. `origin` and `axis` keep where it
+       * stood when inserted. Without `length`, a screw or dowel pin takes
+       * the preferred length matched to the hole
+       * (`matchedStandardLengthMm`). The hole must be earlier in history,
+       * and must take the part's size (`standardPartForHole`).
+       */
+      hole?: { featureId: FeatureId };
     }
   /**
    * M16 (schema v58): a sheet-metal part. The sketch cells in `profiles`

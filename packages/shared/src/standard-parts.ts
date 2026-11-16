@@ -871,3 +871,172 @@ export function standardPartDesignation(
   const label = `${size}${length} ${noun}`;
   return standard === 'typical' ? `${label} (typical)` : `${standard} ${label}`;
 }
+
+// ---------------------------------------------------------------------------
+// M17 slice 2: parts inserted into M01 holes.
+
+/** What a part inserted into a hole needs to know about the hole, in mm. */
+export interface StandardHoleFit {
+  /** The hole's standard size, if it has one. */
+  standard?: {
+    system: StandardPartSystem;
+    size: string;
+    kind: 'clearance' | 'tap-drill';
+  };
+  /** The bore's diameter. */
+  diameterMm: number;
+  /** Whether the hole runs through its body. */
+  through: boolean;
+  /**
+   * The bore's length below its seat (a counterbore's floor, else the entry
+   * face): the material a through hole passes, a blind hole's depth.
+   */
+  boreMm: number;
+  /** A tapped hole's thread length from the seat; absent is untapped. */
+  threadMm?: number;
+  /** A countersink at the entry, for a countersunk head to sit in. */
+  countersunk?: boolean;
+}
+
+/** The kinds a hole takes: a screw by its standard, a dowel pin by size. */
+export type StandardHoleKind = 'screw' | 'dowel';
+
+/**
+ * The catalogue row a hole takes, matched by size: a screw of the hole's
+ * own standard size (a clearance hole passes it, a tap drill is threaded
+ * for it), a dowel pin whose diameter is the hole's. A string says why the
+ * hole takes none.
+ */
+export function standardPartForHole(
+  kind: StandardHoleKind,
+  fit: StandardHoleFit,
+  system: StandardPartSystem,
+  head: StandardScrewHead = 'socket'
+): StandardPartChoice | string {
+  if (kind === 'screw') {
+    if (!fit.standard) {
+      return 'A screw goes into a standard hole: give the hole an ISO or ANSI size.';
+    }
+    const choice: StandardPartChoice = {
+      partKind: 'screw',
+      system: fit.standard.system,
+      size: fit.standard.size,
+      ...(head !== 'socket' ? { head } : {})
+    };
+    return standardPartProblem(choice) === null
+      ? choice
+      : `The ${standardPartNoun(choice)} table has no ${fit.standard.size}.`;
+  }
+  const sizes = standardPartSizes('dowel', system);
+  const size = sizes.find((candidate) => {
+    const g = standardPartGeometry({
+      partKind: 'dowel',
+      system,
+      size: candidate
+    });
+    return (
+      g.partKind === 'dowel' &&
+      Math.abs(g.diameterMm - fit.diameterMm) <=
+        1e-6 * Math.max(1, g.diameterMm)
+    );
+  });
+  return size
+    ? { partKind: 'dowel', system, size }
+    : `No ${system === 'iso' ? 'ISO' : 'ANSI'} dowel pin is ${formatNumber(fit.diameterMm)} mm across.`;
+}
+
+/** Every preferred length a row can be built at, shortest first, mm. */
+function standardSeriesMm(choice: StandardPartChoice): number[] {
+  const geometry = standardPartGeometry(choice);
+  const minimum = standardPartMinimumLengthMm(geometry);
+  const series =
+    choice.system === 'iso'
+      ? ISO_LENGTHS
+      : ANSI_LENGTHS.map((inches) => inches * MM_PER_INCH);
+  return series.filter((length) => length > minimum - 1e-9);
+}
+
+/**
+ * The preferred length a part in `fit` takes, mm, or a string saying why
+ * none fits:
+ * - a screw through a clearance hole passes the material and a standard
+ *   nut on the far side with two pitches to spare: the shortest such length;
+ * - a screw in a tap drill or a blind hole stops short of the bore's end
+ *   (and of its thread, if tapped): the longest such length;
+ * - a dowel pin fills a blind hole short of its floor (the longest such
+ *   length), or passes a through hole (the shortest).
+ * A countersunk head's own height is added, as its nominal length includes
+ * it.
+ */
+export function matchedStandardLengthMm(
+  choice: StandardPartChoice,
+  fit: StandardHoleFit
+): number | string {
+  const geometry = standardPartGeometry(choice);
+  const series = standardSeriesMm(choice);
+  const head =
+    geometry.partKind === 'screw' && geometry.head === 'countersunk'
+      ? geometry.headHeightMm
+      : 0;
+  const shortest = (need: number) =>
+    series.find((length) => length >= need - 1e-9) ??
+    `No preferred length reaches ${formatNumber(need)} mm.`;
+  const longest = (room: number) =>
+    [...series].reverse().find((length) => length <= room + 1e-9) ??
+    'The hole is too shallow for this part.';
+  if (geometry.partKind === 'dowel') {
+    return fit.through ? shortest(fit.boreMm) : longest(fit.boreMm);
+  }
+  if (geometry.partKind !== 'screw') {
+    return 'Only a screw or a dowel pin goes into a hole.';
+  }
+  if (fit.through && fit.standard?.kind === 'clearance') {
+    const nut = standardPartGeometry({
+      partKind: 'nut',
+      system: choice.system,
+      size: choice.size
+    });
+    const nutHeight = nut.partKind === 'nut' ? nut.heightMm : 0;
+    return shortest(
+      head + fit.boreMm + nutHeight + 2 * geometry.thread.pitchMm
+    );
+  }
+  const room = Math.min(fit.boreMm, fit.threadMm ?? Number.POSITIVE_INFINITY);
+  return longest(head + room);
+}
+
+/**
+ * The fit a hole offers, from its stored data and its bore as built (or as
+ * picked): one rule for the kernel's build and the tool's preview. A tapped
+ * hole's thread runs the whole bore unless its own length stops it.
+ */
+export function standardHoleFit(
+  hole: {
+    standard?: { system: StandardPartSystem; size: string; kind: string };
+    depthMode: string;
+    style: string;
+    tapped?: object;
+  },
+  diameterMm: number,
+  boreMm: number,
+  threadMm?: number
+): StandardHoleFit {
+  const { standard } = hole;
+  return {
+    ...(standard &&
+    (standard.kind === 'clearance' || standard.kind === 'tap-drill')
+      ? {
+          standard: {
+            system: standard.system,
+            size: standard.size,
+            kind: standard.kind
+          }
+        }
+      : {}),
+    diameterMm,
+    through: hole.depthMode === 'through',
+    boreMm,
+    ...(hole.tapped ? { threadMm: threadMm ?? boreMm } : {}),
+    ...(hole.style === 'countersink' ? { countersunk: true } : {})
+  };
+}

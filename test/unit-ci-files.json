@@ -201,6 +201,7 @@
     "test/sphere-cylinder-union.test.ts",
     "test/sphere-patch-lineage.test.ts",
     "test/spline-self-seam.test.ts",
+    "test/standard-parts-holes.test.ts",
     "test/standard-parts.test.ts",
     "test/step-import-privacy.test.ts",
     "test/step-import-rejection.test.ts",

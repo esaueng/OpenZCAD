@@ -53,6 +53,7 @@ import {
   standardPartMinimumLengthMm,
   standardPartNoun,
   standardPartProblem,
+  standardPartForHole,
   createId,
   createSketchReferenceAnnotationId,
   createSketchCompositeId,
@@ -1666,8 +1667,11 @@ function validateStandardPartInput(
   if (problem) throw new Error(problem);
   const value = (label: string, param: ParamValue) =>
     resolvedModelingValue(document, `standard part ${label}`, param);
+  if (input.hole !== undefined) validateStandardPartHole(document, input);
   if (standardPartHasLength(input.partKind)) {
+    // M17 (schema v71): in a hole, an absent length is matched to it.
     if (input.length === undefined) {
+      if (input.hole !== undefined) return validatePlacement();
       throw new Error(`A ${standardPartNoun(input)} needs a length.`);
     }
     const length = value('length', input.length);
@@ -1684,24 +1688,76 @@ function validateStandardPartInput(
       `A ${standardPartNoun(input)} takes its height from its table, not a length.`
     );
   }
-  if (input.origin === undefined || input.axis === undefined) {
-    throw new Error('A standard part needs an origin and an axis.');
+  validatePlacement();
+
+  function validatePlacement(): void {
+    if (input.origin === undefined || input.axis === undefined) {
+      throw new Error('A standard part needs an origin and an axis.');
+    }
+    value('origin X', input.origin.x);
+    value('origin Y', input.origin.y);
+    value('origin Z', input.origin.z);
+    const axisLength = Math.hypot(
+      value('axis X', input.axis.x),
+      value('axis Y', input.axis.y),
+      value('axis Z', input.axis.z)
+    );
+    if (!(axisLength > 1e-12)) {
+      throw new Error('A standard part axis must be non-zero.');
+    }
+    if (input.xDirection !== undefined) {
+      value('x direction X', input.xDirection.x);
+      value('x direction Y', input.xDirection.y);
+      value('x direction Z', input.xDirection.z);
+    }
   }
-  value('origin X', input.origin.x);
-  value('origin Y', input.origin.y);
-  value('origin Z', input.origin.z);
-  const axisLength = Math.hypot(
-    value('axis X', input.axis.x),
-    value('axis Y', input.axis.y),
-    value('axis Z', input.axis.z)
+}
+
+/**
+ * M17 (schema v71): a part inserted into a hole names an M01 hole feature,
+ * is a screw or a dowel pin, and is the size the hole takes: a screw the
+ * hole's standard size, a dowel pin the hole's diameter.
+ */
+function validateStandardPartHole(
+  document: ProjectDocument,
+  input: StandardPartInput
+): void {
+  const hole = findFeature(document, input.hole!.featureId);
+  if (!hole || hole.data.featureKind !== 'hole') {
+    throw new Error('A part is inserted into a hole feature.');
+  }
+  if (input.partKind !== 'screw' && input.partKind !== 'dowel') {
+    throw new Error('Only a screw or a dowel pin goes into a hole.');
+  }
+  const data = hole.data;
+  const diameterMm = data.standard
+    ? holeStandardDiameterMm(data.standard)
+    : resolvedModelingValue(document, 'hole diameter', data.diameter) *
+      millimetresPerUnit(document.units);
+  const matched = standardPartForHole(
+    input.partKind,
+    {
+      ...(data.standard
+        ? {
+            standard: {
+              system: data.standard.system,
+              size: data.standard.size,
+              kind: data.standard.kind
+            }
+          }
+        : {}),
+      diameterMm,
+      through: data.depthMode === 'through',
+      boreMm: 0
+    },
+    input.system,
+    input.head
   );
-  if (!(axisLength > 1e-12)) {
-    throw new Error('A standard part axis must be non-zero.');
-  }
-  if (input.xDirection !== undefined) {
-    value('x direction X', input.xDirection.x);
-    value('x direction Y', input.xDirection.y);
-    value('x direction Z', input.xDirection.z);
+  if (typeof matched === 'string') throw new Error(matched);
+  if (matched.system !== input.system || matched.size !== input.size) {
+    throw new Error(
+      `${hole.name} takes ${matched.system === 'iso' ? 'an ISO' : 'an ANSI'} ${matched.size}, not ${input.size}.`
+    );
   }
 }
 

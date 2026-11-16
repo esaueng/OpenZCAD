@@ -107,6 +107,7 @@
   "sphere-cylinder-union.spec.ts": 36,
   "staged-geometry.spec.ts": 6,
   "standalone-gear-height.spec.ts": 24,
+  "standard-parts-holes.spec.ts": 30,
   "standard-parts.spec.ts": 20,
   "start-screen-import-rename.spec.ts": 20,
   "start-screen-refresh.spec.ts": 7,

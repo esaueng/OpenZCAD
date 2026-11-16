@@ -21,16 +21,26 @@ import {
   standardPartMinimumLengthMm,
   standardPartNoun,
   standardPartProblem,
+  matchedStandardLengthMm,
+  standardPartForHole,
+  standardHoleFit,
   type BodyId,
   type FeatureId,
   type FeatureNode,
   type ParamValue,
+  type StandardHoleKind,
   type StandardPartGeometry,
   type Vector3
 } from '@openzcad/shared';
-import { resolveParamValue } from '@openzcad/document-core';
+import {
+  listFeaturesInOrder,
+  resolveParamValue
+} from '@openzcad/document-core';
 
 import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
+import { drillHole } from './exact-cylinder-ops';
+import type { HoleBore } from './exact-feature-builders';
+import type { HoleToolSpec } from './exact-cylinder-ops';
 import { cutGearTeethOnFace } from './exact-gear';
 import { topologyCandidatesForSolid } from './exact-lineage-builders';
 import { measureFaceGeometry } from './exact-measure';
@@ -68,10 +78,28 @@ interface BuiltPart {
   threads: ThreadOkDetails[];
 }
 
+/**
+ * The hole builder's own steps a part in a hole repeats. Passed in by the
+ * feature dispatch rather than imported, which would close an import cycle
+ * through `exact-feature-builders` that the bundled worker cannot order.
+ */
+export interface StandardPartHoleSteps {
+  holeToolSpecFor(
+    ctx: FeatureBuildContext,
+    data: FeatureDataOf<'hole'>
+  ): { bores: HoleBore[]; targetSolid: number };
+  boreFaceOf(
+    kernel: RemusKernel,
+    solid: number,
+    spec: HoleToolSpec
+  ): { geometry: { axisStart?: Vector3; axisEnd?: Vector3 } };
+}
+
 export function buildStandardPartFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
-  data: FeatureDataOf<'standard-part'>
+  data: FeatureDataOf<'standard-part'>,
+  holeSteps: StandardPartHoleSteps
 ): void {
   if (!feature.bodyId) {
     throw new Error('Standard part has no result body.');
@@ -91,30 +119,148 @@ export function buildStandardPartFeature(
   });
   const mm = millimetresPerUnit(document.units);
   const geometry = standardPartGeometry(data);
-  const length =
+  const stored =
     data.length === undefined ? undefined : resolve(data.length, 'length');
-  if (geometry.partKind === 'screw' || geometry.partKind === 'dowel') {
-    const minimum = standardPartMinimumLengthMm(geometry) / mm;
-    if (length === undefined || !(length > minimum - 1e-9)) {
-      throw new Error(
-        `A ${standardPartNoun(data)} this size must be longer than ${Number(minimum.toPrecision(4))} ${document.units}.`
-      );
+  const xDirection = data.xDirection
+    ? vector(data.xDirection, 'x direction')
+    : undefined;
+  // M17 (schema v71): in a hole, one part in each of its bores; else one
+  // where it was placed.
+  const placements: { frame: PartFrame; length: number | undefined }[] =
+    data.hole
+      ? holePlacements(ctx, feature, data, stored, mm, holeSteps).map(
+          (place) => ({
+            frame: partFrame(place.origin, place.axis, xDirection),
+            length: place.length
+          })
+        )
+      : [
+          {
+            frame: partFrame(
+              vector(data.origin, 'origin'),
+              vector(data.axis, 'axis'),
+              xDirection
+            ),
+            length: stored
+          }
+        ];
+  const builds: { built: BuiltPart; frame: PartFrame }[] = [];
+  for (const { frame, length } of placements) {
+    if (geometry.partKind === 'screw' || geometry.partKind === 'dowel') {
+      const minimum = standardPartMinimumLengthMm(geometry) / mm;
+      if (length === undefined || !(length > minimum - 1e-9)) {
+        throw new Error(
+          `A ${standardPartNoun(data)} this size must be longer than ${Number(minimum.toPrecision(4))} ${document.units}.`
+        );
+      }
     }
-  }
-  const frame = partFrame(
-    vector(data.origin, 'origin'),
-    vector(data.axis, 'axis'),
-    data.xDirection ? vector(data.xDirection, 'x direction') : undefined
-  );
-  const built = buildLocalPart(kernel, geometry, length, mm);
-  const matrix = frameMatrix(frame);
-  for (const solid of built.solids) {
-    kernel.transformSolid(solid, matrix);
-    validateGeneratedSolid(kernel, solid, 'Standard part');
+    const built = buildLocalPart(kernel, geometry, length, mm);
+    const matrix = frameMatrix(frame);
+    for (const solid of built.solids) {
+      kernel.transformSolid(solid, matrix);
+      validateGeneratedSolid(kernel, solid, 'Standard part');
+    }
+    builds.push({ built, frame });
   }
   result.shapes.set(feature.bodyId, {
-    solids: built.solids,
-    lineage: partLineage(kernel, feature.featureId, built, frame)
+    solids: builds.flatMap(({ built }) => built.solids),
+    lineage: partLineage(kernel, feature.featureId, builds)
+  });
+}
+
+/**
+ * M17 (schema v71): where a part in an M01 hole stands, one place per bore
+ * the hole drills, in document units. Each bore is drilled again, untapped,
+ * into the hole's input body (exactly as the hole drills it), and read back
+ * as its cylinder: the cylinder's end nearer the entry is the seat (a
+ * counterbore's floor, else the entry face) and its length is the material
+ * a through hole passes or a blind hole's depth below the seat. A
+ * countersunk screw in a countersink stands with its head's top on the
+ * entry face. A part without a length takes the one matched to its bore.
+ */
+function holePlacements(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'standard-part'>,
+  stored: number | undefined,
+  mm: number,
+  { holeToolSpecFor, boreFaceOf }: StandardPartHoleSteps
+): { origin: Vector3; axis: Vector3; length: number | undefined }[] {
+  const { kernel, document, scope } = ctx;
+  const features = listFeaturesInOrder(document);
+  const at = features.findIndex(
+    (candidate) => candidate.featureId === data.hole!.featureId
+  );
+  const hole = features[at];
+  if (!hole || hole.data.featureKind !== 'hole') {
+    throw new Error('The hole this part is in is gone.');
+  }
+  if (
+    at >
+    features.findIndex((candidate) => candidate.featureId === feature.featureId)
+  ) {
+    throw new Error('The hole this part is in comes after it in History.');
+  }
+  const holeData = hole.data;
+  const { bores, targetSolid } = holeToolSpecFor(ctx, holeData);
+  let drilled = targetSolid;
+  for (const { spec } of bores) drilled = drillHole(kernel, drilled, spec);
+  const threadLength =
+    holeData.tapped?.length === undefined
+      ? undefined
+      : resolveParamValue(
+          holeData.tapped.length,
+          scope,
+          'tapped length',
+          document.units
+        );
+  return bores.map(({ spec }) => {
+    const { geometry } = boreFaceOf(kernel, drilled, spec);
+    const ends = [geometry.axisStart!, geometry.axisEnd!];
+    const along = (p: Vector3) =>
+      dot(
+        {
+          x: p.x - spec.surfacePoint.x,
+          y: p.y - spec.surfacePoint.y,
+          z: p.z - spec.surfacePoint.z
+        },
+        spec.axis
+      );
+    const seat = along(ends[0]!) <= along(ends[1]!) ? ends[0]! : ends[1]!;
+    const boreLength = Math.abs(along(ends[1]!) - along(ends[0]!)) * mm;
+    const fit = standardHoleFit(
+      holeData,
+      2 * spec.radius * mm,
+      boreLength,
+      threadLength === undefined ? undefined : threadLength * mm
+    );
+    const matched = standardPartForHole(
+      data.partKind as StandardHoleKind,
+      fit,
+      data.system,
+      data.head
+    );
+    if (typeof matched === 'string') throw new Error(matched);
+    if (matched.size !== data.size || matched.system !== data.system) {
+      throw new Error(
+        `${hole.name} takes ${matched.system === 'iso' ? 'an ISO' : 'an ANSI'} ${matched.size}, not ${data.size}.`
+      );
+    }
+    let length = stored;
+    if (length === undefined) {
+      const millimetres = matchedStandardLengthMm(data, fit);
+      if (typeof millimetres === 'string') throw new Error(millimetres);
+      length = millimetres / mm;
+    }
+    const flush =
+      data.partKind === 'screw' &&
+      data.head === 'countersunk' &&
+      holeData.style === 'countersink';
+    return {
+      origin: flush ? { ...spec.surfacePoint } : { ...seat },
+      axis: { ...spec.axis },
+      length
+    };
   });
 }
 
@@ -742,57 +888,59 @@ function buildBearing(
 function partLineage(
   kernel: RemusKernel,
   featureId: FeatureId,
-  built: BuiltPart,
-  frame: PartFrame
+  builds: readonly { built: BuiltPart; frame: PartFrame }[]
 ): RemusLineageState {
   const assignments: RemusSemanticAssignment[] = [];
   const states: RemusLineageState[] = [];
-  const scale = Math.max(
-    1e-9,
-    ...built.rules.map((rule) =>
-      'plane' in rule
-        ? Math.abs(rule.plane)
-        : 'cylinder' in rule
-          ? rule.cylinder
-          : 0
-    )
-  );
-  const tolerance = 1e-6 * scale;
-  for (const solid of built.solids) {
-    const candidates = topologyCandidatesForSolid(kernel, solid).filter(
-      (candidate) => candidate.kind === 'face'
+  for (const { built, frame } of builds) {
+    const scale = Math.max(
+      1e-9,
+      ...built.rules.map((rule) =>
+        'plane' in rule
+          ? Math.abs(rule.plane)
+          : 'cylinder' in rule
+            ? rule.cylinder
+            : 0
+      )
     );
-    for (const candidate of candidates) {
-      const geometry = measureFaceGeometry(kernel, candidate.handle);
-      if (!geometry) continue;
-      const at = localOf(frame, geometry.center);
-      for (const rule of built.rules) {
-        const matches =
-          'plane' in rule
-            ? geometry.surfaceType === 'plane' &&
-              geometry.normal !== undefined &&
-              Math.abs(Math.abs(dot(geometry.normal, frame.axis)) - 1) < 1e-9 &&
-              Math.abs(at.z - rule.plane) <= tolerance
-            : 'cylinder' in rule
-              ? geometry.surfaceType === 'cylinder' &&
-                geometry.radius !== undefined &&
-                Math.abs(geometry.radius - rule.cylinder) <= tolerance
-              : // The tip chamfer is a cone too, at the far end.
-                geometry.surfaceType === 'cone' && at.z < rule.coneBelow;
-        if (matches) {
-          assignments.push({
-            ...candidate,
-            lineageName: `standard-part.face.${rule.role}`
-          });
+    const tolerance = 1e-6 * scale;
+    for (const solid of built.solids) {
+      const candidates = topologyCandidatesForSolid(kernel, solid).filter(
+        (candidate) => candidate.kind === 'face'
+      );
+      for (const candidate of candidates) {
+        const geometry = measureFaceGeometry(kernel, candidate.handle);
+        if (!geometry) continue;
+        const at = localOf(frame, geometry.center);
+        for (const rule of built.rules) {
+          const matches =
+            'plane' in rule
+              ? geometry.surfaceType === 'plane' &&
+                geometry.normal !== undefined &&
+                Math.abs(Math.abs(dot(geometry.normal, frame.axis)) - 1) <
+                  1e-9 &&
+                Math.abs(at.z - rule.plane) <= tolerance
+              : 'cylinder' in rule
+                ? geometry.surfaceType === 'cylinder' &&
+                  geometry.radius !== undefined &&
+                  Math.abs(geometry.radius - rule.cylinder) <= tolerance
+                : // The tip chamfer is a cone too, at the far end.
+                  geometry.surfaceType === 'cone' && at.z < rule.coneBelow;
+          if (matches) {
+            assignments.push({
+              ...candidate,
+              lineageName: `standard-part.face.${rule.role}`
+            });
+          }
         }
       }
-    }
-    for (const details of built.threads) {
-      states.push(
-        threadRoleLineage(kernel, solid, featureId, details, {
-          faceReferences: new Map()
-        })
-      );
+      for (const details of built.threads) {
+        states.push(
+          threadRoleLineage(kernel, solid, featureId, details, {
+            faceReferences: new Map()
+          })
+        );
+      }
     }
   }
   // `createRemusSemanticLineage` keeps a name only where one face holds it.

@@ -450,6 +450,16 @@ export interface InPlaceContext {
    * a pattern on sketch points; empty when the sketch has none.
    */
   sketchPoints?(sketchId: SketchId): readonly SketchPointSpot[];
+  /**
+   * M17 (schema v71): an M01 hole feature's stored data and its entry
+   * face's outward normal, for a part inserted into it; null when the
+   * feature is not a hole.
+   */
+  holeFeature?(featureId: FeatureId): {
+    name: string;
+    data: Extract<FeatureData, { featureKind: 'hole' }>;
+    entryNormal: Vector3 | null;
+  } | null;
 }
 
 /** M02: a point entity of a sketch, where it stands. */

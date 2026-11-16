@@ -557,6 +557,8 @@ export function useInPlaceCommand(
         optionsRef.current.imagePlaneBasis?.(plane) ?? null,
       sketchPoints: (sketchId) =>
         optionsRef.current.sketchPoints?.(sketchId) ?? [],
+      holeFeature: (featureId) =>
+        optionsRef.current.holeFeature?.(featureId) ?? null,
       ...(options.units ? { units: options.units } : {})
     }),
     [
