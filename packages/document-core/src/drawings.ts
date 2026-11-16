@@ -9,6 +9,7 @@ import {
   projectedViewSide,
   type BodyId,
   type DrawingSheet,
+  type DrawingDetail,
   type DrawingSheetFormat,
   type DrawingSheetId,
   type DrawingTitleBlock,
@@ -65,6 +66,8 @@ export interface DrawingViewUpdateInput {
   bodyIds?: BodyId[];
   /** D03: moves a section view's cutting plane, in model units. */
   sectionDepth?: number;
+  /** D03 (v78): a detail view's circle and scale; omitted fields are kept. */
+  detail?: Partial<Pick<DrawingDetail, 'center' | 'radius' | 'scale'>>;
 }
 
 export interface DrawingViewDeleteInput {
@@ -383,6 +386,18 @@ export function updateDrawingView(
         input.bodyIds.filter((id) => !view.bodyIds.includes(id))
       );
     if (input.hiddenLines !== undefined) view.hiddenLines = input.hiddenLines;
+    if (input.detail !== undefined) {
+      if (!view.detail)
+        throw new Error(`Drawing view ${input.viewId} is not a detail.`);
+      view.detail = deepClone({ ...view.detail, ...input.detail });
+    }
+    // A detail looks as its source does: its bodies follow the source's.
+    if (input.bodyIds && view.detail)
+      throw new Error('A detail view draws the bodies of its source view.');
+    if (input.bodyIds)
+      for (const detail of sheet.views)
+        if (detail.detail?.sourceViewId === view.viewId)
+          detail.bodyIds = [...input.bodyIds];
     if (input.sectionDepth !== undefined) {
       if (!view.section)
         throw new Error(`Drawing view ${input.viewId} is not a section.`);
@@ -452,7 +467,11 @@ export function deleteDrawingView(
     // measure and sit in them.
     const removed = new Set<DrawingViewId>([input.viewId]);
     for (const view of sheet.views)
-      if (view.section?.sourceViewId === input.viewId) removed.add(view.viewId);
+      if (
+        view.section?.sourceViewId === input.viewId ||
+        view.detail?.sourceViewId === input.viewId
+      )
+        removed.add(view.viewId);
     if (sheet.annotations) {
       const kept = sheet.annotations.filter(
         (annotation) =>

@@ -285,6 +285,31 @@ export function hasDrawingDistance(value: unknown): boolean {
   return false;
 }
 
+/** D03 detail views (schema v78). */
+export function assertDrawingDetailSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 78, 'Detail views');
+}
+
+/** Whether `value` holds a v78 detail view. */
+export function hasDrawingDetail(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (typeof entry.viewId === 'string' && entry.detail !== undefined)
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
 function hasCouplings(assembly: unknown): boolean {
   return record(assembly) && assembly.couplings !== undefined;
 }
@@ -404,6 +429,12 @@ export function assertDocumentContentCommandSchema(
       hasDrawingDistance(command.payload)
     )
       assertDrawingDistanceSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingDetail(command.payload)
+    )
+      assertDrawingDetailSchema(document.schemaVersion);
     if (!record(command.payload)) continue;
     if (
       command.kind === 'sketch.composite.add' &&
@@ -523,6 +554,15 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
     assertDrawingGeometrySchema(document.schemaVersion);
   if (hasDrawingDistance(document.drawings))
     assertDrawingDistanceSchema(document.schemaVersion);
+  if (hasDrawingDetail(document.drawings))
+    assertDrawingDetailSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingDetail(change.before) || hasDrawingDetail(change.after))
+      )
+        assertDrawingDetailSchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
     for (const change of entry.changes)
       if (

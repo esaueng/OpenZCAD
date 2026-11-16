@@ -293,29 +293,52 @@ export function projectedExtent(
   return Number.isFinite(extent.minU) ? extent : null;
 }
 
-/** Maps a view's model (u, v) to paper millimetres. */
+/**
+ * Maps a view's model (u, v) to paper millimetres. A detail view (D03,
+ * v78) is centred on its circle and drawn at its own scale.
+ */
 export function viewPageTransform(
-  view: Pick<DrawingView, 'centerMm'>,
+  view: Pick<DrawingView, 'centerMm' | 'detail'>,
   extent: ViewExtent,
   sheet: Pick<DrawingSheet, 'scale'>,
   units: UnitSystem
 ): (u: number, v: number) => [number, number] {
-  const k = drawingPaperPerModelUnit(sheet.scale, units);
-  const cu = (extent.minU + extent.maxU) / 2;
-  const cv = (extent.minV + extent.maxV) / 2;
+  const detail = view.detail;
+  const k = drawingPaperPerModelUnit(detail?.scale ?? sheet.scale, units);
+  const cu = detail ? detail.center.u : (extent.minU + extent.maxU) / 2;
+  const cv = detail ? detail.center.v : (extent.minV + extent.maxV) / 2;
   return (u, v) => [
     view.centerMm.x + (u - cu) * k,
     view.centerMm.y + (v - cv) * k
   ];
 }
 
-/** A view's footprint on paper, in millimetres. */
+/** Paper millimetres per model unit in `view`: a detail's own scale (v78), else the sheet's. */
+export function viewPaperPerModelUnit(
+  view: Pick<DrawingView, 'detail'>,
+  sheet: Pick<DrawingSheet, 'scale'>,
+  units: UnitSystem
+): number {
+  return drawingPaperPerModelUnit(view.detail?.scale ?? sheet.scale, units);
+}
+
+/** A view's footprint on paper, in millimetres: a detail's is its circle's square. */
 export function viewPageBox(
-  view: Pick<DrawingView, 'centerMm'>,
+  view: Pick<DrawingView, 'centerMm' | 'detail'>,
   extent: ViewExtent,
   sheet: Pick<DrawingSheet, 'scale'>,
   units: UnitSystem
 ): { x: number; y: number; width: number; height: number } {
+  if (view.detail) {
+    const r =
+      view.detail.radius * drawingPaperPerModelUnit(view.detail.scale, units);
+    return {
+      x: view.centerMm.x - r,
+      y: view.centerMm.y - r,
+      width: 2 * r,
+      height: 2 * r
+    };
+  }
   const k = drawingPaperPerModelUnit(sheet.scale, units);
   const width = (extent.maxU - extent.minU) * k;
   const height = (extent.maxV - extent.minV) * k;
@@ -607,6 +630,7 @@ export function composeSheetPage(
   annotations?: { strokes: SheetStroke[]; texts: SheetText[] }
 ): SheetPage {
   const marks = composeSectionMarks(sheet, views, context.units);
+  const details = composeDetailMarks(sheet, views, context.units);
   const paper = drawingPaperMm(sheet.paper);
   const strokes: SheetStroke[] = [
     {
@@ -630,18 +654,19 @@ export function composeSheetPage(
     );
     if (projection.hatch)
       strokes.push(...hatchStrokes(projection.hatch, toPage));
+    // A detail draws only what lies inside its circle (D03, v78).
+    const clip = viewClipCircle(view, context.units);
     // Hidden first, so a visible line drawn over a coincident hidden one wins.
     for (const [kind, lines] of [
       ['hidden', projection.hidden],
       ['visible', projection.visible]
     ] as const)
       for (const line of lines) {
-        const points: number[] = [];
-        for (let i = 0; i + 1 < line.length; i += 2) {
-          const [x, y] = toPage(line[i]!, line[i + 1]!);
-          points.push(x, y);
-        }
-        strokes.push({ kind, points });
+        const page: [number, number][] = [];
+        for (let i = 0; i + 1 < line.length; i += 2)
+          page.push(toPage(line[i]!, line[i + 1]!));
+        for (const piece of clip ? clipPolylineToCircle(page, clip) : [page])
+          strokes.push({ kind, points: piece.flat() });
       }
   }
   const block = titleBlock(sheet, context);
@@ -663,11 +688,13 @@ export function composeSheetPage(
     strokes: [
       ...strokes,
       ...marks.strokes,
+      ...details.strokes,
       ...(annotations?.strokes ?? []),
       ...block.strokes
     ].flatMap((stroke) => clipStroke(stroke, onPaper)),
     texts: [
       ...marks.texts,
+      ...details.texts,
       ...(annotations?.texts ?? []),
       ...block.texts
     ].filter((text) => insideRect(onPaper, text.x, text.y))
@@ -913,6 +940,169 @@ export function composeSectionMarks(
         align: 'middle'
       });
     }
+  }
+  return { strokes, texts };
+}
+
+/**
+ * D03 (v78): a detail view's crop circle on the paper, or null for any other
+ * view. What the view draws, picks and points leaders at is cut to it.
+ */
+export function viewClipCircle(
+  view: Pick<DrawingView, 'centerMm' | 'detail'>,
+  units: UnitSystem
+): { center: [number, number]; radius: number } | null {
+  if (!view.detail) return null;
+  return {
+    center: [view.centerMm.x, view.centerMm.y],
+    radius:
+      view.detail.radius * drawingPaperPerModelUnit(view.detail.scale, units)
+  };
+}
+
+/**
+ * The parts of a paper polyline inside a circle: each segment cut where it
+ * crosses the rim, consecutive inside pieces joined.
+ */
+export function clipPolylineToCircle(
+  points: readonly [number, number][],
+  circle: { center: [number, number]; radius: number }
+): [number, number][][] {
+  const [cx, cy] = circle.center;
+  const r2 = circle.radius * circle.radius;
+  const inside = (p: readonly [number, number]) =>
+    (p[0] - cx) ** 2 + (p[1] - cy) ** 2 <= r2;
+  const pieces: [number, number][][] = [];
+  let current: [number, number][] = [];
+  const close = () => {
+    if (current.length >= 2) pieces.push(current);
+    current = [];
+  };
+  for (let i = 0; i + 1 < points.length; i += 1) {
+    const a = points[i]!;
+    const b = points[i + 1]!;
+    // Where the segment a + t(b - a) meets the circle.
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const fx = a[0] - cx;
+    const fy = a[1] - cy;
+    const qa = dx * dx + dy * dy;
+    const qb = 2 * (fx * dx + fy * dy);
+    const qc = fx * fx + fy * fy - r2;
+    if (qa < 1e-18) {
+      if (!inside(a)) close();
+      continue;
+    }
+    const disc = qb * qb - 4 * qa * qc;
+    if (disc < 0) {
+      close();
+      continue;
+    }
+    const root = Math.sqrt(disc);
+    const t0 = Math.max(0, (-qb - root) / (2 * qa));
+    const t1 = Math.min(1, (-qb + root) / (2 * qa));
+    if (t1 - t0 <= 1e-12) {
+      close();
+      continue;
+    }
+    const at = (t: number): [number, number] => [a[0] + dx * t, a[1] + dy * t];
+    const start = at(t0);
+    const last = current[current.length - 1];
+    if (
+      t0 > 1e-12 ||
+      !last ||
+      Math.hypot(last[0] - start[0], last[1] - start[1]) > 1e-9
+    ) {
+      close();
+      current.push(start);
+    }
+    current.push(at(t1));
+    if (t1 < 1 - 1e-12) close();
+  }
+  close();
+  return pieces;
+}
+
+/** "DETAIL A (2:1)": the detail's caption, under it. */
+export function detailCaption(
+  label: string,
+  scale: DrawingSheet['scale']
+): string {
+  return `DETAIL ${label} (${formatDrawingScale(scale)})`;
+}
+
+/** A circle as a closed paper polyline. */
+function circlePoints(center: [number, number], radius: number): number[] {
+  const steps = Math.max(36, Math.min(180, Math.ceil(radius * 2)));
+  const points: number[] = [];
+  for (let i = 0; i < steps; i += 1) {
+    const angle = (2 * Math.PI * i) / steps;
+    points.push(
+      center[0] + radius * Math.cos(angle),
+      center[1] + radius * Math.sin(angle)
+    );
+  }
+  return points;
+}
+
+/**
+ * D03 (v78): each detail's circle on its source view with its letter, the
+ * detail's own boundary circle, and its caption beneath it.
+ */
+export function composeDetailMarks(
+  sheet: Pick<DrawingSheet, 'scale' | 'views'>,
+  views: readonly ComposedView[],
+  units: UnitSystem
+): { strokes: SheetStroke[]; texts: SheetText[] } {
+  const strokes: SheetStroke[] = [];
+  const texts: SheetText[] = [];
+  const drawn = new Map(views.map((entry) => [entry.view.viewId, entry]));
+  for (const view of sheet.views) {
+    const detail = view.detail;
+    if (!detail) continue;
+    const source = drawn.get(detail.sourceViewId);
+    if (source?.projection.bounds) {
+      const toPage = viewPageTransform(
+        source.view,
+        source.projection.bounds,
+        sheet,
+        units
+      );
+      const center = toPage(detail.center.u, detail.center.v);
+      const radius =
+        detail.radius *
+        drawingPaperPerModelUnit(
+          source.view.detail?.scale ?? sheet.scale,
+          units
+        );
+      strokes.push({
+        kind: 'thin',
+        closed: true,
+        points: circlePoints(center, radius)
+      });
+      // The letter just outside the circle, up and to the right (45°).
+      texts.push({
+        x: center[0] + radius * Math.SQRT1_2 + 1.5,
+        y: center[1] + radius * Math.SQRT1_2 + 1.5,
+        sizeMm: SECTION_LABEL_MM,
+        text: detail.label,
+        bold: true
+      });
+    }
+    const circle = viewClipCircle(view, units)!;
+    strokes.push({
+      kind: 'thin',
+      closed: true,
+      points: circlePoints(circle.center, circle.radius)
+    });
+    texts.push({
+      x: circle.center[0],
+      y: circle.center[1] - circle.radius - SECTION_CAPTION_GAP_MM,
+      sizeMm: SECTION_LABEL_MM * 0.7,
+      text: detailCaption(detail.label, detail.scale),
+      bold: true,
+      align: 'middle'
+    });
   }
   return { strokes, texts };
 }

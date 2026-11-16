@@ -2,7 +2,6 @@ import {
   DRAWING_VIEW_FRAMES,
   drawingEdgeRefError,
   drawingFaceRefError,
-  drawingPaperPerModelUnit,
   projectToView,
   type BodyId,
   type DrawingAnnotation,
@@ -33,7 +32,13 @@ import {
   type AnnotationBodies,
   type MarkLookup
 } from './annotations';
-import { viewPageTransform, type ComposedView } from './sheetPage';
+import {
+  clipPolylineToCircle,
+  viewClipCircle,
+  viewPageTransform,
+  viewPaperPerModelUnit,
+  type ComposedView
+} from './sheetPage';
 import { add, cross, dot, norm, scale, sub } from './surfaceSharps';
 
 export { drawnLines };
@@ -88,7 +93,7 @@ export function pickableEdges(
     if (!projection.bounds) continue;
     const toPage = viewPageTransform(view, projection.bounds, sheet, units);
     const frame = DRAWING_VIEW_FRAMES[view.orientation];
-    const k = drawingPaperPerModelUnit(sheet.scale, units);
+    const k = viewPaperPerModelUnit(view, sheet, units);
     const coincidenceMm = drawnCoincidence(bodies, view.bodyIds, k) * k;
     for (const bodyId of view.bodyIds) {
       const body = annotationBody(bodies, view, bodyId);
@@ -106,6 +111,17 @@ export function pickableEdges(
           page.push(toPage(projected.u, projected.v));
           depths.push(projected.depth);
         }
+        // A detail offers only what lies inside its circle (D03, v78).
+        const clip = viewClipCircle(view, units);
+        if (
+          clip &&
+          !page.some(
+            ([x, y]) =>
+              Math.hypot(x - clip.center[0], y - clip.center[1]) <= clip.radius
+          ) &&
+          clipPolylineToCircle(page, clip).length === 0
+        )
+          continue;
         out.push({ view, bodyId, edge, page, depths, coincidenceMm, toPage });
       }
     }
@@ -275,6 +291,8 @@ export function drawnOutlines(
   for (const { view, projection } of views) {
     if (!projection.bounds) continue;
     const toPage = viewPageTransform(view, projection.bounds, sheet, units);
+    // A detail (v78) draws, and so offers, only what lies inside its circle.
+    const clip = viewClipCircle(view, units);
     const lines: XY[][] = [];
     for (const run of view.hiddenLines
       ? [...projection.visible, ...projection.hidden]
@@ -282,7 +300,8 @@ export function drawnOutlines(
       const line: XY[] = [];
       for (let i = 0; i + 1 < run.length; i += 2)
         line.push(toPage(run[i]!, run[i + 1]!));
-      lines.push(line);
+      if (clip) lines.push(...clipPolylineToCircle(line, clip));
+      else lines.push(line);
     }
     out.set(view.viewId, lines);
   }
