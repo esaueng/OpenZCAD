@@ -90,9 +90,14 @@ import {
 } from '@openzcad/io-stl';
 import { faceDxfEntities } from './exact-dxf';
 import { pairwiseBodyClash, rowMajorMatrix } from './exact-body-clash';
+import { analyzeBodySurfaces } from './exact-surface-analysis';
 import type {
   AssemblyInterferenceOperand,
-  AssemblyInterferenceReport
+  AssemblyInterferenceReport,
+  SurfaceAnalysisBody,
+  SurfaceAnalysisReport,
+  SurfaceAnalysisRequest,
+  SurfaceAnalysisUnsupported
 } from '@openzcad/shared';
 import {
   foldSheetMetalAt,
@@ -937,6 +942,19 @@ export interface ExactKernelAdapter {
     document: ProjectDocument,
     operands: AssemblyInterferenceOperand[]
   ): Promise<AssemblyInterferenceReport>;
+  /**
+   * M09 analysis overlays: the exact kernel's per-face analysis of each
+   * named body (`exact-surface-analysis.ts`), sampled for the viewport to
+   * colour. Read-only, on the same build the clash query uses. A body with
+   * no exact geometry (unknown, consumed or parameter-hidden) is listed in
+   * `missing`; a face or body the kernel refuses is listed in `unsupported`
+   * and never given a value.
+   */
+  surfaceAnalysis(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    request: SurfaceAnalysisRequest
+  ): Promise<SurfaceAnalysisReport>;
   /**
    * Solves one sketch's persisted constraints with the kernel's GCS and
    * returns the solved geometry plus classification, DOF, and per-constraint
@@ -5816,6 +5834,44 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           result[bodyId] = drawingTessellationOfShape(kernel, shape, budget);
         }
         return result;
+      },
+      []
+    );
+  }
+
+  surfaceAnalysis(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    request: SurfaceAnalysisRequest
+  ): Promise<SurfaceAnalysisReport> {
+    return this.withExportBuild(
+      document,
+      (kernel, build) => {
+        const hidden = getParameterHiddenBodyIds(document);
+        const missing: string[] = [];
+        const bodies: SurfaceAnalysisBody[] = [];
+        const unsupported: SurfaceAnalysisUnsupported[] = [];
+        for (const bodyId of bodyIds) {
+          const shape = build.shapes.get(bodyId);
+          if (
+            !shape ||
+            shape.solids.length === 0 ||
+            hidden.has(bodyId) ||
+            build.consumed.has(bodyId)
+          ) {
+            missing.push(bodyId);
+            continue;
+          }
+          const body = analyzeBodySurfaces(
+            kernel,
+            bodyId,
+            shape.solids,
+            request,
+            unsupported
+          );
+          if (body) bodies.push(body);
+        }
+        return { request, bodies, unsupported, missing };
       },
       []
     );

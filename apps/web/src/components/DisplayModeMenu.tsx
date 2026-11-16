@@ -1,11 +1,22 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Check, ScanEye } from 'lucide-react';
+import { Check, ScanEye, Triangle } from 'lucide-react';
 import type { DisplayMode, ViewerSettings } from '@openzcad/viewport';
 import { DisplayModeIcon } from './ViewerRailIcons';
 import { DISPLAY_MODE_LABELS, DISPLAY_MODE_ORDER } from '../lib/displayMode';
 import { Tooltip } from './Tooltip';
 import { labelWithKey, useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
+import {
+  analysisRuntime,
+  useAnalysisRuntime
+} from '../lib/analysis/analysisRuntime';
+import { ANALYSIS_LABELS } from '../lib/analysis/surfaceAnalysisUi';
+import type { SurfaceAnalysisKind } from '@openzcad/shared';
+
+/** The M09 analyses the menu offers, in order, with their icons. */
+const ANALYSIS_ITEMS: { kind: SurfaceAnalysisKind; icon: typeof Triangle }[] = [
+  { kind: 'draft', icon: Triangle }
+];
 
 /**
  * Whether a key press is a workspace shortcut that acts on its own: a bare
@@ -60,9 +71,10 @@ export function DisplayModeMenu({
   const onOpenChangeRef = useRef(onOpenChange);
   onOpenChangeRef.current = onOpenChange;
   const xray = settings.xray === true;
+  const analysisKind = useAnalysisRuntime((s) => s.request?.kind ?? null);
   const displayModeLabel = `${DISPLAY_MODE_LABELS[settings.displayMode]}${
     xray ? ' · X-ray' : ''
-  }`;
+  }${analysisKind ? ` · ${ANALYSIS_LABELS[analysisKind]} analysis` : ''}`;
   const displayKey = keymap.label('view-display');
   const xrayKey = keymap.label('view-xray');
 
@@ -112,7 +124,7 @@ export function DisplayModeMenu({
       <Tooltip
         label="Display mode"
         shortcut={displayKey}
-        description={`Now: ${displayModeLabel} · modes and X-ray`}
+        description={`Now: ${displayModeLabel} · modes, X-ray and analysis`}
       >
         <button
           type="button"
@@ -185,6 +197,42 @@ export function DisplayModeMenu({
               />
             )}
           </button>
+          <span className="display-menu-divider" aria-hidden="true" />
+          {/* M09: analysis overlays. One at a time, over whichever mode is
+              on; each opens its panel (legend, provenance, limits) over the
+              viewport, so the menu closes on a choice. */}
+          <span className="display-menu-heading" aria-hidden="true">
+            Analysis
+          </span>
+          {ANALYSIS_ITEMS.map(({ kind, icon: Icon }) => {
+            const on = analysisKind === kind;
+            return (
+              <button
+                key={kind}
+                type="button"
+                className="display-menu-item"
+                aria-pressed={on}
+                aria-label={`${ANALYSIS_LABELS[kind]} analysis`}
+                onClick={() => {
+                  analysisRuntime.toggle(kind);
+                  setOpen(false);
+                  triggerRef.current?.focus();
+                }}
+              >
+                <Icon size={14} aria-hidden="true" />
+                <span className="display-menu-label">
+                  {ANALYSIS_LABELS[kind]}
+                </span>
+                {on && (
+                  <Check
+                    size={14}
+                    className="display-menu-check"
+                    aria-hidden="true"
+                  />
+                )}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

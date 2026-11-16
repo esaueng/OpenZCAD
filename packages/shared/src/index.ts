@@ -19,6 +19,7 @@ export * from './assembly';
 export * from './assembly-coupling';
 export * from './assembly-kinematics';
 export * from './body-clash';
+export * from './surface-analysis';
 export * from './gear-mesh-types';
 export * from './gear-mesh';
 export * from './hole-points';

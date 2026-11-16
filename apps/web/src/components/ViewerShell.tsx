@@ -109,6 +109,15 @@ import { ProjectThumbnailSyncAgent } from './ProjectThumbnailSyncAgent';
 import type { ProjectThumbnailRecord } from '../lib/localProjectStore';
 import type { ThumbnailCloudTransport } from '../lib/cloudThumbnail';
 import type { DimensionMode } from '../lib/keypad';
+import { AnalysisPanel } from './AnalysisPanel';
+import {
+  analysisRuntime,
+  useAnalysisRuntime
+} from '../lib/analysis/analysisRuntime';
+import {
+  useSurfaceAnalysis,
+  type RunSurfaceAnalysis
+} from '../lib/analysis/useSurfaceAnalysis';
 
 type MeasurementCloudSyncState = readonly [
   projectId: string | undefined,
@@ -449,6 +458,11 @@ interface ViewerShellProps {
    * and the rail's description of it can never disagree.
    */
   sectionOutline: SectionOutlineState;
+  /**
+   * M09: runs the exact surface analysis (the geometry worker's). Absent,
+   * the Display menu's analyses draw nothing.
+   */
+  runSurfaceAnalysis?: RunSurfaceAnalysis;
 }
 
 export function ViewerShell({
@@ -617,9 +631,32 @@ export function ViewerShell({
   onSectionCommit,
   onSectionFlip,
   onExportSectionDxf,
-  sectionOutline
+  sectionOutline,
+  runSurfaceAnalysis
 }: ViewerShellProps) {
   const { bodies, standIns: parameterVisualPreview } = view;
+  // M09 analysis overlays: the analysis the Display menu switched on, run on
+  // the bodies drawn as built. A stand-in or a body drawn somewhere else
+  // than the build put it withholds the overlay rather than paint the
+  // build's colours over a shape that is not the build's.
+  const analysisRequest = useAnalysisRuntime((s) => s.request);
+  const analysisBodyIds = useMemo(
+    () => bodies.map((body) => body.bodyId),
+    [bodies]
+  );
+  const analysisPreviewing =
+    (parameterVisualPreview?.length ?? 0) > 0 || view.drawnElsewhere.length > 0;
+  const analysis = useSurfaceAnalysis({
+    request: analysisRequest,
+    document: view.document,
+    bodyIds: analysisBodyIds,
+    previewing: analysisPreviewing,
+    run: runSurfaceAnalysis
+  });
+  const analysisNames = useMemo(
+    () => new Map(bodies.map((body) => [body.bodyId as string, body.name])),
+    [bodies]
+  );
   // M09: bodies overlapping inside the cut, as the viewport's section pass
   // found them on the display meshes; named for the section toolbox.
   const [sectionOverlapIds, setSectionOverlapIds] = useState<
@@ -867,6 +904,7 @@ export function ViewerShell({
         settings={settings}
         exactSection={exactSection}
         onSectionOverlap={setSectionOverlapIds}
+        analysisOverlay={analysis.overlay}
         fitSignal={fitSignal}
         autoFrame={autoFrame}
         creationFrame={creationFrame}
@@ -1127,6 +1165,18 @@ export function ViewerShell({
         </>
       )}
       {modeOverlay}
+      {/* M09: the analysis the Display menu switched on, with its legend,
+          provenance and limits; its own island over the stage's foot. */}
+      {!hideViewerToolbar && analysisRequest && analysis.state ? (
+        <AnalysisPanel
+          request={analysisRequest}
+          run={analysis.state}
+          previewing={analysisPreviewing}
+          nameOf={(bodyId) => analysisNames.get(bodyId) ?? 'A body'}
+          onChange={analysisRuntime.update}
+          onOff={analysisRuntime.off}
+        />
+      ) : null}
       {/* Upright in the stage's bottom-left corner at every window size. */}
       <ViewportScaleIndicator scaleSinkRef={scaleIndicatorRef} units={units} />
       {frameRateOverlay && (

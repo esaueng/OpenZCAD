@@ -36057,6 +36057,7 @@ export function App() {
             }}
             onExportSectionDxf={() => void handleExportSectionDxf()}
             sectionOutline={sectionOutline}
+            runSurfaceAnalysis={geometry.surfaceAnalysis}
           />
           {!modelingLocked &&
             !panelState.workspaceTourDismissed &&

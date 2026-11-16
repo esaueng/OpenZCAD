@@ -103,6 +103,8 @@ import {
   applyDisplayMode,
   applySectionPlane,
   type SectionOverlapPair,
+  type AnalysisOverlayDisplay,
+  syncAnalysisOverlay,
   exactSectionSnapshot,
   sectionClippingPlane,
   CameraController,
@@ -1153,6 +1155,11 @@ export interface ModelViewerProps {
    * Display evidence from the tessellation, never an exact clash answer.
    */
   onSectionOverlap?(pairs: SectionOverlapPair[]): void;
+  /**
+   * M09 analysis overlay: per-body meshes coloured from the exact kernel's
+   * samples, drawn over the bodies they analyse. Null draws none.
+   */
+  analysisOverlay?: AnalysisOverlayDisplay | null;
   /** Scroll-wheel auto-detection just proved a different pointing device. */
   onWheelDeviceLearned?(device: WheelDevice): void;
   /** Imperative sink for per-frame axis projections (no React re-render). */
@@ -2401,6 +2408,7 @@ export function ModelViewer({
   geometryTrace: incomingGeometryTrace,
   onBodiesDrawnElsewhere,
   onSectionOverlap,
+  analysisOverlay = null,
   onWheelDeviceLearned,
   orientationRef,
   orientationDragRef,
@@ -2737,6 +2745,8 @@ export function ModelViewer({
   const onSectionOverlapRef = useRef(onSectionOverlap);
   onSectionOverlapRef.current = onSectionOverlap;
   const sectionOverlapKeyRef = useRef('[]');
+  const analysisOverlayRef = useRef(analysisOverlay);
+  analysisOverlayRef.current = analysisOverlay;
   /** Reports the section pass's overlap pairs when they change. */
   const reportSectionOverlap = (pairs: SectionOverlapPair[]) => {
     // Areas are display figures: a few significant digits are all a label
@@ -6681,6 +6691,8 @@ export function ModelViewer({
             }[];
             /** M09 display overlap overlays, one per overlapping pair. */
             sectionOverlaps: { pair: string[]; triangles: number }[];
+            /** M09 analysis overlays, one per analysed body on screen. */
+            analysisOverlays: { bodyId: string; vertices: number }[];
             bodyFaces: {
               visible: boolean;
               opacity: number;
@@ -6827,6 +6839,20 @@ export function ModelViewer({
           triangles: geometry.getAttribute('position').count / 3
         });
       });
+      const analysisOverlays: { bodyId: string; vertices: number }[] = [];
+      bodyGroup.traverse((child) => {
+        if (
+          child.userData.analysisOverlay !== true ||
+          !(child instanceof THREE.Mesh)
+        )
+          return;
+        analysisOverlays.push({
+          bodyId: child.userData.analysisBodyId as string,
+          vertices: (child.geometry as THREE.BufferGeometry).getAttribute(
+            'position'
+          ).count
+        });
+      });
       const offsetWorldObjects: string[] = [];
       scene.traverse((object) => {
         if (object.name === 'offset-face-handle-world') {
@@ -6838,6 +6864,7 @@ export function ModelViewer({
         sectionCaps,
         exactSections,
         sectionOverlaps,
+        analysisOverlays,
         ...(detail.includeBodies
           ? { bodies: context.renderedBodies ?? [] }
           : {}),
@@ -14213,6 +14240,9 @@ export function ModelViewer({
       displayModeRef.current,
       xrayRef.current
     );
+    // A rebuilt body's mesh takes its M09 analysis overlay with it; draw it
+    // again before the section pass gives it the cut.
+    syncAnalysisOverlay(context.bodyGroup, analysisOverlayRef.current);
     // Rebuilt bodies and freshly created highlight geometry arrive without
     // clip planes; reapply so an active section survives both.
     reportSectionOverlap(
@@ -16832,6 +16862,14 @@ export function ModelViewer({
     context.refreshShadowMap();
     context.requestRender();
   }, [settings.sectionView, exactSection]);
+
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context) return;
+    if (syncAnalysisOverlay(context.bodyGroup, analysisOverlay)) {
+      context.requestRender();
+    }
+  }, [analysisOverlay]);
 
   useEffect(() => {
     const context = contextRef.current;

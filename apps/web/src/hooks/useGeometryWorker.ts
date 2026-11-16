@@ -8,7 +8,9 @@ import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import type {
   AssemblyInterferenceOperand,
-  AssemblyInterferenceReport
+  AssemblyInterferenceReport,
+  SurfaceAnalysisReport,
+  SurfaceAnalysisRequest
 } from '@openzcad/shared';
 import { hasDraftDisplay as hasDraftBodies } from '@openzcad/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -371,6 +373,15 @@ export interface GeometryWorkerApi {
     operands: AssemblyInterferenceOperand[]
   ): Promise<AssemblyInterferenceReport>;
   /**
+   * M09 analysis overlays: the exact per-face analysis of the named bodies,
+   * sampled for the viewport (read-only).
+   */
+  surfaceAnalysis(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    analysis: SurfaceAnalysisRequest
+  ): Promise<SurfaceAnalysisReport>;
+  /**
    * Runs one planar sketch edit — corner fillet, corner chamfer, or closed
    * loop offset — on the kernel's 2D operations. Geometry only: the caller
    * decides which entities the answer replaces.
@@ -467,6 +478,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const interferenceRequests = useRef(
     new Map<string, PendingRequest<AssemblyInterferenceReport>>()
   );
+  const surfaceAnalysisRequests = useRef(
+    new Map<string, PendingRequest<SurfaceAnalysisReport>>()
+  );
   const sectionRequests = useRef(
     new Map<string, PendingRequest<SectionOutlineReport>>()
   );
@@ -553,6 +567,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       sheetMetalFoldRequests.current,
       solveSketchRequests.current,
       interferenceRequests.current,
+      surfaceAnalysisRequests.current,
       sectionRequests.current,
       sketchPlanarRequests.current,
       recognizeImportedFaceRequests.current,
@@ -1022,6 +1037,21 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             return;
           }
           sectionRequests.current.delete(message.requestId);
+          if (message.ok) {
+            pending.resolve(message.report);
+          } else {
+            pending.reject(new Error(message.error));
+          }
+          return;
+        }
+        if (message.type === 'surface-analysis') {
+          const pending = surfaceAnalysisRequests.current.get(
+            message.requestId
+          );
+          if (!pending) {
+            return;
+          }
+          surfaceAnalysisRequests.current.delete(message.requestId);
           if (message.ok) {
             pending.resolve(message.report);
           } else {
@@ -1639,6 +1669,17 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         type: 'assembly-interference',
         document: documentForWorker(document),
         operands
+      });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker is unavailable.'));
+    },
+    surfaceAnalysis(document, bodyIds, analysis) {
+      const posted = postRequest(surfaceAnalysisRequests.current, {
+        type: 'surface-analysis',
+        document: documentForWorker(document),
+        bodyIds,
+        analysis
       });
       return posted.ok
         ? posted.promise
