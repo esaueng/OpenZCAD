@@ -526,6 +526,29 @@ notes to D01 sheets:
   "Measure circles to" picks centres, near or far sides.
 - **Schema.** v75, built on v74, with a content gate below it.
 
+## Arc and three-point angles (D02, schema v82)
+
+- **Shape.** `kind: 'arc-angle'` names one circular edge, an arc the view
+  sees face-on; `kind: 'three-point-angle'` names a vertex and two points
+  (each an edge end, a face-on circle's centre or a v73 mark). Both take
+  decimals, tolerance, prefix and suffix and print in the sheet's angle
+  format, like the two-edge angle.
+- **Reading.** An arc angle is the arc's included angle at its centre,
+  between its two ends, the way the arc runs: an arc of more than 180°
+  reads more than 180°, and its dimension arc sweeps the long way (the
+  resolved angle carries the arc's middle as `through`). A whole circle is
+  `closed-edge`, an arc seen edge-on `edge-on`. A three-point angle is the
+  angle at the vertex between the lines to the other two (at most 180°);
+  the three must lie in one plane parallel to the view (`foreshortened`),
+  and three points on one line, or two that coincide, are `no-angle`. Both
+  resolve to the same angle shape as the two-edge angle, so they draw and
+  export through its layout. The isometric view refuses the three-point
+  angle; an arc there is rarely face-on and is refused as `edge-on`.
+- **Tools.** Arc angle (E): pick a face-on arc, then place. 3-point angle
+  (J): pick the vertex, then the two arms' points (ends, circle centres or
+  marks), then place.
+- **Schema.** v82, built on v81, with a content gate below it.
+
 ## Parts lists and balloons (D02, schema v80)
 
 - **Shape.** Two annotation kinds read from the AS03 BOM table model
@@ -550,7 +573,7 @@ notes to D01 sheets:
 - **Tools.** Parts list (P): one click on the paper places it; the panel
   picks its columns. Balloon (O): pick an edge of an assembly part, then
   place the balloon. Both are offered once the assembly has parts.
-- **Schema.** v80, built on v79, with a content gate below it.
+- **Schema.** v80, built on v78 (v79 went unused), with a content gate below it.
 
 ## Finishing-body update repair
 
