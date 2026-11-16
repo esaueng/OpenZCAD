@@ -195,7 +195,9 @@ export function inPlaceToolForFeature(data: FeatureData): InPlaceToolId | null {
     case 'boolean':
       return data.operation;
     case 'pattern':
-      return `${data.patternKind}-pattern`;
+      return data.patternKind === 'points'
+        ? 'point-pattern'
+        : `${data.patternKind}-pattern`;
     case 'transform': {
       const { translation, rotationDeg, scale } = data.transform;
       // Only a pure scale or a pure turn about a datum axis is that tool's
@@ -803,6 +805,18 @@ export function inPlaceEditSeed(
       if (data.skippedInstances?.length) {
         seed.options.skip = data.skippedInstances.join(',');
       }
+      if (data.patternKind === 'points') {
+        // M02 (schema v63): the picked points, the original's left out: it
+        // stays the reference the edit keeps.
+        for (const pointId of data.points?.pointIds ?? []) {
+          if (pointId === data.points?.referencePointId) continue;
+          seed.slots.path.push({
+            sketchId: data.points!.sketchId,
+            entityId: pointId
+          });
+        }
+        break;
+      }
       value('count', data.count);
       if (data.patternKind === 'linear') {
         value('spacing', data.spacing);
@@ -1256,7 +1270,8 @@ export function inPlaceFeatureUpdate(
             : {}),
           ...(request.skippedInstances
             ? { skippedInstances: request.skippedInstances }
-            : {})
+            : {}),
+          ...(request.points ? { points: request.points } : {})
         },
         // R01: the world axis is the absent datum axis. M02: a pattern turned
         // back to its body, or with every copy back, stores neither list.
@@ -1312,6 +1327,9 @@ export function inPlaceEditSourceSketchIds(data: FeatureData): SketchId[] {
     // The in-place Extrude edits an extrude (U09): its profile's sketch.
     case 'extrude':
       return [data.sketchId];
+    // M02: a pattern on sketch points shows the sketch its points are on.
+    case 'pattern':
+      return data.points ? [data.points.sketchId] : [];
     default:
       return [];
   }

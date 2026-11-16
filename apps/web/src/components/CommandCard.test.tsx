@@ -983,7 +983,8 @@ describe('CommandCard', () => {
     expect(foldTools(container)).toEqual([
       'linear-pattern',
       'circular-pattern',
-      'grid-pattern'
+      'grid-pattern',
+      'point-pattern'
     ]);
     fireEvent.change(search, { target: { value: 'zzz' } });
     expect(container.querySelector('.command-flyout-empty')).toHaveTextContent(

@@ -254,7 +254,8 @@ const PRIMITIVE_KINDS = valuesOf<PrimitiveKind>({
 const PATTERN_KINDS = valuesOf<PatternKind>({
   linear: true,
   circular: true,
-  grid: true
+  grid: true,
+  points: true
 });
 const GEAR_TYPES = valuesOf<GearType>({
   external: true,

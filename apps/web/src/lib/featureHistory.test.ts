@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
+  addPrimitiveFeature,
+  addSketchFeature,
   createProjectDocument,
   findSketch,
-  listFeaturesInOrder
+  listFeaturesInOrder,
+  patternBody
 } from '@openzcad/document-core';
 import { toUserId, FEATURE_SUPPRESSED_METADATA_KEY } from '@openzcad/shared';
 import {
@@ -133,6 +136,50 @@ it('tracks the second result of a split as a dependency', () => {
   expect(featureResultBodyIds(graph.features.at(-1)!)).toEqual([
     split.data.secondBodyId
   ]);
+});
+
+it('makes the sketch a pattern stands on a parent of it (M02 review)', () => {
+  // Deleting the sketch breaks the pattern: the dependent-delete
+  // confirmation must count it.
+  const block = addPrimitiveFeature(
+    createProjectDocument('Points', toUserId('user_points')),
+    {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 10 }
+    }
+  );
+  const points = addSketchFeature(block, {
+    name: 'Points',
+    plane: 'XY',
+    offset: 0,
+    objects: [
+      { objectKind: 'point', x: 5, y: 5 },
+      { objectKind: 'point', x: 30, y: 5 }
+    ]
+  });
+  const pointIds = findSketch(points.document, points.sketchId)!.objectIds.map(
+    String
+  );
+  const patterned = patternBody(points.document, {
+    name: 'On points',
+    targetBodyId: block.bodyOrder[0]!,
+    patternKind: 'points',
+    count: 2,
+    axis: 'x',
+    points: {
+      sketchId: points.sketchId,
+      pointIds,
+      referencePointId: pointIds[0]!
+    }
+  });
+  const graph = featureHistory(patterned.document);
+  const named = (name: string) =>
+    graph.features.find((feature) => feature.name === name)!.featureId;
+  expect(graph.parents.get(named('On points'))).toContain(named('Points'));
+  expect(
+    graph.downstream(named('Points')).map((feature) => feature.name)
+  ).toEqual(['On points']);
 });
 
 it('makes a guide rail sketch a parent of the sweep it steers', () => {

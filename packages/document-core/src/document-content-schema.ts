@@ -84,6 +84,8 @@ export function assertPatternContentSchema(
       62,
       'Feature patterns and skipped pattern copies'
     );
+  if (data.patternKind === 'points' || data.points !== undefined)
+    assertMinimumProjectSchema(version, 63, 'Patterns on sketch points');
 }
 
 /**

@@ -158,6 +158,7 @@
     "test/picked-feature-deletion.test.ts",
     "test/picked-step-feature-deletion.test.ts",
     "test/pin-remus.test.ts",
+    "test/point-pattern.test.ts",
     "test/prepared-face-move-preview.test.ts",
     "test/private-artifacts.test.ts",
     "test/project-adoption-api.test.ts",

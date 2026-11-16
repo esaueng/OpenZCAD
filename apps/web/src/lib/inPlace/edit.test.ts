@@ -1267,6 +1267,61 @@ describe('an untouched edit writes the feature back as stored', () => {
     ).toEqual(['skippedInstances']);
   });
 
+  it('M02 point pattern: its points reopen as picks and write back unchanged', () => {
+    const SKETCH_P = 'sketch_points' as SketchId;
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'points',
+      count: 3,
+      axis: 'x',
+      spacing: 10,
+      angleDeg: 360,
+      points: {
+        sketchId: SKETCH_P,
+        pointIds: ['p_ref', 'p_a', 'p_b'],
+        referencePointId: 'p_ref'
+      },
+      skippedInstances: ['p_b']
+    };
+    const node = feature(data, 'body_p' as BodyId);
+    const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+    expect(armed.tool).toBe('point-pattern');
+    // The original's point stays the stored reference, not a pick.
+    expect(armed.seed.slots.path).toEqual([
+      { sketchId: SKETCH_P, entityId: 'p_a' },
+      { sketchId: SKETCH_P, entityId: 'p_b' }
+    ]);
+    expect(armed.seed.options.skip).toBe('p_b');
+    const spec = IN_PLACE_TOOL_SPECS[armed.tool];
+    const request = spec.request(
+      { ...armed.seed.slots, axis: null, refs: [], image: null },
+      {},
+      armed.seed.options,
+      {
+        sketchViews: [],
+        datumAxes: undefined,
+        datumLabel: () => 'Axis',
+        saved: data,
+        sketchPoints: () => [
+          { id: 'p_ref', at: { x: 0, y: 0, z: 0 } },
+          { id: 'p_a', at: { x: 30, y: 0, z: 0 } },
+          { id: 'p_b', at: { x: 0, y: 30, z: 0 } }
+        ]
+      }
+    ) as Extract<ResolvedInPlaceRequest, { tool: 'pattern' }>;
+    const update = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      request
+    );
+    expect(update?.data).toMatchObject({
+      patternKind: 'points',
+      points: data.points,
+      skippedInstances: ['p_b']
+    });
+    expect(update).not.toHaveProperty('clearData');
+  });
+
   it('loft: a stored apex opens as a point, each coordinate editable', () => {
     const data: FeatureData = {
       featureKind: 'loft',
@@ -1795,6 +1850,18 @@ describe('inPlaceEditSourceSketchIds', () => {
         featureKind: 'shell'
       } as unknown as FeatureData)
     ).toEqual([]);
+    // M02: a pattern on sketch points shows its sketch, hidden or not.
+    expect(
+      inPlaceEditSourceSketchIds({
+        featureKind: 'pattern',
+        patternKind: 'points',
+        points: {
+          sketchId: SKETCH,
+          pointIds: ['a', 'b'],
+          referencePointId: 'a'
+        }
+      } as unknown as FeatureData)
+    ).toEqual([SKETCH]);
   });
 });
 

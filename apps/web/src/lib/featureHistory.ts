@@ -134,6 +134,10 @@ export function featureHistory(document: ProjectDocument) {
       case 'direct-edit':
         body(data.targetBodyId);
         for (const ref of featureDatumAxisRefs(data)) datum(ref.datumFeatureId);
+        // M02: a pattern on sketch points reads its sketch.
+        if (data.featureKind === 'pattern' && data.points) {
+          sketch(data.points.sketchId);
+        }
         break;
       case 'gear':
         if (data.targetBodyId !== undefined) body(data.targetBodyId);

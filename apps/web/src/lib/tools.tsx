@@ -28,6 +28,7 @@ import {
   helicalSweepGlyph,
   linearPatternGlyph,
   loftGlyph,
+  pointPatternGlyph,
   planeGlyph,
   revolveGlyph,
   bendGlyph,
@@ -80,7 +81,8 @@ export type ToolId =
   | 'chamfer'
   | 'linear-pattern'
   | 'circular-pattern'
-  | 'grid-pattern';
+  | 'grid-pattern'
+  | 'point-pattern';
 
 /**
  * The five groups of the feature tools, in workflow order: make something,
@@ -362,6 +364,13 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     icon: gridPatternGlyph,
     group: 'pattern',
     hint: 'Repeat a body along two directions'
+  },
+  'point-pattern': {
+    label: 'Point pattern',
+    short: 'Points',
+    icon: pointPatternGlyph,
+    group: 'pattern',
+    hint: 'Repeat a body or a feature at sketch points'
   }
 };
 
@@ -424,7 +433,12 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
     {
       id: 'pattern',
       label: 'Pattern',
-      tools: ['linear-pattern', 'circular-pattern', 'grid-pattern']
+      tools: [
+        'linear-pattern',
+        'circular-pattern',
+        'grid-pattern',
+        'point-pattern'
+      ]
     }
   ];
 
@@ -621,7 +635,8 @@ export function toolDisabledReason(
   if (
     (tool === 'linear-pattern' ||
       tool === 'circular-pattern' ||
-      tool === 'grid-pattern') &&
+      tool === 'grid-pattern' ||
+      tool === 'point-pattern') &&
     avail.liveBodyCount < 1
   ) {
     return 'Needs a body';
