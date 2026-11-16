@@ -3185,10 +3185,14 @@ export function App() {
   } | null>(null);
   /**
    * A refused hole, fillet or chamfer delete, asking whether to delete the
-   * later details and edits built on its geometry too.
+   * later details and edits built on its geometry too. Valid only for the
+   * manager and document version it was refused against: a newer copy of the
+   * project (another device, a collaborator) may have changed those steps.
    */
   const [pendingDetailCascade, setPendingDetailCascade] = useState<{
     projectId: ProjectDocument['projectId'];
+    version: number;
+    manager: CommandManager;
     name: string;
     featureIds: FeatureId[];
     dependents: { featureId: FeatureId; name: string }[];
@@ -30224,12 +30228,19 @@ export function App() {
     const dependents = (cascade ?? []).filter(
       (dependent) => !requested.has(dependent.featureId)
     );
-    if (!document || managerRef.current !== owner || dependents.length === 0) {
+    if (
+      !owner ||
+      !document ||
+      managerRef.current !== owner ||
+      dependents.length === 0
+    ) {
       announce(message);
       return;
     }
     setPendingDetailCascade({
       projectId: document.projectId,
+      version: document.version,
+      manager: owner,
       name,
       featureIds: [...featureIds],
       dependents: dependents.map(({ featureId, name: dependentName }) => ({
@@ -31966,7 +31977,7 @@ export function App() {
     !meshExportOpen &&
     !importUnitsPrompt &&
     !pendingFeatureDelete &&
-    !activeSuppressionPrompt(pendingDetailCascade, doc?.projectId) &&
+    !activeResumePrompt(pendingDetailCascade, doc) &&
     !activeSuppressionPrompt(pendingSuppression, doc?.projectId) &&
     !activeResumePrompt(pendingResume, doc) &&
     !pendingToolSwitch;
@@ -37391,7 +37402,7 @@ export function App() {
             />
           )}
           {pendingDetailCascade &&
-            activeSuppressionPrompt(pendingDetailCascade, doc?.projectId) && (
+            activeResumePrompt(pendingDetailCascade, doc) && (
               <DeleteDependentsDialog
                 name={pendingDetailCascade.name}
                 dependents={pendingDetailCascade.dependents.map(
@@ -37399,8 +37410,18 @@ export function App() {
                 )}
                 onCancel={() => setPendingDetailCascade(null)}
                 onDeleteAll={() => {
-                  const { name, featureIds, dependents } = pendingDetailCascade;
+                  const { name, featureIds, dependents, manager } =
+                    pendingDetailCascade;
                   setPendingDetailCascade(null);
+                  if (
+                    managerRef.current !== manager ||
+                    !activeResumePrompt(pendingDetailCascade, manager.document)
+                  ) {
+                    setStatus(
+                      'The model changed. Select the feature again before deleting it.'
+                    );
+                    return;
+                  }
                   commitDeleteFeatures(
                     [
                       ...featureIds,
