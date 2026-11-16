@@ -44,6 +44,10 @@ import type { DrawingViewId } from './drawings';
  * Schema v68 (D02) adds a tolerance and a prefix and suffix to a dimension
  * (see {@link DrawingTolerance}). Each is optional and absent on every older
  * annotation.
+ *
+ * Schema v73 (D02) adds geometry annotations — centre marks, intersection
+ * marks and centrelines (through two points, midway between two lines, or a
+ * circle through three points) — and a mark as a dimension point.
  */
 
 export type DrawingAnnotationId = Brand<string, 'DrawingAnnotationId'>;
@@ -134,11 +138,22 @@ export interface DrawingChamferCornerRef {
   side: DrawingExtremeSide;
 }
 
+/**
+ * v73: the point a centre mark or an intersection mark on the same view
+ * marks, read through it each time it is drawn. Deleting the mark breaks
+ * what measures to it.
+ */
+export interface DrawingMarkPointRef {
+  anchor: 'mark';
+  annotationId: DrawingAnnotationId;
+}
+
 export type DrawingPointRef =
   | DrawingEdgePointRef
   | DrawingSilhouettePointRef
   | DrawingVirtualSharpRef
-  | DrawingChamferCornerRef;
+  | DrawingChamferCornerRef
+  | DrawingMarkPointRef;
 
 /**
  * Which way a two-point dimension measures in its view: along the page
@@ -294,6 +309,68 @@ export interface DrawingNote extends DrawingAnnotationBase {
   leader?: DrawingEdgeRef;
 }
 
+/**
+ * v73: a centre mark on a circle or arc the view sees face-on: a cross at
+ * its centre with centre lines run past its rim.
+ */
+export interface DrawingCenterMark extends DrawingAnnotationBase {
+  kind: 'center-mark';
+  viewId: DrawingViewId;
+  edge: DrawingEdgeRef;
+}
+
+/**
+ * v73: where two straight edges' lines cross in the view (a virtual sharp
+ * of a rounded or chamfered corner), drawn as their thin extensions.
+ */
+export interface DrawingIntersectionMark extends DrawingAnnotationBase {
+  kind: 'intersection-mark';
+  viewId: DrawingViewId;
+  edges: [DrawingEdgeRef, DrawingEdgeRef];
+}
+
+/**
+ * v73: a centreline, drawn as a thin chain line: through two points
+ * (`points`), midway between two parallel straight edges (`lines`), or the
+ * circle through three points (`circle`, a bolt circle through three hole
+ * centres).
+ */
+export type DrawingCenterline = DrawingAnnotationBase & {
+  kind: 'centerline';
+  viewId: DrawingViewId;
+} & (
+    | { mode: 'points'; from: DrawingPointRef; to: DrawingPointRef }
+    | { mode: 'lines'; edges: [DrawingEdgeRef, DrawingEdgeRef] }
+    | {
+        mode: 'circle';
+        through: [DrawingPointRef, DrawingPointRef, DrawingPointRef];
+      }
+  );
+
+/** v73: the annotations that mark geometry rather than state a value. */
+export type DrawingGeometryAnnotation =
+  DrawingCenterMark | DrawingIntersectionMark | DrawingCenterline;
+
+export const DRAWING_GEOMETRY_ANNOTATION_KINDS: readonly DrawingGeometryAnnotation['kind'][] =
+  ['center-mark', 'intersection-mark', 'centerline'];
+
+export function isDrawingGeometryAnnotation(
+  annotation: DrawingAnnotation
+): annotation is DrawingGeometryAnnotation {
+  return (
+    annotation.kind === 'center-mark' ||
+    annotation.kind === 'intersection-mark' ||
+    annotation.kind === 'centerline'
+  );
+}
+
+/** Whether `annotation` states a value: not a note, not a mark. */
+export function isDrawingDimension(
+  annotation: DrawingAnnotation
+): annotation is DrawingDimension {
+  return annotation.kind !== 'note' && !isDrawingGeometryAnnotation(annotation);
+}
+
 export type DrawingDimension =
   | DrawingLinearDimension
   | DrawingRadialDimension
@@ -301,7 +378,8 @@ export type DrawingDimension =
   | DrawingAngleDimension
   | DrawingChamferDimension;
 
-export type DrawingAnnotation = DrawingDimension | DrawingNote;
+export type DrawingAnnotation =
+  DrawingDimension | DrawingNote | DrawingGeometryAnnotation;
 
 export type DrawingAnnotationKind = DrawingAnnotation['kind'];
 
@@ -534,9 +612,30 @@ function pointRefError(value: unknown): string | null {
       if (face.hash === like.hash) return 'sizes a chamfer corner like itself';
       return null;
     }
+    case 'mark':
+      if (Object.keys(value).length !== 2)
+        return 'has a mark point with unknown fields';
+      return typeof value.annotationId === 'string' &&
+        value.annotationId.startsWith(DRAWING_ANNOTATION_ID_PREFIX) &&
+        value.annotationId.length <= 64
+        ? null
+        : 'names no mark';
     default:
       return 'has an unknown point anchor';
   }
+}
+
+/** A point a centreline may pass through: an end, a centre or a mark. */
+function centerlinePointError(value: unknown): string | null {
+  const error = pointRefError(value);
+  if (error) return error;
+  const anchor = (value as DrawingPointRef).anchor;
+  return anchor === 'first' ||
+    anchor === 'second' ||
+    anchor === 'center' ||
+    anchor === 'mark'
+    ? null
+    : 'passes a centreline through an extreme, which has no place without a direction';
 }
 
 /** Absent, or the literal `true`: a stored `false` would not be byte-stable. */
@@ -662,6 +761,62 @@ export function drawingAnnotationError(
     return `${where} has a Ø prefix, which only a linear dimension takes.`;
   const counted = countError(value.count, value.kind, where);
   if (counted) return counted;
+  if (
+    value.kind === 'center-mark' ||
+    value.kind === 'intersection-mark' ||
+    value.kind === 'centerline'
+  ) {
+    if (value.viewId === undefined)
+      return `${where} is a mark that belongs to no view.`;
+    if (
+      [
+        'decimals',
+        'reference',
+        'tolerance',
+        'prefix',
+        'suffix',
+        'provenance'
+      ].some((key) => value[key] !== undefined)
+    )
+      return `${where} is a mark, which states no value.`;
+    const twoEdges = (edges: unknown) => {
+      if (!Array.isArray(edges) || edges.length !== 2)
+        return 'must name two edges';
+      const error = edgeRefError(edges[0]) ?? edgeRefError(edges[1]);
+      if (error) return error;
+      const [a, b] = edges as DrawingEdgeRef[];
+      return a!.bodyId === b!.bodyId && a!.hash === b!.hash
+        ? 'names one edge twice'
+        : null;
+    };
+    switch (value.kind) {
+      case 'center-mark':
+        return fail(edgeRefError(value.edge));
+      case 'intersection-mark':
+        return fail(twoEdges(value.edges));
+      default:
+        switch (value.mode) {
+          case 'points':
+            return fail(
+              centerlinePointError(value.from) ?? centerlinePointError(value.to)
+            );
+          case 'lines':
+            return fail(twoEdges(value.edges));
+          case 'circle': {
+            const through = value.through;
+            if (!Array.isArray(through) || through.length !== 3)
+              return `${where} is a circular centreline that must pass through three points.`;
+            return fail(
+              centerlinePointError(through[0]) ??
+                centerlinePointError(through[1]) ??
+                centerlinePointError(through[2])
+            );
+          }
+          default:
+            return `${where} has an unknown centreline mode.`;
+        }
+    }
+  }
   if (value.kind === 'note') {
     if (value.reference !== undefined)
       return `${where} is a note, which cannot be a reference dimension.`;
@@ -791,6 +946,7 @@ export function drawingAnnotationError(
 function pointReferences(
   point: DrawingPointRef
 ): (DrawingEdgeRef | DrawingFaceRef)[] {
+  if (point.anchor === 'mark') return [];
   if ('faces' in point) return [...point.faces];
   if ('like' in point) return [point.face, point.like];
   return [point.edge];
@@ -807,6 +963,12 @@ export function drawingAnnotationEdges(
       );
     case 'chamfer':
       return [];
+    case 'centerline':
+      return annotation.mode === 'lines'
+        ? [...annotation.edges]
+        : centerlinePoints(annotation).flatMap((point) =>
+            'edge' in point ? [point.edge] : []
+          );
     case 'radius':
     case 'diameter':
       return 'face' in annotation
@@ -853,5 +1015,39 @@ export function drawingAnnotationReferences(
       return [annotation.face];
     case 'note':
       return annotation.leader ? [annotation.leader] : [];
+    case 'center-mark':
+      return [annotation.edge];
+    case 'intersection-mark':
+      return [...annotation.edges];
+    case 'centerline':
+      return annotation.mode === 'lines'
+        ? [...annotation.edges]
+        : centerlinePoints(annotation).flatMap(pointReferences);
   }
+}
+
+/** v73: the points a `points` or `circle` centreline passes through. */
+export function centerlinePoints(
+  annotation: DrawingCenterline
+): DrawingPointRef[] {
+  return annotation.mode === 'points'
+    ? [annotation.from, annotation.to]
+    : annotation.mode === 'circle'
+      ? [...annotation.through]
+      : [];
+}
+
+/** v73: the marks an annotation measures to, by id. */
+export function drawingAnnotationMarks(
+  annotation: DrawingAnnotation
+): DrawingAnnotationId[] {
+  const points: DrawingPointRef[] =
+    annotation.kind === 'linear'
+      ? [annotation.from, annotation.to]
+      : annotation.kind === 'centerline'
+        ? centerlinePoints(annotation)
+        : [];
+  return points.flatMap((point) =>
+    point.anchor === 'mark' ? [point.annotationId] : []
+  );
 }

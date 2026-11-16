@@ -134,8 +134,16 @@ export interface CadDigestDrawingView {
 
 export interface CadDigestDrawingAnnotation {
   annotationId: string;
-  /** A sheet may hold a v48 chamfer, which proposals cannot author yet. */
-  kind: CadDrawingAnnotationKind | 'chamfer';
+  /**
+   * A sheet may hold a v48 chamfer and v73 marks and centrelines, which
+   * proposals cannot author yet.
+   */
+  kind:
+    | CadDrawingAnnotationKind
+    | 'chamfer'
+    | 'center-mark'
+    | 'intersection-mark'
+    | 'centerline';
   viewId: string | null;
   /** The digest refs it measures, when its edges are in the view's list. */
   edgeRefs: string[];

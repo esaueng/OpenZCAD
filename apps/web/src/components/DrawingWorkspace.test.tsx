@@ -149,6 +149,16 @@ function displayTessellation(
     );
 }
 
+/** v73: the cube with its edges published as straight lines. */
+function straightCube(): BodyRepresentation {
+  const body = cube();
+  body.topology!.edges = body.topology!.edges.map((edge) => ({
+    ...edge,
+    curve: { type: 'LINE' }
+  }));
+  return body;
+}
+
 /** The cube's faces, in `quads` order, as exact planes. */
 function CUBE_PLANES(s: number) {
   const plane = (x: number, y: number, z: number, planeOffset: number) => ({
@@ -173,6 +183,8 @@ function setup(
     sheet?: DrawingSheet;
     size?: number;
     exactFaces?: boolean;
+    /** v73: the cube's edges published as straight lines. */
+    straightEdges?: boolean;
     editDisabledReason?: string | null;
     geometryPending?: boolean;
     previewAnnotations?: Parameters<
@@ -186,7 +198,10 @@ function setup(
     bodyOrder: [bodyId],
     ...(options.sheet ? { drawings: { sheets: [options.sheet] } } : {})
   };
-  const bodies = { [bodyId]: cube(options.size, options.exactFaces) };
+  const body = options.straightEdges
+    ? straightCube()
+    : cube(options.size, options.exactFaces);
+  const bodies = { [bodyId]: body };
   const onCommand = vi.fn((_command: AnyCommand) => true);
   const onStatus = vi.fn();
   const onAnnounceUndoable = vi.fn();
@@ -2677,6 +2692,63 @@ describe('DrawingWorkspace section views (D03)', () => {
       depth: -5
     });
     expect(view.centerMm.y).toBe(front.centerMm.y);
+  });
+});
+
+describe('DrawingWorkspace geometry annotations (D02 v73)', () => {
+  it('marks where two edges cross from two picks, with no placement click', async () => {
+    resetRetainedProjections();
+    const sheet = starter(
+      drawingSourceFingerprint({ [bodyId]: straightCube() }, [bodyId])!
+    );
+    const { onCommand, onStatus } = setup({ sheet, straightEdges: true });
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    Object.defineProperty(canvas, 'getScreenCTM', {
+      configurable: true,
+      value: () => ({
+        a: 1,
+        b: 0,
+        c: 0,
+        d: 1,
+        e: 0,
+        f: 0,
+        inverse: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 })
+      })
+    });
+    expect(
+      screen.getByRole('button', { name: 'Intersection mark' })
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Centre mark' })).toBeTruthy();
+    await userEvent.keyboard('x');
+    expect(screen.getByText(/Intersection mark: pick the first/)).toBeTruthy();
+    const surface = canvas.querySelector('.drawing-pick-surface')!;
+    const front = sheet.views.find((view) => view.orientation === 'front')!;
+    const k = drawingPaperPerModelUnit(sheet.scale, 'mm');
+    // The cube's front view spans 10 × 10 about its centre; (u, v) from
+    // its lower left corner, to the client (y down on a 297 mm page).
+    const client = (u: number, v: number) => ({
+      clientX: front.centerMm.x + (u - 5) * k,
+      clientY: 297 - (front.centerMm.y + (v - 5) * k),
+      button: 0,
+      pointerId: 1
+    });
+    fireEvent.pointerDown(surface, client(5, 10));
+    expect(onStatus).not.toHaveBeenCalledWith('Pick a straight edge.');
+    expect(screen.getByText(/pick the second straight edge/)).toBeTruthy();
+    fireEvent.pointerDown(surface, client(10, 5));
+    const added = onCommand.mock.calls
+      .map(([command]) => command)
+      .find((command) => command.kind === 'drawing.annotation.add');
+    expect(added).toBeTruthy();
+    const annotation = (added!.payload as { annotation: DrawingAnnotation })
+      .annotation;
+    expect(annotation.kind).toBe('intersection-mark');
+    expect(annotation.viewId).toBe(front.viewId);
   });
 });
 

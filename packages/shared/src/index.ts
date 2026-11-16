@@ -333,12 +333,17 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // means no table, so every older document builds unchanged. An older client
 // would show and export bodies the active row hides and drop the table on
 // its next save, so it must refuse. Builds on v70 (v71 is claimed by M17).
-// v73 is claimed by D02 centre marks and centrelines (#1646).
+// v73 adds D02 geometry annotations: centre marks, intersection marks and
+// centrelines (`center-mark`, `intersection-mark`, `centerline` annotation
+// kinds) and a mark as a dimension point (`anchor: 'mark'`). An older client
+// would refuse the unknown kinds, so it must refuse the document. Builds on
+// v72.
 // v74 adds M17 parts inserted into M01 holes (`hole` on a standard part):
 // the part stands in each of the hole's bores and takes its matched length
 // where it stores none. An older client would build one part at the stored
 // origin, or none without a length, so it must refuse. (M17 first claimed
 // v71, which F06 left free, but a v72 client has no `hole` either.)
+// Builds on v73.
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 74 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;

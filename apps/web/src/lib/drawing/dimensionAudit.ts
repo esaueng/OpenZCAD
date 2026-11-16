@@ -1,4 +1,5 @@
 import {
+  isDrawingDimension,
   DRAWING_VIEW_FRAMES,
   type BodyId,
   type BoundingBox,
@@ -13,6 +14,7 @@ import {
 import {
   annotationBody,
   annotationModelReading,
+  sheetMarkLookup,
   readCounterbore,
   readCountersink,
   defaultDimensionDecimals,
@@ -1211,14 +1213,18 @@ export function readDimensionState(
   const slopeStatedBy = new Map<SlopeGroup, DrawingAnnotationId>();
 
   const views = new Map(sheet.views.map((view) => [view.viewId, view]));
+  // v73: a dimension may measure to a mark on its view.
+  const marks = sheetMarkLookup(sheet);
   for (const annotation of sheet.annotations ?? []) {
-    if (annotation.kind === 'note') continue;
+    // Notes and v73 marks state no value.
+    if (!isDrawingDimension(annotation)) continue;
     const id = annotation.annotationId;
     const reading = annotationModelReading(
       annotation,
       views.get(annotation.viewId),
       bodies,
-      units
+      units,
+      marks
     );
     if (!reading) {
       audit.unchecked.push({

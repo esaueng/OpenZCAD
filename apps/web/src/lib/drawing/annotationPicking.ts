@@ -29,7 +29,8 @@ import {
   edgeEndsInPageOrder,
   referenceTrust,
   resolveDrawingAnnotation,
-  type AnnotationBodies
+  type AnnotationBodies,
+  type MarkLookup
 } from './annotations';
 import { viewPageTransform, type ComposedView } from './sheetPage';
 import { add, cross, dot, norm, scale, sub } from './surfaceSharps';
@@ -511,7 +512,24 @@ export type AnnotationToolKind =
   | 'diameter'
   | 'angle'
   | 'chamfer'
-  | 'note';
+  | 'note'
+  /** v73 geometry annotations. */
+  | 'center-mark'
+  | 'intersection-mark'
+  | 'centerline'
+  | 'circle-centerline';
+
+/** v73: tools that mark geometry, made as soon as their picks are in. */
+export const GEOMETRY_TOOL_KINDS: readonly AnnotationToolKind[] = [
+  'center-mark',
+  'intersection-mark',
+  'centerline',
+  'circle-centerline'
+];
+
+export function isGeometryTool(kind: AnnotationToolKind): boolean {
+  return GEOMETRY_TOOL_KINDS.includes(kind);
+}
 
 export const ANNOTATION_TOOL_LABELS: Readonly<
   Record<AnnotationToolKind, string>
@@ -523,7 +541,11 @@ export const ANNOTATION_TOOL_LABELS: Readonly<
   diameter: 'Diameter',
   angle: 'Angle',
   chamfer: 'Chamfer',
-  note: 'Note'
+  note: 'Note',
+  'center-mark': 'Centre mark',
+  'intersection-mark': 'Intersection mark',
+  centerline: 'Centreline',
+  'circle-centerline': 'Circular centreline'
 };
 
 /** What each tool asks for next, by how many picks it has. */
@@ -553,6 +575,20 @@ export function annotationToolHint(tool: AnnotationTool): string {
       return 'Chamfer: pick the chamfer’s outline, seen side-on or edge-on.';
     case 'note':
       return 'Note: pick an edge for its leader, or click empty paper to place it.';
+    case 'center-mark':
+      return 'Centre mark: pick a circle or arc seen face-on.';
+    case 'intersection-mark':
+      return tool.edges.length === 0
+        ? 'Intersection mark: pick the first straight edge.'
+        : 'Intersection mark: pick the second straight edge; the mark sits where their lines cross.';
+    case 'centerline':
+      return tool.edges.length === 1
+        ? 'Centreline: pick the second straight edge, parallel to the first; the line runs midway between them.'
+        : tool.points.length === 1
+          ? 'Centreline: pick the second point (an edge end, circle or mark).'
+          : 'Centreline: pick a point (an edge end, circle or mark), or a straight edge to run midway between two.';
+    case 'circle-centerline':
+      return `Circular centreline: pick point ${tool.points.length + 1} of 3 (an edge end, circle or mark).`;
   }
 }
 
@@ -623,6 +659,14 @@ export function pickedEnough(tool: AnnotationTool): boolean {
       return tool.faces.length === 1;
     case 'note':
       return tool.edges.length === 1 || tool.placed !== undefined;
+    case 'center-mark':
+      return tool.edges.length === 1;
+    case 'intersection-mark':
+      return tool.edges.length === 2;
+    case 'centerline':
+      return tool.points.length === 2 || tool.edges.length === 2;
+    case 'circle-centerline':
+      return tool.points.length === 3;
   }
 }
 
@@ -735,9 +779,43 @@ export function applyAnnotationPick(
   viewAt: DrawingView | null,
   bodies: AnnotationBodies,
   /** The face outline under the pointer, for virtual sharps and chamfers. */
-  faceHit: PickableFace | null = null
+  faceHit: PickableFace | null = null,
+  /** v73: a centre or intersection mark under the pointer. */
+  markHit: {
+    annotationId: DrawingAnnotationId;
+    viewId: DrawingViewId;
+  } | null = null
 ): PickResult {
   if (pickedEnough(tool)) return { ok: true, tool };
+  // A mark is a point: the linear tools and the centrelines take it.
+  if (
+    markHit &&
+    (tool.kind === 'horizontal' ||
+      tool.kind === 'vertical' ||
+      tool.kind === 'aligned' ||
+      ((tool.kind === 'centerline' || tool.kind === 'circle-centerline') &&
+        tool.edges.length === 0)) &&
+    tool.faces.length === 0
+  ) {
+    if (tool.viewId && markHit.viewId !== tool.viewId)
+      return {
+        ok: false,
+        message: tool.repairId
+          ? 'Re-pick in the view this annotation belongs to.'
+          : 'Pick in the same view as the first pick.'
+      };
+    return {
+      ok: true,
+      tool: {
+        ...tool,
+        viewId: markHit.viewId,
+        points: [
+          ...tool.points,
+          { anchor: 'mark', annotationId: markHit.annotationId }
+        ]
+      }
+    };
+  }
   const linear =
     tool.kind === 'horizontal' ||
     tool.kind === 'vertical' ||
@@ -791,7 +869,8 @@ export function applyAnnotationPick(
     view.orientation === 'iso' &&
     tool.kind !== 'note' &&
     tool.kind !== 'radius' &&
-    tool.kind !== 'diameter'
+    tool.kind !== 'diameter' &&
+    tool.kind !== 'center-mark'
   )
     return {
       ok: false,
@@ -908,6 +987,106 @@ export function applyAnnotationPick(
       return { ok: true, tool: { ...next, edges: [...tool.edges, ref] } };
     case 'note':
       return { ok: true, tool: { ...next, edges: [ref] } };
+    case 'center-mark':
+      if (!isFaceOnCircle(view, hit.edge))
+        return {
+          ok: false,
+          message: 'Pick a circle or arc this view sees face-on.'
+        };
+      return { ok: true, tool: { ...next, edges: [ref] } };
+    case 'intersection-mark':
+      if (
+        hit.edge.curve?.type !== 'LINE' ||
+        !edgeEndsInPageOrder(view, hit.edge)
+      )
+        return { ok: false, message: 'Pick a straight edge.' };
+      if (
+        tool.edges.some(
+          (edge) => edge.hash === ref.hash && edge.bodyId === ref.bodyId
+        )
+      )
+        return {
+          ok: false,
+          message: 'Pick a different edge for the second one.'
+        };
+      return { ok: true, tool: { ...next, edges: [...tool.edges, ref] } };
+    case 'centerline':
+    case 'circle-centerline': {
+      const ends = edgeEndsInPageOrder(view, hit.edge);
+      // A straight edge picked away from its ends is a line (two make a
+      // centreline midway between them); otherwise the pick is its nearer
+      // end, or a face-on circle's centre.
+      if (
+        ends &&
+        hit.edge.curve?.type === 'LINE' &&
+        tool.kind === 'centerline' &&
+        tool.points.length === 0
+      ) {
+        const page = hit.page;
+        const first = page[0]!;
+        const last = page[page.length - 1]!;
+        const length = Math.hypot(last[0] - first[0], last[1] - first[1]);
+        const away =
+          Math.min(
+            Math.hypot(point[0] - first[0], point[1] - first[1]),
+            Math.hypot(point[0] - last[0], point[1] - last[1])
+          ) >
+          0.25 * length;
+        if (away || tool.edges.length === 1) {
+          if (
+            tool.edges.some(
+              (edge) => edge.hash === ref.hash && edge.bodyId === ref.bodyId
+            )
+          )
+            return {
+              ok: false,
+              message: 'Pick a different edge for the second one.'
+            };
+          return { ok: true, tool: { ...next, edges: [...tool.edges, ref] } };
+        }
+      }
+      if (tool.edges.length > 0)
+        return {
+          ok: false,
+          message: 'Pick a second straight edge, parallel to the first.'
+        };
+      if (!ends) {
+        if (!isFaceOnCircle(view, hit.edge))
+          return {
+            ok: false,
+            message: 'Pick an edge end, a circle seen face-on, or a mark.'
+          };
+        return {
+          ok: true,
+          tool: {
+            ...next,
+            points: [...tool.points, { edge: ref, anchor: 'center' }]
+          }
+        };
+      }
+      const start = projectToView(DRAWING_VIEW_FRAMES[view.orientation], {
+        x: hit.edge.points[0]!,
+        y: hit.edge.points[1]!,
+        z: hit.edge.points[2]!
+      });
+      const startIsFirst =
+        Math.hypot(start.u - ends[0][0], start.v - ends[0][1]) <=
+        Math.hypot(start.u - ends[1][0], start.v - ends[1][1]);
+      const firstPage = hit.page[0]!;
+      const lastPage = hit.page[hit.page.length - 1]!;
+      const [pageFirst, pageSecond] = startIsFirst
+        ? [firstPage, lastPage]
+        : [lastPage, firstPage];
+      const anchor: DrawingPointAnchor =
+        Math.hypot(point[0] - pageFirst[0], point[1] - pageFirst[1]) <=
+        Math.hypot(point[0] - pageSecond[0], point[1] - pageSecond[1])
+          ? 'first'
+          : 'second';
+      return {
+        ok: true,
+        tool: { ...next, points: [...tool.points, { edge: ref, anchor }] }
+      };
+    }
   }
 }
 
@@ -1020,6 +1199,45 @@ export function draftAnnotation(
         ...(tool.viewId ? { viewId: tool.viewId } : {}),
         ...(tool.edges[0] ? { leader: tool.edges[0] } : {})
       };
+    case 'center-mark':
+      return {
+        ...base,
+        kind: 'center-mark',
+        viewId: tool.viewId!,
+        edge: tool.edges[0]!
+      };
+    case 'intersection-mark':
+      return {
+        ...base,
+        kind: 'intersection-mark',
+        viewId: tool.viewId!,
+        edges: [tool.edges[0]!, tool.edges[1]!]
+      };
+    case 'centerline':
+      return tool.edges.length === 2
+        ? {
+            ...base,
+            kind: 'centerline',
+            viewId: tool.viewId!,
+            mode: 'lines',
+            edges: [tool.edges[0]!, tool.edges[1]!]
+          }
+        : {
+            ...base,
+            kind: 'centerline',
+            viewId: tool.viewId!,
+            mode: 'points',
+            from: tool.points[0]!,
+            to: tool.points[1]!
+          };
+    case 'circle-centerline':
+      return {
+        ...base,
+        kind: 'centerline',
+        viewId: tool.viewId!,
+        mode: 'circle',
+        through: [tool.points[0]!, tool.points[1]!, tool.points[2]!]
+      };
   }
 }
 
@@ -1062,6 +1280,8 @@ export function repairedAnnotation(
 export function repairToolKind(
   annotation: DrawingAnnotation
 ): AnnotationToolKind {
+  if (annotation.kind === 'centerline')
+    return annotation.mode === 'circle' ? 'circle-centerline' : 'centerline';
   return annotation.kind === 'linear' ? annotation.direction : annotation.kind;
 }
 
@@ -1070,8 +1290,18 @@ export function draftRefusal(
   annotation: DrawingAnnotation,
   view: DrawingView | undefined,
   bodies: AnnotationBodies,
-  units: UnitSystem
+  units: UnitSystem,
+  /** v73: the sheet's annotations, for points that marks mark. */
+  marks?: MarkLookup
 ): string | null {
-  const resolution = resolveDrawingAnnotation(annotation, view, bodies, units);
+  const resolution = resolveDrawingAnnotation(
+    annotation,
+    view,
+    bodies,
+    units,
+    undefined,
+    undefined,
+    marks
+  );
   return resolution.ok ? null : resolution.message;
 }

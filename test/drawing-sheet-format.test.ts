@@ -20,6 +20,7 @@ import {
   type BodyRepresentation,
   type DrawingAnnotation,
   type DrawingAnnotationId,
+  type DrawingDimension,
   type DrawingEdgeRef,
   type DrawingLinearDimension,
   type DrawingSheet,
@@ -244,7 +245,7 @@ describe('D02 drawing properties (schema v70)', () => {
         edges: [ref, { ...ref, hash: 8 }],
         placementMm: { x: 0, y: 0 },
         ...extra
-      }) as DrawingAnnotation as Exclude<DrawingAnnotation, { kind: 'note' }>;
+      }) as DrawingDimension;
     expect(formatDimension(angled(), angle(30.5), dms).label).toBe(`30°30'0"`);
     // Rounded once, in seconds: no 60" carries into the label.
     expect(formatDimension(angled(), angle(29.99999), dms).label).toBe(

@@ -46,6 +46,7 @@ export {
   type OpeningAxis
 } from './growing-holder';
 import {
+  isDrawingGeometryAnnotation,
   PIPE_THREAD_SIZES,
   isPipeThreadSize,
   standardPartGeometry,
@@ -3678,7 +3679,11 @@ export const commandFactories = {
   ): CommandDefinition<DrawingAnnotationAddInput> {
     return makeCommand(
       'drawing.annotation.add',
-      payload.annotation.kind === 'note' ? 'Add note' : 'Add dimension',
+      payload.annotation.kind === 'note'
+        ? 'Add note'
+        : isDrawingGeometryAnnotation(payload.annotation)
+          ? 'Add mark'
+          : 'Add dimension',
       payload,
       (document) => addDrawingAnnotation(document, payload)
     );

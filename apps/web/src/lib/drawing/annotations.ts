@@ -23,6 +23,11 @@ import {
   type DrawingView,
   type DrawingViewFrame,
   type DrawingAngleFormat,
+  type DrawingCenterMark,
+  type DrawingDimension,
+  type DrawingGeometryAnnotation,
+  type DrawingIntersectionMark,
+  isDrawingGeometryAnnotation,
   type DrawingSheetFormat,
   millimetresPerUnit,
   MAX_DRAWING_DIMENSION_DECIMALS,
@@ -172,11 +177,35 @@ export type AnnotationBreak =
   | 'not-a-chamfer'
   | 'not-a-blend'
   | 'not-a-counterbore'
-  | 'not-a-countersink';
+  | 'not-a-countersink'
+  | 'mark-missing'
+  | 'not-parallel'
+  | 'collinear';
 
 type UV = [number, number];
 
 export type ResolvedAnnotation =
+  | {
+      /** v73: a centre mark's circle, in view (u, v). */
+      kind: 'center-mark';
+      center: UV;
+      radius: number;
+      label: string;
+    }
+  | {
+      /** v73: where two lines cross; each edge's nearer end, to extend from. */
+      kind: 'intersection-mark';
+      point: UV;
+      from: [UV, UV];
+      label: string;
+    }
+  | {
+      /** v73: a centreline: a segment, or a circle. */
+      kind: 'centerline';
+      segment?: [UV, UV];
+      circle?: { center: UV; radius: number };
+      label: string;
+    }
   | {
       kind: 'linear';
       /** Unit measuring direction in the view plane. */
@@ -289,6 +318,12 @@ export function annotationBreakMessage(reason: AnnotationBreak): string {
       return 'These circles no longer make a counterbored hole: a larger bore on the same axis, opening onto the hole.';
     case 'not-a-countersink':
       return 'These circles no longer make a countersunk hole: a cone on the same axis, opening onto the hole.';
+    case 'mark-missing':
+      return 'The centre or intersection mark this measured to has been deleted, or no longer marks a point.';
+    case 'not-parallel':
+      return 'The two edges are no longer parallel in this view, so there is no line midway between them.';
+    case 'collinear':
+      return 'The three points now lie on one line, so no circle passes through them.';
   }
 }
 
@@ -442,7 +477,7 @@ function signedDeviation(
  * and × (U+00D7) and ± (U+00B1) are in it.
  */
 export function formatDimension(
-  annotation: Exclude<DrawingAnnotation, { kind: 'note' }>,
+  annotation: DrawingDimension,
   measured: string | Measured,
   format: DrawingNumberFormat = drawingNumberFormat(undefined, 'mm')
 ): { label: string; text?: DimensionText } {
@@ -760,9 +795,21 @@ function pointOf(
   point: DrawingPointRef,
   bodies: AnnotationBodies,
   along: Vector3 | null,
-  across: Vector3 | null
+  across: Vector3 | null,
+  /** v73: the sheet's annotations, for a point a mark marks. */
+  marks?: MarkLookup
 ): { ok: true; point: ViewPoint } | { ok: false; reason: AnnotationBreak } {
   const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  if (point.anchor === 'mark') {
+    const mark = marks?.(point.annotationId);
+    if (
+      !mark ||
+      mark.viewId !== view.viewId ||
+      (mark.kind !== 'center-mark' && mark.kind !== 'intersection-mark')
+    )
+      return { ok: false, reason: 'mark-missing' };
+    return markPoint(mark, view, bodies);
+  }
   if (point.anchor === 'virtual-sharp') {
     const found = point.faces.map((ref) => lookupFace(ref, view, bodies));
     for (const entry of found) if (!entry.ok) return entry;
@@ -1017,6 +1064,237 @@ function straightEnds(
   return { ok: true, ends: [a.uv, b.uv] };
 }
 
+/** v73: the sheet's annotations by id, for points that marks mark. */
+export type MarkLookup = (
+  annotationId: DrawingAnnotationId
+) => DrawingAnnotation | undefined;
+
+/** A point in the view at (u, v) and `depth`, with its model position. */
+function pointAt(frame: DrawingViewFrame, uv: UV, depth: number): ViewPoint {
+  const model = add(
+    add(scale(frame.x, uv[0]), scale(frame.up, uv[1])),
+    scale(frame.direction, depth)
+  );
+  return { uv, depth, model };
+}
+
+/** Where two straight edges' lines cross in the view, and each one's near end. */
+function crossing(
+  view: DrawingView,
+  edges: readonly EdgeTopology[]
+):
+  | { ok: true; point: UV; depth: number; near: [UV, UV] }
+  | { ok: false; reason: AnnotationBreak } {
+  // Where the lines cross on the page: an edge sloping into the view still
+  // has one, so only straightness is asked of it, not true length.
+  const lines: [ViewPoint, ViewPoint][] = [];
+  for (const edge of edges) {
+    if (edge.curve?.type !== 'LINE')
+      return { ok: false, reason: 'not-straight' };
+    const ends = edgeEndsWithDepth(view, edge);
+    if (!ends) return { ok: false, reason: 'not-straight' };
+    if (
+      Math.hypot(ends[1].uv[0] - ends[0].uv[0], ends[1].uv[1] - ends[0].uv[1]) <
+      1e-9
+    )
+      return { ok: false, reason: 'edge-on' };
+    lines.push(ends);
+  }
+  const [[a1, b1], [a2, b2]] = lines as [
+    [ViewPoint, ViewPoint],
+    [ViewPoint, ViewPoint]
+  ];
+  const e1: UV = [b1.uv[0] - a1.uv[0], b1.uv[1] - a1.uv[1]];
+  const e2: UV = [b2.uv[0] - a2.uv[0], b2.uv[1] - a2.uv[1]];
+  const cross = e1[0] * e2[1] - e1[1] * e2[0];
+  if (Math.abs(cross) <= 1e-9 * Math.hypot(...e1) * Math.hypot(...e2))
+    return { ok: false, reason: 'parallel' };
+  const t =
+    ((a2.uv[0] - a1.uv[0]) * e2[1] - (a2.uv[1] - a1.uv[1]) * e2[0]) / cross;
+  const point: UV = [a1.uv[0] + t * e1[0], a1.uv[1] + t * e1[1]];
+  const nearer = ([a, b]: [ViewPoint, ViewPoint]): UV =>
+    Math.hypot(a.uv[0] - point[0], a.uv[1] - point[1]) <=
+    Math.hypot(b.uv[0] - point[0], b.uv[1] - point[1])
+      ? a.uv
+      : b.uv;
+  return {
+    ok: true,
+    point,
+    depth: a1.depth + t * (b1.depth - a1.depth),
+    near: [nearer(lines[0]!), nearer(lines[1]!)]
+  };
+}
+
+/** The point a centre or intersection mark marks, read from the model. */
+function markPoint(
+  mark: DrawingCenterMark | DrawingIntersectionMark,
+  view: DrawingView,
+  bodies: AnnotationBodies
+): { ok: true; point: ViewPoint } | { ok: false; reason: AnnotationBreak } {
+  const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  if (mark.kind === 'center-mark') {
+    const found = lookupEdge(mark.edge, view, bodies);
+    if (!found.ok) return found;
+    const circle = faceOnCircle(view, found.edge);
+    if (!circle.ok) return circle;
+    return { ok: true, point: pointAt(frame, circle.center, circle.depth) };
+  }
+  const edges: EdgeTopology[] = [];
+  for (const ref of mark.edges) {
+    const found = lookupEdge(ref, view, bodies);
+    if (!found.ok) return found;
+    edges.push(found.edge);
+  }
+  if (edges[0] === edges[1]) return { ok: false, reason: 'ambiguous' };
+  const crossed = crossing(view, edges);
+  if (!crossed.ok) return crossed;
+  return { ok: true, point: pointAt(frame, crossed.point, crossed.depth) };
+}
+
+/** v73: a centre mark, an intersection mark or a centreline, in its view. */
+function resolveGeometryAnnotation(
+  annotation: DrawingGeometryAnnotation,
+  view: DrawingView,
+  bodies: AnnotationBodies,
+  marks: MarkLookup | undefined
+): AnnotationResolution {
+  switch (annotation.kind) {
+    case 'center-mark': {
+      const found = lookupEdge(annotation.edge, view, bodies);
+      if (!found.ok) return failure(found.reason);
+      const circle = faceOnCircle(view, found.edge);
+      if (!circle.ok) return failure(circle.reason);
+      return {
+        ok: true,
+        resolved: {
+          kind: 'center-mark',
+          center: circle.center,
+          radius: circle.radius,
+          label: ''
+        }
+      };
+    }
+    case 'intersection-mark': {
+      const edges: EdgeTopology[] = [];
+      for (const ref of annotation.edges) {
+        const found = lookupEdge(ref, view, bodies);
+        if (!found.ok) return failure(found.reason);
+        edges.push(found.edge);
+      }
+      if (edges[0] === edges[1]) return failure('ambiguous');
+      const crossed = crossing(view, edges);
+      if (!crossed.ok) return failure(crossed.reason);
+      return {
+        ok: true,
+        resolved: {
+          kind: 'intersection-mark',
+          point: crossed.point,
+          from: crossed.near,
+          label: ''
+        }
+      };
+    }
+    case 'centerline': {
+      if (annotation.mode === 'lines') {
+        const lines: [UV, UV][] = [];
+        for (const ref of annotation.edges) {
+          const found = lookupEdge(ref, view, bodies);
+          if (!found.ok) return failure(found.reason);
+          // Midway on the page: an edge sloping into the view still draws
+          // a line there.
+          if (found.edge.curve?.type !== 'LINE') return failure('not-straight');
+          const ends = edgeEndsInPageOrder(view, found.edge);
+          if (!ends) return failure('not-straight');
+          if (
+            Math.hypot(ends[1][0] - ends[0][0], ends[1][1] - ends[0][1]) < 1e-9
+          )
+            return failure('edge-on');
+          lines.push(ends);
+        }
+        const [[a1, b1], [a2, b2]] = lines as [[UV, UV], [UV, UV]];
+        const length = Math.hypot(b1[0] - a1[0], b1[1] - a1[1]);
+        const d: UV = [(b1[0] - a1[0]) / length, (b1[1] - a1[1]) / length];
+        const e2: UV = [b2[0] - a2[0], b2[1] - a2[1]];
+        if (
+          Math.abs(d[0] * e2[1] - d[1] * e2[0]) >
+          1e-6 * Math.max(1, Math.hypot(...e2))
+        )
+          return failure('not-parallel');
+        const n: UV = [-d[1], d[0]];
+        const offset = (p: UV) => p[0] * n[0] + p[1] * n[1];
+        const gap = offset(a2) - offset(a1);
+        if (Math.abs(gap) < 1e-9) return failure('degenerate');
+        // Midway across, spanning both edges along their direction.
+        const along = [a1, b1, a2, b2].map((p) => p[0] * d[0] + p[1] * d[1]);
+        const mid = offset(a1) + gap / 2;
+        const at = (t: number): UV => [
+          d[0] * t + n[0] * mid,
+          d[1] * t + n[1] * mid
+        ];
+        return {
+          ok: true,
+          resolved: {
+            kind: 'centerline',
+            segment: [at(Math.min(...along)), at(Math.max(...along))],
+            label: ''
+          }
+        };
+      }
+      const refs =
+        annotation.mode === 'points'
+          ? [annotation.from, annotation.to]
+          : [...annotation.through];
+      const points: UV[] = [];
+      for (const ref of refs) {
+        const found = pointOf(view, ref, bodies, null, null, marks);
+        if (!found.ok) return failure(found.reason);
+        points.push(found.point.uv);
+      }
+      if (annotation.mode === 'points') {
+        const [a, b] = points as [UV, UV];
+        if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 1e-9)
+          return failure('degenerate');
+        return {
+          ok: true,
+          resolved: { kind: 'centerline', segment: [a, b], label: '' }
+        };
+      }
+      const [a, b, c] = points as [UV, UV, UV];
+      const d2 =
+        2 *
+        (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+      const span = Math.max(
+        Math.hypot(b[0] - a[0], b[1] - a[1]),
+        Math.hypot(c[0] - a[0], c[1] - a[1])
+      );
+      if (Math.abs(d2) <= 1e-9 * Math.max(1, span * span))
+        return failure('collinear');
+      const sq = (p: UV) => p[0] * p[0] + p[1] * p[1];
+      const center: UV = [
+        (sq(a) * (b[1] - c[1]) +
+          sq(b) * (c[1] - a[1]) +
+          sq(c) * (a[1] - b[1])) /
+          d2,
+        (sq(a) * (c[0] - b[0]) +
+          sq(b) * (a[0] - c[0]) +
+          sq(c) * (b[0] - a[0])) /
+          d2
+      ];
+      return {
+        ok: true,
+        resolved: {
+          kind: 'centerline',
+          circle: {
+            center,
+            radius: Math.hypot(a[0] - center[0], a[1] - center[1])
+          },
+          label: ''
+        }
+      };
+    }
+  }
+}
+
 /**
  * What `annotation` measures in `view` of the current model, or why it no
  * longer can. A note without a view needs no model at all.
@@ -1029,7 +1307,9 @@ export function resolveDrawingAnnotation(
   /** M01: a hole's callout data, by the hole's feature id. */
   holes?: HoleCalloutLookup,
   /** D02 v70: the sheet's number format; absent prints in `units`. */
-  format: DrawingNumberFormat = drawingNumberFormat(undefined, units)
+  format: DrawingNumberFormat = drawingNumberFormat(undefined, units),
+  /** D02 v73: the sheet's annotations, for points that marks mark. */
+  marks?: MarkLookup
 ): AnnotationResolution {
   if (annotation.kind === 'note') {
     const label = annotation.text;
@@ -1055,6 +1335,8 @@ export function resolveDrawingAnnotation(
     };
   }
   if (!view) return failure('not-in-view');
+  if (isDrawingGeometryAnnotation(annotation))
+    return resolveGeometryAnnotation(annotation, view, bodies, marks);
   // An isometric projection shortens every length by a direction-dependent
   // factor, so a span or angle read off it is not the part's. A circle seen
   // face-on there is true size and may still be dimensioned.
@@ -1088,9 +1370,9 @@ export function resolveDrawingAnnotation(
           : annotation.direction === 'vertical'
             ? [frame.up, frame.x]
             : [null, null];
-      const from = pointOf(view, annotation.from, bodies, along, across);
+      const from = pointOf(view, annotation.from, bodies, along, across, marks);
       if (!from.ok) return failure(from.reason);
-      const to = pointOf(view, annotation.to, bodies, along, across);
+      const to = pointOf(view, annotation.to, bodies, along, across, marks);
       if (!to.ok) return failure(to.reason);
       const du = to.point.uv[0] - from.point.uv[0];
       const dv = to.point.uv[1] - from.point.uv[1];
@@ -1645,7 +1927,18 @@ export type AnnotationModelReading =
     };
 
 /** The body a dimension point belongs to. */
+/** The body a centre or intersection mark marks: '' across two bodies. */
+function markBody(mark: DrawingAnnotation | undefined): string {
+  if (mark?.kind === 'center-mark') return mark.edge.bodyId;
+  if (mark?.kind === 'intersection-mark')
+    return mark.edges[0].bodyId === mark.edges[1].bodyId
+      ? mark.edges[0].bodyId
+      : '';
+  return '';
+}
+
 function pointBody(point: DrawingPointRef): string {
+  if (point.anchor === 'mark') return '';
   if ('faces' in point) return point.faces[0].bodyId;
   if ('like' in point) return point.face.bodyId;
   return point.edge.bodyId;
@@ -1655,10 +1948,25 @@ export function annotationModelReading(
   annotation: DrawingAnnotation,
   view: DrawingView | undefined,
   bodies: AnnotationBodies,
-  units: UnitSystem
+  units: UnitSystem,
+  /** v73: the sheet's annotations, for points that marks mark. */
+  marks?: MarkLookup
 ): AnnotationModelReading | null {
-  if (!view || annotation.kind === 'note') return null;
-  const resolution = resolveDrawingAnnotation(annotation, view, bodies, units);
+  if (
+    !view ||
+    annotation.kind === 'note' ||
+    isDrawingGeometryAnnotation(annotation)
+  )
+    return null;
+  const resolution = resolveDrawingAnnotation(
+    annotation,
+    view,
+    bodies,
+    units,
+    undefined,
+    undefined,
+    marks
+  );
   if (!resolution.ok) return null;
   if (annotation.kind === 'angle') {
     if (resolution.resolved.kind !== 'angle') return null;
@@ -1680,15 +1988,17 @@ export function annotationModelReading(
         : annotation.direction === 'vertical'
           ? [frame.up, frame.x]
           : [null, null];
-    const from = pointOf(view, annotation.from, bodies, along, across);
-    const to = pointOf(view, annotation.to, bodies, along, across);
+    const from = pointOf(view, annotation.from, bodies, along, across, marks);
+    const to = pointOf(view, annotation.to, bodies, along, across, marks);
     if (!from.ok || !to.ok) return null;
     // A virtual sharp's two faces may lie on two bodies; it then reads as a
-    // span between bodies.
+    // span between bodies. A mark reads as the body it marks.
     const bodyOf = (point: DrawingPointRef) =>
       'faces' in point && point.faces[0].bodyId !== point.faces[1].bodyId
         ? ''
-        : pointBody(point);
+        : point.anchor === 'mark'
+          ? markBody(marks?.(point.annotationId))
+          : pointBody(point);
     return {
       kind: 'linear',
       bodyIds: [bodyOf(annotation.from), bodyOf(annotation.to)],
@@ -2499,6 +2809,127 @@ export function layoutAnnotation(
       return angleLayout(resolved, toPage, anchor);
     case 'chamfer':
       return chamferLayout(resolved, toPage, anchor);
+    case 'center-mark':
+    case 'intersection-mark':
+    case 'centerline':
+      return geometryLayout(resolved, toPage, k);
+  }
+}
+
+/** v73: how far centre lines run past what they mark, on the paper (ISO 128-20). */
+const CENTRE_LINE_OVERRUN_MM = 2.5;
+/** A centre line shorter than this draws solid: its chain dash would not show. */
+const CHAIN_MIN_MM = 12;
+/** A centre mark's small solid cross, each arm. */
+const CENTRE_CROSS_MM = 1.5;
+/** A mark's pick box, each side of what it marks. */
+const MARK_BOX_MM = 2.5;
+
+function chainOrThin(a: XY, b: XY): SheetStroke {
+  const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  return {
+    kind: length >= CHAIN_MIN_MM ? 'chain' : 'dimension',
+    points: [a[0], a[1], b[0], b[1]]
+  };
+}
+
+function markBox(at: XY): AnnotationBox {
+  return {
+    x: at[0] - MARK_BOX_MM,
+    y: at[1] - MARK_BOX_MM,
+    width: 2 * MARK_BOX_MM,
+    height: 2 * MARK_BOX_MM
+  };
+}
+
+/**
+ * v73: centre marks (centre lines across the circle, run past its rim, and
+ * a small cross at its centre), intersection marks (each edge's thin
+ * extension through the crossing) and centrelines (a chain line run past
+ * its ends, or a chain circle). They state no value, so they have no text;
+ * their box sits on what they mark.
+ */
+function geometryLayout(
+  resolved: Extract<
+    ResolvedAnnotation,
+    { kind: 'center-mark' | 'intersection-mark' | 'centerline' }
+  >,
+  toPage: (u: number, v: number) => XY,
+  k: number
+): AnnotationLayout {
+  const strokes: SheetStroke[] = [];
+  switch (resolved.kind) {
+    case 'center-mark': {
+      const c = toPage(...resolved.center);
+      const reach = resolved.radius * k + CENTRE_LINE_OVERRUN_MM;
+      strokes.push(
+        chainOrThin([c[0] - reach, c[1]], [c[0] + reach, c[1]]),
+        chainOrThin([c[0], c[1] - reach], [c[0], c[1] + reach]),
+        line([c[0] - CENTRE_CROSS_MM, c[1]], [c[0] + CENTRE_CROSS_MM, c[1]]),
+        line([c[0], c[1] - CENTRE_CROSS_MM], [c[0], c[1] + CENTRE_CROSS_MM])
+      );
+      return { strokes, texts: [], box: markBox(c) };
+    }
+    case 'intersection-mark': {
+      const p = toPage(...resolved.point);
+      for (const near of resolved.from) {
+        const q = toPage(...near);
+        const length = Math.hypot(p[0] - q[0], p[1] - q[1]);
+        if (length < 1e-6) continue;
+        const d: XY = [(p[0] - q[0]) / length, (p[1] - q[1]) / length];
+        const start =
+          length > EXTENSION_GAP_MM
+            ? ([
+                q[0] + d[0] * EXTENSION_GAP_MM,
+                q[1] + d[1] * EXTENSION_GAP_MM
+              ] as XY)
+            : q;
+        strokes.push(
+          line(start, [
+            p[0] + d[0] * EXTENSION_OVERSHOOT_MM,
+            p[1] + d[1] * EXTENSION_OVERSHOOT_MM
+          ])
+        );
+      }
+      return { strokes, texts: [], box: markBox(p) };
+    }
+    case 'centerline': {
+      if (resolved.circle) {
+        const c = toPage(...resolved.circle.center);
+        const r = resolved.circle.radius * k;
+        const steps = Math.max(24, Math.min(180, Math.ceil(r)));
+        const points: number[] = [];
+        for (let i = 0; i < steps; i += 1) {
+          const angle = (2 * Math.PI * i) / steps;
+          points.push(c[0] + r * Math.cos(angle), c[1] + r * Math.sin(angle));
+        }
+        strokes.push({ kind: 'chain', closed: true, points });
+        return { strokes, texts: [], box: markBox([c[0], c[1] + r]) };
+      }
+      const [a, b] = resolved.segment!.map((uv) => toPage(...uv)) as [XY, XY];
+      const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const d: XY =
+        length > 1e-9
+          ? [(b[0] - a[0]) / length, (b[1] - a[1]) / length]
+          : [1, 0];
+      strokes.push(
+        chainOrThin(
+          [
+            a[0] - d[0] * CENTRE_LINE_OVERRUN_MM,
+            a[1] - d[1] * CENTRE_LINE_OVERRUN_MM
+          ],
+          [
+            b[0] + d[0] * CENTRE_LINE_OVERRUN_MM,
+            b[1] + d[1] * CENTRE_LINE_OVERRUN_MM
+          ]
+        )
+      );
+      return {
+        strokes,
+        texts: [],
+        box: markBox([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2])
+      };
+    }
   }
 }
 
@@ -2547,6 +2978,16 @@ export function drawnLines(
 }
 
 /** Every annotation of a sheet resolved against the current model. */
+/** v73: a sheet's annotations by id, for points its marks mark. */
+export function sheetMarkLookup(
+  sheet: Pick<DrawingSheet, 'annotations'>
+): MarkLookup {
+  const byId = new Map(
+    (sheet.annotations ?? []).map((entry) => [entry.annotationId, entry])
+  );
+  return (annotationId) => byId.get(annotationId);
+}
+
 export function resolveSheetAnnotations(
   sheet: DrawingSheet,
   bodies: AnnotationBodies,
@@ -2554,6 +2995,7 @@ export function resolveSheetAnnotations(
   holes?: HoleCalloutLookup
 ): Map<DrawingAnnotationId, AnnotationResolution> {
   const views = new Map(sheet.views.map((view) => [view.viewId, view]));
+  const marks = sheetMarkLookup(sheet);
   return new Map(
     (sheet.annotations ?? []).map((annotation) => [
       annotation.annotationId,
@@ -2563,7 +3005,8 @@ export function resolveSheetAnnotations(
         bodies,
         units,
         holes,
-        sheetNumberFormat(sheet, units)
+        sheetNumberFormat(sheet, units),
+        marks
       )
     ])
   );

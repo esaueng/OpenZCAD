@@ -89,12 +89,12 @@ test(
       /now: Wireframe · X-ray$/
     );
 
-    // Section is on View's bar too, and its chip says the cut is on.
+    // Section is on View's bar too, and the status line says the cut is on.
     const section = bar.getByRole('button', { name: /^Section view/ });
     await section.click();
     await expect(section).toHaveAttribute('aria-pressed', 'true');
     await expect(
-      page.getByRole('group', { name: 'Section view on' })
+      page.getByRole('button', { name: 'Turn off section view' })
     ).toBeVisible();
     await section.click();
     await expect(section).toHaveAttribute('aria-pressed', 'false');

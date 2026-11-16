@@ -2,12 +2,15 @@ import { useEffect, useRef, useState } from 'react';
 import type { FeatureWarning, ProjectDocument } from '@openzcad/shared';
 import type { GeometryWorkerApi } from './useGeometryWorker';
 import type { KernelRefusalObservation } from '../lib/analytics';
-import {
-  createRefusalHarvester,
-  type RefusalCapture
-} from '../lib/refusalHarvest';
+import type { RefusalCapture, RefusalHarvester } from '../lib/refusalHarvest';
 import { splitRefusal } from '../lib/featureValidation';
 import type { CommandDiagnostic } from '../lib/interaction/machine';
+
+/**
+ * How long a finished edit check waits for a harvester chunk that has not
+ * arrived. A request that stalls without failing must not hold the check.
+ */
+export const HARVESTER_WAIT_MS = 1_000;
 
 interface OwnedCapture {
   capture: RefusalCapture;
@@ -29,22 +32,58 @@ export function useRefusalHarvest(options: {
   const [held, setHeld] = useState<OwnedCapture | null>(null);
   const heldRef = useRef<OwnedCapture | null>(null);
   const request = useRef({ generation: 0 });
-  const [harvester] = useState(() =>
-    createRefusalHarvester({ track: (value) => live.current.track(value) })
-  );
+  // The harvester loads in its own chunk, off the launcher's entry chunk.
+  // It is asked for on mount, so it is there long before the first edit
+  // check; a chunk that fails to load is asked for again by the next check,
+  // and until then checks go unobserved rather than fail. A request that
+  // outlasts HARVESTER_WAIT_MS holds one check that long; later checks stop
+  // waiting for that request and are observed once it arrives.
+  const harvesterRef = useRef<RefusalHarvester | null>(null);
+  const loading = useRef<Promise<RefusalHarvester | null> | null>(null);
+  const stalled = useRef<Promise<RefusalHarvester | null> | null>(null);
+  function loadHarvester() {
+    return (loading.current ??= import('../lib/refusalHarvest').then(
+      ({ createRefusalHarvester }) =>
+        (harvesterRef.current ??= createRefusalHarvester({
+          track: (value) => live.current.track(value)
+        })),
+      () => {
+        loading.current = null;
+        return null;
+      }
+    ));
+  }
+  async function harvesterWithin(ready: Promise<RefusalHarvester | null>) {
+    if (stalled.current === ready) return null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<null>((resolve) => {
+      timer = setTimeout(() => {
+        stalled.current = ready;
+        resolve(null);
+      }, HARVESTER_WAIT_MS);
+    });
+    try {
+      return await Promise.race([ready, late]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  useEffect(() => {
+    void loadHarvester();
+  }, []);
   const projectId = options.document?.projectId;
   const version = options.document?.version;
   useEffect(() => {
     const pending = request.current;
     ++pending.generation;
-    harvester.clear();
+    harvesterRef.current?.clear();
     heldRef.current = null;
     setHeld(null);
     // A commit or project switch ends the attempt, including pending replies.
     return () => {
       ++pending.generation;
     };
-  }, [projectId, version, harvester]);
+  }, [projectId, version]);
 
   async function syncFor(
     owner: string,
@@ -60,9 +99,13 @@ export function useRefusalHarvest(options: {
     const token = ++request.current.generation;
     heldRef.current = null;
     setHeld(null);
+    const harvesterReady = loadHarvester();
     const derived = await live.current.rebuild(...args);
+    const harvester =
+      harvesterRef.current ?? (await harvesterWithin(harvesterReady));
     const current = live.current.currentDocument();
     if (
+      !harvester ||
       token !== request.current.generation ||
       !current ||
       current.projectId !== base.projectId ||
