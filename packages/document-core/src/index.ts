@@ -3829,7 +3829,7 @@ export function standardPartBody(
   const { name, ids, bodyName, ...parameters } = input;
   // Written to a document that declares an older schema, the feature would
   // be dropped by the readers that schema admits.
-  assertStandardPartSchema(document.schemaVersion);
+  assertStandardPartSchema(document.schemaVersion, parameters);
   const problem = standardPartProblem(parameters);
   if (problem) throw new Error(problem);
   return addBodyResultFeature(
@@ -5059,7 +5059,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'length',
     'origin',
     'axis',
-    'xDirection'
+    'xDirection',
+    'hole'
   ],
   // `secondBodyId` is body wiring, not a parameter: never patchable.
   split: ['targetBodyId', 'plane', 'keepOriginal'],
@@ -5221,6 +5222,11 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   // stored position again; clearing its standard (schema v65) drills its
   // stored diameter.
   hole: ['points', 'standard', 'tapped'],
+  // M17: a screw's head goes off a part that is no longer a screw, a length
+  // off a part that has none (or, in a hole, is matched again), the
+  // x-direction back to the default, and the hole when the part is placed
+  // on a face instead (schema v77).
+  'standard-part': ['head', 'length', 'xDirection', 'hole'],
   // Schema v53: every size and placement field falls back to the face or its
   // documented default; the custom-profile fields may go only off a custom
   // profile, which the thread validation enforces. A face picked again
@@ -7630,3 +7636,44 @@ export {
 } from './imported-payload-key';
 
 export { resolvedSketchDocument } from './sketch-geometry';
+
+/**
+ * M17 (schema v77): an M01 hole feature a standard part can go into: its
+ * name, its stored data, and its entry face's outward normal as `bodies`
+ * (the derived body representations) show it. Null for anything else.
+ */
+export function standardPartHoleSource(
+  document: ProjectDocument,
+  bodies: Readonly<
+    Record<
+      string,
+      | {
+          topology?: {
+            faces: readonly {
+              hash: number;
+              geometry?: { normal?: { x: number; y: number; z: number } };
+            }[];
+          };
+        }
+      | undefined
+    >
+  >,
+  featureId: FeatureId
+): {
+  name: string;
+  data: Extract<FeatureData, { featureKind: 'hole' }>;
+  entryNormal: { x: number; y: number; z: number } | null;
+} | null {
+  const feature = findFeature(document, featureId);
+  if (!feature || feature.data.featureKind !== 'hole') return null;
+  const data = feature.data;
+  const hash = data.faceReference?.currentHash ?? data.faceHash;
+  const entry = bodies[data.targetBodyId]?.topology?.faces.find(
+    (face) => face.hash === hash
+  );
+  return {
+    name: feature.name,
+    data,
+    entryNormal: entry?.geometry?.normal ?? null
+  };
+}

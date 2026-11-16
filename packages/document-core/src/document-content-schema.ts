@@ -174,8 +174,13 @@ export function hasDrawingDimensionFormat(value: unknown): boolean {
  * M17 standard parts (schema v69): an older reader has no builder for the
  * kind and would drop the body, so the document must declare the schema.
  */
-export function assertStandardPartSchema(version: unknown): void {
+export function assertStandardPartSchema(
+  version: unknown,
+  data?: unknown
+): void {
   assertMinimumProjectSchema(version, 69, 'Standard parts');
+  if (record(data) && data.hole !== undefined)
+    assertMinimumProjectSchema(version, 77, 'Parts inserted into holes');
 }
 
 /**
@@ -367,7 +372,7 @@ export function assertDocumentContentCommandSchema(
     if (command.kind === 'feature.sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
     if (command.kind === 'feature.standard-part')
-      assertStandardPartSchema(document.schemaVersion);
+      assertStandardPartSchema(document.schemaVersion, command.payload);
     if (command.kind === 'printClearance.set')
       assertPrintClearanceSchema(document.schemaVersion);
     if (
@@ -435,6 +440,19 @@ export function assertDocumentContentCommandSchema(
         command.payload.data.featureKind === 'thread')
     )
       assertThreadContentSchema(command.payload.data, document.schemaVersion);
+    // M17 (schema v77): `hole` is a standard part's only, so a patch that
+    // carries one and is not another kind's inserts the part into a hole.
+    if (
+      record(command.payload.data) &&
+      command.payload.data.hole !== undefined &&
+      (command.payload.data.featureKind === undefined ||
+        command.payload.data.featureKind === 'standard-part')
+    )
+      assertMinimumProjectSchema(
+        document.schemaVersion,
+        77,
+        'Parts inserted into holes'
+      );
     switch (command.kind) {
       case 'sketch.add':
       case 'sketch.object.add':
@@ -550,7 +568,7 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
     if (node.kind === 'feature' && node.data.featureKind === 'sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'standard-part')
-      assertStandardPartSchema(document.schemaVersion);
+      assertStandardPartSchema(document.schemaVersion, node.data);
     if (
       node.kind === 'sketch' &&
       Array.isArray(node.composites) &&

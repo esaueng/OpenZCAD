@@ -26,6 +26,7 @@ export * from './gear-mesh';
 export * from './hole-points';
 export * from './hole-standards';
 export * from './standard-parts';
+export * from './standard-part-placement';
 import type { DocumentHistory } from './document-history';
 import { ownEntry } from './document-validation';
 import type { KeymapOverrides } from './keymap-settings';
@@ -343,7 +344,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // line may be a straight edge or a centreline. An older client would refuse
 // the unknown kind, so it must refuse the document. Builds on v74
 // (M17 standard parts in holes, #1644).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 75 as const;
+// v76 is claimed by D03 detail views (#1651).
+// v77 adds M17 parts inserted into M01 holes (`hole` on a standard part):
+// the part stands in each of the hole's bores and takes its matched length
+// where it stores none. An older client would build one part at the stored
+// origin, or none without a length, so it must refuse. (M17 first claimed
+// v71 and then v74, but clients up to v75 have no `hole`.) Builds on v75.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 77 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2391,6 +2398,18 @@ export type FeatureData =
       origin: ParametricVector3;
       axis: ParametricVector3;
       xDirection?: ParametricVector3;
+      /**
+       * M17 slice 2 (schema v71): the M01 hole the part is inserted into.
+       * The part then stands in every bore that hole drills (one solid
+       * each), on the bore's seat (a counterbore's floor, the entry face,
+       * or a countersunk head's top on the entry face) along the bore, and
+       * follows the hole when it moves. `origin` and `axis` keep where it
+       * stood when inserted. Without `length`, a screw or dowel pin takes
+       * the preferred length matched to the hole
+       * (`matchedStandardLengthMm`). The hole must be earlier in history,
+       * and must take the part's size (`standardPartForHole`).
+       */
+      hole?: { featureId: FeatureId };
     }
   /**
    * M16 (schema v58): a sheet-metal part. The sketch cells in `profiles`

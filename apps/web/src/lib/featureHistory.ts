@@ -42,6 +42,7 @@ export function featureHistory(document: ProjectDocument) {
   const bodyOwners = new Map<BodyId, FeatureId>();
   const sketchOwners = new Map<SketchId, FeatureId>();
   const datumOwners = new Set<FeatureId>();
+  const built = new Set<FeatureId>();
   for (const feature of features) {
     const inputs = new Set<FeatureId>();
     const missingInputs = new Set<'body' | 'sketch' | 'datum'>();
@@ -149,8 +150,14 @@ export function featureHistory(document: ProjectDocument) {
       case 'thread':
         body(data.targetBodyId);
         break;
-      case 'primitive':
       case 'standard-part':
+        // M17 (schema v71): a part in a hole stands in its bores.
+        if (data.hole) {
+          if (built.has(data.hole.featureId)) inputs.add(data.hole.featureId);
+          else missingInputs.add('body');
+        }
+        break;
+      case 'primitive':
       case 'imported-mesh':
       case 'imported-step':
         break;
@@ -161,6 +168,7 @@ export function featureHistory(document: ProjectDocument) {
         data satisfies never;
     }
     parents.set(feature.featureId, inputs);
+    built.add(feature.featureId);
     missing.set(feature.featureId, missingInputs);
     if (feature.bodyId) bodyOwners.set(feature.bodyId, feature.featureId);
     // An in-place edit republishes its target; a copy (M10) owns only its

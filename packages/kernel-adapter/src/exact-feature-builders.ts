@@ -1536,7 +1536,7 @@ const BORE_FACE_TOLERANCE = 1e-6;
  * The cylindrical face `spec`'s bore left in `solid`: on its axis, at its
  * radius. A bore cut into pieces (or missing) has no single face to tap.
  */
-function boreFaceOf(
+export function boreFaceOf(
   kernel: RemusKernel,
   solid: number,
   spec: HoleToolSpec
@@ -4280,7 +4280,10 @@ function buildFeatureByKind(
       buildSheetMetalFeature(ctx, feature, feature.data);
       break;
     case 'standard-part':
-      buildStandardPartFeature(ctx, feature, feature.data);
+      buildStandardPartFeature(ctx, feature, feature.data, {
+        holeToolSpecFor,
+        boreFaceOf
+      });
       break;
     case 'split':
       buildSplitFeature(ctx, feature, feature.data);

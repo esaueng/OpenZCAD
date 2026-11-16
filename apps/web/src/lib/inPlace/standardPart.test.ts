@@ -13,6 +13,7 @@ import {
 } from './edit';
 import {
   standardPartChoice,
+  standardPartHoleInsertion,
   standardPartSizeOptionId,
   standardPartSpec
 } from './standardPart';
@@ -244,5 +245,116 @@ describe('M17 Standard part command', () => {
       data: { partKind: 'washer', size: 'M6' },
       clearData: ['head', 'length']
     });
+  });
+});
+
+describe('M17 Standard part into a hole (schema v77)', () => {
+  const HOLE_ID = 'feat_hole' as FeatureId;
+  const hole = {
+    featureKind: 'hole',
+    targetBodyId: 'body_block' as BodyId,
+    faceHash: 7,
+    style: 'simple',
+    diameter: 6.6,
+    depthMode: 'through',
+    position: { u: 0, v: 0 },
+    standard: { system: 'iso', size: 'M6', kind: 'clearance' }
+  } as Extract<FeatureData, { featureKind: 'hole' }>;
+  const ctx: InPlaceContext = {
+    ...CTX,
+    evaluate: (value) => (typeof value === 'number' ? value : null),
+    holeFeature: (featureId) =>
+      featureId === HOLE_ID
+        ? { name: 'Hole 1', data: hole, entryNormal: { x: 0, y: 0, z: 1 } }
+        : null
+  };
+  // The bore of a 20 mm block, picked.
+  const bore = {
+    bodyId: 'body_holed' as BodyId,
+    hash: 11,
+    topologyId: 'f11',
+    feature: { featureId: HOLE_ID, name: 'Hole 1' },
+    cylinder: {
+      axisStart: { x: 20, y: 15, z: 0 },
+      axisEnd: { x: 20, y: 15, z: 20 },
+      radius: 3.3,
+      axialLength: 20
+    }
+  };
+  const slots = { ...SLOTS, faces: [bore] };
+  const options = { partKind: 'screw', place: 'hole', head: 'hex' };
+
+  it('sizes the screw by the hole and matches its length', () => {
+    const inserted = standardPartHoleInsertion(slots, options, ctx);
+    expect(inserted).toMatchObject({
+      featureId: HOLE_ID,
+      choice: { partKind: 'screw', system: 'iso', size: 'M6', head: 'hex' },
+      // The bore's end on the entry face, going in.
+      origin: { x: 20, y: 15, z: 20 },
+      axis: { x: 0, y: 0, z: -1 },
+      // 20 through, a 5.2 nut and two pitches: the preferred 30.
+      matchedLength: 30
+    });
+    expect(standardPartSpec.ready(slots, options, ctx)).toBe(true);
+    expect(standardPartSpec.defaults!(slots, ctx, {}, options).length).toBe(30);
+  });
+
+  it('stores the hole, and a length only once it is set', () => {
+    const matched = standardPartSpec.request(
+      slots,
+      { length: 30 },
+      options,
+      ctx
+    );
+    expect(matched).toMatchObject({
+      tool: 'standard-part',
+      part: { size: 'M6', head: 'hex', hole: { featureId: HOLE_ID } }
+    });
+    expect(matched && 'part' in matched && 'length' in matched.part).toBe(
+      false
+    );
+    const dragged = standardPartSpec.request(slots, { length: 35 }, options, {
+      ...ctx,
+      touched: ['length']
+    });
+    expect(dragged).toMatchObject({ part: { length: 35 } });
+  });
+
+  it('refuses a part the hole does not take', () => {
+    expect(
+      standardPartHoleInsertion(
+        slots,
+        { partKind: 'dowel', place: 'hole' },
+        ctx
+      )
+    ).toMatch(/No ISO dowel pin is 6.6 mm/);
+    expect(
+      standardPartSpec.hint(slots, { partKind: 'dowel', place: 'hole' }, ctx)
+    ).toMatch(/No ISO dowel pin/);
+    expect(standardPartSpec.ready(SLOTS, options, ctx)).toBe(false);
+  });
+
+  it('takes a part out of its hole when the edit places it on a face (regression)', () => {
+    const saved = {
+      featureKind: 'standard-part',
+      partKind: 'screw',
+      system: 'iso',
+      size: 'M6',
+      origin: { x: 20, y: 15, z: 20 },
+      axis: { x: 0, y: 0, z: -1 },
+      hole: { featureId: HOLE_ID }
+    } as Extract<FeatureData, { featureKind: 'standard-part' }>;
+    const onFace = standardPartSpec.request(
+      { ...SLOTS, plane: TOP },
+      { length: 20 },
+      { partKind: 'screw', place: 'face' },
+      { ...ctx, saved }
+    )!;
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: 'feat_part' as FeatureId, name: 'Screw', data: saved },
+        onFace as StandardPartUpdateRequest
+      )
+    ).toMatchObject({ clearData: ['hole'] });
   });
 });

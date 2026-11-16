@@ -2,24 +2,35 @@ import {
   STANDARD_PART_KINDS,
   STANDARD_SCREW_HEADS,
   millimetresPerUnit,
-  standardPartDefaultLengthMm,
+  standardPartChoiceOf,
+  standardPartDefaultLength,
   standardPartDesignation,
+  standardPartGoesIn,
   standardPartHasLength,
+  standardPartInHole,
+  standardPartHoleFields,
   standardPartMinimumLengthMm,
   standardPartGeometry,
-  standardPartSizes,
+  standardPartOnPlane,
+  standardPartEditChoices,
+  standardPartRow,
+  standardPartSizeChoiceLists,
+  standardPartSizeOptionId,
   type FeatureData,
+  type FeatureId,
+  type ParamValue,
   type ParametricVector3,
-  type StandardPartChoice,
+  type StandardPartInHole,
   type StandardPartKind,
   type StandardPartSize,
-  type StandardPartSystem,
   type StandardScrewHead,
-  type UnitSystem,
   type Vector3
 } from '@openzcad/shared';
 import type {
+  InPlaceContext,
   InPlacePanelState,
+  InPlaceRequest,
+  InPlaceSlots,
   InPlaceToolSpec,
   OptionSpec,
   PlanePick
@@ -54,125 +65,96 @@ const HEAD_LABELS: Record<StandardScrewHead, string> = {
   countersunk: 'Countersunk'
 };
 
-/** Whether a part of this kind goes into the face it is placed on. */
-export function standardPartGoesIn(kind: StandardPartKind): boolean {
-  return kind === 'screw' || kind === 'insert' || kind === 'dowel';
-}
+export { standardPartGoesIn, standardPartSizeOptionId };
 
-/** The size option a kind, head and system read their size from. */
-export function standardPartSizeOptionId(
-  kind: StandardPartKind,
-  system: StandardPartSystem,
-  head: StandardScrewHead = 'socket'
-): string {
-  return `size-${system}-${kind === 'screw' ? `screw-${head}` : kind}`;
-}
-
-/** The kind, head and system the options choose. */
-function chosenRow(options: Readonly<Record<string, string>>): {
-  partKind: StandardPartKind;
-  system: StandardPartSystem;
-  head?: StandardScrewHead;
-} {
-  const partKind = (
-    STANDARD_PART_KINDS.includes(options.partKind as StandardPartKind)
-      ? options.partKind
-      : 'screw'
-  ) as StandardPartKind;
-  const system: StandardPartSystem = options.system === 'ansi' ? 'ansi' : 'iso';
-  const head = STANDARD_SCREW_HEADS.includes(options.head as StandardScrewHead)
-    ? (options.head as StandardScrewHead)
-    : 'socket';
-  return { partKind, system, ...(partKind === 'screw' ? { head } : {}) };
-}
+const chosenRow = standardPartRow;
+const defaultLength = standardPartDefaultLength;
 
 /** The catalogue row the options choose, size included. */
-export function standardPartChoice(
-  options: Readonly<Record<string, string>>
-): StandardPartChoice {
-  const row = chosenRow(options);
-  const sizes = standardPartSizes(row.partKind, row.system, row.head);
-  const chosen =
-    options[standardPartSizeOptionId(row.partKind, row.system, row.head)];
-  const size =
-    chosen && (sizes as readonly string[]).includes(chosen)
-      ? chosen
-      : defaultSize(sizes);
-  return { ...row, size };
-}
+export const standardPartChoice = standardPartChoiceOf;
 
-/** The middle-of-the-range default: M6 or 1/4 where the table has it. */
-function defaultSize(sizes: readonly string[]): string {
-  for (const preferred of ['M6', '1/4', '6', '608', 'R4', 'M3', '#6']) {
-    if (sizes.includes(preferred)) return preferred;
-  }
-  return sizes[Math.floor(sizes.length / 2)]!;
-}
-
-const SIZE_OPTIONS: OptionSpec[] = (['iso', 'ansi'] as const).flatMap(
-  (system) =>
-    STANDARD_PART_KINDS.flatMap((kind) =>
-      (kind === 'screw' ? STANDARD_SCREW_HEADS : [undefined]).map(
-        (head): OptionSpec => {
-          const sizes = standardPartSizes(kind, system, head);
-          return {
-            id: standardPartSizeOptionId(kind, system, head),
-            label: kind === 'bearing' ? 'Bearing' : 'Size',
-            choices: sizes.map((size) => ({
-              value: size,
-              label:
-                kind === 'dowel'
-                  ? system === 'iso'
-                    ? `Ø${size}`
-                    : `Ø${size}"`
-                  : size
-            })),
-            initial: defaultSize(sizes),
-            when: (state: InPlacePanelState) => {
-              const row = chosenRow(state.options);
-              return (
-                row.partKind === kind &&
-                row.system === system &&
-                (kind !== 'screw' || row.head === head)
-              );
-            }
-          };
-        }
-      )
-    )
+const SIZE_OPTIONS: OptionSpec[] = standardPartSizeChoiceLists().map(
+  ({ id, partKind, system, head, initial, choices }) => ({
+    id,
+    label: partKind === 'bearing' ? 'Bearing' : 'Size',
+    choices,
+    initial,
+    when: (state: InPlacePanelState) => {
+      const row = chosenRow(state.options);
+      return (
+        row.partKind === partKind &&
+        row.system === system &&
+        (partKind !== 'screw' || row.head === head)
+      );
+    }
+  })
 );
 
-/** The length a row is offered at first, in document units. */
-function defaultLength(choice: StandardPartChoice, units: UnitSystem): number {
-  const millimetres = standardPartDefaultLengthMm(choice);
-  return millimetres === undefined
-    ? 20
-    : Number((millimetres / millimetresPerUnit(units)).toPrecision(12));
-}
-
-/** Where the part stands: the picked point and the way it goes. */
+/** Where the part stands on a picked plane, and the way it goes. */
 function placement(
   plane: PlanePick | null,
   kind: StandardPartKind
 ): { origin: Vector3; axis: Vector3 } | null {
   if (!plane || plane.kind === 'datum') return null;
-  const n = plane.normal;
-  const length = Math.hypot(n.x, n.y, n.z);
-  if (!(length > 0)) return null;
-  const sign = standardPartGoesIn(kind) ? -1 : 1;
-  return {
-    origin: plane.origin,
-    // `|| 0` stores a zero component as 0, never −0.
-    axis: {
-      x: (sign * n.x) / length || 0,
-      y: (sign * n.y) / length || 0,
-      z: (sign * n.z) / length || 0
-    }
-  };
+  return standardPartOnPlane(plane.origin, plane.normal, kind);
 }
 
 function vectorOf(v: Vector3): ParametricVector3 {
-  return { x: v.x, y: v.y, z: v.z };
+  return { x: v.x || 0, y: v.y || 0, z: v.z || 0 };
+}
+
+/** M17 (schema v77): whether the options put the part into a hole. */
+function intoHole(options: Readonly<Record<string, string>>): boolean {
+  const kind = chosenRow(options).partKind;
+  return options.place === 'hole' && (kind === 'screw' || kind === 'dowel');
+}
+
+/** A part going into a hole: the hole, the row it takes and where. */
+export interface HoleInsertion extends StandardPartInHole {
+  featureId: FeatureId;
+  name: string;
+}
+
+/**
+ * Where a part picked into a hole stands (`standardPartInHole`), from the
+ * bore picked last, or an edited part's stored hole and placement. Null
+ * until a bore is picked; a string says why the hole takes no such part.
+ */
+export function standardPartHoleInsertion(
+  slots: Pick<InPlaceSlots, 'faces'>,
+  options: Readonly<Record<string, string>>,
+  ctx: Pick<InPlaceContext, 'holeFeature' | 'evaluate' | 'units' | 'saved'>
+): HoleInsertion | string | null {
+  const face = slots.faces.at(-1);
+  const saved =
+    ctx.saved?.featureKind === 'standard-part' ? ctx.saved : undefined;
+  const featureId = face?.feature?.featureId ?? saved?.hole?.featureId;
+  if (!featureId) return null;
+  const hole = ctx.holeFeature?.(featureId);
+  if (!hole) return 'Click the bore of a hole';
+  const evaluate = (value: ParamValue) => ctx.evaluate?.(value) ?? null;
+  const resolved = (v: ParametricVector3) => {
+    const x = evaluate(v.x);
+    const y = evaluate(v.y);
+    const z = evaluate(v.z);
+    return x === null || y === null || z === null ? null : { x, y, z };
+  };
+  const storedOrigin = saved?.hole ? resolved(saved.origin) : null;
+  const storedAxis = saved?.hole ? resolved(saved.axis) : null;
+  const inserted = standardPartInHole({
+    options,
+    hole: hole.data,
+    entryNormal: hole.entryNormal,
+    ...(face?.cylinder ? { bore: face.cylinder } : {}),
+    ...(storedOrigin && storedAxis
+      ? { stored: { origin: storedOrigin, axis: storedAxis } }
+      : {}),
+    units: ctx.units ?? 'mm',
+    evaluate
+  });
+  return inserted === null || typeof inserted === 'string'
+    ? inserted
+    : { ...inserted, featureId, name: hole.name };
 }
 
 export const standardPartSpec: InPlaceToolSpec = {
@@ -181,6 +163,8 @@ export const standardPartSpec: InPlaceToolSpec = {
   profileMode: 'none',
   wantsPlane: true,
   planeAtClick: true,
+  // M17 (schema v77): Into a hole takes the bore a hole feature drilled.
+  featureFaces: { optionId: 'place', value: 'hole' },
   wantsAxis: false,
   wantsPath: false,
   values: [
@@ -206,6 +190,23 @@ export const standardPartSpec: InPlaceToolSpec = {
       initial: 'screw'
     },
     {
+      id: 'place',
+      label: 'Place',
+      choices: [
+        { value: 'face', label: 'On a face', tip: 'Where a face is clicked' },
+        {
+          value: 'hole',
+          label: 'Into a hole',
+          tip: 'In every bore of a hole, its size and length matched'
+        }
+      ],
+      initial: 'face',
+      when: (state) => {
+        const kind = chosenRow(state.options).partKind;
+        return kind === 'screw' || kind === 'dowel';
+      }
+    },
+    {
       id: 'head',
       label: 'Head',
       choices: STANDARD_SCREW_HEADS.map((head) => ({
@@ -222,9 +223,19 @@ export const standardPartSpec: InPlaceToolSpec = {
         { value: 'iso', label: 'ISO metric' },
         { value: 'ansi', label: 'ANSI inch' }
       ],
-      initial: 'iso'
+      initial: 'iso',
+      // A screw in a hole takes the hole's standard.
+      when: (state) =>
+        !(
+          intoHole(state.options) &&
+          chosenRow(state.options).partKind === 'screw'
+        )
     },
-    ...SIZE_OPTIONS
+    ...SIZE_OPTIONS.map((option): OptionSpec => ({
+      ...option,
+      // In a hole, the hole sets the size.
+      when: (state) => !intoHole(state.options) && option.when!(state)
+    }))
   ],
   layout: [
     {
@@ -232,6 +243,7 @@ export const standardPartSpec: InPlaceToolSpec = {
       compact: true,
       items: [
         'partKind',
+        'place',
         'head',
         'system',
         ...SIZE_OPTIONS.map((option) => option.id),
@@ -240,6 +252,9 @@ export const standardPartSpec: InPlaceToolSpec = {
     }
   ],
   summary: (state, units) => {
+    if (intoHole(state.options)) {
+      return 'Sized by the hole · length matched until dragged';
+    }
     const choice = standardPartChoice(state.options);
     // The designation reads millimetres; the panel's length is in the
     // document's units.
@@ -251,7 +266,17 @@ export const standardPartSpec: InPlaceToolSpec = {
         : undefined
     );
   },
-  defaults(_slots, ctx, _numbers, options) {
+  defaults(slots, ctx, _numbers, options) {
+    if (options && intoHole(options)) {
+      const inserted = standardPartHoleInsertion(slots, options, ctx);
+      if (
+        inserted &&
+        typeof inserted === 'object' &&
+        typeof inserted.matchedLength === 'number'
+      ) {
+        return { length: inserted.matchedLength };
+      }
+    }
     const choice = standardPartChoice(options ?? {});
     return { length: defaultLength(choice, ctx.units ?? 'mm') };
   },
@@ -267,7 +292,17 @@ export const standardPartSpec: InPlaceToolSpec = {
       ? null
       : `This size must be longer than ${Number(minimum.toPrecision(4))} ${units}`;
   },
-  hint(slots, options) {
+  hint(slots, options, ctx) {
+    if (options && intoHole(options)) {
+      const inserted = ctx
+        ? standardPartHoleInsertion(slots, options, ctx)
+        : null;
+      if (inserted === null) return 'Click the bore of a hole';
+      if (typeof inserted === 'string') return inserted;
+      return typeof inserted.matchedLength === 'string'
+        ? inserted.matchedLength
+        : `In ${inserted.name} · drag the length to override the matched one`;
+    }
     if (!slots.plane) return 'Click a flat face or a plane to place the part';
     if (slots.plane.kind === 'datum') {
       return 'Pick a ghost plane or flat face instead';
@@ -277,9 +312,20 @@ export const standardPartSpec: InPlaceToolSpec = {
       ? 'Drag the length · choose the size in Options'
       : 'Choose the size in Options';
   },
-  ready: (slots, options) =>
-    placement(slots.plane, standardPartChoice(options ?? {}).partKind) !== null,
+  ready: (slots, options, ctx) => {
+    if (options && intoHole(options)) {
+      const inserted = ctx
+        ? standardPartHoleInsertion(slots, options, ctx)
+        : null;
+      return inserted !== null && typeof inserted === 'object';
+    }
+    return (
+      placement(slots.plane, standardPartChoice(options ?? {}).partKind) !==
+      null
+    );
+  },
   request(slots, values, options, ctx) {
+    if (intoHole(options)) return holeRequest(slots, values, options, ctx);
     const choice = standardPartChoice(options);
     const at = placement(slots.plane, choice.partKind);
     if (!at) return null;
@@ -310,9 +356,17 @@ export const standardPartSpec: InPlaceToolSpec = {
       }
     };
   },
-  handles(slots, _values, _ctx, options) {
+  handles(slots, _values, ctx, options) {
     const choice = standardPartChoice(options);
-    const at = placement(slots.plane, choice.partKind);
+    const inserted = intoHole(options)
+      ? standardPartHoleInsertion(slots, options, ctx)
+      : null;
+    const at =
+      inserted !== null && typeof inserted === 'object'
+        ? inserted
+        : intoHole(options)
+          ? null
+          : placement(slots.plane, choice.partKind);
     if (!at || !standardPartHasLength(choice.partKind)) return [];
     const { origin, axis } = at;
     return [
@@ -327,45 +381,43 @@ export const standardPartSpec: InPlaceToolSpec = {
 };
 
 /**
+ * M17 (schema v77): the request for a part in a hole. Its row is the one
+ * the hole takes; its length is stored only once set (dragged, typed, or
+ * stored by an edit), and otherwise matched to the hole at every rebuild.
+ */
+function holeRequest(
+  slots: InPlaceSlots,
+  values: Record<string, ParamValue>,
+  options: Record<string, string>,
+  ctx: InPlaceContext
+): InPlaceRequest | null {
+  const inserted = standardPartHoleInsertion(slots, options, ctx);
+  if (inserted === null || typeof inserted === 'string') return null;
+  const saved =
+    ctx.saved?.featureKind === 'standard-part' ? ctx.saved : undefined;
+  const keeps =
+    saved?.hole?.featureId === inserted.featureId && slots.faces.length === 0;
+  const length =
+    ctx.touched?.includes('length') && values.length !== undefined
+      ? values.length
+      : undefined;
+  return {
+    tool: 'standard-part',
+    part: {
+      ...standardPartHoleFields(inserted, length, keeps ? saved : undefined),
+      ...(saved?.xDirection ? { xDirection: { ...saved.xDirection } } : {})
+    }
+  };
+}
+
+/**
  * An edited part's options and its saved plane: the plane's normal is the
  * face's, so a part that goes into its face stored the opposite axis.
  */
 export function standardPartEditSeed(
   data: Extract<FeatureData, { featureKind: 'standard-part' }>,
-  evaluate: (value: ParametricVector3[keyof ParametricVector3]) => number | null
+  evaluate: (value: ParamValue) => number | null
 ): { options: Record<string, string>; plane: PlanePick | null } {
-  const options: Record<string, string> = {
-    partKind: data.partKind,
-    system: data.system,
-    ...(data.head ? { head: data.head } : {}),
-    [standardPartSizeOptionId(data.partKind, data.system, data.head)]: data.size
-  };
-  const resolved = (vector: ParametricVector3) => {
-    const x = evaluate(vector.x);
-    const y = evaluate(vector.y);
-    const z = evaluate(vector.z);
-    return x === null || y === null || z === null ? null : { x, y, z };
-  };
-  const origin = resolved(data.origin);
-  const axis = resolved(data.axis);
-  if (!origin || !axis) return { options, plane: null };
-  const sign = standardPartGoesIn(data.partKind) ? -1 : 1;
-  const text = (vector: ParametricVector3) => ({
-    x: String(vector.x),
-    y: String(vector.y),
-    z: String(vector.z)
-  });
-  return {
-    options,
-    plane: {
-      kind: 'saved',
-      origin,
-      normal: {
-        x: sign * axis.x || 0,
-        y: sign * axis.y || 0,
-        z: sign * axis.z || 0
-      },
-      fields: { origin: text(data.origin), normal: text(data.axis) }
-    }
-  };
+  const { options, plane } = standardPartEditChoices(data, evaluate);
+  return { options, plane: plane ? { kind: 'saved', ...plane } : null };
 }
