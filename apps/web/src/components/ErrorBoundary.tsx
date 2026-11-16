@@ -1,6 +1,10 @@
-import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { Component, Suspense, type ErrorInfo, type ReactNode } from 'react';
 import { recordCaughtError } from '../lib/activityLog';
-import { isChunkLoadError, STALE_CHUNK_MESSAGE } from '../lib/staleChunk';
+import {
+  isChunkLoadError,
+  lazyWithStaleChunkNotice,
+  STALE_CHUNK_MESSAGE
+} from '../lib/staleChunk';
 import { useOnline } from '../hooks/useOnline';
 import { BrandMark } from './BrandMark';
 
@@ -31,6 +35,27 @@ interface ErrorBoundaryState {
 }
 
 const reload = () => window.location.reload();
+
+/** The message alone: the details until the rest loads, or if it cannot. */
+function PlainDetails({ message }: { message: string }) {
+  return (
+    <details className="error-page-details">
+      <summary>Error details</summary>
+      <code>{message}</code>
+    </details>
+  );
+}
+
+// Only a crash needs it, so it loads with the card (the startup prefetch has
+// usually fetched it already) rather than weigh on the entry chunk. A chunk
+// that cannot load leaves the plain message, never a second crash, and
+// raises no stale-version notice of its own.
+const CrashDetails = lazyWithStaleChunkNotice(() =>
+  import('./CrashDetails').then(
+    (module) => ({ default: module.CrashDetails }),
+    () => ({ default: PlainDetails })
+  )
+);
 
 /**
  * A panel whose code did not download. Offline it says it waits for the
@@ -115,6 +140,7 @@ export class ErrorBoundary extends Component<
 
   override componentDidCatch(error: Error, info: ErrorInfo) {
     console.error(`${this.props.label} crashed:`, error, info.componentStack);
+    // The card's details read the stacks back from this entry.
     recordCaughtError(this.props.label, error, info.componentStack);
     // A failed chunk download stays cached in the module map until
     // navigation, so a remount cannot fix it. Remounting the whole app would
@@ -179,13 +205,16 @@ export class ErrorBoundary extends Component<
         <button type="button" className="secondary" onClick={reload}>
           Reload workspace
         </button>
-        {this.state.message ? (
-          <details className="error-page-details">
-            <summary>Error details</summary>
-            <code>{this.state.message}</code>
-          </details>
-        ) : null}
+        {this.state.message ? this.renderDetails(this.state.message) : null}
       </section>
+    );
+  }
+
+  private renderDetails(message: string) {
+    return (
+      <Suspense fallback={<PlainDetails message={message} />}>
+        <CrashDetails label={this.props.label} message={message} />
+      </Suspense>
     );
   }
 
@@ -232,12 +261,9 @@ export class ErrorBoundary extends Component<
               </button>
             </>
           )}
-          {!stale && this.state.message ? (
-            <details className="error-page-details">
-              <summary>Error details</summary>
-              <code>{this.state.message}</code>
-            </details>
-          ) : null}
+          {!stale && this.state.message
+            ? this.renderDetails(this.state.message)
+            : null}
         </div>
       </main>
     );
