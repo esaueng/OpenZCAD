@@ -7832,13 +7832,15 @@ export function App() {
     stop.setPaused(libraryCoveredRef.current);
     libraryFreshnessRef.current = stop;
     // A sealed shelf sync changed the account's agreed pins, order or
-    // archive: list them now rather than at the next poll.
+    // archive: list them now rather than at the next poll, through the watch
+    // so Settings' cover, a rate limit's backoff and a listing in flight
+    // still hold it.
     const applied = (event: Event) => {
       if (
         (event as CustomEvent<{ accountId?: string }>).detail?.accountId ===
         accountId
       )
-        void refresh();
+        stop.requestNow();
     };
     window.addEventListener(SEALED_SHELF_APPLIED_EVENT, applied);
     return () => {

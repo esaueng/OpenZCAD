@@ -261,6 +261,87 @@ describe('watchLibraryFreshness', () => {
   });
 });
 
+describe('watchLibraryFreshness requestNow', () => {
+  // Regression (review of the read-budget fix): a sealed shelf sync from
+  // another browser called the shelf's refresh directly, so it listed
+  // behind Settings, inside a rate limit's backoff and over a listing in
+  // flight, spending the read budget the watch was holding back.
+  it('lists a known change past the gap, but not while covered', async () => {
+    const fake = fakeHost();
+    const refresh = vi.fn(async () => undefined);
+    const watch = watchLibraryFreshness(refresh, fake.host);
+
+    watch.requestNow();
+    await settle();
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    watch.setPaused(true);
+    watch.requestNow();
+    await settle();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    // Uncovered within the gap, the held change still lists once.
+    watch.setPaused(false);
+    await settle();
+    expect(refresh).toHaveBeenCalledTimes(2);
+    watch.setPaused(true);
+    watch.setPaused(false);
+    await settle();
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('defers a change behind a hidden tab or a listing in flight', async () => {
+    const fake = fakeHost();
+    let finish!: () => void;
+    const refresh = vi.fn(
+      () => new Promise<void>((resolve) => (finish = resolve))
+    );
+    const watch = watchLibraryFreshness(refresh, fake.host);
+
+    fake.setVisibility('hidden');
+    watch.requestNow();
+    await settle();
+    expect(refresh).not.toHaveBeenCalled();
+    fake.setVisibility('visible');
+    await settle();
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    watch.requestNow();
+    watch.requestNow();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    finish();
+    await settle();
+    // Both requests made during the listing collapse into one more.
+    expect(refresh).toHaveBeenCalledTimes(2);
+    finish();
+    await settle();
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a change inside a rate limit backoff', async () => {
+    const fake = fakeHost();
+    const refresh = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new ApiError(429, 'API request limit reached.'))
+      .mockResolvedValue(undefined);
+    const watch = watchLibraryFreshness(refresh, fake.host);
+
+    watch.requestNow();
+    await settle();
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    fake.advance(LIBRARY_REFRESH_MIN_GAP_MS);
+    watch.requestNow();
+    fake.focus();
+    await settle();
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    fake.advance(LIBRARY_REFRESH_INTERVAL_MS);
+    fake.tick();
+    await settle();
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('libraryRefreshBackoffMs', () => {
   it('doubles from one interval up to the cap, or takes Retry-After', () => {
     expect(libraryRefreshBackoffMs(1)).toBe(LIBRARY_REFRESH_INTERVAL_MS);

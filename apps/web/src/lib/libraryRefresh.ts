@@ -52,6 +52,12 @@ export type LibraryFreshnessWatch = (() => void) & {
    * Uncovering it refreshes once, within the usual gap and backoff.
    */
   setPaused(paused: boolean): void;
+  /**
+   * Lists for a change known to have happened (a sealed shelf sync), past
+   * the minimum gap but within the cover, visibility, overlap and backoff
+   * rules.
+   */
+  requestNow(): void;
 };
 
 export interface LibraryRefreshHost {
@@ -94,20 +100,14 @@ export function watchLibraryFreshness(
   let rateLimits = 0;
   let waitUntil = 0;
 
-  const trigger = () => {
-    if (
-      stopped ||
-      paused ||
-      running ||
-      host.document.visibilityState === 'hidden'
-    ) {
-      return;
-    }
-    const now = host.now();
-    if (now - lastStarted < LIBRARY_REFRESH_MIN_GAP_MS) return;
-    if (now < waitUntil) return;
+  // A change signal (`requestNow`) that arrived while the shelf was covered,
+  // hidden or mid-listing: listed as soon as it can be, past the gap.
+  let pending = false;
+
+  const start = () => {
+    pending = false;
     running = true;
-    lastStarted = now;
+    lastStarted = host.now();
     const settle = (limit: RateLimit | null | undefined) => {
       if (!limit) {
         rateLimits = 0;
@@ -125,8 +125,39 @@ export function watchLibraryFreshness(
       )
       .finally(() => {
         running = false;
+        if (pending) requestNow();
       });
   };
+  const blocked = () =>
+    stopped || paused || running || host.document.visibilityState === 'hidden';
+  const trigger = () => {
+    if (pending) {
+      requestNow();
+      return;
+    }
+    if (blocked()) return;
+    const now = host.now();
+    if (now - lastStarted < LIBRARY_REFRESH_MIN_GAP_MS) return;
+    if (now < waitUntil) return;
+    start();
+  };
+  /**
+   * Lists now for a known change, skipping the minimum gap but never a
+   * cover, a hidden tab, a listing in flight (each defers it) or a rate
+   * limit's backoff (the next listing after it picks the change up).
+   */
+  function requestNow() {
+    if (stopped) return;
+    if (host.now() < waitUntil) {
+      pending = false;
+      return;
+    }
+    if (blocked()) {
+      pending = true;
+      return;
+    }
+    start();
+  }
   const onVisibilityChange = () => {
     if (host.document.visibilityState === 'visible') trigger();
   };
@@ -147,6 +178,7 @@ export function watchLibraryFreshness(
       if (next === paused) return;
       paused = next;
       if (!paused) trigger();
-    }
+    },
+    requestNow
   });
 }
