@@ -1039,22 +1039,14 @@ export function ViewerShell({
       {!hideViewerToolbar && (
         <>
           <div className="viewer-rail-stack">
-            <OrientationWidget
-              orientationRef={orientationRef}
-              orbitMode={settings.orbitMode ?? 'free'}
-              onSelectView={onView}
-              onDragStart={() => orientationDragRef.current?.begin()}
-              onDrag={(deltaX, deltaY) =>
-                orientationDragRef.current?.move(deltaX, deltaY)
-              }
-              onDragEnd={() => orientationDragRef.current?.end()}
-            />
             {/* View has no instrument rail, yet command search can still
                 turn the cut on there. Without this the model stayed clipped
                 with nothing on screen saying so or turning it off. Build
                 says it too once its controls are put away (Escape, or the
                 rail button): a lit button alone did not say the model on
-                screen was cut (I49). */}
+                screen was cut (I49). It stands above the cube: under it, it
+                lifted the cube out of its corner and ran under the triad's
+                tips, wedged against the stage's edge. */}
             {settings.sectionView &&
               (viewMode || sectionPanelOpen === false || !sectionRange) && (
                 <div
@@ -1086,6 +1078,16 @@ export function ViewerShell({
                   ) : null}
                 </div>
               )}
+            <OrientationWidget
+              orientationRef={orientationRef}
+              orbitMode={settings.orbitMode ?? 'free'}
+              onSelectView={onView}
+              onDragStart={() => orientationDragRef.current?.begin()}
+              onDrag={(deltaX, deltaY) =>
+                orientationDragRef.current?.move(deltaX, deltaY)
+              }
+              onDragEnd={() => orientationDragRef.current?.end()}
+            />
           </div>
           {!viewMode && !dockLayout && viewerToolbar}
         </>
