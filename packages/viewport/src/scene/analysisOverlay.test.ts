@@ -170,4 +170,20 @@ describe('analysis overlay (M09)', () => {
     expect(a.mesh.material.visible).toBe(true);
     expect(b.mesh.material.visible).toBe(true);
   });
+
+  it('leaves the section cap of a covered body showing', () => {
+    const root = new THREE.Group();
+    const a = body('body_a', root);
+    root.updateWorldMatrix(true, true);
+    applyAnalysisOverlay(root, display('body_a'));
+    // The display-cap fallback (no exact section yet) copies the body's
+    // material, which the overlay has switched off.
+    applySectionPlane(root, sectionClippingPlane({ plane: 'XY', offset: 0 }));
+    const cap = a.mesh.children.find(
+      (child) => child.userData.sectionCap === true
+    ) as THREE.Mesh | undefined;
+    expect(cap).toBeDefined();
+    expect((cap!.material as THREE.Material).visible).toBe(true);
+    expect(a.mesh.material.visible).toBe(false);
+  });
 });
