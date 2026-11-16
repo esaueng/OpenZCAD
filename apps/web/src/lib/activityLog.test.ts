@@ -1,6 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  MAX_PERSISTED_ERRORS,
+  PERSISTED_ERROR_MAX_AGE_MS,
+  persistActivityErrors,
+  resetActivityPersistenceForTests,
+  restoreActivityLog
+} from './activityLogPersistence';
+import { APP_BUILD_COMMIT } from './crashEnvironment';
 import {
   MAX_ACTIVITY_LOG_ENTRIES,
+  PERSISTED_ERRORS_KEY,
   clearActivityLog,
   filterActivityLog,
   formatActivityLogJson,
@@ -8,8 +17,10 @@ import {
   getActivityLogSnapshot,
   installRuntimeErrorCapture,
   recordActivity,
+  readStoredErrors,
   recordCaughtError,
   resetActivityLogForTests,
+  setActivityErrorSink,
   setActivityContext,
   subscribeActivityLog
 } from './activityLog';
@@ -219,5 +230,223 @@ describe('recordCaughtError', () => {
     expect(getActivityLogSnapshot().entries[0]).toMatchObject({
       message: 'Inspector crashed: not an error'
     });
+  });
+
+  it('keeps a deep component stack, innermost first', () => {
+    // The viewer crash this was written for: #185 inside a deep tree, where
+    // the looping component sits well past the old eight-line cut.
+    const stack = Array.from(
+      { length: 20 },
+      (_, index) =>
+        `    at C${index} (https://zcad.app/assets/index.js:1:${index})`
+    ).join('\n');
+    recordCaughtError(
+      '3D viewer',
+      new Error(
+        'Minified React error #185; visit https://react.dev/errors/185 for the full message'
+      ),
+      `\n${stack}\n`
+    );
+    const detail = getActivityLogSnapshot().entries[0]!.detail!;
+    // React's own link names the code; the crash card reads it out.
+    expect(detail).toContain('https://react.dev/errors/185');
+    expect(detail).toContain('Component stack:\nat C0 (');
+    expect(detail).toContain('at C15 (');
+    expect(detail).not.toContain('at C16 (');
+  });
+});
+
+describe('errors kept across reloads', () => {
+  /** The kept errors as stored. */
+  const keptRecords = () =>
+    JSON.parse(localStorage.getItem(PERSISTED_ERRORS_KEY) ?? '[]') as {
+      timestamp: number;
+      message: string;
+    }[];
+  const keptMessages = () => keptRecords().map((entry) => entry.message);
+  beforeEach(() => {
+    resetActivityLogForTests();
+    localStorage.removeItem(PERSISTED_ERRORS_KEY);
+    resetActivityPersistenceForTests();
+    persistActivityErrors();
+  });
+  afterEach(() => {
+    setActivityErrorSink(null);
+    vi.unstubAllGlobals();
+    localStorage.removeItem(PERSISTED_ERRORS_KEY);
+  });
+
+  /** A page load: a fresh in-memory log over the same storage. */
+  function reload(now = Date.now()) {
+    resetActivityLogForTests();
+    const stored = readStoredErrors();
+    return restoreActivityLog({ stored, loadedAt: now, now, environment: [] });
+  }
+
+  it('brings a crash back after a reload, marked and with its build', () => {
+    setActivityContext({ workspace: 'Build', project: 'Jazzy Hedgehog' });
+    recordActivity({ level: 'ready', source: 'status', message: 'Saved.' });
+    recordCaughtError(
+      '3D viewer',
+      new Error('Minified React error #185'),
+      '\n    at SectionPanel (index.js:1:2)\n'
+    );
+    // Only the error is kept.
+    const kept = keptRecords();
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toMatchObject({
+      message: '3D viewer crashed: Minified React error #185',
+      workspace: 'Build',
+      project: 'Jazzy Hedgehog',
+      build: APP_BUILD_COMMIT
+    });
+
+    expect(reload()).toBe(1);
+    const [restored, loaded] = getActivityLogSnapshot().entries;
+    expect(restored).toMatchObject({
+      level: 'error',
+      source: 'error',
+      message:
+        'Earlier page load: 3D viewer crashed: Minified React error #185',
+      workspace: 'Build',
+      project: 'Jazzy Hedgehog',
+      timestamp: kept[0]!.timestamp
+    });
+    expect(restored!.detail).toContain('at SectionPanel (index.js:1:2)');
+    expect(restored!.detail).toContain(
+      `Build ${APP_BUILD_COMMIT.slice(0, 12)}`
+    );
+    expect(loaded!.message).toMatch(/^Page loaded · /);
+    // Still kept: a second reload does not lose it.
+    expect(reload()).toBe(1);
+  });
+
+  it('heads the log even when this load recorded first', () => {
+    recordActivity({ level: 'error', source: 'error', message: 'before' });
+    resetActivityLogForTests();
+    // Startup reads storage first; then this load raises its own error
+    // before the persistence module has loaded.
+    const stored = readStoredErrors();
+    setActivityErrorSink(null);
+    recordActivity({ level: 'ready', source: 'status', message: 'Opening…' });
+    recordActivity({ level: 'error', source: 'error', message: 'during' });
+    expect(restoreActivityLog({ stored, loadedAt: 0, environment: [] })).toBe(
+      1
+    );
+    expect(
+      getActivityLogSnapshot().entries.map((entry) => entry.message)
+    ).toEqual([
+      'Earlier page load: before',
+      expect.stringMatching(/^Page loaded · /),
+      'Opening…',
+      'during'
+    ]);
+    // The error that waited for the module is kept once it arrives.
+    expect(keptMessages()).toEqual(['before', 'during']);
+  });
+
+  it('keeps the newest ten, and a repeating error only once', () => {
+    for (let index = 0; index < MAX_PERSISTED_ERRORS + 3; index += 1) {
+      recordActivity({
+        level: 'error',
+        source: 'error',
+        message: `failure ${index}`,
+        timestamp: 1_000 + index
+      });
+    }
+    // An error raised every frame, after the distinct ones.
+    for (let frame = 0; frame < 30; frame += 1) {
+      recordActivity({
+        level: 'error',
+        source: 'error',
+        message: 'every frame',
+        timestamp: 2_000 + frame * 16
+      });
+    }
+    expect(keptMessages()).toEqual([
+      ...Array.from(
+        { length: MAX_PERSISTED_ERRORS - 1 },
+        (_, index) => `failure ${index + 4}`
+      ),
+      'every frame'
+    ]);
+  });
+
+  it('leaves out week-old and malformed errors, and storage it cannot read', () => {
+    const now = Date.UTC(2026, 10, 16);
+    localStorage.setItem(
+      PERSISTED_ERRORS_KEY,
+      JSON.stringify([
+        {
+          timestamp: now - PERSISTED_ERROR_MAX_AGE_MS - 1,
+          message: 'old',
+          build: 'abc'
+        },
+        { timestamp: now - 1_000, message: 'recent', build: 'abc' },
+        { timestamp: 'yesterday', message: 'malformed', build: 'abc' },
+        { timestamp: now - 500, message: 'no build' }
+      ])
+    );
+    expect(reload(now)).toBe(1);
+    expect(getActivityLogSnapshot().entries[0]!.message).toBe(
+      'Earlier page load: recent'
+    );
+    // The next kept error drops the old and malformed ones from storage.
+    recordActivity({
+      level: 'error',
+      source: 'error',
+      message: 'new',
+      timestamp: now
+    });
+    expect(keptMessages()).toEqual(['recent', 'new']);
+
+    localStorage.setItem(PERSISTED_ERRORS_KEY, '{not json');
+    expect(reload(now)).toBe(0);
+    expect(getActivityLogSnapshot().entries).toHaveLength(1);
+  });
+
+  it('forgets kept errors when the log is cleared', () => {
+    recordActivity({ level: 'error', source: 'error', message: 'boom' });
+    expect(keptMessages()).toEqual(['boom']);
+    clearActivityLog();
+    expect(localStorage.getItem(PERSISTED_ERRORS_KEY)).toBeNull();
+    expect(reload()).toBe(0);
+  });
+
+  it('still logs when storage throws', () => {
+    const blocked = () => {
+      throw new Error('blocked');
+    };
+    // A store whose every call throws, as a full or locked-down one does.
+    vi.stubGlobal('localStorage', {
+      getItem: blocked,
+      setItem: blocked,
+      removeItem: blocked
+    });
+    recordActivity({ level: 'error', source: 'error', message: 'boom' });
+    expect(getActivityLogSnapshot().entries[0]!.message).toBe('boom');
+    expect(reload()).toBe(0);
+    expect(() => clearActivityLog()).not.toThrow();
+  });
+});
+
+describe('the page-load line', () => {
+  beforeEach(() => resetActivityLogForTests());
+  afterEach(() => setActivityErrorSink(null));
+
+  it('opens the log with the build and the browser it runs on', () => {
+    restoreActivityLog({
+      stored: null,
+      loadedAt: 42,
+      environment: ['Browser Firefox/140', 'Window 1990×1480 @2x']
+    });
+    const [entry] = getActivityLogSnapshot().entries;
+    expect(entry).toMatchObject({
+      level: 'ready',
+      source: 'status',
+      timestamp: 42
+    });
+    expect(entry!.message).toMatch(/^Page loaded · OpenZCAD .+ · Remus /);
+    expect(entry!.detail).toBe('Browser Firefox/140\nWindow 1990×1480 @2x');
   });
 });
