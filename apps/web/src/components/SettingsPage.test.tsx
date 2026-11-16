@@ -794,10 +794,10 @@ describe('assistant data disclosure', () => {
     });
     expect(screen.getByText('Unavailable')).toBeVisible();
     expect(
-      screen.queryByText(/Free with no personal API key/)
+      screen.queryByText(/Free to use, with usage limits/)
     ).not.toBeInTheDocument();
     expect(
-      screen.getByText(/may retain this data or use it for training/)
+      screen.getByText(/may keep them or use them for training/)
     ).toBeVisible();
   });
 
@@ -824,13 +824,13 @@ describe('assistant data disclosure', () => {
 
       expect(screen.queryByText(/OpenRouter/)).not.toBeInTheDocument();
       expect(
-        screen.queryByText(/Free with no personal API key/)
+        screen.queryByText(/Free to use, with usage limits/)
       ).not.toBeInTheDocument();
       if (provider === 'openai') {
         expect(
-          screen.getByText(/OpenAI may retain API data/)
+          screen.getByText(/OpenAI, which may keep them for safety/)
         ).toHaveTextContent(
-          'API data is not used for training unless the deployment operator opts in'
+          'does not train on them unless this deployment’s operator opts in'
         );
         expect(
           screen.getByRole('link', { name: 'OpenAI API data policies' })
@@ -840,10 +840,8 @@ describe('assistant data disclosure', () => {
         );
       } else {
         expect(
-          screen.getByText(/The configured AI provider may retain this data/)
-        ).toHaveTextContent(
-          'Ask your deployment operator which service and data policies apply.'
-        );
+          screen.getByText(/this deployment’s AI provider, which may keep them/)
+        ).toHaveTextContent('Ask its operator which policies apply.');
         expect(
           screen.queryByRole('link', { name: /data policies/ })
         ).not.toBeInTheDocument();
@@ -851,7 +849,7 @@ describe('assistant data disclosure', () => {
     }
   );
 
-  it('reserves the data notice while loading, without flashing fallback copy', async () => {
+  it('holds the data notice while loading, without flashing fallback copy', async () => {
     let finishRead!: (
       result: Awaited<ReturnType<typeof loadAssistantStatus>>
     ) => void;
@@ -867,14 +865,12 @@ describe('assistant data disclosure', () => {
     expect(
       screen.getByRole('status', { name: 'Loading assistant data policies' })
     ).toBeVisible();
-    expect(screen.queryByText(/Ask your deployment operator/)).toBeNull();
+    expect(screen.queryByText(/Ask its operator/)).toBeNull();
     expect(
       screen.queryByText('Status appears when the server is reachable.')
     ).toBeNull();
     expect(screen.queryByText('Not configured')).toBeNull();
     expect(screen.queryByRole('link', { name: /data policies/ })).toBeNull();
-    const reserve = document.querySelector('.settings-assistant-data-reserve');
-    expect(reserve).toHaveAttribute('aria-hidden', 'true');
 
     const settings = defaultAppSettings();
     rerender(
@@ -903,10 +899,13 @@ describe('assistant data disclosure', () => {
     expect(
       screen.getByRole('link', { name: 'OpenRouter data policies' })
     ).toBeVisible();
-    expect(screen.queryByText(/Ask your deployment operator/)).toBeNull();
-    expect(document.querySelector('.settings-assistant-data-reserve')).toBe(
-      reserve
-    );
+    expect(screen.queryByText(/Ask its operator/)).toBeNull();
+    // One notice and no hidden sizing copy, which left an empty band
+    // below the policy when the free-model line was absent.
+    expect(
+      document.querySelectorAll('.settings-assistant-data .settings-notice')
+    ).toHaveLength(1);
+    expect(document.querySelector('[data-copy]')).toBeNull();
     expect(signal?.aborted).toBe(true);
     await act(async () => {
       finishRead({
@@ -929,7 +928,7 @@ describe('assistant data disclosure', () => {
       await screen.findByText('Status appears when the server is reachable.')
     ).toBeVisible();
     expect(screen.getByText('Unavailable')).toBeVisible();
-    expect(screen.getByText(/Ask your deployment operator/)).toBeVisible();
+    expect(screen.getByText(/Ask its operator/)).toBeVisible();
     expect(screen.queryByText('Loading…')).toBeNull();
     expect(screen.queryByText(/OpenRouter/)).toBeNull();
   });
@@ -947,7 +946,7 @@ describe('assistant data disclosure', () => {
       await screen.findByRole('link', { name: 'OpenAI API data policies' })
     ).toBeVisible();
     expect(screen.getByText('Off')).toBeVisible();
-    expect(screen.queryByText(/Ask your deployment operator/)).toBeNull();
+    expect(screen.queryByText(/Ask its operator/)).toBeNull();
   });
 
   it.each([
@@ -1002,13 +1001,15 @@ describe('assistant data disclosure', () => {
       }
     });
 
-    expect(screen.getByText(/Free with no personal API key/)).toBeVisible();
+    expect(screen.getByText(/Free to use, with usage limits/)).toBeVisible();
     expect(
-      screen.getByText(/may retain this data or use it for training/)
+      screen.getByText(/may keep them or use them for training/)
     ).toBeVisible();
     expect(
-      screen.getByText(/The built-in assistant sends your prompts/)
-    ).toHaveTextContent('conversation, model context, and any attachments');
+      screen.getByText(/Your prompts, conversation, model context/)
+    ).toHaveTextContent(
+      'Free to use, with usage limits. Your prompts, conversation, model context and attachments go to OpenRouter'
+    );
     expect(
       screen.getByRole('link', { name: 'OpenRouter data policies' })
     ).toHaveAttribute(
@@ -1023,7 +1024,7 @@ describe('assistant data disclosure', () => {
       screen.getByText(/That provider’s data retention, training policies/)
     ).toBeVisible();
     expect(
-      screen.queryByText(/Free with no personal API key/)
+      screen.queryByText(/Free to use, with usage limits/)
     ).not.toBeInTheDocument();
   });
 });
