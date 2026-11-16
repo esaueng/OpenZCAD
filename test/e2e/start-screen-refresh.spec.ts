@@ -462,3 +462,81 @@ for (const width of [1440, 390]) {
     await expect(page.locator('.start-tile-placeholder')).toHaveCount(0);
   });
 }
+
+// The account's read budget is shared by every browser it is open in, and a
+// listing of an encrypted library spends about two reads per project. A
+// shelf covered by Settings re-listed every minute regardless, so
+// Settings › Encryption › Refresh met the account's rate limit.
+test('the library poll waits while Settings covers the shelf and lists once on close', async ({
+  page
+}) => {
+  test.setTimeout(60_000);
+  await stubApi(page);
+  await createProject(page, 'Covered part');
+  await page.getByTitle('Back to projects').click();
+  await expect(
+    page.locator('.start-tile-open', { hasText: 'Covered part' })
+  ).toBeVisible();
+  const isListing = (request: { url(): string; method(): string }) =>
+    new URL(request.url()).pathname === '/api/projects' &&
+    request.method() === 'GET';
+  // Opening Settings reconnects the account, which lists once itself.
+  const opened = page.waitForResponse((response) =>
+    isListing(response.request())
+  );
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
+  await opened;
+  let listings = 0;
+  page.on('request', (request) => {
+    if (isListing(request)) listings += 1;
+  });
+  await page.waitForTimeout(10_500);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.waitForTimeout(500);
+  expect(listings).toBe(0);
+
+  const listed = page.waitForRequest(isListing);
+  await page
+    .getByRole('button', { name: 'Close settings and go back to projects' })
+    .click();
+  await listed;
+  await page.waitForTimeout(500);
+  expect(listings).toBe(1);
+});
+
+test('a rate-limited library poll keeps the shelf and waits before asking again', async ({
+  page
+}) => {
+  test.setTimeout(60_000);
+  await stubApi(page);
+  await createProject(page, 'Patient part');
+  await page.getByTitle('Back to projects').click();
+  await expect(
+    page.locator('.start-tile-open', { hasText: 'Patient part' })
+  ).toBeVisible();
+  let listings = 0;
+  const limited = (route: Route) => {
+    listings += 1;
+    return route.fulfill({
+      status: 429,
+      json: { error: 'API request limit reached. Try again later.' }
+    });
+  };
+  await page.route('**/api/projects', limited);
+  await page.waitForTimeout(10_500);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => listings).toBe(1);
+
+  // Past the usual gap, focus would list again; after a 429 it waits.
+  await page.waitForTimeout(10_500);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.waitForTimeout(500);
+  expect(listings).toBe(1);
+  await expect(
+    page.locator('.start-tile-open', { hasText: 'Patient part' })
+  ).toBeVisible();
+  const account = page.locator('.start-account');
+  await expect(account).not.toContainText('On this device only');
+  await expect(account.getByRole('button', { name: 'Sign in' })).toHaveCount(0);
+});

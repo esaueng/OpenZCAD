@@ -556,7 +556,11 @@ import {
   decideProjectSync,
   shouldPollForFreshness
 } from './lib/projectSyncDecision';
-import { watchLibraryFreshness } from './lib/libraryRefresh';
+import {
+  watchLibraryFreshness,
+  type LibraryFreshnessWatch
+} from './lib/libraryRefresh';
+import { rateLimitOf, type RateLimit } from './lib/rateLimit';
 import {
   claimProjectOwnership,
   type ProjectOwnershipClaim
@@ -2394,6 +2398,13 @@ async function loadProjectSummaries(
    * than reading an absence as "local-only".
    */
   cloudProjectIds: Set<string>;
+  /**
+   * The account's read budget ran out (HTTP 429) during this listing,
+   * either refusing it or stopping its encrypted names part way. A
+   * background refresh keeps the shelf it has and waits; this is never a
+   * sign-out.
+   */
+  rateLimited: RateLimit | null;
 }> {
   const keySessionRevision = getKeySessionRevision();
   const signedIn = accountId !== null;
@@ -2432,6 +2443,7 @@ async function loadProjectSummaries(
     });
   const progress = options?.progress;
   const shelfNames = cachedShelfNames(accountId);
+  let listingRateLimit: RateLimit | null = null;
   const [local, organizationSnapshots, remote] = await Promise.all([
     localRead,
     listLocalProjectOrganizationSnapshots().catch(
@@ -2467,6 +2479,7 @@ async function loadProjectSummaries(
           )
           .catch((error: unknown) => {
             reportProjectListingFailure(error);
+            listingRateLimit = rateLimitOf(error);
             return null;
           })
       : Promise.resolve(null)
@@ -2593,7 +2606,8 @@ async function loadProjectSummaries(
   return {
     projects,
     remoteReached: Boolean(remote),
-    cloudProjectIds: remoteIds
+    cloudProjectIds: remoteIds,
+    rateLimited: remote?.rateLimited ?? listingRateLimit
   };
 }
 
@@ -7754,10 +7768,21 @@ export function App() {
    * the shelf was busy (a navigation or a shelf edit) and nothing was asked.
    */
   const relistLibraryRef = useRef<(() => Promise<boolean | null>) | null>(null);
+  // Settings covers the shelf: its re-list waits meanwhile, so the shelf's
+  // verification reads (about two per encrypted project) do not spend the
+  // account's shared read budget behind it, and lists once on close.
+  const libraryFreshnessRef = useRef<LibraryFreshnessWatch | null>(null);
+  const libraryCoveredRef = useRef(settingsOpen);
+  useEffect(() => {
+    libraryCoveredRef.current = settingsOpen;
+    libraryFreshnessRef.current?.setPaused(settingsOpen);
+  }, [settingsOpen]);
   useEffect(() => {
     const accountId = session?.userId ?? null;
     if (!libraryShown || !cloudFunctionsEnabled || accountId === null) return;
     let cancelled = false;
+    // Set by the latest listing that met the account's rate limit.
+    let rateLimited: RateLimit | null = null;
     const settled = () =>
       !cancelled &&
       navigationBusyRef.current === null &&
@@ -7772,10 +7797,12 @@ export function App() {
       if (!settled() || latestProjects.current !== before) return null;
       // Expiry purging stays with the explicit listings.
       const listed = await loadProjectSummaries(accountId, false);
+      rateLimited = listed.rateLimited;
       if (!settled()) return null;
       // An unreachable account keeps the shelf as it was rather than
-      // dropping it to device-only between polls.
-      if (!listed.remoteReached) return false;
+      // dropping it to device-only between polls; so does a rate limit,
+      // which may have left encrypted names unverified part way.
+      if (!listed.remoteReached || listed.rateLimited) return false;
       if (latestProjects.current !== before) return null;
       // The account answered, whether or not the shelf changed: a listing
       // that failed earlier can show the very projects this one does (the
@@ -7798,8 +7825,12 @@ export function App() {
     };
     relistLibraryRef.current = refresh;
     const stop = watchLibraryFreshness(async () => {
+      rateLimited = null;
       await refresh();
+      return { rateLimited };
     });
+    stop.setPaused(libraryCoveredRef.current);
+    libraryFreshnessRef.current = stop;
     // A sealed shelf sync changed the account's agreed pins, order or
     // archive: list them now rather than at the next poll.
     const applied = (event: Event) => {
@@ -7813,6 +7844,8 @@ export function App() {
     return () => {
       cancelled = true;
       if (relistLibraryRef.current === refresh) relistLibraryRef.current = null;
+      if (libraryFreshnessRef.current === stop)
+        libraryFreshnessRef.current = null;
       stop();
       window.removeEventListener(SEALED_SHELF_APPLIED_EVENT, applied);
     };

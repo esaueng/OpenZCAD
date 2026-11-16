@@ -68,7 +68,10 @@ import {
 } from '../lib/e2ee/passkeys';
 import { encodeQr, qrSvgPath } from '../lib/e2ee/qrCode';
 import { invalidateAccountKeyReads } from '../lib/e2ee/unlockedKeys';
-import { encryptionStateChanged } from '../lib/e2ee/encryptionStateEvents';
+import {
+  encryptionStateChanged,
+  observeEncryptionState
+} from '../lib/e2ee/encryptionStateEvents';
 import {
   getKeySessionRevision,
   getKeySessionVersion,
@@ -150,7 +153,10 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
   const [justSetUp, setJustSetUp] = useState(false);
 
   const run = useCallback(
-    async (work: () => Promise<EncryptionState | void>) => {
+    async (
+      work: () => Promise<EncryptionState | void>,
+      options: { readOnly?: boolean } = {}
+    ) => {
       const generation = lifetime.generation;
       const isCurrent = () =>
         lifetime.active && lifetime.generation === generation;
@@ -162,7 +168,14 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
         if (!isCurrent()) return false;
         if (next) {
           setState(next);
-          encryptionStateChanged(userId);
+          // A change made here (setup, unlock, a device added or removed,
+          // a key replaced, a recovery) always retires the page's
+          // encrypted-project clients. A plain reload does so only when it
+          // found the account changed: retiring them drops their verified
+          // caches, and the shelf's next listing then reads every
+          // project's authority and device lists again.
+          const changed = observeEncryptionState(userId, next);
+          if (!options.readOnly || changed) encryptionStateChanged(userId);
         }
         return true;
       } catch (caught) {
@@ -177,7 +190,10 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
     [lifetime, userId]
   );
 
-  const reload = useCallback(() => run(() => loadEncryption(ctx)), [ctx, run]);
+  const reload = useCallback(
+    () => run(() => loadEncryption(ctx), { readOnly: true }),
+    [ctx, run]
+  );
 
   useEffect(() => {
     lifetime.active = true;

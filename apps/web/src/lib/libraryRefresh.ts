@@ -8,11 +8,51 @@
  * tab comes back into view or regains focus, and on a slow timer while it is
  * visible.
  *
- * Each listing decrypts every encrypted project's title, so a background tab
- * never refreshes and back-to-back focus/visibility events collapse into one.
+ * Each listing verifies every encrypted project's title, about two account
+ * reads per project, and every browser on the account shares one read
+ * budget. So a background tab never refreshes, back-to-back
+ * focus/visibility events collapse into one, a shelf covered by Settings
+ * waits (`setPaused`) and refreshes once when uncovered, and a listing the
+ * account refused with a rate limit (429) waits before asking again:
+ * `Retry-After` when the server names one, otherwise twice as long after
+ * each refusal from one interval up to `LIBRARY_REFRESH_MAX_BACKOFF_MS`.
  */
+import { rateLimitOf, type RateLimit } from './rateLimit';
+
 export const LIBRARY_REFRESH_INTERVAL_MS = 60_000;
 export const LIBRARY_REFRESH_MIN_GAP_MS = 10_000;
+export const LIBRARY_REFRESH_MAX_BACKOFF_MS = 10 * 60_000;
+
+/**
+ * How long to wait after the `failures`-th rate limit in a row: the
+ * server's `Retry-After` when it sent one (never under the minimum gap),
+ * otherwise doubling from one interval, capped.
+ */
+export function libraryRefreshBackoffMs(
+  failures: number,
+  retryAfterMs?: number
+): number {
+  if (retryAfterMs !== undefined)
+    return Math.max(retryAfterMs, LIBRARY_REFRESH_MIN_GAP_MS);
+  return Math.min(
+    LIBRARY_REFRESH_INTERVAL_MS * 2 ** Math.max(0, failures - 1),
+    LIBRARY_REFRESH_MAX_BACKOFF_MS
+  );
+}
+
+/** A refresh that the account refused with a rate limit, without throwing. */
+export interface LibraryRefreshOutcome {
+  readonly rateLimited?: RateLimit | null;
+}
+
+/** Stops watching when called. */
+export type LibraryFreshnessWatch = (() => void) & {
+  /**
+   * Holds refreshes while the shelf is covered (Settings is open over it).
+   * Uncovering it refreshes once, within the usual gap and backoff.
+   */
+  setPaused(paused: boolean): void;
+};
 
 export interface LibraryRefreshHost {
   window: Pick<Window, 'addEventListener' | 'removeEventListener'>;
@@ -39,25 +79,50 @@ function browserHost(): LibraryRefreshHost {
 /**
  * Calls `refresh` while the shelf is shown; returns the stop function. The
  * caller has just listed the shelf, so the first refresh waits for the
- * minimum gap. A refresh never overlaps the previous one.
+ * minimum gap. A refresh never overlaps the previous one. A refresh that
+ * reports `rateLimited`, or rejects with a rate limit (`rateLimitOf`),
+ * backs off; any other outcome clears the backoff.
  */
 export function watchLibraryFreshness(
-  refresh: () => Promise<void>,
+  refresh: () => Promise<void | LibraryRefreshOutcome>,
   host: LibraryRefreshHost = browserHost()
-): () => void {
+): LibraryFreshnessWatch {
   let stopped = false;
+  let paused = false;
   let running = false;
   let lastStarted = host.now();
+  let rateLimits = 0;
+  let waitUntil = 0;
 
   const trigger = () => {
-    if (stopped || running || host.document.visibilityState === 'hidden') {
+    if (
+      stopped ||
+      paused ||
+      running ||
+      host.document.visibilityState === 'hidden'
+    ) {
       return;
     }
-    if (host.now() - lastStarted < LIBRARY_REFRESH_MIN_GAP_MS) return;
+    const now = host.now();
+    if (now - lastStarted < LIBRARY_REFRESH_MIN_GAP_MS) return;
+    if (now < waitUntil) return;
     running = true;
-    lastStarted = host.now();
+    lastStarted = now;
+    const settle = (limit: RateLimit | null | undefined) => {
+      if (!limit) {
+        rateLimits = 0;
+        waitUntil = 0;
+        return;
+      }
+      rateLimits += 1;
+      waitUntil =
+        host.now() + libraryRefreshBackoffMs(rateLimits, limit.retryAfterMs);
+    };
     void refresh()
-      .catch(() => undefined)
+      .then(
+        (outcome) => settle(outcome ? outcome.rateLimited : null),
+        (error: unknown) => settle(rateLimitOf(error))
+      )
       .finally(() => {
         running = false;
       });
@@ -70,11 +135,18 @@ export function watchLibraryFreshness(
   host.window.addEventListener('focus', trigger);
   host.window.addEventListener('online', trigger);
   host.document.addEventListener('visibilitychange', onVisibilityChange);
-  return () => {
+  const stop = () => {
     stopped = true;
     host.clearInterval(interval);
     host.window.removeEventListener('focus', trigger);
     host.window.removeEventListener('online', trigger);
     host.document.removeEventListener('visibilitychange', onVisibilityChange);
   };
+  return Object.assign(stop, {
+    setPaused(next: boolean) {
+      if (next === paused) return;
+      paused = next;
+      if (!paused) trigger();
+    }
+  });
 }

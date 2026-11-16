@@ -260,6 +260,36 @@ describe('dispatch on the storage format', () => {
     expect(listing.projects[0]).toMatchObject({ name: 'Encrypted project' });
   });
 
+  // Regression: a listing stopped by the account's read limit came back
+  // looking like any other, so a background refresh replaced the shelf and
+  // kept polling at full rate.
+  it('marks a listing whose names stopped at a rate limit, keeping its rows', async () => {
+    encryptedModule.encryptedProjectShelf.mockRejectedValue(
+      new ApiError(
+        429,
+        'API request limit reached.',
+        undefined,
+        undefined,
+        30_000
+      )
+    );
+    const listing = await listEncrypted('proj_limited', {
+      projectId: 'proj_limited'
+    });
+    expect(listing.projects[0]).toMatchObject({ projectId: 'proj_limited' });
+    expect(listing).toMatchObject({ rateLimited: { retryAfterMs: 30_000 } });
+  });
+
+  it('does not call any other refusal a rate limit', async () => {
+    encryptedModule.encryptedProjectShelf.mockRejectedValue(
+      new ApiError(403, 'locked', 'E2EE_KEYS_LOCKED')
+    );
+    const listing = await listEncrypted('proj_locked_too', {
+      projectId: 'proj_locked_too'
+    });
+    expect(listing).not.toHaveProperty('rateLimited');
+  });
+
   it('keeps an encrypted project’s files off the plaintext routes', async () => {
     const projectId = 'proj_local_only';
     await listEncrypted(projectId);
