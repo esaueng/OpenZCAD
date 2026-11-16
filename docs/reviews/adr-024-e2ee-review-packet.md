@@ -273,9 +273,18 @@ the browser side first, then the Worker's defense in depth.
   the device. It does not carry the contacts head (see section 6).
 - Worker: `/api/e2ee/approvals` in `e2ee.ts`, with `APPROVAL_TTL_MS`
   (10 minutes), `MAX_OPEN_APPROVALS` (3) and `MAX_APPROVALS_PER_HOUR` (10).
-- An approved but uncertified device can read but not write
-  (read-only devices hold no MLS leaf, decision D4;
-  `revokeReadOnlyDevices` in `accountKeys.ts`).
+- Approval always certifies (ADR-024 amendment 2026-11-16): the approver
+  opens the identity key with a passkey or the recovery key, appends the
+  device and wraps the account key to its unlock key; `approveDevice`
+  refuses without that authorization (`certification-required`) unless the
+  device is already certified with the same keys. Read-only devices
+  approved earlier can read but not write (they hold no MLS leaf, decision
+  D4; `revokeReadOnlyDevices` in `accountKeys.ts`); the sealing path that
+  made them survives only as `legacyApproveReadOnly` for fixtures.
+- The new device's QR code carries `<origin>/#approve-device=<code>`, the
+  same full hash in a fragment (`deviceApprovalLink.ts`), so a phone's
+  camera app opens it; `approvalMatchesScanCode` and `approveDevice` both
+  check it against the listed request's keys.
 
 ### 3.3 Passkey PRF
 

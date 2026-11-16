@@ -11,7 +11,10 @@ import {
   type ProjectPreferenceState
 } from '../lib/e2ee/projectPreferences';
 import { unlockedAccount } from '../lib/e2ee/unlockedKeys';
-import { encryptionStateChanged } from '../lib/e2ee/encryptionStateEvents';
+import {
+  encryptionStateChanged,
+  subscribeEncryptionState
+} from '../lib/e2ee/encryptionStateEvents';
 import {
   isSupportedProjectFormat,
   PROJECT_STORAGE_FORMAT_E2EE_V1
@@ -33,8 +36,7 @@ const CAN_CREATE_ENCRYPTED = isSupportedProjectFormat(
 export function ProjectEncryptionPreference({
   userId,
   unlocked,
-  afterSetup = false,
-  onAfterSetupDone,
+  onEncryptNewChange,
   api: injectedApi,
   pins: injectedPins
 }: {
@@ -42,13 +44,12 @@ export function ProjectEncryptionPreference({
   /** This device holds the account key (keys set up and unlocked here). */
   unlocked: boolean;
   /**
-   * Encryption setup has just finished on this device: end it with the
-   * question "Encrypt new projects?", answered yes unless unticked (design
-   * review I75). Without it, "Encryption is on" sat above new projects that
-   * were still created unencrypted.
+   * Reports whether new projects are encrypted once known (null while
+   * unknown), so the page's status line never says "Encryption is on" above
+   * new projects still created unencrypted (design review I75). Setup itself
+   * asks the question, ticked by default (`SetupDialog`).
    */
-  afterSetup?: boolean;
-  onAfterSetupDone?(): void;
+  onEncryptNewChange?(encryptNew: boolean | null): void;
   api?: ProjectPreferenceApi;
   pins?: PreferencePinStore;
 }) {
@@ -65,8 +66,6 @@ export function ProjectEncryptionPreference({
   const [state, setState] = useState<ProjectPreferenceState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // The setup step's own box, ticked by default (design review I75).
-  const [encryptChoice, setEncryptChoice] = useState(true);
 
   const context = useCallback(() => {
     const account = unlockedAccount(userId);
@@ -97,6 +96,27 @@ export function ProjectEncryptionPreference({
   useEffect(() => {
     if (unlocked) void reload();
   }, [reload, unlocked]);
+
+  // Setup's last step saves this choice from outside this row; any change
+  // announced for the account reads it again.
+  useEffect(() => {
+    if (!unlocked) return;
+    return subscribeEncryptionState(userId, () => void reload());
+  }, [reload, unlocked, userId]);
+
+  const known: boolean | null =
+    !unlocked || enabled !== true
+      ? null
+      : required
+        ? true
+        : state?.kind === 'verified'
+          ? state.encryptNewProjects
+          : state?.kind === 'unset'
+            ? false
+            : null;
+  useEffect(() => {
+    onEncryptNewChange?.(known);
+  }, [known, onEncryptNewChange]);
 
   if (!unlocked || enabled !== true || !context()) return null;
 
@@ -129,49 +149,6 @@ export function ProjectEncryptionPreference({
 
   const checked =
     required || (state?.kind === 'verified' && state.encryptNewProjects);
-  const storedChoice =
-    state?.kind === 'verified' ? state.encryptNewProjects : false;
-  if (
-    afterSetup &&
-    !required &&
-    (state?.kind === 'verified' || state?.kind === 'unset')
-  ) {
-    return (
-      <Group title="Last step">
-        <SettingRow
-          title="Encrypt new projects?"
-          hint="Recommended. New cloud projects are then end-to-end encrypted, so only your devices can read them. Projects you already have stay as they are until you encrypt them below."
-        >
-          <div className="encryption-setup-choice">
-            <label>
-              <input
-                type="checkbox"
-                checked={encryptChoice}
-                disabled={busy}
-                onChange={(event) => setEncryptChoice(event.target.checked)}
-              />
-              Encrypt new projects
-            </label>
-            <button
-              className="primary"
-              type="button"
-              disabled={busy}
-              onClick={() =>
-                void (async () => {
-                  if (encryptChoice !== storedChoice) {
-                    await choose(encryptChoice);
-                  }
-                  onAfterSetupDone?.();
-                })()
-              }
-            >
-              Done
-            </button>
-          </div>
-        </SettingRow>
-      </Group>
-    );
-  }
   return (
     <Group title="Projects">
       {error ? (

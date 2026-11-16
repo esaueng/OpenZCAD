@@ -1761,3 +1761,84 @@ it changes.
   are inside the ciphertext.
 - **Review.** This is a new account-key derivation and record format, so the
   Phase 8 outside review covers it with the other account records.
+
+## Amendment 2026-11-16: approval certifies, and the approval link
+
+The [L11 plan for simpler setup, unlock and devices](../plans/l11-encryption-ux-simplification.md)
+changes two client policies. Neither changes a key, wrap, record format,
+Worker route or migration.
+
+### Approval always certifies
+
+[Unlock and devices](#unlock-and-devices) let an approving device hand over
+the account key without certifying the new device, which could then read but
+not write until it certified itself. In practice that left most approved
+devices unable to save. Approval now always certifies:
+
+- `approveDevice` opens the identity key with a passkey or the recovery key
+  (`UnlockAuthorization`, the type removal and revocation already take),
+  appends the device to the device list and wraps the account key to its
+  unlock key. Settings asks for a passkey touch first and keeps the recovery
+  key one click away.
+- Without an authorization, `approveDevice` refuses
+  (`certification-required`) unless the request comes from a device already
+  certified with exactly the same keys, which only asks to have its contacts
+  head confirmed; that path is unchanged.
+- The identity key is still never wrapped to a device unlock key. An
+  approver with neither a passkey nor the recovery key at hand cannot
+  approve; the new device can unlock itself with the recovery key instead,
+  with the first-sight freshness limit stated under
+  [Unlock and devices](#unlock-and-devices).
+- Existing read-only devices keep working, and readers are unchanged. They
+  show as "Not finished", finish with a passkey or the recovery key, and
+  "Revoke read-only devices" stays (under Advanced) while any remain. The
+  sealing path that made them (`device-approval` wraps) is kept only as
+  `legacyApproveReadOnly` for fixtures. A later change, once no read-only
+  devices remain, stops the Worker accepting read-only grants and deletes it.
+- Read-only devices hold no MLS leaf (decision D4). A newly approved device
+  is certified exactly as a recovery-key or passkey enrolment certifies one,
+  and joins project groups the same way.
+
+### The approval link
+
+The new device's QR code now carries a link,
+`<origin>/#approve-device=<code>`, where `<code>` is the same full 256-bit
+`pk_new` hash in Crockford base32 that the scan form already used
+(`deviceScanCode`). A phone's own camera app opens it into OpenZCAD, which
+offers to approve exactly the request whose keys hash to it
+(`approvalMatchesScanCode`); `approveDevice` checks the scan again. The
+in-app scanner reads the link as well as the bare code (`parseScanCode`).
+
+- **What it authenticates.** Exactly what the scan form did: the approving
+  browser compares the full hash, read off the new device's screen, with
+  the keys the server delivered. The link adds no secret and no server
+  input. A link that matches no listed request offers nothing.
+- **Where it travels.** The code is in the fragment, so it never reaches the
+  server in a request. The app scrubs it from the address bar at once and
+  keeps it tab-scoped while the user signs in or unlocks
+  (`deviceApprovalLink.ts`).
+- **Phishing.** A link only pre-fills the scan. Approving still needs the
+  user's explicit Approve and a passkey or the recovery key, and the dialog
+  says to approve only a device they have with them or just set up. This is
+  the same exposure as an attacker showing someone a QR code to scan in the
+  app today: an attacker who controls the inbox can open an approval
+  request, but cannot make the victim's device approve it unseen.
+- **Size.** The QR encoder covers byte mode up to version 6-M (106 bytes),
+  which fits an origin of up to 29 characters. A longer self-hosted origin
+  falls back to the bare code, which the in-app scanner still reads.
+
+### Passkeys in setup
+
+Setup now offers to add a passkey right after the recovery key is
+confirmed, using the recovery secret already in memory, so nothing is typed
+twice. A further passkey can be added with an existing passkey as well as
+the recovery key (`addPasskey` takes an `UnlockAuthorization`). Setup skips
+the step where `PublicKeyCredential.getClientCapabilities()` reports no PRF
+support; where the browser does not say, creation still fails closed as
+before.
+
+### Review
+
+T1 changes when the identity key is opened and removes a path the review
+packet describes, so the Phase 8 review packet (section 3.2) is updated to
+match.

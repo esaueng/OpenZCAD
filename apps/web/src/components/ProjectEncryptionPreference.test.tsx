@@ -287,51 +287,43 @@ describe('project preference records in the browser', () => {
   });
 });
 
-// Design review I75: "Encryption is on" right after setup, while new projects
-// were still created unencrypted. Setup ends by asking, ticked by default.
-describe('the last step of encryption setup', () => {
-  it('asks "Encrypt new projects?" ticked, and Done turns it on', async () => {
+// Design review I75: "Encryption is on" sat above new projects still created
+// unencrypted. The page's status line reads this callback instead; setup
+// itself asks the question (SetupDialog.test.tsx).
+describe('reporting whether new projects are encrypted', () => {
+  it('reports off while unset, and on once switched on', async () => {
     unlock();
     const { api, current } = fakeApi(OPEN);
-    const onAfterSetupDone = vi.fn();
+    const reported = vi.fn();
     render(
       <ProjectEncryptionPreference
         userId={USER}
         unlocked
-        afterSetup
-        onAfterSetupDone={onAfterSetupDone}
+        onEncryptNewChange={reported}
         api={api}
         pins={memoryPreferencePins()}
       />
     );
-    expect(await screen.findByText('Encrypt new projects?')).toBeVisible();
-    const box = screen.getByRole('checkbox', { name: 'Encrypt new projects' });
-    expect(box).toBeChecked();
-    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
-    await waitFor(() => expect(onAfterSetupDone).toHaveBeenCalledOnce());
+    await waitFor(() => expect(reported).toHaveBeenLastCalledWith(false));
+    fireEvent.click(
+      await screen.findByRole('checkbox', { name: 'Encrypt new projects' })
+    );
+    await waitFor(() => expect(reported).toHaveBeenLastCalledWith(true));
     expect(current()).toMatchObject({ encryptNewProjects: true });
   });
 
-  it('keeps new projects unencrypted when unticked, writing nothing', async () => {
-    unlock();
+  it('reports unknown while locked', () => {
     const { api } = fakeApi(OPEN);
-    const onAfterSetupDone = vi.fn();
+    const reported = vi.fn();
     render(
       <ProjectEncryptionPreference
         userId={USER}
-        unlocked
-        afterSetup
-        onAfterSetupDone={onAfterSetupDone}
+        unlocked={false}
+        onEncryptNewChange={reported}
         api={api}
         pins={memoryPreferencePins()}
       />
     );
-    await screen.findByText('Encrypt new projects?');
-    fireEvent.click(
-      screen.getByRole('checkbox', { name: 'Encrypt new projects' })
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
-    await waitFor(() => expect(onAfterSetupDone).toHaveBeenCalledOnce());
-    expect(api.save).not.toHaveBeenCalled();
+    expect(reported).toHaveBeenLastCalledWith(null);
   });
 });
