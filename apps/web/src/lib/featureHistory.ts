@@ -150,6 +150,7 @@ export function featureHistory(document: ProjectDocument) {
         body(data.targetBodyId);
         break;
       case 'primitive':
+      case 'standard-part':
       case 'imported-mesh':
       case 'imported-step':
         break;

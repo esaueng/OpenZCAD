@@ -392,8 +392,9 @@ notes to D01 sheets:
   stored tolerance never reads as zero), and an optional `prefix` and
   `suffix` (one trimmed line of at most
   40 characters, printed with a space between). Tolerances are stored as
-  deviations from the measured value in document units (degrees on an
-  angle), never as a value, so `limits` prints the measured value plus each
+  deviations from the measured value in the units the dimension prints in
+  (the document's until v70's sheet units; degrees on an angle), never as a
+  value, so `limits` prints the measured value plus each
   deviation and follows the model through the sheet's explicit Update. A
   reference dimension, a chamfer's `size × angle` and a counterbore or
   countersink callout take no tolerance (refused by the validator); marking a
@@ -414,6 +415,58 @@ notes to D01 sheets:
   document, its edit history or a drawing command that declares v67 or
   older. Drawing-level units, precision and decimal separator remain the
   next D02 slice.
+## Drawing DXF export (D04)
+
+- **What.** Export DXF writes the composed sheet — the same `SheetPage` the
+  preview, PDF and SVG draw — as a DXF R12 drawing, one-to-one in paper
+  millimetres (`$INSUNITS` 4), so it lands as printed: views at the sheet's
+  scale, sections and their hatching, dimensions, notes and the title
+  block. Exports are refused under the same conditions as PDF and SVG.
+- **Layers.** One layer per stroke kind, since R12 has no line weights:
+  `VISIBLE` (7), `HIDDEN` (8, line type `HIDDEN` 3/1.5 mm), `BORDER`,
+  `THIN`, `DIMENSION` (3), `HATCH`, `CENTER` (4, `CENTER` 12/1.5/0.5/1.5
+  mm, ISO 128 type 04) and `CUTTING` (1), plus `TEXT`; only the layers the
+  page uses are declared.
+- **Entities.** A two-point stroke is a LINE, a longer one a POLYLINE
+  (closed when the stroke is), a filled arrowhead a SOLID, and each text a
+  TEXT at its cap height, centred or right-aligned and turned as drawn.
+  Characters outside ASCII use the writer's `\U+XXXX` escapes (Ø is
+  `\U+00D8`). Curves are the page's polylines — exact edges sampled to the
+  display tolerance — as the PDF draws them; an exact-arc view export is not
+  this slice.
+- **Writer.** `@openzcad/io-dxf` gains SOLID and the `HIDDEN`/`CENTER`
+  line types; a file naming only `DASHED` (flat patterns) writes the same
+  bytes as before. The export is deterministic.
+- **Sketch DXF.** The export dialog's DXF option writes one saved sketch
+  through the existing exact sketch exporter (`exportSketchDxf`): the sketch
+  menu entry the D04 row left open.
+
+## Drawing properties and title-block fields (D02, schema v70)
+
+- **Shape.** `DrawingSheet.format`, absent when every property is its
+  default: `units` (dimensions are measured in document units and printed
+  in these), `decimals` and `angleDecimals` (the defaults when an annotation
+  sets none), `angleFormat` (`decimal` or `dms`, degrees, minutes and
+  seconds with the decimals on the seconds), `decimalSeparator` (`comma`;
+  absent is a point) and `lineWidthsMm`, a print weight per line class
+  (visible, hidden, thin, border, dimension, hatch, chain, cutting) within
+  0.05–2 mm. `drawing.sheet.update` replaces it whole; null clears it.
+- **Numbers.** One sheet number format writes every dimension, callout and
+  tolerance: a value converts from document to printed units, a tolerance's
+  deviations are amounts in the printed units (degrees on an angle), and a
+  D°M'S" angle is rounded once in seconds so no 60" carries into a label.
+  Values the sheet measures stay in model units; only text changes.
+- **Weights.** The page carries the sheet's weights only when it sets any,
+  and the SVG and PDF writers read a kind's weight from the page before the
+  ISO 128 default, so a sheet without them exports byte-identical. The
+  on-screen preview keeps its screen weights.
+- **Title block.** The SCALE cell reads `SCALE · SIZE` (`1:1 · A3`), UNITS
+  names the printed units, and DATE shows the date of the project's latest
+  saved revision until one is typed. Title, scale, size, units and
+  projection were already read from the sheet; they cannot disagree with it.
+- **Schema.** v70, built on v69 (M17 standard parts). A content gate refuses `format` on a sheet
+  or in a sheet update in a document, its history or its commands that
+  declares v69 or older.
 
 ## Finishing-body update repair
 

@@ -48,6 +48,11 @@ export {
 import {
   PIPE_THREAD_SIZES,
   isPipeThreadSize,
+  standardPartGeometry,
+  standardPartHasLength,
+  standardPartMinimumLengthMm,
+  standardPartNoun,
+  standardPartProblem,
   createId,
   createSketchReferenceAnnotationId,
   createSketchCompositeId,
@@ -170,6 +175,8 @@ import {
   type GearInput,
   sheetMetalBody,
   type SheetMetalInput,
+  standardPartBody,
+  type StandardPartInput,
   threadBody,
   type ThreadInput,
   type ImportedMeshInput,
@@ -391,6 +398,7 @@ export type CommandKind =
   | 'feature.hole'
   | 'feature.gear'
   | 'feature.sheet-metal'
+  | 'feature.standard-part'
   | 'feature.thread'
   | 'feature.shell'
   | 'feature.solid-offset'
@@ -520,6 +528,7 @@ export type AnyCommand =
   | CommandDefinition<HelicalSweepInput>
   | CommandDefinition<GearInput>
   | CommandDefinition<ThreadInput>
+  | CommandDefinition<StandardPartInput>
   | CommandDefinition<BooleanInput>
   | CommandDefinition<TransformInput>
   | CommandDefinition<MirrorInput>
@@ -1679,6 +1688,58 @@ const MIN_ENVELOPED_TEETH = 10;
  * (a pointed tip, a closed root land, a cylinder too small) is the kernel's
  * call and surfaces as its typed refusal at rebuild.
  */
+/**
+ * M17: structural checks for a standard part. The row is the catalogue's
+ * (`standardPartProblem`); a length only on a screw or dowel pin, positive
+ * and long enough to build; a placement with a non-zero axis.
+ */
+function validateStandardPartInput(
+  document: ProjectDocument,
+  input: StandardPartInput
+): void {
+  const problem = standardPartProblem(input);
+  if (problem) throw new Error(problem);
+  const value = (label: string, param: ParamValue) =>
+    resolvedModelingValue(document, `standard part ${label}`, param);
+  if (standardPartHasLength(input.partKind)) {
+    if (input.length === undefined) {
+      throw new Error(`A ${standardPartNoun(input)} needs a length.`);
+    }
+    const length = value('length', input.length);
+    const minimum =
+      standardPartMinimumLengthMm(standardPartGeometry(input)) /
+      millimetresPerUnit(document.units);
+    if (!(length > minimum - 1e-9)) {
+      throw new Error(
+        `A ${standardPartNoun(input)} this size must be longer than ${Number(minimum.toPrecision(4))} ${document.units}.`
+      );
+    }
+  } else if (input.length !== undefined) {
+    throw new Error(
+      `A ${standardPartNoun(input)} takes its height from its table, not a length.`
+    );
+  }
+  if (input.origin === undefined || input.axis === undefined) {
+    throw new Error('A standard part needs an origin and an axis.');
+  }
+  value('origin X', input.origin.x);
+  value('origin Y', input.origin.y);
+  value('origin Z', input.origin.z);
+  const axisLength = Math.hypot(
+    value('axis X', input.axis.x),
+    value('axis Y', input.axis.y),
+    value('axis Z', input.axis.z)
+  );
+  if (!(axisLength > 1e-12)) {
+    throw new Error('A standard part axis must be non-zero.');
+  }
+  if (input.xDirection !== undefined) {
+    value('x direction X', input.xDirection.x);
+    value('x direction Y', input.xDirection.y);
+    value('x direction Z', input.xDirection.z);
+  }
+}
+
 function validateGearInput(document: ProjectDocument, input: GearInput): void {
   const value = (label: string, param: ParamValue): number => {
     const resolved = resolvedModelingValue(document, label, param);
@@ -2327,6 +2388,11 @@ function validateModelingFeatureUpdate(
       validateSheetMetalInput(preview, { name: feature.name, ...sheet });
       break;
     }
+    case 'standard-part': {
+      const { featureKind: _kind, ...part } = feature.data;
+      validateStandardPartInput(preview, { name: feature.name, ...part });
+      break;
+    }
     case 'shell':
       validateShellInput(preview, {
         name: feature.name,
@@ -2918,6 +2984,19 @@ export const commandFactories = {
           : {})
       },
       'Edit sheet metal'
+    );
+  },
+  /** M17: a standard part from its standard's table, as a new body. */
+  standardPartBody(
+    payload: StandardPartInput
+  ): CommandDefinition<StandardPartInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.standard-part',
+      `Add ${standardPartNoun(payload)}`,
+      withIds,
+      (document) => standardPartBody(document, withIds).document,
+      (document) => validateStandardPartInput(document, withIds)
     );
   },
   threadBody(payload: ThreadInput): CommandDefinition<ThreadInput> {
@@ -6290,6 +6369,12 @@ export function replayCommands(
         break;
       case 'feature.thread':
         next = threadBody(next, command.payload as ThreadInput).document;
+        break;
+      case 'feature.standard-part':
+        next = standardPartBody(
+          next,
+          command.payload as StandardPartInput
+        ).document;
         break;
       case 'feature.shell':
         next = shellBody(next, command.payload as ShellInput).document;

@@ -9,6 +9,7 @@ import {
   projectedViewSide,
   type BodyId,
   type DrawingSheet,
+  type DrawingSheetFormat,
   type DrawingSheetId,
   type DrawingTitleBlock,
   type DrawingView,
@@ -39,6 +40,11 @@ export interface DrawingSheetUpdateInput {
   source?: DrawingSheet['source'];
   /** Explicit body succession; subshape witnesses are retained and rechecked. */
   bodyReplacements?: { from: BodyId; to: BodyId }[];
+  /**
+   * D02 (schema v70): replaces the sheet's drawing properties whole; null
+   * or an empty record clears them back to every default.
+   */
+  format?: DrawingSheetFormat | null;
 }
 
 export interface DrawingSheetDeleteInput {
@@ -232,6 +238,11 @@ export function updateDrawingSheet(
         else delete titleBlock[key];
       }
       sheet.titleBlock = titleBlock;
+    }
+    if (input.format !== undefined) {
+      if (input.format === null || Object.keys(input.format).length === 0)
+        delete sheet.format;
+      else sheet.format = deepClone(input.format);
     }
     return sheets;
   });

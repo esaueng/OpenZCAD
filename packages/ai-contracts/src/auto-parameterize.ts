@@ -267,6 +267,7 @@ function suppressedScopeSource(feature: FeatureNode): BodyId | null {
     case 'sweep':
     case 'helical-sweep':
     case 'sheet-metal':
+    case 'standard-part':
     case 'imported-mesh':
     case 'imported-step':
     case 'datum-plane':
@@ -389,6 +390,7 @@ function featureScopeForBodies(
         neededBodies.add(data.targetBodyId);
         break;
       case 'primitive':
+      case 'standard-part':
       case 'imported-step':
       case 'imported-mesh':
       case 'datum-plane':
@@ -659,6 +661,7 @@ function nativeCandidates(
       case 'sheet-metal':
       case 'gear':
       case 'thread':
+      case 'standard-part':
         // In scope so the walk reaches the bodies they consume, but their
         // own dimensions are not proposed yet, like the group above.
         break;

@@ -40,6 +40,7 @@ const HANDLED_FEATURE_KINDS: ReadonlySet<FeatureKind> = new Set<FeatureKind>([
   'gear',
   'thread',
   'sheet-metal',
+  'standard-part',
   'transform',
   'mirror',
   'shell',
@@ -282,6 +283,7 @@ export function affectedFeatureTargets(
         affected = affectedBodies.has(data.targetBodyId);
         break;
       case 'primitive':
+      case 'standard-part':
       case 'imported-mesh':
       case 'imported-step':
         break;

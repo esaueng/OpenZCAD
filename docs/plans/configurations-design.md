@@ -19,7 +19,7 @@ each variant as a row, switches between them while modelling, exports any of
 them, and shares a link where someone else picks a row and downloads a
 printable file.
 
-## Data contract (schema v70)
+## Data contract (schema v72)
 
 `ProjectDocument.configurations?: ConfigurationSet`
 (`packages/shared/src/configurations.ts`):
@@ -75,14 +75,14 @@ interface ConfigurationSet {
   columns are refused. Bounds: 100 rows, 200 columns, 80-character names.
 - **Validation and gates.** `configurationSetError` runs on load, on every
   stored history change and on undo/redo. The section, its history changes
-  and `configuration.*` commands need schema v70; an older client refuses the
+  and `configuration.*` commands need schema v72; an older client refuses the
   document rather than showing bodies the active row hides. Diagnostic
   reproductions keep the table (it decides what is exported) with row names
   replaced, and drop the commands, whose labels are the user's words.
 
 ## Slices
 
-1. **Variant table and active row** (schema v70). Data contract above,
+1. **Variant table and active row** (schema v72). Data contract above,
    commands (`configuration.create/delete`, `row.add/rename/delete`,
    `column.add/delete`, `cell.set`, `activate`), the Parameters panel table
    with a radio per row, undo/redo, replay, reload.

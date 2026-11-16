@@ -116,6 +116,27 @@ describe('ImageExportDialog', () => {
     expect(props.onExportPng).not.toHaveBeenCalled();
   });
 
+  it('exports the chosen sketch as DXF from the same picker (D04)', async () => {
+    const props = renderDialog({ initialSketchId: 'sketch_b' });
+    await userEvent.click(screen.getByRole('radio', { name: 'DXF' }));
+    expect(screen.getByText(/DXF R12 drawing in millimeters/)).toBeTruthy();
+    // A DXF has no background to leave transparent.
+    expect(screen.queryByLabelText('Transparent background')).toBeNull();
+    await userEvent.selectOptions(screen.getByLabelText('Sketch'), 'sketch_a');
+    await userEvent.click(screen.getByRole('button', { name: /Export DXF/ }));
+    expect(props.onExportSvg).toHaveBeenCalledWith({
+      sketchId: 'sketch_a',
+      transparent: false,
+      format: 'dxf'
+    });
+    expect(props.onClose).toHaveBeenCalled();
+  });
+
+  it('offers DXF only when the project has a sketch', () => {
+    renderDialog({ sketches: [] });
+    expect(screen.queryByRole('radio', { name: 'DXF' })).toBeNull();
+  });
+
   it('offers SVG only when the project has a sketch', () => {
     renderDialog({ sketches: [] });
     const svg = screen.getByRole<HTMLInputElement>('radio', { name: 'SVG' });

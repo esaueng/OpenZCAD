@@ -6,7 +6,7 @@ import {
 } from './mass-density';
 
 /**
- * F06 configurations (schema v70): a variant table on the document. Each row
+ * F06 configurations (schema v72): a variant table on the document. Each row
  * is a named configuration; each column is one thing a row decides: a
  * parameter's expression, whether a feature is suppressed, whether a body is
  * shown, or the material. The table is dense: every row holds a value for

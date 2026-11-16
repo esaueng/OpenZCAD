@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  CONFIGURATION_SCHEMA_VERSION,
   activateConfiguration,
   addConfigurationColumn,
   addConfigurationRow,
@@ -42,7 +43,7 @@ import {
 import { createProjectDiagnosticBundle } from '../apps/web/src/lib/projectDiagnostics';
 
 /**
- * F06 configurations (schema v70): a variant table of named rows over
+ * F06 configurations (schema v72): a variant table of named rows over
  * parameters, feature suppression, body visibility and material, with one
  * active row whose parameter and suppression values the model holds.
  */
@@ -278,12 +279,15 @@ describe('the variant table', () => {
 });
 
 describe('storage and history', () => {
-  it('is gated to schema v70 and validated on load', () => {
+  it('is gated to its schema and validated on load', () => {
     const { document } = table();
     expect(() => assertStorableDocument(document)).not.toThrow();
     expect(() =>
-      normalizeDocument({ ...document, schemaVersion: 68 } as never)
-    ).toThrow(/Configurations require project schema v70/);
+      normalizeDocument({
+        ...document,
+        schemaVersion: CONFIGURATION_SCHEMA_VERSION - 1
+      } as never)
+    ).toThrow(/Configurations require project schema v\d+/);
     const bad = structuredClone(document);
     bad.configurations!.activeRowId = 'gone';
     expect(() => assertStorableDocument(bad)).toThrow(

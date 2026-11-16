@@ -50,6 +50,12 @@ import {
   MAX_DRAWING_NOTE_LENGTH,
   type DrawingAnnotation,
   type DrawingTolerance,
+  type DrawingLineClass,
+  type DrawingSheetFormat,
+  DRAWING_LINE_CLASSES,
+  DRAWING_LINE_CLASS_LABELS,
+  MAX_DRAWING_LINE_WIDTH_MM,
+  MIN_DRAWING_LINE_WIDTH_MM,
   type DrawingToleranceKind,
   type DrawingAnnotationId,
   DRAWING_PAPER_LABELS,
@@ -116,6 +122,8 @@ import {
   freeViewCenter,
   nextViewOrientation,
   sheetUnprintableCharacters,
+  SHEET_STROKE_WIDTH_MM,
+  titleBlockAutoDate,
   titleBlockBox,
   viewPageBox,
   viewPlacementIssue,
@@ -139,6 +147,7 @@ import {
 import {
   drawingExportFileName,
   sheetPageToPdf,
+  sheetPageToDxf,
   sheetPageToSvg,
   sheetTextStart
 } from '../lib/drawing/sheetExport';
@@ -146,6 +155,8 @@ import {
   annotationAnchor,
   composeSheetAnnotations,
   defaultDimensionDecimals,
+  sheetNumberFormat,
+  type DrawingNumberFormat,
   markHiddenLeaders,
   previewAnnotationLayer,
   resolveSheetAnnotations,
@@ -1483,7 +1494,8 @@ function AnnotationProperties(props: {
   /** Re-picking needs a ready, editable sheet with views. */
   canRepick: boolean;
   editable: boolean;
-  units: ProjectDocument['units'];
+  /** The sheet's number format: its printed units and default precision. */
+  numberFormat: DrawingNumberFormat;
   resolutions: ReadonlyMap<DrawingAnnotationId, AnnotationResolution>;
   onTool: (tool: AnnotationTool | null) => void;
   onDeselect: () => void;
@@ -1511,7 +1523,7 @@ function AnnotationProperties(props: {
           {resolution.resolved.label}
           {selected.kind === 'angle' || selected.kind === 'chamfer'
             ? ''
-            : ` ${props.units}`}
+            : ` ${props.numberFormat.units}`}
         </p>
       ) : null}
       {selected.kind === 'note' ? (
@@ -1543,7 +1555,11 @@ function AnnotationProperties(props: {
             }}
           >
             <option value="">
-              Default ({defaultDimensionDecimals(selected.kind, props.units)})
+              Default (
+              {selected.kind === 'angle'
+                ? props.numberFormat.angleDecimals
+                : props.numberFormat.lengthDecimals}
+              )
             </option>
             {Array.from(
               { length: MAX_DRAWING_DIMENSION_DECIMALS + 1 },
@@ -1745,7 +1761,7 @@ const TOLERANCE_LABELS: Readonly<Record<DrawingToleranceKind, string>> = {
 
 /**
  * v68: a dimension's tolerance. Amounts are deviations from the measured
- * value in the document's units (degrees on an angle), so Limits print the
+ * value in the sheet's printed units (degrees on an angle), so Limits print the
  * value plus each and follow the model through every Update.
  */
 function ToleranceFields(props: {
@@ -2017,6 +2033,219 @@ const TITLE_FIELDS: { key: keyof DrawingTitleBlock; label: string }[] = [
 ];
 
 const NO_SHEETS: readonly DrawingSheet[] = [];
+
+const UNIT_NAMES: Readonly<Record<ProjectDocument['units'], string>> = {
+  mm: 'Millimetres',
+  cm: 'Centimetres',
+  m: 'Metres',
+  inch: 'Inches'
+};
+
+/**
+ * D02 (schema v70): the sheet's drawing properties — the units, precision,
+ * angle format and decimal separator its dimensions print in, and its print
+ * weights. Each change replaces the whole format; a field set back to its
+ * default is left out, so a sheet with every default stores none.
+ */
+function SheetFormatFields(props: {
+  format: DrawingSheetFormat | undefined;
+  documentUnits: ProjectDocument['units'];
+  editable: boolean;
+  onChange: (format: DrawingSheetFormat | null) => void;
+}) {
+  const format = props.format ?? {};
+  const units = format.units ?? props.documentUnits;
+  const set = <K extends keyof DrawingSheetFormat>(
+    key: K,
+    value: DrawingSheetFormat[K] | undefined
+  ) => {
+    const { [key]: _previous, ...rest } = format;
+    const next: DrawingSheetFormat =
+      value === undefined ? rest : { ...rest, [key]: value };
+    props.onChange(Object.keys(next).length > 0 ? next : null);
+  };
+  const weights = format.lineWidthsMm ?? {};
+  const setWeight = (kind: DrawingLineClass, width: number | undefined) => {
+    const { [kind]: _previous, ...rest } = weights;
+    const next = width === undefined ? rest : { ...rest, [kind]: width };
+    set('lineWidthsMm', Object.keys(next).length > 0 ? next : undefined);
+  };
+  const decimalsOptions = Array.from(
+    { length: MAX_DRAWING_DIMENSION_DECIMALS + 1 },
+    (_, decimals) => (
+      <option key={decimals} value={decimals}>
+        {decimals}
+      </option>
+    )
+  );
+  return (
+    <div className="drawing-panel-section">
+      <h3>Drawing properties</h3>
+      <label className="drawing-field">
+        <span>Dimension units</span>
+        <select
+          value={format.units ?? ''}
+          disabled={!props.editable}
+          onChange={(event) =>
+            set(
+              'units',
+              (event.target.value || undefined) as
+                ProjectDocument['units'] | undefined
+            )
+          }
+        >
+          <option value="">Document ({UNIT_NAMES[props.documentUnits]})</option>
+          {(Object.keys(UNIT_NAMES) as ProjectDocument['units'][]).map(
+            (key) => (
+              <option key={key} value={key}>
+                {UNIT_NAMES[key]}
+              </option>
+            )
+          )}
+        </select>
+      </label>
+      <div className="drawing-field-row">
+        <label className="drawing-field">
+          <span>Length decimals</span>
+          <select
+            value={format.decimals ?? ''}
+            disabled={!props.editable}
+            onChange={(event) =>
+              set(
+                'decimals',
+                event.target.value === ''
+                  ? undefined
+                  : Number(event.target.value)
+              )
+            }
+          >
+            <option value="">
+              Default ({defaultDimensionDecimals('linear', units)})
+            </option>
+            {decimalsOptions}
+          </select>
+        </label>
+        <label className="drawing-field">
+          <span>Decimal separator</span>
+          <select
+            value={format.decimalSeparator ?? ''}
+            disabled={!props.editable}
+            onChange={(event) =>
+              set(
+                'decimalSeparator',
+                event.target.value === 'comma' ? 'comma' : undefined
+              )
+            }
+          >
+            <option value="">Point (12.5)</option>
+            <option value="comma">Comma (12,5)</option>
+          </select>
+        </label>
+      </div>
+      <div className="drawing-field-row">
+        <label className="drawing-field">
+          <span>Angles</span>
+          <select
+            value={format.angleFormat ?? 'decimal'}
+            disabled={!props.editable}
+            onChange={(event) =>
+              set(
+                'angleFormat',
+                event.target.value === 'dms' ? 'dms' : undefined
+              )
+            }
+          >
+            <option value="decimal">Decimal degrees</option>
+            <option value="dms">Degrees, minutes, seconds</option>
+          </select>
+        </label>
+        <label className="drawing-field">
+          <span>Angle decimals</span>
+          <select
+            value={format.angleDecimals ?? ''}
+            disabled={!props.editable}
+            onChange={(event) =>
+              set(
+                'angleDecimals',
+                event.target.value === ''
+                  ? undefined
+                  : Number(event.target.value)
+              )
+            }
+          >
+            <option value="">
+              Default ({defaultDimensionDecimals('angle', units)})
+            </option>
+            {decimalsOptions}
+          </select>
+        </label>
+      </div>
+      <details className="drawing-line-weights">
+        <summary>Line weights (mm)</summary>
+        {DRAWING_LINE_CLASSES.map((kind) => (
+          <WeightField
+            key={kind}
+            label={DRAWING_LINE_CLASS_LABELS[kind]}
+            value={weights[kind]}
+            fallback={SHEET_STROKE_WIDTH_MM[kind]}
+            disabled={!props.editable}
+            onCommit={(width) => setWeight(kind, width)}
+          />
+        ))}
+      </details>
+    </div>
+  );
+}
+
+/**
+ * One line class's print weight: blank is the ISO 128 default; a weight
+ * outside the bounds reverts.
+ */
+function WeightField(props: {
+  label: string;
+  value: number | undefined;
+  fallback: number;
+  disabled: boolean;
+  onCommit: (width: number | undefined) => void;
+}) {
+  const shown = props.value === undefined ? '' : String(props.value);
+  const [draft, setDraft] = useState(shown);
+  useEffect(() => setDraft(shown), [shown]);
+  const commit = () => {
+    const text = draft.trim();
+    const width = Number(text);
+    if (text === '') {
+      if (props.value !== undefined) props.onCommit(undefined);
+    } else if (
+      Number.isFinite(width) &&
+      width >= MIN_DRAWING_LINE_WIDTH_MM &&
+      width <= MAX_DRAWING_LINE_WIDTH_MM &&
+      width !== props.value
+    )
+      props.onCommit(width);
+    setDraft(shown);
+  };
+  return (
+    <label className="drawing-field">
+      <span>{props.label}</span>
+      <input
+        type="number"
+        min={MIN_DRAWING_LINE_WIDTH_MM}
+        max={MAX_DRAWING_LINE_WIDTH_MM}
+        step={0.05}
+        value={draft}
+        placeholder={String(props.fallback)}
+        disabled={props.disabled}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') commit();
+          if (event.key === 'Escape') setDraft(shown);
+        }}
+      />
+    </label>
+  );
+}
 
 export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const { document, bodies, editDisabledReason } = props;
@@ -2979,7 +3208,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       setSelectedViewId(view.viewId);
   };
 
-  const exportSheet = async (format: 'pdf' | 'svg') => {
+  const exportSheet = async (format: 'pdf' | 'svg' | 'dxf') => {
     if (!sheet || !sheetReady) return;
     const viewStates = sheet.views.map((view) => {
       const state = projections.get(view.viewId);
@@ -3004,7 +3233,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const page = composeSheetPage(
       sheet,
       drawn,
-      { projectName: document.name, units: document.units, sheetNumber },
+      {
+        projectName: document.name,
+        units: document.units,
+        sheetNumber,
+        date: autoDate
+      },
       composeSheetAnnotations(sheet, drawn, resolutions, document.units)
     );
     const fileName = drawingExportFileName(document.name, sheet.name, format);
@@ -3018,8 +3252,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             )
           : await saveCadTextFile(
               fileName,
-              'svg',
-              sheetPageToSvg(page, sheet.name)
+              format,
+              format === 'dxf'
+                ? sheetPageToDxf(page)
+                : sheetPageToSvg(page, sheet.name)
             );
       props.onStatus(
         saved
@@ -3156,6 +3392,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const sheetPosition = sheet
     ? sheets.findIndex((entry) => entry.sheetId === sheet.sheetId) + 1
     : 0;
+  // The DATE cell's automatic value until the title block sets one.
+  const autoDate = useMemo(
+    () => titleBlockAutoDate(document.revisions),
+    [document.revisions]
+  );
   const sheetNumber = useMemo(
     () => ({ index: Math.max(1, sheetPosition), count: sheets.length }),
     [sheetPosition, sheets.length]
@@ -3168,7 +3409,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         page: composeSheetPage(shownSheet, ghostViews, {
           projectName: document.name,
           units: document.units,
-          sheetNumber
+          sheetNumber,
+          date: autoDate
         }),
         boxes: new Map<DrawingAnnotationId, AnnotationBox>(),
         ghost: true
@@ -3183,7 +3425,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       page: composeSheetPage(
         shownSheet,
         drawnViews,
-        { projectName: document.name, units: document.units, sheetNumber },
+        {
+          projectName: document.name,
+          units: document.units,
+          sheetNumber,
+          date: autoDate
+        },
         annotations
       ),
       boxes: annotations.boxes,
@@ -3196,7 +3443,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     resolutions,
     document.name,
     document.units,
-    sheetNumber
+    sheetNumber,
+    autoDate
   ]);
   const page: SheetPage | null = composed?.page ?? null;
   // Each view's projected extent: the drawn one once it is ready, the
@@ -4316,6 +4564,21 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               >
                 SVG
               </button>
+              <button
+                type="button"
+                className="secondary"
+                aria-label="Export DXF"
+                disabled={exportReason !== null}
+                title={
+                  exportReason ??
+                  (outdated
+                    ? 'Export this sheet as DXF, as drawn before the latest model change'
+                    : 'Export this sheet as DXF (R12, paper millimetres, a layer per line kind)')
+                }
+                onClick={() => void exportSheet('dxf')}
+              >
+                DXF
+              </button>
             </div>
           </div>
         </div>
@@ -4741,7 +5004,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             ready={sheetReady}
             canRepick={canAnnotate}
             editable={editable}
-            units={document.units}
+            numberFormat={sheetNumberFormat(sheet, document.units)}
             resolutions={resolutions}
             onTool={chooseTool}
             onDeselect={deselect}
@@ -5159,6 +5422,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         />
         {selection === null && (
           <>
+            <SheetFormatFields
+              format={sheet.format}
+              documentUnits={document.units}
+              editable={editable}
+              onChange={(format) =>
+                updateSheet({ format }, 'Change drawing properties')
+              }
+            />
             <div className="drawing-panel-section">
               <h3>Title block</h3>
               {TITLE_FIELDS.map(({ key, label }) => (
@@ -5166,7 +5437,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   key={key}
                   label={label}
                   value={sheet.titleBlock[key] ?? ''}
-                  placeholder={key === 'title' ? document.name : undefined}
+                  placeholder={
+                    key === 'title'
+                      ? document.name
+                      : key === 'date'
+                        ? autoDate
+                        : undefined
+                  }
                   printed
                   disabled={!editable}
                   onCommit={(value) =>

@@ -682,7 +682,7 @@ import {
   ViewModeRail
 } from './components/ViewModeRail';
 import { StartScreen } from './components/StartScreen';
-import { SharePage, type SharePageState } from './components/SharePage';
+import type { SharePageState } from './components/SharePage';
 import { StartupScreen } from './components/StartupScreen';
 import { SettingsPlaceholder } from './components/SettingsPlaceholder';
 import {
@@ -1224,6 +1224,13 @@ function withSuspense<P extends object>(Lazy: JSXElementConstructor<P>) {
   };
 }
 
+// A share link's landing page: only a share link opens it, so it waits in
+// its own chunk, outside the entry chunk, which runs at its budget.
+const SharePage = preloadableSlot('Shared link', () =>
+  import('./components/SharePage').then((module) => ({
+    default: module.SharePage
+  }))
+);
 const LazyNumericKeypad = preloadableLazy(() =>
   import('./components/NumericKeypad').then((module) => ({
     default: module.NumericKeypad
@@ -3002,7 +3009,7 @@ export function App() {
   // Where the model panels live (U08). Read before anything can write the
   // new key: on a device that has none, the v1 drawer state it migrates
   // from is what `loadPanelState` just read, untouched. A device with
-  // neither starts in the two-sided Essentials.
+  // neither starts with Objects above History in one right column.
   const [panelLayout, setPanelLayout] = useState<PanelLayout>(() =>
     loadPanelLayout(undefined, undefined, { leftDock: true })
   );
@@ -18880,30 +18887,37 @@ export function App() {
     }
   }
 
-  /** One sketch's exact curves as an SVG at 1:1 in document units. */
+  /**
+   * One sketch's exact curves as an SVG at 1:1 in document units, or (D04)
+   * as a DXF drawing in millimetres.
+   */
   async function handleExportSketchSvg(options: SvgExportOptions) {
+    const format = options.format ?? 'svg';
     // No rebuild guard: the sketch is read from the saved document, and the
     // worker queues the export behind any rebuild in flight. The dialog
     // offers SVG while the model updates, so it must be able to deliver it.
     if (!doc) {
       return;
     }
-    const fileName = `${exportFileStem(doc.name)}-sketch.svg`;
+    const fileName = `${exportFileStem(doc.name)}-sketch.${format}`;
+    const name = format.toUpperCase();
     try {
-      setStatus('Exporting the sketch as SVG…');
-      const result = await geometry.exportModel('svg', doc, [], {
+      setStatus(`Exporting the sketch ${name}…`);
+      const result = await geometry.exportModel(format, doc, [], {
         sketchId: options.sketchId as SketchId,
         transparent: options.transparent
       });
       if (!('text' in result)) {
-        throw new Error('The SVG export returned no text.');
+        throw new Error(`${name} export returned no text.`);
       }
-      const saved = await saveCadTextFile(fileName, 'svg', result.text);
+      const saved = await saveCadTextFile(fileName, format, result.text);
       setStatus(
-        saved ? `Exported the sketch to ${fileName}.` : 'SVG export cancelled.'
+        saved
+          ? `Exported the sketch to ${fileName}.`
+          : `${name} export cancelled.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'SVG export failed.'));
+      setStatus(errorMessage(error, `${name} export failed.`));
     }
   }
 
@@ -20035,7 +20049,12 @@ export function App() {
             candidate.topologyId === selection.topologyId ||
             (selection.hash !== undefined && candidate.hash === selection.hash)
         )?.geometry;
-        const on = geometry?.centroid ?? geometry?.center ?? detail?.point;
+        // A standard part stands where the face was clicked.
+        const on =
+          (command.spec.planeAtClick ? detail?.point : undefined) ??
+          geometry?.centroid ??
+          geometry?.center ??
+          detail?.point;
         if (
           geometry?.normal &&
           on &&
@@ -24539,6 +24558,12 @@ export function App() {
           name,
           bodyName,
           ...request.sheet
+        });
+      case 'standard-part':
+        return commandFactories.standardPartBody({
+          name,
+          bodyName,
+          ...request.part
         });
       case 'modeling': {
         // Through the card's own submission builder, so a face operation

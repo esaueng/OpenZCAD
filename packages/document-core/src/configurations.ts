@@ -28,7 +28,7 @@ import {
 import { assertSketchBoundaryTopologyPreserved } from './sketch-boundary-dependencies';
 
 /**
- * F06 configuration commands (schema v70). Every input carries explicit ids,
+ * F06 configuration commands (schema v72). Every input carries explicit ids,
  * so undo, redo and replay reproduce the same table. See the shared
  * `configurations.ts` for the table's contract: the active row's parameter
  * and suppression values live in the document itself, and activating a row

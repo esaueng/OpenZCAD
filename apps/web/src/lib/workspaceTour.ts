@@ -113,14 +113,13 @@ export const WORKSPACE_TOUR_STEPS: readonly WorkspaceTourStep[] = [
   {
     id: 'history',
     title: 'The history is the model',
-    body: 'Open History from the rail on the right. Every feature lands there and replays in order. Drag the grip to reorder, right-click a row for actions, and roll back with the clock on a row.',
+    body: 'History on the right lists every feature and replays them in order. If it is closed, open History from the rail. Drag the grip to reorder, right-click a row for actions, and roll back with the clock on a row.',
     touchBody:
-      'Tap History in the rail on the right. Every feature lands there and replays in order. Drag the grip to reorder, touch and hold a row for its actions, and roll back with the clock on a row.',
+      'History on the right lists every feature and replays them in order. If it is closed, tap History in the rail. Drag the grip to reorder, touch and hold a row for its actions, and roll back with the clock on a row.',
     targetSelector: '.rail-panels [aria-label="History panel"]',
     // Never done ahead of time: the step is how the user learns the history
-    // is the model, so it is always shown. Opening History is the action it
-    // asks for, but its tips are about the panel that opens: the step holds
-    // over the open panel until Next, rather than vanishing as it arrives.
+    // is the model, so it is always shown. The tips stay over the open panel
+    // until Next, whether it opened by default or through the rail.
     isComplete: () => false,
     holdAfter: {
       done: (signals) => signals.historyOpen,

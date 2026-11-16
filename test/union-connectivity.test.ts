@@ -713,6 +713,16 @@ describe('interior-point overlap proof', () => {
     },
     translation: { x: number; y: number; z: number }
   ): Promise<string[]> {
+    return (await unionResult(second, translation)).messages;
+  }
+
+  async function unionResult(
+    second: {
+      primitiveKind: 'sphere' | 'cylinder';
+      dimensions: Record<string, number>;
+    },
+    translation: { x: number; y: number; z: number }
+  ): Promise<{ messages: string[]; volume: number | undefined }> {
     const adapter = await createExactKernelAdapter();
     try {
       let document = addPrimitiveFeature(
@@ -736,9 +746,12 @@ describe('interior-point overlap proof', () => {
         targetBodyIds: [plate, moved.bodyId]
       });
       const result = await adapter.syncDocument(united.document);
-      return (result.featureWarnings ?? [])
-        .filter((warning) => warning.featureName === 'Union')
-        .map((warning) => warning.message);
+      return {
+        messages: (result.featureWarnings ?? [])
+          .filter((warning) => warning.featureName === 'Union')
+          .map((warning) => warning.message),
+        volume: result.bodyRepresentations[united.bodyId]?.volume
+      };
     } finally {
       adapter.dispose();
     }
@@ -750,23 +763,22 @@ describe('interior-point overlap proof', () => {
   ])(
     'does not call the overlapping $placement box/sphere union disconnected',
     async ({ z }) => {
-      const messages = await unionWarnings(
+      const { messages, volume } = await unionResult(
         { primitiveKind: 'sphere', dimensions: { radius: SPHERE_RADIUS } },
         { x: 30, y: 30, z }
       );
       expect(messages.join('\n')).not.toContain('disconnected');
-      // The pin's fuse of this pair fails strict validation ("1 shared edges
-      // have inconsistent face orientations"); that is the refusal it earns.
-      // Flip this to an exact-volume assertion (60·60·20 + 4/3·π·r³ −
-      // capVolume) once the kernel returns a valid fuse.
-      // A proved move may ride along after the sentence.
-      expect(
-        messages.filter((message) =>
-          message.startsWith(
-            'Feature "Union": Union produced an open, non-manifold, or inconsistently oriented result.'
-          )
-        )
-      ).toHaveLength(1);
+      // Remus 2026.1.142 (#1793) returns a valid fuse of this pair, so the
+      // union builds with the exact volume 60·60·20 + 4/3·π·r³ − the cap the
+      // box top cuts off (height h = 20 − (z − r)).
+      expect(messages).toEqual([]);
+      const r = SPHERE_RADIUS;
+      const h = 20 - (z - r);
+      const cap = (Math.PI * h * h * (3 * r - h)) / 3;
+      expect(volume).toBeCloseTo(
+        60 * 60 * 20 + (4 / 3) * Math.PI * r ** 3 - cap,
+        6
+      );
     },
     120_000
   );
