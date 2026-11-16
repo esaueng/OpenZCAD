@@ -25,6 +25,7 @@
   "design-review-followups.spec.ts": 140,
   "direct-edit-ownership.spec.ts": 58,
   "direct-edit-parity-wiring.spec.ts": 4,
+  "drawing-bom-balloons.spec.ts": 14,
   "drawing-centerlines.spec.ts": 12,
   "drawing-detail-views.spec.ts": 12,
   "drawing-dimensions.spec.ts": 10,

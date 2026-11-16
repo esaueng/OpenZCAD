@@ -49,6 +49,10 @@ import type { DrawingViewId } from './drawings';
  * marks and centrelines (through two points, midway between two lines, or a
  * circle through three points) — and a mark as a dimension point.
  *
+ * Schema v80 (D02) adds an assembly's parts list (`bom-table`) on the paper
+ * and balloons naming a part's item number, both read from the AS03 BOM
+ * table each time the sheet is drawn.
+ *
  * Schema v75 (D02) adds the distance dimension: point to line, line to
  * line, and to a circle's centre or its near or far side (min/max), where a
  * line may be a straight edge or a centreline.
@@ -376,6 +380,43 @@ export interface DrawingDistanceDimension extends DrawingDimensionBase {
   extent?: 'min' | 'max';
 }
 
+/** v80: the BOM columns a parts list may show, by their CSV key. */
+export const DRAWING_BOM_COLUMN_KEYS = [
+  'item',
+  'quantity',
+  'part',
+  'instances',
+  'source_body',
+  'status'
+] as const;
+export type DrawingBomColumnKey = (typeof DRAWING_BOM_COLUMN_KEYS)[number];
+
+/**
+ * v80: the assembly's parts list on the paper, its top-left corner at
+ * `placementMm`. Rows, cells and item numbers come from the AS03 BOM table
+ * each time the sheet is drawn; only the choice and order of columns is
+ * stored (absent: item, quantity and part).
+ */
+export interface DrawingBomTable extends DrawingAnnotationBase {
+  kind: 'bom-table';
+  /** On the paper, never in a view: the validator refuses one. */
+  viewId?: DrawingViewId;
+  columns?: DrawingBomColumnKey[];
+}
+
+/**
+ * v80: a balloon naming the item number of the part an edge belongs to,
+ * with a leader to that edge. `componentId` is the assembly component the
+ * edge was picked on; its row's item number is read from the BOM table each
+ * time the sheet is drawn, so it follows the table's numbering.
+ */
+export interface DrawingBalloon extends DrawingAnnotationBase {
+  kind: 'balloon';
+  viewId: DrawingViewId;
+  leader: DrawingEdgeRef;
+  componentId: string;
+}
+
 /** v73: the annotations that mark geometry rather than state a value. */
 export type DrawingGeometryAnnotation =
   DrawingCenterMark | DrawingIntersectionMark | DrawingCenterline;
@@ -397,7 +438,12 @@ export function isDrawingGeometryAnnotation(
 export function isDrawingDimension(
   annotation: DrawingAnnotation
 ): annotation is DrawingDimension {
-  return annotation.kind !== 'note' && !isDrawingGeometryAnnotation(annotation);
+  return (
+    annotation.kind !== 'note' &&
+    annotation.kind !== 'bom-table' &&
+    annotation.kind !== 'balloon' &&
+    !isDrawingGeometryAnnotation(annotation)
+  );
 }
 
 export type DrawingDimension =
@@ -409,7 +455,11 @@ export type DrawingDimension =
   | DrawingChamferDimension;
 
 export type DrawingAnnotation =
-  DrawingDimension | DrawingNote | DrawingGeometryAnnotation;
+  | DrawingDimension
+  | DrawingNote
+  | DrawingGeometryAnnotation
+  | DrawingBomTable
+  | DrawingBalloon;
 
 export type DrawingAnnotationKind = DrawingAnnotation['kind'];
 
@@ -817,6 +867,41 @@ export function drawingAnnotationError(
     return `${where} has a Ø prefix, which only a linear dimension takes.`;
   const counted = countError(value.count, value.kind, where);
   if (counted) return counted;
+  if (value.kind === 'bom-table' || value.kind === 'balloon') {
+    if (
+      [
+        'decimals',
+        'reference',
+        'tolerance',
+        'prefix',
+        'suffix',
+        'provenance'
+      ].some((key) => value[key] !== undefined)
+    )
+      return `${where} is a ${value.kind === 'balloon' ? 'balloon' : 'parts list'}, which states no measured value.`;
+    if (value.kind === 'bom-table') {
+      if (value.viewId !== undefined)
+        return `${where} is a parts list, which sits on the paper, not in a view.`;
+      if (value.columns !== undefined) {
+        const columns = value.columns;
+        if (
+          !Array.isArray(columns) ||
+          columns.length === 0 ||
+          !columns.every((key) =>
+            (DRAWING_BOM_COLUMN_KEYS as readonly unknown[]).includes(key)
+          ) ||
+          new Set(columns).size !== columns.length
+        )
+          return `${where} lists parts-list columns other than each known BOM column once.`;
+      }
+      return null;
+    }
+    if (value.viewId === undefined)
+      return `${where} is a balloon that belongs to no view.`;
+    if (!isShortText(value.componentId, 128))
+      return `${where} is a balloon that names no assembly component.`;
+    return fail(edgeRefError(value.leader));
+  }
   if (
     value.kind === 'center-mark' ||
     value.kind === 'intersection-mark' ||
@@ -1090,6 +1175,10 @@ export function drawingAnnotationReferences(
       return [annotation.face];
     case 'note':
       return annotation.leader ? [annotation.leader] : [];
+    case 'bom-table':
+      return [];
+    case 'balloon':
+      return [annotation.leader];
     case 'distance':
       return [
         ...distanceTargetReferences(annotation.from),
