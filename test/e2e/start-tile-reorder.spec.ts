@@ -111,13 +111,16 @@ test(
     // A pass over the middle does nothing; the hold arms it.
     await expect(card(page, names[2]!)).toHaveClass(/is-drop-pending/);
     await expect(card(page, names[2]!)).toHaveClass(/is-drop-target/);
-    // The hint rides on the dragged card, which would cover it on the target.
-    await expect(
-      card(page, names[0]!).locator('.start-tile-merge-hint')
-    ).toHaveText('Release to make a folder');
+    // The hint rides above the dragged card, which would cover it on the
+    // target, and clear of the pointer.
+    const hint = card(page, names[0]!).locator('.start-tile-merge-hint');
+    await expect(hint).toHaveText('Release to make a folder');
     await expect(
       card(page, names[2]!).locator('.start-tile-merge-hint')
     ).toHaveCount(0);
+    const hintBox = (await hint.boundingBox())!;
+    const draggedBox = (await card(page, names[0]!).boundingBox())!;
+    expect(hintBox.y + hintBox.height).toBeLessThanOrEqual(draggedBox.y);
     await page.mouse.up();
 
     const field = page.getByRole('textbox', { name: 'Folder name' });
