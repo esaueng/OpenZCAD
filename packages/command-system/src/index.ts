@@ -1164,7 +1164,27 @@ function validateHoleInput(
   validateBodyTarget(document, input.targetBodyId);
   // M01 (schema v64): the sketch points, at the hole's history position.
   validateHolePoints(document, input.points, ownFeatureId);
-  validateHoleStandard(input.standard);
+  validateHoleStandard(input.standard, input.tapped);
+  if (input.tapped?.length !== undefined) {
+    const length = resolvedModelingValue(
+      document,
+      'tapped length',
+      input.tapped.length
+    );
+    if (!(length > 0)) {
+      throw new Error('Tapped length must resolve to a positive value.');
+    }
+  }
+  if (input.tapped?.clearance !== undefined) {
+    const clearance = resolvedModelingValue(
+      document,
+      'tapped clearance',
+      input.tapped.clearance
+    );
+    if (!(clearance >= 0)) {
+      throw new Error('Tapped clearance must be zero or more.');
+    }
+  }
   // M01 (schema v65): a standard hole's table gives its diameter.
   const diameter = input.standard
     ? holeStandardDiameterMm(input.standard) /

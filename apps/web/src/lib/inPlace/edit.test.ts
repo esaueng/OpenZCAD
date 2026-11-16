@@ -1631,6 +1631,42 @@ describe('an untouched edit writes the feature back as stored', () => {
     ]);
   });
 
+  it('tapped hole (M01): its thread reopens as stored; drilled only, it clears', () => {
+    const saved: FeatureData = {
+      featureKind: 'hole',
+      targetBodyId: BODY,
+      faceHash: 11,
+      style: 'simple',
+      diameter: 5,
+      depthMode: 'blind',
+      depth: 12,
+      position: { u: 0, v: 0 },
+      standard: { system: 'iso', size: 'M6', kind: 'tap-drill' },
+      tapped: { length: 8, clearance: 0, hand: 'left' }
+    };
+    const armed = inPlaceEditSeed(
+      feature(saved, 'body_h' as BodyId),
+      EDIT_CTX
+    )!;
+    expect(armed.seed.options).toMatchObject({
+      tap: 'tapped',
+      tapFit: 'exact',
+      holeFor: 'tap-drill'
+    });
+    expect(armed.seed.values.tapLength).toBe(8);
+    expect(untouched(feature(saved, 'body_h' as BodyId))).toMatchObject({
+      state: { value: { tapped: { length: '8', clearance: 0, hand: 'left' } } }
+    });
+    const { tapped: _tapped, ...drilled } = saved;
+    const update = {
+      featureId: 'feat_1' as FeatureId,
+      data: drilled
+    } as unknown as FeatureUpdateInput;
+    expect(keepAbsentHoleSteps(update, saved, []).clearData).toEqual([
+      'tapped'
+    ]);
+  });
+
   it('boolean: its bodies, operation and kept inputs', () => {
     const data: FeatureData = {
       featureKind: 'boolean',

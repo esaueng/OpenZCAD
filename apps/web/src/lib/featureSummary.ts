@@ -364,8 +364,11 @@ export function featureValueSummary(
         ? ` at ${data.points.pointIds.length} points`
         : '';
       // M01 (schema v65): a standard size reads by its name.
+      // M01 (schema v66): a tapped one by its thread.
       const size = data.standard
-        ? holeStandardLabel(data.standard)
+        ? data.tapped
+          ? holeStandardLabel(data.standard).replace(/ tap drill$/, ' tapped')
+          : holeStandardLabel(data.standard)
         : `⌀ ${diameter} ${unit}`;
       if (data.depthMode === 'through') {
         return `${size} through${count}`;

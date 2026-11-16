@@ -472,6 +472,18 @@ export function inPlaceEditSeed(
           seed.options[system === 'iso' ? 'fit' : 'ansiFit'] = fit ?? 'normal';
         }
       }
+      // M01 (schema v66): tapped, its length on the arrow where it has one.
+      if (data.tapped) {
+        seed.options.tap = 'tapped';
+        const clearance = data.tapped.clearance;
+        seed.options.tapFit =
+          clearance === undefined
+            ? 'document'
+            : clearance === 0
+              ? 'exact'
+              : 'stored';
+        value('tapLength', data.tapped.length);
+      }
       // M01 (schema v64): drilled at sketch points, which reopen as picks.
       if (data.points) {
         seed.options.place = 'points';
@@ -1638,7 +1650,7 @@ export function keepAbsentHoleSteps(
   // M01: a hole moved off its sketch points, or off a standard size, drops
   // them, which a patch without the key would keep.
   const patch = update.data as Record<string, unknown> | undefined;
-  const cleared = (['points', 'standard'] as const).filter(
+  const cleared = (['points', 'standard', 'tapped'] as const).filter(
     (key) => saved[key] !== undefined && patch?.[key] === undefined
   );
   return {

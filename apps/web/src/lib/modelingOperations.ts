@@ -25,6 +25,7 @@ import {
   type FeatureNode,
   type HolePoints,
   type HoleStandard,
+  type HoleTapped,
   type ParamValue,
   type SketchPathReference,
   type SketchSectionReference
@@ -173,6 +174,8 @@ export interface HoleFormState {
   points?: HolePoints;
   /** M01 (schema v65): the standard size whose table gives the diameter. */
   standard?: HoleStandard;
+  /** M01 (schema v66): tapped with the standard's thread. */
+  tapped?: HoleTapped;
 }
 
 export interface ThickenFormState {
@@ -493,7 +496,8 @@ export function modelingFormStateFromFeature(
                 }
               }
             : {}),
-          ...(data.standard ? { standard: { ...data.standard } } : {})
+          ...(data.standard ? { standard: { ...data.standard } } : {}),
+          ...(data.tapped ? { tapped: { ...data.tapped } } : {})
         }
       };
     case 'mirror':
@@ -1367,6 +1371,20 @@ export function buildModelingOperationSubmission(
           : {}),
         ...(state.value.standard
           ? { standard: { ...state.value.standard } }
+          : {}),
+        ...(state.value.tapped
+          ? {
+              tapped: {
+                ...state.value.tapped,
+                ...(state.value.tapped.length !== undefined
+                  ? {
+                      length: coerceParamValue(
+                        String(state.value.tapped.length)
+                      )
+                    }
+                  : {})
+              }
+            }
           : {})
       }
     };
