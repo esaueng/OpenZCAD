@@ -21,6 +21,7 @@ import { useAssemblyView } from '../lib/assembly/useAssemblyView';
 import type { ReferenceImageDisplay } from '../lib/referenceImageDisplay';
 import type { AutoFrameRequest } from '../lib/autoFrame';
 import {
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -635,6 +636,39 @@ export function ViewerShell({
   const sectionOverlapText = settings.sectionView
     ? describeSectionOverlap(sectionOverlap, units)
     : null;
+  // The chip that says a cut is on while its controls are put away. It
+  // stands above the cube, so the corner the right lane and the unpinned
+  // panel stop above (--stage-corner-h) grows by its height and gap while
+  // it shows: under the Measure workbench at 1440 × 700, its Turn off took
+  // the workbench footer's click.
+  const sectionChipShown =
+    !hideViewerToolbar &&
+    Boolean(settings.sectionView) &&
+    (viewMode || sectionPanelOpen === false || !sectionRange);
+  const sectionChipRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const chip = sectionChipRef.current;
+    const workspace = chip?.closest<HTMLElement>('.workspace');
+    if (!sectionChipShown || !chip || !workspace) return;
+    const measure = () => {
+      const height = Math.ceil(chip.getBoundingClientRect().height);
+      // The stack's 6px gap comes with a chip that is drawn.
+      workspace.style.setProperty(
+        '--section-chip-h',
+        `${height > 0 ? height + 6 : 0}px`
+      );
+    };
+    measure();
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(chip);
+    return () => {
+      observer?.disconnect();
+      workspace.style.removeProperty('--section-chip-h');
+    };
+  }, [sectionChipShown]);
   // Assemble's posed view of the same document; null outside Assemble.
   const assemblyView = useAssemblyView(view.document);
   /**
@@ -1047,37 +1081,37 @@ export function ViewerShell({
                 screen was cut (I49). It stands above the cube: under it, it
                 lifted the cube out of its corner and ran under the triad's
                 tips, wedged against the stage's edge. */}
-            {settings.sectionView &&
-              (viewMode || sectionPanelOpen === false || !sectionRange) && (
-                <div
-                  className="view-mode-section"
-                  role="group"
-                  // Not "Section view": that names the controls themselves.
-                  aria-label="Section view on"
+            {settings.sectionView && sectionChipShown && (
+              <div
+                ref={sectionChipRef}
+                className="view-mode-section"
+                role="group"
+                // Not "Section view": that names the controls themselves.
+                aria-label="Section view on"
+              >
+                <span className="view-mode-section-label">
+                  Section · {SECTION_PLANE_LABELS[settings.sectionView.plane]}
+                </span>
+                <button
+                  type="button"
+                  className="view-mode-section-off"
+                  onClick={onToggleSection}
                 >
-                  <span className="view-mode-section-label">
-                    Section · {SECTION_PLANE_LABELS[settings.sectionView.plane]}
-                  </span>
-                  <button
-                    type="button"
-                    className="view-mode-section-off"
-                    onClick={onToggleSection}
-                  >
-                    Turn off
-                  </button>
-                  {sectionOverlapText ? (
-                    // M09: the same words the section toolbox shows, for a
-                    // cut whose toolbox is put away (Assemble, View).
-                    <p className="view-mode-section-overlap" role="note">
-                      <span
-                        className="rail-section-overlap-swatch"
-                        aria-hidden="true"
-                      />
-                      {sectionOverlapText}
-                    </p>
-                  ) : null}
-                </div>
-              )}
+                  Turn off
+                </button>
+                {sectionOverlapText ? (
+                  // M09: the same words the section toolbox shows, for a
+                  // cut whose toolbox is put away (Assemble, View).
+                  <p className="view-mode-section-overlap" role="note">
+                    <span
+                      className="rail-section-overlap-swatch"
+                      aria-hidden="true"
+                    />
+                    {sectionOverlapText}
+                  </p>
+                ) : null}
+              </div>
+            )}
             <OrientationWidget
               orientationRef={orientationRef}
               orbitMode={settings.orbitMode ?? 'free'}
