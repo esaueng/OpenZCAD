@@ -74,8 +74,8 @@ function fitToElement(element: HTMLElement, name: string): string {
  * clamp stays as the fallback before the first measurement.
  *
  * The full name stays in the title (hover) and in the tile button's own
- * label. A list row's keyboard focus shows it whole: the full name is
- * rendered beside the short one and the stylesheet swaps them.
+ * label, and it is the element's only text: the short form is drawn by the
+ * stylesheet from `data-short`. A list row's keyboard focus shows it whole.
  */
 export function TileName({ name }: { name: string }) {
   const ref = useRef<HTMLElement>(null);
@@ -115,16 +115,17 @@ export function TileName({ name }: { name: string }) {
   }, [name]);
 
   const text = fitted.name === name ? fitted.text : name;
+  const shortened = text !== name;
+  // The short form is drawn from `data-short` by the stylesheet, so the
+  // element's text stays the full name for every reader of `textContent`.
   return (
-    <strong ref={ref} className="start-tile-name" title={name}>
-      {text !== name ? (
-        <>
-          <span className="start-tile-name-short">{text}</span>
-          <span className="start-tile-name-full">{name}</span>
-        </>
-      ) : (
-        name
-      )}
+    <strong
+      ref={ref}
+      className="start-tile-name"
+      title={name}
+      data-short={shortened ? text : undefined}
+    >
+      {shortened ? <span className="start-tile-name-full">{name}</span> : name}
     </strong>
   );
 }

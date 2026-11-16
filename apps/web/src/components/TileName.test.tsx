@@ -38,21 +38,20 @@ describe('TileName', () => {
     const { container } = render(<TileName name="Lucky Quokka" />);
     const name = container.querySelector('.start-tile-name');
     expect(name?.textContent).toBe('Lucky Quokka');
-    expect(name?.querySelector('.start-tile-name-short')).toBeNull();
+    expect(name?.hasAttribute('data-short')).toBe(false);
   });
 
   it('shortens a longer name in the middle, keeping its distinguishing end', () => {
     const full = 'OAWIHDOIAWHDOIHAWawdawd VERSION 2';
     const { container } = render(<TileName name={full} />);
     const name = container.querySelector('.start-tile-name');
-    const short = name?.querySelector('.start-tile-name-short')?.textContent;
+    const short = name?.getAttribute('data-short');
     expect(short).toBe('OAWIHDOIAWHD…RSION 2');
     expect(Array.from(short ?? '').length).toBeLessThanOrEqual(20);
-    // The full name stays on hover and for the list row's focus reveal.
+    // The full name stays the element's only text, on hover and for the
+    // list row's focus reveal.
+    expect(name?.textContent).toBe(full);
     expect(name?.getAttribute('title')).toBe(full);
-    expect(name?.querySelector('.start-tile-name-full')?.textContent).toBe(
-      full
-    );
   });
 
   it('refits when the name changes', () => {
@@ -60,11 +59,11 @@ describe('TileName', () => {
       <TileName name="PiKVM v3.3 Enclosure V6 - Hardware fit" />
     );
     expect(
-      container.querySelector('.start-tile-name-short')?.textContent
+      container.querySelector('.start-tile-name')?.getAttribute('data-short')
     ).toContain('…');
     rerender(<TileName name="Tiny Fox" />);
-    expect(container.querySelector('.start-tile-name')?.textContent).toBe(
-      'Tiny Fox'
-    );
+    const name = container.querySelector('.start-tile-name');
+    expect(name?.textContent).toBe('Tiny Fox');
+    expect(name?.hasAttribute('data-short')).toBe(false);
   });
 });

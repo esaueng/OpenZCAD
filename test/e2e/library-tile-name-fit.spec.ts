@@ -75,21 +75,29 @@ test(
     const folder = page.locator(`.start-tile-name[title="${LONG_FOLDER}"]`);
     const project = page.locator(`.start-tile-name[title="${LONG_PROJECT}"]`);
 
-    const folderShort = folder.locator('.start-tile-name-short');
-    await expect(folderShort).toHaveText(/^awpodjpopo.*….*jawd$/);
+    await expect(folder).toHaveAttribute('data-short', /^awpodjpopo.*….*jawd$/);
+    // The element's text stays the full name; only the drawing is short.
+    await expect(folder).toHaveText(LONG_FOLDER);
     expect(await lineCount(page, LONG_FOLDER)).toBeLessThanOrEqual(2);
 
-    const projectShort = project.locator('.start-tile-name-short');
-    await expect(projectShort).toHaveText(/^OAWIHDOIAWHD.*….*VERSION 2$/);
+    await expect(project).toHaveAttribute(
+      'data-short',
+      /^OAWIHDOIAWHD.*….*VERSION 2$/
+    );
+    await expect(project).toHaveText(LONG_PROJECT);
     expect(await lineCount(page, LONG_PROJECT)).toBeLessThanOrEqual(2);
     // Two lines are used, not one: the fit is the longest that still fits.
     expect(await lineCount(page, LONG_PROJECT)).toBe(2);
 
     // A wider card refits to show more of the name.
-    const before = (await projectShort.textContent())!.length;
+    const before = (await project.getAttribute('data-short'))!.length;
     await page.setViewportSize({ width: 1900, height: 900 });
     await expect
-      .poll(async () => (await projectShort.textContent())?.length ?? 0)
+      .poll(
+        async () =>
+          (await project.getAttribute('data-short'))?.length ??
+          LONG_PROJECT.length
+      )
       .toBeGreaterThanOrEqual(before);
     expect(await lineCount(page, LONG_PROJECT)).toBeLessThanOrEqual(2);
 

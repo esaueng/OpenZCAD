@@ -1943,14 +1943,21 @@
   -webkit-line-clamp: unset;
 }
 
-/* A middle-shortened name (TileName) carries its full form beside the short
-   one; the row's keyboard focus swaps them, as it lifts the clamp above. */
+/* A middle-shortened name (TileName) keeps its full form as its text and
+   draws the short one from `data-short`, so `textContent` stays the name.
+   The row's keyboard focus swaps them, as it lifts the clamp above. */
+.start-tile-name[data-short]::before {
+  content: attr(data-short);
+}
+
 .start-tile-name-full {
   display: none;
 }
 
-.start-tile-grid.is-list .start-tile-open:focus-visible .start-tile-name-short {
-  display: none;
+.start-tile-grid.is-list
+  .start-tile-open:focus-visible
+  .start-tile-name[data-short]::before {
+  content: none;
 }
 
 .start-tile-grid.is-list .start-tile-open:focus-visible .start-tile-name-full {
