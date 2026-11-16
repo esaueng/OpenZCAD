@@ -76,6 +76,7 @@
   "open-in-slicer.spec.ts": 16,
   "orbit-mode-setting.spec.ts": 16,
   "overlay-reach.spec.ts": 5,
+  "panel-dock.spec.ts": 7,
   "panel-float.spec.ts": 11,
   "panel-suspension.spec.ts": 48,
   "parts-list-scroll.spec.ts": 17,
@@ -130,5 +131,6 @@
   "viewport.spec.ts": 13,
   "visual-selection-fillet-edit.spec.ts": 12,
   "visual-selection-live-preview.spec.ts": 12,
-  "workspace-empty-state.spec.ts": 8
+  "workspace-empty-state.spec.ts": 8,
+  "workspace-tour.spec.ts": 7
 }

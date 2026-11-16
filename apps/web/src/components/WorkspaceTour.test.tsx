@@ -319,7 +319,7 @@ describe('WorkspaceTour', () => {
     try {
       await waitFor(() => expect(history).toHaveClass('tour-target'));
       expect(
-        screen.getByText(/Open History from the rail on the right/)
+        screen.getByText(/If it is closed, open History from the rail/)
       ).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: 'Next' }));
       expect(screen.getByText('Take it with you')).toBeTruthy();

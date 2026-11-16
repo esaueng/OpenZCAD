@@ -2998,7 +2998,7 @@ export function App() {
   // Where the model panels live (U08). Read before anything can write the
   // new key: on a device that has none, the v1 drawer state it migrates
   // from is what `loadPanelState` just read, untouched. A device with
-  // neither starts in the two-sided Essentials.
+  // neither starts with Objects above History in one right column.
   const [panelLayout, setPanelLayout] = useState<PanelLayout>(() =>
     loadPanelLayout(undefined, undefined, { leftDock: true })
   );
