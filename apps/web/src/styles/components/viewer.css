@@ -1647,3 +1647,132 @@
     0 0 18px color-mix(in srgb, var(--gizmo-axis-color) 65%, transparent),
     0 10px 28px rgba(0, 0, 0, 0.5);
 }
+
+/* M09: the Display menu's Analysis group is headed like a menu section. */
+.display-menu .display-menu-heading {
+  padding: 4px 8px 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* M09: the analysis panel. Its own island at the head of the stage, under
+   the top bar's mode switch: the foot holds the command bar and its cards,
+   the corners the cube and the rails, the sides the docks. It scrolls
+   rather than grow over the model. */
+.analysis-panel {
+  position: absolute;
+  top: calc(60px + var(--island-gap, 8px));
+  left: 50%;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(360px, calc(100% - 24px));
+  max-height: min(45%, 400px);
+  padding: 8px 10px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  transform: translateX(-50%);
+  box-shadow: var(--shadow-popover);
+}
+
+.analysis-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.analysis-panel-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.analysis-panel-off {
+  padding: 2px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.analysis-panel-off:hover {
+  background: var(--color-surface-hover);
+}
+
+.analysis-panel-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.analysis-panel-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-muted);
+}
+
+.analysis-panel-field select,
+.analysis-panel-field input {
+  max-width: 6em;
+  font-size: var(--fs-xs);
+}
+
+.analysis-legend {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.analysis-legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.analysis-swatch {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.analysis-panel-status {
+  margin: 0;
+  color: var(--color-text);
+}
+
+.analysis-panel-note {
+  margin: 0;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.analysis-unsupported {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* A phone's top bar takes two rows (identity, then the mode switch): the
+   panel stands under both and gives the model more of the height. */
+@media (max-width: 640px) {
+  .analysis-panel {
+    top: 112px;
+    max-height: 38%;
+  }
+}

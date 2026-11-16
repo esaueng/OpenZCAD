@@ -7,7 +7,9 @@ import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import type {
   AssemblyInterferenceOperand,
-  AssemblyInterferenceReport
+  AssemblyInterferenceReport,
+  SurfaceAnalysisReport,
+  SurfaceAnalysisRequest
 } from '@openzcad/shared';
 import type {
   BodyId,
@@ -260,6 +262,17 @@ export type GeometryWorkerRequest =
       operands: AssemblyInterferenceOperand[];
     }
   | {
+      /**
+       * M09 analysis overlays: the exact per-face analysis of the named
+       * bodies (the adapter's `surfaceAnalysis`). Read-only.
+       */
+      type: 'surface-analysis';
+      requestId: string;
+      document: ProjectDocument;
+      bodyIds: BodyId[];
+      analysis: SurfaceAnalysisRequest;
+    }
+  | {
       /** One planar sketch edit: corner fillet, corner chamfer, or offset. */
       type: 'sketch-2d-op';
       requestId: string;
@@ -473,6 +486,20 @@ export type GeometryAssemblyInterferenceResult =
       error: string;
     };
 
+export type GeometrySurfaceAnalysisResult =
+  | {
+      type: 'surface-analysis';
+      ok: true;
+      requestId: string;
+      report: SurfaceAnalysisReport;
+    }
+  | {
+      type: 'surface-analysis';
+      ok: false;
+      requestId: string;
+      error: string;
+    };
+
 export type GeometrySolveSketchResult =
   | {
       type: 'solve-sketch';
@@ -597,6 +624,7 @@ export type GeometryWorkerResult =
   | GeometrySectionResult
   | GeometrySolveSketchResult
   | GeometryAssemblyInterferenceResult
+  | GeometrySurfaceAnalysisResult
   | GeometrySketch2dOpResult
   | GeometryRecognizeImportedFaceResult
   | GeometrySheetMetalFlatPatternResult;
@@ -1235,6 +1263,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       request.type === 'section' ||
       request.type === 'solve-sketch' ||
       request.type === 'assembly-interference' ||
+      request.type === 'surface-analysis' ||
       request.type === 'sketch-2d-op' ||
       request.type === 'recognize-imported-face' ||
       request.type === 'sheet-metal-fold' ||
@@ -1346,6 +1375,21 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         );
         post({
           type: 'assembly-interference',
+          ok: true,
+          requestId: request.requestId,
+          report
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
+      if (request.type === 'surface-analysis') {
+        const report = await exact.surfaceAnalysis(
+          document,
+          request.bodyIds,
+          request.analysis
+        );
+        post({
+          type: 'surface-analysis',
           ok: true,
           requestId: request.requestId,
           report
@@ -1828,6 +1872,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     } else if (request.type === 'assembly-interference') {
       post({
         type: 'assembly-interference',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'surface-analysis') {
+      post({
+        type: 'surface-analysis',
         ok: false,
         requestId: request.requestId,
         error: message

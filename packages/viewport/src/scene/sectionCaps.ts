@@ -309,6 +309,11 @@ export function updateSectionCap(
     cap.material.color.offsetHSL(0, 0, CUT_LIGHTNESS_SHIFT);
     cap.material.clippingPlanes = null;
     cap.material.side = THREE.DoubleSide;
+    // An M09 analysis overlay stands in for the body's faces and switches
+    // their material off; the cut still shows, as the faces would.
+    if (mesh.userData.analysisCovered === true) {
+      cap.material.visible = mesh.userData.analysisFacesVisible !== false;
+    }
     // Hover animation updates emissive, and X-ray or appearance changes
     // update blending, between section applications.
     cap.onBeforeRender = () => {
