@@ -332,6 +332,82 @@ export function drillHole(
 ): number {
   const facesBefore = kernel.getSolidFaces(solid).length;
   const volumeBefore = kernel.volume(solid, HOLE_PROOF_DEFLECTION);
+  const tools = holeToolSolids(kernel, spec);
+  // Cut one tool at a time. The kernel's compound pass trips its exact
+  // assembly on tool pairs that each cut exactly on their own, and now
+  // refuses the pair outright rather than meshing it; per-tool cuts keep the
+  // hole buildable, and a refusal names the step that could not be cut.
+  let cut = solid;
+  for (const tool of tools) {
+    cut = exactCut(kernel, cut, tool);
+  }
+  unifyAndRequireValidSolid(
+    kernel,
+    cut,
+    'The hole cut did not produce a valid solid.'
+  );
+  const volumeAfter = kernel.volume(cut, HOLE_PROOF_DEFLECTION);
+  if (!(volumeAfter < volumeBefore - GEOMETRY_EPSILON)) {
+    throw new Error('The hole removed no material — it misses the body.');
+  }
+  if (!(volumeAfter > GEOMETRY_EPSILON)) {
+    throw new Error('The hole removed the whole body.');
+  }
+  // A mesh-boolean fallback replaces a handful of analytic faces with
+  // hundreds of triangles; a real hole adds at most a few faces per style.
+  if (kernel.getSolidFaces(cut).length > facesBefore + 8) {
+    throw new Error(
+      'This hole could only be cut by replacing exact surfaces with flat triangles, so it was refused.'
+    );
+  }
+  const missing = missingHoleBore(kernel, cut, spec);
+  if (missing !== null) {
+    throw new Error(
+      `The hole's ${missing * 2} bore did not come back as an analytic cylinder.`
+    );
+  }
+  return cut;
+}
+
+/**
+ * The radius of a bore `spec` asks for that `solid` does not hold as an
+ * analytic cylinder on the hole's axis, or null when every one is there.
+ */
+export function missingHoleBore(
+  kernel: RemusKernel,
+  solid: number,
+  spec: HoleToolSpec
+): number | null {
+  const bores = coaxialCylinderRadii(
+    kernel,
+    solid,
+    spec.surfacePoint,
+    spec.axis,
+    ANALYTIC_MATCH_EPSILON
+  );
+  const expected = [spec.radius];
+  if (spec.style === 'counterbore' && spec.counterboreRadius !== undefined) {
+    expected.push(spec.counterboreRadius);
+  }
+  return (
+    expected.find(
+      (radius) =>
+        !bores.some(
+          (bore) => Math.abs(bore - radius) <= ANALYTIC_MATCH_EPSILON * radius
+        )
+    ) ?? null
+  );
+}
+
+/**
+ * The analytic solids a hole cuts, in the order they are cut: the bore (or
+ * the revolved countersink section), then a counterbore. M02 repeats these
+ * for a pattern of holes.
+ */
+export function holeToolSolids(
+  kernel: RemusKernel,
+  spec: HoleToolSpec
+): number[] {
   const start = subtract(
     spec.surfacePoint,
     scale(spec.axis, spec.entryExtension)
@@ -406,57 +482,7 @@ export function drillHole(
       );
     }
   }
-
-  // Cut one tool at a time. The kernel's compound pass trips its exact
-  // assembly on tool pairs that each cut exactly on their own, and now
-  // refuses the pair outright rather than meshing it; per-tool cuts keep the
-  // hole buildable, and a refusal names the step that could not be cut.
-  let cut = solid;
-  for (const tool of tools) {
-    cut = exactCut(kernel, cut, tool);
-  }
-  unifyAndRequireValidSolid(
-    kernel,
-    cut,
-    'The hole cut did not produce a valid solid.'
-  );
-  const volumeAfter = kernel.volume(cut, HOLE_PROOF_DEFLECTION);
-  if (!(volumeAfter < volumeBefore - GEOMETRY_EPSILON)) {
-    throw new Error('The hole removed no material — it misses the body.');
-  }
-  if (!(volumeAfter > GEOMETRY_EPSILON)) {
-    throw new Error('The hole removed the whole body.');
-  }
-  // A mesh-boolean fallback replaces a handful of analytic faces with
-  // hundreds of triangles; a real hole adds at most a few faces per style.
-  if (kernel.getSolidFaces(cut).length > facesBefore + 8) {
-    throw new Error(
-      'This hole could only be cut by replacing exact surfaces with flat triangles, so it was refused.'
-    );
-  }
-  const bores = coaxialCylinderRadii(
-    kernel,
-    cut,
-    spec.surfacePoint,
-    spec.axis,
-    ANALYTIC_MATCH_EPSILON
-  );
-  const expected = [spec.radius];
-  if (spec.style === 'counterbore' && spec.counterboreRadius !== undefined) {
-    expected.push(spec.counterboreRadius);
-  }
-  for (const radius of expected) {
-    if (
-      !bores.some(
-        (bore) => Math.abs(bore - radius) <= ANALYTIC_MATCH_EPSILON * radius
-      )
-    ) {
-      throw new Error(
-        `The hole's ${radius * 2} bore did not come back as an analytic cylinder.`
-      );
-    }
-  }
-  return cut;
+  return tools;
 }
 
 /** Matches the adapter's measurement tessellation for volume proofs. */

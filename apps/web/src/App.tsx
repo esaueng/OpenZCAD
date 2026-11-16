@@ -305,6 +305,7 @@ import {
   FEATURE_SUPPRESSED_METADATA_KEY,
   isFeatureManuallySuppressed,
   isFeatureSuppressed,
+  patternSourceProblem,
   projectBranchPoint,
   projectOrganization,
   TRASH_RETENTION_DAYS
@@ -985,6 +986,7 @@ import {
   resolveFace
 } from './lib/topologyResolution';
 import { useLineageDemand } from './lib/lineageDemand';
+import { faceProducingFeature } from './lib/faceProducerName';
 import { persistsKernelSession } from './lib/kernelSessionPolicy';
 import {
   folderClickSelection,
@@ -1816,6 +1818,10 @@ import {
   keypadText,
   profileRegionLoops,
   isInPlacePatternTool,
+  inPlaceBodyMode,
+  inPlaceFaceMode,
+  takesFeatureFaces,
+  toggledPatternSkip,
   requestNewAxis,
   resolveNewAxis,
   valueInRange,
@@ -3429,6 +3435,8 @@ export function App() {
   const [inPlaceEdgeTool, setInPlaceEdgeTool] = useState<
     'fillet' | 'chamfer' | null
   >(null);
+  /** M02: a pattern repeating features picks faces, mirrored for the filter. */
+  const [inPlaceFeaturePick, setInPlaceFeaturePick] = useState(false);
   /**
    * What picking is narrowed to right now. A manual choice outranks the tool's
    * so that arming Fillet does not silently undo a filter set on purpose.
@@ -3439,7 +3447,7 @@ export function App() {
   // takes over again once the sketch has a plane.
   const selectionFilter = datumRepair?.vertices
     ? 'edge'
-    : tool === 'sketch'
+    : tool === 'sketch' || (inPlaceFeaturePick && !manualSelectionFilter)
       ? 'face'
       : effectiveSelectionFilter(
           manualSelectionFilter,
@@ -11308,11 +11316,31 @@ export function App() {
     const command = inPlaceRef.current;
     const spec = command.spec;
     if (!spec || !(spec.axisPicks || spec.takeDirection)) return false;
+    // M02: a feature pattern acts on its picked features; a face one of
+    // those kinds made is another feature to repeat, not a line.
+    const features = takesFeatureFaces(spec, command.options);
     if (
-      command.slots.bodies.length === 0 &&
-      command.slots.profiles.length === 0
+      features
+        ? command.slots.faces.length === 0
+        : command.slots.bodies.length === 0 &&
+          command.slots.profiles.length === 0
     ) {
       return false;
+    }
+    if (features && selection.kind === 'face') {
+      const shownDocument = representations[selection.bodyId]
+        ? managerRef.current?.document
+        : previewDoc;
+      const face = shownDocument?.derived.bodyRepresentations[
+        selection.bodyId
+      ]?.topology?.faces.find((candidate) => candidate.hash === selection.hash);
+      const feature =
+        shownDocument && face
+          ? faceProducingFeature(shownDocument, face)
+          : null;
+      if (feature && !patternSourceProblem(feature.data, feature.name)) {
+        return false;
+      }
     }
     // An edit's new axis is a datum just before the feature: a body made by
     // it or later is not there yet (its result is on screen where its input
@@ -11592,6 +11620,20 @@ export function App() {
           ) ?? faces[0];
         return face
           ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined, true)
+          : null;
+      },
+      featureFace: (bodyId, featureId) => {
+        // M02: a feature pattern's repeated feature, as one of its faces.
+        const face = representations[bodyId]?.topology?.faces.find(
+          (candidate) =>
+            faceProducingFeature(current, candidate)?.featureId === featureId
+        );
+        const pick = face
+          ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined, true)
+          : null;
+        const source = findFeature(current, featureId);
+        return pick && source
+          ? { ...pick, feature: { featureId, name: source.name } }
           : null;
       },
       curve: (sketchId, entityId) =>
@@ -12044,6 +12086,71 @@ export function App() {
       ...(cylinder ? { cylinder } : {}),
       ...(point ? { point } : {})
     };
+  }
+
+  /**
+   * M02: the face a feature pattern's click picks, naming the hole, boss or
+   * cut that made it, or null (with the reason on the status line). On the
+   * pattern's own preview the click stands for that feature's face on the
+   * body the pattern is made on.
+   */
+  function inPlaceFeatureFacePick(
+    bodyId: string,
+    topologyId: string | undefined,
+    hash: number | undefined,
+    point: { x: number; y: number; z: number } | undefined
+  ): FacePick | null {
+    const committed = managerRef.current?.document;
+    if (!committed) return null;
+    const matches = (candidate: { topologyId: string; hash: number }) =>
+      (topologyId !== undefined && candidate.topologyId === topologyId) ||
+      (hash !== undefined && candidate.hash === hash);
+    const own =
+      representations[bodyId as BodyId]?.topology?.faces.find(matches);
+    const shownDocument = own ? committed : previewDoc;
+    const face =
+      own ??
+      previewDoc?.derived.bodyRepresentations[
+        bodyId as BodyId
+      ]?.topology?.faces.find(matches);
+    if (!face || !shownDocument) return null;
+    if (!face.reference) {
+      // A boss's or cut's faces are named once something asks: ask, and the
+      // next click finds the feature.
+      addLineageDemand([bodyId as BodyId]);
+      setStatus('Reading which feature made that face · click it again.');
+      return null;
+    }
+    const feature = faceProducingFeature(shownDocument, face);
+    const problem = !feature
+      ? 'Click a face a hole, boss or cut made.'
+      : patternSourceProblem(feature.data, feature.name);
+    if (!feature || problem) {
+      setStatus(problem ?? 'Click a face a hole, boss or cut made.');
+      return null;
+    }
+    const named = { featureId: feature.featureId, name: feature.name };
+    if (own) {
+      const pick = inPlaceFacePick(bodyId, topologyId, hash, point);
+      return pick ? { ...pick, feature: named } : null;
+    }
+    const target = inPlaceRef.current.slots.faces[0]?.bodyId;
+    const stand = target
+      ? representations[target]?.topology?.faces.find(
+          (candidate) =>
+            faceProducingFeature(committed, candidate)?.featureId ===
+            feature.featureId
+        )
+      : undefined;
+    if (!target || !stand) return null;
+    const pick = inPlaceFacePick(
+      target,
+      stand.topologyId,
+      stand.hash,
+      undefined,
+      true
+    );
+    return pick ? { ...pick, feature: named } : null;
   }
 
   /**
@@ -19852,6 +19959,20 @@ export function App() {
         }
         return false;
       }
+      if (
+        selection?.kind === 'face' &&
+        takesFeatureFaces(command.spec, command.options)
+      ) {
+        // M02: a feature pattern's click names the hole, boss or cut that
+        // made the face.
+        const face = inPlaceFeatureFacePick(
+          selection.bodyId,
+          selection.topologyId,
+          selection.hash,
+          detail?.point
+        );
+        return face ? command.pickFace(face) : true;
+      }
       if (selection?.kind === 'face' && command.spec?.faceMode) {
         const face = inPlaceFacePick(
           selection.bodyId,
@@ -19861,7 +19982,11 @@ export function App() {
         );
         if (face) return command.pickFace(face);
       }
-      if (selection && command.spec?.bodyMode) {
+      if (
+        selection &&
+        command.spec &&
+        inPlaceBodyMode(command.spec, command.options)
+      ) {
         // With the body picked, a flat face is the plane to mirror or split
         // across; otherwise any face names its body.
         if (
@@ -24318,7 +24443,14 @@ export function App() {
           ...(request.count2 !== undefined ? { count2: request.count2 } : {}),
           ...(request.axisRef ? { axisRef: request.axisRef } : {}),
           // A custom repeat vector, which the axis then only stands beside.
-          ...(request.direction ? { direction: request.direction } : {})
+          ...(request.direction ? { direction: request.direction } : {}),
+          // M02: the features repeated, and the copies left out.
+          ...(request.sourceFeatureIds
+            ? { sourceFeatureIds: request.sourceFeatureIds }
+            : {}),
+          ...(request.skippedInstances
+            ? { skippedInstances: request.skippedInstances }
+            : {})
         });
       case 'edge-modifier':
         // Through the card's own command, so a fillet or chamfer made in
@@ -25456,7 +25588,8 @@ export function App() {
   /** A face-list command's faces, lit as a sweep's are. */
   const inPlaceFocusFaces = useMemo<TopologySelection[] | null>(
     () =>
-      inPlaceSpec?.faceMode === 'many' && inPlace.slots.faces.length > 0
+      inPlaceFaceMode(inPlaceSpec, inPlace.options) === 'many' &&
+      inPlace.slots.faces.length > 0
         ? inPlace.slots.faces.map((face) => ({
             bodyId: face.bodyId,
             kind: 'face',
@@ -25464,12 +25597,25 @@ export function App() {
             hash: face.hash
           }))
         : null,
-    [inPlaceSpec, inPlace.slots.faces]
+    [inPlaceSpec, inPlace.options, inPlace.slots.faces]
   );
   /** The command's handles, with how each chip reads its value. */
   const inPlaceHandles = useMemo(
     () =>
       inPlace.handles.map((handle) => {
+        if (handle.kind === 'instance') {
+          // M02: a copy's skip toggle reads its label, and whether it is in.
+          const { label, skipped } = handle.params;
+          return {
+            ...handle,
+            value: skipped ? 1 : 0,
+            format: () => label,
+            describe: () =>
+              skipped
+                ? `Copy ${label}, skipped · bring it back`
+                : `Copy ${label} · skip it`
+          };
+        }
         const valueSpec = inPlaceSpec?.values.find(
           (candidate) => candidate.id === handle.valueId
         );
@@ -25668,10 +25814,14 @@ export function App() {
       inPlaceTool === 'fillet' || inPlaceTool === 'chamfer' ? inPlaceTool : null
     );
   }, [inPlaceTool]);
+  const featurePicking = takesFeatureFaces(inPlaceSpec, inPlace.options);
+  useEffect(() => {
+    setInPlaceFeaturePick(inPlace.active && featurePicking);
+  }, [inPlace.active, featurePicking]);
   // A body tool's picked bodies are the selection: each wears its pick
   // number in the viewport, base first, as the boolean card's list did.
   const inPlaceBodyIds =
-    inPlace.active && inPlaceSpec?.bodyMode
+    inPlace.active && inPlaceBodyMode(inPlaceSpec, inPlace.options)
       ? inPlace.slots.bodies.map((body) => body.bodyId).join(',')
       : null;
   // Again after an undo or redo, which clears the selection while the
@@ -35305,6 +35455,12 @@ export function App() {
               inPlace.active
                 ? openInPlaceKeypad(valueId, value)
                 : openRegionExtrudeKeypad(valueId as ExtrudeValueId)
+            }
+            onToggleCommandInstance={(label: string) =>
+              inPlace.setOption(
+                'skip',
+                toggledPatternSkip(inPlace.options.skip, label)
+              )
             }
             commandSetterRef={commandSetterRef}
             // The in-place Extrude's keypad rides the chip it opened from:

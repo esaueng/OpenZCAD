@@ -24,6 +24,10 @@ import {
   requestNewAxis,
   resolveNewAxis,
   stepTotal,
+  inPlaceBodyMode,
+  inPlaceFaceMode,
+  takesFeatureFaces,
+  toggledPatternSkip,
   valueInRange,
   valueRangeSentence,
   type BodyPick,
@@ -1122,6 +1126,7 @@ describe('body tools', () => {
     expect(
       spec
         .handles({ ...EMPTY, bodies: [BODY], axis }, {}, CTX, {})
+        .filter((handle) => handle.kind !== 'instance')
         .map((handle) => [handle.valueId, handle.kind])
     ).toEqual([
       ['angle', 'angle'],
@@ -1170,9 +1175,10 @@ describe('patterns', () => {
       axis: 'y',
       spacing: 30
     });
+    // M02: then a skip toggle on each copy, the original left out.
     expect(
       spec.handles(slots, {}, CTX, { axis: 'y' }).map((h) => h.kind)
-    ).toEqual(['linear', 'chip']);
+    ).toEqual(['linear', 'chip', 'instance', 'instance']);
   });
 
   it('circular: a world axis or a datum axis', () => {
@@ -1236,6 +1242,170 @@ describe('patterns', () => {
       count: 'X count',
       count2: 'Z count'
     });
+  });
+});
+
+describe('M02 feature patterns and skipped copies', () => {
+  const HOLE = 'feature_hole' as FeatureId;
+  const BORE: FacePick = {
+    bodyId: 'body_a' as BodyId,
+    hash: 21,
+    topologyId: 'f21',
+    surfaceType: 'cylinder',
+    centroid: { x: 4, y: 5, z: 2 },
+    cylinder: {
+      axisStart: { x: 4, y: 5, z: 0 },
+      axisEnd: { x: 4, y: 5, z: 4 },
+      radius: 1.5
+    },
+    feature: { featureId: HOLE, name: 'Hole' }
+  };
+  const FEATURES = { repeat: 'features' } as const;
+
+  it('Repeat: Features takes faces, many on one body, instead of the body', () => {
+    for (const id of [
+      'linear-pattern',
+      'circular-pattern',
+      'grid-pattern'
+    ] as const) {
+      const spec = IN_PLACE_TOOL_SPECS[id];
+      expect(spec.options?.some((option) => option.id === 'repeat')).toBe(true);
+      expect(takesFeatureFaces(spec, {})).toBe(false);
+      expect(inPlaceBodyMode(spec, {})).toBe('one');
+      expect(inPlaceFaceMode(spec, {})).toBeUndefined();
+      expect(inPlaceBodyMode(spec, FEATURES)).toBeUndefined();
+      expect(inPlaceFaceMode(spec, FEATURES)).toBe('many');
+    }
+    // A face command's own face list is unchanged.
+    expect(inPlaceFaceMode(IN_PLACE_TOOL_SPECS.shell, {})).toBe('many');
+  });
+
+  it('repeats the picked feature on its body, once however many faces name it', () => {
+    const spec = IN_PLACE_TOOL_SPECS['linear-pattern'];
+    const slots = {
+      ...EMPTY,
+      faces: [BORE, { ...BORE, hash: 22, topologyId: 'f22' }]
+    };
+    expect(spec.ready(slots, FEATURES)).toBe(true);
+    expect(spec.ready({ ...EMPTY, bodies: [BODY] }, FEATURES)).toBe(false);
+    expect(spec.hint({ ...EMPTY }, FEATURES)).toBe(
+      'Click a hole, boss or cut to repeat'
+    );
+    expect(
+      spec.request(
+        slots,
+        { spacing: 10, count: 3 },
+        { ...FEATURES, axis: 'x' },
+        CTX,
+        { spacing: 10, count: 3 }
+      )
+    ).toEqual({
+      tool: 'pattern',
+      targetBodyId: 'body_a',
+      sourceFeatureIds: [HOLE],
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      spacing: 10
+    });
+    // The handles stand on the hole, not the body's middle.
+    const spacing = spec
+      .handles(slots, { spacing: 10, count: 3 }, CTX, {
+        ...FEATURES,
+        axis: 'x'
+      })
+      .find((handle) => handle.valueId === 'spacing')!;
+    expect(spacing.kind === 'linear' && spacing.params.origin).toEqual({
+      x: 4,
+      y: 5,
+      z: 2
+    });
+  });
+
+  it('places a toggle on every copy where it lands, and stores the skipped ones', () => {
+    const spec = IN_PLACE_TOOL_SPECS['linear-pattern'];
+    const slots = { ...EMPTY, bodies: [BODY] };
+    const options = { axis: 'x', skip: '2' };
+    const toggles = spec
+      .handles(slots, { spacing: 30, count: 4 }, CTX, options)
+      .filter((handle) => handle.kind === 'instance');
+    expect(
+      toggles.map((handle) =>
+        handle.kind === 'instance'
+          ? [handle.params.label, handle.params.anchor.x, handle.params.skipped]
+          : null
+      )
+    ).toEqual([
+      ['1', 40, false],
+      ['2', 70, true],
+      ['3', 100, false]
+    ]);
+    expect(
+      spec.request(slots, { spacing: 30, count: 4 }, options, CTX, {
+        spacing: 30,
+        count: 4
+      })
+    ).toMatchObject({ skippedInstances: ['2'] });
+    // A copy a lowered count no longer reaches is not stored.
+    expect(
+      spec.request(slots, { spacing: 30, count: 2 }, options, CTX, {
+        spacing: 30,
+        count: 2
+      })
+    ).not.toHaveProperty('skippedInstances');
+  });
+
+  it('labels a grid copy by column and row, and a ring copy by its turn', () => {
+    const grid = IN_PLACE_TOOL_SPECS['grid-pattern'];
+    const labels = grid
+      .handles(
+        { ...EMPTY, bodies: [BODY] },
+        { spacing: 10, count: 2, spacing2: 20, count2: 3 },
+        CTX,
+        { axis: 'x', axis2: 'y' }
+      )
+      .flatMap((handle) =>
+        handle.kind === 'instance' ? [handle.params.label] : []
+      );
+    expect(labels).toEqual(['0-1', '0-2', '1-0', '1-1', '1-2']);
+    expect(
+      grid.request(
+        { ...EMPTY, bodies: [BODY] },
+        { spacing: 10, count: 2, spacing2: 20, count2: 3 },
+        { axis: 'x', axis2: 'y', skip: '1-1' },
+        CTX,
+        { spacing: 10, count: 2, spacing2: 20, count2: 3 }
+      )
+    ).toMatchObject({ skippedInstances: ['1-1'] });
+
+    const ring = IN_PLACE_TOOL_SPECS['circular-pattern'];
+    const z = axisCandidatesFor(EMPTY, CTX, 'world')[2]!;
+    const quarter = ring
+      .handles(
+        { ...EMPTY, bodies: [BODY], axis: z },
+        { count: 4, angle: 360 },
+        CTX,
+        {}
+      )
+      .find(
+        (handle) => handle.kind === 'instance' && handle.params.label === '1'
+      )!;
+    // The body's middle (10, 5) turned a quarter about Z.
+    expect(quarter.kind === 'instance' && quarter.params.anchor.x).toBeCloseTo(
+      -5,
+      9
+    );
+    expect(quarter.kind === 'instance' && quarter.params.anchor.y).toBeCloseTo(
+      10,
+      9
+    );
+  });
+
+  it('toggles a copy in and out of the skip list', () => {
+    expect(toggledPatternSkip(undefined, '2')).toBe('2');
+    expect(toggledPatternSkip('2', '3')).toBe('2,3');
+    expect(toggledPatternSkip('2,3', '2')).toBe('3');
+    expect(toggledPatternSkip('3', '3')).toBe('');
   });
 });
 
@@ -2215,6 +2385,7 @@ describe('axes and directions picked in the model', () => {
     expect(
       spec
         .handles(slots, {}, CTX, { spacing: 'step' })
+        .filter((handle) => handle.kind !== 'instance')
         .map((handle) => handle.valueId)
     ).toEqual(['step', 'count']);
     expect(spec.hint(slots, { spacing: 'step' })).toMatch(/Drag the step/);

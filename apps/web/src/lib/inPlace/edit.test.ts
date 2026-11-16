@@ -1131,6 +1131,63 @@ describe('an untouched edit writes the feature back as stored', () => {
     ).toMatchObject({ direction: { x: 1, y: 2, z: 0 } });
   });
 
+  it('M02 feature pattern: its features and skipped copies round-trip unchanged', () => {
+    const hole = 'feat_hole' as FeatureId;
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'linear',
+      count: 4,
+      axis: 'x',
+      spacing: 12,
+      angleDeg: 0,
+      sourceFeatureIds: [hole],
+      skippedInstances: ['2']
+    };
+    const node = feature(data, 'body_p' as BodyId);
+    const context: InPlaceEditContext = {
+      ...EDIT_CTX,
+      featureFace: (bodyId, featureId) => ({
+        ...TOP,
+        bodyId,
+        feature: { featureId, name: 'Hole' }
+      })
+    };
+    const armed = inPlaceEditSeed(node, context)!;
+    expect(armed.tool).toBe('linear-pattern');
+    expect(armed.seed.options).toMatchObject({
+      repeat: 'features',
+      skip: '2'
+    });
+    expect(armed.seed.slots.bodies).toEqual([]);
+    const request = untouched(node, {}, context) as Extract<
+      ResolvedInPlaceRequest,
+      { tool: 'pattern' }
+    >;
+    expect(request).toMatchObject({
+      targetBodyId: BODY,
+      sourceFeatureIds: [hole],
+      skippedInstances: ['2']
+    });
+    const update = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      request
+    );
+    expect(update?.data).toMatchObject({
+      sourceFeatureIds: [hole],
+      skippedInstances: ['2']
+    });
+    expect(update).not.toHaveProperty('clearData');
+    // Every copy brought back: the stored list is cleared, not left behind.
+    const { skippedInstances: _skipped, ...kept } = request;
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: node.featureId, name: node.name, data },
+        kept
+      )?.clearData
+    ).toEqual(['skippedInstances']);
+  });
+
   it('loft: a stored apex opens as a point, each coordinate editable', () => {
     const data: FeatureData = {
       featureKind: 'loft',

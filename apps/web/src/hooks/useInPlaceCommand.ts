@@ -32,7 +32,9 @@ import {
   type OptionSpec,
   type PlanePick,
   type ProfilePick,
-  type RefPick
+  type RefPick,
+  inPlaceBodyMode,
+  inPlaceFaceMode
 } from '../lib/inPlace/tools';
 import { placeImage as placedImage } from '../lib/inPlace/image';
 import type { RevolveAxisCandidate } from '../lib/inPlace/revolve';
@@ -1486,21 +1488,28 @@ export function useInPlaceCommand(
     if (committingRef.current) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
-    if (!current || !toolSpec?.faceMode) return false;
+    const faceMode = inPlaceFaceMode(toolSpec, current?.options);
+    if (!current || !toolSpec || !faceMode) return false;
     if (!faceFilterAccepts(toolSpec.faceFilter, face)) {
       return false;
     }
+    // M02: a feature pattern's faces stand for the features that made them,
+    // so another face of a picked feature is that feature clicked again.
+    const same = (other: FacePick) =>
+      face.feature && other.feature
+        ? other.feature.featureId === face.feature.featureId
+        : other.hash === face.hash;
     setSession((latest) => {
       if (!latest) return latest;
       const faces = latest.slots.faces;
       const sameBody = faces[0]?.bodyId === face.bodyId;
       let next: FacePick[];
-      if (toolSpec.faceMode === 'one') {
+      if (faceMode === 'one') {
         // One face: a click replaces it, or (on the same face) moves where
         // it was clicked, which is how a hole is repositioned.
         next = [face];
       } else {
-        const picked = faces.some((other) => other.hash === face.hash);
+        const picked = faces.some(same);
         const placing =
           toolSpec.clickPlacesPoint !== undefined &&
           latest.options[toolSpec.clickPlacesPoint.optionId] ===
@@ -1523,7 +1532,7 @@ export function useInPlaceCommand(
           next = !sameBody
             ? [face]
             : picked
-              ? faces.filter((other) => other.hash !== face.hash)
+              ? faces.filter((other) => !same(other))
               : [...faces, face];
         }
       }
@@ -1536,7 +1545,9 @@ export function useInPlaceCommand(
     if (committingRef.current) return null;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
-    if (!current || toolSpec?.faceMode !== 'many') return null;
+    // A sweep's faces name no feature, so a feature pattern takes none.
+    if (!current || !toolSpec?.faceMode || toolSpec.faceMode !== 'many')
+      return null;
     const accepted = faces.filter((face) =>
       faceFilterAccepts(toolSpec.faceFilter, face)
     );
@@ -1551,13 +1562,14 @@ export function useInPlaceCommand(
     if (committingRef.current) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
-    if (!current || !toolSpec?.bodyMode) return false;
+    const bodyMode = inPlaceBodyMode(toolSpec, current?.options);
+    if (!current || !bodyMode) return false;
     setSession((latest) => {
       if (!latest) return latest;
       const bodies = latest.slots.bodies;
       const picked = bodies.some((other) => other.bodyId === body.bodyId);
       const next =
-        toolSpec.bodyMode === 'one'
+        bodyMode === 'one'
           ? [body]
           : picked
             ? bodies.filter((other) => other.bodyId !== body.bodyId)

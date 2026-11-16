@@ -393,6 +393,26 @@
   outline-offset: 2px;
 }
 
+/* M02: a pattern copy's toggle hangs just under the copy, a round tag with
+   its label; under, not on it, because a linear pattern's spacing arrow ends
+   exactly on the first copy and must stay grabbable. A skipped copy's tag
+   stays to bring it back, hollow and struck through, so a gap in the row
+   reads as chosen rather than missing. */
+.handle-value-chip.handle-instance-chip {
+  min-width: 1.6em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  text-align: center;
+  transform: translate(-50%, 45%);
+}
+
+.handle-value-chip.handle-instance-chip.is-skipped {
+  color: color-mix(in srgb, #eaf1ff 60%, transparent);
+  background: rgba(16, 19, 22, 0.35);
+  border-style: dashed;
+  text-decoration: line-through;
+}
+
 /* The number carries the weight; the prefix and units step back. */
 .chip-number {
   font-weight: 600;

@@ -350,6 +350,7 @@ interface ViewerShellProps {
   onCommandHandlePreview?: ModelViewerProps['onCommandHandlePreview'];
   onCommandHandleRelease?: ModelViewerProps['onCommandHandleRelease'];
   onOpenCommandKeypad?: ModelViewerProps['onOpenCommandKeypad'];
+  onToggleCommandInstance?: ModelViewerProps['onToggleCommandInstance'];
   commandSetterRef?: ModelViewerProps['commandSetterRef'];
   footprintPicker?: ModelViewerProps['footprintPicker'];
   onFootprint?: ModelViewerProps['onFootprint'];
@@ -567,6 +568,7 @@ export function ViewerShell({
   onCommandHandlePreview,
   onCommandHandleRelease,
   onOpenCommandKeypad,
+  onToggleCommandInstance,
   commandSetterRef,
   footprintPicker = null,
   onFootprint,
@@ -948,6 +950,7 @@ export function ViewerShell({
         onCommandHandlePreview={onCommandHandlePreview}
         onCommandHandleRelease={onCommandHandleRelease}
         onOpenCommandKeypad={onOpenCommandKeypad}
+        onToggleCommandInstance={onToggleCommandInstance}
         commandSetterRef={commandSetterRef}
         footprintPicker={footprintPicker}
         onFootprint={onFootprint}

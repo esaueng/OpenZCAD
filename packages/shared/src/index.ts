@@ -263,7 +263,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // and edited by dragging. Absent means none, so every older assembly loads
 // unchanged. An older client would drop the offsets on its next save, so it
 // must refuse. Builds on v60.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 61 as const;
+// v62 adds M02 feature patterns and skipped pattern copies on the `pattern`
+// feature: `sourceFeatureIds` repeats those holes and add/cut extrudes on the
+// target body instead of the whole body, and `skippedInstances` leaves the
+// named copies out. Both are optional and absent keeps the whole-body
+// pattern, so every older document builds unchanged. An older client would
+// copy the whole body, or build every copy, so it must refuse. Builds on v61.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 62 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2344,6 +2350,21 @@ export type FeatureData =
        * through the origin. Absent is the world axis every older pattern uses.
        */
       axisRef?: DatumAxisRef;
+      /**
+       * M02 (schema v62): repeat these features instead of the whole body.
+       * Each is a hole or an add/cut extrude made earlier in history on the
+       * body chain `targetBodyId` ends; its copies are cut into (or added
+       * onto) `targetBodyId`, whose original already holds the features
+       * themselves. Absent is the whole-body pattern.
+       */
+      sourceFeatureIds?: FeatureId[];
+      /**
+       * M02 (schema v62): the copies left out, by instance label: `"3"` for
+       * a linear or circular pattern's fourth, `"1-2"` for a grid's column 1,
+       * row 2. The original (`"0"`, `"0-0"`) is never one. Labels stay with
+       * their place, so skipping one never renames the others.
+       */
+      skippedInstances?: string[];
     }
   | {
       featureKind: 'direct-edit';
@@ -5981,4 +6002,5 @@ export * from './import-limits';
 export * from './mesh-buffer-equality';
 export * from './pipe-threads';
 export * from './thread-span';
+export * from './feature-patterns';
 export * from './sheet-metal';
