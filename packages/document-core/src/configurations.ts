@@ -414,7 +414,15 @@ export function setConfigurationCell(
   input: ConfigurationCellSetInput
 ): ProjectDocument {
   const set = cloneSet(table(document));
-  const row = rowById(set, input.rowId);
+  let row = rowById(set, input.rowId);
+  // The active row's stored parameter and suppression values may be stale:
+  // an ordinary edit changes the model, not the row. Start from what the
+  // model holds, or applying the row below would undo that edit.
+  if (row.id === set.activeRowId) {
+    const live = captureLive(document, set, row);
+    set.rows = set.rows.map((entry) => (entry.id === live.id ? live : entry));
+    row = live;
+  }
   const { column, value } = input;
   const key = configurationColumnKey(column);
   if (!set.columns.some((entry) => configurationColumnKey(entry) === key))

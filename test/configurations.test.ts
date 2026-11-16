@@ -16,6 +16,7 @@ import {
   normalizeDocument,
   renameConfigurationRow,
   setConfigurationCell,
+  setNodeMetadata,
   setParameter
 } from '@openzcad/document-core';
 import {
@@ -161,6 +162,37 @@ describe('the variant table', () => {
       unsuppressed.configurations!.rows.find((row) => row.id === 'small')!
         .suppressed[lug.featureId]
     ).toBe(true);
+  });
+
+  it('keeps ordinary edits when another cell of the active row changes', () => {
+    const { document, width, lug, lugBody } = table();
+    // Edits made in the Parameters panel and History, not the table.
+    let edited = setParameter(document, { name: 'width', expression: '22' });
+    edited = setNodeMetadata(edited, {
+      nodeId: lug.id,
+      metadata: { suppressed: true }
+    });
+    for (const [column, value] of [
+      [{ kind: 'body', bodyId: lugBody }, false],
+      [{ kind: 'material' }, { kind: 'preset', presetId: 'steel' }]
+    ] as const) {
+      const next = setConfigurationCell(edited, {
+        rowId: 'small',
+        column,
+        value
+      });
+      expect(listParameters(next)[0]!.expression).toBe('22');
+      expect(isFeatureManuallySuppressed(features(next)[1]!)).toBe(true);
+      expect(effectiveConfigurationRow(next, 'small')!.parameters[width]).toBe(
+        '22'
+      );
+      // The row is stored with the live values, not the stale ones.
+      expect(
+        next.configurations!.rows.find((row) => row.id === 'small')!.suppressed[
+          lug.featureId
+        ]
+      ).toBe(true);
+    }
   });
 
   it('hides the bodies the active row hides, alongside on/off parameters', () => {
