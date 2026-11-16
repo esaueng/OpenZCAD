@@ -51,10 +51,10 @@ test(
     const settings = page.getByRole('dialog', { name: 'Settings' });
     await expect(settings).toContainText('minimax/minimax-m3.1-flash:free');
     await expect(
-      settings.getByText(/Free with no personal API key/)
+      settings.getByText(/Free to use, with usage limits/)
     ).toBeVisible();
     await expect(
-      settings.getByText(/may retain this data or use it for training/)
+      settings.getByText(/may keep them or use them for training/)
     ).toBeVisible();
     await expect(
       settings.getByRole('link', { name: 'OpenRouter data policies' })
