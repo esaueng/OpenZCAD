@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import process from 'node:process';
 import ts from 'typescript';
 
@@ -33,6 +34,22 @@ export const OFFICIAL = Object.freeze({
   turnstileSiteKey: '0x4AAAAAAD_j6Y7NvXKtcxNX',
   publicOrigin: 'https://zcad.app',
   sender: 'noreply@zcad.esau.app'
+});
+
+/**
+ * The stable (production) channel, wrangler.stable.jsonc: its own Worker,
+ * database and bucket, deployed from the `stable` branch. Everything not
+ * listed here (asset binding, senders, Turnstile key, bindings) matches
+ * OFFICIAL. Its public origin is stable.zcad.app until the cutover moves
+ * zcad.app to it (docs/release-channels.md).
+ */
+export const OFFICIAL_STABLE = Object.freeze({
+  workerName: 'openzcad-stable',
+  databaseName: 'openzcad-stable',
+  databaseId: '3b5fb65e-0af0-46a8-a50c-b7b5bd69c56b',
+  bucketName: 'openzcad-stable-artifacts',
+  publicOrigins: Object.freeze(['https://stable.zcad.app', 'https://zcad.app']),
+  branch: 'stable'
 });
 
 // End-to-end encryption flags (ADR-024), each with the flag the Worker also
@@ -144,7 +161,12 @@ function validateE2eeFlags(config, { canaryAllowed }) {
   }
   for (const [flag, prerequisite] of E2EE_FLAG_PREREQUISITES) {
     if (!flagEnabled(vars[flag]) || flagEnabled(vars[prerequisite])) continue;
-    if (canaryAllowed && prerequisite === 'E2EE_KEYS_ENABLED' && flag !== 'E2EE_PLAINTEXT_FROZEN') continue;
+    if (
+      canaryAllowed &&
+      prerequisite === 'E2EE_KEYS_ENABLED' &&
+      flag !== 'E2EE_PLAINTEXT_FROZEN'
+    )
+      continue;
     errors.push(`vars.${flag} requires vars.${prerequisite} to be "true"`);
   }
   if (
@@ -379,7 +401,9 @@ function validateOfficialPreviews(config) {
       item?.database_id === OFFICIAL.databaseId ||
       item?.database_name === OFFICIAL.databaseName
     ) {
-      errors.push(`previews D1 binding ${item.binding} uses the production database`);
+      errors.push(
+        `previews D1 binding ${item.binding} uses the production database`
+      );
     }
   }
   if (!binding(previews, 'r2_buckets', 'ARTIFACTS')?.bucket_name) {
@@ -387,7 +411,9 @@ function validateOfficialPreviews(config) {
   }
   for (const item of previews.r2_buckets ?? []) {
     if (item?.bucket_name === OFFICIAL.bucketName) {
-      errors.push(`previews R2 binding ${item.binding} uses the production bucket`);
+      errors.push(
+        `previews R2 binding ${item.binding} uses the production bucket`
+      );
     }
   }
   const room = (previews.durable_objects?.bindings ?? []).find(
@@ -471,7 +497,13 @@ function officialOriginUrl(originUrl) {
 
 export function validateDeploymentConfig(
   config,
-  { target, originUrl = '', environment = {}, configOnly = false }
+  {
+    target,
+    originUrl = '',
+    environment = {},
+    configOnly = false,
+    betaConfig = undefined
+  }
 ) {
   if (target === 'dev') {
     const errors = [];
@@ -480,6 +512,10 @@ export function validateDeploymentConfig(
       OFFICIAL.databaseName,
       OFFICIAL.databaseId,
       OFFICIAL.bucketName,
+      OFFICIAL_STABLE.workerName,
+      OFFICIAL_STABLE.databaseName,
+      OFFICIAL_STABLE.databaseId,
+      OFFICIAL_STABLE.bucketName,
       OFFICIAL.publicOrigin,
       OFFICIAL.turnstileSiteKey,
       OFFICIAL.sender
@@ -513,16 +549,18 @@ export function validateDeploymentConfig(
     (item) => item?.name === 'PROJECT_ROOM'
   );
 
-  if (target === 'official') {
+  if (target === 'official' || target === 'stable') {
+    const stable = target === 'stable';
+    const resources = stable ? OFFICIAL_STABLE : OFFICIAL;
     const checks = [
-      [config.name, OFFICIAL.workerName, 'Worker name'],
+      [config.name, resources.workerName, 'Worker name'],
       [config.assets?.binding, OFFICIAL.assetBinding, 'asset binding'],
       [config.build?.command, RELEASE_BUILD_CHECK, 'release build check'],
       [db?.binding, OFFICIAL.databaseBinding, 'D1 binding'],
-      [db?.database_name, OFFICIAL.databaseName, 'D1 database name'],
-      [db?.database_id, OFFICIAL.databaseId, 'D1 database ID'],
+      [db?.database_name, resources.databaseName, 'D1 database name'],
+      [db?.database_id, resources.databaseId, 'D1 database ID'],
       [bucket?.binding, OFFICIAL.bucketBinding, 'R2 binding'],
-      [bucket?.bucket_name, OFFICIAL.bucketName, 'R2 bucket name'],
+      [bucket?.bucket_name, resources.bucketName, 'R2 bucket name'],
       [email?.name, OFFICIAL.emailBinding, 'email binding'],
       [room?.name, OFFICIAL.durableObjectBinding, 'Durable Object binding'],
       [
@@ -530,7 +568,15 @@ export function validateDeploymentConfig(
         OFFICIAL.turnstileSiteKey,
         'Turnstile site key'
       ],
-      [config.vars?.PUBLIC_APP_ORIGIN, OFFICIAL.publicOrigin, 'public origin'],
+      ...(stable
+        ? []
+        : [
+            [
+              config.vars?.PUBLIC_APP_ORIGIN,
+              OFFICIAL.publicOrigin,
+              'public origin'
+            ]
+          ]),
       [config.vars?.AUTH_EMAIL_FROM, OFFICIAL.sender, 'authentication sender'],
       [
         config.vars?.PROJECT_INVITATION_EMAIL_FROM,
@@ -543,7 +589,77 @@ export function validateDeploymentConfig(
         errors.push(`${label} changed from the official deployment value`);
       }
     }
-    errors.push(...validateOfficialPreviews(config));
+    if (stable) {
+      if (
+        !OFFICIAL_STABLE.publicOrigins.includes(config.vars?.PUBLIC_APP_ORIGIN)
+      ) {
+        errors.push(
+          `public origin must be one of ${OFFICIAL_STABLE.publicOrigins.join(', ')}`
+        );
+      }
+      // Stable shares nothing with beta: not its data, its Previews or the
+      // Glimpse collector beta reports to.
+      if (config.previews !== undefined) {
+        errors.push('stable must not define previews; Previews belong to beta');
+      }
+      const betaValues = [
+        OFFICIAL.workerName,
+        OFFICIAL.databaseName,
+        OFFICIAL.databaseId,
+        OFFICIAL.bucketName
+      ];
+      const values = [
+        ...(config.d1_databases ?? []).flatMap((item) => [
+          item?.database_name,
+          item?.database_id
+        ]),
+        ...(config.r2_buckets ?? []).map((item) => item?.bucket_name),
+        ...(config.durable_objects?.bindings ?? []).map(
+          (item) => item?.script_name
+        )
+      ];
+      if (values.some((value) => betaValues.includes(value))) {
+        errors.push('stable references a beta resource');
+      }
+      // Service bindings reach another Worker's production deployment (the
+      // Glimpse collector beta reports to); stable has none until the
+      // cutover decides which channel reports.
+      for (const item of config.services ?? []) {
+        errors.push(
+          `stable service binding ${item?.binding} would share beta's`
+        );
+      }
+      for (const flag of ['GLIMPSE_BASIC_ENABLED', 'GLIMPSE_USAGE_ENABLED']) {
+        const value = config.vars?.[flag];
+        if (flagEnabled(value) || value === true) {
+          errors.push(`vars.${flag} must be off on stable until the cutover`);
+        }
+      }
+      // Rate-limit namespaces are account-wide budgets: one shared with beta
+      // lets beta traffic spend stable's limit. They can only be compared
+      // against beta's actual config.
+      if (!betaConfig) {
+        errors.push(
+          'stable validation needs the beta config (wrangler.jsonc) to compare rate-limit namespaces'
+        );
+      } else {
+        const betaNamespaces = new Set(
+          [
+            ...(betaConfig.ratelimits ?? []),
+            ...(betaConfig.previews?.ratelimits ?? [])
+          ].map((limit) => limit?.namespace_id)
+        );
+        for (const limit of config.ratelimits ?? []) {
+          if (betaNamespaces.has(limit?.namespace_id)) {
+            errors.push(
+              `stable rate limit ${limit.name} shares beta namespace ${limit.namespace_id}`
+            );
+          }
+        }
+      }
+    } else {
+      errors.push(...validateOfficialPreviews(config));
+    }
     if (originUrl && !officialOriginUrl(originUrl)) {
       errors.push(
         `official deployment requires an esaueng/OpenZCAD origin; found ${originUrl}`
@@ -560,7 +676,8 @@ export function validateDeploymentConfig(
     if (
       !configOnly &&
       environment.GITHUB_ACTIONS === 'true' &&
-      environment.GITHUB_REF !== 'refs/heads/main'
+      environment.GITHUB_REF !==
+        `refs/heads/${stable ? OFFICIAL_STABLE.branch : 'main'}`
     ) {
       errors.push(
         `official deployment is not allowed from GitHub ref ${environment.GITHUB_REF || '(unknown)'}`
@@ -572,6 +689,10 @@ export function validateDeploymentConfig(
     }
     const checks = [
       [config.name, OFFICIAL.workerName],
+      [config.name, OFFICIAL_STABLE.workerName],
+      [db?.database_name, OFFICIAL_STABLE.databaseName],
+      [db?.database_id, OFFICIAL_STABLE.databaseId],
+      [bucket?.bucket_name, OFFICIAL_STABLE.bucketName],
       [db?.database_name, OFFICIAL.databaseName],
       [db?.database_id, OFFICIAL.databaseId],
       [bucket?.bucket_name, OFFICIAL.bucketName],
@@ -621,15 +742,21 @@ if (process.argv[1]?.endsWith('validate-deployment-config.mjs')) {
   const target = argument('--target');
   if (!configPath || !target) {
     console.error(
-      'Usage: node scripts/validate-deployment-config.mjs --config <path> --target <official|selfhost|example|dev> [--config-only]'
+      'Usage: node scripts/validate-deployment-config.mjs --config <path> --target <official|stable|selfhost|example|dev> [--config-only]'
     );
     process.exit(2);
   }
 
   try {
     const config = parseConfig(configPath);
+    // Stable is checked against the beta config beside it (wrangler.jsonc).
+    const betaConfig =
+      target === 'stable'
+        ? parseConfig(join(dirname(configPath), 'wrangler.jsonc'))
+        : undefined;
     const errors = validateDeploymentConfig(config, {
       target,
+      betaConfig,
       originUrl: readOriginUrl(),
       environment: process.env,
       configOnly: process.argv.includes('--config-only')

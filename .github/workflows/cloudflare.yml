@@ -32,9 +32,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: node scripts/validate-deployment-config.mjs --config wrangler.jsonc --target official --config-only
+      - run: node scripts/validate-deployment-config.mjs --config wrangler.stable.jsonc --target stable --config-only
       - run: node scripts/validate-deployment-config.mjs --config apps/web/wrangler.jsonc --target dev
       - run: pnpm build
       - run: pnpm --filter @openzcad/web exec wrangler deploy --dry-run --config ../../wrangler.jsonc
+      - run: pnpm --filter @openzcad/web exec wrangler deploy --dry-run --config ../../wrangler.stable.jsonc
 
   upload:
     # Queue candidates get the dry-run verification, never a version upload,

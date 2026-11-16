@@ -28,3 +28,8 @@ export function verifyBetaDeployment(options?: {
   health: Record<string, unknown>;
   metadata: Record<string, unknown>;
 }>;
+
+export function verificationOrigin(
+  argv: readonly string[],
+  env?: Record<string, string | undefined>
+): string;

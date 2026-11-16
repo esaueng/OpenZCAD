@@ -181,7 +181,7 @@
   // the staging D1 database and R2 bucket. Each Preview gets its own Durable
   // Object namespace. Cron triggers never run in a Preview.
   // validate-deployment-config.mjs refuses any production resource here and
-  // any drift between these vars and production's beyond the listed ones.
+  // the safety-relevant vars that would reach production (docs/previews.md).
   // Apply D1 migrations with `pnpm migrate:preview`. Set Preview secrets with
   // `wrangler preview base-config secret put` (docs/previews.md).
   "previews": {
