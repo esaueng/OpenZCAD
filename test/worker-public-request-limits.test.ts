@@ -126,6 +126,7 @@ describe('QA capability provisioning route', () => {
       ...env,
       QA_TURNSTILE_BYPASS: JSON.stringify({
         token,
+        issuedAt: '2026-11-16T00:00:00Z',
         expiresAt: '2026-11-22T00:00:00Z'
       })
     };

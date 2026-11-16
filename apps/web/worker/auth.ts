@@ -316,8 +316,8 @@ export function getAuthConfig(env: CloudflareEnv): {
 
 const QA_EMAIL = 'qa@esau.bot';
 const QA_COOKIE = '__Host-openzcad_qa_turnstile';
-// Hard stop even if the deployment secret is accidentally left configured.
-const QA_DEADLINE = Date.parse('2026-11-23T00:00:00Z');
+// Every issuance expires within seven days; renewal rotates the deployment secret.
+const QA_MAX_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 
 function qaCapability(request: Request, env: CloudflareEnv) {
   if (
@@ -329,21 +329,26 @@ function qaCapability(request: Request, env: CloudflareEnv) {
   try {
     const config: unknown = JSON.parse(env.QA_TURNSTILE_BYPASS);
     if (!config || typeof config !== 'object') return null;
-    const { token, expiresAt } = config as Record<string, unknown>;
+    const { token, issuedAt, expiresAt } = config as Record<string, unknown>;
     if (
       typeof token !== 'string' ||
       !/^[A-Za-z0-9_-]{43}$/.test(token) ||
+      typeof issuedAt !== 'string' ||
       typeof expiresAt !== 'string'
     )
       return null;
+    const issued = Date.parse(issuedAt);
     const expiry = Date.parse(expiresAt);
     if (
+      !Number.isFinite(issued) ||
       !Number.isFinite(expiry) ||
+      issued > Date.now() ||
       expiry <= Date.now() ||
-      expiry > QA_DEADLINE
+      expiry <= issued ||
+      expiry - issued > QA_MAX_LIFETIME_MS
     )
       return null;
-    return { token, expiry };
+    return { token, issued, expiry };
   } catch {
     return null;
   }
@@ -355,7 +360,13 @@ async function hasQaCapability(request: Request, env: CloudflareEnv) {
   return Boolean(
     config &&
     cookie &&
-    constantTimeEqual(cookie, await hmac('qa-turnstile-cookie', config.token))
+    constantTimeEqual(
+      cookie,
+      await hmac(
+        `qa-turnstile-cookie:${config.issued}:${config.expiry}`,
+        config.token
+      )
+    )
   );
 }
 
@@ -379,7 +390,10 @@ export async function provisionQaTurnstileCookie(
       'QA access unavailable.'
     );
   }
-  const cookie = await hmac('qa-turnstile-cookie', config.token);
+  const cookie = await hmac(
+    `qa-turnstile-cookie:${config.issued}:${config.expiry}`,
+    config.token
+  );
   const maxAge = Math.floor((config.expiry - Date.now()) / 1000);
   return `${QA_COOKIE}=${cookie}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`;
 }

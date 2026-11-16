@@ -1434,8 +1434,9 @@ describe('assistant request identity', () => {
 
 describe('temporary beta QA Turnstile capability', () => {
   const token = 'Q'.repeat(43);
+  const issuedAt = '2026-11-16T00:00:00Z';
   const expiry = '2026-11-22T00:00:00Z';
-  const secret = JSON.stringify({ token, expiresAt: expiry });
+  const secret = JSON.stringify({ token, issuedAt, expiresAt: expiry });
   const request = (cookie?: string, origin = 'https://beta.zcad.app') =>
     new Request(`${origin}/api/auth/qa-turnstile`, {
       method: 'POST',
@@ -1537,12 +1538,38 @@ describe('temporary beta QA Turnstile capability', () => {
   it.each([
     ['absent', undefined],
     ['malformed', '{'],
-    ['short token', JSON.stringify({ token: 'short', expiresAt: expiry })],
-    ['invalid expiry', JSON.stringify({ token, expiresAt: 'invalid' })],
-    ['expired', JSON.stringify({ token, expiresAt: '2026-11-15T00:00:00Z' })],
+    ['missing issuance', JSON.stringify({ token, expiresAt: expiry })],
     [
-      'beyond hard stop',
-      JSON.stringify({ token, expiresAt: '2026-12-01T00:00:00Z' })
+      'seven days plus one second',
+      JSON.stringify({ token, issuedAt, expiresAt: '2026-11-23T00:00:01Z' })
+    ],
+    [
+      'invalid issuance',
+      JSON.stringify({ token, issuedAt: 'invalid', expiresAt: expiry })
+    ],
+    [
+      'future issuance',
+      JSON.stringify({
+        token,
+        issuedAt: '2026-11-17T00:00:00Z',
+        expiresAt: expiry
+      })
+    ],
+    [
+      'short token',
+      JSON.stringify({ token: 'short', issuedAt, expiresAt: expiry })
+    ],
+    [
+      'invalid expiry',
+      JSON.stringify({ token, issuedAt, expiresAt: 'invalid' })
+    ],
+    [
+      'expired',
+      JSON.stringify({ token, issuedAt, expiresAt: '2026-11-15T00:00:00Z' })
+    ],
+    [
+      'longer than seven days',
+      JSON.stringify({ token, issuedAt, expiresAt: '2026-12-01T00:00:00Z' })
     ]
   ])('fails closed with %s configuration', async (_label, config) => {
     const flow = harness();
@@ -1597,6 +1624,65 @@ describe('temporary beta QA Turnstile capability', () => {
     ).rejects.toMatchObject({ status: 403 });
   });
 
+  it('renews beyond the previous deadline by rotating the secret without code changes', async () => {
+    const flow = harness();
+    const oldCookie = cookiePair(
+      await provisionQaTurnstileCookie(request(), flow.env)
+    );
+    vi.setSystemTime(new Date('2026-11-24T12:00:00Z'));
+    const sameTokenNewDates = {
+      ...flow.env,
+      QA_TURNSTILE_BYPASS: JSON.stringify({
+        token,
+        issuedAt: '2026-11-24T12:00:00Z',
+        expiresAt: '2026-12-01T12:00:00Z'
+      })
+    };
+    expect(
+      await getBrowserAuthConfig(request(oldCookie), sameTokenNewDates)
+    ).not.toHaveProperty('qaTurnstileBypassEmail');
+    const nextToken = 'N'.repeat(43);
+    const renewed = {
+      ...flow.env,
+      QA_TURNSTILE_BYPASS: JSON.stringify({
+        token: nextToken,
+        issuedAt: '2026-11-24T12:00:00Z',
+        expiresAt: '2026-12-01T12:00:00Z'
+      })
+    };
+    expect(
+      await getBrowserAuthConfig(request(oldCookie), renewed)
+    ).not.toHaveProperty('qaTurnstileBypassEmail');
+    const nextRequest = new Request(
+      'https://beta.zcad.app/api/auth/qa-turnstile',
+      {
+        method: 'POST',
+        headers: {
+          origin: 'https://beta.zcad.app',
+          authorization: `Bearer ${nextToken}`
+        }
+      }
+    );
+    const nextCookie = cookiePair(
+      await provisionQaTurnstileCookie(nextRequest, renewed)
+    );
+    expect(
+      await getBrowserAuthConfig(request(nextCookie), renewed)
+    ).toMatchObject({ qaTurnstileBypassEmail: 'qa@esau.bot' });
+    expect(
+      await startEmailLogin(
+        request(nextCookie),
+        { email: 'qa@esau.bot', turnstileToken: '' },
+        renewed
+      )
+    ).toMatchObject({ expiresInSeconds: 600 });
+    expect(fetch).not.toHaveBeenCalled();
+    vi.setSystemTime(new Date('2026-12-01T12:00:00Z'));
+    expect(
+      await getBrowserAuthConfig(request(nextCookie), renewed)
+    ).not.toHaveProperty('qaTurnstileBypassEmail');
+  });
+
   it('rechecks expiry and secret rotation for an already provisioned cookie', async () => {
     const flow = harness();
     const cookie = cookiePair(
@@ -1606,6 +1692,7 @@ describe('temporary beta QA Turnstile capability', () => {
       ...flow.env,
       QA_TURNSTILE_BYPASS: JSON.stringify({
         token: 'R'.repeat(43),
+        issuedAt,
         expiresAt: expiry
       })
     };
