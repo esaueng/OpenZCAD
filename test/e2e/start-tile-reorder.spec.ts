@@ -111,6 +111,16 @@ test(
     // A pass over the middle does nothing; the hold arms it.
     await expect(card(page, names[2]!)).toHaveClass(/is-drop-pending/);
     await expect(card(page, names[2]!)).toHaveClass(/is-drop-target/);
+    // The hint rides above the dragged card, which would cover it on the
+    // target, and clear of the pointer.
+    const hint = card(page, names[0]!).locator('.start-tile-merge-hint');
+    await expect(hint).toHaveText('Release to make a folder');
+    await expect(
+      card(page, names[2]!).locator('.start-tile-merge-hint')
+    ).toHaveCount(0);
+    const hintBox = (await hint.boundingBox())!;
+    const draggedBox = (await card(page, names[0]!).boundingBox())!;
+    expect(hintBox.y + hintBox.height).toBeLessThanOrEqual(draggedBox.y);
     await page.mouse.up();
 
     const field = page.getByRole('textbox', { name: 'Folder name' });
@@ -142,6 +152,29 @@ test(
       .toEqual(['Reorder pair', names[1]]);
   }
 );
+
+test('the folder hint stays inside the shelf over the first row', async ({
+  page
+}) => {
+  // Held by its top edge, a first-row card sits level with its row, where a
+  // hint above it would be cut off by the top of the shelf.
+  const source = (await card(page, names[0]!).boundingBox())!;
+  const target = (await card(page, names[2]!).boundingBox())!;
+  await page.mouse.move(source.x + source.width / 2, source.y + 4);
+  await page.mouse.down();
+  await page.mouse.move(target.x + target.width / 2, target.y + 4, {
+    steps: 12
+  });
+  const hint = card(page, names[0]!).locator('.start-tile-merge-hint');
+  await expect(hint).toHaveText('Release to make a folder');
+  const shelf = (await page.locator('.start-body').boundingBox())!;
+  const hintBox = (await hint.boundingBox())!;
+  expect(hintBox.y).toBeGreaterThanOrEqual(shelf.y);
+  // Out of room above, it hangs under the dragged card instead.
+  const draggedBox = (await card(page, names[0]!).boundingBox())!;
+  expect(hintBox.y).toBeGreaterThanOrEqual(draggedBox.y + draggedBox.height);
+  await page.keyboard.press('Escape');
+});
 
 test('selects several cards and trashes them together', async ({ page }) => {
   await page.getByRole('checkbox', { name: `Select ${names[0]}` }).click();
