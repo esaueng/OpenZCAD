@@ -312,6 +312,19 @@
   gap: 8px;
 }
 
+/* D02 drawing properties: the per-class print weights, folded away. */
+.drawing-line-weights {
+  display: grid;
+  gap: 6px;
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+}
+
+.drawing-line-weights > summary {
+  cursor: pointer;
+  color: var(--color-text-muted);
+}
+
 .drawing-check {
   display: flex;
   align-items: center;

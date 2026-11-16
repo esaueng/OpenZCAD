@@ -1,7 +1,7 @@
 import {
   SHEET_STROKE_DASH_MM,
   SHEET_STROKE_ORDER,
-  SHEET_STROKE_WIDTH_MM,
+  sheetStrokeWidthMm,
   sheetSafeText,
   textWidthMm,
   type SheetPage,
@@ -100,7 +100,7 @@ export function sheetPageToSvg(page: SheetPage, title: string): string {
       ? ` stroke-dasharray="${pattern.map((value) => num(value)).join(' ')}"`
       : '';
     lines.push(
-      `<g class="${kind}" fill="none" stroke="#000000" stroke-width="${num(SHEET_STROKE_WIDTH_MM[kind])}" stroke-linecap="round" stroke-linejoin="round"${dash}>`
+      `<g class="${kind}" fill="none" stroke="#000000" stroke-width="${num(sheetStrokeWidthMm(page, kind))}" stroke-linecap="round" stroke-linejoin="round"${dash}>`
     );
     for (const stroke of strokes) {
       const coords: string[] = [];
@@ -169,7 +169,7 @@ export function sheetPageToPdf(page: SheetPage, title: string): Uint8Array {
   for (const kind of SHEET_STROKE_ORDER) {
     const strokes = page.strokes.filter((stroke) => stroke.kind === kind);
     if (strokes.length === 0) continue;
-    content.push(`${pt(SHEET_STROKE_WIDTH_MM[kind])} w`);
+    content.push(`${pt(sheetStrokeWidthMm(page, kind))} w`);
     const pattern = SHEET_STROKE_DASH_MM[kind];
     content.push(pattern ? `[${pattern.map(pt).join(' ')}] 0 d` : '[] 0 d');
     for (const stroke of strokes) {

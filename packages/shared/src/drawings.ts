@@ -431,6 +431,65 @@ export function nextDrawingSectionLabel(
   throw new Error('No section labels left on this sheet.');
 }
 
+/**
+ * D02 (schema v70): the line classes a sheet prints, each with its own
+ * weight in paper millimetres (ISO 128 defaults when absent).
+ */
+export const DRAWING_LINE_CLASSES = [
+  'visible',
+  'hidden',
+  'thin',
+  'border',
+  'dimension',
+  'hatch',
+  'chain',
+  'cutting'
+] as const;
+export type DrawingLineClass = (typeof DRAWING_LINE_CLASSES)[number];
+
+export const DRAWING_LINE_CLASS_LABELS: Readonly<
+  Record<DrawingLineClass, string>
+> = {
+  visible: 'Visible edges',
+  hidden: 'Hidden edges',
+  thin: 'Title block rules',
+  border: 'Borders',
+  dimension: 'Dimensions and notes',
+  hatch: 'Section hatching',
+  chain: 'Centre and cutting-plane lines',
+  cutting: 'Cutting-plane ends'
+};
+
+export const MIN_DRAWING_LINE_WIDTH_MM = 0.05;
+export const MAX_DRAWING_LINE_WIDTH_MM = 2;
+
+/** How a sheet writes angles: decimal degrees, or degrees, minutes and seconds. */
+export type DrawingAngleFormat = 'decimal' | 'dms';
+
+/**
+ * D02 (schema v70): a sheet's drawing properties. Every field is optional
+ * and absent keeps the document's units, the units' default precision, a
+ * decimal point, decimal degrees and the ISO 128 line weights, so an older
+ * sheet draws and exports exactly as before.
+ *
+ * Dimension values and their tolerances are printed in `units`: a value is
+ * measured in the document's units and converted, and a tolerance's
+ * deviations are amounts in `units` (degrees on an angle).
+ */
+export interface DrawingSheetFormat {
+  /** The units dimensions are printed in; absent is the document's. */
+  units?: UnitSystem;
+  /** Decimal places for lengths, trailing zeros trimmed; absent is the units' default. */
+  decimals?: number;
+  /** Decimal places for decimal degrees, or for the seconds of D°M'S". */
+  angleDecimals?: number;
+  angleFormat?: DrawingAngleFormat;
+  /** Absent is a point. */
+  decimalSeparator?: 'comma';
+  /** Print weights by line class, in paper millimetres. */
+  lineWidthsMm?: Partial<Record<DrawingLineClass, number>>;
+}
+
 export interface DrawingSheet {
   sheetId: DrawingSheetId;
   name: string;
@@ -445,6 +504,8 @@ export interface DrawingSheet {
    * never synthesized on load.
    */
   annotations?: DrawingAnnotation[];
+  /** D02 drawing properties (schema v70); absent keeps every default. */
+  format?: DrawingSheetFormat;
 }
 
 /** The document's drawing section (schema v30). Absent means no drawings. */
@@ -537,6 +598,66 @@ function drawingViewError(view: unknown, where: string): string | null {
       return `${where} has an invalid section.`;
     if (view.parentViewId !== undefined)
       return `${where} cannot be both a section and a projected view.`;
+  }
+  return null;
+}
+
+const UNIT_SYSTEMS: readonly unknown[] = ['mm', 'cm', 'm', 'inch'];
+
+function isDecimals(value: unknown): boolean {
+  return (
+    Number.isSafeInteger(value) &&
+    (value as number) >= 0 &&
+    (value as number) <= 6
+  );
+}
+
+/** Why `value` is not a stored {@link DrawingSheetFormat}, or null. */
+export function drawingSheetFormatError(value: unknown): string | null {
+  if (!isRecord(value)) return 'has drawing properties that are not a record';
+  for (const key of Object.keys(value))
+    if (
+      ![
+        'units',
+        'decimals',
+        'angleDecimals',
+        'angleFormat',
+        'decimalSeparator',
+        'lineWidthsMm'
+      ].includes(key)
+    )
+      return `has an unknown drawing property "${key}"`;
+  if (value.units !== undefined && !UNIT_SYSTEMS.includes(value.units))
+    return 'prints dimensions in unknown units';
+  if (value.decimals !== undefined && !isDecimals(value.decimals))
+    return 'shows lengths to other than 0 to 6 decimals';
+  if (value.angleDecimals !== undefined && !isDecimals(value.angleDecimals))
+    return 'shows angles to other than 0 to 6 decimals';
+  if (
+    value.angleFormat !== undefined &&
+    value.angleFormat !== 'decimal' &&
+    value.angleFormat !== 'dms'
+  )
+    return 'has an unknown angle format';
+  if (
+    value.decimalSeparator !== undefined &&
+    value.decimalSeparator !== 'comma'
+  )
+    return 'has an unknown decimal separator';
+  if (value.lineWidthsMm !== undefined) {
+    const widths = value.lineWidthsMm;
+    if (!isRecord(widths)) return 'has line weights that are not a record';
+    for (const [key, width] of Object.entries(widths)) {
+      if (!(DRAWING_LINE_CLASSES as readonly string[]).includes(key))
+        return `has a weight for an unknown line class "${key}"`;
+      if (
+        typeof width !== 'number' ||
+        !Number.isFinite(width) ||
+        width < MIN_DRAWING_LINE_WIDTH_MM ||
+        width > MAX_DRAWING_LINE_WIDTH_MM
+      )
+        return `has a ${key} line weight outside ${MIN_DRAWING_LINE_WIDTH_MM}–${MAX_DRAWING_LINE_WIDTH_MM} mm`;
+    }
   }
   return null;
 }
@@ -668,6 +789,10 @@ export function drawingSheetError(value: unknown): string | null {
       side * free < -ALIGNMENT_TOLERANCE_MM
     )
       return `${where} has a section view out of line with its source or on the wrong side for its projection angle.`;
+  }
+  if (value.format !== undefined) {
+    const error = drawingSheetFormatError(value.format);
+    if (error) return `${where} ${error}.`;
   }
   if (value.annotations !== undefined) {
     if (

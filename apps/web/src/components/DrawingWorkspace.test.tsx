@@ -768,6 +768,56 @@ describe('DrawingWorkspace', () => {
     }
   });
 
+  it('sets the sheet’s drawing properties as one format, leaving defaults out (v70)', async () => {
+    const sheet = {
+      ...starter(drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!),
+      format: { decimalSeparator: 'comma' as const }
+    };
+    const { onCommand } = setup({ sheet });
+    const panel = screen.getByRole('complementary', {
+      name: 'Drawing properties'
+    });
+    await userEvent.selectOptions(
+      within(panel).getByRole('combobox', { name: 'Dimension units' }),
+      'inch'
+    );
+    let command = onCommand.mock.calls.at(-1)![0];
+    expect(command.kind).toBe('drawing.sheet.update');
+    expect(command.payload).toEqual({
+      sheetId: sheet.sheetId,
+      format: { decimalSeparator: 'comma', units: 'inch' }
+    });
+    await userEvent.selectOptions(
+      within(panel).getByRole('combobox', { name: 'Angles' }),
+      'dms'
+    );
+    command = onCommand.mock.calls.at(-1)![0];
+    expect(command.payload).toMatchObject({
+      format: { decimalSeparator: 'comma', angleFormat: 'dms' }
+    });
+    // Back to the default separator: nothing left, so the format clears.
+    await userEvent.selectOptions(
+      within(panel).getByRole('combobox', { name: 'Decimal separator' }),
+      ''
+    );
+    command = onCommand.mock.calls.at(-1)![0];
+    expect(command.payload).toEqual({ sheetId: sheet.sheetId, format: null });
+    // A print weight in bounds is kept; one out of bounds reverts.
+    await userEvent.click(screen.getByText('Line weights (mm)'));
+    const visible = within(panel).getByRole('spinbutton', {
+      name: 'Visible edges'
+    });
+    const calls = onCommand.mock.calls.length;
+    await userEvent.type(visible, '5{Enter}');
+    expect(onCommand.mock.calls.length).toBe(calls);
+    expect((visible as HTMLInputElement).value).toBe('');
+    await userEvent.type(visible, '0.5{Enter}');
+    command = onCommand.mock.calls.at(-1)![0];
+    expect(command.payload).toMatchObject({
+      format: { decimalSeparator: 'comma', lineWidthsMm: { visible: 0.5 } }
+    });
+  });
+
   it('shows the paper dark on request and remembers it on this device', async () => {
     window.localStorage.removeItem('openzcad.drawing.darkPaper');
     const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [

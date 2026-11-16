@@ -176,7 +176,8 @@ interface DrawingAnnotationBase {
 
 /**
  * v68: a dimension's tolerance. Deviations are signed amounts from the
- * measured value, in the document's length units (degrees on an angle), so
+ * measured value, in the units the dimension is printed in (the sheet's
+ * units from v70, else the document's; degrees on an angle), so
  * a toleranced dimension stays associative: `limits` prints the measured
  * value plus each deviation, read from the model each time it is drawn.
  *

@@ -289,7 +289,12 @@ describe('D02 dimension tolerances (schema v68)', () => {
 
   it('writes each tolerance the way a print states it', () => {
     const ref: DrawingEdgeRef = { bodyId: 'body_x' as BodyId, hash: 7 };
-    const measured = { symbol: '', value: 20, decimals: 2, unit: '' };
+    const measured = {
+      symbol: '',
+      value: 20,
+      decimals: 2,
+      kind: 'length' as const
+    };
     const format = (extra: Partial<DrawingLinearDimension>) =>
       formatDimension(width(ref, extra), measured);
     expect(format({})).toEqual({ label: '20' });
@@ -340,7 +345,7 @@ describe('D02 dimension tolerances (schema v68)', () => {
           placementMm: { x: 0, y: 0 },
           tolerance: { kind: 'deviation', upper: 0.5, lower: -0.5 }
         },
-        { symbol: '', value: 30, decimals: 1, unit: '°' }
+        { symbol: '', value: 30, decimals: 1, kind: 'angle' }
       ).text?.stack
     ).toEqual(['+0.5°', '-0.5°']);
     // Text a callout wrote takes the prefix and suffix, never a tolerance.
