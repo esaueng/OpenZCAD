@@ -30,6 +30,18 @@ Public assistant identities use HMAC values keyed by the Worker-only
 `AI_IDENTITY_PEPPER`. The later account-tier policy limits AI usage per account
 without an IP or deployment-wide quota.
 
+## Temporary beta QA exception
+
+Until 2026-11-23 00:00 UTC, the owner-authorized QA account may request
+email codes without Turnstile on `https://beta.zcad.app` only, from a browser
+provisioned with a separate secret capability. Email-code verification,
+wrong-code limits, requester/email/IP send limits and session authorization
+remain mandatory. Other accounts and hosts keep Turnstile. The capability is
+disabled by default and fails closed on invalid configuration or expiry.
+See [the temporary QA runbook](../qa/temporary-turnstile-capability.md) for
+provisioning and immediate revocation. This exception does not grant project,
+encryption-key, account-tier or AI access.
+
 ## Consequences
 
 - Cloudflare Access is not required for beta sign-in.

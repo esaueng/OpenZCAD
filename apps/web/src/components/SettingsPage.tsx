@@ -834,6 +834,13 @@ export function SettingsPage({
   }, [loginChallengeId]);
   const [turnstileToken, setTurnstileToken] = useState('');
   const [turnstileReset, setTurnstileReset] = useState(0);
+  const [qaBypassRefused, setQaBypassRefused] = useState(false);
+  const qaTurnstileBypass = Boolean(
+    !qaBypassRefused &&
+    authConfig?.qaTurnstileBypassEmail &&
+    loginEmail.trim().toLowerCase() === authConfig.qaTurnstileBypassEmail
+  );
+  const loginSecurityToken = qaTurnstileBypass ? 'qa-cookie' : turnstileToken;
   const [storageUsage, setStorageUsage] = useState<AccountStorageUsage | null>(
     null
   );
@@ -2624,21 +2631,27 @@ export function SettingsPage({
                                 className="settings-auth-resend"
                                 id="settings-auth-resend"
                               >
-                                <TurnstileWidget
-                                  siteKey={authConfig.turnstileSiteKey}
-                                  resetSignal={turnstileReset}
-                                  onToken={setTurnstileToken}
-                                />
+                                {qaTurnstileBypass ? (
+                                  <small role="status">
+                                    QA security check enabled for this browser.
+                                  </small>
+                                ) : (
+                                  <TurnstileWidget
+                                    siteKey={authConfig.turnstileSiteKey}
+                                    resetSignal={turnstileReset}
+                                    onToken={setTurnstileToken}
+                                  />
+                                )}
                                 <button
                                   className="secondary"
                                   type="button"
                                   disabled={
-                                    busy || !resendReady || !turnstileToken
+                                    busy || !resendReady || !loginSecurityToken
                                   }
                                   onClick={() => {
                                     void onRequestLoginCode(
                                       loginEmail.trim(),
-                                      turnstileToken
+                                      loginSecurityToken
                                     )
                                       .then((response) => {
                                         setLoginCode('');
@@ -2646,7 +2659,10 @@ export function SettingsPage({
                                           response.challengeId
                                         );
                                       })
-                                      .catch(() => undefined)
+                                      .catch(() => {
+                                        if (qaTurnstileBypass)
+                                          setQaBypassRefused(true);
+                                      })
                                       .finally(() => {
                                         setTurnstileToken('');
                                         setTurnstileReset((value) => value + 1);
@@ -2669,12 +2685,14 @@ export function SettingsPage({
                             event.preventDefault();
                             void onRequestLoginCode(
                               loginEmail.trim(),
-                              turnstileToken
+                              loginSecurityToken
                             )
                               .then((response) =>
                                 setLoginChallengeId(response.challengeId)
                               )
-                              .catch(() => undefined)
+                              .catch(() => {
+                                if (qaTurnstileBypass) setQaBypassRefused(true);
+                              })
                               .finally(() => {
                                 setTurnstileToken('');
                                 setTurnstileReset((value) => value + 1);
@@ -2712,16 +2730,24 @@ export function SettingsPage({
                                 }
                               />
                             </label>
-                            <TurnstileWidget
-                              siteKey={authConfig.turnstileSiteKey}
-                              resetSignal={turnstileReset}
-                              onToken={setTurnstileToken}
-                            />
+                            {qaTurnstileBypass ? (
+                              <small role="status">
+                                QA security check enabled for this browser.
+                              </small>
+                            ) : (
+                              <TurnstileWidget
+                                siteKey={authConfig.turnstileSiteKey}
+                                resetSignal={turnstileReset}
+                                onToken={setTurnstileToken}
+                              />
+                            )}
                             <button
                               className="primary"
                               type="submit"
                               disabled={
-                                busy || !loginEmail.trim() || !turnstileToken
+                                busy ||
+                                !loginEmail.trim() ||
+                                !loginSecurityToken
                               }
                             >
                               <Mail size={14} aria-hidden="true" />

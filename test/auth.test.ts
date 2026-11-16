@@ -20,6 +20,8 @@ import {
   createSessionCookie,
   generateLoginCode,
   getAuthConfig,
+  getBrowserAuthConfig,
+  provisionQaTurnstileCookie,
   hashLoginCode,
   identifyAssistantRequest,
   loginEmail,
@@ -1427,5 +1429,211 @@ describe('assistant request identity', () => {
         AI_IDENTITY_PEPPER: 'identity-test-pepper'
       })
     ).rejects.toThrow('session expired');
+  });
+});
+
+describe('temporary beta QA Turnstile capability', () => {
+  const token = 'Q'.repeat(43);
+  const expiry = '2026-11-22T00:00:00Z';
+  const secret = JSON.stringify({ token, expiresAt: expiry });
+  const request = (cookie?: string, origin = 'https://beta.zcad.app') =>
+    new Request(`${origin}/api/auth/qa-turnstile`, {
+      method: 'POST',
+      headers: {
+        origin,
+        authorization: `Bearer ${token}`,
+        ...(cookie ? { cookie } : {})
+      }
+    });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  function harness() {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-16T12:00:00Z'));
+    const flow = signInHarness('qa@esau.bot');
+    const env = { ...flow.env, QA_TURNSTILE_BYPASS: secret };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ success: false }))
+    );
+    return { ...flow, env };
+  }
+
+  it('provisions a secure cookie, requires the actual email code, and retains requester limits', async () => {
+    const flow = harness();
+    const setCookie = await provisionQaTurnstileCookie(request(), flow.env);
+    expect(setCookie).toContain(
+      'Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age='
+    );
+    expect(setCookie).not.toContain(token);
+    const cookie = cookiePair(setCookie);
+    const req = request(cookie);
+    expect(await getBrowserAuthConfig(req, flow.env)).toMatchObject({
+      qaTurnstileBypassEmail: 'qa@esau.bot'
+    });
+    const input = { email: ' QA@ESAU.BOT ', turnstileToken: '' };
+    const first = await startEmailLogin(req, input, flow.env);
+    expect(flow.sent).toHaveLength(1);
+    await expect(
+      verifyEmailLogin(
+        { challengeId: first.challengeId, code: wrongCode(flow.sent[0]!) },
+        flow.env
+      )
+    ).rejects.toThrow();
+    const verified = await verifyEmailLogin(
+      { challengeId: first.challengeId, code: flow.sent[0]! },
+      flow.env
+    );
+    expect(verified.session.email).toBe('qa@esau.bot');
+    for (let i = 0; i < 3; i++) await startEmailLogin(req, input, flow.env);
+    expect(flow.sent).toHaveLength(3);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('retains the per-IP send limit', async () => {
+    const flow = harness();
+    const cookie = cookiePair(
+      await provisionQaTurnstileCookie(request(), flow.env)
+    );
+    for (let i = 0; i < 10; i++)
+      await startEmailLogin(
+        request(cookie),
+        { email: 'qa@esau.bot', turnstileToken: '' },
+        flow.env
+      );
+    await expect(
+      startEmailLogin(
+        request(cookie),
+        { email: 'qa@esau.bot', turnstileToken: '' },
+        flow.env
+      )
+    ).rejects.toMatchObject({ status: 429 });
+  });
+
+  it('never bypasses another email or publishes the capability without its cookie', async () => {
+    const flow = harness();
+    const cookie = cookiePair(
+      await provisionQaTurnstileCookie(request(), flow.env)
+    );
+    expect(await getBrowserAuthConfig(request(), flow.env)).not.toHaveProperty(
+      'qaTurnstileBypassEmail'
+    );
+    expect(getAuthConfig(flow.env)).not.toHaveProperty(
+      'qaTurnstileBypassEmail'
+    );
+    await expect(
+      startEmailLogin(
+        request(cookie),
+        { email: 'other@example.com', turnstileToken: 'real-token' },
+        flow.env
+      )
+    ).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_INVALID' });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(flow.sent).toHaveLength(0);
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['malformed', '{'],
+    ['short token', JSON.stringify({ token: 'short', expiresAt: expiry })],
+    ['invalid expiry', JSON.stringify({ token, expiresAt: 'invalid' })],
+    ['expired', JSON.stringify({ token, expiresAt: '2026-11-15T00:00:00Z' })],
+    [
+      'beyond hard stop',
+      JSON.stringify({ token, expiresAt: '2026-12-01T00:00:00Z' })
+    ]
+  ])('fails closed with %s configuration', async (_label, config) => {
+    const flow = harness();
+    const env = { ...flow.env, QA_TURNSTILE_BYPASS: config };
+    await expect(
+      provisionQaTurnstileCookie(request(), env)
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      startEmailLogin(
+        request('__Host-openzcad_qa_turnstile=forged'),
+        { email: 'qa@esau.bot', turnstileToken: '' },
+        env
+      )
+    ).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_REQUIRED' });
+  });
+
+  it('rejects wrong credentials, cross-origin provisioning, other hosts and development', async () => {
+    const flow = harness();
+    const refusedHeaders: Record<string, string>[] = [
+      { origin: 'https://beta.zcad.app' },
+      { origin: 'https://evil.example', authorization: `Bearer ${token}` },
+      {
+        origin: 'https://beta.zcad.app',
+        authorization: `Bearer ${'X'.repeat(43)}`
+      }
+    ];
+    for (const headers of refusedHeaders) {
+      await expect(
+        provisionQaTurnstileCookie(
+          new Request('https://beta.zcad.app/api/auth/qa-turnstile', {
+            method: 'POST',
+            headers
+          }),
+          flow.env
+        )
+      ).rejects.toMatchObject({ status: 403 });
+    }
+    for (const origin of [
+      'https://zcad.app',
+      'https://preview.dev.zcad.app',
+      'http://beta.zcad.app'
+    ]) {
+      await expect(
+        provisionQaTurnstileCookie(request(undefined, origin), flow.env)
+      ).rejects.toMatchObject({ status: 403 });
+    }
+    await expect(
+      provisionQaTurnstileCookie(request(), {
+        ...flow.env,
+        ENVIRONMENT: 'development'
+      })
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('rechecks expiry and secret rotation for an already provisioned cookie', async () => {
+    const flow = harness();
+    const cookie = cookiePair(
+      await provisionQaTurnstileCookie(request(), flow.env)
+    );
+    const rotated = {
+      ...flow.env,
+      QA_TURNSTILE_BYPASS: JSON.stringify({
+        token: 'R'.repeat(43),
+        expiresAt: expiry
+      })
+    };
+    for (const env of [
+      rotated,
+      { ...flow.env, QA_TURNSTILE_BYPASS: undefined }
+    ]) {
+      expect(
+        await getBrowserAuthConfig(request(cookie), env)
+      ).not.toHaveProperty('qaTurnstileBypassEmail');
+      await expect(
+        startEmailLogin(
+          request(cookie),
+          { email: 'qa@esau.bot', turnstileToken: '' },
+          env
+        )
+      ).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_REQUIRED' });
+    }
+    vi.setSystemTime(new Date(expiry));
+    expect(
+      await getBrowserAuthConfig(request(cookie), flow.env)
+    ).not.toHaveProperty('qaTurnstileBypassEmail');
+    await expect(
+      startEmailLogin(
+        request(cookie),
+        { email: 'qa@esau.bot', turnstileToken: '' },
+        flow.env
+      )
+    ).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_REQUIRED' });
   });
 });

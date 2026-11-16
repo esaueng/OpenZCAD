@@ -314,6 +314,88 @@ export function getAuthConfig(env: CloudflareEnv): {
   };
 }
 
+const QA_EMAIL = 'qa@esau.bot';
+const QA_COOKIE = '__Host-openzcad_qa_turnstile';
+// Hard stop even if the deployment secret is accidentally left configured.
+const QA_DEADLINE = Date.parse('2026-11-23T00:00:00Z');
+
+function qaCapability(request: Request, env: CloudflareEnv) {
+  if (
+    env.ENVIRONMENT !== 'beta' ||
+    new URL(request.url).origin !== 'https://beta.zcad.app' ||
+    !env.QA_TURNSTILE_BYPASS
+  )
+    return null;
+  try {
+    const config: unknown = JSON.parse(env.QA_TURNSTILE_BYPASS);
+    if (!config || typeof config !== 'object') return null;
+    const { token, expiresAt } = config as Record<string, unknown>;
+    if (
+      typeof token !== 'string' ||
+      !/^[A-Za-z0-9_-]{43}$/.test(token) ||
+      typeof expiresAt !== 'string'
+    )
+      return null;
+    const expiry = Date.parse(expiresAt);
+    if (
+      !Number.isFinite(expiry) ||
+      expiry <= Date.now() ||
+      expiry > QA_DEADLINE
+    )
+      return null;
+    return { token, expiry };
+  } catch {
+    return null;
+  }
+}
+
+async function hasQaCapability(request: Request, env: CloudflareEnv) {
+  const config = qaCapability(request, env);
+  const cookie = readCookie(request, QA_COOKIE);
+  return Boolean(
+    config &&
+    cookie &&
+    constantTimeEqual(cookie, await hmac('qa-turnstile-cookie', config.token))
+  );
+}
+
+/** Provisioned out of band; this never grants a session or skips an email code. */
+export async function provisionQaTurnstileCookie(
+  request: Request,
+  env: CloudflareEnv
+) {
+  requireEmailAuth(env);
+  const config = qaCapability(request, env);
+  const token = readBearerToken(request);
+  if (
+    !config ||
+    !token ||
+    !constantTimeEqual(token, config.token) ||
+    request.headers.get('origin') !== new URL(request.url).origin
+  ) {
+    throw new AuthFlowError(
+      403,
+      'AUTH_QA_UNAVAILABLE',
+      'QA access unavailable.'
+    );
+  }
+  const cookie = await hmac('qa-turnstile-cookie', config.token);
+  const maxAge = Math.floor((config.expiry - Date.now()) / 1000);
+  return `${QA_COOKIE}=${cookie}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAge}`;
+}
+
+export async function getBrowserAuthConfig(
+  request: Request,
+  env: CloudflareEnv
+) {
+  return {
+    ...getAuthConfig(env),
+    ...((await hasQaCapability(request, env))
+      ? { qaTurnstileBypassEmail: QA_EMAIL }
+      : {})
+  };
+}
+
 export async function getDesktopAuthConfig(
   env: CloudflareEnv
 ): Promise<ReturnType<typeof getAuthConfig> & { desktopAuthEnabled: boolean }> {
@@ -696,7 +778,9 @@ export async function startEmailLogin(
   const turnstileToken =
     typeof input.turnstileToken === 'string' ? input.turnstileToken : '';
   const attemptId = crypto.randomUUID();
-  await verifyTurnstile(request, turnstileToken, attemptId, env);
+  if (email !== QA_EMAIL || !(await hasQaCapability(request, env))) {
+    await verifyTurnstile(request, turnstileToken, attemptId, env);
+  }
 
   const timestamp = nowSeconds();
   const connectingIp = requestClientAddressKey(request);

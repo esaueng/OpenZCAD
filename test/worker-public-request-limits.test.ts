@@ -117,6 +117,80 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('QA capability provisioning route', () => {
+  it('sets a non-cacheable HttpOnly cookie without creating an account or session', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-16T12:00:00Z'));
+    const { env, sqlite } = hostedEnv();
+    const token = 'Q'.repeat(43);
+    const qaEnv = {
+      ...env,
+      QA_TURNSTILE_BYPASS: JSON.stringify({
+        token,
+        expiresAt: '2026-11-22T00:00:00Z'
+      })
+    };
+    const request = new Request('https://beta.zcad.app/api/auth/qa-turnstile', {
+      method: 'POST',
+      headers: {
+        origin: 'https://beta.zcad.app',
+        authorization: `Bearer ${token}`
+      }
+    });
+    const response = await worker.fetch(request, qaEnv);
+    expect(response.status).toBe(204);
+    expect(response.headers.get('set-cookie')).toContain(
+      'HttpOnly; Secure; SameSite=Strict'
+    );
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(
+      sqlite.prepare('SELECT COUNT(*) AS n FROM auth_sessions').get()
+    ).toEqual({ n: 0 });
+    expect(sqlite.prepare('SELECT COUNT(*) AS n FROM users').get()).toEqual({
+      n: 0
+    });
+    const cookie = response.headers.get('set-cookie')!.split(';')[0]!;
+    const config = await worker.fetch(
+      new Request('https://beta.zcad.app/api/auth/config', {
+        headers: { cookie }
+      }),
+      qaEnv
+    );
+    expect(config.headers.get('cache-control')).toBe('private, no-store');
+    expect(await config.json()).toMatchObject({
+      qaTurnstileBypassEmail: 'qa@esau.bot'
+    });
+    const turnstile = vi.fn(async () => Response.json({ success: false }));
+    vi.stubGlobal('fetch', turnstile);
+    const started = await worker.fetch(
+      new Request('https://beta.zcad.app/api/auth/email/start', {
+        method: 'POST',
+        headers: {
+          origin: 'https://beta.zcad.app',
+          cookie,
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({ email: 'qa@esau.bot', turnstileToken: '' })
+      }),
+      qaEnv
+    );
+    expect(started.status).toBe(202);
+    expect(await started.json()).toMatchObject({ expiresInSeconds: 600 });
+    expect(turnstile).not.toHaveBeenCalled();
+    const refused = await worker.fetch(
+      new Request('https://beta.zcad.app/api/auth/qa-turnstile', {
+        method: 'POST',
+        headers: {
+          origin: 'https://elsewhere.example',
+          authorization: `Bearer ${token}`
+        }
+      }),
+      qaEnv
+    );
+    expect(refused.status).toBe(403);
+    expect(refused.headers.get('set-cookie')).toBeNull();
+  });
+});
+
 describe('sign-in request bodies', () => {
   it.each([
     '/api/auth/email/start',
@@ -159,6 +233,7 @@ describe('sign-in request bodies', () => {
 
 describe('per-address limits before a sign-in body is read', () => {
   it.each([
+    ['/api/auth/qa-turnstile', 30],
     ['/api/auth/email/verify', 30],
     ['/api/auth/desktop/start', 10],
     ['/api/auth/desktop/exchange', 60],
@@ -472,7 +547,11 @@ describe('Workers rate-limit bindings', () => {
   });
 
   it('match the limits each Wrangler configuration declares', () => {
-    for (const path of ['wrangler.jsonc', 'wrangler.stable.jsonc', 'wrangler.selfhost.example.jsonc']) {
+    for (const path of [
+      'wrangler.jsonc',
+      'wrangler.stable.jsonc',
+      'wrangler.selfhost.example.jsonc'
+    ]) {
       const parsed = ts.parseConfigFileTextToJson(
         path,
         readFileSync(path, 'utf8')

@@ -297,6 +297,8 @@ export interface CloudflareEnv {
   DESKTOP_AUTH_ENABLED?: string;
   TURNSTILE_SITE_KEY?: string;
   TURNSTILE_SECRET_KEY?: string;
+  /** Temporary beta QA capability: JSON { token, expiresAt }; never a public var. */
+  QA_TURNSTILE_BYPASS?: string;
   EMAIL?: SendEmail;
   AI_PROVIDER?: 'openai' | 'openrouter' | 'anthropic' | 'responses-compatible';
   AI_BASE_URL?: string;
