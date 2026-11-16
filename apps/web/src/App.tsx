@@ -25982,7 +25982,7 @@ export function App() {
     // M02: a pattern on sketch points picks point entities, not curves.
     if (inPlaceSpec.id === 'point-pattern') {
       return sketchPointCandidates(doc, availableSketchViews, (value) =>
-        resolve(value as ParamValue)
+        resolve(value)
       );
     }
     // Every sketch's curves, the profile's own included: one sketch may hold
