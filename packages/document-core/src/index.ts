@@ -68,6 +68,7 @@ export * from './assembly-interference';
 export * from './gear-mesh';
 export * from './hole-callout';
 export * from './print-clearance';
+export * from './configurations';
 export * from './reference-images';
 export * from './body-consumption';
 export {
@@ -82,6 +83,7 @@ export {
   normalizeDocumentHistory
 } from './document-history';
 import {
+  configurationHiddenBodyIds,
   isDocumentHistory,
   isReservedRecordKey,
   ownEntry,
@@ -4473,6 +4475,9 @@ export function getParameterHiddenBodyIds(
       for (const bodyId of parameter.toggle.bodyIds) hidden.add(bodyId);
     }
   }
+  // F06: a body the active configuration hides is hidden the same way.
+  for (const bodyId of configurationHiddenBodyIds(document.configurations))
+    hidden.add(bodyId);
   return hidden;
 }
 
@@ -4873,7 +4878,7 @@ export function getParameterScope(
 }
 
 /** Recomputes the cached `value` field of every parameter node. */
-function refreshParameterValues(document: ProjectDocument): void {
+export function refreshParameterValues(document: ProjectDocument): void {
   const { scope } = getParameterScope(document);
   for (const parameter of listParameters(document)) {
     const value = ownEntry(scope, parameter.name);

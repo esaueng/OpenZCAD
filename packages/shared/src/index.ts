@@ -15,6 +15,7 @@ export * from './keymap-settings';
 export * from './drawings';
 export * from './object-folders';
 export * from './print-clearance';
+export * from './configurations';
 export * from './assembly';
 export * from './assembly-coupling';
 export * from './assembly-kinematics';
@@ -36,6 +37,7 @@ import type { SheetMetalFeatureFields } from './sheet-metal';
 import type { SketchPromotion } from './sketch-promotions';
 import type { ObjectFolderSet } from './object-folders';
 import type { AssemblySet } from './assembly';
+import type { ConfigurationSet } from './configurations';
 import type { PipeThreadSize } from './pipe-threads';
 import type {
   HoleClearanceFit,
@@ -308,7 +310,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // drawn. Absent keeps the bare value, so every older sheet draws unchanged.
 // An older client would print the bare value and drop them on its next save,
 // so it must refuse. Builds on v67.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 68 as const;
+// v70 adds F06 configurations (`configurations`): a variant table whose rows
+// are named configurations and whose columns are parameters, feature
+// suppression, body visibility and material, with one active row. Absent
+// means no table, so every older document builds unchanged. An older client
+// would show and export bodies the active row hides and drop the table on
+// its next save, so it must refuse. Builds on v68 (v69 is claimed by M17).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 70 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -3924,6 +3932,11 @@ export interface ProjectDocument {
    * before. See `documentPrintClearance` in document-core.
    */
   printClearance?: ParamValue;
+  /**
+   * F06 (schema v70): the variant table, its rows and the active row. See
+   * `configurations.ts`. Absent means the document has no configurations.
+   */
+  configurations?: ConfigurationSet;
 }
 
 export interface SerializedCommand<TPayload = unknown> {

@@ -86,6 +86,7 @@
     "test/collaboration-checkpoint.test.ts",
     "test/combination-matrix.test.ts",
     "test/command-system.test.ts",
+    "test/configurations.test.ts",
     "test/css-class-coverage.test.ts",
     "test/cylinder-radius-across-boolean.test.ts",
     "test/cylinder-resize-face-lineage.test.ts",
@@ -222,6 +223,7 @@
     "test/worker-public-request-limits.test.ts"
   ],
   "web": [
+    "src/components/ConfigurationTable.test.tsx",
     "src/components/DrawingWorkspace.test.tsx",
     "src/components/EncryptedPinReset.test.tsx",
     "src/components/ExportDialog.test.tsx",
