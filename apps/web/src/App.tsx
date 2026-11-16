@@ -635,6 +635,7 @@ import {
   ViewportDockExtras,
   WorkspaceReadout
 } from './components/WorkspaceReadout';
+import { SECTION_PLANE_LABELS } from './lib/sectionPlaneLabels';
 import { StatusActivityLog } from './components/StatusActivityLog';
 import { recordActivity } from './lib/activityLog';
 import { reportProjectListingFailure } from './lib/projectListingFailure';
@@ -3904,6 +3905,11 @@ export function App() {
   // one set of visible bodies. Everything that invalidates it bumps this
   // token, and an answer that arrives under an old token is dropped.
   const sectionTokenRef = useRef(0);
+  // M09: the viewport's overlap note for the cut on screen, which the status
+  // line carries while the section controls are put away.
+  const [sectionOverlapNote, setSectionOverlapNote] = useState<string | null>(
+    null
+  );
   const pendingSectionRestoreRef = useRef<string | null>(null);
   const restoredSectionRequestTokenRef = useRef<number | null>(null);
   // Key by membership so an unrelated dimension edit keeps the viewport's
@@ -36010,6 +36016,7 @@ export function App() {
             onToggleSection={toggleSectionView}
             nothingToSection={!viewerBodies.some((body) => !body.consumed)}
             sectionPanelOpen={panelState.sectionPanelOpen}
+            onSectionOverlapNote={setSectionOverlapNote}
             onSectionPanelOpenChange={(open) =>
               setPanelState((current) =>
                 current.sectionPanelOpen === open
@@ -36675,6 +36682,23 @@ export function App() {
               (parameterPreview !== null && !exactGeometryReady)
             }
             geometryStatus={geometryStatus}
+            // A cut left on says so on the status line once its controls
+            // are put away: View and Assemble have none, and Build's are
+            // closed with Escape or the rail button (I49).
+            section={
+              viewerSettings.sectionView &&
+              (modelingLocked ||
+                panelState.sectionPanelOpen === false ||
+                sectionAxisRange(viewerSettings.sectionView.plane) === null)
+                ? {
+                    label: `Section · ${
+                      SECTION_PLANE_LABELS[viewerSettings.sectionView.plane]
+                    }`,
+                    note: sectionOverlapNote,
+                    onTurnOff: toggleSectionView
+                  }
+                : null
+            }
             tone={tone}
             // The plane chooser carries the Sketch tool's instruction too:
             // the toast under it said the same sentence a second time. The
