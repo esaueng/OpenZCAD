@@ -86,7 +86,7 @@ interface ConfigurationSet {
    commands (`configuration.create/delete`, `row.add/rename/delete`,
    `column.add/delete`, `cell.set`, `activate`), the Parameters panel table
    with a radio per row, undo/redo, replay, reload.
-2. **Exact export of any row.** Export takes a configuration: the active row
+2. **Exact export of any row.** Each row exports as STEP or through the mesh dialog: the active row
    exports as today; another row is built from
    `documentForConfiguration(document, rowId)` in a disposable exact build,
    so nothing in the open document changes. STEP, STL and 3MF.

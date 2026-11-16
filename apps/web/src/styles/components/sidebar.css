@@ -2013,3 +2013,8 @@
 .configuration-row-name .configuration-cell-input {
   width: 14ch;
 }
+
+.configuration-export {
+  max-width: 9ch;
+  font-size: var(--fs-xs);
+}

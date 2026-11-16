@@ -19,6 +19,7 @@ import {
 import {
   documentPrintClearance,
   effectiveConfigurationRow,
+  documentForConfiguration,
   repairLegacyBracketModel,
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
@@ -264,7 +265,10 @@ import {
   type PlaneBasis,
   type Vec2
 } from '@openzcad/geometry';
-import type { SketchSolveOutcome } from '@openzcad/kernel-adapter/exact';
+import type {
+  ExportBodySummary,
+  SketchSolveOutcome
+} from '@openzcad/kernel-adapter/exact';
 import type {
   ArtifactKind,
   AccountDeletionScope,
@@ -599,7 +603,6 @@ import {
 } from './lib/sketch/valueResolver';
 import { countClosedProfileSketches } from './lib/sketch/profileAvailability';
 import { useDocumentFonts } from './lib/textFonts';
-import { createProjectDiagnosticBundle } from './lib/projectDiagnostics';
 import type { DirectEditFixtureOutcome } from './lib/directEditFixture';
 import type * as InteractionDiagnostics from './lib/interactionDiagnostics';
 import { KERNEL_BUILD, supportsBlendGroupEdits } from './lib/kernelBuild';
@@ -1205,6 +1208,8 @@ const preflightCadPatch: typeof AiPatchPreflight.preflightCadPatch = (
  * read only for its Settings export, neither of which waits on the result.
  */
 const interactionDiagnostics = () => import('./lib/interactionDiagnostics');
+// Loaded on Export diagnostics only, as the interaction log is.
+const projectDiagnostics = () => import('./lib/projectDiagnostics');
 const closedOpenings = () => import('./lib/closedOpenings');
 /** A refused rebuild saved as a corpus fixture, on its Save reproduction. */
 const refusalReproduction = () => import('./lib/refusalReproduction');
@@ -3113,6 +3118,21 @@ export function App() {
   });
   const [sharingOpen, setSharingOpen] = useState(false);
   const [meshExportOpen, setMeshExportOpen] = useState(false);
+  /**
+   * F06: the configuration the mesh export writes; null is the active one,
+   * the model as shown. Reset when the dialog closes.
+   */
+  const [exportRowId, setExportRowId] = useState<string | null>(null);
+  /**
+   * F06: what an export of `exportRowId` writes, asked of the kernel for the
+   * row built on its own. The mesh dialog lists these and limits its formats
+   * by them, not by the row on screen.
+   */
+  const [exportRowBodies, setExportRowBodies] = useState<{
+    rowId: string;
+    version: number;
+    bodies: ExportBodySummary[];
+  } | null>(null);
   /** A unitless import waiting for the user to say what its numbers mean. */
   const [importUnitsPrompt, setImportUnitsPrompt] = useState<Omit<
     ComponentProps<typeof LazyImportUnitsDialog>,
@@ -4858,6 +4878,9 @@ export function App() {
       setStatus(message);
     }
   });
+  // Read by effects that must not re-run whenever the hook's object changes.
+  const geometryRef = useRef(geometry);
+  geometryRef.current = geometry;
   useThumbnailCaptureActivity(
     sharedThumbnailCapture,
     geometryBusy ||
@@ -19312,32 +19335,91 @@ export function App() {
     }
   }
 
-  async function handleExportStep() {
+  /**
+   * F06: what an export of `rowId` writes. The active row (or none) is the
+   * model as shown, with the export scope's bodies. Another row is built for
+   * the file alone from `documentForConfiguration`, nothing in the open
+   * document changes, and it writes every body that row shows.
+   */
+  function exportTarget(rowId: string | null): {
+    document: ProjectDocument;
+    bodyIds: BodyId[];
+    allShownBodies: boolean;
+    rowName: string | null;
+  } | null {
+    if (!doc) return null;
+    const set = doc.configurations;
+    const row =
+      rowId && set && rowId !== set.activeRowId
+        ? set.rows.find((entry) => entry.id === rowId)
+        : undefined;
+    if (!row)
+      return {
+        document: doc,
+        bodyIds: exportBodyIds,
+        allShownBodies: false,
+        rowName: null
+      };
+    return {
+      document: documentForConfiguration(doc, row.id),
+      bodyIds: [],
+      allShownBodies: true,
+      rowName: row.name
+    };
+  }
+
+  /** The file stem of an export, naming a configuration that is not active. */
+  function exportStemFor(rowName: string | null): string {
+    return exportFileStem(
+      rowName && doc ? `${doc.name} ${rowName}` : (doc?.name ?? '')
+    );
+  }
+
+  async function handleExportStep(rowId: string | null = null) {
     if (currentGeometrySnapshot !== null) {
       setStatus(
         'The model is still updating. Try exporting again when it finishes.'
       );
       return;
     }
-    if (!doc || exportBodyIds.length === 0) {
+    let target: ReturnType<typeof exportTarget>;
+    try {
+      target = exportTarget(rowId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'That configuration cannot be exported.'));
+      return;
+    }
+    if (
+      !doc ||
+      !target ||
+      (!target.allShownBodies && target.bodyIds.length === 0)
+    ) {
       setStatus(emptyExportReason);
       return;
     }
-    const fileName = `${exportFileStem(doc.name)}.step`;
+    const { document: exported, bodyIds, allShownBodies, rowName } = target;
+    const fileName = `${exportStemFor(rowName)}.step`;
     const contentType = 'model/step';
     await runExportJob({
       fileName,
-      label: 'STEP',
+      label: rowName ? `STEP of ${rowName}` : 'STEP',
       kind: 'step-export',
       contentType,
       metadata: {
-        bodyIds: exportBodyIds.join(','),
+        bodyIds: bodyIds.join(','),
         documentVersion: doc.version,
-        units: doc.units
+        units: doc.units,
+        ...(rowName ? { configuration: rowName } : {})
       },
+      ...(rowName
+        ? {
+            completed: () => `Exported configuration ${rowName} to ${fileName}.`
+          }
+        : {}),
       produce: async (options) => {
-        const result = await geometry.exportModel('step', doc, exportBodyIds, {
+        const result = await geometry.exportModel('step', exported, bodyIds, {
           ...options,
+          ...(allShownBodies ? { allShownBodies: true } : {}),
           fileName,
           units: resolveExportUnits(
             appSettingsRef.current.files.exportUnits,
@@ -19372,28 +19454,47 @@ export function App() {
       );
       return;
     }
-    if (!doc || exportBodyIds.length === 0) {
+    let target: ReturnType<typeof exportTarget>;
+    try {
+      target = exportTarget(exportRowId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'That configuration cannot be exported.'));
+      return;
+    }
+    if (
+      !doc ||
+      !target ||
+      (!target.allShownBodies && target.bodyIds.length === 0)
+    ) {
       setStatus(emptyExportReason);
       return;
     }
+    const { document: exported, bodyIds, allShownBodies, rowName } = target;
     const info = MESH_EXPORT_FILE_INFO[format];
-    const fileName = `${exportFileStem(doc.name)}.${info.extension}`;
+    const fileName = `${exportStemFor(rowName)}.${info.extension}`;
     void runExportJob({
       fileName,
-      label: info.label,
+      label: rowName ? `${info.label} of ${rowName}` : info.label,
       kind: info.kind,
       contentType: info.contentType,
       metadata: {
-        bodyIds: exportBodyIds.join(','),
+        bodyIds: bodyIds.join(','),
         documentVersion: doc.version,
         units: doc.units,
         format,
-        deflectionMm: deflection
+        deflectionMm: deflection,
+        ...(rowName ? { configuration: rowName } : {})
       },
+      ...(rowName
+        ? {
+            completed: () => `Exported configuration ${rowName} to ${fileName}.`
+          }
+        : {}),
       produce: async (options) => {
-        const result = await geometry.exportModel(format, doc, exportBodyIds, {
+        const result = await geometry.exportModel(format, exported, bodyIds, {
           deflection,
           ...tolerances,
+          ...(allShownBodies ? { allShownBodies: true } : {}),
           units: resolveExportUnits(
             appSettingsRef.current.files.exportUnits,
             doc.units
@@ -19431,25 +19532,38 @@ export function App() {
       setStatus('The model is still updating. Try again when it finishes.');
       return;
     }
-    if (!doc || exportBodyIds.length === 0) {
+    let written: ReturnType<typeof exportTarget>;
+    try {
+      written = exportTarget(exportRowId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'That configuration cannot be exported.'));
+      return;
+    }
+    if (
+      !doc ||
+      !written ||
+      (!written.allShownBodies && written.bodyIds.length === 0)
+    ) {
       setStatus(emptyExportReason);
       return;
     }
+    const { document: exported, bodyIds, allShownBodies, rowName } = written;
     const slicer = DESKTOP_SLICERS.find((entry) => entry.id === target);
     if (!slicer && target !== 'download') return;
     const info = MESH_EXPORT_FILE_INFO['3mf'];
-    const fileName = `${exportFileStem(doc.name)}.${info.extension}`;
+    const fileName = `${exportStemFor(rowName)}.${info.extension}`;
     void runExportJob({
       fileName,
       label: slicer ? `3MF for ${slicer.label}` : '3MF for your slicer',
       kind: info.kind,
       contentType: info.contentType,
       metadata: {
-        bodyIds: exportBodyIds.join(','),
+        bodyIds: bodyIds.join(','),
         documentVersion: doc.version,
         units: doc.units,
         format: '3mf',
-        deflectionMm: deflection
+        deflectionMm: deflection,
+        ...(rowName ? { configuration: rowName } : {})
       },
       archive: false,
       completed: (bodies) =>
@@ -19457,9 +19571,10 @@ export function App() {
           ? `Opened ${bodies} in ${slicer.label} as ${fileName}.`
           : `Downloaded ${bodies} as ${fileName}. Open it from your browser’s downloads in your slicer.`,
       produce: async (options) => {
-        const result = await geometry.exportModel('3mf', doc, exportBodyIds, {
+        const result = await geometry.exportModel('3mf', exported, bodyIds, {
           deflection,
           ...tolerances,
+          ...(allShownBodies ? { allShownBodies: true } : {}),
           units: resolveExportUnits(
             appSettingsRef.current.files.exportUnits,
             doc.units
@@ -19489,12 +19604,21 @@ export function App() {
       onProgress?(progress: ExportProgress): void;
     }
   ) {
-    if (!doc || exportBodyIds.length === 0) {
+    let target: ReturnType<typeof exportTarget>;
+    try {
+      target = exportTarget(exportRowId);
+    } catch (error) {
+      return Promise.reject(
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
+    if (!target || (!target.allShownBodies && target.bodyIds.length === 0)) {
       return Promise.reject(
         new Error(emptyExportMessage(exportScopeInfo, 'checking printability'))
       );
     }
-    return geometry.meshQuality(doc, exportBodyIds, deflection, {
+    return geometry.meshQuality(target.document, target.bodyIds, deflection, {
+      ...(target.allShownBodies ? { allShownBodies: true } : {}),
       ...(options?.angularTolerance !== undefined
         ? { angularTolerance: options.angularTolerance }
         : {}),
@@ -19562,12 +19686,13 @@ export function App() {
     }
   }
 
-  function handleExportDiagnostics() {
+  async function handleExportDiagnostics() {
     if (!doc) {
       reportSupportExport('Open a project before exporting diagnostics.');
       return;
     }
     try {
+      const { createProjectDiagnosticBundle } = await projectDiagnostics();
       const bundle = createProjectDiagnosticBundle(doc, {
         remusVersion: KERNEL_BUILD.packageVersion,
         remusCommit: KERNEL_BUILD.sourceCommit
@@ -23750,6 +23875,58 @@ export function App() {
     return executeCommand(command)
       ? null
       : 'The configurations were not changed.';
+  }
+
+  /** F06: exports one configuration row, as STEP or from the mesh dialog. */
+  // F06: the bodies the mesh dialog's row writes, from that row's own build.
+  const exportRowDocument = meshExportOpen && exportRowId ? doc : null;
+  useEffect(() => {
+    if (!exportRowDocument || !exportRowId) return;
+    let current = true;
+    let target: ProjectDocument;
+    try {
+      target = documentForConfiguration(exportRowDocument, exportRowId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'That configuration cannot be built.'));
+      setExportRowBodies({
+        rowId: exportRowId,
+        version: exportRowDocument.version,
+        bodies: []
+      });
+      return;
+    }
+    void geometryRef.current
+      .exportBodies(target)
+      .then(
+        (bodies) => bodies,
+        (error: unknown) => {
+          if (current)
+            setStatus(
+              errorMessage(error, 'The configuration could not be built.')
+            );
+          return [];
+        }
+      )
+      .then((bodies) => {
+        if (current)
+          setExportRowBodies({
+            rowId: exportRowId,
+            version: exportRowDocument.version,
+            bodies
+          });
+      });
+    return () => {
+      current = false;
+    };
+  }, [exportRowDocument, exportRowId, setStatus]);
+
+  function handleExportConfigurationRow(rowId: string, kind: 'step' | 'mesh') {
+    if (kind === 'step') {
+      void handleExportStep(rowId);
+      return;
+    }
+    setExportRowId(rowId === doc?.configurations?.activeRowId ? null : rowId);
+    setMeshExportOpen(true);
   }
 
   const configurationActions: ConfigurationActions = {
@@ -33121,7 +33298,7 @@ export function App() {
           onDeleteCloudData={handleDeleteCloudData}
           onReset={() => void handleResetAppSettings()}
           onApplyViewportDefaults={applyViewportDefaults}
-          onExportDiagnostics={handleExportDiagnostics}
+          onExportDiagnostics={() => void handleExportDiagnostics()}
           onExportInteractionLog={() => void handleExportInteractionLog()}
           onRegenerateThumbnails={() => void handleRegenerateThumbnails()}
           thumbnailRegeneration={thumbnailRegeneration}
@@ -33870,7 +34047,7 @@ export function App() {
       group: 'Support',
       keywords: ['troubleshooting', 'support', 'sanitized', 'json', 'report'],
       icon: <Download size={16} aria-hidden="true" />,
-      run: handleExportDiagnostics
+      run: () => void handleExportDiagnostics()
     },
     {
       id: 'file-export-interaction-log',
@@ -34677,6 +34854,7 @@ export function App() {
       configurationTable={{
         configurations: configurationView,
         features,
+        onExportRow: handleExportConfigurationRow,
         ...(editDisabledReason ? {} : { actions: configurationActions })
       }}
       onSetPrintClearance={
@@ -37649,30 +37827,62 @@ export function App() {
           )}
           {meshExportOpen &&
             doc &&
-            // Keep the dialog open if the last visible body is hidden.
-            (exportBodyIds.length > 0 ||
+            // A row that is not shown has its own bodies (listed below once
+            // the kernel answers); otherwise keep the dialog open if the
+            // last visible body is hidden.
+            (exportRowId !== null ||
+              exportBodyIds.length > 0 ||
               (exportScopeInfo?.hiddenExcluded ?? 0) > 0) && (
               <ExportDialog
                 scopeLabel={
-                  exportScopeInfo?.selection && selectedBody
-                    ? selectedBody.name
-                    : exportScopeInfo
-                      ? exportScopeLabel(exportScopeInfo)
-                      : `all bodies (${exportBodyIds.length})`
+                  exportRowId &&
+                  doc.configurations?.rows.some((row) => row.id === exportRowId)
+                    ? `every body configuration ${doc.configurations.rows.find((row) => row.id === exportRowId)!.name} shows`
+                    : exportScopeInfo?.selection && selectedBody
+                      ? selectedBody.name
+                      : exportScopeInfo
+                        ? exportScopeLabel(exportScopeInfo)
+                        : `all bodies (${exportBodyIds.length})`
                 }
-                bodies={exportBodyIds.map((bodyId) => ({
-                  bodyId,
-                  name:
-                    ownEntry(doc.derived.bodyRepresentations, bodyId)?.name ??
-                    bodyId,
-                  meshReference: ownEntry(
-                    doc.derived.bodyRepresentations,
-                    bodyId
-                  )?.meshReference
-                }))}
+                bodies={
+                  exportRowId !== null
+                    ? exportRowBodies?.rowId === exportRowId &&
+                      exportRowBodies.version === doc.version
+                      ? exportRowBodies.bodies
+                      : []
+                    : exportBodyIds.map((bodyId) => ({
+                        bodyId,
+                        name:
+                          ownEntry(doc.derived.bodyRepresentations, bodyId)
+                            ?.name ?? bodyId,
+                        meshReference: ownEntry(
+                          doc.derived.bodyRepresentations,
+                          bodyId
+                        )?.meshReference
+                      }))
+                }
                 revision={doc.version}
-                onClose={() => setMeshExportOpen(false)}
+                key={exportRowId ?? 'active'}
+                onClose={() => {
+                  setMeshExportOpen(false);
+                  setExportRowId(null);
+                }}
                 onExport={handleExportMesh}
+                {...(doc.configurations && doc.configurations.rows.length > 1
+                  ? {
+                      configuration: {
+                        rows: doc.configurations.rows,
+                        selectedRowId:
+                          exportRowId ?? doc.configurations.activeRowId,
+                        onSelect: (rowId: string) =>
+                          setExportRowId(
+                            rowId === doc.configurations?.activeRowId
+                              ? null
+                              : rowId
+                          )
+                      }
+                    }
+                  : {})}
                 slicerTargets={slicerTargets(isDesktopApp())}
                 onOpenInSlicer={handleOpenInSlicer}
                 onCheckQuality={handleCheckMeshQuality}
