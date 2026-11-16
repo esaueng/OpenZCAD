@@ -138,6 +138,96 @@ function distanceTo(loop: Loop2, point: Point2): number {
 }
 
 /**
+ * Where segment `a`→`b` crosses segment `c`→`d`, as a parameter along
+ * `a`→`b`, or `null` when they do not cross. Parallel segments are treated
+ * as not crossing: collinear overlap is two loops touching along an edge.
+ */
+function crossingParameter(
+  a: Point2,
+  b: Point2,
+  c: Point2,
+  d: Point2
+): number | null {
+  const ru = b.u - a.u;
+  const rv = b.v - a.v;
+  const su = d.u - c.u;
+  const sv = d.v - c.v;
+  const denominator = ru * sv - rv * su;
+  if (denominator === 0) return null;
+  const qu = c.u - a.u;
+  const qv = c.v - a.v;
+  const t = (qu * sv - qv * su) / denominator;
+  const s = (qu * rv - qv * ru) / denominator;
+  return t >= 0 && t <= 1 && s >= 0 && s <= 1 ? t : null;
+}
+
+/**
+ * The points of `probe` that are tested against `boundary`: its vertices,
+ * and, on each segment that crosses the boundary, the midpoint of every
+ * stretch between successive crossings.
+ *
+ * Vertices alone are not enough. Two slots laid across each other overlap in
+ * a square whose four corners are all crossing points, and every vertex of
+ * each slot lies outside the other, so only a point between two crossings
+ * lands in the overlap. A stretch of a segment between successive crossings
+ * lies wholly on one side of the boundary, so its midpoint speaks for it.
+ */
+function probePoints(
+  probe: Loop2,
+  boundary: Loop2,
+  tolerance: number
+): Point2[] {
+  const points = [...probe.points];
+  // Only the boundary segments near the probe can cross it.
+  const near: [Point2, Point2][] = [];
+  const bp = boundary.points;
+  for (let i = 0, j = bp.length - 1; i < bp.length; j = i, i += 1) {
+    const c = bp[j]!;
+    const d = bp[i]!;
+    if (
+      Math.max(c.u, d.u) < probe.minU - tolerance ||
+      Math.min(c.u, d.u) > probe.maxU + tolerance ||
+      Math.max(c.v, d.v) < probe.minV - tolerance ||
+      Math.min(c.v, d.v) > probe.maxV + tolerance
+    ) {
+      continue;
+    }
+    near.push([c, d]);
+  }
+  if (near.length === 0) return points;
+  const pp = probe.points;
+  for (let i = 0, j = pp.length - 1; i < pp.length; j = i, i += 1) {
+    const a = pp[j]!;
+    const b = pp[i]!;
+    const lowU = Math.min(a.u, b.u);
+    const highU = Math.max(a.u, b.u);
+    const lowV = Math.min(a.v, b.v);
+    const highV = Math.max(a.v, b.v);
+    const crossings: number[] = [];
+    for (const [c, d] of near) {
+      if (
+        Math.max(c.u, d.u) < lowU ||
+        Math.min(c.u, d.u) > highU ||
+        Math.max(c.v, d.v) < lowV ||
+        Math.min(c.v, d.v) > highV
+      ) {
+        continue;
+      }
+      const t = crossingParameter(a, b, c, d);
+      if (t !== null) crossings.push(t);
+    }
+    if (crossings.length === 0) continue;
+    crossings.push(0, 1);
+    crossings.sort((left, right) => left - right);
+    for (let k = 1; k < crossings.length; k += 1) {
+      const t = (crossings[k - 1]! + crossings[k]!) / 2;
+      points.push({ u: a.u + t * (b.u - a.u), v: a.v + t * (b.v - a.v) });
+    }
+  }
+  return points;
+}
+
+/**
  * How far any point of `probe` lies on the wrong side of `boundary` by more
  * than `tolerance`: outside it when `mustBeInside`, inside it otherwise.
  * Zero when none does.
@@ -149,7 +239,7 @@ function penetration(
   tolerance: number
 ): number {
   let deepest = 0;
-  for (const point of probe.points) {
+  for (const point of probePoints(probe, boundary, tolerance)) {
     // A point outside the boundary's box (by more than the tolerance) is
     // outside the boundary, and at least that far from it.
     if (!inBox(boundary, point, tolerance)) {
@@ -208,12 +298,10 @@ function planarFaceLoopCrossing(
  *
  * The loops of a sound face are one outer loop with every other loop inside
  * it, apart from each other; loops may touch, which is why only a reach past
- * `tolerance` counts. Where two polygons cross, the region between them is
- * bounded by the crossing points and by vertices of the two loops, and the
- * crossing points alone cannot enclose anything, so some vertex lies on the
- * wrong side of the other loop. Each loop's vertices are measured against the
- * other loop, and the reported depth is the deepest such vertex — a lower
- * bound on how far the loops cross.
+ * `tolerance` counts. Each loop's vertices, and the midpoints between
+ * successive crossings along its segments (see `probePoints`), are measured
+ * against the other loop. The reported depth is the deepest of those points,
+ * a lower bound on how far the loops cross.
  */
 export function loopCrossingDepth(
   rings: readonly (readonly Point2[])[],

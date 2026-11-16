@@ -116,6 +116,33 @@ describe('loop crossing depth', () => {
     expect(depth).toBeGreaterThan(0.1);
   });
 
+  it('measures crossing slots whose corners all lie outside each other', () => {
+    // Every vertex of each slot is outside the other; only the edges cross.
+    const rectangle = (u0: number, v0: number, u1: number, v1: number) => [
+      point(u0, v0),
+      point(u1, v0),
+      point(u1, v1),
+      point(u0, v1)
+    ];
+    expect(
+      loopCrossingDepth(
+        [square(10), rectangle(-5, -1, 5, 1), rectangle(-1, -5, 1, 5)],
+        tolerance
+      )
+    ).toBeCloseTo(1, 6);
+    // A slot running out through the outline: its far corners lie 2 outside.
+    expect(
+      loopCrossingDepth([square(10), rectangle(8, -1, 12, 1)], tolerance)
+    ).toBeCloseTo(2, 6);
+    // Slots meeting edge to edge only touch.
+    expect(
+      loopCrossingDepth(
+        [square(10), rectangle(-5, -1, 0, 1), rectangle(0, -1, 5, 1)],
+        tolerance
+      )
+    ).toBe(0);
+  });
+
   it('measures a hole lying wholly outside the outline', () => {
     expect(
       loopCrossingDepth([square(10), circle(20, 0, 3)], tolerance)
@@ -247,11 +274,12 @@ describe('fillet whose spring line crosses a boss circle', () => {
     // runs 0.363 inside the hub circle and an open mesh. A kernel that trims
     // the face correctly returns no crossing, and the guard has nothing to do.
     const raw = kernel.filletDetailed(body, Uint32Array.from(sCurve), 0.5);
+    const rawSolid = raw.status === 'ok' ? raw.value : null;
     const rawCrossing =
-      raw.status === 'ok' ? crossingFaceLoops(kernel, [raw.value]) : null;
-    if (rawCrossing) {
+      rawSolid === null ? null : crossingFaceLoops(kernel, [rawSolid]);
+    if (rawSolid !== null && rawCrossing) {
       expect(rawCrossing.depth).toBeCloseTo(0.5 - CLEARANCE, 2);
-      expect(closedMesh(kernel, raw.value)).toBe(false);
+      expect(closedMesh(kernel, rawSolid)).toBe(false);
     }
 
     let reported = '';
