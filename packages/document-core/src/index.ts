@@ -66,6 +66,7 @@ export * from './assembly';
 export * from './assembly-bom';
 export * from './assembly-interference';
 export * from './gear-mesh';
+export * from './hole-callout';
 export * from './print-clearance';
 export * from './reference-images';
 export * from './body-consumption';

@@ -432,7 +432,12 @@ export function buildFeaturePattern(
       solid = unifyBooleanFaces(kernel, solid);
       // M01 (schema v66): the copies of a tapped hole are tapped as it is,
       // each bore checked to be one plain cylinder before it is threaded.
-      if (sourceData.featureKind === 'hole' && sourceData.tapped) {
+      // A cosmetic thread (schema v67) is described, not cut.
+      if (
+        sourceData.featureKind === 'hole' &&
+        sourceData.tapped &&
+        !sourceData.tapped.cosmetic
+      ) {
         if (!tapHole) {
           throw new Error(
             `${source.name} is tapped, and this pattern cannot tap its copies.`

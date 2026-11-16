@@ -1650,9 +1650,17 @@ describe('an untouched edit writes the feature back as stored', () => {
     )!;
     expect(armed.seed.options).toMatchObject({
       tap: 'tapped',
+      tapForm: 'modeled',
       tapFit: 'exact',
       holeFor: 'tap-drill'
     });
+    // A cosmetic thread reopens as one (M01, schema v67).
+    expect(
+      inPlaceEditSeed(
+        feature({ ...saved, tapped: { cosmetic: true } }, 'body_h' as BodyId),
+        EDIT_CTX
+      )!.seed.options.tapForm
+    ).toBe('cosmetic');
     expect(armed.seed.values.tapLength).toBe(8);
     expect(untouched(feature(saved, 'body_h' as BodyId))).toMatchObject({
       state: { value: { tapped: { length: '8', clearance: 0, hand: 'left' } } }

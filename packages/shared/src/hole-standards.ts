@@ -313,9 +313,84 @@ export function holeTappedProblem(data: {
   if (data.standard?.kind !== 'tap-drill') {
     return 'Only a hole sized as a standard tap drill can be tapped.';
   }
-  const { hand } = tapped as HoleTapped;
+  const { hand, cosmetic } = tapped as HoleTapped;
   if (hand !== undefined && hand !== 'right' && hand !== 'left') {
     return "A tapped hole's thread is right- or left-handed.";
   }
+  if (cosmetic !== undefined && cosmetic !== true) {
+    return 'A cosmetic thread is marked true or left out.';
+  }
   return null;
+}
+
+/**
+ * M01: what a drawing, a callout or an export reads about a hole: its bore,
+ * its standard and its thread, cut or cosmetic, in document units. Built
+ * from the stored hole by document-core's `holeCallout`.
+ */
+export interface HoleCallout {
+  /** How many bores the hole drills (its sketch points), at least 1. */
+  count: number;
+  /** The bore's diameter. */
+  diameter: number;
+  /** The bore's depth from the entry face; null drills through. */
+  depth: number | null;
+  style: 'simple' | 'counterbore' | 'countersink';
+  /** The standard size it is drilled to, if any. */
+  standard?: HoleStandard;
+  /** The thread tapped into it, if any. */
+  thread?: {
+    /** `M6×1`, `1/4-20 UNC`. */
+    designation: string;
+    majorDiameter: number;
+    pitch: number;
+    /** From the entry end; null runs the whole bore. */
+    length: number | null;
+    hand: 'right' | 'left';
+    /** Described, not cut: the bore is still its tap drill. */
+    cosmetic: boolean;
+  };
+}
+
+/** A standard size's thread as a drawing names it: `M6×1`, `1/4-20 UNC`. */
+export function holeThreadDesignation(
+  standard: Pick<HoleStandard, 'system' | 'size'>
+): string {
+  return standard.system === 'iso'
+    ? `${standard.size}×${ISO[standard.size as IsoHoleSize]?.[1] ?? '?'}`
+    : `${standard.size}-${ANSI[standard.size as AnsiHoleSize]?.[1] ?? '?'} UNC`;
+}
+
+/**
+ * The callout a drawing writes for a hole, numbers formatted by `format`
+ * (the drawing's precision): `M6×1 THRU`, `3× M6×1 × 8 DEEP, Ø5 × 12 DEEP`,
+ * `Ø6.6 THRU, M6 CLEARANCE`, `Ø5 × 12 DEEP, M6×1 TAP DRILL`; a left-hand
+ * thread adds `LH`, a cosmetic one is called out the same as a cut one.
+ */
+export function holeCalloutLabel(
+  callout: HoleCallout,
+  format: (value: number) => string
+): string {
+  const count = callout.count > 1 ? `${callout.count}× ` : '';
+  const extent = (depth: number | null) =>
+    depth === null ? ' THRU' : ` × ${format(depth)} DEEP`;
+  const bore = `Ø${format(callout.diameter)}${extent(callout.depth)}`;
+  const { thread, standard } = callout;
+  if (thread) {
+    const hand = thread.hand === 'left' ? ' LH' : '';
+    // A thread the whole bore needs no second extent unless the bore is
+    // blind: then the tap drill's depth is the bore's.
+    if (thread.length === null) {
+      return `${count}${thread.designation}${hand}${extent(callout.depth)}`;
+    }
+    return `${count}${thread.designation}${hand} × ${format(thread.length)} DEEP, ${bore}`;
+  }
+  if (standard) {
+    const name =
+      standard.kind === 'tap-drill'
+        ? `${holeThreadDesignation(standard)} TAP DRILL`
+        : `${standard.size} CLEARANCE`;
+    return `${count}${bore}, ${name}`;
+  }
+  return `${count}${bore}`;
 }

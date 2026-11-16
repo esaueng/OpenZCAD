@@ -1,7 +1,15 @@
 import {
+  getParameterScope,
+  holeCallout,
+  holeOfBoreFace
+} from '@openzcad/document-core';
+import {
   DRAWING_VIEW_FRAMES,
   drawingPaperPerModelUnit,
+  holeCalloutLabel,
   projectToView,
+  type FeatureId,
+  type HoleCallout,
   type DrawingAnnotationId,
   type DrawingViewId,
   type DrawingSheet,
@@ -19,6 +27,7 @@ import {
   type FaceTopology,
   type FaceTopologyReferenceV5,
   type GeometryBodyRepresentation,
+  type ProjectDocument,
   type UnitSystem,
   type Vector3
 } from '@openzcad/shared';
@@ -80,6 +89,59 @@ export function sectionBodyKey(viewId: DrawingViewId, bodyId: string): string {
 }
 
 /** The body `view` draws for `bodyId`: its cut body when it is a section. */
+/** M01: a hole's callout data by the hole's feature id, else null. */
+export type HoleCalloutLookup = (featureId: FeatureId) => HoleCallout | null;
+
+/**
+ * M01: the hole callouts of `document`, read once per hole and bound to it:
+ * a drawing kept with this lookup calls its holes out as they were when it
+ * was drawn, however the model changes before its Update.
+ */
+export function holeCalloutLookup(
+  document: ProjectDocument
+): HoleCalloutLookup {
+  const scope = getParameterScope(document).scope;
+  const read = new Map<FeatureId, HoleCallout | null>();
+  return (featureId) => {
+    if (!read.has(featureId)) {
+      read.set(featureId, holeCallout(document, featureId, scope));
+    }
+    return read.get(featureId)!;
+  };
+}
+
+/** Below this a rim's radius is its bore's. */
+const BORE_RIM_TOLERANCE = 1e-6;
+
+/**
+ * M01: the callout of the hole whose bore `edge` rims, when the hole says
+ * more than a plain diameter (a standard size or a thread) and the rim is
+ * the bore's own diameter. A face named by a hole's bore lineage (directly,
+ * on sketch points, or as an M02 pattern copy's) names the hole.
+ */
+function boreCallout(
+  body: SourceBody | undefined,
+  edge: { adjacentFaceHashes?: readonly number[] },
+  radius: number,
+  holes: HoleCalloutLookup
+): HoleCallout | null {
+  const faces = body?.topology?.faces ?? [];
+  for (const hash of edge.adjacentFaceHashes ?? []) {
+    const face = faces.find((candidate) => candidate.hash === hash);
+    const holeId = face?.reference ? holeOfBoreFace(face.reference) : null;
+    if (!holeId) continue;
+    const callout = holes(holeId);
+    if (
+      callout &&
+      (callout.standard || callout.thread) &&
+      Math.abs(callout.diameter / 2 - radius) <=
+        BORE_RIM_TOLERANCE * Math.max(1, radius)
+    )
+      return callout;
+  }
+  return null;
+}
+
 export function annotationBody(
   bodies: AnnotationBodies,
   view: Pick<DrawingView, 'viewId' | 'section'> | undefined,
@@ -756,7 +818,9 @@ export function resolveDrawingAnnotation(
   annotation: DrawingAnnotation,
   view: DrawingView | undefined,
   bodies: AnnotationBodies,
-  units: UnitSystem
+  units: UnitSystem,
+  /** M01: a hole's callout data, by the hole's feature id. */
+  holes?: HoleCalloutLookup
 ): AnnotationResolution {
   if (annotation.kind === 'note') {
     const label = annotation.text;
@@ -933,6 +997,18 @@ export function resolveDrawingAnnotation(
           }
         };
       }
+      // M01: a diameter on the rim of a hole's bore reads the hole's
+      // callout (its standard, its thread, cosmetic or cut), where the hole
+      // says more than its diameter.
+      const callout =
+        annotation.kind === 'diameter' && holes
+          ? boreCallout(
+              annotationBody(bodies, view, annotation.edge.bodyId),
+              found.edge,
+              circle.radius,
+              holes
+            )
+          : null;
       return {
         ok: true,
         resolved: {
@@ -945,7 +1021,11 @@ export function resolveDrawingAnnotation(
           value,
           label: dimensionLabel(
             annotation,
-            `${annotation.kind === 'radius' ? 'R' : 'Ø'}${formatDrawingNumber(value, decimals)}`
+            callout
+              ? holeCalloutLabel(callout, (n) =>
+                  formatDrawingNumber(n, decimals)
+                )
+              : `${annotation.kind === 'radius' ? 'R' : 'Ø'}${formatDrawingNumber(value, decimals)}`
           )
         }
       };
@@ -2078,7 +2158,8 @@ export function drawnLines(
 export function resolveSheetAnnotations(
   sheet: DrawingSheet,
   bodies: AnnotationBodies,
-  units: UnitSystem
+  units: UnitSystem,
+  holes?: HoleCalloutLookup
 ): Map<DrawingAnnotationId, AnnotationResolution> {
   const views = new Map(sheet.views.map((view) => [view.viewId, view]));
   return new Map(
@@ -2088,7 +2169,8 @@ export function resolveSheetAnnotations(
         annotation,
         annotation.viewId ? views.get(annotation.viewId) : undefined,
         bodies,
-        units
+        units,
+        holes
       )
     ])
   );

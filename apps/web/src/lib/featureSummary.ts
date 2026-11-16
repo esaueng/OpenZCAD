@@ -367,7 +367,10 @@ export function featureValueSummary(
       // M01 (schema v66): a tapped one by its thread.
       const size = data.standard
         ? data.tapped
-          ? holeStandardLabel(data.standard).replace(/ tap drill$/, ' tapped')
+          ? holeStandardLabel(data.standard).replace(
+              / tap drill$/,
+              data.tapped.cosmetic ? ' tapped (cosmetic)' : ' tapped'
+            )
           : holeStandardLabel(data.standard)
         : `⌀ ${diameter} ${unit}`;
       if (data.depthMode === 'through') {

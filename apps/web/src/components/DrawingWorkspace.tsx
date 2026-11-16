@@ -145,6 +145,8 @@ import {
   markHiddenLeaders,
   previewAnnotationLayer,
   resolveSheetAnnotations,
+  holeCalloutLookup,
+  type HoleCalloutLookup,
   sectionBodyKey,
   type AnnotationBox,
   type AnnotationResolution
@@ -404,6 +406,11 @@ interface KeptDrawing {
   fingerprint: string;
   bodies: DrawingWorkspaceProps['bodies'];
   projections: Map<string, ViewProjection>;
+  /**
+   * M01: the hole callouts of the document it was drawn from, so a kept
+   * sheet calls its holes out as drawn until it is Updated.
+   */
+  holes: HoleCalloutLookup;
 }
 
 function retainedFor(projectId: string) {
@@ -2117,6 +2124,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     props.requestSection
   );
   const keptDrawings = keptDrawingsFor(document.projectId);
+  // M01: a hole's callout data, read from the document by its feature id,
+  // for a diameter on its bore to call it out (standard, thread). Bound to
+  // this document, so a drawing kept with it keeps reading it.
+  const liveHoleCallouts = useMemo(
+    () => holeCalloutLookup(document),
+    [document]
+  );
   // A sheet whose model changed keeps the drawing it last made of the model
   // it is fenced to, so it stays usable until someone chooses to Update it.
   // Not while the model rebuilds: that may yet turn out to match the sheet.
@@ -2141,6 +2155,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   }, [keptDrawing, sheet, liveProjections]);
   /** The bodies the drawing on screen measures: the kept model's, if kept. */
   const modelBodies = keptDrawing?.bodies ?? bodies;
+  /** Its holes' callouts, likewise: the kept document's, if kept. */
+  const holeCallouts = keptDrawing?.holes ?? liveHoleCallouts;
   const liveBodies = useMemo(
     () =>
       document.bodyOrder.filter((id) => {
@@ -2232,11 +2248,16 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     keptDrawings.set(
       shownSheet.sheetId,
       [
-        { fingerprint: status.fingerprint, bodies, projections },
+        {
+          fingerprint: status.fingerprint,
+          bodies,
+          projections,
+          holes: liveHoleCallouts
+        },
         ...previous.filter((entry) => entry.fingerprint !== status.fingerprint)
       ].slice(0, KEPT_DRAWINGS_PER_SHEET)
     );
-  }, [shownSheet, status, drawnViews, bodies, keptDrawings]);
+  }, [shownSheet, status, drawnViews, bodies, keptDrawings, liveHoleCallouts]);
   // While the model rebuilds the sheet shows its last drawing faded instead
   // of empty outlines; it is only ever seen, never picked from, annotated or
   // exported, since the rebuild may not leave the model it was drawn from.
@@ -2258,13 +2279,18 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       shownSheet
         ? markHiddenLeaders(
             shownSheet,
-            resolveSheetAnnotations(shownSheet, drawBodies, document.units),
+            resolveSheetAnnotations(
+              shownSheet,
+              drawBodies,
+              document.units,
+              holeCallouts
+            ),
             drawnViews,
             document.units,
             drawBodies
           )
         : new Map<DrawingAnnotationId, AnnotationResolution>(),
-    [shownSheet, drawBodies, document.units, drawnViews]
+    [shownSheet, drawBodies, document.units, drawnViews, holeCallouts]
   );
   /** Drawn and usable: matches the model, or keeps its earlier drawing. */
   const sheetReady = status?.kind === 'ready' || keptDrawing !== null;
@@ -2582,7 +2608,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return null;
     }
     return [
-      ...remove.map((id) => commandFactories.deleteDrawingSheet({ sheetId: id })),
+      ...remove.map((id) =>
+        commandFactories.deleteDrawingSheet({ sheetId: id })
+      ),
       ...add.map((entry) => commandFactories.addDrawingSheet({ sheet: entry }))
     ];
   };
@@ -3789,7 +3817,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         resolveSheetAnnotations(
           { ...shownSheet, annotations: shownAutoPlan.annotations },
           drawBodies,
-          document.units
+          document.units,
+          holeCallouts
         ),
         document.units
       )
