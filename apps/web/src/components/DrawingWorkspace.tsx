@@ -29,6 +29,9 @@ import {
   Sun,
   Trash2,
   TriangleRight,
+  LocateFixed,
+  SeparatorVertical,
+  CircleDashed,
   X,
   ZoomIn,
   ZoomOut,
@@ -50,6 +53,9 @@ import {
   MAX_DRAWING_NOTE_LENGTH,
   type DrawingAnnotation,
   type DrawingTolerance,
+  type DrawingDimension,
+  isDrawingDimension,
+  isDrawingGeometryAnnotation,
   type DrawingLineClass,
   type DrawingSheetFormat,
   DRAWING_LINE_CLASSES,
@@ -155,6 +161,7 @@ import {
   annotationAnchor,
   composeSheetAnnotations,
   defaultDimensionDecimals,
+  sheetMarkLookup,
   sheetNumberFormat,
   type DrawingNumberFormat,
   markHiddenLeaders,
@@ -180,6 +187,7 @@ import {
   applyAnnotationPick,
   draftAnnotation,
   draftRefusal,
+  isGeometryTool,
   drawingViewSignature,
   drawnLines,
   drawnOutlines,
@@ -939,7 +947,11 @@ const ANNOTATION_TOOLS: readonly AnnotationToolKind[] = [
   'diameter',
   'angle',
   'chamfer',
-  'note'
+  'note',
+  'center-mark',
+  'intersection-mark',
+  'centerline',
+  'circle-centerline'
 ];
 
 const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
@@ -951,7 +963,11 @@ const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
     diameter: Diameter,
     angle: Angle,
     chamfer: TriangleRight,
-    note: StickyNote
+    note: StickyNote,
+    'center-mark': Crosshair,
+    'intersection-mark': LocateFixed,
+    centerline: SeparatorVertical,
+    'circle-centerline': CircleDashed
   };
 
 /** One key per tool, live while Draw is open and focus is not in a field. */
@@ -963,7 +979,11 @@ const ANNOTATION_TOOL_KEYS: Readonly<Record<AnnotationToolKind, string>> = {
   diameter: 'D',
   angle: 'G',
   chamfer: 'C',
-  note: 'N'
+  note: 'N',
+  'center-mark': 'M',
+  'intersection-mark': 'X',
+  centerline: 'L',
+  'circle-centerline': 'B'
 };
 
 /** D03: the section view tool's key, beside the annotation tools'. */
@@ -1013,14 +1033,23 @@ const ANNOTATION_KIND_LABELS: Readonly<
   diameter: 'Diameter',
   angle: 'Angle',
   chamfer: 'Chamfer',
-  note: 'Note'
+  note: 'Note',
+  'center-mark': 'Centre mark',
+  'intersection-mark': 'Intersection mark',
+  centerline: 'Centreline'
 };
 
 function annotationTitle(annotation: DrawingAnnotation): string {
+  if (annotation.kind === 'centerline')
+    return annotation.mode === 'circle'
+      ? 'Circular centreline'
+      : annotation.mode === 'lines'
+        ? 'Centreline between lines'
+        : 'Centreline';
   return annotation.kind === 'linear'
     ? `${ANNOTATION_TOOL_LABELS[annotation.direction]} dimension`
-    : annotation.kind === 'note'
-      ? 'Note'
+    : annotation.kind === 'note' || isDrawingGeometryAnnotation(annotation)
+      ? ANNOTATION_KIND_LABELS[annotation.kind]
       : `${ANNOTATION_KIND_LABELS[annotation.kind]} dimension`;
 }
 
@@ -1033,9 +1062,11 @@ function annotationName(
   if (annotation.kind === 'note') return `Note: ${annotation.text}`;
   const title = annotationTitle(annotation);
   if (!ready) return title;
-  return resolution?.ok
+  if (!resolution?.ok) return `${title} (broken)`;
+  // A mark states no value: its name is its kind.
+  return resolution.resolved.label
     ? `${title} ${resolution.resolved.label}`
-    : `${title} (broken)`;
+    : title;
 }
 
 /**
@@ -1518,7 +1549,7 @@ function AnnotationProperties(props: {
         <p className="drawing-annotation-status" role="alert">
           Broken: {resolution.message} Re-pick what it measures, or delete it.
         </p>
-      ) : resolution?.ok && selected.kind !== 'note' ? (
+      ) : resolution?.ok && isDrawingDimension(selected) ? (
         <p className="drawing-annotation-value">
           {resolution.resolved.label}
           {selected.kind === 'angle' || selected.kind === 'chamfer'
@@ -1526,7 +1557,12 @@ function AnnotationProperties(props: {
             : ` ${props.numberFormat.units}`}
         </p>
       ) : null}
-      {selected.kind === 'note' ? (
+      {isDrawingGeometryAnnotation(selected) ? (
+        <p className="drawing-hint">
+          Marks geometry; dimensions may measure to a centre or intersection
+          mark.
+        </p>
+      ) : selected.kind === 'note' ? (
         <TextField
           label="Text"
           value={selected.text}
@@ -1572,7 +1608,7 @@ function AnnotationProperties(props: {
           </select>
         </label>
       )}
-      {selected.kind !== 'note' && (
+      {isDrawingDimension(selected) && (
         <DimensionFormat
           selected={selected}
           editable={editable}
@@ -1625,7 +1661,7 @@ function AnnotationProperties(props: {
  * span across a cylinder, and reference dimensions in brackets.
  */
 function DimensionFormat(props: {
-  selected: Exclude<DrawingAnnotation, { kind: 'note' }>;
+  selected: DrawingDimension;
   editable: boolean;
   onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
 }) {
@@ -1743,7 +1779,7 @@ function DimensionFormat(props: {
 
 /** v68: `selected` with its prefix or suffix set, or cleared when blank. */
 function affixed(
-  selected: Exclude<DrawingAnnotation, { kind: 'note' }>,
+  selected: DrawingDimension,
   key: 'prefix' | 'suffix',
   text: string
 ): DrawingAnnotation {
@@ -1765,7 +1801,7 @@ const TOLERANCE_LABELS: Readonly<Record<DrawingToleranceKind, string>> = {
  * value plus each and follow the model through every Update.
  */
 function ToleranceFields(props: {
-  selected: Exclude<DrawingAnnotation, { kind: 'note' }>;
+  selected: DrawingDimension;
   editable: boolean;
   onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
 }) {
@@ -1951,6 +1987,7 @@ function DrawingToolRail(props: {
   const groups: AnnotationToolKind[][] = [
     ['horizontal', 'vertical', 'aligned'],
     ['radius', 'diameter', 'angle', 'chamfer'],
+    ['center-mark', 'intersection-mark', 'centerline', 'circle-centerline'],
     ['note']
   ];
   return (
@@ -1977,8 +2014,8 @@ function DrawingToolRail(props: {
             const active = tool?.kind === kind && !tool.repairId;
             const usable = props.canUseTool(kind);
             const name =
-              kind === 'note'
-                ? 'Note'
+              kind === 'note' || isGeometryTool(kind)
+                ? ANNOTATION_TOOL_LABELS[kind]
                 : `${ANNOTATION_TOOL_LABELS[kind]} dimension`;
             return (
               <button
@@ -3656,6 +3693,31 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const { faces, outlines } = currentPickable();
     return hitFace(faces, point, pickTolerance(pxPerMm), outlines);
   };
+  /** v73: the centre or intersection mark whose box holds `point`, if any. */
+  const markAt = (point: [number, number]) => {
+    if (!composed || composed.ghost || !shownSheet) return null;
+    for (const annotation of shownSheet.annotations ?? []) {
+      if (
+        annotation.kind !== 'center-mark' &&
+        annotation.kind !== 'intersection-mark'
+      )
+        continue;
+      if (!resolutions.get(annotation.annotationId)?.ok) continue;
+      const box = composed.boxes.get(annotation.annotationId);
+      if (
+        box &&
+        point[0] >= box.x &&
+        point[0] <= box.x + box.width &&
+        point[1] >= box.y &&
+        point[1] <= box.y + box.height
+      )
+        return {
+          annotationId: annotation.annotationId,
+          viewId: annotation.viewId
+        };
+    }
+    return null;
+  };
 
   /** A pointer position in paper millimetres (y up), with the zoom. */
   const paperPoint = (event: {
@@ -3716,7 +3778,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       placementMm
     );
     if (!annotation) return;
-    const refusal = draftRefusal(annotation, view, drawBodies, document.units);
+    const refusal = draftRefusal(
+      annotation,
+      view,
+      drawBodies,
+      document.units,
+      sheetMarkLookup(sheet)
+    );
     if (refusal) {
       props.onStatus(refusal);
       setTool(startAnnotationTool(finished.kind));
@@ -3736,7 +3804,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       props.onStatus(
         finished.kind === 'note'
           ? 'Note added. Edit its text in Properties.'
-          : `${ANNOTATION_TOOL_LABELS[finished.kind]} dimension added.`,
+          : isGeometryTool(finished.kind)
+            ? `${ANNOTATION_TOOL_LABELS[finished.kind]} added.`
+            : `${ANNOTATION_TOOL_LABELS[finished.kind]} dimension added.`,
         { immediate: true }
       );
       // A note is placed and then typed; dimensions keep their tool for the
@@ -3758,7 +3828,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return;
     }
     const view = sheet.views.find((entry) => entry.viewId === repaired.viewId);
-    const refusal = draftRefusal(repaired, view, drawBodies, document.units);
+    const refusal = draftRefusal(
+      repaired,
+      view,
+      drawBodies,
+      document.units,
+      sheetMarkLookup(sheet)
+    );
     if (refusal) {
       props.onStatus(refusal);
       return;
@@ -3795,7 +3871,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       at.point,
       viewAt(at.point),
       drawBodies,
-      faceAt(at.point, at.pxPerMm)
+      faceAt(at.point, at.pxPerMm),
+      markAt(at.point)
     );
     if (!result.ok) {
       props.onStatus(result.message);
@@ -3805,7 +3882,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       commitRepair(result.tool);
       return;
     }
-    if (result.tool.placed) {
+    // A note on empty paper, and a mark or centreline, has nowhere further
+    // to be placed: it is made as soon as its picks are in.
+    if (
+      result.tool.placed ||
+      (isGeometryTool(result.tool.kind) && pickedEnough(result.tool))
+    ) {
       commitAnnotation(result.tool, at.point);
       return;
     }
@@ -4818,7 +4900,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   <text x={x} y={paper.height - y}>
                     {annotation.kind === 'note'
                       ? 'Broken leader'
-                      : 'Broken dimension'}
+                      : isDrawingGeometryAnnotation(annotation)
+                        ? 'Broken mark'
+                        : 'Broken dimension'}
                   </text>
                   <rect
                     className="drawing-annotation-hit"

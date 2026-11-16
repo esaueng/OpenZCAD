@@ -2,6 +2,8 @@ import {
   createDrawingAnnotationId,
   createDrawingSheetId,
   createDrawingViewId,
+  type DrawingAnnotation,
+  type DrawingAnnotationId,
   type DrawingSheet,
   type DrawingView,
   type DrawingViewId
@@ -74,12 +76,35 @@ export function duplicateDrawingSheet(
         }
       : {})
   }));
-  if (copy.annotations)
+  if (copy.annotations) {
+    // New ids, and every reference one annotation makes to another (a mark
+    // a dimension or centreline measures to) follows its new id.
+    const annotationIds = new Map(
+      copy.annotations.map((annotation) => [
+        annotation.annotationId,
+        newAnnotationId()
+      ])
+    );
+    const remap = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(remap);
+      if (typeof value !== 'object' || value === null) return value;
+      const entry = value as Record<string, unknown>;
+      const out: Record<string, unknown> = {};
+      for (const [key, inner] of Object.entries(entry))
+        out[key] =
+          entry.anchor === 'mark' &&
+          key === 'annotationId' &&
+          typeof inner === 'string'
+            ? (annotationIds.get(inner as DrawingAnnotationId) ?? inner)
+            : remap(inner);
+      return out;
+    };
     copy.annotations = copy.annotations.map((annotation) => ({
-      ...annotation,
-      annotationId: newAnnotationId(),
+      ...(remap(annotation) as DrawingAnnotation),
+      annotationId: annotationIds.get(annotation.annotationId)!,
       ...(annotation.viewId ? { viewId: mapped(annotation.viewId) } : {})
     }));
+  }
   return copy;
 }
 

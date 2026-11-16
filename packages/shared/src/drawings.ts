@@ -2,6 +2,7 @@ import { millimetresPerUnit } from './index';
 import type { BodyId, Brand, UnitSystem, Vector3 } from './index';
 import {
   drawingAnnotationError,
+  drawingAnnotationMarks,
   MAX_DRAWING_ANNOTATIONS,
   type DrawingAnnotation
 } from './drawing-annotations';
@@ -813,6 +814,23 @@ export function drawingSheetError(value: unknown): string | null {
       if (ids.has(id)) return `${where} names annotation ${id} twice.`;
       ids.add(id);
     }
+    // v73: a mark measured to is a centre or intersection mark of the same
+    // view. A missing one is not refused here: deleting a mark leaves what
+    // measured to it broken until it is re-picked, like a lost edge.
+    const annotations = value.annotations as DrawingAnnotation[];
+    const byId = new Map(
+      annotations.map((entry) => [entry.annotationId, entry])
+    );
+    for (const annotation of annotations)
+      for (const markId of drawingAnnotationMarks(annotation)) {
+        const mark = byId.get(markId);
+        if (
+          mark &&
+          ((mark.kind !== 'center-mark' && mark.kind !== 'intersection-mark') ||
+            mark.viewId !== annotation.viewId)
+        )
+          return `${where} annotation ${annotation.annotationId} measures to ${markId}, which is not a mark on its view.`;
+      }
   }
   return null;
 }

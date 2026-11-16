@@ -1,4 +1,5 @@
 import {
+  isDrawingDimension,
   DRAWING_VIEW_FRAMES,
   DRAWING_VIEW_LABELS,
   MAX_DRAWING_ANNOTATIONS,
@@ -281,7 +282,7 @@ export function planAutoDimensions(
   const holdKey = (viewId: DrawingViewId, bodyId: string) =>
     `${viewId}|${bodyId}`;
   for (const annotation of sheet.annotations ?? []) {
-    if (annotation.kind === 'note' || !annotation.viewId) continue;
+    if (!isDrawingDimension(annotation)) continue;
     const bodyId = drawingAnnotationBodyId(annotation);
     if (!bodyId) continue;
     const key = holdKey(annotation.viewId, bodyId);
