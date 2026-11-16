@@ -10,13 +10,16 @@ import type {
   E2eeSetupRequest
 } from '@openzcad/shared';
 import { desktopFetch } from '../desktopBridge';
+import { retryAfterMs } from '../rateLimit';
 
 /** A refusal from the key routes, with the Worker's stable `code`. */
 export class E2eeApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    readonly code?: string
+    readonly code?: string,
+    /** The server's `Retry-After` on a 429, in milliseconds. */
+    readonly retryAfterMs?: number
   ) {
     super(message);
     this.name = 'E2eeApiError';
@@ -88,7 +91,8 @@ async function call<T>(
       typeof details.error === 'string'
         ? details.error
         : `${response.status} ${response.statusText}`,
-      typeof details.code === 'string' ? details.code : undefined
+      typeof details.code === 'string' ? details.code : undefined,
+      response.status === 429 ? retryAfterMs(response.headers) : undefined
     );
   }
   return payload as T;

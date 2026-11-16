@@ -24,6 +24,7 @@ import type {
   E2eeProjectEnvelopeRecord
 } from '@openzcad/shared';
 import { ApiError } from '../api';
+import { isRateLimitError } from '../rateLimit';
 import type { ArchiveArtifactInput } from '../archiveArtifact';
 import {
   createBlobReferenceRegistry,
@@ -114,6 +115,7 @@ import {
 import { invitationStore } from './invitationStore';
 import {
   encryptionStateChanged,
+  observeEncryptionState,
   subscribeEncryptionState
 } from './encryptionStateEvents';
 import { unlockedAccount } from './unlockedKeys';
@@ -353,6 +355,9 @@ async function openStore(
     }
   };
   requireCurrent();
+  // These clients hold this state: a settings reload that finds the same
+  // has nothing to retire them for.
+  observeEncryptionState(userId, state);
   if (state.kind !== 'ready' || !state.account.unlocked) throw locked();
   const account = state.account;
   let accountRecheck: Promise<void> | null = null;
@@ -364,6 +369,8 @@ async function openStore(
       // An unrecognized leaf alone never authorizes a new device.
       const fresh = await loadEncryption(e2ee);
       requireCurrent();
+      // Either these clients still hold it or they are retired below.
+      observeEncryptionState(userId, fresh);
       if (
         fresh.kind !== 'ready' ||
         fresh.account.unlocked !== account.unlocked ||
@@ -914,7 +921,9 @@ export interface EncryptedShelfEntry {
 
 /**
  * Names and thumbnails by project id, from verified project-info
- * envelopes; one that fails to verify is left out. Each thumbnail's
+ * envelopes; one that fails to verify is left out. A rate limit (429)
+ * stops the listing and rejects with it instead: every remaining project
+ * would only spend more of the account's read budget failing the same way. Each thumbnail's
  * reference is registered with this page, so the shelf downloads and
  * decrypts it like any other blob.
  */
@@ -955,7 +964,9 @@ export async function encryptedProjectShelf(
       shelf.set(record.projectId, entry);
       progress?.onEntry(record.projectId, entry);
     },
-    isCurrent
+    isCurrent,
+    // The account's read budget is spent: the rest would only fail too.
+    isRateLimitError
   );
   return isCurrent() ? shelf : new Map();
 }

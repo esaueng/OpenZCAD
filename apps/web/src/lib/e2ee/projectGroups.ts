@@ -144,6 +144,7 @@ import type {
   E2eeWelcomeResponse
 } from '@openzcad/shared';
 import { desktopFetch } from '../desktopBridge';
+import { retryAfterMs } from '../rateLimit';
 import {
   openAccountKeyChain,
   type AccountView,
@@ -186,9 +187,10 @@ export class ProjectGroupApiError extends E2eeApiError {
     status: number,
     message: string,
     code: string | undefined,
-    readonly body: Record<string, unknown>
+    readonly body: Record<string, unknown>,
+    retryAfterMs?: number
   ) {
-    super(status, message, code);
+    super(status, message, code, retryAfterMs);
     this.name = 'ProjectGroupApiError';
   }
 }
@@ -293,7 +295,8 @@ export function createProjectGroupsApi(
           ? details.error
           : `${response.status} ${response.statusText}`,
         typeof details.code === 'string' ? details.code : undefined,
-        details
+        details,
+        response.status === 429 ? retryAfterMs(response.headers) : undefined
       );
     }
     return payload as T;

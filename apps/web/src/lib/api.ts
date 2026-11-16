@@ -76,6 +76,7 @@ import {
 } from '@openzcad/shared';
 import { splitProjectStorageUpload } from '@openzcad/persistence';
 import { desktopFetch, isDesktopApp } from './desktopBridge';
+import { rateLimitOf, retryAfterMs, type RateLimit } from './rateLimit';
 import type * as EncryptedProjectsModule from './e2ee/encryptedProjects';
 import { localStoragePreferencePins } from './e2ee/preferencePins';
 import {
@@ -107,6 +108,11 @@ export interface ProjectListingProgress {
 /** Client-only presentation state; never part of the server/storage contract. */
 interface ShelfListingResponse extends ListProjectsResponse {
   pendingEncryptedProjectIds?: ReadonlySet<string>;
+  /**
+   * Verification stopped at an account rate limit (429), leaving the rest
+   * of `pendingEncryptedProjectIds` unasked rather than refused.
+   */
+  rateLimited?: RateLimit;
 }
 
 /**
@@ -130,7 +136,9 @@ export class ApiError extends Error {
      * account actually holds, and a size refusal reports the ceiling; both let
      * the client explain itself without a second round trip.
      */
-    readonly details?: Record<string, unknown>
+    readonly details?: Record<string, unknown>,
+    /** The server's `Retry-After` on a 429, in milliseconds. */
+    readonly retryAfterMs?: number
   ) {
     super(message);
     this.name = 'ApiError';
@@ -349,7 +357,8 @@ async function requestJson<T>(
       response.status,
       message || `${response.status} ${response.statusText}`,
       code,
-      details
+      details,
+      response.status === 429 ? retryAfterMs(response.headers) : undefined
     );
   }
 
@@ -1807,8 +1816,11 @@ export const api = {
               };
         })
       };
-    } catch {
-      return unverified();
+    } catch (error) {
+      // A rate limit stopped verification part way: say so, so a
+      // background refresh keeps the shelf it has and waits.
+      const rateLimited = rateLimitOf(error);
+      return rateLimited ? { ...unverified(), rateLimited } : unverified();
     }
   },
   /**
