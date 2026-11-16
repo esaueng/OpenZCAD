@@ -1,12 +1,10 @@
-import {
-  Component,
-  lazy,
-  Suspense,
-  type ErrorInfo,
-  type ReactNode
-} from 'react';
+import { Component, Suspense, type ErrorInfo, type ReactNode } from 'react';
 import { recordCaughtError } from '../lib/activityLog';
-import { isChunkLoadError, STALE_CHUNK_MESSAGE } from '../lib/staleChunk';
+import {
+  isChunkLoadError,
+  lazyWithStaleChunkNotice,
+  STALE_CHUNK_MESSAGE
+} from '../lib/staleChunk';
 import { useOnline } from '../hooks/useOnline';
 import { BrandMark } from './BrandMark';
 
@@ -50,8 +48,9 @@ function PlainDetails({ message }: { message: string }) {
 
 // Only a crash needs it, so it loads with the card (the startup prefetch has
 // usually fetched it already) rather than weigh on the entry chunk. A chunk
-// that cannot load leaves the plain message, never a second crash.
-const CrashDetails = lazy(() =>
+// that cannot load leaves the plain message, never a second crash, and
+// raises no stale-version notice of its own.
+const CrashDetails = lazyWithStaleChunkNotice(() =>
   import('./CrashDetails').then(
     (module) => ({ default: module.CrashDetails }),
     () => ({ default: PlainDetails })
