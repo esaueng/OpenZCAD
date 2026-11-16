@@ -2964,7 +2964,9 @@ export const commandFactories = {
           ? 'Linear'
           : payload.patternKind === 'grid'
             ? 'Grid'
-            : 'Circular'
+            : payload.patternKind === 'points'
+              ? 'Point'
+              : 'Circular'
       } pattern`,
       withIds,
       (document) => patternBody(document, withIds).document,

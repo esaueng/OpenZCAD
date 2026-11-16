@@ -27,6 +27,7 @@ const FILTER_BY_TOOL: Partial<Record<ToolId, SelectionFilter>> = {
   'linear-pattern': 'body',
   'circular-pattern': 'body',
   'grid-pattern': 'body',
+  'point-pattern': 'body',
   sketch: 'face',
   extrude: 'sketch',
   revolve: 'sketch',

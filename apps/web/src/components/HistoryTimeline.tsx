@@ -74,6 +74,7 @@ import {
   draftGlyph,
   extrudeGlyph,
   gridPatternGlyph,
+  pointPatternGlyph,
   helicalSweepGlyph,
   linearPatternGlyph,
   loftGlyph,
@@ -134,7 +135,8 @@ const BOOLEAN_ICONS: Record<string, ReactNode> = {
 const PATTERN_ICONS: Record<string, ReactNode> = {
   linear: linearPatternGlyph,
   circular: circularPatternGlyph,
-  grid: gridPatternGlyph
+  grid: gridPatternGlyph,
+  points: pointPatternGlyph
 };
 const OFFSET_FACE_ICON = <ArrowUpFromDot size={14} aria-hidden="true" />;
 const RESIZE_DIAMETER_ICON = <Diameter size={14} aria-hidden="true" />;

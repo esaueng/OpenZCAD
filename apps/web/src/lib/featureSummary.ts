@@ -432,7 +432,11 @@ export function featureValueSummary(
     case 'direct-edit':
       return directEditSummary(data.operation, num, unit);
     case 'pattern': {
-      const count = num(data.count);
+      // M02 (schema v63): one instance per point, the original's included.
+      const count =
+        data.patternKind === 'points'
+          ? (data.points?.pointIds.length ?? null)
+          : num(data.count);
       if (count === null) {
         return null;
       }

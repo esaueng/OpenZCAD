@@ -20,6 +20,7 @@ import {
   type FeatureId,
   type ParamValue,
   type ParametricVector3,
+  type PatternPoints,
   type PrimitiveKind,
   type ReferenceImage,
   type ReferenceImagePlane,
@@ -101,6 +102,7 @@ export type InPlaceToolId =
   | 'linear-pattern'
   | 'circular-pattern'
   | 'grid-pattern'
+  | 'point-pattern'
   | 'fillet'
   | 'chamfer'
   | PrimitiveKind
@@ -133,6 +135,7 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'linear-pattern',
   'circular-pattern',
   'grid-pattern',
+  'point-pattern',
   'fillet',
   'chamfer',
   'box',
@@ -154,7 +157,8 @@ export function isInPlacePatternTool(tool: InPlaceToolId | null): boolean {
   return (
     tool === 'linear-pattern' ||
     tool === 'circular-pattern' ||
-    tool === 'grid-pattern'
+    tool === 'grid-pattern' ||
+    tool === 'point-pattern'
   );
 }
 
@@ -430,6 +434,17 @@ export interface InPlaceContext {
   imagePlaneBasis?(plane: ReferenceImagePlane): PlaneBasis | null;
   /** The document's length unit, which a diametral pitch converts from. */
   units?: UnitSystem;
+  /**
+   * M02: a sketch's point entities and where each stands in the world, for
+   * a pattern on sketch points; empty when the sketch has none.
+   */
+  sketchPoints?(sketchId: SketchId): readonly SketchPointSpot[];
+}
+
+/** M02: a point entity of a sketch, where it stands. */
+export interface SketchPointSpot {
+  id: string;
+  at: Vector3;
 }
 
 /** A titled group of an Options panel's rows; `collapsed` folds it shut. */
@@ -548,7 +563,7 @@ export type InPlaceRequest =
   | {
       tool: 'pattern';
       targetBodyId: BodyId;
-      patternKind: 'linear' | 'circular' | 'grid';
+      patternKind: 'linear' | 'circular' | 'grid' | 'points';
       count: ParamValue;
       axis: 'x' | 'y' | 'z';
       spacing?: ParamValue;
@@ -563,6 +578,8 @@ export type InPlaceRequest =
       sourceFeatureIds?: FeatureId[];
       /** M02: the copies left out, by instance label. */
       skippedInstances?: string[];
+      /** M02 (schema v63): the sketch points a points pattern stands on. */
+      points?: PatternPoints;
     }
   | {
       /** An M14 gear, as the feature stores it. */
@@ -5220,6 +5237,112 @@ const circularPattern: InPlaceToolSpec = {
 };
 
 /**
+ * M02 (schema v63): a pattern on sketch points. The original stands on one
+ * point of the sketch, the one nearest it (an edit keeps the one stored),
+ * and each picked point takes a copy moved there from it. Picks are the
+ * body, or features under Repeat Features, then the points; each copy wears
+ * a chip that skips it.
+ */
+function pointPatternPlan(
+  slots: InPlaceSlots,
+  options: Readonly<Record<string, string>>,
+  ctx: InPlaceContext | undefined
+): {
+  seed: BodyPick;
+  points: PatternPoints;
+  copies: PatternCopySpot[];
+} | null {
+  const seed = patternSeed(slots, options);
+  const sketchId = slots.path[0]?.sketchId;
+  if (!seed || !sketchId) return null;
+  const all = ctx?.sketchPoints?.(sketchId) ?? [];
+  if (all.length === 0) return null;
+  const saved =
+    ctx?.saved?.featureKind === 'pattern' &&
+    ctx.saved.points?.sketchId === sketchId
+      ? ctx.saved.points.referencePointId
+      : undefined;
+  const middle = centre(seed);
+  const distance = (spot: SketchPointSpot) =>
+    Math.hypot(
+      spot.at.x - middle.x,
+      spot.at.y - middle.y,
+      spot.at.z - middle.z
+    );
+  const reference =
+    all.find((spot) => spot.id === saved) ??
+    all.reduce((best, spot) => (distance(spot) < distance(best) ? spot : best));
+  const picked = slots.path.flatMap((pick) => {
+    if (pick.entityId === reference.id) return [];
+    const spot = all.find((candidate) => candidate.id === pick.entityId);
+    return spot ? [spot] : [];
+  });
+  if (picked.length === 0) return null;
+  return {
+    seed,
+    points: {
+      sketchId,
+      pointIds: [reference.id, ...picked.map((spot) => spot.id)],
+      referencePointId: reference.id
+    },
+    copies: picked.map((spot) => ({
+      label: spot.id,
+      point: offset(
+        middle,
+        {
+          x: spot.at.x - reference.at.x,
+          y: spot.at.y - reference.at.y,
+          z: spot.at.z - reference.at.z
+        },
+        1
+      )
+    }))
+  };
+}
+
+const pointPattern: InPlaceToolSpec = {
+  id: 'point-pattern',
+  title: 'Point pattern',
+  profileMode: 'none',
+  bodyMode: 'one',
+  featureFaces: REPEAT_FEATURES,
+  wantsAxis: false,
+  // Its path is the sketch points it repeats at, clicked one by one.
+  wantsPath: true,
+  values: [],
+  options: [REPEAT_OPTION],
+  hint(slots, options, ctx) {
+    const pick = patternHint(slots, options ?? {});
+    if (pick) return pick;
+    if (slots.path.length === 0) return 'Click the sketch points to repeat at';
+    return pointPatternPlan(slots, options ?? {}, ctx)
+      ? 'Click more points · tap a copy to skip it'
+      : 'Click a point besides the one the original stands on';
+  },
+  ready: (slots, options, ctx) =>
+    patternSource(slots, options) !== null &&
+    pointPatternPlan(slots, options ?? {}, ctx) !== null,
+  request(slots, _values, options, ctx) {
+    const source = patternSource(slots, options);
+    const plan = pointPatternPlan(slots, options, ctx);
+    if (!source || !plan) return null;
+    return {
+      tool: 'pattern',
+      ...source,
+      patternKind: 'points',
+      count: plan.points.pointIds.length,
+      axis: 'x',
+      points: plan.points,
+      ...skipRequest(options, plan.copies)
+    };
+  },
+  handles(slots, _values, ctx, options) {
+    const plan = pointPatternPlan(slots, options, ctx);
+    return plan ? instanceHandles(plan.seed, plan.copies, options) : [];
+  }
+};
+
+/**
  * The total a fixed step stores. A pattern spreads `count` copies over its
  * total (a whole turn's step is total ÷ count, any other's total ÷ (count −
  * 1)), so a step that closes the ring stores the whole turn and any other
@@ -5861,6 +5984,7 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   'linear-pattern': linearPattern,
   'circular-pattern': circularPattern,
   'grid-pattern': gridPattern,
+  'point-pattern': pointPattern,
   fillet,
   chamfer,
   box: primitiveSpec('box'),

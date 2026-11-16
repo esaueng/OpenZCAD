@@ -54,6 +54,7 @@ import {
   FULL_REVOLVE_ANGLE_DEG,
   MAX_MESH_SOLID_CONVERSION_TRIANGLES,
   MAX_PATTERN_INSTANCES,
+  ownEntry,
   millimetresPerUnit,
   isDatumPlaneRef,
   type BodyId,
@@ -3304,6 +3305,78 @@ function datumAxisCircularPatternArm(
   };
 }
 
+/**
+ * M02 (schema v63): the arm on sketch points. Instance 0 is the reference
+ * point, where the original stands; each other point takes a copy moved from
+ * there to it, labelled by the point's id. The kernel has no pattern entry
+ * point for an arbitrary set of translations, so every copy is the rigid
+ * copy-and-transform build, fused where copies overlap as any pattern's are.
+ */
+function pointsPatternArm(
+  ctx: FeatureBuildContext,
+  data: FeatureDataOf<'pattern'>
+): PatternArm {
+  const points = data.points;
+  if (!points) {
+    throw new Error('A pattern on sketch points needs its sketch and points.');
+  }
+  const sketch = findSketch(ctx.document, points.sketchId);
+  const basis = ctx.result.sketchBases.get(points.sketchId);
+  if (!sketch || !basis) {
+    throw new Error(
+      `The sketch this pattern stands on${sketch ? ` (${sketch.name})` : ''} did not resolve.`
+    );
+  }
+  const order = [
+    points.referencePointId,
+    ...points.pointIds.filter((id) => id !== points.referencePointId)
+  ];
+  const world = order.map((pointId) => {
+    const node = ownEntry(ctx.document.nodes, pointId);
+    if (
+      !(sketch.objectIds as readonly string[]).includes(pointId) ||
+      node?.kind !== 'sketch-object' ||
+      node.data.objectKind !== 'point'
+    ) {
+      throw new Error(
+        `A point this pattern stands on is no longer a point of ${sketch.name}.`
+      );
+    }
+    const x = resolveParamValue(
+      node.data.x,
+      ctx.scope,
+      'point x',
+      ctx.document.units
+    );
+    const y = resolveParamValue(
+      node.data.y,
+      ctx.scope,
+      'point y',
+      ctx.document.units
+    );
+    return {
+      x: basis.origin.x + basis.u.x * x + basis.v.x * y,
+      y: basis.origin.y + basis.u.y * x + basis.v.y * y,
+      z: basis.origin.z + basis.u.z * x + basis.v.z * y
+    };
+  });
+  const from = world[0]!;
+  return {
+    total: order.length,
+    label: (index) => order[index]!,
+    matrix: (index) =>
+      transformMatrix(
+        {
+          x: world[index]!.x - from.x,
+          y: world[index]!.y - from.y,
+          z: world[index]!.z - from.z
+        },
+        PATTERN_ORIGIN
+      ),
+    kernelCopies: null
+  };
+}
+
 /** Records a kernel refusal alongside whatever lineage the build published. */
 function withPatternDiagnostic(
   state: RemusLineageState,
@@ -3355,7 +3428,12 @@ function buildPatternFeature(
     }
     return rounded;
   };
-  const count = wholeCount(data.count, 'count');
+  // A points pattern makes one instance per point; its stored count is not
+  // read (see FeatureData).
+  const count =
+    data.patternKind === 'points'
+      ? (data.points?.pointIds.length ?? 0)
+      : wholeCount(data.count, 'count');
   if (count < 2 || count > 100) {
     throw new Error('Pattern count must be between 2 and 100.');
   }
@@ -3429,6 +3507,8 @@ function buildPatternFeature(
       { direction: direction2, spacing: spacing2, count: count2 },
       target.solids.length === 1
     );
+  } else if (data.patternKind === 'points') {
+    arm = pointsPatternArm(ctx, data);
   } else {
     const angle = resolveParamValue(
       data.angleDeg,

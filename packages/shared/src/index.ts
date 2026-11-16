@@ -269,7 +269,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // named copies out. Both are optional and absent keeps the whole-body
 // pattern, so every older document builds unchanged. An older client would
 // copy the whole body, or build every copy, so it must refuse. Builds on v61.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 62 as const;
+// v63 adds M02 patterns driven by sketch points (`patternKind: 'points'` and
+// `points`): one copy at each picked I01 point entity, moved there from the
+// point the original stands on. An older client has no such arrangement and
+// would build a linear pattern in its place, so it must refuse. Builds on
+// v62.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 63 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -377,7 +382,16 @@ export type BooleanOperation = 'union' | 'subtract' | 'intersect';
  * none, the consume-everything Boolean every document before v24 stores.
  */
 export type BooleanKeepOriginals = 'all' | 'target' | 'tools';
-export type PatternKind = 'linear' | 'circular' | 'grid';
+export type PatternKind = 'linear' | 'circular' | 'grid' | 'points';
+
+/** M02 (schema v63): the sketch points a `points` pattern repeats at. */
+export interface PatternPoints {
+  sketchId: SketchId;
+  /** Point entity ids, the reference among them, each once. */
+  pointIds: string[];
+  /** Where the original stands; it makes no copy and cannot be skipped. */
+  referencePointId: string;
+}
 export type AxisId = 'x' | 'y' | 'z';
 
 /**
@@ -2365,6 +2379,15 @@ export type FeatureData =
        * their place, so skipping one never renames the others.
        */
       skippedInstances?: string[];
+      /**
+       * M02 (schema v63), `patternKind: 'points'` only, and required there:
+       * one copy at each of these point entities of an earlier sketch,
+       * translated from `referencePointId`, the point the original stands
+       * on, which makes no copy. A copy's instance label is its point's id,
+       * so adding or removing another point renames no copy. `count`,
+       * `axis`, `spacing` and `angleDeg` are stored but not read.
+       */
+      points?: PatternPoints;
     }
   | {
       featureKind: 'direct-edit';

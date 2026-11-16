@@ -1401,6 +1401,87 @@ describe('M02 feature patterns and skipped copies', () => {
     );
   });
 
+  it('Point pattern: copies move from the point nearest the original to each picked point', () => {
+    const spec = IN_PLACE_TOOL_SPECS['point-pattern'];
+    const SKETCH = 'sketch_points' as SketchId;
+    const spots = [
+      // BODY's middle is (10, 5, 2): this point is the one it stands on.
+      { id: 'p_ref', at: { x: 11, y: 5, z: 0 } },
+      { id: 'p_a', at: { x: 41, y: 5, z: 0 } },
+      { id: 'p_b', at: { x: 11, y: 35, z: 0 } }
+    ];
+    const ctx: InPlaceContext = {
+      ...CTX,
+      sketchPoints: (sketchId) => (sketchId === SKETCH ? spots : [])
+    };
+    const pick = (entityId: string) => ({ sketchId: SKETCH, entityId });
+    expect(spec.hint({ ...EMPTY, bodies: [BODY] }, {}, ctx)).toBe(
+      'Click the sketch points to repeat at'
+    );
+    // The reference alone makes no copy.
+    const lone = { ...EMPTY, bodies: [BODY], path: [pick('p_ref')] };
+    expect(spec.ready(lone, {}, ctx)).toBe(false);
+    const slots = {
+      ...EMPTY,
+      bodies: [BODY],
+      path: [pick('p_ref'), pick('p_a'), pick('p_b')]
+    };
+    expect(spec.ready(slots, {}, ctx)).toBe(true);
+    expect(spec.request(slots, {}, { skip: 'p_b' }, ctx)).toEqual({
+      tool: 'pattern',
+      targetBodyId: 'body_a',
+      patternKind: 'points',
+      count: 3,
+      axis: 'x',
+      points: {
+        sketchId: SKETCH,
+        pointIds: ['p_ref', 'p_a', 'p_b'],
+        referencePointId: 'p_ref'
+      },
+      skippedInstances: ['p_b']
+    });
+    // Each copy's chip stands where it lands: the body's middle, moved.
+    expect(
+      spec
+        .handles(slots, {}, ctx, {})
+        .map((handle) =>
+          handle.kind === 'instance'
+            ? [handle.params.label, handle.params.anchor]
+            : null
+        )
+    ).toEqual([
+      ['p_a', { x: 40, y: 5, z: 2 }],
+      ['p_b', { x: 10, y: 35, z: 2 }]
+    ]);
+    // An edit keeps the reference it stored, wherever the body is now.
+    expect(
+      spec.request(
+        slots,
+        {},
+        {},
+        {
+          ...ctx,
+          saved: {
+            featureKind: 'pattern',
+            targetBodyId: 'body_a' as BodyId,
+            patternKind: 'points',
+            count: 2,
+            axis: 'x',
+            spacing: 10,
+            angleDeg: 360,
+            points: {
+              sketchId: SKETCH,
+              pointIds: ['p_a', 'p_b'],
+              referencePointId: 'p_a'
+            }
+          }
+        }
+      )
+    ).toMatchObject({
+      points: { pointIds: ['p_a', 'p_ref', 'p_b'], referencePointId: 'p_a' }
+    });
+  });
+
   it('toggles a copy in and out of the skip list', () => {
     expect(toggledPatternSkip(undefined, '2')).toBe('2');
     expect(toggledPatternSkip('2', '3')).toBe('2,3');

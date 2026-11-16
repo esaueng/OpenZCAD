@@ -1853,7 +1853,9 @@ import type * as DatumPicks from './lib/inPlace/datumPicks';
 import type { PreparedReferenceImage } from './lib/referenceImageInsert';
 import {
   parseCurveCandidateId,
-  sketchCurveCandidates
+  sketchCurveCandidates,
+  sketchPointCandidates,
+  sketchPointSpots
 } from './lib/inPlace/curves';
 import { datumAxisChoices } from './lib/datumAxisChoices';
 import {
@@ -11641,7 +11643,9 @@ export function App() {
           current,
           sketchId,
           entityId,
-          feature.data.featureKind === 'sheet-metal'
+          feature.data.featureKind === 'sheet-metal',
+          feature.data.featureKind === 'pattern' &&
+            feature.data.patternKind === 'points'
         ),
       body: (bodyId) => inPlaceBodyPick(bodyId),
       laterTransforms: laterInPlaceSteps(current, feature),
@@ -11904,16 +11908,20 @@ export function App() {
     current: ProjectDocument,
     sketchId: SketchId,
     entityId: string,
-    bendLine = false
+    bendLine = false,
+    /** M02: a pattern on sketch points picks point entities instead. */
+    point = false
   ): boolean {
     const node = ownEntry(current.nodes, entityId as EntityId);
     return (
       node?.kind === 'sketch-object' &&
-      (bendLine
-        ? node.data.objectKind === 'line'
-        : !node.data.construction &&
-          (node.data.objectKind === 'line' ||
-            node.data.objectKind === 'arc')) &&
+      (point
+        ? node.data.objectKind === 'point'
+        : bendLine
+          ? node.data.objectKind === 'line'
+          : !node.data.construction &&
+            (node.data.objectKind === 'line' ||
+              node.data.objectKind === 'arc')) &&
       (findSketch(current, sketchId)?.objectIds.includes(
         entityId as EntityId
       ) ??
@@ -24450,7 +24458,8 @@ export function App() {
             : {}),
           ...(request.skippedInstances
             ? { skippedInstances: request.skippedInstances }
-            : {})
+            : {}),
+          ...(request.points ? { points: request.points } : {})
         });
       case 'edge-modifier':
         // Through the card's own command, so a fillet or chamfer made in
@@ -24702,6 +24711,16 @@ export function App() {
       : null,
     datumLabel: (featureId) =>
       (doc && findFeature(doc, featureId)?.name) ?? 'Datum axis',
+    // M02: a pattern on sketch points reads where each point stands.
+    sketchPoints: (sketchId) =>
+      doc
+        ? sketchPointSpots(
+            doc,
+            availableSketchViews,
+            sketchId,
+            sketchValueResolver(parameterScope.scope, doc.units)
+          )
+        : [],
     bodyBounds: (bodyId) => inPlaceBodyPick(bodyId),
     liveBodyIds: () =>
       Object.values(representations)
@@ -25955,6 +25974,12 @@ export function App() {
       );
       return bendLineCandidates(doc, views, blank, (value) => resolve(value));
     }
+    // M02: a pattern on sketch points picks point entities, not curves.
+    if (inPlaceSpec.id === 'point-pattern') {
+      return sketchPointCandidates(doc, availableSketchViews, (value) =>
+        resolve(value as ParamValue)
+      );
+    }
     // Every sketch's curves, the profile's own included: one sketch may hold
     // both a closed profile and the open spine it sweeps along. An edit
     // offers only sketches made before its feature, as it takes profiles.
@@ -26148,7 +26173,8 @@ export function App() {
             doc,
             pick.sketchId,
             pick.entityId,
-            inPlace.tool === 'bend'
+            inPlace.tool === 'bend',
+            inPlace.tool === 'point-pattern'
           ),
         inPlace.tool === 'bend'
       );

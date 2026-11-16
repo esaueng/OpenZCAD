@@ -83,9 +83,11 @@ import {
   isDocumentHistory,
   isReservedRecordKey,
   ownEntry,
+  patternPointsProblem,
   patternSourceProblem,
   skippedInstancesProblem,
-  suppliedIds
+  suppliedIds,
+  type PatternPoints
 } from '@openzcad/shared';
 import {
   BODY_COLOR_CHOSEN_METADATA_KEY,
@@ -697,6 +699,8 @@ export interface PatternInput {
   sourceFeatureIds?: FeatureId[];
   /** M02 (schema v62): the copies left out, by instance label. */
   skippedInstances?: string[];
+  /** M02 (schema v63): required on a `points` pattern, absent otherwise. */
+  points?: PatternPoints;
   ids?: BodyFeatureIds;
 }
 
@@ -3946,10 +3950,64 @@ export function patternBody(
         : {}),
       ...(input.skippedInstances
         ? { skippedInstances: [...input.skippedInstances] }
+        : {}),
+      ...(input.points
+        ? {
+            points: {
+              sketchId: input.points.sketchId,
+              pointIds: [...input.points.pointIds],
+              referencePointId: input.points.referencePointId
+            }
+          }
         : {})
     },
     suppliedIds(input.ids)
   );
+}
+
+/**
+ * M02 (schema v63): a points pattern's sketch is an earlier one, and each of
+ * its points is a point entity of that sketch. Where the points stand is the
+ * build's to read, at the pattern's history position.
+ */
+function validatePatternPoints(
+  document: ProjectDocument,
+  points: PatternPoints,
+  ownFeatureId: FeatureId | null
+): void {
+  const sketch = findSketch(document, points.sketchId);
+  if (!sketch) {
+    throw new Error('The sketch this pattern stands on is no longer there.');
+  }
+  const sketchFeature = listFeaturesInOrder(document).find(
+    (feature) =>
+      feature.data.featureKind === 'sketch' &&
+      feature.data.sketchId === points.sketchId
+  );
+  const ownIndex =
+    ownFeatureId === null
+      ? document.featureOrder.length
+      : document.featureOrder.indexOf(ownFeatureId);
+  if (
+    !sketchFeature ||
+    document.featureOrder.indexOf(sketchFeature.featureId) >= ownIndex
+  ) {
+    throw new Error(
+      `${sketch.name} comes later in History; a pattern can only stand on an earlier sketch.`
+    );
+  }
+  for (const pointId of points.pointIds) {
+    const node = ownEntry(document.nodes, pointId);
+    if (
+      !(sketch.objectIds as readonly string[]).includes(pointId) ||
+      node?.kind !== 'sketch-object' ||
+      node.data.objectKind !== 'point'
+    ) {
+      throw new Error(
+        `A point this pattern stands on is no longer a point of ${sketch.name}.`
+      );
+    }
+  }
 }
 
 /**
@@ -3963,7 +4021,7 @@ export function validatePatternDefinition(
   document: ProjectDocument,
   data: Pick<
     PatternInput,
-    'patternKind' | 'sourceFeatureIds' | 'skippedInstances'
+    'patternKind' | 'sourceFeatureIds' | 'skippedInstances' | 'points'
   >,
   ownFeatureId: FeatureId | null
 ): void {
@@ -3972,6 +4030,9 @@ export function validatePatternDefinition(
     data.skippedInstances
   );
   if (skipProblem) throw new Error(skipProblem);
+  const pointsProblem = patternPointsProblem(data);
+  if (pointsProblem) throw new Error(pointsProblem);
+  if (data.points) validatePatternPoints(document, data.points, ownFeatureId);
   const sources = data.sourceFeatureIds;
   if (sources === undefined) return;
   if (!Array.isArray(sources) || sources.length === 0) {
@@ -4911,7 +4972,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'count2',
     'axisRef',
     'sourceFeatureIds',
-    'skippedInstances'
+    'skippedInstances',
+    'points'
   ],
   gear: [
     'gearType',

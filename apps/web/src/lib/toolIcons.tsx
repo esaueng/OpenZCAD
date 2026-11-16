@@ -210,6 +210,18 @@ export const circularPatternGlyph = glyph(
 );
 
 /** Copies in rows and columns, spaced apart: not the viewer's grid. */
+/** M02: copies standing on scattered sketch points. */
+export const pointPatternGlyph = glyph(
+  <>
+    <rect x="3" y="4" width="6" height="6" rx="1" />
+    <rect x="14" y="2" width="6" height="6" rx="1" />
+    <rect x="11" y="15" width="6" height="6" rx="1" />
+    <circle cx="6" cy="7" r="0.6" />
+    <circle cx="17" cy="5" r="0.6" />
+    <circle cx="14" cy="18" r="0.6" />
+  </>
+);
+
 export const gridPatternGlyph = glyph(
   <>
     <rect x="3" y="3" width="6" height="6" rx="1" />
