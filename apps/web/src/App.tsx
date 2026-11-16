@@ -421,6 +421,11 @@ import {
   isEncryptedInvitationHash,
   pendingEncryptedInvitation
 } from './lib/e2ee/encryptedInvitationLink';
+import {
+  captureDeviceApprovalLink,
+  isDeviceApprovalHash,
+  pendingDeviceApproval
+} from './lib/e2ee/deviceApprovalLink';
 import { requestContactVerification } from './lib/e2ee/contactFocus';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import {
@@ -2847,6 +2852,13 @@ export function App() {
   }, []);
   useEffect(() => {
     const openFragment = () => {
+      if (isDeviceApprovalHash(window.location.hash)) {
+        if (captureDeviceApprovalLink()) {
+          updateSettingsViewState({ open: true, activeSection: 'encryption' });
+          setSettingsOpen(true);
+        }
+        return;
+      }
       if (isEncryptedInvitationHash(window.location.hash)) {
         if (captureEncryptedInvitationLink()) {
           beginProjectNavigation(false);
@@ -3087,8 +3099,18 @@ export function App() {
   // address bar at once; Settings › Encryption opens on it once the session
   // is known (below), where it is accepted after encryption is set up.
   useState(captureEncryptedInvitationLink);
+  // A new device's approval QR code, opened by a phone's camera: taken off
+  // the address bar at once, and Settings › Encryption opens on it, where
+  // this device approves the new one once it is signed in and unlocked.
+  const [bootDeviceApproval] = useState(() => {
+    const code = captureDeviceApprovalLink();
+    if (code)
+      updateSettingsViewState({ open: true, activeSection: 'encryption' });
+    return code;
+  });
   const [settingsOpen, setSettingsOpen] = useState(
     () =>
+      bootDeviceApproval !== null ||
       pendingInvitationToken !== null ||
       desktopAuthorizationAttempt !== null ||
       loadSettingsViewState().open
@@ -4022,7 +4044,7 @@ export function App() {
     const userId = session?.userId ?? null;
     if (!userId || encryptedInvitationSessionRef.current === userId) return;
     encryptedInvitationSessionRef.current = userId;
-    if (pendingEncryptedInvitation()) {
+    if (pendingEncryptedInvitation() || pendingDeviceApproval()) {
       updateSettingsViewState({ open: true, activeSection: 'encryption' });
       setSettingsOpen(true);
     }

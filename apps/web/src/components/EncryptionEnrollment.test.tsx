@@ -40,23 +40,22 @@ describe('device approval polling', () => {
           return false;
         }
       });
-      const setFlow = vi.fn();
+      const setStep = vi.fn();
       render(
         <EnrollPanel
           account={{ device: { label: 'Phone' } } as unknown as AccountView}
           ctx={{ userId: 'user_alice' } as E2eeContext}
           busy={false}
           run={run}
-          setFlow={setFlow}
-          flow={{
-            kind: 'request',
-            step: {
-              step,
-              approval: {} as never,
-              scanCode: 'OZD1:000000',
-              code: '123456',
-              confirmed: true
-            }
+          setStep={setStep}
+          passkey={false}
+          onUnlock={vi.fn()}
+          step={{
+            step,
+            approval: {} as never,
+            scanCode: 'OZD1:000000',
+            code: '123456',
+            confirmed: true
           }}
         />
       );
@@ -65,7 +64,7 @@ describe('device approval polling', () => {
       });
       expect(errors).toEqual([conflict]);
       expect(run).toHaveBeenCalledOnce();
-      expect(setFlow).not.toHaveBeenCalled();
+      expect(setStep).not.toHaveBeenCalled();
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10_000);
       });

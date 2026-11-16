@@ -1,5 +1,10 @@
 import { admitDevelopmentE2eeWrite } from '../../apps/web/worker/e2eeWriteAuthorization';
-import { expect, type BrowserContext, type Page } from '@playwright/test';
+import {
+  expect,
+  type BrowserContext,
+  type Locator,
+  type Page
+} from '@playwright/test';
 import type { DatabaseSync } from 'node:sqlite';
 import {
   exportPrivateKey,
@@ -561,4 +566,87 @@ export async function openEncryptionSettings(page: Page) {
     .getByRole('button', { name: 'Encryption', exact: true })
     .click();
   return settings;
+}
+
+/**
+ * Runs Settings › Encryption's setup dialog from its first step to the end
+ * (L11 plan §4.2): the loss warning, the recovery key saved and typed back,
+ * then the optional passkey and projects steps. Returns the recovery key.
+ */
+export async function setUpEncryptionInSettings(
+  settings: Locator,
+  { encryptNew = true }: { encryptNew?: boolean } = {}
+): Promise<string> {
+  await settings
+    .getByRole('button', { name: 'Set up encryption', exact: true })
+    .click();
+  await settings.getByRole('button', { name: 'Start', exact: true }).click();
+  const recoveryKey = (await settings
+    .getByLabel('Recovery key', { exact: true })
+    .textContent())!;
+  await settings
+    .getByRole('checkbox', { name: /I saved my recovery key/ })
+    .check();
+  await settings.getByRole('button', { name: 'Continue', exact: true }).click();
+  await settings.getByLabel('Confirm recovery key').fill(recoveryKey);
+  await settings
+    .getByRole('button', { name: 'Turn on encryption', exact: true })
+    .click();
+  await finishSetupDialog(settings, { encryptNew });
+  return recoveryKey;
+}
+
+/** Skips the passkey step and answers the projects step, where shown. */
+export async function finishSetupDialog(
+  settings: Locator,
+  { encryptNew = true }: { encryptNew?: boolean } = {}
+): Promise<void> {
+  const dialog = settings.locator('.encryption-dialog');
+  await expect(
+    settings.getByRole('button', { name: 'Turn on encryption', exact: true })
+  ).toHaveCount(0, { timeout: 30_000 });
+  const skip = dialog.getByRole('button', { name: 'Skip', exact: true });
+  const done = dialog.getByRole('button', { name: 'Done', exact: true });
+  await expect(
+    skip
+      .or(done)
+      .or(settings.getByText('Unlocked', { exact: true }))
+      .first()
+  ).toBeVisible({
+    timeout: 30_000
+  });
+  if (await skip.isVisible()) await skip.click();
+  if (
+    await done
+      .waitFor({ state: 'visible', timeout: 2_000 })
+      .then(() => true)
+      .catch(() => false)
+  ) {
+    const choice = dialog.getByRole('checkbox', {
+      name: /Encrypt new projects/
+    });
+    if ((await choice.count()) > 0) await choice.setChecked(encryptNew);
+    await done.click();
+  }
+  await expect(dialog).toHaveCount(0, { timeout: 30_000 });
+}
+
+/**
+ * Confirms an approval in Settings' authorize dialog with the recovery key
+ * (approval always certifies: L11 plan T1).
+ */
+export async function approveWithRecoveryKey(
+  settings: Locator,
+  recoveryKey: string
+): Promise<void> {
+  const dialog = settings.getByRole('dialog', { name: /^Approve “/ });
+  await expect(dialog).toBeVisible();
+  const key = dialog.getByLabel('Recovery key', { exact: true });
+  if (!(await key.isVisible()))
+    await dialog
+      .getByRole('button', { name: 'Use recovery key instead' })
+      .click();
+  await key.fill(recoveryKey);
+  await dialog.getByRole('button', { name: 'Approve device' }).click();
+  await expect(dialog).toHaveCount(0, { timeout: 15_000 });
 }

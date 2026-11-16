@@ -38,6 +38,7 @@ import {
   EncryptionFlowError,
   advanceApprovalAsNewDevice,
   approveDevice,
+  legacyApproveReadOnly,
   enrollWithRecoveryKey,
   loadEncryption,
   requestApproval,
@@ -83,6 +84,22 @@ import {
   newServer,
   type Server
 } from './support/e2ee-documents';
+
+/**
+ * Approves as the tests did before approval always certified (L11 plan T1):
+ * a recovery key certifies, and `null` builds a legacy read-only device.
+ */
+function approveAs(
+  ctx: Parameters<typeof approveDevice>[0],
+  account: Parameters<typeof approveDevice>[1],
+  approval: Parameters<typeof approveDevice>[2],
+  proof: Parameters<typeof approveDevice>[3],
+  authorization: Parameters<typeof approveDevice>[4]
+) {
+  return authorization === null
+    ? legacyApproveReadOnly(ctx, account, approval, proof)
+    : approveDevice(ctx, account, approval, proof, authorization);
+}
 
 const ALICE = 'user_alice';
 const BOB = 'user_bob';
@@ -1128,7 +1145,7 @@ describe('contacts heads in device approval', () => {
   ): Promise<void> {
     const request = await requestApproval(phone, null, 'Phone');
     if (request.step !== 'waiting') throw new Error('Expected a request');
-    await approveDevice(
+    await approveAs(
       approverKeys,
       ready(await loadEncryption(approver.keys)),
       await approver.keys.api.getApproval(request.approval.id),
@@ -1191,7 +1208,7 @@ describe('contacts heads in device approval', () => {
     // laptop through the approval exchange, which needs no recovery key.
     const request = await requestApproval(phone.keys, account, 'Phone');
     if (request.step !== 'waiting') throw new Error('Expected a request');
-    await approveDevice(
+    await approveAs(
       alice.keys,
       ready(await loadEncryption(alice.keys)),
       await alice.keys.api.getApproval(request.approval.id),
@@ -1230,7 +1247,7 @@ describe('contacts heads in device approval', () => {
     expect(await phone.pins.advanceList(ALICE, fork)).toBe(true);
     const request = await requestApproval(phone.keys, account, 'Phone');
     if (request.step !== 'waiting') throw new Error('Expected a request');
-    await approveDevice(
+    await approveAs(
       alice.keys,
       ready(await loadEncryption(alice.keys)),
       await alice.keys.api.getApproval(request.approval.id),
@@ -1289,7 +1306,7 @@ describe('contacts heads in device approval', () => {
     // It asks the stale laptop to confirm: the grant names entry 0.
     const request = await requestApproval(phone.keys, account, 'Phone');
     if (request.step !== 'waiting') throw new Error('Expected a request');
-    await approveDevice(
+    await approveAs(
       alice.keys,
       ready(await loadEncryption(alice.keys)),
       await alice.keys.api.getApproval(request.approval.id),
@@ -1400,7 +1417,7 @@ describe('contacts heads in device approval', () => {
     const laptopAccount = ready(await loadEncryption(alice.keys));
     const request = await requestApproval(alice.keys, laptopAccount, 'Laptop');
     if (request.step !== 'waiting') throw new Error('Expected a request');
-    await approveDevice(
+    await approveAs(
       phone.keys,
       ready(await loadEncryption(phone.keys)),
       await phone.keys.api.getApproval(request.approval.id),
@@ -1535,7 +1552,7 @@ describe('contacts heads in device approval', () => {
       else expect(before).toBeNull();
       const request = await requestApproval(phone.keys, account, 'Phone');
       if (request.step !== 'waiting') throw new Error('Expected request');
-      await approveDevice(
+      await approveAs(
         approver.keys,
         ready(await loadEncryption(approver.keys)),
         await approver.keys.api.getApproval(request.approval.id),
@@ -1731,7 +1748,7 @@ describe('contacts heads in device approval', () => {
     const request = await requestApproval(third.keys, null, 'Third');
     if (request.step !== 'waiting') throw new Error('Expected request');
     const approveThird = async () =>
-      approveDevice(
+      approveAs(
         phone.keys,
         ready(await loadEncryption(phone.keys)),
         await phone.keys.api.getApproval(request.approval.id),

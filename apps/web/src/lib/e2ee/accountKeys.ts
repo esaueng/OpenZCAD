@@ -51,6 +51,7 @@ import {
   type UnlockTarget,
   type VerifiedDeviceList
 } from '@openzcad/crypto';
+import { deviceApprovalCodeFromLink } from './deviceApprovalLink';
 import type {
   E2eeAccountKeyHistoryInput,
   E2eeAccountKeyHistoryRecord,
@@ -125,6 +126,7 @@ export type EncryptionFlowErrorCode =
   | 'key-mismatch'
   | 'missing-wrap'
   | 'approval-gone'
+  | 'certification-required'
   | 'invalid-request';
 
 export class EncryptionFlowError extends Error {
@@ -914,7 +916,8 @@ function passkeyContext(ctx: E2eeContext): E2eeContext {
 async function openIdentity(
   ctx: E2eeContext,
   account: AccountView,
-  authorization: UnlockAuthorization
+  authorization: UnlockAuthorization,
+  exportIdentity = false
 ): Promise<{ identityPrivateKey: CryptoKey; accountKey: Bytes }> {
   if (account.userId !== ctx.userId) {
     throw new EncryptionFlowError(
@@ -927,7 +930,8 @@ async function openIdentity(
       ctx,
       account,
       recoveryTarget(account.list),
-      authorization
+      authorization,
+      exportIdentity
     );
   }
   const selected = await (ctx.passkeys ?? browserPasskeys).get();
@@ -946,7 +950,8 @@ async function openIdentity(
       ctx,
       account,
       target,
-      selected.secret
+      selected.secret,
+      exportIdentity
     );
     try {
       ctx.assertActive?.();
@@ -1234,31 +1239,29 @@ export function enrollWithPasskey(
   return enrollWithUnlockMethod(passkeyContext(ctx), account, 'passkey', label);
 }
 
-/** Enrolls a discoverable PRF passkey, authorized by the current recovery key. */
+/**
+ * Enrolls a discoverable PRF passkey, authorized by the recovery key or by
+ * a passkey already certified for this identity (one ceremony to open the
+ * identity, a second to create the new credential).
+ */
 export async function addPasskey(
   ctx: E2eeContext,
   account: AccountView,
-  recoverySecret: Uint8Array
+  authorization: UnlockAuthorization
 ): Promise<EncryptionState> {
   ctx = passkeyContext(ctx);
   return ctx.store.withDeviceLock(ctx.userId, async () => {
     requireActiveKeyContext(ctx);
-    return addPasskeyLocked(ctx, account, recoverySecret);
+    return addPasskeyLocked(ctx, account, authorization);
   });
 }
 
 async function addPasskeyLocked(
   ctx: E2eeContext,
   account: AccountView,
-  recoverySecret: Uint8Array
+  authorization: UnlockAuthorization
 ): Promise<EncryptionState> {
-  const opened = await openTargetIdentity(
-    ctx,
-    account,
-    recoveryTarget(account.list),
-    recoverySecret,
-    true
-  );
+  const opened = await openIdentity(ctx, account, authorization, true);
   let secret: Bytes | undefined;
   let targetPkcs8: Bytes | undefined;
   let identityPkcs8: Bytes | undefined;
@@ -2088,9 +2091,14 @@ export async function deviceScanCode(device: StoredDevice): Promise<string> {
   )}`;
 }
 
-/** The 32-byte hash in a scanned or typed code, or null if it is not one. */
+/**
+ * The 32-byte hash in a scanned or typed code, or null if it is not one.
+ * Accepts the bare code, `OZD1:…`, or the approval link the new device's QR
+ * code carries (`deviceApprovalLink`).
+ */
 export function parseScanCode(text: string): Bytes | null {
-  const compact = text.replace(/[\s-]/g, '').toUpperCase();
+  const linked = deviceApprovalCodeFromLink(text);
+  const compact = (linked ?? text).replace(/[\s-]/g, '').toUpperCase();
   const body = compact.startsWith(SCAN_PREFIX)
     ? compact.slice(SCAN_PREFIX.length)
     : compact;
@@ -3012,19 +3020,105 @@ export type ApprovalProof =
   | { readonly kind: 'compare' };
 
 /**
+ * Whether `approval` comes from a device already certified with exactly
+ * these keys, asking again only to have its contacts head confirmed. Such
+ * an approval needs no identity authorization.
+ */
+export function approvalIsReconfirmation(
+  account: AccountView,
+  approval: Pick<E2eeApprovalRecord, 'deviceId' | 'signingKey' | 'unlockKey'>
+): boolean {
+  let signingKey: Bytes;
+  let unlockKey: Bytes;
+  try {
+    signingKey = fromBase64Url(approval.signingKey);
+    unlockKey = fromBase64Url(approval.unlockKey);
+  } catch {
+    return false;
+  }
+  return account.list.devices.some(
+    (d) =>
+      d.deviceId === approval.deviceId &&
+      sameBytes(d.signingKey, signingKey) &&
+      sameBytes(d.unlockKey, unlockKey)
+  );
+}
+
+/**
  * Approves a new device once its keys are authenticated: by the scanned
- * full hash, or by a compare-form code the user confirmed. With the
- * recovery key the device is certified in a new entry and the account key
- * sealed to its unlock key; without it the account key is sealed for
- * read-only approval, and the device certifies itself later. Either way the
- * new device receives a grant signed by this device naming the head to pin.
+ * full hash, or by a compare-form code the user confirmed. The approver
+ * opens the identity key with a passkey or the recovery key, certifies the
+ * device in a new entry and seals the account key to its unlock key, so an
+ * approved device can always save (ADR-024 amendment 2026-11-16). Only a
+ * device already certified with the same keys, asking to have its contacts
+ * head confirmed, is approved without `authorization`. Either way the new
+ * device receives a grant signed by this device naming the head to pin.
  */
 export async function approveDevice(
   ctx: E2eeContext,
   account: AccountView,
   approval: E2eeApprovalRecord,
   proof: ApprovalProof,
-  recoverySecret: Uint8Array | null
+  authorization: UnlockAuthorization | null
+): Promise<EncryptionState> {
+  if (authorization === null && !approvalIsReconfirmation(account, approval)) {
+    throw new EncryptionFlowError(
+      'certification-required',
+      'Confirm with your passkey or recovery key to approve this device.'
+    );
+  }
+  return approveDeviceWith(
+    authorization === 'passkey' ? passkeyContext(ctx) : ctx,
+    account,
+    approval,
+    proof,
+    authorization
+  );
+}
+
+/**
+ * Whether a scanned code or approval link names exactly the keys of this
+ * approval request. The link a phone's camera opened is matched this way
+ * before it is offered for approval; `approveDevice` checks it again.
+ */
+export async function approvalMatchesScanCode(
+  approval: Pick<E2eeApprovalRecord, 'signingKey' | 'unlockKey'>,
+  code: string
+): Promise<boolean> {
+  const scanned = parseScanCode(code);
+  if (!scanned) return false;
+  try {
+    return await verifyScannedDeviceKey(
+      [fromBase64Url(approval.signingKey), fromBase64Url(approval.unlockKey)],
+      scanned
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The read-only approval the product no longer offers: the account key is
+ * sealed for the device without certifying it, so it can read but not
+ * save. Kept only to build legacy fixtures until the Worker stops accepting
+ * read-only grants (L11 plan, T1); readers of existing read-only devices
+ * are unchanged.
+ */
+export function legacyApproveReadOnly(
+  ctx: E2eeContext,
+  account: AccountView,
+  approval: E2eeApprovalRecord,
+  proof: ApprovalProof
+): Promise<EncryptionState> {
+  return approveDeviceWith(ctx, account, approval, proof, null);
+}
+
+async function approveDeviceWith(
+  ctx: E2eeContext,
+  account: AccountView,
+  approval: E2eeApprovalRecord,
+  proof: ApprovalProof,
+  authorization: UnlockAuthorization | null
 ): Promise<EncryptionState> {
   approval = { ...approval };
   const { device, unlocked } = requireUnlockedApprover(ctx, account);
@@ -3069,7 +3163,7 @@ export async function approveDevice(
   // certified, with no new certification and no sealed account key. (With
   // the recovery key the branch below finds it in the current list.)
   if (
-    !recoverySecret &&
+    !authorization &&
     list.devices.some(
       (d) =>
         d.deviceId === approval.deviceId &&
@@ -3079,7 +3173,7 @@ export async function approveDevice(
   ) {
     certified = true;
   }
-  if (recoverySecret) {
+  if (authorization) {
     // An earlier attempt may have certified the device and then failed
     // before `completeApproval` reached the Worker. Resume from the current
     // list with that certification instead of conflicting on a second append.
@@ -3108,11 +3202,11 @@ export async function approveDevice(
       );
     }
   }
-  if (recoverySecret && !certified) {
+  if (authorization && !certified) {
     const { identityPrivateKey, accountKey } = await openIdentity(
       ctx,
       account,
-      recoverySecret
+      authorization
     );
     const entry = nextDeviceListEntry(list, {
       issuedAt: now(ctx),
