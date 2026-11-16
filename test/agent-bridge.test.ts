@@ -131,6 +131,55 @@ describe('openzcad-mcp file grants', () => {
     await expect(openGrants([path])).rejects.toThrow(/writable by other users/);
   });
 
+  it('refuses a granted file later replaced by a link to another project', async () => {
+    const granted = await project('granted.openzcad');
+    const other = blockDocument();
+    const elsewhere = await project('elsewhere.openzcad', backupText(other));
+    const workspace = new FileWorkspace(await openGrants([granted]), noKernel);
+    await workspace.load('granted');
+    await rm(granted);
+    await symlink(elsewhere, granted);
+    const swapped = await workspace.load('granted').then(
+      (loaded) => loaded.document.projectId,
+      (error: { code: string }) => error.code
+    );
+    expect(swapped).toBe('not_found');
+    expect(swapped).not.toBe(other.projectId);
+  });
+
+  it.runIf(posix)(
+    'refuses a granted file whose permissions loosen after startup',
+    async () => {
+      const path = await project('loosened.openzcad');
+      const workspace = new FileWorkspace(await openGrants([path]), noKernel);
+      await workspace.load('loosened');
+      await chmod(path, 0o666);
+      const refusal = await workspace.load('loosened').then(
+        () => null,
+        (error: { code: string; message: string }) => error
+      );
+      expect(refusal?.code).toBe('refused');
+      expect(refusal?.message).toMatch(/writable by other users/);
+    }
+  );
+
+  it.runIf(posix)(
+    'refuses a folder others can write unless the sticky bit protects it',
+    async () => {
+      const path = await project('in-open-folder.openzcad');
+      try {
+        await chmod(directory, 0o777);
+        await expect(openGrants([path])).rejects.toThrow(
+          /folder holding .* is writable by other users/
+        );
+        await chmod(directory, 0o1777);
+        await expect(openGrants([path])).resolves.toHaveLength(1);
+      } finally {
+        await chmod(directory, 0o700);
+      }
+    }
+  );
+
   it('refuses a missing file or a directory', async () => {
     await expect(
       openGrants([join(directory, 'none.openzcad')])

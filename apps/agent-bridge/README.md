@@ -15,7 +15,10 @@ contacts OpenZCAD, and holds no account credentials or keys. It works on
    project is decrypted in your browser for the export, exactly as a manual
    backup is.
 2. Make the file yours alone if it is not already: `chmod go-w Block.openzcad`.
-   The server refuses a file another user owns or can write.
+   The server refuses a file another user owns or can write, or one in a folder
+   other users can write (unless the folder has the sticky bit, as `/tmp` does).
+   It checks again on every read and write, and refuses a file that was moved
+   or replaced by a link after it started.
 3. Add the server to your MCP host's configuration. From a checkout of this
    repository (after `pnpm install`):
 
@@ -61,8 +64,9 @@ alias or project id, never by path.
 One exact-kernel job runs at a time and one more may wait. Each server
 process allows 120 read calls and 12 exact-kernel calls a minute (bursts of 30
 and 4); `--reads-per-minute` and `--kernel-per-minute` can lower these. A
-request line is at most 2 MiB, a derivation at most 120 s, `get_document` at
-most 4 MiB.
+request line is at most 2 MiB, `get_document` at most 4 MiB. A derivation is
+asked to stop after 120 s; one kernel operation cannot be interrupted, so a
+very large one can run longer, but a call past its budget never writes.
 
 ## Privacy
 

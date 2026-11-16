@@ -552,9 +552,9 @@ describe('kernel gate', () => {
     let signalled: AbortSignal | undefined;
     let finish!: () => void;
     const slow = gate.run(
-      (signal) =>
+      (deadline) =>
         new Promise<void>((resolve) => {
-          signalled = signal;
+          signalled = deadline.signal;
           finish = resolve;
         })
     );
@@ -590,6 +590,78 @@ describe('kernel gate', () => {
     release();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(workspace.commits).toHaveLength(0);
+  });
+
+  it('refuses to apply when the clock passed the deadline while the kernel held the event loop', async () => {
+    // A synchronous kernel call blocks timers: model it by moving the clock
+    // past the budget inside preflight without ever yielding to the timer.
+    let now = 0;
+    const workspace = new MemoryWorkspace(boxDocument());
+    const blocking = createAgentApi({
+      workspace,
+      scope: 'edit',
+      now: () => now,
+      kernelTimeoutMs: 120_000,
+      preflight: (base, proposal, derive) => {
+        now += 200_000;
+        return commandPreflight(base, proposal, derive);
+      }
+    });
+    const result = await blocking.call('apply_patch', {
+      project: 'block',
+      expectedVersion: workspace.document.version,
+      proposal: widthProposal(workspace.document, 60)
+    });
+    expect(parsed(result)).toMatchObject({ error: 'timeout' });
+    expect(workspace.commits).toHaveLength(0);
+  });
+
+  it('cancels derivation by the clock, not only by the timer', async () => {
+    let now = 0;
+    const gate = new KernelGate(1_000, () => now);
+    const seen = await gate.run(async (deadline) => {
+      const before = deadline.expired();
+      now = 1_000;
+      return [before, deadline.expired(), deadline.signal.aborted];
+    });
+    expect(seen).toEqual([false, true, true]);
+  });
+
+  it('never reports a claimed write as timed out', async () => {
+    const gate = new KernelGate(10);
+    const written = await gate.run(async (deadline) => {
+      expect(deadline.claim()).toBe(true);
+      // The write outlives the budget; the timer must not reject the call.
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return 'written';
+    });
+    expect(written).toBe('written');
+  });
+
+  it('reports a write claimed during commit as applied even past the timer', async () => {
+    const document = boxDocument();
+    const workspace = new MemoryWorkspace(document);
+    const commit = workspace.commit.bind(workspace);
+    workspace.commit = async (...args) => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      return commit(...args);
+    };
+    const slowWrite = createAgentApi({
+      workspace,
+      scope: 'edit',
+      // The clock never passes the budget before the claim; the real timer
+      // (200 ms) fires while the 600 ms write is under way.
+      now: () => 0,
+      kernelTimeoutMs: 200,
+      preflight: commandPreflight
+    });
+    const result = await slowWrite.call('apply_patch', {
+      project: 'block',
+      expectedVersion: document.version,
+      proposal: widthProposal(document, 60)
+    });
+    expect(parsed(result)).toMatchObject({ ok: true, applied: true });
+    expect(workspace.commits).toHaveLength(1);
   });
 });
 

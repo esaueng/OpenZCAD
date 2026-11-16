@@ -17,7 +17,8 @@ import {
   TokenBucket,
   boundedRateLimits,
   DEFAULT_KERNEL_TIMEOUT_MS,
-  type AgentRateLimits
+  type AgentRateLimits,
+  type KernelDeadline
 } from './limits';
 import {
   scopeAllows,
@@ -354,7 +355,8 @@ export function createAgentApi(options: AgentApiOptions): AgentApi {
     now
   );
   const gate = new KernelGate(
-    options.kernelTimeoutMs ?? DEFAULT_KERNEL_TIMEOUT_MS
+    options.kernelTimeoutMs ?? DEFAULT_KERNEL_TIMEOUT_MS,
+    now
   );
   const maxDocumentBytes = options.maxDocumentBytes ?? MAX_AGENT_DOCUMENT_BYTES;
   /** Exact derivations by project and stored revision; one per project. */
@@ -370,11 +372,15 @@ export function createAgentApi(options: AgentApiOptions): AgentApi {
 
   async function exactBase(
     loaded: LoadedProject,
-    signal: AbortSignal
+    deadline: KernelDeadline
   ): Promise<ProjectDocument> {
     let derived = cached(loaded);
     if (!derived) {
-      derived = await workspace.derive(loaded.document, undefined, signal);
+      derived = await workspace.derive(
+        loaded.document,
+        undefined,
+        deadline.expired
+      );
       derivedCache.set(loaded.document.projectId, {
         revision: loaded.revision,
         derived
@@ -410,14 +416,14 @@ export function createAgentApi(options: AgentApiOptions): AgentApi {
   async function checkedPatch(
     loaded: LoadedProject,
     proposalValue: unknown,
-    signal: AbortSignal
+    deadline: KernelDeadline
   ) {
-    const base = await exactBase(loaded, signal);
+    const base = await exactBase(loaded, deadline);
     const proposal = parseProposal(base, proposalValue);
     let result;
     try {
       result = await preflight(base, proposal, (candidate, analysis) =>
-        workspace.derive(candidate, analysis, signal)
+        workspace.derive(candidate, analysis, deadline.expired)
       );
     } catch (error) {
       if (error instanceof AgentToolError) throw error;
@@ -464,8 +470,8 @@ export function createAgentApi(options: AgentApiOptions): AgentApi {
       const project = projectArgument(args);
       const loaded = await workspace.load(project);
       if (!cached(loaded)) kernelCalls.take('exact-kernel');
-      return gate.run(async (signal) => {
-        const base = await exactBase(await workspace.load(project), signal);
+      return gate.run(async (deadline) => {
+        const base = await exactBase(await workspace.load(project), deadline);
         return {
           version: base.version,
           digest: createCadDocumentDigest(base)
@@ -487,13 +493,13 @@ export function createAgentApi(options: AgentApiOptions): AgentApi {
       // A stale call is refused before it spends exact-kernel budget.
       assertVersion(await workspace.load(project), expected);
       kernelCalls.take('exact-kernel');
-      return gate.run(async (signal) => {
+      return gate.run(async (deadline) => {
         const loaded = await workspace.load(project);
         assertVersion(loaded, expected);
         const { report, result } = await checkedPatch(
           loaded,
           args.proposal,
-          signal
+          deadline
         );
         return {
           ok: true,
@@ -510,13 +516,13 @@ export function createAgentApi(options: AgentApiOptions): AgentApi {
       // A stale call is refused before it spends exact-kernel budget.
       assertVersion(await workspace.load(project), expected);
       kernelCalls.take('exact-kernel');
-      return gate.run(async (signal) => {
+      return gate.run(async (deadline) => {
         const loaded = await workspace.load(project);
         assertVersion(loaded, expected);
         const { base, report, result } = await checkedPatch(
           loaded,
           args.proposal,
-          signal
+          deadline
         );
         let next: ProjectDocument;
         try {
@@ -533,12 +539,13 @@ export function createAgentApi(options: AgentApiOptions): AgentApi {
             'The proposal changes nothing. Nothing was applied.'
           );
         assertRetainedUndo(base, next);
-        // A timed-out call has already been reported as failed: never let it
-        // write afterwards.
-        if (signal.aborted)
+        // The point of no return. A call past its budget — even one whose
+        // timer could not fire because the kernel held the event loop —
+        // writes nothing; a claimed call is never reported as timed out.
+        if (!deadline.claim())
           throw new AgentToolError(
             'timeout',
-            'The call was cancelled before it applied. Nothing was written.'
+            'The call ran past its time budget before it applied. Nothing was written.'
           );
         const committed = await workspace.commit(project, loaded.revision, {
           ...next,

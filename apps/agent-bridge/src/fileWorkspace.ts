@@ -1,13 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { constants } from 'node:fs';
-import {
-  open,
-  readFile,
-  realpath,
-  rename,
-  stat,
-  unlink
-} from 'node:fs/promises';
+import { constants, type Stats } from 'node:fs';
+import { open, realpath, rename, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import {
   AgentToolError,
@@ -54,11 +47,54 @@ function aliasFor(path: string, taken: Set<string>): string {
   return alias;
 }
 
+function currentUser(): { uid: number; gid: number } | null {
+  return typeof process.getuid === 'function' &&
+    typeof process.getgid === 'function'
+    ? { uid: process.getuid(), gid: process.getgid() }
+    : null;
+}
+
 /**
- * Resolves and checks each granted path. The file must be a regular file
- * within the backup size limit and, on POSIX systems, owned by the user
- * running the server and writable by nobody else: the server's authority is
- * the launching user's, so it refuses a file another account could swap.
+ * Why a granted file is unsafe for this server to act on, or null. On POSIX
+ * systems the file must be owned by the user running the server and
+ * writable by nobody else: the server acts with that user's authority, so it
+ * refuses a file another account could change underneath it.
+ */
+export function grantedFileProblem(info: Stats, label: string): string | null {
+  if (!info.isFile()) return `${label} is not a file.`;
+  if (info.size > MAX_PROJECT_BACKUP_BYTES)
+    return `${label} is larger than the 256 MB backup limit.`;
+  const user = currentUser();
+  if (!user) return null;
+  if (info.uid !== user.uid)
+    return `${label} belongs to another user. Grant only your own project files.`;
+  if ((info.mode & 0o022) !== 0)
+    return `${label} is writable by other users. Remove group and other write permission first (chmod go-w).`;
+  return null;
+}
+
+/**
+ * Why the folder holding a granted file is unsafe, or null. Whoever can write
+ * the folder can replace the file in it — with another file or a link to
+ * one — unless the sticky bit reserves that to the file's owner. A folder
+ * writable by its group is accepted only when that group is the user's own
+ * primary group (the usual private-group setup).
+ */
+export function grantFolderProblem(info: Stats, label: string): string | null {
+  const user = currentUser();
+  if (!user || (info.mode & 0o1000) !== 0) return null;
+  if (
+    (info.mode & 0o002) !== 0 ||
+    ((info.mode & 0o020) !== 0 && info.gid !== user.gid)
+  )
+    return `The folder holding ${label} is writable by other users, who could replace the file. Move it to a folder only you can write.`;
+  return null;
+}
+
+/**
+ * Resolves and checks each granted path, once, at startup. Every later read
+ * and write checks the grant again (see `FileWorkspace`), so a file replaced
+ * or loosened after startup is refused rather than followed.
  */
 export async function openGrants(
   paths: readonly string[]
@@ -66,7 +102,6 @@ export async function openGrants(
   const taken = new Set<string>();
   const seen = new Set<string>();
   const grants: ProjectGrant[] = [];
-  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
   for (const requested of paths) {
     let path: string;
     try {
@@ -76,23 +111,50 @@ export async function openGrants(
     }
     if (seen.has(path)) continue;
     seen.add(path);
-    const info = await stat(path);
-    if (!info.isFile()) throw new Error(`${requested} is not a file.`);
-    if (info.size > MAX_PROJECT_BACKUP_BYTES)
-      throw new Error(`${requested} is larger than the 256 MB backup limit.`);
-    if (uid !== null) {
-      if (info.uid !== uid)
-        throw new Error(
-          `${requested} belongs to another user. Grant only your own project files.`
-        );
-      if ((info.mode & 0o022) !== 0)
-        throw new Error(
-          `${requested} is writable by other users. Remove group and other write permission first (chmod go-w).`
-        );
-    }
+    const problem =
+      grantedFileProblem(await stat(path), requested) ??
+      grantFolderProblem(await stat(dirname(path)), requested);
+    if (problem) throw new Error(problem);
     grants.push({ alias: aliasFor(path, taken), path });
   }
   return grants;
+}
+
+/**
+ * Reads a granted file only if it is still the file that was granted: the
+ * path must still resolve to itself (no component replaced by a link), the
+ * final component is opened without following a link, and the opened file
+ * and its folder pass the startup checks again.
+ */
+async function readGranted(grant: ProjectGrant): Promise<Uint8Array> {
+  const gone = () =>
+    new AgentToolError(
+      'not_found',
+      `The project file for "${grant.alias}" was moved, replaced by a link or can no longer be read. Grant it again.`
+    );
+  const resolved = await realpath(grant.path).catch(() => null);
+  if (resolved !== grant.path) throw gone();
+  const folder = grantFolderProblem(
+    await stat(dirname(grant.path)),
+    `"${grant.alias}"`
+  );
+  if (folder) throw new AgentToolError('refused', folder);
+  const handle = await open(
+    grant.path,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)
+  ).catch(() => {
+    throw gone();
+  });
+  try {
+    const problem = grantedFileProblem(
+      await handle.stat(),
+      `The project file for "${grant.alias}"`
+    );
+    if (problem) throw new AgentToolError('refused', problem);
+    return await handle.readFile();
+  } finally {
+    await handle.close();
+  }
 }
 
 function sha256(bytes: Uint8Array): string {
@@ -154,20 +216,7 @@ export class FileWorkspace implements AgentWorkspace {
   }
 
   private async read(grant: ProjectGrant): Promise<ParsedProject> {
-    let bytes: Uint8Array;
-    try {
-      bytes = await readFile(grant.path);
-    } catch {
-      throw new AgentToolError(
-        'not_found',
-        `The project file for "${grant.alias}" can no longer be read.`
-      );
-    }
-    if (bytes.length > MAX_PROJECT_BACKUP_BYTES)
-      throw new AgentToolError(
-        'too_large',
-        `The project file for "${grant.alias}" is larger than 256 MB.`
-      );
+    const bytes = await readGranted(grant);
     const revision = sha256(bytes);
     const known = this.parsed.get(grant.alias);
     if (known?.revision === revision) return known;
@@ -233,11 +282,11 @@ export class FileWorkspace implements AgentWorkspace {
   async derive(
     document: ProjectDocument,
     analysis: EditAnalysisRequest | undefined,
-    signal: AbortSignal
+    cancelled: () => boolean
   ): Promise<ProjectDocument['derived']> {
     const adapter = await this.kernel();
     return adapter.syncDocument(document, undefined, undefined, analysis, {
-      cancellation: { isCancelled: () => signal.aborted }
+      cancellation: { isCancelled: cancelled }
     });
   }
 
@@ -248,7 +297,7 @@ export class FileWorkspace implements AgentWorkspace {
   ): Promise<LoadedProject> {
     const grant = await this.grantFor(project);
     const current = this.parsed.get(grant.alias);
-    const onDisk = sha256(await readFile(grant.path));
+    const onDisk = sha256(await readGranted(grant));
     if (!current || current.revision !== revision || onDisk !== revision)
       throw new AgentToolError(
         'conflict',
@@ -279,7 +328,7 @@ export class FileWorkspace implements AgentWorkspace {
     }
     await handle.close();
     // The last moment to notice a concurrent writer before replacing it.
-    if (sha256(await readFile(grant.path)) !== revision) {
+    if (sha256(await readGranted(grant)) !== revision) {
       await unlink(temporary).catch(() => undefined);
       throw new AgentToolError(
         'conflict',

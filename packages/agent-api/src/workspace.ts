@@ -50,10 +50,14 @@ export interface AgentWorkspace {
   projects(): Promise<readonly AgentProjectSummary[]>;
   /** Throws `AgentToolError('not_found')` for anything not granted. */
   load(project: string): Promise<LoadedProject>;
+  /**
+   * `cancelled` reads the call's deadline; the derivation checks it between
+   * indivisible kernel operations and stops, committing nothing.
+   */
   derive(
     document: ProjectDocument,
     analysis: EditAnalysisRequest | undefined,
-    signal: AbortSignal
+    cancelled: () => boolean
   ): Promise<ProjectDocument['derived']>;
   /**
    * Stores `next` if and only if the project still holds `revision`;

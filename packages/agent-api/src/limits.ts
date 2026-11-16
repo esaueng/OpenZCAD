@@ -85,23 +85,52 @@ export class TokenBucket {
 }
 
 /**
+ * One kernel job's time budget. The timer alone cannot enforce it: a
+ * synchronous WASM call holds the event loop, so the timer may fire late or
+ * never before the job settles. `expired()` therefore reads the clock.
+ */
+export interface KernelDeadline {
+  /** Aborted once the budget is known to have passed. */
+  readonly signal: AbortSignal;
+  /** Whether the budget has passed, by the clock; aborts `signal` if so. */
+  expired(): boolean;
+  /**
+   * Claims the point of no return before a write. False when the budget has
+   * already passed: the caller must write nothing. Once it returns true the
+   * call is never reported as timed out, so a call is never reported as
+   * failed after it wrote.
+   */
+  claim(): boolean;
+}
+
+/**
  * Serializes exact-kernel jobs: one runs, at most one waits, and a further
  * call is refused as busy instead of queueing without bound. A job that runs
- * past its budget is reported as a timeout at once and signalled to stop, but
- * it keeps the kernel until it actually settles, so two derivations never
- * share the kernel.
+ * past its budget is reported as a timeout once the event loop can say so
+ * and signalled to stop, unless it has already claimed its write. It keeps
+ * the kernel until it actually settles, so two derivations never share it.
  */
 export class KernelGate {
   private pending = 0;
   private tail: Promise<void> = Promise.resolve();
 
-  constructor(private readonly timeoutMs: number = DEFAULT_KERNEL_TIMEOUT_MS) {}
+  constructor(
+    private readonly timeoutMs: number = DEFAULT_KERNEL_TIMEOUT_MS,
+    private readonly now: () => number = Date.now
+  ) {}
 
   get queued(): number {
     return this.pending;
   }
 
-  async run<T>(job: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  private timeoutError(): AgentToolError {
+    return new AgentToolError(
+      'timeout',
+      `The exact derivation ran past ${Math.round(this.timeoutMs / 1000)} s and was cancelled. Nothing was applied.`
+    );
+  }
+
+  async run<T>(job: (deadline: KernelDeadline) => Promise<T>): Promise<T> {
     if (this.pending >= 2)
       throw new AgentToolError(
         'busy',
@@ -114,7 +143,22 @@ export class KernelGate {
     this.tail = new Promise<void>((resolve) => (release = resolve));
     await previous;
     const controller = new AbortController();
-    const work = Promise.resolve().then(() => job(controller.signal));
+    const endsAt = this.now() + this.timeoutMs;
+    let claimed = false;
+    const deadline: KernelDeadline = {
+      signal: controller.signal,
+      expired: () => {
+        if (!controller.signal.aborted && this.now() >= endsAt)
+          controller.abort();
+        return controller.signal.aborted;
+      },
+      claim: () => {
+        if (deadline.expired()) return false;
+        claimed = true;
+        return true;
+      }
+    };
+    const work = Promise.resolve().then(() => job(deadline));
     void work
       .catch(() => undefined)
       .finally(() => {
@@ -124,13 +168,10 @@ export class KernelGate {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
+        // A claimed write runs to completion and reports what it did.
+        if (claimed) return;
         controller.abort();
-        reject(
-          new AgentToolError(
-            'timeout',
-            `The exact derivation ran past ${Math.round(this.timeoutMs / 1000)} s and was cancelled. Nothing was applied.`
-          )
-        );
+        reject(this.timeoutError());
       }, this.timeoutMs);
     });
     try {
