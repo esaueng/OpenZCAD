@@ -589,6 +589,12 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               // helpers so their integration does not grow the entry chunk.
               id.includes('/apps/web/src/lib/failedHistoryExport.ts') ||
               id.includes('/apps/web/src/lib/sweepFaceting.ts') ||
+              // Feature forms and History summaries turn stored feature data
+              // to and from what the workspace shows (M01 hole placement and
+              // standard sizes among them). Pure document helpers: keep them
+              // with the preloaded model helpers too.
+              id.includes('/apps/web/src/lib/modelingOperations.ts') ||
+              id.includes('/apps/web/src/lib/featureSummary.ts') ||
               // Canonical worker transport and revision/reference helpers are
               // already workspace dependencies. Reuse the preloaded model
               // chunk rather than adding another first-paint request.
