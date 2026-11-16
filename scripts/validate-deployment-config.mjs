@@ -52,7 +52,10 @@ export const OFFICIAL_STABLE = Object.freeze({
   databaseId: '3b5fb65e-0af0-46a8-a50c-b7b5bd69c56b',
   bucketName: 'openzcad-stable-artifacts',
   sender: 'noreply@zcad.app',
+  // The one origin stable's invitation links may use, and every address it
+  // serves: Previews, dev and self-host configs must not send links to any.
   publicOrigins: Object.freeze(['https://zcad.app']),
+  servedOrigins: Object.freeze(['https://zcad.app', 'https://stable.zcad.app']),
   branch: 'stable'
 });
 
@@ -459,7 +462,7 @@ function validateOfficialPreviews(config) {
   }
   // Invitation links from a Preview must reach neither channel's users.
   if (
-    [OFFICIAL.publicOrigin, ...OFFICIAL_STABLE.publicOrigins].some((origin) =>
+    [OFFICIAL.publicOrigin, ...OFFICIAL_STABLE.servedOrigins].some((origin) =>
       sameOrigin(vars.PUBLIC_APP_ORIGIN, origin)
     )
   ) {
@@ -526,7 +529,7 @@ export function validateDeploymentConfig(
       OFFICIAL_STABLE.databaseId,
       OFFICIAL_STABLE.bucketName,
       OFFICIAL.publicOrigin,
-      ...OFFICIAL_STABLE.publicOrigins,
+      ...OFFICIAL_STABLE.servedOrigins,
       OFFICIAL.turnstileSiteKey,
       OFFICIAL.sender,
       OFFICIAL_STABLE.sender,
@@ -717,7 +720,7 @@ export function validateDeploymentConfig(
       [bucket?.bucket_name, OFFICIAL.bucketName],
       [config.vars?.TURNSTILE_SITE_KEY, OFFICIAL.turnstileSiteKey],
       [config.vars?.PUBLIC_APP_ORIGIN, OFFICIAL.publicOrigin],
-      ...OFFICIAL_STABLE.publicOrigins.map((origin) => [
+      ...OFFICIAL_STABLE.servedOrigins.map((origin) => [
         config.vars?.PUBLIC_APP_ORIGIN,
         origin
       ]),

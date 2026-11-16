@@ -241,7 +241,7 @@ describe('deployment configuration preflight', () => {
     });
 
     it('refuses production invitation links written another way', () => {
-      for (const origin of ['https://zcad.app/', ' https://ZCAD.app ', 'https://zcad.app:443/invite', 'https://beta.zcad.app/']) {
+      for (const origin of ['https://zcad.app/', ' https://ZCAD.app ', 'https://zcad.app:443/invite', 'https://beta.zcad.app/', 'https://stable.zcad.app']) {
         expect(
           withPreviews((previews) => {
             previews.vars.PUBLIC_APP_ORIGIN = origin;
