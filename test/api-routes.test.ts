@@ -1620,6 +1620,32 @@ describe('worker api routes', () => {
     });
   });
 
+  it('shows a signed-out caller the built-in model, not the personal default', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/assistant/status', {
+        headers: { 'cf-connecting-ip': '203.0.113.7' }
+      }),
+      {
+        ...env,
+        AUTH_MODE: 'email-code',
+        AI_IDENTITY_PEPPER: 'pepper-test-value',
+        DB: { prepare: () => ({ bind: () => ({ first: async () => null }) }) },
+        OPENROUTER_API_KEY: 'secret-test-value',
+        AI_PROVIDER: 'openrouter',
+        AI_MODEL: 'nvidia/nemotron-3.5-super-vl:free',
+        AI_DEPLOYMENT_FREE_ENABLED: 'true'
+      } as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      configured: false,
+      source: 'deployment',
+      provider: 'openrouter',
+      model: 'nvidia/nemotron-3.5-super-vl:free'
+    });
+  });
+
   it('reports deployment assistant availability to an allowlisted session', async () => {
     const response = await worker.fetch(
       new Request('https://example.com/api/assistant/status', {
