@@ -4048,7 +4048,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
           }
         },
         {
-          name: 'Defeature needs planar faces',
+          name: 'Defeature leaves too few faces',
           operation: {
             kind: 'remove-face-feature',
             faceHash: cap.hash,
@@ -4087,7 +4087,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
           'Feature "Diameter breaks the body": Through-hole diameter 40 does not fit this body'
         ),
         'Feature "Unchanged diameter": Through-hole diameter must differ from its current diameter.',
-        'Feature "Defeature needs planar faces": Removing a plane face needs Remus\'s defeature operation, which only supports bodies whose every remaining face is planar; this body still has cylinder faces.'
+        'Feature "Defeature leaves too few faces": Removing the selected face would leave too few faces to bound a solid.'
       ]);
     } finally {
       remus.dispose();

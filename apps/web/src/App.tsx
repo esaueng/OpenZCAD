@@ -1458,6 +1458,11 @@ const LazyDeleteFeatureDialog = lazyWithStaleChunkNotice(() =>
     default: module.DeleteFeatureDialog
   }))
 );
+const LazyDeleteDependentsDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/DeleteDependentsDialog').then((module) => ({
+    default: module.DeleteDependentsDialog
+  }))
+);
 const LazySuppressFeatureDialog = lazyWithStaleChunkNotice(() =>
   import('./components/SuppressFeatureDialog').then((module) => ({
     default: module.SuppressFeatureDialog
@@ -1638,6 +1643,8 @@ const SharedLinkCopyDialog = withSuspense(LazySharedLinkCopyDialog);
 const SaveRevisionDialog = withSuspense(LazySaveRevisionDialog);
 
 const DeleteFeatureDialog = withSuspense(LazyDeleteFeatureDialog);
+
+const DeleteDependentsDialog = withSuspense(LazyDeleteDependentsDialog);
 
 const SuppressFeatureDialog = withSuspense(LazySuppressFeatureDialog);
 
@@ -3176,6 +3183,16 @@ export function App() {
     /** A History multi-selection deleted together, in history order. */
     batch?: FeatureId[];
   } | null>(null);
+  /**
+   * A refused hole, fillet or chamfer delete, asking whether to delete the
+   * later details and edits built on its geometry too.
+   */
+  const [pendingDetailCascade, setPendingDetailCascade] = useState<{
+    projectId: ProjectDocument['projectId'];
+    name: string;
+    featureIds: FeatureId[];
+    dependents: { featureId: FeatureId; name: string }[];
+  } | null>(null);
   /** A refused suppression, asking whether to pause its dependents too. */
   const [pendingSuppression, setPendingSuppression] = useState<{
     projectId: ProjectDocument['projectId'];
@@ -4578,6 +4595,8 @@ export function App() {
     launchTool,
     validateSelectionEdit,
     handleSelectFeatureFromTree,
+    handleDeleteFeature,
+    handleDeleteImportedFace,
     toggleBodyVisibility,
     isolateBody
   });
@@ -4585,6 +4604,8 @@ export function App() {
     launchTool,
     validateSelectionEdit,
     handleSelectFeatureFromTree,
+    handleDeleteFeature,
+    handleDeleteImportedFace,
     toggleBodyVisibility,
     isolateBody
   };
@@ -7513,6 +7534,7 @@ export function App() {
     // command the new, empty one was somehow in the middle of.
     dispatchInteraction({ type: 'clear' });
     setPendingFeatureDelete(null);
+    setPendingDetailCascade(null);
     setPendingSuppression(null);
     setPendingResume(null);
     setPendingToolSwitch(null);
@@ -29945,7 +29967,7 @@ export function App() {
    */
   function handleDeleteImportedFace(
     selection: TopologySelection,
-    origin: 'imported' | 'cut' = 'imported'
+    origin: 'imported' | 'cut' | 'orphan' = 'imported'
   ) {
     // A pick may demand lineage while a complete validated body is already
     // displayed. The candidate rebuild re-resolves its face before healing.
@@ -29954,7 +29976,7 @@ export function App() {
     const base = manager?.document;
     if (!base) return;
     void import('./lib/featureDeletion')
-      .then(({ importedFaceDeletion, cutFaceDeletion }) => {
+      .then(({ importedFaceDeletion, cutFaceDeletion, orphanFaceDeletion }) => {
         const current = manager.document;
         if (
           managerRef.current !== manager ||
@@ -29969,14 +29991,18 @@ export function App() {
         const removal =
           origin === 'cut'
             ? cutFaceDeletion(current, selection)
-            : importedFaceDeletion(current, selection);
+            : origin === 'orphan'
+              ? orphanFaceDeletion(current, selection)
+              : importedFaceDeletion(current, selection);
         void validatedFeature.runTransaction([removal.command], {
           label: removal.command.label,
           targets: [removal.target],
           validatingMessage:
             origin === 'cut'
               ? 'Checking the cut removal…'
-              : 'Checking imported feature removal…',
+              : origin === 'orphan'
+                ? 'Checking the face removal…'
+                : 'Checking imported feature removal…',
           successMessage: removal.successMessage,
           onFailure: (message) => announce(message),
           onSuccess: () => {
@@ -29994,7 +30020,9 @@ export function App() {
             error,
             origin === 'cut'
               ? 'Could not fill this cut.'
-              : 'Could not remove this imported feature.'
+              : origin === 'orphan'
+                ? 'Could not delete this face.'
+                : 'Could not remove this imported feature.'
           )
         )
       );
@@ -30093,7 +30121,7 @@ export function App() {
     const feature = base && findFeature(base, featureId);
     if (base && feature && isRemovableDetail(feature)) {
       void import('./lib/featureDeletion')
-        .then(({ nativeFeatureDeletion }) => {
+        .then(({ nativeFeatureDeletion, detailCascade }) => {
           const current = manager.document;
           if (
             managerRef.current !== manager ||
@@ -30108,13 +30136,22 @@ export function App() {
           // A geometry-only echo may replace the document object while the
           // module loads. Its project/revision still owns this deletion.
           const removal = nativeFeatureDeletion(current, feature);
+          let cascade: readonly FeatureNode[] | null = null;
           void validatedFeature.runTransaction([removal.command], {
             label: `Delete ${name}`,
             targets: [],
-            validateDerived: removal.validateDerived,
+            validateDerived: (derived) => {
+              try {
+                removal.validateDerived(derived);
+              } catch (error) {
+                cascade = detailCascade(error);
+                throw error;
+              }
+            },
             validatingMessage: `Checking removal of ${name}…`,
             successMessage: deleteFeatureToastMessage(name, dependentCount),
-            onFailure: (message) => announce(message),
+            onFailure: (message) =>
+              offerDetailCascade(manager, name, [featureId], cascade, message),
             onSuccess: finish
           });
         })
@@ -30170,9 +30207,43 @@ export function App() {
     commitDeleteFeatures(featureIds, dependents.length);
   }
 
+  /**
+   * A detail delete refused because later details or edits were built on its
+   * geometry: offer to delete those too, as a refused suppression offers to
+   * pause its branch. Any other refusal is announced as before.
+   */
+  function offerDetailCascade(
+    owner: CommandManager | null | undefined,
+    name: string,
+    featureIds: readonly FeatureId[],
+    cascade: readonly FeatureNode[] | null,
+    message: string
+  ) {
+    const document = owner?.document;
+    const requested = new Set<FeatureId>(featureIds);
+    const dependents = (cascade ?? []).filter(
+      (dependent) => !requested.has(dependent.featureId)
+    );
+    if (!document || managerRef.current !== owner || dependents.length === 0) {
+      announce(message);
+      return;
+    }
+    setPendingDetailCascade({
+      projectId: document.projectId,
+      name,
+      featureIds: [...featureIds],
+      dependents: dependents.map(({ featureId, name: dependentName }) => ({
+        featureId,
+        name: dependentName
+      }))
+    });
+  }
+
   function commitDeleteFeatures(
     featureIds: readonly FeatureId[],
-    dependentCount: number
+    dependentCount: number,
+    /** The detail a cascade grew from, named again if it is refused. */
+    cascadeName?: string
   ) {
     const manager = managerRef.current;
     const base = manager?.document;
@@ -30197,7 +30268,7 @@ export function App() {
       );
     };
     void import('./lib/featureDeletion')
-      .then(({ batchFeatureDeletion }) => {
+      .then(({ batchFeatureDeletion, detailCascade }) => {
         const current = manager.document;
         if (
           managerRef.current !== manager ||
@@ -30210,14 +30281,31 @@ export function App() {
           return;
         }
         const removal = batchFeatureDeletion(current, featureIds);
-        if (removal.validateDerived) {
+        const { validateDerived } = removal;
+        if (validateDerived) {
+          let cascade: readonly FeatureNode[] | null = null;
           void validatedFeature.runTransaction(removal.commands, {
             label: removal.label,
             targets: [],
-            validateDerived: removal.validateDerived,
+            validateDerived: (derived) => {
+              try {
+                validateDerived(derived);
+              } catch (error) {
+                cascade = detailCascade(error);
+                throw error;
+              }
+            },
             validatingMessage: `Checking removal of ${countLabel(featureIds.length, 'feature', 'features')}…`,
             successMessage: message,
-            onFailure: (failure) => announce(failure),
+            onFailure: (failure) =>
+              offerDetailCascade(
+                manager,
+                cascadeName ??
+                  countLabel(featureIds.length, 'feature', 'features'),
+                featureIds,
+                cascade,
+                failure
+              ),
             onSuccess: finish
           });
           return;
@@ -31004,6 +31092,55 @@ export function App() {
       selection.bodyId
     );
     const feature = selectionFeature(current, body, selection);
+    // Delete does what the Del key does with this pick: a STEP face or a
+    // subtract's cut is healed in place, a face or edge a step defines
+    // deletes that step, and a face no step can be shown to own is healed.
+    const faceHeal: 'imported' | 'cut' | 'orphan' | null =
+      selection.kind !== 'face'
+        ? null
+        : listFeaturesInOrder(current).some(
+              (candidate) =>
+                candidate.bodyId === selection.bodyId &&
+                candidate.data.featureKind === 'imported-step'
+            )
+          ? 'imported'
+          : isCutFace(current, selection)
+            ? 'cut'
+            : feature
+              ? null
+              : 'orphan';
+    const deleteItem =
+      selection.kind === 'body'
+        ? null
+        : faceHeal
+          ? {
+              label: faceHeal === 'cut' ? 'Fill cut' : 'Delete face',
+              run: runCurrent((handlers) => {
+                if (
+                  handlers.validateSelectionEdit({ acceptCompleteCommit: true })
+                )
+                  handlers.handleDeleteImportedFace(
+                    menuSelection.selection,
+                    faceHeal
+                  );
+              })
+            }
+          : feature
+            ? {
+                label: `Delete ${feature.name}`,
+                run: runCurrent((handlers) => {
+                  if (
+                    handlers.validateSelectionEdit({
+                      acceptCompleteCommit: true
+                    })
+                  )
+                    handlers.handleDeleteFeature(
+                      feature.featureId,
+                      feature.name
+                    );
+                })
+              }
+            : null;
     // M16: a sheet-metal body (or one a later feature carried on) offers
     // its flat pattern.
     const sheetSource = sheetMetalFeatureForBody(current, selection.bodyId);
@@ -31126,6 +31263,21 @@ export function App() {
                   if (handlers.validateSelectionEdit())
                     handlers.handleSelectFeatureFromTree(feature.id, false);
                 })
+              }
+            ]
+          : []),
+        ...(deleteItem
+          ? [
+              {
+                item: {
+                  id: 'delete',
+                  label: deleteItem.label,
+                  icon: <Trash2 size={13} aria-hidden="true" />,
+                  shortcut: 'Del',
+                  danger: true,
+                  section: !feature
+                },
+                run: deleteItem.run
               }
             ]
           : [])
@@ -31814,6 +31966,7 @@ export function App() {
     !meshExportOpen &&
     !importUnitsPrompt &&
     !pendingFeatureDelete &&
+    !activeSuppressionPrompt(pendingDetailCascade, doc?.projectId) &&
     !activeSuppressionPrompt(pendingSuppression, doc?.projectId) &&
     !activeResumePrompt(pendingResume, doc) &&
     !pendingToolSwitch;
@@ -32597,6 +32750,25 @@ export function App() {
               selectedFeature.featureId,
               selectedFeature.name
             );
+            return;
+          }
+          // A face no step can be shown to own (its name was lost to an
+          // earlier edit) is healed in place, as a STEP face is, rather than
+          // doing nothing or deleting a guessed feature.
+          if (
+            featureSelectionSource !== 'pinned' &&
+            !selectedFeature &&
+            selectedTopology?.kind === 'face' &&
+            selectedEdges.length === 0 &&
+            !(
+              isOperationState(interaction) &&
+              interaction.phase !== 'armed' &&
+              interaction.phase !== 'failed'
+            ) &&
+            validateSelectionEdit({ acceptCompleteCommit: true })
+          ) {
+            event.preventDefault();
+            handleDeleteImportedFace(selectedTopology, 'orphan');
           }
           return;
       }
@@ -37218,6 +37390,28 @@ export function App() {
               }}
             />
           )}
+          {pendingDetailCascade &&
+            activeSuppressionPrompt(pendingDetailCascade, doc?.projectId) && (
+              <DeleteDependentsDialog
+                name={pendingDetailCascade.name}
+                dependents={pendingDetailCascade.dependents.map(
+                  (dependent) => dependent.name
+                )}
+                onCancel={() => setPendingDetailCascade(null)}
+                onDeleteAll={() => {
+                  const { name, featureIds, dependents } = pendingDetailCascade;
+                  setPendingDetailCascade(null);
+                  commitDeleteFeatures(
+                    [
+                      ...featureIds,
+                      ...dependents.map((dependent) => dependent.featureId)
+                    ],
+                    0,
+                    name
+                  );
+                }}
+              />
+            )}
           {pendingSuppression &&
             activeSuppressionPrompt(pendingSuppression, doc?.projectId) && (
               <SuppressFeatureDialog

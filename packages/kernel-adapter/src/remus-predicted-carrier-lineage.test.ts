@@ -345,4 +345,79 @@ describe('direct-edit lineage by exact predicted carrier', () => {
       })
     ).toBeUndefined();
   });
+
+  it('carries a re-trimmed cone by its exact curved carrier, and only a unique one', () => {
+    // A chamfer cone has no analytic witness term; its carrier key is read
+    // from the kernel's exact surface. A blend removal re-trims it.
+    const cone = (perimeter: number, centroid: [number, number, number]) =>
+      ({
+        surfaceType: 'cone',
+        perimeter,
+        centroid,
+        analytic: { kind: 'none' },
+        closure: { u: 'closed', v: 'open' }
+      }) satisfies FaceWitnessV1;
+    const band = cone(30_000_000, [0, 0, 9_500_000]);
+    const { state, candidates } = sourceOf({ top: [1, TOP], band: [2, band] });
+    const trimmed = cone(32_000_000, [0, 0, 9_400_000]);
+    const results = [face(11, { ...TOP, perimeter: 1 }), face(12, trimmed)];
+    const carried = deriveRemusPredictedCarrierDirectEditLineage({
+      source: state,
+      sourceCandidates: candidates,
+      resultCandidates: results,
+      predicted: new Map(),
+      curvedCarriers: {
+        source: new Map([[2, 'cone:A']]),
+        result: new Map([[12, 'cone:A']])
+      }
+    });
+    expect(namesOf(carried)).toEqual(
+      new Map([
+        [11, 'top'],
+        [12, 'band']
+      ])
+    );
+    expect(carried!.faceReferences.get(12)!.witness).toEqual(trimmed);
+
+    // Without the key, or with the carrier split in two, nothing is guessed.
+    for (const curvedCarriers of [
+      undefined,
+      {
+        source: new Map([[2, 'cone:A']]),
+        result: new Map([
+          [12, 'cone:A'],
+          [13, 'cone:A']
+        ])
+      },
+      {
+        source: new Map([[2, 'cone:A']]),
+        result: new Map([[12, 'cone:B']])
+      }
+    ]) {
+      const lineage = deriveRemusPredictedCarrierDirectEditLineage({
+        source: state,
+        sourceCandidates: candidates,
+        resultCandidates: [
+          ...results,
+          face(13, cone(5_000_000, [0, 0, 1_000_000]))
+        ],
+        predicted: new Map(),
+        ...(curvedCarriers ? { curvedCarriers } : {})
+      });
+      expect(namesOf(lineage).get(12)).toBeUndefined();
+    }
+
+    // A face the command edits takes its predicted carrier, never this key.
+    const edited = deriveRemusPredictedCarrierDirectEditLineage({
+      source: state,
+      sourceCandidates: candidates,
+      resultCandidates: results,
+      predicted: new Map([[2, null]]),
+      curvedCarriers: {
+        source: new Map([[2, 'cone:A']]),
+        result: new Map([[12, 'cone:A']])
+      }
+    });
+    expect(namesOf(edited).get(12)).toBeUndefined();
+  });
 });

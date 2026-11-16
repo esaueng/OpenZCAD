@@ -121,6 +121,7 @@ import {
   rebuildFaceDistance
 } from './exact-face-distance';
 import { preparedFaceMove } from './exact-prepared-face-move';
+import { curvedCarrierKeys } from './exact-curved-carrier';
 import { offsetFaceRefusalOf } from './exact-offset-face-refusal';
 import { modelingOperationRefusal } from './remus-operation-refusal';
 import {
@@ -1407,13 +1408,14 @@ function applyImportedHoleEdit(
  * Remove the feature the selected face belongs to.
  *
  * A through-hole is closed by fusing a plug of its own radius, exactly as
- * OpenCascade does. Anything else goes to Remus's `defeature`, which
- * rebuilds the body from the planes of the faces it keeps and therefore
- * only accepts a body whose every remaining face is planar. That
- * precondition is checked before the call so an unsupported selection is
- * named rather than silently reassembled, and the reassembly itself is held
- * to strict solid validation because its failure mode is a closed-looking
- * body with the wrong walls.
+ * OpenCascade does. Anything else goes to Remus's `defeature`, which extends
+ * the faces around the removed one until they close again. It decides for
+ * itself whether that neighbourhood can be extended exactly and refuses by
+ * name when it cannot, as it does for {@link removeFaces}: a body that also
+ * carries cylinders, cones or fillets elsewhere is no reason to refuse (the
+ * all-planar precondition this path once had predates that kernel). The
+ * result is still held to strict solid validation, because a defeature's
+ * failure mode is a closed-looking body with the wrong walls.
  */
 export function removeFaceFeature(
   kernel: RemusKernel,
@@ -1462,16 +1464,6 @@ export function removeFaceFeature(
   const keptFaces = Array.from(kernel.getSolidFaces(solid)).filter(
     (handle) => handle !== face
   );
-  const nonPlanar = new Set(
-    keptFaces
-      .map((handle) => kernel.getSurfaceType(handle))
-      .filter((surfaceType) => surfaceType !== 'plane')
-  );
-  if (nonPlanar.size > 0) {
-    throw new Error(
-      `Removing a ${geometry.surfaceType} face needs Remus's defeature operation, which only supports bodies whose every remaining face is planar; this body still has ${[...nonPlanar].sort().join(', ')} faces.`
-    );
-  }
   if (keptFaces.length < 4) {
     throw new Error(
       'Removing the selected face would leave too few faces to bound a solid.'
@@ -2748,11 +2740,16 @@ function predictedCarrierLineage(
   producingFeatureId: FeatureId | undefined,
   retiredPlacements?: ReadonlyMap<number, number>
 ): RemusLineageState | undefined {
+  const resultCandidates = topologyCandidatesForSolid(kernel, output);
   const lineage = deriveRemusPredictedCarrierDirectEditLineage({
     source: target.lineage,
     sourceCandidates,
-    resultCandidates: topologyCandidatesForSolid(kernel, output),
+    resultCandidates,
     predicted,
+    curvedCarriers: {
+      source: curvedCarrierKeys(kernel, sourceCandidates),
+      result: curvedCarrierKeys(kernel, resultCandidates)
+    },
     ...(retiredPlacements ? { retiredPlacements } : {})
   });
   return lineage && producingFeatureId
