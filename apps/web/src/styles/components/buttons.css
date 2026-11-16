@@ -243,8 +243,7 @@ button.command-rail:hover:not(:disabled, [aria-disabled='true'], .active),
 }
 
 /* Borderless at rest, so their hover edge is drawn inset and nothing moves. */
-.drawing-tool-hint-cancel:not(:hover):not(:focus-visible),
-.view-mode-section-off:not(:hover):not(:focus-visible) {
+.drawing-tool-hint-cancel:not(:hover):not(:focus-visible) {
   background: transparent;
 }
 
@@ -254,8 +253,7 @@ button.command-rail:hover:not(:disabled, [aria-disabled='true'], .active),
   border-color: transparent;
 }
 
-.drawing-tool-hint-cancel:is(:hover, :focus-visible),
-.view-mode-section-off:is(:hover, :focus-visible) {
+.drawing-tool-hint-cancel:is(:hover, :focus-visible) {
   background: var(--color-surface-hover);
   box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }

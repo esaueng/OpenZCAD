@@ -167,12 +167,14 @@ test(
     const sectionButton = page.getByRole('button', { name: /^Section view/ });
     await sectionButton.click();
     await expect(sectionButton).toHaveAttribute('aria-pressed', 'true');
-    // Assemble keeps the toolbox put away and says the cut is on in a chip,
-    // which carries the overlap note. The default cut is XY through the
-    // middle of the model, across both blades.
-    const chip = page.getByRole('group', { name: 'Section view on' });
-    await expect(chip).toContainText('XY plane');
-    const note = chip.getByRole('note');
+    // Assemble keeps the toolbox put away and says the cut is on in the
+    // status line, which carries the overlap note. The default cut is XY
+    // through the middle of the model, across both blades.
+    const line = page.locator('.workspace-toast:not(.hidden)');
+    await expect(line.getByRole('status')).toHaveText(
+      'Section · XY plane · overlap in this cut'
+    );
+    const note = line.getByRole('note');
     await expect(note).toHaveText(
       /^Overlap in this cut: Blade A and Blade B \(about 240 mm²\)\. Display evidence from the meshes on screen, not an exact clash check\.$/
     );
@@ -182,8 +184,11 @@ test(
       )
       .toEqual([2]);
     // Turning the cut off clears the highlight with it.
-    await chip.getByRole('button', { name: 'Turn off' }).click();
-    await expect(chip).toHaveCount(0);
+    const turnOff = line.getByRole('button', {
+      name: 'Turn off section view'
+    });
+    await turnOff.click();
+    await expect(turnOff).toHaveCount(0);
     await expect
       .poll(async () => (await overlapState(page)).sectionOverlaps.length)
       .toBe(0);

@@ -123,10 +123,9 @@ describe('column and panel sizes', () => {
     const css = sheet('quiet-stage.css');
     expect(rule(css, '.stage-right').bottom).toContain('var(--stage-corner-h)');
     // The cube (--cube-size) 4px off the edge, with a few pixels to spare;
-    // the ruler stands at the left. The section chip over the cube, while
-    // one shows, adds its height (ViewerShell publishes --section-chip-h).
+    // the ruler stands at the left.
     expect(rule(css, '.workspace.column-layout')['--stage-corner-h']).toBe(
-      'calc(var(--cube-size) + 8px + var(--section-chip-h, 0px))'
+      'calc(var(--cube-size) + 8px)'
     );
     expect(
       px(rule(sheet('../../theme/tokens.css'), ':root')['--cube-size'])
