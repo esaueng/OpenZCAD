@@ -230,6 +230,23 @@ import {
   moveToObjectFolder,
   setPrintClearance,
   type PrintClearanceSetInput,
+  createConfigurations,
+  deleteConfigurations,
+  addConfigurationRow,
+  renameConfigurationRow,
+  deleteConfigurationRow,
+  addConfigurationColumn,
+  deleteConfigurationColumn,
+  setConfigurationCell,
+  activateConfiguration,
+  type ConfigurationCreateInput,
+  type ConfigurationRowAddInput,
+  type ConfigurationRowRenameInput,
+  type ConfigurationRowDeleteInput,
+  type ConfigurationColumnAddInput,
+  type ConfigurationColumnDeleteInput,
+  type ConfigurationCellSetInput,
+  type ConfigurationActivateInput,
   addAssemblyComponents,
   updateAssemblyComponent,
   deleteAssemblyComponent,
@@ -417,6 +434,15 @@ export type CommandKind =
   | 'objectFolder.delete'
   | 'objectFolder.move'
   | 'printClearance.set'
+  | 'configuration.create'
+  | 'configuration.delete'
+  | 'configuration.row.add'
+  | 'configuration.row.rename'
+  | 'configuration.row.delete'
+  | 'configuration.column.add'
+  | 'configuration.column.delete'
+  | 'configuration.cell.set'
+  | 'configuration.activate'
   | 'assembly.components.add'
   | 'assembly.component.update'
   | 'assembly.component.delete'
@@ -536,6 +562,15 @@ export type AnyCommand =
   | CommandDefinition<ObjectFolderDeleteInput>
   | CommandDefinition<ObjectFolderMoveInput>
   | CommandDefinition<PrintClearanceSetInput>
+  | CommandDefinition<ConfigurationCreateInput>
+  | CommandDefinition<Record<string, never>>
+  | CommandDefinition<ConfigurationRowAddInput>
+  | CommandDefinition<ConfigurationRowRenameInput>
+  | CommandDefinition<ConfigurationRowDeleteInput>
+  | CommandDefinition<ConfigurationColumnAddInput>
+  | CommandDefinition<ConfigurationColumnDeleteInput>
+  | CommandDefinition<ConfigurationCellSetInput>
+  | CommandDefinition<ConfigurationActivateInput>
   | CommandDefinition<AssemblyComponentsAddInput>
   | CommandDefinition<AssemblyComponentUpdateInput>
   | CommandDefinition<AssemblyComponentDeleteInput>
@@ -1669,7 +1704,7 @@ function validateStandardPartInput(
     resolvedModelingValue(document, `standard part ${label}`, param);
   if (input.hole !== undefined) validateStandardPartHole(document, input);
   if (standardPartHasLength(input.partKind)) {
-    // M17 (schema v71): in a hole, an absent length is matched to it.
+    // M17 (schema v74): in a hole, an absent length is matched to it.
     if (input.length === undefined) {
       if (input.hole !== undefined) return validatePlacement();
       throw new Error(`A ${standardPartNoun(input)} needs a length.`);
@@ -1714,7 +1749,7 @@ function validateStandardPartInput(
 }
 
 /**
- * M17 (schema v71): a part inserted into a hole names an M01 hole feature,
+ * M17 (schema v74): a part inserted into a hole names an M01 hole feature,
  * is a screw or a dowel pin, and is the size the hole takes: a screw the
  * hole's standard size, a dowel pin the hole's diameter.
  */
@@ -3552,6 +3587,80 @@ export const commandFactories = {
   ): CommandDefinition<ObjectFolderMoveInput> {
     return makeCommand('objectFolder.move', label, payload, (document) =>
       moveToObjectFolder(document, payload)
+    );
+  },
+  createConfigurations(
+    payload: ConfigurationCreateInput,
+    label = 'Add configurations'
+  ): CommandDefinition<ConfigurationCreateInput> {
+    return makeCommand('configuration.create', label, payload, (document) =>
+      createConfigurations(document, payload)
+    );
+  },
+  deleteConfigurations(
+    label = 'Remove configurations'
+  ): CommandDefinition<Record<string, never>> {
+    return makeCommand('configuration.delete', label, {}, (document) =>
+      deleteConfigurations(document)
+    );
+  },
+  addConfigurationRow(
+    payload: ConfigurationRowAddInput,
+    label = `Add configuration ${payload.name}`
+  ): CommandDefinition<ConfigurationRowAddInput> {
+    return makeCommand('configuration.row.add', label, payload, (document) =>
+      addConfigurationRow(document, payload)
+    );
+  },
+  renameConfigurationRow(
+    payload: ConfigurationRowRenameInput,
+    label = `Rename configuration to ${payload.name}`
+  ): CommandDefinition<ConfigurationRowRenameInput> {
+    return makeCommand('configuration.row.rename', label, payload, (document) =>
+      renameConfigurationRow(document, payload)
+    );
+  },
+  deleteConfigurationRow(
+    payload: ConfigurationRowDeleteInput,
+    label = 'Delete configuration'
+  ): CommandDefinition<ConfigurationRowDeleteInput> {
+    return makeCommand('configuration.row.delete', label, payload, (document) =>
+      deleteConfigurationRow(document, payload)
+    );
+  },
+  addConfigurationColumn(
+    payload: ConfigurationColumnAddInput,
+    label = 'Add configuration column'
+  ): CommandDefinition<ConfigurationColumnAddInput> {
+    return makeCommand('configuration.column.add', label, payload, (document) =>
+      addConfigurationColumn(document, payload)
+    );
+  },
+  deleteConfigurationColumn(
+    payload: ConfigurationColumnDeleteInput,
+    label = 'Remove configuration column'
+  ): CommandDefinition<ConfigurationColumnDeleteInput> {
+    return makeCommand(
+      'configuration.column.delete',
+      label,
+      payload,
+      (document) => deleteConfigurationColumn(document, payload)
+    );
+  },
+  setConfigurationCell(
+    payload: ConfigurationCellSetInput,
+    label = 'Edit configuration'
+  ): CommandDefinition<ConfigurationCellSetInput> {
+    return makeCommand('configuration.cell.set', label, payload, (document) =>
+      setConfigurationCell(document, payload)
+    );
+  },
+  activateConfiguration(
+    payload: ConfigurationActivateInput,
+    label = 'Switch configuration'
+  ): CommandDefinition<ConfigurationActivateInput> {
+    return makeCommand('configuration.activate', label, payload, (document) =>
+      activateConfiguration(document, payload)
     );
   },
   setPrintClearance(
@@ -5698,6 +5807,36 @@ function assemblyOnly(entry: DocumentHistoryEntry | undefined): boolean {
   return sectionOnly(entry, isAssemblyCommandKind, 'assembly');
 }
 
+/**
+ * F06: a configuration command that edits only the table. Activating a row,
+ * and setting a parameter or suppression cell of the active row, change the
+ * model; body and material cells change what is shown and exported but not
+ * the geometry, so they keep the ready geometry too.
+ */
+export function isConfigurationTableOnlyCommand(
+  command: AnyCommand,
+  document: ProjectDocument
+): boolean {
+  if (command.commands)
+    return (
+      command.commands.length > 0 &&
+      command.commands.every((child) =>
+        isConfigurationTableOnlyCommand(child, document)
+      )
+    );
+  if (!command.kind.startsWith('configuration.')) return false;
+  if (command.kind === 'configuration.activate') return false;
+  if (command.kind === 'configuration.cell.set') {
+    const payload = command.payload as ConfigurationCellSetInput;
+    return (
+      payload.rowId !== document.configurations?.activeRowId ||
+      payload.column.kind === 'body' ||
+      payload.column.kind === 'material'
+    );
+  }
+  return true;
+}
+
 /** I05: a command that edits reference images and never the model. */
 export function isReferenceImageCommandKind(kind: string): boolean {
   return kind.startsWith('reference-image.');
@@ -6519,6 +6658,57 @@ export function replayCommands(
         next = moveToObjectFolder(
           next,
           command.payload as ObjectFolderMoveInput
+        );
+        break;
+      case 'configuration.create':
+        next = createConfigurations(
+          next,
+          command.payload as ConfigurationCreateInput
+        );
+        break;
+      case 'configuration.delete':
+        next = deleteConfigurations(next);
+        break;
+      case 'configuration.row.add':
+        next = addConfigurationRow(
+          next,
+          command.payload as ConfigurationRowAddInput
+        );
+        break;
+      case 'configuration.row.rename':
+        next = renameConfigurationRow(
+          next,
+          command.payload as ConfigurationRowRenameInput
+        );
+        break;
+      case 'configuration.row.delete':
+        next = deleteConfigurationRow(
+          next,
+          command.payload as ConfigurationRowDeleteInput
+        );
+        break;
+      case 'configuration.column.add':
+        next = addConfigurationColumn(
+          next,
+          command.payload as ConfigurationColumnAddInput
+        );
+        break;
+      case 'configuration.column.delete':
+        next = deleteConfigurationColumn(
+          next,
+          command.payload as ConfigurationColumnDeleteInput
+        );
+        break;
+      case 'configuration.cell.set':
+        next = setConfigurationCell(
+          next,
+          command.payload as ConfigurationCellSetInput
+        );
+        break;
+      case 'configuration.activate':
+        next = activateConfiguration(
+          next,
+          command.payload as ConfigurationActivateInput
         );
         break;
       case 'printClearance.set':

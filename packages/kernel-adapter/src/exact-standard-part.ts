@@ -125,7 +125,7 @@ export function buildStandardPartFeature(
   const xDirection = data.xDirection
     ? vector(data.xDirection, 'x direction')
     : undefined;
-  // M17 (schema v71): in a hole, one part in each of its bores; else one
+  // M17 (schema v74): in a hole, one part in each of its bores; else one
   // where it was placed.
   const placements: { frame: PartFrame; length: number | undefined }[] =
     data.hole
@@ -170,7 +170,7 @@ export function buildStandardPartFeature(
 }
 
 /**
- * M17 (schema v71): where a part in an M01 hole stands, one place per bore
+ * M17 (schema v74): where a part in an M01 hole stands, one place per bore
  * the hole drills, in document units. Each bore is drilled again, untapped,
  * into the hole's input body (exactly as the hole drills it), and read back
  * as its cylinder: the cylinder's end nearer the entry is the seat (a

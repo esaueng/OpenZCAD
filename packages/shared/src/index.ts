@@ -15,6 +15,7 @@ export * from './keymap-settings';
 export * from './drawings';
 export * from './object-folders';
 export * from './print-clearance';
+export * from './configurations';
 export * from './assembly';
 export * from './assembly-coupling';
 export * from './assembly-kinematics';
@@ -38,6 +39,7 @@ import type { SheetMetalFeatureFields } from './sheet-metal';
 import type { SketchPromotion } from './sketch-promotions';
 import type { ObjectFolderSet } from './object-folders';
 import type { AssemblySet } from './assembly';
+import type { ConfigurationSet } from './configurations';
 import type { PipeThreadSize } from './pipe-threads';
 import type {
   StandardPartKind,
@@ -320,12 +322,24 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // nut, washer, threaded insert, dowel pin or ball bearing generated from its
 // standard's table as a new body. An older client has no builder for the
 // kind and would drop the body on rebuild, so it must refuse. Builds on v68.
-// v70 is claimed by D02 per-sheet drawing properties (#1641).
-// v71 adds M17 parts inserted into M01 holes (`hole` on a standard part):
+// v70 adds D02 drawing properties (`format` on a drawing sheet): the units,
+// precision, angle format and decimal separator its dimensions print in and
+// per-class line weights. Absent keeps every default, so every older sheet
+// draws unchanged. An older client would print in the document's units and
+// drop them on its next save, so it must refuse. Builds on v69.
+// v72 adds F06 configurations (`configurations`): a variant table whose rows
+// are named configurations and whose columns are parameters, feature
+// suppression, body visibility and material, with one active row. Absent
+// means no table, so every older document builds unchanged. An older client
+// would show and export bodies the active row hides and drop the table on
+// its next save, so it must refuse. Builds on v70 (v71 is claimed by M17).
+// v73 is claimed by D02 centre marks and centrelines (#1646).
+// v74 adds M17 parts inserted into M01 holes (`hole` on a standard part):
 // the part stands in each of the hole's bores and takes its matched length
 // where it stores none. An older client would build one part at the stored
-// origin, or none without a length, so it must refuse.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 71 as const;
+// origin, or none without a length, so it must refuse. (M17 first claimed
+// v71, which F06 left free, but a v72 client has no `hole` either.)
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 74 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -3985,6 +3999,11 @@ export interface ProjectDocument {
    * before. See `documentPrintClearance` in document-core.
    */
   printClearance?: ParamValue;
+  /**
+   * F06 (schema v72): the variant table, its rows and the active row. See
+   * `configurations.ts`. Absent means the document has no configurations.
+   */
+  configurations?: ConfigurationSet;
 }
 
 export interface SerializedCommand<TPayload = unknown> {

@@ -248,7 +248,7 @@ describe('M17 Standard part command', () => {
   });
 });
 
-describe('M17 Standard part into a hole (schema v71)', () => {
+describe('M17 Standard part into a hole (schema v74)', () => {
   const HOLE_ID = 'feat_hole' as FeatureId;
   const hole = {
     featureKind: 'hole',

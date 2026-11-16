@@ -30,7 +30,7 @@ import {
 } from '@openzcad/shared';
 
 /**
- * M17 slice 2 (schema v71): standard parts inserted into M01 holes — the
+ * M17 slice 2 (schema v74): standard parts inserted into M01 holes — the
  * size a hole takes, the length matched to it, and the exact parts standing
  * in each bore, following the hole when it changes.
  */
@@ -226,8 +226,8 @@ describe('M17 holes: document contract', () => {
       ...patch
     }) as StandardPartInput;
 
-  it('stores a part in a hole, without a length, at schema v71', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(71);
+  it('stores a part in a hole, without a length, at schema v74', () => {
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(74);
     const { document, holeId } = holed();
     expect(() =>
       commandFactories.standardPartBody(part(holeId)).validate(document)
@@ -239,10 +239,10 @@ describe('M17 holes: document contract', () => {
     expect(() => assertDocumentContentSchema(next)).not.toThrow();
     const old = {
       ...document,
-      schemaVersion: 70
+      schemaVersion: 73
     } as unknown as ProjectDocument;
     expect(() => standardPartBody(old, part(holeId))).toThrow(
-      /Parts inserted into holes require project schema v71/
+      /Parts inserted into holes require project schema v74/
     );
   });
 

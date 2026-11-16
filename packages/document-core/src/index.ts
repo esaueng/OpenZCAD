@@ -69,6 +69,7 @@ export * from './assembly-interference';
 export * from './gear-mesh';
 export * from './hole-callout';
 export * from './print-clearance';
+export * from './configurations';
 export * from './reference-images';
 export * from './body-consumption';
 export {
@@ -83,6 +84,7 @@ export {
   normalizeDocumentHistory
 } from './document-history';
 import {
+  configurationHiddenBodyIds,
   isDocumentHistory,
   isReservedRecordKey,
   ownEntry,
@@ -4515,6 +4517,9 @@ export function getParameterHiddenBodyIds(
       for (const bodyId of parameter.toggle.bodyIds) hidden.add(bodyId);
     }
   }
+  // F06: a body the active configuration hides is hidden the same way.
+  for (const bodyId of configurationHiddenBodyIds(document.configurations))
+    hidden.add(bodyId);
   return hidden;
 }
 
@@ -4915,7 +4920,7 @@ export function getParameterScope(
 }
 
 /** Recomputes the cached `value` field of every parameter node. */
-function refreshParameterValues(document: ProjectDocument): void {
+export function refreshParameterValues(document: ProjectDocument): void {
   const { scope } = getParameterScope(document);
   for (const parameter of listParameters(document)) {
     const value = ownEntry(scope, parameter.name);
@@ -5220,7 +5225,7 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   // M17: a screw's head goes off a part that is no longer a screw, a length
   // off a part that has none (or, in a hole, is matched again), the
   // x-direction back to the default, and the hole when the part is placed
-  // on a face instead (schema v71).
+  // on a face instead (schema v74).
   'standard-part': ['head', 'length', 'xDirection', 'hole'],
   // Schema v53: every size and placement field falls back to the face or its
   // documented default; the custom-profile fields may go only off a custom
@@ -7633,7 +7638,7 @@ export {
 export { resolvedSketchDocument } from './sketch-geometry';
 
 /**
- * M17 (schema v71): an M01 hole feature a standard part can go into: its
+ * M17 (schema v74): an M01 hole feature a standard part can go into: its
  * name, its stored data, and its entry face's outward normal as `bodies`
  * (the derived body representations) show it. Null for anything else.
  */

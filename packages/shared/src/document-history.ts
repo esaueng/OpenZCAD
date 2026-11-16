@@ -3,6 +3,7 @@ import { drawingSetError } from './drawings';
 import { objectFolderSetError } from './object-folders';
 import { printClearanceError } from './print-clearance';
 import { assemblySetError } from './assembly';
+import { configurationSetError } from './configurations';
 import {
   documentFeatureKinds,
   historyChangeIdentifierError,
@@ -38,7 +39,8 @@ export const HISTORY_FIELDS = [
   'objectFolders',
   'referenceImages',
   'assembly',
-  'printClearance'
+  'printClearance',
+  'configurations'
 ] as const;
 export type HistoryField = (typeof HISTORY_FIELDS)[number];
 
@@ -225,6 +227,16 @@ export function isDocumentHistory(
           (change.key !== undefined ||
             [change.before, change.after].some(
               (side) => side !== undefined && assemblySetError(side) !== null
+            ))
+        )
+          return false;
+        // The same holds for the F06 configuration table.
+        if (
+          change.field === 'configurations' &&
+          (change.key !== undefined ||
+            [change.before, change.after].some(
+              (side) =>
+                side !== undefined && configurationSetError(side) !== null
             ))
         )
           return false;
