@@ -2093,7 +2093,7 @@ test('signs in with an email code only when cloud profile access is requested', 
   await expect(page.getByText('Security check complete.')).toBeVisible();
   await expect(page.getByLabel('Email address')).toHaveAttribute(
     'type',
-    'password'
+    'email'
   );
   await page.getByLabel('Email address').fill('maker@example.com');
   await expect(
