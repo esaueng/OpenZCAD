@@ -173,7 +173,7 @@ describe('openzcad-mcp file grants', () => {
       try {
         await chmod(directory, 0o777);
         await expect(openGrants([path])).rejects.toThrow(
-          /folder on the path to .* is writable by other users/
+          /folder on the path to .* is writable by its group or by other users/
         );
         await chmod(directory, 0o1777);
         await expect(openGrants([path])).resolves.toHaveLength(1);
@@ -200,7 +200,7 @@ describe('openzcad-mcp file grants', () => {
       try {
         await chmod(join(directory, 'inner'), 0o777);
         await expect(openGrants([path])).rejects.toThrow(
-          /folder on the path to .* is writable by other users/
+          /folder on the path to .* is writable by its group or by other users/
         );
         // A grant made before the ancestor opened up is refused on its next read.
         const refusal = await workspace.load('nested').then(
@@ -211,6 +211,12 @@ describe('openzcad-mcp file grants', () => {
         expect(refusal?.message).toMatch(/folder on the path/);
         await chmod(join(directory, 'inner'), 0o1777);
         await expect(openGrants([path])).resolves.toHaveLength(1);
+        // Group write alone is refused too: the user's primary group may be
+        // shared with other accounts (macOS `staff`).
+        await chmod(join(directory, 'inner'), 0o770);
+        await expect(openGrants([path])).rejects.toThrow(
+          /writable by its group or by other users/
+        );
       } finally {
         await chmod(join(directory, 'inner'), 0o700);
       }

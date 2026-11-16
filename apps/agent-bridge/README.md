@@ -16,7 +16,7 @@ contacts OpenZCAD, and holds no account credentials or keys. It works on
    backup is.
 2. Make the file yours alone if it is not already: `chmod go-w Block.openzcad`.
    The server refuses a file another user owns or can write, or one under any folder
-   other users can write (unless the folder has the sticky bit, as `/tmp` does)
+   its group or other users can write (unless the folder has the sticky bit, as `/tmp` does)
    or that another account owns.
    It checks again on every read and write, and refuses a file that was moved
    or replaced by a link after it started.

@@ -77,10 +77,10 @@ export function grantedFileProblem(info: Stats, label: string): string | null {
  * Why one folder on a granted file's path is unsafe, or null. Whoever can
  * write a folder can rename or replace anything in it — the file, or a
  * folder further down the path, with a link to somewhere else — unless the
- * sticky bit reserves that to each entry's owner. A folder writable by its
- * group is accepted only when that group is the user's own primary group
- * (the usual private-group setup). A folder owned by another account other
- * than root is refused too: its owner can change its permissions at will.
+ * sticky bit reserves that to each entry's owner. That includes a folder
+ * writable only by its group: the user's primary group may have other
+ * members. A folder owned by another account other than root is refused
+ * too: its owner can change its permissions at will.
  */
 export function grantFolderProblem(info: Stats, label: string): string | null {
   const user = currentUser();
@@ -90,11 +90,10 @@ export function grantFolderProblem(info: Stats, label: string): string | null {
   if (info.uid !== user.uid && info.uid !== 0)
     return `A folder on the path to ${label} belongs to another user, who could replace the file. Move it to a folder only you and the system control.`;
   if ((info.mode & 0o1000) !== 0) return null;
-  if (
-    (info.mode & 0o002) !== 0 ||
-    ((info.mode & 0o020) !== 0 && info.gid !== user.gid)
-  )
-    return `A folder on the path to ${label} is writable by other users, who could replace the file. Move it to a folder only you can write.`;
+  // Group write is refused like other write: a primary group does not prove
+  // the user is its only member (macOS accounts share `staff`).
+  if ((info.mode & 0o022) !== 0)
+    return `A folder on the path to ${label} is writable by its group or by other users, who could replace the file. Remove that permission (chmod go-w) or move the file to a folder only you can write.`;
   return null;
 }
 
