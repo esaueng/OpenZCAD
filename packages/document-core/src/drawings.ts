@@ -12,6 +12,7 @@ import {
   type DrawingDetail,
   type DrawingSheetFormat,
   type DrawingSheetId,
+  type DrawingSectionStep,
   type DrawingTitleBlock,
   type DrawingView,
   type DrawingViewId,
@@ -67,6 +68,8 @@ export interface DrawingViewUpdateInput {
   bodyIds?: BodyId[];
   /** D03: moves a section view's cutting plane, in model units. */
   sectionDepth?: number;
+  /** D03 (v93): a section's steps; empty removes them. */
+  sectionSteps?: DrawingSectionStep[];
   /** D03 (v78): a detail view's circle and scale; omitted fields are kept. */
   detail?: Partial<Pick<DrawingDetail, 'center' | 'radius' | 'scale'>>;
   /**
@@ -439,6 +442,15 @@ export function updateDrawingView(
       if (!view.section)
         throw new Error(`Drawing view ${input.viewId} is not a section.`);
       view.section = { ...view.section, depth: input.sectionDepth };
+    }
+    if (input.sectionSteps !== undefined) {
+      if (!view.section)
+        throw new Error(`Drawing view ${input.viewId} is not a section.`);
+      const { steps: _previous, ...rest } = view.section;
+      view.section =
+        input.sectionSteps.length > 0
+          ? { ...rest, steps: input.sectionSteps.map((step) => ({ ...step })) }
+          : rest;
     }
     if (input.bodyIds) view.bodyIds = [...input.bodyIds];
     if (input.centerMm) {

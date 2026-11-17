@@ -62,6 +62,7 @@ import {
   drawingToleranceError,
   MAX_DRAWING_DIMENSION_DECIMALS,
   MAX_DRAWING_IMAGE_WIDTH_MM,
+  MAX_DRAWING_SECTION_STEPS,
   MAX_DRAWING_NOTE_LENGTH,
   MIN_DRAWING_IMAGE_WIDTH_MM,
   type DrawingAnnotation,
@@ -86,6 +87,7 @@ import {
   drawingPaperMm,
   drawingPaperPerModelUnit,
   drawingSectionOrientations,
+  drawingSectionCut,
   drawingSectionPlane,
   drawingViewAlignment,
   formatDrawingScale,
@@ -97,11 +99,11 @@ import {
   type DrawingSheet,
   type DrawingSheetId,
   type DrawingTitleBlock,
+  type DrawingSectionStep,
   type DrawingView,
   type DrawingViewId,
   type DrawingViewOrientation,
   type ProjectDocument,
-  type Vector3,
   hasDraftDisplay
 } from '@openzcad/shared';
 import {
@@ -339,7 +341,8 @@ export interface DrawingWorkspaceProps {
   requestSection?: (
     document: ProjectDocument,
     bodyIds: BodyId[],
-    plane: { normal: Vector3; depth: number },
+    /** v93: with a stepped section's steps. */
+    plane: ReturnType<typeof drawingSectionCut>,
     signal: AbortSignal
   ) => Promise<Record<string, SectionBodyInput>>;
   /** Why drawing edits are refused, or null. */
@@ -437,6 +440,11 @@ function viewIntentKey(view: DrawingView): string {
           ? `|frame:${[view.section.frame.direction, view.section.frame.x]
               .map((v) => `${v.x},${v.y},${v.z}`)
               .join('|')}`
+          : ''
+      }${
+        // v93: a stepped section's steps.
+        view.section.steps?.length
+          ? `|steps:${view.section.steps.map((step) => `${step.at}@${step.depth}`).join(',')}`
           : ''
       }`
     : '';
@@ -638,7 +646,7 @@ function useViewProjections(
     const cuts = new Map<
       string,
       {
-        plane: { normal: Vector3; depth: number };
+        plane: ReturnType<typeof drawingSectionCut>;
         row: string | null;
         bodyIds: Set<BodyId>;
         views: DrawingView[];
@@ -653,7 +661,13 @@ function useViewProjections(
       const row = projectionViewRow(view);
       if (planeKey && view.section) {
         const cut = cuts.get(planeKey) ?? {
-          plane: drawingSectionPlane({ ...view, section: view.section }),
+          // v93: a stepped section's steps go with its plane.
+          plane: drawingSectionCut(
+            { ...view, section: view.section },
+            sheet.views.find(
+              (entry) => entry.viewId === view.section!.sourceViewId
+            )?.orientation
+          ),
           row,
           bodyIds: new Set<BodyId>(),
           views: []
@@ -1390,6 +1404,108 @@ function AnnotationList(props: {
           values from the model and follow the sheet&apos;s Update.
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * D03 (v93): where along its line a stepped section's steps may go: the
+ * source's extent along the line (its u for a horizontal line, v for a
+ * vertical one), in model units.
+ */
+function sectionStepRange(
+  source: DrawingView,
+  section: DrawingView,
+  drawn: ViewState | undefined
+): [number, number] | null {
+  if (drawn?.state !== 'ready' || !drawn.projection.bounds) return null;
+  const alignment = drawingViewAlignment(
+    source.orientation,
+    section.orientation
+  );
+  if (alignment === null) return null;
+  const bounds = drawn.projection.bounds;
+  return alignment === 'column'
+    ? [bounds.minU, bounds.maxU]
+    : [bounds.minV, bounds.maxV];
+}
+
+/** D03 (v93): a section's steps: where each starts and its own cut. */
+function SectionStepFields(props: {
+  steps: readonly DrawingSectionStep[];
+  firstDepth: number;
+  /** World coordinate per stored depth, as the Cut at field shows it. */
+  sign: number;
+  axisLabel: string;
+  units: string;
+  /** The source's extent along the line; null while it is not drawn. */
+  bounds: [number, number] | null;
+  editable: boolean;
+  onCommit: (steps: DrawingSectionStep[]) => void;
+}) {
+  const { steps, sign } = props;
+  const commit = (next: DrawingSectionStep[]) =>
+    props.onCommit([...next].sort((a, b) => a.at - b.at));
+  const add = () => {
+    if (!props.bounds) return;
+    const [low, high] = props.bounds;
+    const last = steps.at(-1);
+    const from = last ? last.at : low;
+    const at = Math.round(((from + high) / 2) * 10) / 10;
+    commit([...steps, { at, depth: last ? last.depth : props.firstDepth }]);
+  };
+  return (
+    <div className="drawing-section-steps">
+      {steps.map((step, index) => (
+        <div key={index} className="drawing-field-row">
+          <NumberField
+            label={`Step ${index + 1} at (${props.units})`}
+            value={step.at}
+            disabled={!props.editable}
+            onCommit={(at) =>
+              commit(
+                steps.map((entry, i) =>
+                  i === index ? { ...entry, at } : entry
+                )
+              )
+            }
+          />
+          <NumberField
+            label={`Step ${index + 1} cut at ${props.axisLabel} (${props.units})`}
+            value={step.depth * sign}
+            disabled={!props.editable}
+            onCommit={(value) =>
+              commit(
+                steps.map((entry, i) =>
+                  i === index ? { ...entry, depth: value * sign } : entry
+                )
+              )
+            }
+          />
+          <button
+            type="button"
+            className="secondary"
+            disabled={!props.editable}
+            aria-label={`Remove step ${index + 1}`}
+            onClick={() => commit(steps.filter((_, i) => i !== index))}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="secondary"
+        disabled={
+          !props.editable ||
+          !props.bounds ||
+          steps.length >= MAX_DRAWING_SECTION_STEPS
+        }
+        onClick={add}
+        title="Step the cutting line to another depth along its run"
+      >
+        Add step
+      </button>
     </div>
   );
 }
@@ -6200,6 +6316,39 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                         )
                       }
                     />
+                    {!free && source && (
+                      <SectionStepFields
+                        steps={section.steps ?? []}
+                        firstDepth={section.depth}
+                        sign={sign}
+                        axisLabel={axis.toUpperCase()}
+                        units={document.units}
+                        bounds={
+                          projections.get(source.viewId)?.state === 'ready'
+                            ? (sectionStepRange(
+                                source,
+                                selectedView,
+                                projections.get(source.viewId)
+                              ) ?? null)
+                            : null
+                        }
+                        editable={editable}
+                        onCommit={(steps) =>
+                          run(
+                            commandFactories.updateDrawingView(
+                              {
+                                sheetId: sheet.sheetId,
+                                viewId: selectedView.viewId,
+                                sectionSteps: steps
+                              },
+                              steps.length > 0
+                                ? 'Edit section steps'
+                                : 'Remove section steps'
+                            )
+                          )
+                        }
+                      />
+                    )}
                     <p className="drawing-hint">
                       Cut from the{' '}
                       {source

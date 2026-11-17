@@ -394,7 +394,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // the project's reference images printed on the paper. An older client
 // would refuse the unknown kind, so it must refuse the document. Builds on
 // v91.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 92 as const;
+// v93 adds D03 stepped sections (`steps` on a drawing view's `section`): an
+// aligned section whose cutting line steps to other depths along its run.
+// An older client would cut one plane at the first depth, so it must
+// refuse. Builds on v92.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 93 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

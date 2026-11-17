@@ -410,6 +410,38 @@ export function hasDrawingAuxiliary(value: unknown): boolean {
   return false;
 }
 
+/** D03 stepped sections (schema v93). */
+export function assertDrawingSteppedSectionSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 93, 'Stepped sections');
+}
+
+/** Whether `value` holds a v93 stepped section (a section with steps). */
+export function hasDrawingSteppedSection(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (
+      typeof entry.sourceViewId === 'string' &&
+      typeof entry.depth === 'number' &&
+      Array.isArray(entry.steps) &&
+      entry.steps.length > 0
+    )
+      return true;
+    // A view update's `sectionSteps`, setting or clearing them.
+    if (Array.isArray(entry.sectionSteps)) return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
 /** D02 sheet images (schema v92). */
 export function assertDrawingImageSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 92, 'Sheet images');
@@ -660,6 +692,12 @@ export function assertDocumentContentCommandSchema(
     if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('drawing.') &&
+      hasDrawingSteppedSection(command.payload)
+    )
+      assertDrawingSteppedSectionSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
       hasDrawingDetail(command.payload)
     )
       assertDrawingDetailSchema(document.schemaVersion);
@@ -851,6 +889,16 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         (hasDrawingImage(change.before) || hasDrawingImage(change.after))
       )
         assertDrawingImageSchema(document.schemaVersion);
+  if (hasDrawingSteppedSection(document.drawings))
+    assertDrawingSteppedSectionSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingSteppedSection(change.before) ||
+          hasDrawingSteppedSection(change.after))
+      )
+        assertDrawingSteppedSectionSchema(document.schemaVersion);
   if (hasDrawingDetail(document.drawings))
     assertDrawingDetailSchema(document.schemaVersion);
   if (hasDrawingBom(document.drawings))
