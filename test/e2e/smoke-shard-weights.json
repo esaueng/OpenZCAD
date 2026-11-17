@@ -45,6 +45,8 @@
   "drawing-stepped-sections.spec.ts": 14,
   "drawing-fits.spec.ts": 12,
   "drawing-gdt.spec.ts": 12,
+  "model-pmi.spec.ts": 14,
+  "step-pmi.spec.ts": 12,
   "drawing-title-block-layouts.spec.ts": 10,
   "drawing-tolerances.spec.ts": 14,
   "drawings.spec.ts": 16,

@@ -2141,6 +2141,7 @@ function projectGeometryInputs(document: ProjectDocument): unknown {
     objectFolders: _objectFolders,
     referenceImages: _referenceImages,
     assembly: _assembly,
+    pmi: _pmi,
     editHistory: _editHistory,
     ...inputs
   } = projectRebuildInputs(document) as Partial<ProjectDocument>;
@@ -2230,6 +2231,7 @@ export type ProjectWorkDifference =
   | 'referenceImages'
   | 'objectFolders'
   | 'assembly'
+  | 'pmi'
   | 'undoHistory'
   | 'fileFormat'
   | 'edits'
@@ -2242,6 +2244,7 @@ const WORK_DIFFERENCE_BY_KEY: Partial<Record<string, ProjectWorkDifference>> = {
   referenceImages: 'referenceImages',
   objectFolders: 'objectFolders',
   assembly: 'assembly',
+  pmi: 'pmi',
   editHistory: 'undoHistory',
   schemaVersion: 'fileFormat'
 };
@@ -2294,6 +2297,7 @@ function listWorkDifferences(
     'referenceImages',
     'objectFolders',
     'assembly',
+    'pmi',
     'edits',
     'savePoints',
     'undoHistory',

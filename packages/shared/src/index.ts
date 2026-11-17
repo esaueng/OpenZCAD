@@ -58,6 +58,7 @@ import type {
 export * from './drawing-annotations';
 export * from './topology-reference';
 export * from './reference-images';
+export * from './model-pmi';
 export * from './e2ee-project-groups';
 export * from './e2ee-project-authority';
 export * from './e2ee-project-documents';
@@ -71,6 +72,7 @@ export * from './e2ee-share-links';
 export * from './share-link-token';
 export * from './e2ee-project-migrations';
 import type { ReferenceImageSet } from './reference-images';
+import type { ModelPmiSet } from './model-pmi';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
 export type ProjectId = Brand<string, 'ProjectId'>;
@@ -425,7 +427,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // and refuse the unknown kind, so it must refuse the document. Builds on
 // v101 (v100 was left unused when M06 landed first; v102-v104 are claimed by
 // #1740, #1741 and #1732).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 105 as const;
+// v106 adds D07 model-based definition (`pmi`): datum features and feature
+// control frames stored on the model's faces. An older client would drop
+// the unknown section on save, so it must refuse the document. Builds on
+// v105.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 106 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -4478,6 +4484,12 @@ export interface ProjectDocument {
    * lies where, never its pixels. Absent means the project has none.
    */
   referenceImages?: ReferenceImageSet;
+  /**
+   * D07 model-based definition (schema v106): datum features and feature
+   * control frames on the model's faces. Never read by a rebuild. Absent
+   * means the model carries none.
+   */
+  pmi?: ModelPmiSet;
   /**
    * AS01/AS02 assembly (schema v54): components, grounding, joints, saved
    * positions and motion studies. Never read by a rebuild. Absent means the

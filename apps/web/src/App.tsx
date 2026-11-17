@@ -214,7 +214,7 @@ import {
   isConfigurationTableOnlyCommand,
   isDrawingCommand,
   isObjectFolderCommandKind,
-  isReferenceImageCommandKind,
+  isGeometryFreeCommandKind,
   type AnyCommand
 } from '@openzcad/command-system';
 import type {
@@ -11192,7 +11192,7 @@ export function App() {
       // Drawings, images and folders edit presentation without rebuilding.
       if (
         isDrawingCommand(command) ||
-        isReferenceImageCommandKind(command.kind) ||
+        isGeometryFreeCommandKind(command.kind) ||
         isObjectFolderCommandKind(command.kind) ||
         isAssemblyOnlyCommand(command) ||
         isConfigurationTableOnlyCommand(command, beforeDocument)
@@ -17467,7 +17467,7 @@ export function App() {
     const parametersOnly = managerRef.current.undoIsParameterOnly;
     const drawingOnly = managerRef.current.undoIsDrawingOnly;
     const folderOnly = managerRef.current.undoIsObjectFolderOnly;
-    const imageOnly = managerRef.current.undoIsReferenceImageOnly;
+    const imageOnly = managerRef.current.undoIsGeometryFree;
     const assemblyOnly = managerRef.current.undoIsAssemblyOnly;
     if (drawingOnly) {
       if (!ensureCanEditDrawings('undo')) return;
@@ -17549,7 +17549,7 @@ export function App() {
     const parametersOnly = managerRef.current.redoIsParameterOnly;
     const drawingOnly = managerRef.current.redoIsDrawingOnly;
     const folderOnly = managerRef.current.redoIsObjectFolderOnly;
-    const imageOnly = managerRef.current.redoIsReferenceImageOnly;
+    const imageOnly = managerRef.current.redoIsGeometryFree;
     const assemblyOnly = managerRef.current.redoIsAssemblyOnly;
     if (drawingOnly) {
       if (!ensureCanEditDrawings('redo')) return;
@@ -35676,6 +35676,7 @@ export function App() {
       onSelectReferenceImage={(imageId) =>
         openReferenceImage(imageId as ReferenceImageId)
       }
+      onPmiCommand={executeCommand}
       warnings={diagnostics}
       pendingHistoryStep={pendingHistoryStepFor(commandSession)}
       editingHistoryFeatureId={editedFeatureIdFor(interaction, offsetPlanEdit)}

@@ -49,7 +49,7 @@ disabled. Show a body in the viewport to include it in the file.
 | Format       | Keeps                                                                                                                                                                    | Drops                                                                                           |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
 | STEP (AP214) | Each body as its own solid named after the body and styled in its display colour, the document as the product, exact analytic faces, bounds, volume, closed shells, unit | History                                                                                         |
-| STEP (AP242) | Same as AP214: the protocol changes only the file's schema and application-context statements                                                                            | History                                                                                         |
+| STEP (AP242) | Same as AP214, plus the model's datum features and feature control frames as semantic PMI on their faces                                                                 | History                                                                                         |
 | IGES (B-rep) | Each body as its own type 186 solid, exact analytic and B-spline faces, bounds, volume, closed shells, cavities, the stated unit                                         | Names, colours, history                                                                         |
 | STL (binary) | Bounds and volume within the chord tolerance, a closed surface                                                                                                           | Body separation (one facet stream), exact faces, unit, names, colours                           |
 | STL (ASCII)  | Same as binary STL                                                                                                                                                       | Same as binary STL; every body shares one `solid` block                                         |
@@ -77,8 +77,10 @@ flat reader, at each part's own origin, and the import says so.
 **STEP protocol:** Settings → General → _STEP protocol_ picks what File ›
 STEP states: AP214 (automotive design, the default and what every STEP export
 wrote before the choice existed) or AP242 edition 1 (managed model-based 3D
-engineering). Both files hold the same entities after the header; Insert
-project always travels as AP214.
+engineering). Both files hold the same geometry and presentation entities
+after the header; an AP242 file also carries the model's PMI (D07) as
+semantic datum features, datums and geometric tolerances, each tied to the
+exact face it applies to. Insert project always travels as AP214.
 
 3MF names and colours use only the 3MF core format: each `<object>` carries
 its body's `name`, and one core `<basematerials>` group holds a `<base>` per

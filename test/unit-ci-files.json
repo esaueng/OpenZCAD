@@ -124,6 +124,8 @@
     "test/drawing-stepped-sections.test.ts",
     "test/drawing-fits.test.ts",
     "test/drawing-gdt.test.ts",
+    "test/model-pmi.test.ts",
+    "test/step-pmi.test.ts",
     "test/drawing-title-block-layouts.test.ts",
     "test/e2e-shards.test.ts",
     "test/e2ee-authority-fork.test.ts",

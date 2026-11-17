@@ -17,6 +17,7 @@
 import type { BodyId, StepProtocol } from '@openzcad/shared';
 
 import type { ExportUnitOptions } from './export-units';
+import { appendStepPmi, type StepPmiEntry, type StepPmiPart } from './step-pmi';
 
 /** A STEP export's unit plus the header's file name and time stamp. */
 export interface StepExportOptions extends ExportUnitOptions {
@@ -70,6 +71,11 @@ export interface StepExportMetadata {
    * folder, the file is one product holding every solid, as before.
    */
   assembly?: StepExportAssembly;
+  /**
+   * D07: the model's PMI, written as AP242 semantic PMI when the file is
+   * AP242 and one product (no Objects folders). Absent writes none.
+   */
+  pmi?: readonly StepPmiEntry[];
 }
 
 /** Objects folders as a STEP product tree (I02). */
@@ -260,6 +266,8 @@ type StepProductRef = {
   definition: string;
   representation: string;
   frame: string;
+  /** Its PRODUCT_DEFINITION_SHAPE, where a part's PMI belongs (D07). */
+  shape?: string;
 };
 
 /**
@@ -278,7 +286,7 @@ function writeAssembly(
   assembly: StepExportAssembly,
   breps: readonly string[],
   representation: RegExpExecArray
-): void {
+): StepPmiPart[] {
   const total = assembly.bodies.reduce((sum, body) => sum + body.solidCount, 0);
   if (total !== breps.length) {
     throw new Error(
@@ -354,7 +362,8 @@ function writeAssembly(
     return {
       definition: definitionId,
       representation: shapeRepresentation,
-      frame: placement
+      frame: placement,
+      shape
     };
   };
   let occurrences = 0;
@@ -387,12 +396,20 @@ function writeAssembly(
     );
   }
   let next = 0;
+  // D07: each solid's part, where its PMI belongs.
+  const parts: StepPmiPart[] = [];
   for (const body of assembly.bodies) {
     const solids = breps.slice(next, next + body.solidCount);
     next += body.solidCount;
     const made = product(body.name, 'part', solids);
     place(made, body.folder === null ? root : folders[body.folder]!, body.name);
+    for (let solid = 0; solid < body.solidCount; solid += 1)
+      parts.push({
+        productShape: made.shape!,
+        representation: made.representation
+      });
   }
+  return parts;
 }
 
 /**
@@ -527,8 +544,38 @@ export function finishStepExport(
   entity(
     `MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION('', (${styled.join(', ')}), #${representation[4]})`
   );
-  if (metadata.assembly && metadata.assembly.folders.length > 0) {
-    writeAssembly(data, entity, metadata.assembly, breps, representation);
+  const assembled = Boolean(
+    metadata.assembly && metadata.assembly.folders.length > 0
+  );
+  // D07: semantic PMI on the shape of the product each solid belongs to:
+  // the one product, or (with Objects folders) each body's own part.
+  let parts: StepPmiPart[] | null = null;
+  if (assembled) {
+    parts = writeAssembly(
+      data,
+      entity,
+      metadata.assembly!,
+      breps,
+      representation
+    );
+  }
+  if (metadata.pmi?.length && metadata.protocol === 'ap242') {
+    if (!parts) {
+      const shapes = data.filter(
+        (line) => ENTITY_LINE.exec(line)?.[2] === 'PRODUCT_DEFINITION_SHAPE'
+      );
+      if (shapes.length !== 1) {
+        throw new Error(
+          `The STEP writer wrote ${shapes.length} product shapes for one product; export refused.`
+        );
+      }
+      const part: StepPmiPart = {
+        productShape: /^#\d+/.exec(shapes[0]!)![0],
+        representation: /^#\d+/.exec(representation[1]!)![0]
+      };
+      parts = breps.map(() => part);
+    }
+    appendStepPmi({ data, entity, breps, parts }, metadata.pmi);
   }
 
   return [

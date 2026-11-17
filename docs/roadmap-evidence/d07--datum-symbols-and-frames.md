@@ -1,6 +1,5 @@
 ---
 row: D07
-state: Partial
 ---
 
 Slice A, datum feature symbols and feature control frames on drawing views

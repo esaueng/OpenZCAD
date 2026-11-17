@@ -28,6 +28,7 @@ import type {
   UnitSystem
 } from '@openzcad/shared';
 import type { DiagnosticRow } from '../../lib/diagnosticsRows';
+import type { AnyCommand } from '@openzcad/command-system';
 import type { HistoryRowActions } from '../HistoryTimeline';
 import type { ObjectFolderActions } from './ObjectsPanel';
 import type { BodyAppearancePreview } from '../ModelViewer';
@@ -103,6 +104,11 @@ export interface ModelPanelSource {
   selectedReferenceImageId?: string | null;
   /** Opens a reference image's card. */
   onSelectReferenceImage?(imageId: string): void;
+  /**
+   * D07: runs a PMI command behind the edit guard (the workspace's own
+   * command runner); absent, Objects lists no PMI.
+   */
+  onPmiCommand?(command: AnyCommand): boolean;
   warnings: DiagnosticRow[];
   historyDetails?: ReactNode;
   /**

@@ -576,6 +576,26 @@ export const DRAWING_GEOMETRIC_CHARACTERISTICS = [
 export type DrawingGeometricCharacteristic =
   (typeof DRAWING_GEOMETRIC_CHARACTERISTICS)[number];
 
+/** v98: each characteristic's name, for lists, labels and STEP. */
+export const DRAWING_CHARACTERISTIC_LABELS: Readonly<
+  Record<DrawingGeometricCharacteristic, string>
+> = {
+  straightness: 'Straightness',
+  flatness: 'Flatness',
+  circularity: 'Circularity',
+  cylindricity: 'Cylindricity',
+  'profile-line': 'Profile of a line',
+  'profile-surface': 'Profile of a surface',
+  parallelism: 'Parallelism',
+  perpendicularity: 'Perpendicularity',
+  angularity: 'Angularity',
+  position: 'Position',
+  concentricity: 'Concentricity',
+  symmetry: 'Symmetry',
+  'circular-runout': 'Circular runout',
+  'total-runout': 'Total runout'
+};
+
 /** v98: form tolerances, which control a feature alone and take no datum. */
 export const DRAWING_FORM_CHARACTERISTICS: readonly DrawingGeometricCharacteristic[] =
   ['straightness', 'flatness', 'circularity', 'cylindricity'];
@@ -1271,6 +1291,19 @@ function toleranceAnnotationError(
       value.attachedTo === value.annotationId)
   )
     return `${where} is a ${name} attached to an invalid annotation id.`;
+  return toleranceFieldsError(value, where);
+}
+
+/**
+ * v98: a datum symbol's letter, or a frame's characteristic, amount, zone,
+ * modifier and datum references, or why they are malformed. Shared by the
+ * drawing annotations and (v106) the model's PMI.
+ */
+export function toleranceFieldsError(
+  value: Record<string, unknown>,
+  where: string
+): string | null {
+  const datum = value.kind === 'datum-feature';
   if (datum) {
     if (
       typeof value.letter !== 'string' ||
