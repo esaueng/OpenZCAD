@@ -288,7 +288,10 @@ import type {
   ParamValue,
   ConfigurationSet,
   FaceTopology,
+  ProjectAccessRole,
   ProjectCheckpoint,
+  ProjectComment,
+  ProjectCommentAnchor,
   PlaneId,
   ProjectDocument,
   ProjectOrganization,
@@ -643,6 +646,11 @@ import {
   LIVE_SESSION_CONNECTING,
   LiveSessionNotice
 } from './components/LiveSessionNotice';
+import type { CommentPin } from './components/ModelViewer';
+import {
+  ENCRYPTED_COMMENTS_UNAVAILABLE,
+  projectCommentsApi
+} from './lib/projectCommentsApi';
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
   ActivityLogButton,
@@ -1479,6 +1487,11 @@ const LazySharedLinkCopyDialog = lazyWithStaleChunkNotice(() =>
     default: module.SharedLinkCopyDialog
   }))
 );
+const LazyCommentsPanel = lazyWithStaleChunkNotice(() =>
+  import('./components/CommentsPanel').then((module) => ({
+    default: module.CommentsPanel
+  }))
+);
 const LazySaveRevisionDialog = lazyWithStaleChunkNotice(() =>
   import('./components/SaveRevisionDialog').then((module) => ({
     default: module.SaveRevisionDialog
@@ -1672,6 +1685,8 @@ const ResumeSessionDialog = withSuspense(LazyResumeSessionDialog);
 const SharedLinkCopyDialog = withSuspense(LazySharedLinkCopyDialog);
 
 const SaveRevisionDialog = withSuspense(LazySaveRevisionDialog);
+
+const CommentsPanel = withSuspense(LazyCommentsPanel);
 
 const DeleteFeatureDialog = withSuspense(LazyDeleteFeatureDialog);
 
@@ -3249,6 +3264,20 @@ export function App() {
   >(new Set());
   /** Open while the user is naming a save point. */
   const [namingSave, setNamingSave] = useState(false);
+  /** L08: the review comments panel, and what it holds for which project. */
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [projectComments, setProjectComments] = useState<{
+    projectId: string;
+    comments: ProjectComment[];
+  } | null>(null);
+  const [commentsError, setCommentsError] = useState<string | null>(null);
+  const [commentPlacing, setCommentPlacing] = useState(false);
+  const commentPlacingRef = useRef(false);
+  commentPlacingRef.current = commentPlacing;
+  const [commentDraft, setCommentDraft] = useState<ProjectCommentAnchor | null>(
+    null
+  );
+  const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   const [pendingFeatureDelete, setPendingFeatureDelete] = useState<{
     featureId: FeatureId;
     name: string;
@@ -20133,12 +20162,106 @@ export function App() {
     return loop.length > 1 ? loop : [selection];
   }
 
+  // L08 review comments: a plaintext project in the account, for every
+  // member. An encrypted project's are not offered until they can travel as
+  // encrypted records, so nothing about them is sent in plaintext.
+  const commentsUnavailableReason = !doc
+    ? null
+    : isEncryptedProject(doc.projectId)
+      ? ENCRYPTED_COMMENTS_UNAVAILABLE
+      : !session || !activeProjectIsCloud
+        ? 'Save this project to your account to comment on it.'
+        : null;
+  const commentRole: ProjectAccessRole =
+    collaboration.role ??
+    (session && doc?.ownerUserId === session.userId ? 'owner' : 'viewer');
+  const shownComments =
+    doc && projectComments?.projectId === doc.projectId
+      ? projectComments.comments
+      : [];
+  const commentPins: CommentPin[] = shownComments
+    .filter((comment) => comment.parentId === null)
+    .flatMap((comment, index) =>
+      comment.anchor
+        ? [
+            {
+              id: comment.commentId,
+              label: String(index + 1),
+              description: `Comment ${index + 1} by ${comment.authorName}: ${comment.text}`,
+              point: {
+                x: comment.anchor.point[0],
+                y: comment.anchor.point[1],
+                z: comment.anchor.point[2]
+              },
+              resolved: comment.resolvedAt !== null,
+              active: comment.commentId === activeCommentId
+            }
+          ]
+        : []
+    );
+  const loadComments = useCallback(async (projectId: string) => {
+    try {
+      const comments = await projectCommentsApi.list(projectId);
+      if (managerRef.current?.document.projectId !== projectId) return;
+      setProjectComments({ projectId, comments });
+      setCommentsError(null);
+    } catch (error) {
+      setCommentsError(errorMessage(error, 'Comments could not be loaded.'));
+    }
+  }, []);
+  // Loaded when the panel opens on a project that can hold them; closed or
+  // moved to another project, the pins and any placement go.
+  useEffect(() => {
+    setCommentPlacing(false);
+    setCommentDraft(null);
+    setActiveCommentId(null);
+    if (!commentsOpen || !doc || commentsUnavailableReason) return;
+    void loadComments(doc.projectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commentsOpen, doc?.projectId, commentsUnavailableReason]);
+  function openComments() {
+    setCommentsOpen(true);
+  }
+  /** Runs one comment change, then reloads the list; false when it failed. */
+  async function runCommentAction(
+    action: (projectId: string) => Promise<void>
+  ): Promise<boolean> {
+    const projectId = managerRef.current?.document.projectId;
+    if (!projectId) return false;
+    try {
+      await action(projectId);
+      await loadComments(projectId);
+      return true;
+    } catch (error) {
+      setCommentsError(errorMessage(error, 'That comment could not be saved.'));
+      return false;
+    }
+  }
+
   function handleSelectTopologyFromViewer(
     selection: TopologySelection | null,
     additive: boolean,
     detail?: PickDetail,
     contextMenu?: { x: number; y: number }
   ): boolean {
+    // L08: while a comment is being placed, a press on the model pins it
+    // there and selects nothing.
+    if (commentPlacingRef.current && !contextMenu) {
+      const current = managerRef.current?.document;
+      if (selection && detail?.point && current) {
+        setCommentDraft({
+          point: [detail.point.x, detail.point.y, detail.point.z],
+          ...(detail.normal
+            ? { normal: [detail.normal.x, detail.normal.y, detail.normal.z] }
+            : {}),
+          ...(selection.bodyId ? { bodyId: selection.bodyId } : {}),
+          documentVersion: current.version
+        });
+        setCommentPlacing(false);
+        setStatus('Write your comment in the Comments panel.');
+      }
+      return true;
+    }
     if (inPlaceRef.current.active) {
       // The command owns the model's clicks: profiles, axis lines, curves,
       // and the faces a face tool takes. A stray pick must not open a card
@@ -35229,6 +35352,7 @@ export function App() {
           }
           onGoHome={() => void handleGoHome()}
           onOpenSharing={() => setSharingOpen(true)}
+          {...(shareSession ? {} : { onOpenComments: openComments })}
           onSignIn={() => openSettingsAt('account')}
           onOpenSettings={openSettings}
           encryption={
@@ -35781,6 +35905,12 @@ export function App() {
                     inPlace.values
                   ))
             }
+            {...(commentsOpen && commentPins.length
+              ? {
+                  commentPins,
+                  onCommentPinClick: (id: string) => setActiveCommentId(id)
+                }
+              : {})}
             onPlacementClick={(point) =>
               bendPlacementPlane
                 ? pickBendFixedPoint(point)
@@ -37630,6 +37760,65 @@ export function App() {
                 }
               }}
               onClose={() => setContextMenu(null)}
+            />
+          ) : null}
+          {commentsOpen && doc && !shareSession ? (
+            <CommentsPanel
+              comments={
+                projectComments?.projectId === doc.projectId
+                  ? projectComments.comments
+                  : null
+              }
+              error={commentsError}
+              unavailableReason={commentsUnavailableReason}
+              currentUserId={session?.userId ?? null}
+              role={commentRole}
+              activeId={activeCommentId}
+              onSelect={setActiveCommentId}
+              placing={commentPlacing}
+              onStartPlacing={() => {
+                setCommentDraft(null);
+                setCommentPlacing(true);
+              }}
+              onCancelPlacing={() => setCommentPlacing(false)}
+              hasDraft={commentDraft !== null}
+              onPostThread={(text) =>
+                commentDraft
+                  ? runCommentAction(async (projectId) => {
+                      const created = await projectCommentsApi.create(
+                        projectId,
+                        { anchor: commentDraft, text }
+                      );
+                      setCommentDraft(null);
+                      setActiveCommentId(created.commentId);
+                    })
+                  : Promise.resolve(false)
+              }
+              onCancelDraft={() => setCommentDraft(null)}
+              onReply={(threadId, text) =>
+                runCommentAction((projectId) =>
+                  projectCommentsApi
+                    .create(projectId, { parentId: threadId, text })
+                    .then(() => undefined)
+                )
+              }
+              onResolve={(threadId, resolved) =>
+                void runCommentAction((projectId) =>
+                  projectCommentsApi
+                    .resolve(projectId, threadId, resolved)
+                    .then(() => undefined)
+                )
+              }
+              onDelete={(commentId) =>
+                void runCommentAction((projectId) =>
+                  projectCommentsApi.remove(projectId, commentId)
+                )
+              }
+              onClose={() => {
+                setCommentsOpen(false);
+                setCommentPlacing(false);
+                setCommentDraft(null);
+              }}
             />
           ) : null}
           {sharingOpen &&

@@ -1041,6 +1041,18 @@ let analysisOverlayModule: Promise<AnalysisOverlayModule> | undefined;
 const loadAnalysisOverlay = () =>
   (analysisOverlayModule ??= import('@openzcad/viewport/analysis-overlay'));
 
+/** L08: a review comment's pin, drawn at its point on the model. */
+export interface CommentPin {
+  id: string;
+  /** The thread's number, printed on the pin. */
+  label: string;
+  /** What a screen reader hears for the pin. */
+  description: string;
+  point: Vector3;
+  resolved?: boolean;
+  active?: boolean;
+}
+
 export interface ModelViewerProps {
   parameterVisualPreview?: ParameterVisualPreview | null;
   bodies: GeometryBodyRepresentation[];
@@ -1406,6 +1418,9 @@ export interface ModelViewerProps {
    */
   placementPlane?: { origin: Vector3; normal: Vector3 } | null;
   onPlacementClick?(point: Vector3): void;
+  /** L08: review comment pins; a press on one reports its id. */
+  commentPins?: readonly CommentPin[];
+  onCommentPinClick?(id: string): void;
   /**
    * U09: a primitive placed by a press-drag. A press on a flat face of one of
    * `bodyIds` draws on that face's plane, anywhere else on the ground (or
@@ -2489,6 +2504,8 @@ export function ModelViewer({
   onPickDatum,
   placementPlane = null,
   onPlacementClick,
+  commentPins,
+  onCommentPinClick,
   onMeasurePreview,
   regionHandle,
   modelPanelsHidden = false,
@@ -2873,6 +2890,15 @@ export function ModelViewer({
   placementPlaneRef.current = placementPlane;
   const onPlacementClickRef = useRef(onPlacementClick);
   onPlacementClickRef.current = onPlacementClick;
+  const onCommentPinClickRef = useRef(onCommentPinClick);
+  onCommentPinClickRef.current = onCommentPinClick;
+  const updateCommentPinsRef = useRef<(() => void) | null>(null);
+  /** Makes one comment pin on the HUD; set when the viewer mounts. */
+  const commentPinFactoryRef = useRef<(() => HTMLDivElement) | null>(null);
+  /** L08 comment pins, each placed at its point every frame. */
+  const commentPinsRef = useRef<
+    { id: string; element: HTMLDivElement; origin: THREE.Vector3 }[]
+  >([]);
   const planePickerOffsetRef = useRef(planePickerOffset);
   planePickerOffsetRef.current = planePickerOffset;
   const datumPlaneRigRef = useRef<DatumPlaneRig | null>(null);
@@ -5045,6 +5071,30 @@ export function ModelViewer({
       return chip;
     };
     axisLabelFactoryRef.current = () => hud.create('axis-pick-label');
+    commentPinFactoryRef.current = () => hud.create('comment-pin');
+    /** Sets each comment pin on its point; hides one behind the camera. */
+    function updateCommentPins() {
+      const pins = commentPinsRef.current;
+      if (pins.length === 0) return;
+      const camera = context.activeCamera;
+      const width = canvasWidth();
+      const height = canvasHeight();
+      for (const pin of pins) {
+        if (isBehindCamera(pin.origin, camera)) {
+          pin.element.hidden = true;
+          continue;
+        }
+        const ndc = pin.origin.clone().project(camera);
+        const x = ((ndc.x + 1) / 2) * width;
+        const y = ((1 - ndc.y) / 2) * height;
+        if (x < 0 || y < 0 || x > width || y > height) {
+          pin.element.hidden = true;
+          continue;
+        }
+        hud.showAt(pin.element, x, y);
+      }
+    }
+    updateCommentPinsRef.current = updateCommentPins;
     /**
      * Sets each axis name tag a little way along its own line from the
      * line's origin, on whichever side stays on the canvas; hides it behind
@@ -12966,6 +13016,7 @@ export function ModelViewer({
       // of its own: the command's anchor has to be the frame's last word.
       updateCommandChips();
       updateAxisLabels();
+      updateCommentPinsRef.current?.();
       // Read the current presentation after every preview has posed its meshes.
       // Reuse the body's bounds for the scale bar, then include sketches in the
       // camera range without letting grids, axes or HUD decorations set it.
@@ -15785,6 +15836,57 @@ export function ModelViewer({
     }
     contextRef.current?.requestRender();
   }, [selectedAxisId, axisPickerKey]);
+
+  // L08 comment pins: rebuilt when the set of pins or their state changes,
+  // placed every frame by `updateCommentPins`.
+  const commentPinsKey = (commentPins ?? [])
+    .map(
+      (pin) =>
+        `${pin.id}:${pin.label}:${pin.point.x},${pin.point.y},${pin.point.z}:${pin.resolved ? 1 : 0}${pin.active ? 1 : 0}:${pin.description}`
+    )
+    .join('|');
+  const commentPinsPropRef = useRef(commentPins);
+  commentPinsPropRef.current = commentPins;
+  useEffect(() => {
+    const context = contextRef.current;
+    const makePin = commentPinFactoryRef.current;
+    if (!context || !makePin) return;
+    const pins = (commentPinsPropRef.current ?? []).map((pin) => {
+      const element = makePin();
+      element.textContent = pin.label;
+      element.setAttribute('role', 'button');
+      element.setAttribute('aria-label', pin.description);
+      element.tabIndex = 0;
+      element.dataset.commentId = pin.id;
+      element.classList.toggle('is-resolved', Boolean(pin.resolved));
+      element.classList.toggle('is-active', Boolean(pin.active));
+      const open = (event: Event) => {
+        event.stopPropagation();
+        onCommentPinClickRef.current?.(pin.id);
+      };
+      element.addEventListener('pointerdown', (event) =>
+        event.stopPropagation()
+      );
+      element.addEventListener('click', open);
+      element.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        open(event);
+      });
+      return {
+        id: pin.id,
+        element,
+        origin: new THREE.Vector3(pin.point.x, pin.point.y, pin.point.z)
+      };
+    });
+    commentPinsRef.current = pins;
+    context.requestRender();
+    return () => {
+      for (const pin of pins) pin.element.remove();
+      if (commentPinsRef.current === pins) commentPinsRef.current = [];
+      context.requestRender();
+    };
+  }, [commentPinsKey]);
 
   // U09 command handles: each built per key and disposed with it; a key
   // that survives keeps its rig, so a value change never rebuilds one. A

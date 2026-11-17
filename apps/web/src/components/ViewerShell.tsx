@@ -35,6 +35,7 @@ import {
   type FaceResizeCommit,
   type ModelViewerProps,
   type ViewportContextMenuOptions,
+  type CommentPin,
   type CylinderRadiusHandleTarget,
   type EdgeHandleTarget,
   type OrientationDragControls,
@@ -379,6 +380,9 @@ interface ViewerShellProps {
   /** See `ModelViewer`: the plane an empty click lands on, and where. */
   placementPlane?: { origin: Vector3; normal: Vector3 } | null;
   onPlacementClick?(point: Vector3): void;
+  /** L08: review comment pins, as `ModelViewer` draws them. */
+  commentPins?: readonly CommentPin[];
+  onCommentPinClick?(id: string): void;
   /**
    * A drag of the selected datum's handle, as a change to its stored offset
    * (already signed for a reversed datum). The handle arms only when this is
@@ -611,6 +615,8 @@ export function ViewerShell({
   onPickDatum,
   placementPlane = null,
   onPlacementClick,
+  commentPins,
+  onCommentPinClick,
   onDatumOffsetDrag,
   datumOffsetDraft = null,
   onDatumOffsetEntry,
@@ -1055,6 +1061,8 @@ export function ViewerShell({
         onPickDatum={onPickDatum}
         placementPlane={placementPlane}
         {...(onPlacementClick ? { onPlacementClick } : {})}
+        {...(commentPins ? { commentPins } : {})}
+        {...(onCommentPinClick ? { onCommentPinClick } : {})}
         onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}
         modelPanelsHidden={modelPanelsHidden}
