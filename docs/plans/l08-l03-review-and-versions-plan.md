@@ -127,13 +127,16 @@ fragment in `docs/roadmap-evidence/`.
    signed, chained comment log per member, merged by the rules in that PR.
    The unsigned `share-comment` half belongs to decision 2 and is not built.
 2. **Unsigned visitor comments.** Accept that anyone holding a commenter link
-   can write comments members will see, labelled "via link".
+   can write comments members will see, labelled "via link". **Approved by
+   the owner on 2026-11-17:** visitors' comments travel encrypted under the
+   link's share key (`share-comment`), unsigned, and the owner can hide them.
 3. **Grant mode `comment`.** Adding a value to the owner-signed link grant's
    mode; older browsers refuse a grant with an unknown mode (fail closed), so
-   a commenter link opens only on an updated build.
+   a commenter link opens only on an updated build. **Approved by the owner
+   on 2026-11-17.**
 4. **Drawing sheets on links.** Per-sheet opt-in by an editor, rather than
    per-link by the owner. An editor can already put any text in the model a
-   link serves.
+   link serves. **Approved by the owner on 2026-11-17**, as built in #1670.
 5. **Comments on encryption.** Until encrypted comments exist, encrypting a
    plaintext project deletes its plaintext comments with the rest of its
    plaintext records (ADR-024 leaves the account no plaintext). Once slice 8
