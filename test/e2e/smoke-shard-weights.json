@@ -120,6 +120,7 @@
   "standalone-gear-height.spec.ts": 24,
   "standard-parts-bom.spec.ts": 30,
   "standard-parts-holes.spec.ts": 30,
+  "standard-parts-threads.spec.ts": 20,
   "standard-parts.spec.ts": 20,
   "start-screen-import-rename.spec.ts": 20,
   "start-screen-refresh.spec.ts": 7,

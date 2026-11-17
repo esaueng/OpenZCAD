@@ -39,6 +39,16 @@ import { holeStandardThread, type HoleStandardSystem } from './hole-standards';
 /** What a standard part is. */
 export type StandardPartKind =
   'screw' | 'nut' | 'washer' | 'insert' | 'dowel' | 'bearing';
+/**
+ * How a threaded part's thread is built: cut by the M15 generator, or
+ * (schema v83) simplified, left as the plain cylinder a drawing shows.
+ */
+export type StandardPartThread = 'modeled' | 'simplified';
+export const STANDARD_PART_THREADS: readonly StandardPartThread[] = [
+  'modeled',
+  'simplified'
+];
+
 /** A screw's head. */
 export type StandardScrewHead = 'socket' | 'hex' | 'countersunk';
 /** ISO metric or ANSI inch, as for hole standards. */

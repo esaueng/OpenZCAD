@@ -181,6 +181,8 @@ export function assertStandardPartSchema(
   assertMinimumProjectSchema(version, 69, 'Standard parts');
   if (record(data) && data.hole !== undefined)
     assertMinimumProjectSchema(version, 77, 'Parts inserted into holes');
+  if (record(data) && data.thread !== undefined)
+    assertMinimumProjectSchema(version, 83, 'Simplified threads');
 }
 
 /**
@@ -483,6 +485,18 @@ export function assertDocumentContentCommandSchema(
         document.schemaVersion,
         77,
         'Parts inserted into holes'
+      );
+    // M17 (schema v83): `thread` is a standard part's only, as `hole` is.
+    if (
+      record(command.payload.data) &&
+      command.payload.data.thread !== undefined &&
+      (command.payload.data.featureKind === undefined ||
+        command.payload.data.featureKind === 'standard-part')
+    )
+      assertMinimumProjectSchema(
+        document.schemaVersion,
+        83,
+        'Simplified threads'
       );
     switch (command.kind) {
       case 'sketch.add':

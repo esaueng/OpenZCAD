@@ -53,6 +53,7 @@ import {
   standardPartHasLength,
   standardPartMinimumLengthMm,
   standardPartNoun,
+  standardPartIsThreaded,
   standardPartProblem,
   standardPartForHole,
   createId,
@@ -1701,6 +1702,15 @@ function validateStandardPartInput(
 ): void {
   const problem = standardPartProblem(input);
   if (problem) throw new Error(problem);
+  // M17 (schema v83): only a threaded part has a thread to simplify.
+  if (input.thread !== undefined) {
+    if (input.thread !== 'modeled' && input.thread !== 'simplified') {
+      throw new Error('A thread is modeled or simplified.');
+    }
+    if (!standardPartIsThreaded(input.partKind)) {
+      throw new Error(`A ${standardPartNoun(input)} has no thread.`);
+    }
+  }
   const value = (label: string, param: ParamValue) =>
     resolvedModelingValue(document, `standard part ${label}`, param);
   if (input.hole !== undefined) validateStandardPartHole(document, input);

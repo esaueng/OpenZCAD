@@ -1,0 +1,571 @@
+{
+  "recorded": "2026-11-16",
+  "probe": "test/e2e/perf-cad-edit.spec.ts (OZ_PERF=1, OZ_PERF_ANGLE=vulkan, CAD_PERF_BROWSER_SAMPLES=30)",
+  "source": "m17/standard-parts-threads at 863a2036c (slice 4 before its rebase; the slice 4 code is unchanged since apart from the schema number)",
+  "build": "VITE_E2E=1 VITE_E2E_FULL_RENDER=1 pnpm --filter @openzcad/web build, served by vite preview",
+  "browser": [
+    {
+      "name": "fasteners-simplified-r0",
+      "environment": {
+        "history": 1,
+        "fasteners": 100,
+        "threads": "simplified",
+        "isolateSource": false,
+        "browserVersion": "156.0.8078.4",
+        "angle": "vulkan",
+        "cpuModel": "AMD Ryzen 5 5600 6-Core Processor",
+        "node": "v24.22.2",
+        "osRelease": "7.0.0-43-generic",
+        "installedRemusVersion": "2026.1.141",
+        "wasmSha256": "e6df603baee7837cde72abd5133b109449b5cca120f55592ffcdda0e651a1175",
+        "remusLockLine": "  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/3c489d7d3429615b78f3c266317b1cf280ed45a6#path:/crates/wasm/pkg:",
+        "host": {
+          "before": {
+            "recordedAt": "2026-11-16T23:57:23.453Z",
+            "loadAverage1m": 1.29,
+            "loadAverage5m": 0.84,
+            "freeMemoryBytes": 4589334528,
+            "availableMemoryBytes": 4589600768,
+            "totalMemoryBytes": 16144953344,
+            "cpuModel": "AMD Ryzen 5 5600 6-Core Processor",
+            "cpuCount": 12,
+            "busyProcesses": []
+          },
+          "after": {
+            "recordedAt": "2026-11-16T23:58:49.869Z",
+            "loadAverage1m": 1.08,
+            "loadAverage5m": 0.87,
+            "freeMemoryBytes": 6567948288,
+            "availableMemoryBytes": 6567948288,
+            "totalMemoryBytes": 16144953344,
+            "cpuModel": "AMD Ryzen 5 5600 6-Core Processor",
+            "cpuCount": 12,
+            "busyProcesses": []
+          }
+        }
+      },
+      "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+      "summaries": {
+        "inputToWorkerRequestMs": {
+          "samples": 30,
+          "medianMs": 1.5,
+          "p95Ms": 2.200000047683716
+        },
+        "requestToWorkerResponseMs": {
+          "samples": 30,
+          "medianMs": 53.89999997615814,
+          "p95Ms": 62.09999996423721
+        },
+        "workerResponseToBodiesMs": {
+          "samples": 30,
+          "medianMs": 35.89999997615814,
+          "p95Ms": 49.39999997615814
+        },
+        "bodyInstallationMs": {
+          "samples": 30,
+          "medianMs": 38.19999998807907,
+          "p95Ms": 52.69999998807907
+        },
+        "bodiesToNextFrameMs": {
+          "samples": 30,
+          "medianMs": 49.30000001192093,
+          "p95Ms": 59.39999997615814
+        },
+        "inputToFrameMs": {
+          "samples": 30,
+          "medianMs": 141.60000002384186,
+          "p95Ms": 163.5
+        },
+        "inputToAnalysisReadyMs": {
+          "samples": 30,
+          "medianMs": 55.30000001192093,
+          "p95Ms": 62.80000001192093
+        }
+      },
+      "afterReload": {
+        "reloadToReadyMs": 1358.7998046875,
+        "reloadResponseMs": 1290.7998046875,
+        "reloadSettledMs": 1434,
+        "firstEditInputToFrameMs": 163.89999997615814
+      }
+    },
+    {
+      "name": "fasteners-simplified-r1",
+      "environment": {
+        "history": 1,
+        "fasteners": 100,
+        "threads": "simplified",
+        "isolateSource": false,
+        "browserVersion": "156.0.8078.4",
+        "angle": "vulkan",
+        "cpuModel": "AMD Ryzen 5 5600 6-Core Processor",
+        "node": "v24.22.2",
+        "osRelease": "7.0.0-43-generic",
+        "installedRemusVersion": "2026.1.141",
+        "wasmSha256": "e6df603baee7837cde72abd5133b109449b5cca120f55592ffcdda0e651a1175",
+        "remusLockLine": "  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/3c489d7d3429615b78f3c266317b1cf280ed45a6#path:/crates/wasm/pkg:",
+        "host": {
+          "before": {
+            "recordedAt": "2026-11-17T00:00:19.231Z",
+            "loadAverage1m": 1.17,
+            "loadAverage5m": 0.98,
+            "freeMemoryBytes": 7746482176,
+            "availableMemoryBytes": 7746482176,
+            "totalMemoryBytes": 16144953344,
+            "cpuModel": "AMD Ryzen 5 5600 6-Core Processor",
+            "cpuCount": 12,
+            "busyProcesses": []
+          },
+          "after": {
+            "recordedAt": "2026-11-17T00:01:45.295Z",
+            "loadAverage1m": 1.02,
+            "loadAverage5m": 1.01,
+            "freeMemoryBytes": 6716272640,
+            "availableMemoryBytes": 6716272640,
+            "totalMemoryBytes": 16144953344,
+            "cpuModel": "AMD Ryzen 5 5600 6-Core Processor",
+            "cpuCount": 12,
+            "busyProcesses": []
+          }
+        }
+      },
+      "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+      "summaries": {
+        "inputToWorkerRequestMs": {
+          "samples": 30,
+          "medianMs": 1.5,
+          "p95Ms": 1.800000011920929
+        },
+        "requestToWorkerResponseMs": {
+          "samples": 30,
+          "medianMs": 53.80000001192093,
+          "p95Ms": 60.19999998807907
+        },
+        "workerResponseToBodiesMs": {
+          "samples": 30,
+          "medianMs": 35.89999997615814,
+          "p95Ms": 42.200000047683716
+        },
+        "bodyInstallationMs": {
+          "samples": 30,
+          "medianMs": 38.19999998807907,
+          "p95Ms": 45.5
+        },
+        "bodiesToNextFrameMs": {
+          "samples": 30,
+          "medianMs": 49.30000001192093,
+          "p95Ms": 57.19999998807907
+        },
+        "inputToFrameMs": {
+          "samples": 30,
+          "medianMs": 142.69999998807907,
+          "p95Ms": 156.89999997615814
+        },
+        "inputToAnalysisReadyMs": {
+          "samples": 30,
+          "medianMs": 54.60000002384186,
+          "p95Ms": 61.30000001192093
+        }
+      },
+      "afterReload": {
+        "reloadToReadyMs": 1327.60009765625,
+        "reloadResponseMs": 1263.300048828125,
+        "reloadSettledMs": 1398,
+        "firstEditInputToFrameMs": 161.4000000357628
+      }
+    },
+    {
+      "name": "fasteners-simplified-r2",
+      "environment": {
+        "history": 1,
+        "fasteners": 100,
+        "threads": "simplified",
+        "isolateSource": false,
+        "browserVersion": "156.0.8078.4",
+        "angle": "vulkan",
+        "cpuModel": "AMD Ryzen 5 5600 6-Core Processor",
+        "node": "v24.22.2",
+        "osRelease": "7.0.0-43-generic",
+        "installedRemusVersion": "2026.1.141",
+        "wasmSha256": "e6df603baee7837cde72abd5133b109449b5cca120f55592ffcdda0e651a1175",
+        "remusLockLine": "  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/3c489d7d3429615b78f3c266317b1cf280ed45a6#path:/crates/wasm/pkg:",
+        "host": {
+          "before": {
+            "recordedAt": "2026-11-17T00:03:16.145Z",
+            "loadAverage1m": 1.6,
+            "loadAverage5m": 1.2,
+            "freeMemoryBytes": 3637608448,
+            "availableMemoryBytes": 3637608448,
+            "totalMemoryBytes": 16144953344,
+            "cpuModel": "AMD Ryzen 5 5600 6-Core Processor",
+            "cpuCount": 12,
+            "busyProcesses": []
+          },
+          "after": {
+            "recordedAt": "2026-11-17T00:04:43.321Z",
+            "loadAverage1m": 2.51,
+            "loadAverage5m": 1.73,
+            "freeMemoryBytes": 5448773632,
+            "availableMemoryBytes": 5448773632,
+            "totalMemoryBytes": 16144953344,
+            "cpuModel": "AMD Ryzen 5 5600 6-Core Processor",
+            "cpuCount": 12,
+            "busyProcesses": [
+              "411054 /bin/bash -c source /home/jane/.claude/shell-snapshots/snapshot-bash-1794873429404-1r6fgu.sh 2>/dev/null || true && \\bui",
+              "411160 node /home/jane/.cache/f06-scratch/bin/pnpm exec playwright test test/e2e/configuration-tweak-link.spec.ts --reporter=li",
+              "411205 node ./node_modules/.bin/../@playwright/test/cli.js test test/e2e/configuration-tweak-link.spec.ts --reporter=line",
+              "411223 /home/jane/.cache/f06-scratch/node/bin/node /home/jane/.cache/f06-scratch/wt3/node_modules/.pnpm/playwright@1.64.1/node_",
+              "411267 /home/jane/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell --disab",
+              "411269 /home/jane/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell --type=",
+              "411270 /home/jane/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell --type=",
+              "411295 /home/jane/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell --type=",
+              "411297 /home/jane/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell --type=",
+              "411329 /home/jane/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell --type="
+            ]
+          }
+        }
+      },
+      "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+      "summaries": {
+        "inputToWorkerRequestMs": {
+          "samples": 30,
+          "medianMs": 1.5,
+          "p95Ms": 3
+        },
+        "requestToWorkerResponseMs": {
+          "samples": 30,
+          "medianMs": 56.80000001192093,
+          "p95Ms": 65.09999996423721
+        },
+        "workerResponseToBodiesMs": {
+          "samples": 30,
+          "medianMs": 38.69999998807907,
+          "p95Ms": 46.90000003576279
+        },
+        "bodyInstallationMs": {
+          "samples": 30,
+          "medianMs": 41.19999998807907,
+          "p95Ms": 49.40000003576279
+        },
+        "bodiesToNextFrameMs": {
+          "samples": 30,
+          "medianMs": 49,
+          "p95Ms": 64
+        },
+        "inputToFrameMs": {
+          "samples": 30,
+          "medianMs": 148.80000001192093,
+          "p95Ms": 185.10000002384186
+        },
+        "inputToAnalysisReadyMs": {
+          "samples": 30,
+          "medianMs": 57.700000047683716,
+          "p95Ms": 66.69999998807907
+        }
+      },
+      "afterReload": {
+        "reloadToReadyMs": 1504,
+        "reloadResponseMs": 1425.900146484375,
+        "reloadSettledMs": 1940,
+        "firstEditInputToFrameMs": 170.10000002384186
+      }
+    },
+    {
+      "name": "w01-history-r0",
+      "environment": {
+        "history": 100,
+        "fasteners": null,
+        "threads": null,
+        "isolateSource": true,
+        "browserVersion": "156.0.8078.4",
+        "angle": "vulkan",
+        "cpuModel": "AMD Ryzen 5 5600 6-Core Processor",
+        "node": "v24.22.2",
+        "osRelease": "7.0.0-43-generic",
+        "installedRemusVersion": "2026.1.141",
+        "wasmSha256": "e6df603baee7837cde72abd5133b109449b5cca120f55592ffcdda0e651a1175",
+        "remusLockLine": "  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/3c489d7d3429615b78f3c266317b1cf280ed45a6#path:/crates/wasm/pkg:",
+        "host": {
+          "before": {
+            "recordedAt": "2026-11-16T23:58:51.469Z",
+            "loadAverage1m": 1.08,
+            "loadAverage5m": 0.87,
+            "freeMemoryBytes": 7629189120,
+            "availableMemoryBytes": 7629189120,
+            "totalMemoryBytes": 16144953344,
+            "cpuModel": "AMD Ryzen 5 5600 6-Core Processor",
+            "cpuCount": 12,
+            "busyProcesses": []
+          },
+          "after": {
+            "recordedAt": "2026-11-17T00:00:17.660Z",
+            "loadAverage1m": 1.19,
+            "loadAverage5m": 0.98,
+            "freeMemoryBytes": 6864048128,
+            "availableMemoryBytes": 6864048128,
+            "totalMemoryBytes": 16144953344,
+            "cpuModel": "AMD Ryzen 5 5600 6-Core Processor",
+            "cpuCount": 12,
+            "busyProcesses": []
+          }
+        }
+      },
+      "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+      "summaries": {
+        "inputToWorkerRequestMs": {
+          "samples": 30,
+          "medianMs": 1.4000000357627869,
+          "p95Ms": 2.099999964237213
+        },
+        "requestToWorkerResponseMs": {
+          "samples": 30,
+          "medianMs": 46.40000003576279,
+          "p95Ms": 56.30000001192093
+        },
+        "workerResponseToBodiesMs": {
+          "samples": 30,
+          "medianMs": 30.399999976158142,
+          "p95Ms": 36.5
+        },
+        "bodyInstallationMs": {
+          "samples": 30,
+          "medianMs": 32.5,
+          "p95Ms": 38.89999997615814
+        },
+        "bodiesToNextFrameMs": {
+          "samples": 30,
+          "medianMs": 45.39999997615814,
+          "p95Ms": 51.19999998807907
+        },
+        "inputToFrameMs": {
+          "samples": 30,
+          "medianMs": 125.70000004768372,
+          "p95Ms": 136.69999998807907
+        },
+        "inputToAnalysisReadyMs": {
+          "samples": 30,
+          "medianMs": 47.40000003576279,
+          "p95Ms": 57.39999997615814
+        }
+      },
+      "afterReload": {
+        "reloadToReadyMs": 611.10009765625,
+        "reloadResponseMs": 566.699951171875,
+        "reloadSettledMs": 743,
+        "firstEditInputToFrameMs": 136.10000002384186
+      }
+    },
+    {
+      "name": "w01-history-r1",
+      "environment": {
+        "history": 100,
+        "fasteners": null,
+        "threads": null,
+        "isolateSource": true,
+        "browserVersion": "156.0.8078.4",
+        "angle": "vulkan",
+        "cpuModel": "AMD Ryzen 5 5600 6-Core Processor",
+        "node": "v24.22.2",
+        "osRelease": "7.0.0-43-generic",
+        "installedRemusVersion": "2026.1.141",
+        "wasmSha256": "e6df603baee7837cde72abd5133b109449b5cca120f55592ffcdda0e651a1175",
+        "remusLockLine": "  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/3c489d7d3429615b78f3c266317b1cf280ed45a6#path:/crates/wasm/pkg:",
+        "host": {
+          "before": {
+            "recordedAt": "2026-11-17T00:01:46.872Z",
+            "loadAverage1m": 1.02,
+            "loadAverage5m": 1.01,
+            "freeMemoryBytes": 7753469952,
+            "availableMemoryBytes": 7753469952,
+            "totalMemoryBytes": 16144953344,
+            "cpuModel": "AMD Ryzen 5 5600 6-Core Processor",
+            "cpuCount": 12,
+            "busyProcesses": []
+          },
+          "after": {
+            "recordedAt": "2026-11-17T00:03:14.290Z",
+            "loadAverage1m": 1.6,
+            "loadAverage5m": 1.2,
+            "freeMemoryBytes": 2889834496,
+            "availableMemoryBytes": 2889834496,
+            "totalMemoryBytes": 16144953344,
+            "cpuModel": "AMD Ryzen 5 5600 6-Core Processor",
+            "cpuCount": 12,
+            "busyProcesses": []
+          }
+        }
+      },
+      "webglRenderer": "ANGLE (AMD, Vulkan 1.4.335 (AMD Radeon RX 6600 (RADV NAVI23) (0x000073FF)), radv)",
+      "summaries": {
+        "inputToWorkerRequestMs": {
+          "samples": 30,
+          "medianMs": 1.5,
+          "p95Ms": 2.199999988079071
+        },
+        "requestToWorkerResponseMs": {
+          "samples": 30,
+          "medianMs": 49.10000002384186,
+          "p95Ms": 63.5
+        },
+        "workerResponseToBodiesMs": {
+          "samples": 30,
+          "medianMs": 33.700000047683716,
+          "p95Ms": 43.30000001192093
+        },
+        "bodyInstallationMs": {
+          "samples": 30,
+          "medianMs": 35.89999997615814,
+          "p95Ms": 45.5
+        },
+        "bodiesToNextFrameMs": {
+          "samples": 30,
+          "medianMs": 50.5,
+          "p95Ms": 57
+        },
+        "inputToFrameMs": {
+          "samples": 30,
+          "medianMs": 135,
+          "p95Ms": 164.5
+        },
+        "inputToAnalysisReadyMs": {
+          "samples": 30,
+          "medianMs": 49.89999997615814,
+          "p95Ms": 64.30000001192093
+        }
+      },
+      "afterReload": {
+        "reloadToReadyMs": 771.7998046875,
+        "reloadResponseMs": 705.7998046875,
+        "reloadSettledMs": 955,
+        "firstEditInputToFrameMs": 179.0999999642372
+      }
+    }
+  ],
+  "browserFailed": [
+    {
+      "name": "w01-history-r2",
+      "reason": "Host load rose mid-run (samples 26-27 at 182-221 ms); the post-reload click timed out at the 900 s test limit. Excluded."
+    }
+  ],
+  "node": {
+    "probe": "test/perf/standard-parts-display.bench.ts (FASTENER_PERF_RUN=1)",
+    "note": "Run at load 7-9 on a shared host: times are relative; sizes are exact.",
+    "samples": [
+      {
+        "thread": "simplified",
+        "fasteners": 100,
+        "round": 0,
+        "coldMs": 654.469994,
+        "firstEditMs": 32.277751999999964,
+        "editMs": 12.055912000000035,
+        "triangles": 83612,
+        "meshBytes": 1507440,
+        "topologyBytes": 2125476,
+        "faces": 506,
+        "edges": 612,
+        "editCache": {
+          "kind": "independent-reuse",
+          "reusedPreparedFeatures": 100,
+          "replayed": 1,
+          "restored": 0,
+          "remeasured": 1,
+          "reusedMeasurements": 100
+        },
+        "loadAverage1m": 9.09,
+        "recordedAt": "2026-11-17T00:22:46.836Z"
+      },
+      {
+        "thread": "simplified",
+        "fasteners": 100,
+        "round": 1,
+        "coldMs": 378.4025630000001,
+        "firstEditMs": 24.855851999999913,
+        "editMs": 11.209228999999823,
+        "triangles": 83612,
+        "meshBytes": 1507440,
+        "topologyBytes": 2125476,
+        "faces": 506,
+        "edges": 612,
+        "editCache": {
+          "kind": "independent-reuse",
+          "reusedPreparedFeatures": 100,
+          "replayed": 1,
+          "restored": 0,
+          "remeasured": 1,
+          "reusedMeasurements": 100
+        },
+        "loadAverage1m": 9.09,
+        "recordedAt": "2026-11-17T00:22:47.340Z"
+      },
+      {
+        "thread": "simplified",
+        "fasteners": 100,
+        "round": 2,
+        "coldMs": 357.910662,
+        "firstEditMs": 25.094674999999825,
+        "editMs": 10.217701999999917,
+        "triangles": 83612,
+        "meshBytes": 1507440,
+        "topologyBytes": 2125476,
+        "faces": 506,
+        "edges": 612,
+        "editCache": {
+          "kind": "independent-reuse",
+          "reusedPreparedFeatures": 100,
+          "replayed": 1,
+          "restored": 0,
+          "remeasured": 1,
+          "reusedMeasurements": 100
+        },
+        "loadAverage1m": 9.09,
+        "recordedAt": "2026-11-17T00:22:47.815Z"
+      },
+      {
+        "thread": "modeled",
+        "fasteners": 10,
+        "round": 0,
+        "coldMs": 17191.845279999998,
+        "firstEditMs": 1065.0686700000006,
+        "editMs": 18.01135499999873,
+        "triangles": 4655732,
+        "meshBytes": 83803440,
+        "topologyBytes": 13596215,
+        "faces": 1576,
+        "edges": 3182,
+        "editCache": {
+          "kind": "independent-reuse",
+          "reusedPreparedFeatures": 10,
+          "replayed": 1,
+          "restored": 0,
+          "remeasured": 1,
+          "reusedMeasurements": 10
+        },
+        "loadAverage1m": 8.44,
+        "recordedAt": "2026-11-17T00:23:07.234Z"
+      },
+      {
+        "thread": "simplified",
+        "fasteners": 10,
+        "round": 0,
+        "coldMs": 64.53240599999845,
+        "firstEditMs": 5.19020399999863,
+        "editMs": 3.5006260000009206,
+        "triangles": 8372,
+        "meshBytes": 150960,
+        "topologyBytes": 225056,
+        "faces": 56,
+        "edges": 72,
+        "editCache": {
+          "kind": "independent-reuse",
+          "reusedPreparedFeatures": 10,
+          "replayed": 1,
+          "restored": 0,
+          "remeasured": 1,
+          "reusedMeasurements": 10
+        },
+        "loadAverage1m": 7.15,
+        "recordedAt": "2026-11-17T00:23:07.394Z"
+      }
+    ]
+  }
+}

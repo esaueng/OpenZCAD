@@ -30,6 +30,7 @@ import type { SheetMetalKFactorMethod } from './sheet-metal';
 import {
   STANDARD_PART_KINDS,
   STANDARD_PART_SIZES,
+  STANDARD_PART_THREADS,
   STANDARD_SCREW_HEADS
 } from './standard-parts';
 
@@ -405,7 +406,8 @@ const FEATURE_ENUM_FIELDS = {
       ansi: true
     }),
     size: STANDARD_PART_SIZES,
-    head: new Set<string>(STANDARD_SCREW_HEADS)
+    head: new Set<string>(STANDARD_SCREW_HEADS),
+    thread: new Set<string>(STANDARD_PART_THREADS)
   },
   fillet: { radiusLaw: RADIUS_LAWS },
   'imported-mesh': { assumedUnits: UNIT_SYSTEMS }

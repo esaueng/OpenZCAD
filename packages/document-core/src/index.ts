@@ -5060,7 +5060,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'origin',
     'axis',
     'xDirection',
-    'hole'
+    'hole',
+    'thread'
   ],
   // `secondBodyId` is body wiring, not a parameter: never patchable.
   split: ['targetBodyId', 'plane', 'keepOriginal'],
@@ -5224,9 +5225,10 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   hole: ['points', 'standard', 'tapped'],
   // M17: a screw's head goes off a part that is no longer a screw, a length
   // off a part that has none (or, in a hole, is matched again), the
-  // x-direction back to the default, and the hole when the part is placed
-  // on a face instead (schema v77).
-  'standard-part': ['head', 'length', 'xDirection', 'hole'],
+  // x-direction back to the default, the hole when the part is placed on a
+  // face instead (schema v77), and a simplified thread when it is modeled
+  // again (schema v83).
+  'standard-part': ['head', 'length', 'xDirection', 'hole', 'thread'],
   // Schema v53: every size and placement field falls back to the face or its
   // documented default; the custom-profile fields may go only off a custom
   // profile, which the thread validation enforces. A face picked again
