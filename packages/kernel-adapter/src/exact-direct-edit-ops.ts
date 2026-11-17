@@ -122,6 +122,12 @@ import {
 } from './exact-face-distance';
 import { preparedFaceMove } from './exact-prepared-face-move';
 import { curvedCarrierKeys } from './exact-curved-carrier';
+import {
+  holeChamferNotCarriedRefusal,
+  holeChamferRefusalOf,
+  holeMouthRims,
+  holeMouthRimsCarried
+} from './exact-offset-face-hole-mouth';
 import { offsetFaceRefusalOf } from './exact-offset-face-refusal';
 import { modelingOperationRefusal } from './remus-operation-refusal';
 import {
@@ -2070,6 +2076,9 @@ export function applyDirectEdit(
     // A drag preview moves the same face of the same restored source every
     // frame, so it reuses the kernel's distance-independent analysis.
     const faces = new Uint32Array([face]);
+    // Read before the move: the general move below re-cuts a hole's chamfer
+    // on the moved face instead of carrying it (issue #1595).
+    const mouthRims = holeMouthRims(kernel, solid, face, geometry.normal);
     // Set when the push was carried past a collision by the exact sweep.
     let sweptPastCollision = false;
     const moveFace = (): ReturnType<typeof journaledMove> => {
@@ -2107,6 +2116,7 @@ export function applyDirectEdit(
         // carry, esaueng/remus#1741) is typed from the kernel's error.
         throw (
           offsetFaceRefusalOf(error, offset) ??
+          holeChamferRefusalOf(error, mouthRims, offset) ??
           modelingOperationRefusal(
             'offset_face',
             error,
@@ -2116,17 +2126,38 @@ export function applyDirectEdit(
         );
       }
     };
-    const moved =
+    const exactCap =
       analytic === null
         ? (tryExactChamferedCylinderCapOffset(kernel, solid, face, offset) ??
-          tryExactLocalChamferCapOffset(kernel, solid, face, offset) ??
-          moveFace())
+          tryExactLocalChamferCapOffset(kernel, solid, face, offset))
         : { solid: analytic, relation: null };
+    const moved = exactCap ?? moveFace();
     const output = moved.solid;
     if (kernel.validateSolidRelaxed(output) !== 0) {
       throw new Error(
         `Offsetting the face by ${offset} does not produce a valid solid.`
       );
+    }
+    // The kernel validates a stretched hole chamfer as a clean solid, so it
+    // is checked here: every hole-mouth rim must still be on the moved face,
+    // about its own axis, at its own radius. The exact cap paths and the
+    // sweep build their results another way and never take this move.
+    if (
+      exactCap === null &&
+      !sweptPastCollision &&
+      !holeMouthRimsCarried(
+        kernel,
+        output,
+        mouthRims,
+        // Where the face went: the kernel moves it along its CURRENT
+        // outward normal. The recorded normal can point the other way (a
+        // body turned over by an earlier Move), and the plane it names can
+        // hold the hole's untouched far mouth.
+        add(geometry.center, scale(geometry.normal, offset)),
+        geometry.normal
+      )
+    ) {
+      throw holeChamferNotCarriedRefusal(offset);
     }
     // Closure and volume checks still accept Remus's triangulated fallback.
     // Preserve the last exact body instead of committing/exporting its facets.
