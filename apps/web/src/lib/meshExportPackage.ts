@@ -4,9 +4,17 @@
  */
 import { unzipSync, zipSync } from 'fflate';
 
+import {
+  saveCadBinaryFile,
+  saveCadTextFile,
+  type CadBinaryExportFormat
+} from './desktopBridge';
 import { saveFile } from './saveFile';
 
+import type { ArtifactKind, BodyId, ProjectDocument } from '@openzcad/shared';
 import type { MeshExportDialogFormat } from '../components/ExportDialog';
+import type { GeometryWorkerApi } from '../hooks/useGeometryWorker';
+import type { GeometryWorkerState } from '../worker/geometryWorker';
 
 /** What the export dialog asks for beyond one file of one format. */
 export interface MeshExportPackage {
@@ -92,62 +100,134 @@ export async function packageMeshExport<Id>(input: {
   return { zip: zipSync(entries), names, warnings };
 }
 
-/**
- * Mesh export of several files (I04), entirely on this lazy module: one
- * scope per body (named after the project and the body) or one for the
- * whole selection, every format of each, as one `<project>.zip`. The
- * bodies of a configuration not on screen are only known once it is built,
- * so splitting one is refused.
- */
-export function exportMeshPackage<Id, Kind, State, Written>(input: {
+/** One mesh export job, as the activity pill runs it. */
+interface MeshExportJob {
+  fileName: string;
+  label: string;
+  kind: ArtifactKind;
+  contentType: string;
+  metadata: Record<string, string | number>;
+  completed?(bodies: string): string;
+  produce(options: {
+    signal: AbortSignal;
+    onState(state: GeometryWorkerState): void;
+  }): Promise<{ body: Blob; save(): Promise<boolean>; warnings: number }>;
+}
+
+/** What the workspace hands over for one mesh export. */
+export interface MeshExportRequest {
   format: MeshExportDialogFormat;
   deflection: number;
   options: { angularTolerance?: number } & MeshExportPackage;
   target: {
-    document: {
-      nodes: Record<string, { kind: string; bodyId?: unknown; name: string }>;
-    };
-    bodyIds: Id[];
-    allShownBodies?: boolean;
-    rowName?: string | null;
+    document: ProjectDocument;
+    bodyIds: BodyId[];
+    allShownBodies: boolean;
+    rowName: string | null;
   };
-  kind: Kind;
-  stemOf(name: string | null): string;
-  units: string;
-  setStatus(message: string): void;
-  runExportJob(job: {
-    fileName: string;
-    label: string;
-    kind: Kind;
+  /** How files of this format are saved, labelled and archived. */
+  info: {
+    extension: string;
     contentType: string;
-    metadata: Record<string, string | number>;
-    produce(options: {
-      signal: AbortSignal;
-      onState(state: State): void;
-    }): Promise<{ body: Blob; save(): Promise<boolean>; warnings: number }>;
-  }): Promise<void>;
-  exportModel(
-    format: MeshExportDialogFormat,
-    document: never,
-    bodyIds: Id[],
-    options: Record<string, unknown>
-  ): Promise<Written>;
-}): void {
+    label: string;
+    kind: ArtifactKind;
+    binaryFormat: CadBinaryExportFormat;
+  };
+  /** The open document's version and unit, for the archive record. */
+  version: number;
+  documentUnits: string;
+  /** The unit to write. */
+  units: ProjectDocument['units'];
+  stemOf(name: string | null): string;
+  setStatus(message: string): void;
+  runExportJob(job: MeshExportJob): Promise<void>;
+  exportModel: GeometryWorkerApi['exportModel'];
+}
+
+/**
+ * Mesh export from the dialog, on this lazy module so the workspace's entry
+ * chunk carries none of it: one file of one format, or (I04) several files
+ * as one ZIP.
+ */
+export function exportMesh(input: MeshExportRequest): void {
+  const { perBody, extraFormats, objMaterials, angularTolerance } =
+    input.options;
+  if (perBody || extraFormats || objMaterials) {
+    exportMeshPackage(input);
+    return;
+  }
+  const { format, deflection, info, target } = input;
+  const { rowName } = target;
+  const fileName = `${input.stemOf(rowName)}.${info.extension}`;
+  void input.runExportJob({
+    fileName,
+    label: rowName ? `${info.label} of ${rowName}` : info.label,
+    kind: info.kind,
+    contentType: info.contentType,
+    metadata: {
+      bodyIds: target.bodyIds.join(','),
+      documentVersion: input.version,
+      units: input.documentUnits,
+      format,
+      deflectionMm: deflection,
+      ...(rowName ? { configuration: rowName } : {})
+    },
+    ...(rowName
+      ? {
+          completed: () => `Exported configuration ${rowName} to ${fileName}.`
+        }
+      : {}),
+    produce: async (options) => {
+      const result = await input.exportModel(
+        format,
+        target.document,
+        target.bodyIds,
+        {
+          deflection,
+          angularTolerance,
+          ...(target.allShownBodies ? { allShownBodies: true } : {}),
+          units: input.units,
+          ...options
+        }
+      );
+      return 'data' in result
+        ? {
+            body: new Blob([result.data], { type: info.contentType }),
+            save: () =>
+              saveCadBinaryFile(fileName, info.binaryFormat, result.data),
+            warnings: result.warnings.length
+          }
+        : {
+            body: new Blob([result.text], { type: info.contentType }),
+            save: () => saveCadTextFile(fileName, 'stl', result.text),
+            warnings: result.warnings.length
+          };
+    }
+  });
+}
+
+/**
+ * Mesh export of several files (I04): one scope per body (named after the
+ * project and the body) or one for the whole selection, every format of
+ * each, as one `<project>.zip`. The bodies of a configuration not on screen
+ * are only known once it is built, so splitting one is refused.
+ */
+function exportMeshPackage(input: MeshExportRequest): void {
   const { perBody, extraFormats, objMaterials, ...tolerances } = input.options;
   const { target } = input;
   if (perBody && target.allShownBodies) {
     input.setStatus('Show this configuration to export one file per body.');
     return;
   }
-  const stem = input.stemOf(target.rowName ?? null);
-  const names = new Map<unknown, string>();
+  const stem = input.stemOf(target.rowName);
+  const names = new Map<BodyId, string>();
   for (const node of Object.values(target.document.nodes)) {
     if (node.kind === 'body') names.set(node.bodyId, node.name);
   }
   void input.runExportJob({
     fileName: `${stem}.zip`,
     label: 'Mesh package',
-    kind: input.kind,
+    kind: input.info.kind,
     contentType: 'application/zip',
     metadata: {
       bodyIds: target.bodyIds.join(','),
@@ -161,19 +241,19 @@ export function exportMeshPackage<Id, Kind, State, Written>(input: {
         scopes: perBody
           ? target.bodyIds.map((bodyId) => ({
               bodyIds: [bodyId],
-              stem: `${stem}-${input.stemOf(names.get(bodyId) ?? String(bodyId))}`
+              stem: `${stem}-${input.stemOf(names.get(bodyId) ?? bodyId)}`
             }))
           : [{ bodyIds: target.bodyIds, stem }],
         objMaterials: Boolean(objMaterials),
         write: (format, ids, extra) =>
-          input.exportModel(format, target.document as never, ids, {
+          input.exportModel(format, target.document, ids, {
             deflection: input.deflection,
             ...tolerances,
             ...(target.allShownBodies ? { allShownBodies: true } : {}),
             units: input.units,
             ...extra,
             ...jobOptions
-          }) as never
+          })
       });
       const body = new Blob([files.zip.slice()], { type: 'application/zip' });
       return {
