@@ -551,7 +551,7 @@ export function resolveDatumAxisEdge(
 }
 
 /**
- * R01 (schema v95): the edge a datum point's midpoint or arc-centre source
+ * R01 (schema v97): the edge a datum point's midpoint or arc-centre source
  * names, re-found solely through verified lineage at the point's history
  * position. A deleted or ambiguous edge refuses by name; its geometry is
  * then read exactly from the kernel by the caller.

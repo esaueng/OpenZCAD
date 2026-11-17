@@ -80,7 +80,7 @@ export interface ExactBuildResult {
    */
   datumAxes: Map<FeatureId, DatumAxis>;
   /**
-   * R01 (schema v95) datum points and coordinate systems, each resolved once
+   * R01 (schema v97) datum points and coordinate systems, each resolved once
    * at its own history position. A failed one is absent and its consumers
    * refuse by name. Absent on builds resumed from before they existed.
    */

@@ -44,7 +44,7 @@ export function datumAxisDisplays(
   });
 }
 
-/** R01 (schema v95): a datum point as the viewport draws it. */
+/** R01 (schema v97): a datum point as the viewport draws it. */
 export interface DatumPointDisplay {
   featureId: FeatureId;
   name: string;
@@ -52,7 +52,7 @@ export interface DatumPointDisplay {
   selected: boolean;
 }
 
-/** R01 (schema v95): a coordinate system as the viewport draws it. */
+/** R01 (schema v97): a coordinate system as the viewport draws it. */
 export interface DatumCsysDisplay {
   featureId: FeatureId;
   name: string;

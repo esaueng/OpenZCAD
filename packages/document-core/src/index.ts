@@ -568,7 +568,7 @@ export interface TransformInput {
   bodyName?: string;
   /** R01 (schema v28): first turn the body about an earlier datum axis. */
   axisRotation?: { axis: DatumAxisRef; angleDeg: ParamValue };
-  /** R01 (schema v95): see the transform `FeatureData`. */
+  /** R01 (schema v97): see the transform `FeatureData`. */
   csysAlign?: { from?: DatumCsysRef; to: DatumCsysRef };
   ids?: FeatureOnlyIds | BodyFeatureIds;
 }
@@ -592,14 +592,14 @@ export interface DatumAxisInput {
   ids?: FeatureOnlyIds;
 }
 
-/** R01 (schema v95): a datum point. */
+/** R01 (schema v97): a datum point. */
 export interface DatumPointInput {
   name: string;
   definition: DatumPointDefinition;
   ids?: FeatureOnlyIds;
 }
 
-/** R01 (schema v95): a named coordinate system. */
+/** R01 (schema v97): a named coordinate system. */
 export interface DatumCsysInput {
   name: string;
   definition: DatumCsysDefinition;
@@ -3055,7 +3055,7 @@ function sameSource(a: DatumPlaneSource, b: DatumPlaneSource): boolean {
 }
 
 /**
- * R01 (schema v95): a datum point or coordinate system reference names an
+ * R01 (schema v97): a datum point or coordinate system reference names an
  * existing datum of that kind defined earlier in history, and nothing else.
  */
 function requireEarlierDatumOf(
@@ -3625,7 +3625,7 @@ function addDatumFeature(
   return { document: next, featureId };
 }
 
-/** Adds an R01 datum point (schema v95) at the end of history; it owns no body. */
+/** Adds an R01 datum point (schema v97) at the end of history; it owns no body. */
 export function addDatumPoint(
   document: ProjectDocument,
   input: DatumPointInput
@@ -3639,7 +3639,7 @@ export function addDatumPoint(
   );
 }
 
-/** Adds an R01 coordinate system (schema v95) at the end of history; it owns no body. */
+/** Adds an R01 coordinate system (schema v97) at the end of history; it owns no body. */
 export function addDatumCsys(
   document: ProjectDocument,
   input: DatumCsysInput
@@ -3770,7 +3770,7 @@ export function transformBody(
   return { document: next, bodyId: input.targetBodyId };
 }
 
-/** R01 (schema v95): a Move's stored alignment, written only when asked for. */
+/** R01 (schema v97): a Move's stored alignment, written only when asked for. */
 function csysAlignField(input: TransformInput): {
   csysAlign?: { from?: DatumCsysRef; to: DatumCsysRef };
 } {

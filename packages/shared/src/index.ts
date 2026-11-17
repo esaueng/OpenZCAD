@@ -774,7 +774,7 @@ export interface DatumAxisRef {
 }
 
 /**
- * Schema v95: a reference to an R01 datum point by the feature that defines
+ * Schema v97: a reference to an R01 datum point by the feature that defines
  * it. The point resolves once, at its own history position; every consumer
  * reads that position and never re-derives it from final topology.
  */
@@ -784,7 +784,7 @@ export interface DatumPointRef {
 }
 
 /**
- * Schema v95: a reference to an R01 coordinate system by the feature that
+ * Schema v97: a reference to an R01 coordinate system by the feature that
  * defines it, resolved once at its own history position like every datum.
  */
 export interface DatumCsysRef {
@@ -1172,7 +1172,7 @@ export type FacePlaneSource = Extract<SketchPlaneRef, { type: 'face' }> & {
 export type ExtrudeToFaceTarget = FacePlaneSource;
 
 /**
- * Schema v95: a principal plane of a coordinate system, as a datum source.
+ * Schema v97: a principal plane of a coordinate system, as a datum source.
  * XY keeps the system's X as u and Y as v (normal Z); YZ takes Y and Z
  * (normal X); ZX takes Z and X (normal Y). Its origin is the system's.
  */
@@ -1210,7 +1210,7 @@ export interface EdgeVertexPointSource {
 export type DatumPointSource =
   | { type: 'point'; point: ParametricVector3 }
   | EdgeVertexPointSource
-  /** Schema v95: an earlier datum point, by reference. */
+  /** Schema v97: an earlier datum point, by reference. */
   | DatumPointRef;
 
 export type DatumPlaneDefinition =
@@ -1314,7 +1314,7 @@ export type DatumAxisDefinition =
     }
   | {
       /**
-       * Schema v95: one of an earlier coordinate system's axes, through its
+       * Schema v97: one of an earlier coordinate system's axes, through its
        * origin along its X, Y or Z.
        */
       kind: 'csys-axis';
@@ -1324,7 +1324,7 @@ export type DatumAxisDefinition =
     };
 
 /**
- * Schema v95: how a datum point is placed. Each is refused by name rather
+ * Schema v97: how a datum point is placed. Each is refused by name rather
  * than guessed when it has no single position: an edge that is not straight
  * (midpoint) or not circular (centre), an axis parallel to the plane it
  * should pierce, a source missing at the point's history position.
@@ -1358,7 +1358,7 @@ export type DatumPointDefinition =
     };
 
 /**
- * Schema v95: how a coordinate system is placed. Every one is right-handed
+ * Schema v97: how a coordinate system is placed. Every one is right-handed
  * and orthonormal; degenerate inputs (coincident or collinear points) are
  * refused by name, never repaired.
  */
@@ -2162,7 +2162,7 @@ export type FeatureData =
     }
   | {
       /**
-       * R01 (schema v95): a datum point. It owns no body; its resolved
+       * R01 (schema v97): a datum point. It owns no body; its resolved
        * position is published at its history position for the planes, axes,
        * coordinate systems and points built from it.
        */
@@ -2171,7 +2171,7 @@ export type FeatureData =
     }
   | {
       /**
-       * R01 (schema v95): a named coordinate system. It owns no body; its
+       * R01 (schema v97): a named coordinate system. It owns no body; its
        * resolved frame is published at its history position for the planes,
        * axes and Moves that use it.
        */
@@ -2379,7 +2379,7 @@ export type FeatureData =
        */
       axisRotation?: { axis: DatumAxisRef; angleDeg: ParamValue };
       /**
-       * R01 (schema v95): carry the body from coordinate system `from` (the
+       * R01 (schema v97): carry the body from coordinate system `from` (the
        * world axes when absent) onto `to`, before `axisRotation` and
        * `transform` apply: a point at (x, y, z) in `from` lands at (x, y, z)
        * in `to`. Absent is the Move every older document holds.
@@ -4314,7 +4314,7 @@ export interface DatumAxisLine {
   direction: Vector3;
 }
 
-/** Schema v95: a resolved coordinate system, right-handed and orthonormal. */
+/** Schema v97: a resolved coordinate system, right-handed and orthonormal. */
 export interface DatumCsysFrame {
   origin: Vector3;
   x: Vector3;
@@ -4342,12 +4342,12 @@ export interface DerivedState {
    */
   datumAxes?: Record<FeatureId, DatumAxisLine>;
   /**
-   * R01 (schema v95): each datum point as the exact build resolved it at its
+   * R01 (schema v97): each datum point as the exact build resolved it at its
    * own history position. A failed or suppressed one is absent.
    */
   datumPoints?: Record<FeatureId, Vector3>;
   /**
-   * R01 (schema v95): each coordinate system as the exact build resolved it
+   * R01 (schema v97): each coordinate system as the exact build resolved it
    * at its own history position. A failed or suppressed one is absent.
    */
   datumCsys?: Record<FeatureId, DatumCsysFrame>;

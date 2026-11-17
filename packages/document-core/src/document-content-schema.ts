@@ -19,17 +19,17 @@ export function assertMinimumProjectSchema(
     throw new Error(`${content} require project schema v${minimum} or newer.`);
 }
 
-/** R01 datum points and coordinate systems (schema v95). */
+/** R01 datum points and coordinate systems (schema v97). */
 export function assertDatumPointCsysSchema(version: unknown): void {
   assertMinimumProjectSchema(
     version,
-    95,
+    97,
     'Datum points and coordinate systems'
   );
 }
 
 /**
- * Whether `value` holds R01 v95 content anywhere: a datum point or
+ * Whether `value` holds R01 v97 content anywhere: a datum point or
  * coordinate system feature, a datum-point or coordinate-system source, an
  * axis along a coordinate system, or a Move aligned by them. An older client
  * would fail to resolve every one of them, so a document holding one refuses.

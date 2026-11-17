@@ -709,7 +709,7 @@ export function axisRotationMatrix(
 }
 
 /**
- * R01 (schema v95): a point at `offset` from `from`. A zero offset is the
+ * R01 (schema v97): a point at `offset` from `from`. A zero offset is the
  * source itself.
  */
 export function offsetDatumPoint(
@@ -721,7 +721,7 @@ export function offsetDatumPoint(
   return datumAdd(from, offset);
 }
 
-/** R01 (schema v95): halfway along a straight edge. */
+/** R01 (schema v97): halfway along a straight edge. */
 export function edgeMidpointDatumPoint(
   start: DatumVector,
   end: DatumVector
@@ -735,7 +735,7 @@ export function edgeMidpointDatumPoint(
 }
 
 /**
- * R01 (schema v95): where an axis pierces a plane. An axis parallel to the
+ * R01 (schema v97): where an axis pierces a plane. An axis parallel to the
  * plane (within the midplane's parallelism tolerance) meets it nowhere, or
  * everywhere, and is refused.
  */
@@ -755,7 +755,7 @@ export function axisPlaneDatumPoint(
   return datumAdd(axis.origin, datumScale(axis.direction, t));
 }
 
-/** R01 (schema v95): a resolved coordinate system, right-handed and orthonormal. */
+/** R01 (schema v97): a resolved coordinate system, right-handed and orthonormal. */
 export interface DatumCsys {
   origin: DatumVector;
   x: DatumVector;

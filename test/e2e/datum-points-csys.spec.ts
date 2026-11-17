@@ -12,7 +12,7 @@ import {
 } from './openzcad-fixtures';
 
 /**
- * R01 (schema v95): datum points and coordinate systems, made in place. A
+ * R01 (schema v97): datum points and coordinate systems, made in place. A
  * Point is dragged out along X from the world origin by its arrow, another
  * is picked at an edge's midpoint; a coordinate system is dragged to its
  * origin and turned by its ring. Each is drawn where the exact build

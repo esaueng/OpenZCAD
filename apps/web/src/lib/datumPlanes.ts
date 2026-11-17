@@ -65,7 +65,7 @@ export type DatumPlaneMode = DatumPlaneDefinition['kind'];
  * as three expressions (lengths in document units).
  */
 export type DatumPointDraft =
-  /** A model vertex, or (schema v95) an earlier datum point. */
+  /** A model vertex, or (schema v97) an earlier datum point. */
   | { type: 'vertex'; source: EdgeVertexPointSource | DatumPointRef }
   | { type: 'typed'; x: string; y: string; z: string };
 
@@ -287,7 +287,7 @@ export function datumSourceKey(source: DatumPlaneSource): string {
 }
 
 /**
- * R01 (schema v95): the datum points defined before `beforeFeatureId` (all
+ * R01 (schema v97): the datum points defined before `beforeFeatureId` (all
  * of them for a new feature), as point-slot options.
  */
 export function datumPointOptions(

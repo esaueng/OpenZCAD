@@ -37,7 +37,7 @@ export type RefPick =
       normal: Vector3;
     }
   | { kind: 'point'; key: string; source: DatumPointSource; at: Vector3 }
-  /** R01 (schema v95): a circle or arc, whose centre a datum point takes. */
+  /** R01 (schema v97): a circle or arc, whose centre a datum point takes. */
   | { kind: 'circle'; key: string; source: DatumAxisEdgeSource }
   | {
       kind: 'edge';
@@ -434,7 +434,7 @@ function offsetHandles(
 }
 
 /**
- * R01 (schema v95): a datum Point. Nothing picked, it stands at typed world
+ * R01 (schema v97): a datum Point. Nothing picked, it stands at typed world
  * coordinates; a picked edge end (or earlier point) offsets from it; a
  * straight edge gives its midpoint and a circle or arc its centre. The X, Y
  * and Z arrows drag the offsets.
@@ -535,7 +535,7 @@ export function datumCsysShape(refs: readonly RefPick[]): CsysShape | null {
 }
 
 /**
- * R01 (schema v95): a named coordinate System. Nothing picked, it is placed
+ * R01 (schema v97): a named coordinate System. Nothing picked, it is placed
  * by typed origin and turns (the origin arrows and the three turn rings
  * drag them); three points give origin, X and the XY plane; a plane gives
  * its own frame, moved to a picked point when there is one.

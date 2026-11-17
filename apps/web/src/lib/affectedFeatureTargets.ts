@@ -163,7 +163,7 @@ export function affectedFeatureTargets(
     plane.type === 'datum' || plane.type === 'datum-csys'
       ? affectedDatums.has(plane.datumFeatureId)
       : plane.type === 'face' && affectedBodies.has(plane.bodyId);
-  // R01 (schema v95): whatever a feature reads by datum-point or
+  // R01 (schema v97): whatever a feature reads by datum-point or
   // coordinate-system reference moves when that datum does.
   const datumRefsAffected = (data: FeatureData) =>
     [...featureDatumPointRefs(data), ...featureDatumCsysRefs(data)].some(

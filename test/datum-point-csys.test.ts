@@ -29,7 +29,7 @@ import {
 } from '@openzcad/shared';
 
 /**
- * R01 (schema v95): datum points and named coordinate systems — the document
+ * R01 (schema v97): datum points and named coordinate systems — the document
  * contract, the exact build's constructors with their named refusals, and
  * every consumer: points feeding planes, axes, systems and later points;
  * systems feeding planes (their principal planes), axes (their X/Y/Z) and
@@ -110,7 +110,7 @@ function expectVector(
   expect(actual!.z).toBeCloseTo(expected[2], digits);
 }
 
-describe('datum points and coordinate systems in the document (v95)', () => {
+describe('datum points and coordinate systems in the document (v97)', () => {
   it('stores them in the current schema and round-trips without rewriting', () => {
     const initial = blank();
     expect(initial.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
@@ -129,7 +129,7 @@ describe('datum points and coordinate systems in the document (v95)', () => {
     type Version = typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
     const older = { ...p.document, schemaVersion: 91 as Version };
     expect(() => normalizeDocument(structuredClone(older))).toThrow(
-      /Datum points and coordinate systems require project schema v95/
+      /Datum points and coordinate systems require project schema v97/
     );
   });
 

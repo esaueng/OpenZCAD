@@ -1229,7 +1229,7 @@ function resolveTransformFeature(
       z: resolveParamValue(pivot.z, scope, 'pivot Z', document.units)
     }
   );
-  // R01 (schema v95): the coordinate-system alignment applies before the
+  // R01 (schema v97): the coordinate-system alignment applies before the
   // axis turn and the authored transform.
   const align =
     data.csysAlign &&
@@ -1505,7 +1505,7 @@ function buildDatumAxisFeature(
 }
 
 /**
- * R01 (schema v95): resolves a datum point once at its history position, for
+ * R01 (schema v97): resolves a datum point once at its history position, for
  * every later plane, axis, coordinate system and point built from it. It
  * makes no body.
  */
@@ -1571,7 +1571,7 @@ function buildDatumPointFeature(
 }
 
 /**
- * R01 (schema v95): resolves a coordinate system once at its history
+ * R01 (schema v97): resolves a coordinate system once at its history
  * position, for the planes, axes and Moves that use it. It makes no body.
  */
 function buildDatumCsysFeature(

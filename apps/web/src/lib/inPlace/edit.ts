@@ -210,7 +210,7 @@ export function inPlaceToolForFeature(data: FeatureData): InPlaceToolId | null {
       if (scale !== undefined && !data.axisRotation) return 'scale';
       return null;
     }
-    // R01 (schema v95): a point typed from the world origin, and a system
+    // R01 (schema v97): a point typed from the world origin, and a system
     // placed at a typed origin, reopen their tool with the drag handles.
     case 'datum-point':
       return data.definition.kind === 'offset' &&
