@@ -69,7 +69,8 @@ interface Built {
 const translation = (x: number, y: number, z: number) =>
   Float64Array.of(1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z, 0, 0, 0, 1);
 
-type Rim = 'chamfer' | 'fillet' | 'none';
+/** `chamfer-both` chamfers the hole's bottom rim as well as its top one. */
+type Rim = 'chamfer' | 'chamfer-both' | 'fillet' | 'none';
 
 /** The plate, with the first hole's top rim finished as `first` and the second's as `second`. */
 function plate(kernel: RemusKernel, first: Rim, second: Rim): number {
@@ -79,13 +80,13 @@ function plate(kernel: RemusKernel, first: Rim, second: Rim): number {
     kernel.transformSolid(tool, translation(x, Y / 2, -2));
     solid = kernel.cut(solid, tool);
   }
-  const topRim = (body: number, x: number) =>
+  const rimAt = (body: number, x: number, z: number) =>
     Array.from(kernel.getSolidEdges(body)).filter((edge) => {
       if (kernel.getEdgeCurveType(edge) !== 'CIRCLE') return false;
       const v = kernel.getEdgeVertices(edge);
       return (
         Math.abs(Math.hypot(v[0]! - x, v[1]! - Y / 2) - BORE) < 1e-6 &&
-        Math.abs(v[2]! - Z) < 1e-6
+        Math.abs(v[2]! - z) < 1e-6
       );
     });
   for (const [x, rim] of [
@@ -93,12 +94,17 @@ function plate(kernel: RemusKernel, first: Rim, second: Rim): number {
     [HOLES[1], second]
   ] as const) {
     if (rim === 'none') continue;
-    const edges = Uint32Array.from(topRim(solid, x));
+    const edges = Uint32Array.from(rimAt(solid, x, Z));
     expect(edges.length).toBeGreaterThan(0);
     solid =
-      rim === 'chamfer'
-        ? kernel.chamfer(solid, edges, CHAMFER)
-        : kernel.fillet(solid, edges, CHAMFER);
+      rim === 'fillet'
+        ? kernel.fillet(solid, edges, CHAMFER)
+        : kernel.chamfer(solid, edges, CHAMFER);
+    if (rim === 'chamfer-both') {
+      const under = Uint32Array.from(rimAt(solid, x, 0));
+      expect(under.length).toBeGreaterThan(0);
+      solid = kernel.chamfer(solid, under, CHAMFER);
+    }
   }
   return solid;
 }
@@ -154,18 +160,28 @@ describe(
             Math.abs(face.geometry.center.z - Z) < 1e-6
         )
         .sort((a, b) => b.geometry!.area - a.geometry!.area)[0]!;
+      const bottom = body.topology!.faces.find(
+        (face) =>
+          face.geometry?.surfaceType === 'plane' &&
+          face.geometry.normal!.z < -0.999 &&
+          Math.abs(face.geometry.center.z) < 1e-6
+      )!;
       return {
         document: imported.document,
         bodyId: imported.bodyId,
         top,
+        bottom,
         volume: body.volume
       };
     }
 
     function offsetBy(
       source: { document: ProjectDocument; bodyId: BodyId; top: FaceTopology },
-      offset: number
+      offset: number,
+      /** Store the pick's normal reversed, as a body turned over since has it. */
+      reversedNormal = false
     ): ProjectDocument {
+      const normal = source.top.geometry!.normal!;
       return commandFactories
         .directEditBody({
           name: 'Offset Face',
@@ -179,7 +195,9 @@ describe(
             sourceSurfaceType: 'plane',
             sourceArea: source.top.geometry!.area,
             sourceCenter: source.top.geometry!.center,
-            sourceNormal: source.top.geometry!.normal!,
+            sourceNormal: reversedNormal
+              ? { x: -normal.x, y: -normal.y, z: -normal.z }
+              : normal,
             offset
           }
         })
@@ -268,6 +286,90 @@ describe(
         }
       });
     }
+
+    it('is not fooled by the far mouth when the recorded normal is reversed', async () => {
+      // Chamfers at both ends of the hole, and an offset equal to the
+      // plate's thickness. The kernel moves the face along its current
+      // outward normal; a check made along the recorded one would look on
+      // the bottom plane and find the untouched bottom mouth there.
+      const source = await part('chamfer-both', 'none');
+      const candidate = offsetBy(source, Z, true);
+      for (const derived of await builds(candidate)) {
+        expect(refusalOf(derived).kernelRefusal).toMatchObject({
+          family: 'direct-edit',
+          category: 'unsupported',
+          code: 'offset_face_hole_chamfer_not_carried'
+        });
+        expectKept(derived, candidate, source.volume);
+      }
+    });
+
+    it('guards a face whose outward normal points down', async () => {
+      const source = await part('chamfer-both', 'none');
+      const candidate = offsetBy({ ...source, top: source.bottom }, 2);
+      for (const derived of await builds(candidate)) {
+        expect(refusalOf(derived).kernelRefusal).toMatchObject({
+          family: 'direct-edit',
+          category: 'unsupported',
+          code: 'offset_face_hole_chamfer_not_carried'
+        });
+        expectVolume(derived, candidate, source.volume, 6);
+        expect(resultOf(derived, candidate).bbox.min.z).toBeCloseTo(0, 6);
+      }
+    });
+
+    it('leaves a tapered boss standing on the face alone', async () => {
+      // A Ø8 → Ø4 boss, 5 tall, sunk 1 into a 30 × 20 × 5 plate. Its flank
+      // meets the plate's top on an inner loop, like a hole's chamfer, but
+      // it rises out of the face: raising the face 1 runs it up the flank
+      // (the base circle goes from r 3.6 to r 3.2), which is correct.
+      const kernel = new RemusKernel();
+      const io = await loadRemusTranslators();
+      let step: string;
+      try {
+        const boss = kernel.makeCone(4, 2, 5);
+        kernel.transformSolid(boss, translation(15, 10, 4));
+        step = new TextDecoder().decode(
+          io.exportStep(
+            kernel.serializeSolids(
+              Uint32Array.of(kernel.fuse(kernel.makeBox(30, 20, 5), boss))
+            )
+          )
+        );
+      } finally {
+        kernel.free();
+      }
+      const imported = importStepBody(
+        createProjectDocument('Boss', toUserId('user_offset_hole_chamfer')),
+        {
+          name: 'Boss',
+          sourceName: 'boss.step',
+          artifactId: 'artifact_boss',
+          stepText: step
+        }
+      );
+      const derived = await adapter.syncDocument(imported.document);
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[imported.bodyId]!;
+      const top = body.topology!.faces.find(
+        (face) =>
+          face.geometry?.surfaceType === 'plane' &&
+          face.geometry.normal!.z > 0.999 &&
+          Math.abs(face.geometry.center.z - 5) < 1e-6
+      )!;
+      const candidate = offsetBy(
+        { document: imported.document, bodyId: imported.bodyId, top },
+        1
+      );
+      // The slab the face sweeps, less the boss it now covers between
+      // z = 5 (r 3.6) and z = 6 (r 3.2).
+      const covered = (Math.PI * (3.6 * 3.6 + 3.6 * 3.2 + 3.2 * 3.2)) / 3;
+      for (const built of await builds(candidate)) {
+        expect(built.warnings).toEqual([]);
+        expectVolume(built, candidate, body.volume + 30 * 20 - covered, 3);
+        expect(resultOf(built, candidate).bbox.max.z).toBeCloseTo(9, 6);
+      }
+    });
 
     it('still offsets the plate with plain holes', async () => {
       const source = await part('none', 'none');

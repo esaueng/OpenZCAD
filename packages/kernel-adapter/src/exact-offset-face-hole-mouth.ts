@@ -108,7 +108,8 @@ function coaxialCones(kernel: RemusKernel, solid: number, normal: Vec3) {
 /**
  * Every hole-mouth rim of `face`: one entry per cone and radius, however
  * many arcs the kernel split the circle into. Empty for a face with no
- * holes, which is every call but the ones this guard exists for.
+ * holes, which is every call but the ones this guard exists for. `normal`
+ * is the face's current outward normal.
  */
 export function holeMouthRims(
   kernel: RemusKernel,
@@ -133,6 +134,21 @@ export function holeMouthRims(
     const cone = cones.find((candidate) => candidate.edges.has(edge));
     const start = cone ? edgeStart(kernel, edge) : null;
     if (!cone || !start) continue;
+    // A hole's mouth runs from the face into the body; a tapered boss
+    // standing on the face rises out of it, and moving the face up its
+    // flank is a correct result. Only a cone wholly behind the face counts.
+    const depths = [...cone.edges].flatMap((other) => {
+      const point = edgeStart(kernel, other);
+      return point ? [dot(subtract(point, start), normal)] : [];
+    });
+    const tolerance = lengthTolerance(
+      radialDistance(start, cone.axisPoint, cone.axis)
+    );
+    if (
+      !depths.some((depth) => depth < -tolerance) ||
+      depths.some((depth) => depth > tolerance)
+    )
+      continue;
     const radius = radialDistance(start, cone.axisPoint, cone.axis);
     const known = rims.some(
       (rim) =>

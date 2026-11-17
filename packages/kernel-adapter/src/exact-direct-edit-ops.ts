@@ -2149,12 +2149,11 @@ export function applyDirectEdit(
         kernel,
         output,
         mouthRims,
-        // Where the face went: along its recorded outward normal, as the
-        // lineage prediction below reads it.
-        add(
-          geometry.center,
-          scale(normalized(operation.sourceNormal) ?? geometry.normal, offset)
-        ),
+        // Where the face went: the kernel moves it along its CURRENT
+        // outward normal. The recorded normal can point the other way (a
+        // body turned over by an earlier Move), and the plane it names can
+        // hold the hole's untouched far mouth.
+        add(geometry.center, scale(geometry.normal, offset)),
         geometry.normal
       )
     ) {
