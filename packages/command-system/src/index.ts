@@ -3402,7 +3402,11 @@ export const commandFactories = {
   },
   updateDrawingView(
     payload: DrawingViewUpdateInput,
-    label = payload.centerMm ? 'Move drawing view' : 'Edit drawing view'
+    label = payload.centerMm
+      ? 'Move drawing view'
+      : payload.configurationId !== undefined
+        ? 'Set view configuration'
+        : 'Edit drawing view'
   ): CommandDefinition<DrawingViewUpdateInput> {
     return makeCommand('drawing.view.update', label, payload, (document) =>
       updateDrawingView(document, payload)

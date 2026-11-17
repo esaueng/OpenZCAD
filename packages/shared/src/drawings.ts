@@ -340,6 +340,13 @@ export interface DrawingView {
    * square onto a face the source sees edge-on. Absent on every other view.
    */
   auxiliary?: DrawingAuxiliary;
+  /**
+   * F06 (schema v89): the configuration row this view draws, built on its
+   * own, while the document's active row stays the model being edited.
+   * Only a base view names one; a view folded from it, cut from it or
+   * detailed from it draws its source's row. Absent: the active row.
+   */
+  configurationId?: string;
 }
 
 /**
@@ -664,6 +671,21 @@ function drawingViewError(view: unknown, where: string): string | null {
     return `${where} has an invalid hidden-line setting.`;
   if (view.parentViewId !== undefined && typeof view.parentViewId !== 'string')
     return `${where} has an invalid base view.`;
+  if (view.configurationId !== undefined) {
+    if (
+      typeof view.configurationId !== 'string' ||
+      view.configurationId.length === 0 ||
+      view.configurationId.length > 128
+    )
+      return `${where} names no usable configuration.`;
+    if (
+      view.parentViewId !== undefined ||
+      view.section !== undefined ||
+      view.detail !== undefined ||
+      view.auxiliary !== undefined
+    )
+      return `${where} draws its source view's configuration and cannot name its own.`;
+  }
   if (view.section !== undefined) {
     const section = view.section;
     if (
