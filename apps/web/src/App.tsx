@@ -1859,6 +1859,7 @@ import {
   keypadText,
   profileRegionLoops,
   isInPlacePatternTool,
+  booleanOperationSwitch,
   inPlaceBodyMode,
   inPlaceFaceMode,
   takesFeatureFaces,
@@ -11250,6 +11251,16 @@ export function App() {
     const holdReason = selectionRailToolHoldReason(railPick, nextTool);
     if (holdReason) {
       setStatus(holdReason, { unlogged: true });
+      return;
+    }
+    // Over a running boolean, another boolean switches its operation as the
+    // Options menu does, keeping the bodies it holds (#1654).
+    const operation = modelingFeature
+      ? null
+      : booleanOperationSwitch(inPlaceRef.current.tool, nextTool);
+    if (operation) {
+      if (operation !== inPlaceRef.current.tool)
+        inPlaceRef.current.setOption('operation', operation);
       return;
     }
     const launch = ++toolLaunchRef.current;
