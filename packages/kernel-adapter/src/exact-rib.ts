@@ -93,7 +93,9 @@ function profileElements(
       const start = { x: value(object.x1, 'X'), y: value(object.y1, 'Y') };
       const end = { x: value(object.x2, 'X'), y: value(object.y2, 'Y') };
       const t = unit(sub(end, start));
-      return { data: object, start, end, t0: t, t1: t };
+      // The resolved numbers, never the stored expressions: the region
+      // faces are built from this data.
+      return { data: lineObject(start, end), start, end, t0: t, t1: t };
     }
     if (object.objectKind === 'arc') {
       const center = {
@@ -101,15 +103,24 @@ function profileElements(
         y: value(object.centerY, 'centre Y')
       };
       const radius = value(object.radius, 'radius');
-      const a0 = (value(object.startAngleDeg, 'start angle') * Math.PI) / 180;
-      const a1 = (value(object.endAngleDeg, 'end angle') * Math.PI) / 180;
+      const startDeg = value(object.startAngleDeg, 'start angle');
+      const endDeg = value(object.endAngleDeg, 'end angle');
+      const a0 = (startDeg * Math.PI) / 180;
+      const a1 = (endDeg * Math.PI) / 180;
       const at = (a: number) => ({
         x: center.x + radius * Math.cos(a),
         y: center.y + radius * Math.sin(a)
       });
       const tangent = (a: number) => ({ x: -Math.sin(a), y: Math.cos(a) });
       return {
-        data: object,
+        data: {
+          objectKind: 'arc',
+          centerX: center.x,
+          centerY: center.y,
+          radius,
+          startAngleDeg: startDeg,
+          endAngleDeg: endDeg
+        },
         start: at(a0),
         end: at(a1),
         t0: tangent(a0),
@@ -313,6 +324,42 @@ function chainMiddle(chain: Element2[]): { at: V2; normal: V2 } {
   };
 }
 
+/**
+ * Points of `e` on the plane at height `h` that reach furthest along each
+ * world axis: a line's ends; an arc's ends and every point of its sweep
+ * where a world coordinate peaks, so an arch is bounded by its crown.
+ */
+function extremes(e: Element2, basis: PlaneBasis, h: number): V3[] {
+  const points = [point3(basis, e.start, h), point3(basis, e.end, h)];
+  if (!e.arc) return points;
+  const { center, radius, ccw } = e.arc;
+  const angle = (p: V2) => Math.atan2(p.y - center.y, p.x - center.x);
+  // The sweep counter-clockwise from `from` through `span`.
+  const [from, to] = ccw
+    ? [angle(e.start), angle(e.end)]
+    : [angle(e.end), angle(e.start)];
+  const turn = 2 * Math.PI;
+  const span = (((to - from) % turn) + turn) % turn;
+  for (const k of ['x', 'y', 'z'] as const) {
+    const peak = Math.atan2(basis.v[k], basis.u[k]);
+    for (const theta of [peak, peak + Math.PI]) {
+      if ((((theta - from) % turn) + turn) % turn <= span) {
+        points.push(
+          point3(
+            basis,
+            {
+              x: center.x + radius * Math.cos(theta),
+              y: center.y + radius * Math.sin(theta)
+            },
+            h
+          )
+        );
+      }
+    }
+  }
+  return points;
+}
+
 function bounds(kernel: RemusKernel, solid: number) {
   const b = kernel.boundingBox(solid);
   return {
@@ -344,7 +391,11 @@ export function buildRibSolid(
   if (!(thickness > 0)) throw new Error('A rib needs a positive thickness.');
   const elements = profileElements(document, data, scope);
   const extent = Math.max(
-    ...elements.flatMap((e) => [length(e.start), length(e.end)]),
+    ...elements.flatMap((e) => [
+      length(e.start),
+      length(e.end),
+      e.arc ? length(e.arc.center) + e.arc.radius : 0
+    ]),
     thickness
   );
   const box = bounds(kernel, body);
@@ -422,9 +473,7 @@ export function buildRibSolid(
         low + height / 2
       );
       // Closed off by the body: within the bounds of the body and profile.
-      const ends = chain.flatMap((e) => [e.start, e.end]).map((p) =>
-        point3(basis, p, low)
-      );
+      const ends = chain.flatMap((e) => extremes(e, basis, low));
       const limit = {
         min: {
           x: Math.min(box.min.x, ...ends.map((p) => p.x)) - thickness,

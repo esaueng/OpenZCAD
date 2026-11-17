@@ -1,8 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { computeSketchRegions } from '@openzcad/geometry';
 import {
   addPrimitiveFeature,
   addSketchFeature,
   booleanBodies,
+  extrudeSketch,
   createProjectDocument,
   findSketch,
   normalizeDocument,
@@ -182,6 +184,93 @@ describe('ribs in the exact build', { timeout: 180_000 }, () => {
     expect(derived.warnings).toEqual([]);
     // 10 long, 2 thick, from the sketch at z 30 down to the top at z 20.
     expect(body?.volume).toBeCloseTo(8000 + 200, 6);
+  });
+
+  it('bounds an arched rib by its crown, not its ends', async () => {
+    // A U bracket 20 deep: a base x 0..40, y 0..5 and walls x 0..5 and
+    // 35..40 up to y 10. 250 mm² × 20 = 5 000 mm³.
+    let document = createProjectDocument('U bracket', user);
+    const corners = [
+      [0, 0], [40, 0], [40, 10], [35, 10], [35, 5], [5, 5], [5, 10], [0, 10]
+    ] as const;
+    const outline = addSketchFeature(document, {
+      name: 'U outline',
+      plane: 'XY',
+      objects: corners.map(([x1, y1], i) => {
+        const [x2, y2] = corners[(i + 1) % corners.length]!;
+        return { objectKind: 'line', x1, y1, x2, y2 };
+      })
+    });
+    const outlineObjects = findSketch(
+      outline.document,
+      outline.sketchId
+    )!.objectIds.flatMap((id) => {
+      const node = outline.document.nodes[id];
+      return node?.kind === 'sketch-object' ? [{ id, data: node.data }] : [];
+    });
+    const [region] = computeSketchRegions(outlineObjects, Number);
+    const u = extrudeSketch(outline.document, {
+      name: 'U',
+      sketchId: outline.sketchId,
+      distance: 20,
+      profile: {
+        regionFingerprint: region!.regionFingerprint,
+        samplePoint: region!.samplePoint,
+        sourceArea: region!.area
+      }
+    });
+    document = u.document;
+    // A half circle of radius 17 from wall top to wall top, its crown at
+    // y 27: far above the bracket and both of the profile's ends.
+    const sketch = profileSketch(document, 10, [
+      {
+        objectKind: 'arc',
+        centerX: 20,
+        centerY: 10,
+        radius: 17,
+        startAngleDeg: 0,
+        endAngleDeg: 180
+      }
+    ]);
+    const rib = ribBody(sketch.document, {
+      name: 'Arch',
+      targetBodyId: u.bodyId,
+      profile: sketch.path,
+      thickness: 2,
+      thicknessSide: 'symmetric',
+      direction: 'parallel'
+    });
+    const { derived, body } = await volumeOf(rib.document, rib.bodyId);
+    expect(derived.warnings).toEqual([]);
+    // The half disc over y 10 and the 30 × 5 pocket between the walls,
+    // 2 thick.
+    expect(body?.volume).toBeCloseTo(
+      5000 + 2 * ((Math.PI * 17 * 17) / 2 + 30 * 5),
+      6
+    );
+    expect(
+      body?.topology?.faces.some(
+        (face) => face.geometry?.surfaceType === 'cylinder'
+      )
+    ).toBe(true);
+  });
+
+  it('builds a profile whose coordinates are expressions', async () => {
+    const start = bracket();
+    const sketch = profileSketch(start.document, 10, [
+      { ...gussetLine, y1: '15 + 15', x2: '60 / 2' }
+    ]);
+    const rib = ribBody(sketch.document, {
+      name: 'Gusset',
+      targetBodyId: start.bodyId,
+      profile: sketch.path,
+      thickness: 2,
+      thicknessSide: 'first',
+      direction: 'parallel'
+    });
+    const { derived, body } = await volumeOf(rib.document, rib.bodyId);
+    expect(derived.warnings).toEqual([]);
+    expect(body?.volume).toBeCloseTo(7500 + 625, 6);
   });
 
   it('refuses a profile in open space and one inside the body, by name', async () => {
