@@ -21,10 +21,12 @@ import {
   standardHoleFit,
   standardPartDefaultLengthMm,
   standardPartForHole,
+  standardPartIsThreaded,
   standardPartSizes,
   type StandardPartChoice,
   type StandardPartKind,
   type StandardPartSize,
+  type StandardPartThread,
   type StandardPartSystem,
   type StandardScrewHead
 } from './standard-parts';
@@ -269,6 +271,9 @@ export function standardPartEditChoices(
     ...(data.hole ? { place: 'hole' } : {}),
     system: data.system,
     ...(data.head ? { head: data.head } : {}),
+    ...(standardPartIsThreaded(data.partKind)
+      ? { thread: data.thread ?? 'modeled' }
+      : {}),
     [standardPartSizeOptionId(data.partKind, data.system, data.head)]: data.size
   };
   const resolved = (vector: {
@@ -325,4 +330,19 @@ export function standardPartHoleFields(
     ...(stored?.xDirection ? { xDirection: { ...stored.xDirection } } : {}),
     hole: { featureId: inserted.featureId }
   };
+}
+
+/**
+ * M17 (schema v83): the thread field a set of choices stores: a simplified
+ * thread on a threaded part; a modeled one as absent, unless the edited part
+ * stored it explicitly.
+ */
+export function standardPartThreadField(
+  options: Readonly<Record<string, string>>,
+  partKind: StandardPartKind,
+  saved?: { thread?: StandardPartThread }
+): { thread?: StandardPartThread } {
+  if (!standardPartIsThreaded(partKind)) return {};
+  if (options.thread === 'simplified') return { thread: 'simplified' };
+  return saved?.thread === 'modeled' ? { thread: 'modeled' } : {};
 }

@@ -27,6 +27,7 @@
   "design-review-followups.spec.ts": 140,
   "direct-edit-ownership.spec.ts": 58,
   "direct-edit-parity-wiring.spec.ts": 4,
+  "drawing-auxiliary-views.spec.ts": 14,
   "drawing-bom-balloons.spec.ts": 14,
   "drawing-centerlines.spec.ts": 12,
   "drawing-detail-views.spec.ts": 12,
@@ -122,6 +123,7 @@
   "standalone-gear-height.spec.ts": 24,
   "standard-parts-bom.spec.ts": 30,
   "standard-parts-holes.spec.ts": 30,
+  "standard-parts-threads.spec.ts": 20,
   "standard-parts.spec.ts": 20,
   "start-screen-import-rename.spec.ts": 20,
   "start-screen-refresh.spec.ts": 7,
@@ -149,5 +151,6 @@
   "visual-selection-live-preview.spec.ts": 12,
   "workspace-empty-state.spec.ts": 8,
   "workspace-tour.spec.ts": 7,
+  "save-state-versions.spec.ts": 12,
   "project-comments.spec.ts": 14
 }

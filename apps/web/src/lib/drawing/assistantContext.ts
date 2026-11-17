@@ -7,7 +7,7 @@ import {
   type CadPatchProposal
 } from '@openzcad/ai-contracts';
 import {
-  DRAWING_VIEW_FRAMES,
+  drawingViewFrame,
   drawingAnnotationEdges,
   drawingPaperMm,
   drawingPaperPerModelUnit,
@@ -78,7 +78,7 @@ function curveOf(edge: EdgeTopology, closed: boolean) {
 function faceOn(view: DrawingView, edge: EdgeTopology): boolean {
   const circle = edge.curve?.circle;
   if (!circle) return false;
-  const d = DRAWING_VIEW_FRAMES[view.orientation].direction;
+  const d = drawingViewFrame(view).direction;
   return (
     Math.abs(
       Math.abs(
@@ -169,7 +169,7 @@ export function drawingAssistantDigest(input: {
         const ends = edgeEndsInPageOrder(view, edge);
         const circle = edge.curve?.circle;
         const center = circle
-          ? projectToView(DRAWING_VIEW_FRAMES[view.orientation], circle.center)
+          ? projectToView(drawingViewFrame(view), circle.center)
           : null;
         return {
           ref,

@@ -155,7 +155,13 @@ export function buildStandardPartFeature(
         );
       }
     }
-    const built = buildLocalPart(kernel, geometry, length, mm);
+    const built = buildLocalPart(
+      kernel,
+      geometry,
+      length,
+      mm,
+      data.thread === 'simplified'
+    );
     const matrix = frameMatrix(frame);
     for (const solid of built.solids) {
       kernel.transformSolid(solid, matrix);
@@ -578,24 +584,49 @@ function cutThread(
 // ---------------------------------------------------------------------------
 // Parts.
 
+/**
+ * M17 (schema v83): a simplified part is its plain envelope, drawn light
+ * enough for many: no thread is cut, so a screw's shank stays the plain
+ * cylinder at the thread's major diameter and a nut's or insert's bore the
+ * plain tap drill, the way a drawing shows a thread (that face is named
+ * `standard-part.face.thread`). A screw also leaves out its drive recess
+ * and chamfers, a nut its chamfers and an insert its knurl, so each keeps a
+ * few faces and edges. Its head's form, every size and its length are the
+ * modeled part's.
+ */
 function buildLocalPart(
   kernel: RemusKernel,
   geometry: StandardPartGeometry,
   length: number | undefined,
-  mm: number
+  mm: number,
+  simplified = false
 ): BuiltPart {
   const u = (millimetres: number) => millimetres / mm;
   switch (geometry.partKind) {
     case 'screw':
-      return buildScrew(kernel, geometry, length!, mm);
+      return buildScrew(kernel, geometry, length!, mm, simplified);
     case 'nut': {
       const height = u(geometry.heightMm);
       const tapRadius = u(tapDrillMm(geometry.thread)) / 2;
-      let solid = chamferedHex(kernel, u(geometry.acrossFlatsMm), 0, height);
+      const flats = u(geometry.acrossFlatsMm);
+      let solid = simplified
+        ? hexPrism(kernel, flats, 0, height)
+        : chamferedHex(kernel, flats, 0, height);
       solid = kernel.cut(
         solid,
         cylinder(kernel, tapRadius, -0.1 * height, 1.2 * height)
       );
+      if (simplified) {
+        return {
+          solids: [solid],
+          rules: [
+            { role: 'seat', plane: 0 },
+            { role: 'top', plane: height },
+            { role: 'thread', cylinder: tapRadius }
+          ],
+          threads: []
+        };
+      }
       const threaded = cutThread(
         kernel,
         solid,
@@ -641,7 +672,7 @@ function buildLocalPart(
       };
     }
     case 'insert':
-      return buildInsert(kernel, geometry, mm);
+      return buildInsert(kernel, geometry, mm, simplified);
     case 'dowel': {
       const r = u(geometry.diameterMm) / 2;
       const c = r / 4;
@@ -685,7 +716,8 @@ function buildScrew(
   kernel: RemusKernel,
   geometry: Extract<StandardPartGeometry, { partKind: 'screw' }>,
   length: number,
-  mm: number
+  mm: number,
+  simplified: boolean
 ): BuiltPart {
   const u = (millimetres: number) => millimetres / mm;
   const d = u(geometry.thread.majorDiameterMm);
@@ -695,8 +727,64 @@ function buildScrew(
   const c = 0.65 * pitch;
   const k = u(geometry.headHeightMm);
   const rules: FaceRule[] = [{ role: 'tip', plane: length }];
+  // The thread runs from the tip chamfer toward the head for the standard's
+  // thread length, and stops at least two pitches short of the head with a
+  // runout, as the standards' unthreaded run under the head allows. A
+  // simplified screw refuses the lengths a modeled one does.
+  const threadStart = geometry.head === 'countersunk' ? k : 0;
+  const threadLength = Math.min(
+    u(geometry.threadLengthMm(length * mm)) - c,
+    length - c - threadStart - 2 * pitch
+  );
+  if (!(threadLength >= 2 * pitch - 1e-9)) {
+    throw new Error('The screw is too short to thread under its head.');
+  }
   let solid: number;
-  let shankStart: number;
+  if (simplified) {
+    // The envelope: the head's form on a plain shank, one revolve (and a
+    // hex head's one intersection), no recess, no chamfer.
+    if (geometry.head === 'countersunk') {
+      solid = revolved(kernel, [
+        [0, length],
+        [r, length],
+        [r, k],
+        [u(geometry.headDiameterMm) / 2, 0],
+        [0, 0]
+      ]);
+      rules.push(
+        { role: 'head.top', plane: 0 },
+        { role: 'head.cone', coneBelow: k }
+      );
+    } else if (geometry.head === 'hex') {
+      const flats = u(geometry.headDiameterMm);
+      const corners = 1.05 * (flats / Math.sqrt(3));
+      solid = kernel.intersect(
+        revolved(kernel, [
+          [0, length],
+          [r, length],
+          [r, 0],
+          [corners, 0],
+          [corners, -k],
+          [0, -k]
+        ]),
+        hexPrism(kernel, flats, -k, k + 1.05 * length)
+      );
+      rules.push({ role: 'seat', plane: 0 }, { role: 'head.top', plane: -k });
+    } else {
+      const R = u(geometry.headDiameterMm) / 2;
+      solid = revolved(kernel, [
+        [0, length],
+        [r, length],
+        [r, 0],
+        [R, 0],
+        [R, -k],
+        [0, -k]
+      ]);
+      rules.push({ role: 'seat', plane: 0 }, { role: 'head.top', plane: -k });
+    }
+    rules.push({ role: 'thread', cylinder: r });
+    return { solids: [solid], rules, threads: [] };
+  }
   if (geometry.head === 'countersunk') {
     const top = u(geometry.headDiameterMm) / 2;
     solid = revolved(kernel, [
@@ -714,7 +802,6 @@ function buildScrew(
       0,
       u(geometry.keyDepthMm!)
     );
-    shankStart = k;
     rules.push(
       { role: 'head.top', plane: 0 },
       { role: 'head.cone', coneBelow: k }
@@ -739,7 +826,6 @@ function buildScrew(
       round,
       hexPrism(kernel, flats, -k, k + length + margin)
     );
-    shankStart = 0;
     rules.push({ role: 'seat', plane: 0 }, { role: 'head.top', plane: -k });
   } else {
     const R = u(geometry.headDiameterMm) / 2;
@@ -761,19 +847,7 @@ function buildScrew(
       -k,
       u(geometry.keyDepthMm!)
     );
-    shankStart = 0;
     rules.push({ role: 'seat', plane: 0 }, { role: 'head.top', plane: -k });
-  }
-  // The thread runs from the tip chamfer toward the head for the standard's
-  // thread length, and stops at least two pitches short of the head with a
-  // runout, as the standards' unthreaded run under the head allows.
-  const faceLength = length - c - shankStart;
-  const threadLength = Math.min(
-    u(geometry.threadLengthMm(length * mm)) - c,
-    faceLength - 2 * pitch
-  );
-  if (!(threadLength >= 2 * pitch - 1e-9)) {
-    throw new Error('The screw is too short to thread under its head.');
   }
   const threaded = cutThread(
     kernel,
@@ -781,7 +855,7 @@ function buildScrew(
     {
       kind: 'external',
       radius: r,
-      z: (shankStart + length - c) / 2,
+      z: (threadStart + length - c) / 2,
       majorDiameter: d,
       pitch,
       fromZ: length - c,
@@ -795,7 +869,8 @@ function buildScrew(
 function buildInsert(
   kernel: RemusKernel,
   geometry: Extract<StandardPartGeometry, { partKind: 'insert' }>,
-  mm: number
+  mm: number,
+  simplified: boolean
 ): BuiltPart {
   const u = (millimetres: number) => millimetres / mm;
   const l = u(geometry.lengthMm);
@@ -807,6 +882,18 @@ function buildInsert(
     [outside, l],
     [tapRadius, l]
   ]);
+  if (simplified) {
+    return {
+      solids: [blank],
+      rules: [
+        { role: 'top', plane: 0 },
+        { role: 'bottom', plane: l },
+        { role: 'thread', cylinder: tapRadius },
+        { role: 'outside', cylinder: outside }
+      ],
+      threads: []
+    };
+  }
   // The knurl: herringbone teeth about 0.3 mm deep that keep the outside,
   // cut by the gear generator. Their module is the outside over (z + 1).
   const teeth = Math.min(

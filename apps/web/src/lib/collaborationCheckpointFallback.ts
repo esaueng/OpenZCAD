@@ -2,7 +2,10 @@ import {
   createSavedRevision,
   withEchoedSavePoints
 } from '@openzcad/document-core';
-import type { ProjectDocument } from '@openzcad/shared';
+import type {
+  ProjectCheckpointAuthor,
+  ProjectDocument
+} from '@openzcad/shared';
 import {
   projectsHaveSameCanonicalContent,
   listLocalSaveStateIds,
@@ -13,6 +16,8 @@ import { normalizeCheckpointReason } from './collaborationProtocol';
 import type { WorkspaceSaveState } from './cloudProjectAutosave';
 
 export interface CheckpointOptions {
+  /** Who is saving, recorded on the save point (L03). */
+  author?: ProjectCheckpointAuthor;
   isCurrent(): boolean;
   readDocument(): ProjectDocument;
   applyDocument(document: ProjectDocument): void;
@@ -83,7 +88,11 @@ export async function preserveFailedCheckpoint(
 ): Promise<never> {
   const local =
     authoritative ??
-    createSavedRevision(snapshot, normalizeCheckpointReason(reason));
+    createSavedRevision(
+      snapshot,
+      normalizeCheckpointReason(reason),
+      options.author
+    );
   let localSaved = false;
   try {
     // Save only the captured state, never an older project head.

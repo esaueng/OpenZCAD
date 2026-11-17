@@ -9,7 +9,7 @@ import {
   holeOfBoreFace
 } from '@openzcad/document-core';
 import {
-  DRAWING_VIEW_FRAMES,
+  drawingViewFrame,
   drawingPaperPerModelUnit,
   holeCalloutLabel,
   projectToView,
@@ -693,7 +693,7 @@ function lookupFace(
 }
 
 function projectPoint(view: DrawingView, p: ArrayLike<number>, at: number) {
-  return projectToView(DRAWING_VIEW_FRAMES[view.orientation], {
+  return projectToView(drawingViewFrame(view), {
     x: p[at]!,
     y: p[at + 1]!,
     z: p[at + 2]!
@@ -776,14 +776,14 @@ function faceOnCircle(
   | { ok: false; reason: AnnotationBreak } {
   const circle = edge.curve?.circle;
   if (!circle) return { ok: false, reason: 'not-circular' };
-  const direction = DRAWING_VIEW_FRAMES[view.orientation].direction;
+  const direction = drawingViewFrame(view).direction;
   const facing =
     circle.axis.x * direction.x +
     circle.axis.y * direction.y +
     circle.axis.z * direction.z;
   if (Math.abs(Math.abs(facing) - 1) > 1e-6)
     return { ok: false, reason: 'edge-on' };
-  const c = projectToView(DRAWING_VIEW_FRAMES[view.orientation], circle.center);
+  const c = projectToView(drawingViewFrame(view), circle.center);
   return {
     ok: true,
     center: [c.u, c.v],
@@ -838,7 +838,7 @@ function pointOf(
   /** v73: the sheet's annotations, for a point a mark marks. */
   marks?: MarkLookup
 ): { ok: true; point: ViewPoint } | { ok: false; reason: AnnotationBreak } {
-  const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  const frame = drawingViewFrame(view);
   if (point.anchor === 'mark') {
     const mark = marks?.(point.annotationId);
     if (
@@ -923,7 +923,7 @@ export function dimensionPointInView(
   bodies: AnnotationBodies,
   direction: 'horizontal' | 'vertical'
 ): { uv: UV; depth: number; model: Vector3 } | null {
-  const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  const frame = drawingViewFrame(view);
   const [along, across] =
     direction === 'horizontal' ? [frame.x, frame.up] : [frame.up, frame.x];
   const found = pointOf(view, point, bodies, along, across);
@@ -985,7 +985,7 @@ function blendTubeInView(
   const g = face.geometry;
   if (!g || !g.surfaceType.toLowerCase().includes('tor') || !g.axis)
     return { ok: false, reason: 'not-a-blend' };
-  const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  const frame = drawingViewFrame(view);
   const across = cross(frame.direction, g.axis);
   const width = norm(across);
   // True size only side-on: the axis lies in the view's plane.
@@ -1194,7 +1194,7 @@ function markPoint(
   view: DrawingView,
   bodies: AnnotationBodies
 ): { ok: true; point: ViewPoint } | { ok: false; reason: AnnotationBreak } {
-  const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  const frame = drawingViewFrame(view);
   if (mark.kind === 'center-mark') {
     const found = lookupEdge(mark.edge, view, bodies);
     if (!found.ok) return found;
@@ -1644,7 +1644,7 @@ export function resolveDrawingAnnotation(
       };
     }
     case 'linear': {
-      const frame = DRAWING_VIEW_FRAMES[view.orientation];
+      const frame = drawingViewFrame(view);
       const [along, across] =
         annotation.direction === 'horizontal'
           ? [frame.x, frame.up]
@@ -1823,7 +1823,7 @@ export function resolveDrawingAnnotation(
     case 'chamfer': {
       const found = lookupFace(annotation.face, view, bodies);
       if (!found.ok) return failure(found.reason);
-      const frame = DRAWING_VIEW_FRAMES[view.orientation];
+      const frame = drawingViewFrame(view);
       // A planar chamfer is true size only edge-on.
       const normal = found.face.geometry?.normal;
       if (normal && Math.abs(dot(normal, frame.direction)) > 1e-6)
@@ -2264,7 +2264,7 @@ export function annotationModelReading(
       value: resolution.resolved.value
     };
   }
-  const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  const frame = drawingViewFrame(view);
   if (annotation.kind === 'linear') {
     const [along, across] =
       annotation.direction === 'horizontal'
@@ -3663,7 +3663,7 @@ function ownedLeaderPieces(
   const { view, projection } = entry;
   const leader = uvPoints(resolved.leader ?? []);
   const leaderDepths = resolved.leaderDepths ?? leader.map(() => 0);
-  const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  const frame = drawingViewFrame(view);
   // Every other physical edge of the view's bodies, in (u, v) with depths.
   const others: { points: XY[]; depths: number[] }[] = [];
   for (const bodyId of view.bodyIds) {

@@ -48,6 +48,7 @@ import {
 import type { RefusalCapture } from './lib/refusalHarvest';
 import { useRefusalHarvest } from './hooks/useRefusalHarvest';
 import {
+  checkpointLabel,
   ownEntry,
   PROJECT_MIGRATING_CODE,
   type DrawingAnnotation,
@@ -224,6 +225,7 @@ import type { DrawingAssistantSource } from './lib/drawing/assistantContext';
 import {
   appendRevision,
   createCheckpoint,
+  createSavedRevision,
   createFeatureOnlyIds,
   createSavePoint,
   createProjectDocument,
@@ -541,6 +543,7 @@ import {
   CheckpointSaveError,
   failedCheckpointSaveState
 } from './lib/collaborationCheckpointFallback';
+import { currentCheckpointAuthor } from './lib/checkpointAuthor';
 import {
   cancelDesktopSignIn,
   DESKTOP_SLICERS,
@@ -3260,6 +3263,10 @@ export function App() {
    * known to work.
    */
   const [restorableCheckpointIds, setRestorableCheckpointIds] = useState<
+    ReadonlySet<string>
+  >(new Set());
+  /** L03: which of those the account holds, for the versions list's sync column. */
+  const [accountCheckpointIds, setAccountCheckpointIds] = useState<
     ReadonlySet<string>
   >(new Set());
   /** Open while the user is naming a save point. */
@@ -8425,6 +8432,7 @@ export function App() {
     const projectId = doc?.projectId;
     if (!projectId) {
       setRestorableCheckpointIds(new Set());
+      setAccountCheckpointIds(new Set());
       return;
     }
     const checkpoints = doc.checkpoints;
@@ -8433,6 +8441,7 @@ export function App() {
       const restorable = new Set(
         await listLocalSaveStateIds(projectId).catch(() => new Set<string>())
       );
+      const inAccount = new Set<string>();
       // The account holds save states this device never had — made on another
       // machine, or older than this device's own retention — so a project the
       // account knows is asked as well, and the two answers are merged.
@@ -8447,11 +8456,13 @@ export function App() {
         for (const checkpoint of stored ? checkpoints : []) {
           if (stored?.has(checkpoint.revisionId)) {
             restorable.add(checkpoint.checkpointId);
+            inAccount.add(checkpoint.checkpointId);
           }
         }
       }
       if (!cancelled) {
         setRestorableCheckpointIds(restorable);
+        setAccountCheckpointIds(inAccount);
       }
     })();
     return () => {
@@ -16558,6 +16569,34 @@ export function App() {
   }
 
   /**
+   * L03: renames a save point in the document. A forward write like the save
+   * point itself (undo never rewinds the list), so it syncs as an ordinary
+   * change and needs edit rights.
+   */
+  function handleRenameCheckpoint(checkpoint: ProjectCheckpoint, name: string) {
+    const manager = managerRef.current;
+    if (!manager || !ensureCanEdit('rename this save point')) return;
+    try {
+      const before = manager.document;
+      const next = manager.renameCheckpoint(checkpoint.checkpointId, name);
+      if (next === before) return;
+      // The model is unchanged: keep the ready geometry.
+      geometry.retainReadyGeometry(next);
+      setDoc(next);
+      const renamed = next.checkpoints.find(
+        (point) => point.checkpointId === checkpoint.checkpointId
+      );
+      setStatus(
+        renamed?.name
+          ? `Renamed the save point to “${renamed.name}”.`
+          : `The save point is called “${checkpoint.reason}” again.`
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not rename the save point.'));
+    }
+  }
+
+  /**
    * Rewinds the open project to one of its save states.
    *
    * Two invariants shape the order of the steps. The pre-restore document is
@@ -16597,7 +16636,7 @@ export function App() {
         );
         return;
       }
-      const reason = `Restored “${checkpoint.reason}”`;
+      const reason = `Restored “${checkpointLabel(checkpoint)}”`;
       const restoreIsCurrent = () =>
         managerRef.current === manager &&
         sameLocalProjectContent(manager.document, current) &&
@@ -17334,6 +17373,8 @@ export function App() {
     }
     if (!ensureCanSave()) return;
     accountSavePendingRef.current = true;
+    // L03: who saved and on which device, shown in the versions list.
+    const author = currentCheckpointAuthor(sessionRef.current);
     let sourceWarning: string | null = null;
     let savedOnDevice = false;
     let accountWriteStarted = false;
@@ -17352,6 +17393,7 @@ export function App() {
             savingDocument,
             reason,
             {
+              author,
               isCurrent,
               readDocument: () => savingManager.document,
               applyDocument: showAccountEcho
@@ -17421,7 +17463,8 @@ export function App() {
         // Commit the save point before yielding so later edits descend from it.
         savingDocument = createCheckpoint(
           appendRevision(savingDocument, reason),
-          reason
+          reason,
+          author
         );
         showAccountEcho(savingDocument);
         await saveLocalProject(savingDocument);
@@ -17436,7 +17479,7 @@ export function App() {
         session &&
         !cloudProjectIds.has(savingDocument.projectId)
       ) {
-        const marked = createSavePoint(savingDocument, reason);
+        const marked = createSavePoint(savingDocument, reason, author);
         await saveLocalProject(marked);
         if (!isCurrentProject()) return;
         if (savingManager.document.version === savingDocument.version) {
@@ -17482,7 +17525,7 @@ export function App() {
         // one it was born with — which would leave restore and branch with
         // nothing to offer exactly where they are needed most, and would drop
         // a name the user had just typed.
-        const marked = createSavePoint(savingDocument, reason);
+        const marked = createSavePoint(savingDocument, reason, author);
         if (savingManager.document.version === savingDocument.version) {
           await saveLocalProject(marked);
           if (!isCurrentProject()) {
@@ -17523,6 +17566,15 @@ export function App() {
         await saveLocalProject(savingDocument);
         if (!readDocument() || !isCurrentProject()) return null;
         accountWriteStarted = true;
+        // Minted here rather than by the API so the save point records its
+        // author; the API stores a save point it is handed as it is.
+        const trimmedReason = reason.trim();
+        const minted = createSavedRevision(
+          withoutDerivedProjection(savingDocument),
+          trimmedReason,
+          author
+        );
+        const savedRevisionId = minted.revisions.at(-1)!.revisionId;
         // A save held back while earlier saves' copies are freed is retried
         // here, account write only: the device copy is already saved, and
         // edits may have saved newer device copies since.
@@ -17530,8 +17582,9 @@ export function App() {
           () =>
             api.saveRevision({
               ...input,
-              reason,
-              document: withoutDerivedProjection(savingDocument)
+              reason: trimmedReason,
+              document: minted,
+              savedRevisionId
             }),
           () => Boolean(readDocument()) && isCurrentProject()
         );
@@ -34989,6 +35042,8 @@ export function App() {
       }
       documentVersion={doc?.version ?? 0}
       restorableCheckpointIds={restorableCheckpointIds}
+      accountCheckpointIds={accountCheckpointIds}
+      currentUserId={session?.userId ?? null}
       onSelectFeature={handleSelectFeatureFromTree}
       onSelectBody={handleSelectBodyFromTree}
       selectedBodyIds={selectedBodyIds}
@@ -35073,6 +35128,9 @@ export function App() {
       }
       onBranchCheckpoint={(checkpoint) =>
         void handleBranchSaveState(checkpoint)
+      }
+      onRenameCheckpoint={
+        editDisabledReason ? undefined : handleRenameCheckpoint
       }
     />
   );
