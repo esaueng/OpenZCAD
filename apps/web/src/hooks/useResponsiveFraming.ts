@@ -25,16 +25,6 @@ export function useResponsiveFraming({
   const framedProject = useRef<string | null>(null);
   const layoutChosen = useRef(false);
   const previousLayout = useRef<string | null>(null);
-  // The project whose model has been ready at least once. Panel arrangement
-  // that settles while a project is still opening (restored weights, column
-  // heights) is not a layout choice: reframing for it moved the opened camera
-  // once the first rebuild ended. A mode or panel toggle still is one.
-  const settledProject = useRef<string | null>(null);
-  const previousChoice = useRef<string | null>(null);
-  // A mode or panel change still waiting for the model: a layout update
-  // after it re-runs the effect, whose cleanup drops the pending fit.
-  const choicePending = useRef(false);
-  if (enabled && projectId) settledProject.current = projectId;
   // Focusing another docked panel changes recency, not the clear stage. Keep
   // a person's chosen zoom unless the visible arrangement actually changes.
   const layoutKey = JSON.stringify({
@@ -57,15 +47,9 @@ export function useResponsiveFraming({
     const identity = JSON.stringify([projectId, mode, layoutKey, panels]);
     const repeatedMount = previousLayout.current === identity;
     previousLayout.current = identity;
-    const choice = JSON.stringify([projectId, mode, panels]);
-    const choiceChanged = previousChoice.current !== choice;
-    previousChoice.current = choice;
     const projectChanged = framedProject.current !== projectId;
     framedProject.current = projectId;
-    if (projectChanged) {
-      layoutChosen.current = false;
-      choicePending.current = false;
-    }
+    if (projectChanged) layoutChosen.current = false;
     if (!projectId) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let frame = 0;
@@ -84,7 +68,6 @@ export function useResponsiveFraming({
               (!layoutChange || pendingLayout.current)
             ) {
               pendingLayout.current = false;
-              choicePending.current = false;
               latest.current.onFit();
             }
           });
@@ -99,19 +82,11 @@ export function useResponsiveFraming({
       cancelAnimationFrame(frame);
       cancelAnimationFrame(nextFrame);
       pendingLayout.current = false;
-      choicePending.current = false;
       layoutChosen.current = false;
     };
     // The viewer owns initial framing and remembered camera restoration.
     // This hook only reacts to subsequent workspace layout choices.
-    if (
-      !projectChanged &&
-      !repeatedMount &&
-      (choiceChanged ||
-        choicePending.current ||
-        settledProject.current === projectId)
-    ) {
-      if (choiceChanged) choicePending.current = true;
+    if (!projectChanged && !repeatedMount) {
       layoutChosen.current = true;
       schedule(true);
     }
