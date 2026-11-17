@@ -1,0 +1,57 @@
+openzcad history 1
+units mm
+
+param #param_4480ae75-e573-49c1-a764-44fe51c1c01d width: length = `40 mm`
+param #param_1eb8df7b-e80f-45b5-b98e-c8f232bfa958 count = `4`
+
+primitive #feat_8fffa88c-0402-486a-9f41-7f0be3600cfb "Block" -> #body_5c167992-21de-40dd-b800-50e2414f095b {
+  primitiveKind: "box",
+  dimensions: { width: `width`, height: 30, depth: 20 },
+}
+
+sketch #feat_04cd674a-1380-4d88-b9f5-56d4831a7f92 "Profile" {
+  sketchId: #sketch_213093d3-4f47-4c46-b361-843b5905c088,
+  @sketch: {
+    planeRef: { type: "canonical", plane: "XY", offset: 25 },
+  },
+  @objects: [
+    circle #ent_f252580a-7bc4-49b4-8260-485e181e1cb7 "circle profile" {
+      centerX: 10,
+      centerY: 10,
+      radius: `width / 10`,
+    },
+  ],
+}
+
+extrude #feat_0f0d4874-0c5f-4b9e-9d90-b6ae14536a11 "Pin" -> #body_9fd7780c-77d7-4c8f-ab7c-3219a4896e80 {
+  sketchId: #sketch_213093d3-4f47-4c46-b361-843b5905c088,
+  distance: `width / 4`,
+}
+
+fillet #feat_2e8afcc8-2bbd-4e95-93bf-18ab70ce7f18 "Round pin" -> #body_ec31b391-e89d-43d4-a551-7620be015f68 {
+  targetBodyId: #body_9fd7780c-77d7-4c8f-ab7c-3219a4896e80,
+  edgeReferences: [
+    edge(#feat_0f0d4874-0c5f-4b9e-9d90-b6ae14536a11, "sweep.edge.cap.start.ent_f252580a-7bc4-49b4-8260-485e181e1cb7.circle"),
+  ],
+  radius: 1,
+}
+
+custom-feature #feat_0cbe0d39-a92b-48c7-b249-5132abe448cc "Tray" -> #body_be6b742b-677c-419f-8ef9-6ee6f4348e41 {
+  targetBodyId: #body_5c167992-21de-40dd-b800-50e2414f095b,
+  script: {
+    id: "openzcad.contract/rounded-tray",
+    version: "1.0.0",
+    api: 1,
+    source: """script "openzcad.contract/rounded-tray" "1.0.0" api 1 {
+  input round: length = `5 mm`
+  input wall: length = `2 mm`
+  pick corners: edges 4 = edges().type("line").axis("z")
+  step fillet { edges: #corners, radius: `round` }
+  pick top: face = faces().normal("z").max("z")
+  step shell { faces: #top, thickness: `wall` }
+}
+""",
+    digest: "6cb4fb393128347dfd69e6a9ad374412238ed3d6f2ca035c0f909339ee133f61",
+  },
+  inputs: { wall: `width / 20` },
+}

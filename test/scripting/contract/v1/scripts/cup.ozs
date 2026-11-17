@@ -1,0 +1,8 @@
+script "openzcad.contract/cup" "1.0.0" api 1 {
+  input wall: length = `1 mm`
+  input foot: length = `2 mm`
+  pick mouth: face = faces().type("plane").max("z")
+  step shell { faces: #mouth, thickness: `wall` }
+  pick base: edge = edges().type("circle").min("z")
+  step fillet { edges: #base, radius: `foot` }
+}

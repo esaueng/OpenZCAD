@@ -288,6 +288,32 @@ whose cache key includes the definition digest.
 5. **D — stability contract:** the v1 golden corpus, digest pinning, the
    version-update command and the published language reference.
 
+## As delivered
+
+The reference is [docs/scripting.md](../scripting.md). Where delivery
+departs from the design above, it is recorded here:
+
+- **Scripts are embedded in each instance**, not stored in a document-level
+  library. An instance carries `{ id, version, api, source, digest }`, and
+  the command system refuses a second instance of the same id and version
+  with other source, so a version stays immutable within a project. This
+  keeps the schema change (v98) to one feature kind, with undo, collaboration
+  and validation unchanged; the history text prints each instance's source
+  as a `"""` block.
+- **Instances are written in the history text**, which is the scripting
+  surface in the app; there is no separate instance card.
+- **Picks reach the step builders as hashes** computed from the queries'
+  results on the body at that point in the build, never stored. Queries read
+  exact witnesses only: `type`, `normal`, `axis`, `radius`, `max` and `min`.
+  `created-by`, `lineage` and `adjacent` are not in api 1.
+- **Steps in api 1** are `fillet`, `chamfer` and `shell`. `repeat` and
+  sketch-based steps are not in api 1; adding them is a minor version under
+  the contract.
+- **Script syntax:** the id and version are quoted strings, and a pick names
+  its count after the entity (`edges 4`).
+- **The reader types a step against the node the document stores** (its
+  fields and value kinds); there is no separate per-kind schema.
+
 ## Risks
 
 - **Bundle size.** The parser, checker and panel live in a lazily loaded

@@ -1,0 +1,83 @@
+[
+  {
+    "script": "rounded-tray",
+    "target": {
+      "primitiveKind": "box",
+      "dimensions": {
+        "width": 40,
+        "height": 30,
+        "depth": 20
+      }
+    },
+    "inputs": {},
+    "volume": 6861.8583169133535,
+    "faceCount": 19,
+    "warnings": []
+  },
+  {
+    "script": "rounded-tray",
+    "target": {
+      "primitiveKind": "box",
+      "dimensions": {
+        "width": 40,
+        "height": 30,
+        "depth": 20
+      }
+    },
+    "inputs": {
+      "round": "3 mm",
+      "wall": "1 mm"
+    },
+    "volume": 3694.725635973335,
+    "faceCount": 19,
+    "warnings": []
+  },
+  {
+    "script": "chamfered-lid",
+    "target": {
+      "primitiveKind": "box",
+      "dimensions": {
+        "width": 20,
+        "height": 20,
+        "depth": 10
+      }
+    },
+    "inputs": {},
+    "volume": 3914.5,
+    "faceCount": 10,
+    "warnings": []
+  },
+  {
+    "script": "cup",
+    "target": {
+      "primitiveKind": "cylinder",
+      "dimensions": {
+        "radius": 12,
+        "height": 25
+      }
+    },
+    "inputs": {
+      "wall": "1.5 mm"
+    },
+    "volume": 3107.946777291487,
+    "faceCount": 6,
+    "warnings": []
+  },
+  {
+    "script": "refuses-count",
+    "target": {
+      "primitiveKind": "box",
+      "dimensions": {
+        "width": 10,
+        "height": 10,
+        "depth": 10
+      }
+    },
+    "inputs": {},
+    "volume": 1000,
+    "faceCount": 6,
+    "warnings": [
+      "Feature \"Golden\": Pick #corners found 4 edges; it needs exactly 3."
+    ]
+  }
+]
