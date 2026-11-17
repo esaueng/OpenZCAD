@@ -37,32 +37,41 @@ export function mergeObjBodies(
     let vt = 0;
     for (const raw of part.text.split('\n')) {
       const line = raw.trim();
-      if (line.startsWith('v ')) {
-        v += 1;
-        lines.push(line);
-      } else if (line.startsWith('vn ')) {
-        vn += 1;
-        lines.push(line);
-      } else if (line.startsWith('vt ')) {
-        vt += 1;
-        lines.push(line);
-      } else if (line.startsWith('f ')) {
-        const corners = line
-          .slice(2)
-          .trim()
-          .split(/\s+/)
-          .map((corner) => {
-            const [a, b, c] = corner.split('/');
+      // OBJ records are a keyword token and its operands.
+      const [keyword = '', ...operands] = line.split(/\s+/);
+      switch (keyword) {
+        case 'v':
+          v += 1;
+          lines.push(line);
+          break;
+        case 'vn':
+          vn += 1;
+          lines.push(line);
+          break;
+        case 'vt':
+          vt += 1;
+          lines.push(line);
+          break;
+        case 'f': {
+          const corners = operands.map((corner) => {
+            const fields = corner.split('/');
             const shift = (value: string | undefined, by: number) =>
               value === undefined || value === ''
-                ? value
+                ? (value ?? '')
                 : String(Number(value) + by);
-            return [shift(a, vertices), shift(b, textures), shift(c, normals)]
-              .slice(0, corner.split('/').length)
-              .map((value) => value ?? '')
+            return [
+              shift(fields[0], vertices),
+              shift(fields[1], textures),
+              shift(fields[2], normals)
+            ]
+              .slice(0, fields.length)
               .join('/');
           });
-        lines.push(`f ${corners.join(' ')}`);
+          lines.push(`f ${corners.join(' ')}`);
+          break;
+        }
+        default:
+          break;
       }
     }
     vertices += v;
