@@ -80,6 +80,8 @@ import {
   getParameterHiddenBodyIds,
   listFeaturesInOrder,
   listNodesByKind,
+  listObjectFolders,
+  objectFolderOfBody,
   rigidImportedSource
 } from '@openzcad/document-core';
 import { writeDxf, type DxfEntity } from '@openzcad/io-dxf';
@@ -222,9 +224,12 @@ import {
   projectRemusLineageDiagnostic
 } from './exact-shape-utils';
 import {
+  importedStepCacheKey,
+  importStepStructureWithOwnBudget,
   importStepWithOwnBudget,
   stepImportEmptyReason,
-  type StepImportReport
+  type StepImportReport,
+  type StepStructure
 } from './kernel-step-import';
 import {
   buildDocumentHistoryCooperatively,
@@ -298,6 +303,7 @@ import {
   stepTimestamp,
   stepWriterOptions,
   type StepBodiesExport,
+  type StepExportAssembly,
   type StepExportMetadata,
   type StepExportOptions
 } from './step-export-metadata';
@@ -1051,7 +1057,10 @@ export interface ExactKernelAdapter {
   sketchPlanarOperation(
     operation: SketchPlanarOperation
   ): Promise<SketchPlanarResult>;
-  inspectStep(data: string | ArrayBuffer): Promise<{
+  inspectStep(
+    data: string | ArrayBuffer,
+    options?: { structure?: boolean }
+  ): Promise<{
     solid: boolean;
     valid: boolean;
     volume: number;
@@ -1063,6 +1072,10 @@ export interface ExactKernelAdapter {
      * come back through the value.
      */
     reason?: string;
+    /** I02: the product structure, when the indices number its solids. */
+    structure?: StepStructure;
+    /** I02: why the structure reader refused, when the flat one stood in. */
+    structureRefusal?: string;
   }>;
   /**
    * On-demand per-face recognition of one imported STEP face (Phase D of the
@@ -1290,6 +1303,42 @@ function exportSolidLabels(
 }
 
 /**
+ * I02: the Objects folders holding the written bodies, as the STEP product
+ * tree; null when no written body sits in a folder.
+ */
+function exportAssembly(
+  document: ProjectDocument,
+  bodies: readonly { bodyId: BodyId; solids: number[] }[]
+): StepExportAssembly | null {
+  const all = new Map(
+    listObjectFolders(document).map((folder) => [folder.id, folder])
+  );
+  const index = new Map<string, number>();
+  const folders: { name: string; parent: number | null }[] = [];
+  const add = (id: string): number => {
+    const known = index.get(id);
+    if (known !== undefined) return known;
+    const folder = all.get(id)!;
+    const parent = folder.parentId === null ? null : add(folder.parentId);
+    folders.push({ name: folder.name, parent });
+    index.set(id, folders.length - 1);
+    return folders.length - 1;
+  };
+  const names = new Map(
+    listNodesByKind(document, 'body').map((body) => [body.bodyId, body.name])
+  );
+  const placed = bodies.map(({ bodyId, solids }) => {
+    const folderId = objectFolderOfBody(document, bodyId);
+    return {
+      name: names.get(bodyId) ?? '',
+      solidCount: solids.length,
+      folder: folderId !== null && all.has(folderId) ? add(folderId) : null
+    };
+  });
+  return folders.length > 0 ? { folders, bodies: placed } : null;
+}
+
+/**
  * One STEP of the given bodies' solids, each named after its body and styled
  * in its display colour.
  */
@@ -1307,6 +1356,8 @@ function writeStepBodies(
     solids: exportSolidLabels(document, bodies),
     ...(options.protocol ? { protocol: options.protocol } : {})
   };
+  const assembly = exportAssembly(document, bodies);
+  if (assembly) metadata.assembly = assembly;
   // Never fuse: a boolean union changes the geometry (overlaps merge,
   // coincident faces weld). Every root of the arena document becomes its
   // own MANIFOLD_SOLID_BREP inside one shape representation, so the
@@ -1326,6 +1377,12 @@ function writeStepBodies(
     metadata
   );
 }
+
+export type {
+  StepStructure,
+  StepStructureNode,
+  StepStructureSolid
+} from './kernel-step-import';
 
 export class RemusKernelAdapter implements ExactKernelAdapter {
   readonly kind = 'remus' as const;
@@ -3025,6 +3082,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         sourceName: string;
         stepText?: string;
         vertices?: number[];
+        stepReader?: 'structure';
       };
       if (
         !ref ||
@@ -3043,8 +3101,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         continue;
       }
       if (!mesh) {
-        pinned.add(ref.checksumSha256);
-        if (this.importedSteps.lookup(ref.checksumSha256)) {
+        const key = importedStepCacheKey(ref.checksumSha256, data);
+        pinned.add(key);
+        if (this.importedSteps.lookup(key)) {
           continue;
         }
       }
@@ -6190,13 +6249,27 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * so a file whose only shell is open reports no solid and no volume instead
    * of the divergence integral over the faces it happens to have.
    */
-  async inspectStep(data: string | ArrayBuffer): Promise<{
+  async inspectStep(
+    data: string | ArrayBuffer,
+    options: {
+      /**
+       * I02: read the product structure (placed occurrences, names,
+       * colours). When the structure reader refuses the file, the flat
+       * reader's result is returned with `structureRefusal` saying why.
+       */
+      structure?: boolean;
+    } = {}
+  ): Promise<{
     solid: boolean;
     valid: boolean;
     volume: number;
     /** Accepted indices in the original kernel import order, before rejection filtering. */
     solidIndices: number[];
     reason?: string;
+    /** Present when the indices number the structure reader's solids. */
+    structure?: StepStructure;
+    /** Why the structure reader refused, when the flat reader stood in. */
+    structureRefusal?: string;
   }> {
     await loadRemusTranslators();
     const kernel = new RemusKernel();
@@ -6205,12 +6278,32 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         typeof data === 'string'
           ? new TextEncoder().encode(data)
           : new Uint8Array(data);
-      let declared: number[];
-      let report: StepImportReport;
+      let declared: number[] = [];
+      let report: StepImportReport = {
+        solidCount: 0,
+        sheetCount: 0,
+        diagnostics: [],
+        diagnosticCount: 0
+      };
+      let structure: StepStructure | undefined;
+      let structureRefusal: string | undefined;
+      if (options.structure) {
+        try {
+          const imported = importStepStructureWithOwnBudget(kernel, bytes);
+          structure = imported.structure;
+          declared = Array.from(imported.solids);
+          report = imported.report;
+        } catch (error) {
+          structureRefusal =
+            error instanceof Error ? error.message : String(error);
+        }
+      }
       try {
-        const imported = importStepWithOwnBudget(kernel, bytes);
-        declared = Array.from(imported.solids);
-        report = imported.report;
+        if (structure === undefined) {
+          const imported = importStepWithOwnBudget(kernel, bytes);
+          declared = Array.from(imported.solids);
+          report = imported.report;
+        }
       } catch (error) {
         return {
           solid: false,
@@ -6230,6 +6323,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         verdict.kind === 'not-a-solid' ? [verdict.reason] : []
       );
       return {
+        ...(structure ? { structure } : {}),
+        ...(structureRefusal !== undefined ? { structureRefusal } : {}),
         solid: accepted.length > 0,
         solidIndices: declared.flatMap((_, index) =>
           verdicts[index]!.kind !== 'not-a-solid' ? [index] : []

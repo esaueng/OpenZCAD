@@ -45,7 +45,12 @@ import type {
 
 import { errorMessage } from './errors';
 import { stepImportRefusal } from './refusalLanguage';
-import { inspectStepSolidsInWorker } from './stepImportWorkerClient';
+import {
+  inspectStepInWorker,
+  inspectStepSolidsInWorker,
+  type StepInspection
+} from './stepImportWorkerClient';
+import { stepStructureLayout } from './stepStructureLayout';
 import {
   settleImportSource,
   type InFlightImportChecksums
@@ -195,6 +200,11 @@ export interface StepImportRunDeps {
   file: File;
   /** Kernel discovery for ordinary STEP imports; guided imports retain their compound contract. */
   inspectSolids?(file: File, signal?: AbortSignal): Promise<number[]>;
+  /**
+   * I02: discovery with the product structure, for an ordinary import (no
+   * `layout`, no `commandFactory`). Defaults to the import worker.
+   */
+  inspectStructure?(file: File, signal?: AbortSignal): Promise<StepInspection>;
   /** MIME type for the archived copy; the caller infers it from the name. */
   contentType: string;
   /** Defaults to {@link localStepImportSourceStore}; a test supplies a fake. */
@@ -561,14 +571,43 @@ export async function runStepImport(
       ? numberedFeatureName(current, importName)
       : importName;
     progress?.update({ phase: 'building', fraction: null });
-    const solidIndices = deps.commandFactory
-      ? []
-      : await (deps.inspectSolids ?? inspectStepSolidsInWorker)(file, signal);
+    // I02: an ordinary import reads the product structure, so an assembly's
+    // parts land where it places them, named and coloured as the file says.
+    // A caller with its own layout or command keeps the flat reader's
+    // numbering, which its layout was written for.
+    const readsStructure =
+      !deps.commandFactory && !deps.layout && !deps.inspectSolids;
+    let solidIndices: number[] = [];
+    let structureInspection: StepInspection | null = null;
+    if (readsStructure) {
+      structureInspection = await (
+        deps.inspectStructure ??
+        ((source: File, abort?: AbortSignal) =>
+          inspectStepInWorker(source, { structure: true }, abort))
+      )(file, signal);
+      solidIndices = structureInspection.solidIndices;
+    } else if (!deps.commandFactory) {
+      solidIndices = await (deps.inspectSolids ?? inspectStepSolidsInWorker)(
+        file,
+        signal
+      );
+    }
+    const structure = structureInspection?.structure;
+    const structureRefusal = structureInspection?.structureRefusal;
     stopIfCancelled();
     // Empty discovery still runs the ordinary validator so its precise refusal
     // and source-cleanup behavior are preserved. Never infer solid count/order
     // from STEP text: assembly instances and rejected shells change both.
-    const layout = deps.layout?.({ solidIndices, document: current });
+    const layout =
+      deps.layout?.({ solidIndices, document: current }) ??
+      (structure
+        ? (stepStructureLayout({
+            structure,
+            solidIndices,
+            fileStem: file.name.replace(/\.(step|stp)$/i, ''),
+            document: current
+          }) ?? undefined)
+        : undefined);
     if (layout && layout.bodies.length === 0) {
       throw new Error(`No body in ${file.name} could be read back.`);
     }
@@ -586,6 +625,7 @@ export async function runStepImport(
       ids: createBodyFeatureIds(),
       sourceName: file.name,
       ...(sourceRef ? { stepSourceRef: sourceRef } : { stepText }),
+      ...(structure ? { stepReader: 'structure' as const } : {}),
       ...(plan.solidIndices === undefined
         ? {}
         : { solidIndices: [...plan.solidIndices] })
@@ -698,7 +738,12 @@ export async function runStepImport(
           : `Imported ${payloads.length} editable STEP bodies from ${file.name}: `) +
           (archived
             ? `exact ${payloads.length === 1 ? 'body' : 'bodies'} rebuilt, source archived.`
-            : `exact ${payloads.length === 1 ? 'body' : 'bodies'} rebuilt (cloud archive unavailable; source saved locally).`),
+            : `exact ${payloads.length === 1 ? 'body' : 'bodies'} rebuilt (cloud archive unavailable; source saved locally).`) +
+          // I02: the flat reader stood in, so an assembly's parts sit at their
+          // own origins, without names or colours from the file.
+          (structureRefusal !== undefined
+            ? ` Its assembly structure could not be read (${structureRefusal}), so parts keep their own placements, without the file's names and colours.`
+            : ''),
       onFailure: (message) => {
         // The kernel's verdict is already in the status bar. The host sink
         // renders inline in whichever feature form is open, and an import has

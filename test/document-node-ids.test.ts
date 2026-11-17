@@ -1658,7 +1658,8 @@ describe('stored command enums by the feature they create or change', () => {
     ['feature.thread', { profile: 'acme' }],
     ['feature.pattern', { patternKind: 'linear', axis: 'horizontal' }],
     ['feature.fillet', { radiusLaw: 'cubic' }],
-    ['import.mesh', { assumedUnits: 'parsec' }]
+    ['import.mesh', { assumedUnits: 'parsec' }],
+    ['import.step', { stepReader: 'flat' }]
   ])('refuses %s with %j', (kind, payload) => {
     const error = reservedIdentifierError(
       [command(kind, payload)],

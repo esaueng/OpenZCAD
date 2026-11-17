@@ -402,7 +402,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // sheet) and the shop fields (company, material, finish, checked, approved,
 // general tolerances). An older client would refuse the unknown title-block
 // fields, so it must refuse the document. Builds on v93.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 94 as const;
+// v96 adds I02 structured STEP imports (`stepReader: 'structure'` on an
+// imported STEP): its solid indices number the product-structure reader's
+// placed occurrences, not the flat reader's unplaced definitions. An older
+// client would rebuild the wrong solids, so it must refuse. Builds on v94
+// (v95 is claimed by #1719, R01 datum points).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 96 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2711,6 +2716,14 @@ export type FeatureData =
        * still dropped with the usual warning.
        */
       solidIndices?: number[];
+      /**
+       * I02 (schema v96): which reader numbers `solidIndices`. Absent is the
+       * flat body reader every earlier import used: one solid per B-rep
+       * definition, unplaced. `'structure'` is the product-structure reader:
+       * one solid per placed occurrence, in product-tree order, so an
+       * assembly's parts land where it places them.
+       */
+      stepReader?: 'structure';
       /** Exact, measured separation of raised planar lettering. Source bytes
        * remain immutable; every rebuild re-verifies the selected footprints. */
       planarEmboss?: {
