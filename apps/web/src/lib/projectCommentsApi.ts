@@ -7,6 +7,7 @@ import { desktopFetch } from './desktopBridge';
 import { projectRequest } from './projectWriteGate';
 import { isEncryptedProject } from './api';
 import { shareTokenHeaders } from './projectShareClient';
+import { ENCRYPTED_COMMENTS_UNAVAILABLE } from './commentsAvailability';
 
 /**
  * L08 review comments for a plaintext project in the account. An encrypted
@@ -14,8 +15,7 @@ import { shareTokenHeaders } from './projectShareClient';
  * offered until they can travel as encrypted records (ADR-024), so nothing
  * about them is sent in plaintext.
  */
-export const ENCRYPTED_COMMENTS_UNAVAILABLE =
-  'Comments are not available on encrypted projects yet.';
+export { ENCRYPTED_COMMENTS_UNAVAILABLE };
 
 export class ProjectCommentsError extends Error {
   constructor(

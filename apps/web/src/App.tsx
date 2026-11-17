@@ -652,12 +652,7 @@ import {
   LiveSessionNotice
 } from './components/LiveSessionNotice';
 import type { CommentPin } from './components/ModelViewer';
-import {
-  ENCRYPTED_COMMENTS_UNAVAILABLE,
-  linkCommentsApi,
-  projectCommentsApi
-} from './lib/projectCommentsApi';
-import { SaveStatePreviewNotice } from './components/SaveStatePreviewNotice';
+import { ENCRYPTED_COMMENTS_UNAVAILABLE } from './lib/commentsAvailability';
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
   ActivityLogButton,
@@ -1494,6 +1489,15 @@ const LazySharedLinkCopyDialog = lazyWithStaleChunkNotice(() =>
     default: module.SharedLinkCopyDialog
   }))
 );
+// The comment client and the save-state preview notice load on the gesture
+// that needs them (opening Comments, previewing a save state), not with the
+// workspace.
+const loadCommentsApi = () => import('./lib/projectCommentsApi');
+const LazySaveStatePreviewNotice = lazyWithStaleChunkNotice(() =>
+  import('./components/SaveStatePreviewNotice').then((module) => ({
+    default: module.SaveStatePreviewNotice
+  }))
+);
 const LazyCommentsPanel = lazyWithStaleChunkNotice(() =>
   import('./components/CommentsPanel').then((module) => ({
     default: module.CommentsPanel
@@ -1730,6 +1734,15 @@ const SharedLinkCopyDialog = withSuspense(LazySharedLinkCopyDialog);
 const SaveRevisionDialog = withSuspense(LazySaveRevisionDialog);
 
 const CommentsPanel = withSuspense(LazyCommentsPanel);
+function SaveStatePreviewNotice(
+  props: ComponentProps<typeof LazySaveStatePreviewNotice>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazySaveStatePreviewNotice {...props} />
+    </Suspense>
+  );
+}
 const SaveStateCompareDialog = withSuspense(LazySaveStateCompareDialog);
 
 const DeleteFeatureDialog = withSuspense(LazyDeleteFeatureDialog);
@@ -20478,6 +20491,7 @@ export function App() {
   const loadComments = useCallback(async (projectId: string) => {
     try {
       const link = shareSessionRef.current;
+      const { linkCommentsApi, projectCommentsApi } = await loadCommentsApi();
       const comments = link?.comments
         ? await linkCommentsApi.list(link.token)
         : await projectCommentsApi.list(projectId);
@@ -20503,12 +20517,15 @@ export function App() {
   }
   /** Runs one comment change, then reloads the list; false when it failed. */
   async function runCommentAction(
-    action: (projectId: string) => Promise<void>
+    action: (
+      projectId: string,
+      api: Awaited<ReturnType<typeof loadCommentsApi>>
+    ) => Promise<void>
   ): Promise<boolean> {
     const projectId = managerRef.current?.document.projectId;
     if (!projectId) return false;
     try {
-      await action(projectId);
+      await action(projectId, await loadCommentsApi());
       await loadComments(projectId);
       return true;
     } catch (error) {
@@ -38116,45 +38133,51 @@ export function App() {
                 : {})}
               onPostThread={(text) =>
                 commentDraft
-                  ? runCommentAction(async (projectId) => {
-                      const input = { anchor: commentDraft, text };
-                      const created = shareSession
-                        ? await linkCommentsApi.create(
-                            shareSession.token,
-                            commentVisitorName,
-                            input
-                          )
-                        : await projectCommentsApi.create(projectId, input);
-                      setCommentDraft(null);
-                      setActiveCommentId(created.commentId);
-                    })
+                  ? runCommentAction(
+                      async (
+                        projectId,
+                        { linkCommentsApi, projectCommentsApi }
+                      ) => {
+                        const input = { anchor: commentDraft, text };
+                        const created = shareSession
+                          ? await linkCommentsApi.create(
+                              shareSession.token,
+                              commentVisitorName,
+                              input
+                            )
+                          : await projectCommentsApi.create(projectId, input);
+                        setCommentDraft(null);
+                        setActiveCommentId(created.commentId);
+                      }
+                    )
                   : Promise.resolve(false)
               }
               onCancelDraft={() => setCommentDraft(null)}
               onReply={(threadId, text) =>
-                runCommentAction((projectId) =>
-                  (shareSession
-                    ? linkCommentsApi.create(
-                        shareSession.token,
-                        commentVisitorName,
-                        { parentId: threadId, text }
-                      )
-                    : projectCommentsApi.create(projectId, {
-                        parentId: threadId,
-                        text
-                      })
-                  ).then(() => undefined)
+                runCommentAction(
+                  (projectId, { linkCommentsApi, projectCommentsApi }) =>
+                    (shareSession
+                      ? linkCommentsApi.create(
+                          shareSession.token,
+                          commentVisitorName,
+                          { parentId: threadId, text }
+                        )
+                      : projectCommentsApi.create(projectId, {
+                          parentId: threadId,
+                          text
+                        })
+                    ).then(() => undefined)
                 )
               }
               onResolve={(threadId, resolved) =>
-                void runCommentAction((projectId) =>
+                void runCommentAction((projectId, { projectCommentsApi }) =>
                   projectCommentsApi
                     .resolve(projectId, threadId, resolved)
                     .then(() => undefined)
                 )
               }
               onDelete={(commentId) =>
-                void runCommentAction((projectId) =>
+                void runCommentAction((projectId, { projectCommentsApi }) =>
                   projectCommentsApi.remove(projectId, commentId)
                 )
               }
