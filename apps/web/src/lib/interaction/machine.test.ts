@@ -14,6 +14,7 @@ import {
   radialFaceOperationName,
   escapeTarget,
   holdsRefusal,
+  refusalDiscardedByHistoryStep,
   interactionReducer,
   isOperationState,
   nextSketchCircleMode,
@@ -1961,6 +1962,27 @@ describe('a preview refused under a held handle', () => {
       title: commandSessionFor(released)!.title,
       message: refusal.message
     });
+  });
+
+  it('lets Undo discard the refusal instead of stepping history (#1597)', () => {
+    const refused = interactionReducer(draggingOffset(), {
+      type: 'preview-refused',
+      diagnostic: refusal,
+      value: -9
+    });
+    const released = interactionReducer(refused, { type: 'drag-release' });
+    const title = commandSessionFor(released)!.title;
+    expect(refusalDiscardedByHistoryStep(released)).toBe(title);
+    // A refused frame still under the hand is held too.
+    expect(refusalDiscardedByHistoryStep(refused)).toBe(title);
+    // Nothing refused: Undo steps history as usual.
+    expect(refusalDiscardedByHistoryStep(draggingOffset())).toBeNull();
+    expect(
+      refusalDiscardedByHistoryStep(
+        interactionReducer(released, { type: 'recover' })
+      )
+    ).toBeNull();
+    expect(refusalDiscardedByHistoryStep(IDLE)).toBeNull();
   });
 
   it('is a validation failure outside a drag', () => {

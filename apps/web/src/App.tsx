@@ -235,6 +235,7 @@ import {
   findBodyNode,
   listObjectFolders,
   getParameterHiddenBodyIds,
+  assemblyComponentBodies,
   findFeature,
   standardPartHoleSource,
   findSketch,
@@ -292,7 +293,10 @@ import type {
   ParamValue,
   ConfigurationSet,
   FaceTopology,
+  ProjectAccessRole,
   ProjectCheckpoint,
+  ProjectComment,
+  ProjectCommentAnchor,
   PlaneId,
   ProjectDocument,
   ProjectOrganization,
@@ -440,6 +444,7 @@ import { requestContactVerification } from './lib/e2ee/contactFocus';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import {
   commandOutcomeMessage,
+  discardedRefusalMessage,
   historyStepMessage
 } from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
@@ -648,6 +653,11 @@ import {
   LIVE_SESSION_CONNECTING,
   LiveSessionNotice
 } from './components/LiveSessionNotice';
+import type { CommentPin } from './components/ModelViewer';
+import {
+  ENCRYPTED_COMMENTS_UNAVAILABLE,
+  projectCommentsApi
+} from './lib/projectCommentsApi';
 import { SaveStatePreviewNotice } from './components/SaveStatePreviewNotice';
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
@@ -729,6 +739,10 @@ import {
   clearProjectShareFragment
 } from './lib/projectShareLink';
 import { sharedDocumentOnRow } from './lib/sharedConfiguration';
+import {
+  useConfigurationRowGeometry,
+  type BuildRowGeometry
+} from './lib/configurationRowGeometry';
 import type {
   ExportProgress,
   MeshExportDialogFormat,
@@ -931,6 +945,7 @@ import {
   interactionReducer,
   commandSessionFor,
   holdsRefusal,
+  refusalDiscardedByHistoryStep,
   isOperationState,
   isStaleSelectionError,
   editedFeatureIdFor,
@@ -1485,6 +1500,11 @@ const LazySharedLinkCopyDialog = lazyWithStaleChunkNotice(() =>
     default: module.SharedLinkCopyDialog
   }))
 );
+const LazyCommentsPanel = lazyWithStaleChunkNotice(() =>
+  import('./components/CommentsPanel').then((module) => ({
+    default: module.CommentsPanel
+  }))
+);
 const LazySaveStateCompareDialog = lazyWithStaleChunkNotice(() =>
   import('./components/SaveStateCompareDialog').then((module) => ({
     default: module.SaveStateCompareDialog
@@ -1715,6 +1735,7 @@ const SharedLinkCopyDialog = withSuspense(LazySharedLinkCopyDialog);
 
 const SaveRevisionDialog = withSuspense(LazySaveRevisionDialog);
 
+const CommentsPanel = withSuspense(LazyCommentsPanel);
 const SaveStateCompareDialog = withSuspense(LazySaveStateCompareDialog);
 
 const DeleteFeatureDialog = withSuspense(LazyDeleteFeatureDialog);
@@ -2197,10 +2218,12 @@ import {
   useAssembleWorkspace
 } from './lib/assembly/assembleWorkspace';
 
-const START_SCREEN_DEMOS =
-  (import.meta.env as unknown as { VITE_E2E?: string }).VITE_E2E === '1'
-    ? [...DEMO_DEFINITIONS, VISUAL_SELECTION_ACCEPTANCE_DEMO]
-    : DEMO_DEFINITIONS;
+const E2E_BUILD =
+  (import.meta.env as unknown as { VITE_E2E?: string }).VITE_E2E === '1';
+
+const START_SCREEN_DEMOS = E2E_BUILD
+  ? [...DEMO_DEFINITIONS, VISUAL_SELECTION_ACCEPTANCE_DEMO]
+  : DEMO_DEFINITIONS;
 
 declare global {
   interface Window {
@@ -3297,6 +3320,20 @@ export function App() {
   >(new Set());
   /** Open while the user is naming a save point. */
   const [namingSave, setNamingSave] = useState(false);
+  /** L08: the review comments panel, and what it holds for which project. */
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [projectComments, setProjectComments] = useState<{
+    projectId: string;
+    comments: ProjectComment[];
+  } | null>(null);
+  const [commentsError, setCommentsError] = useState<string | null>(null);
+  const [commentPlacing, setCommentPlacing] = useState(false);
+  const commentPlacingRef = useRef(false);
+  commentPlacingRef.current = commentPlacing;
+  const [commentDraft, setCommentDraft] = useState<ProjectCommentAnchor | null>(
+    null
+  );
+  const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
   /**
    * L03: the saved version the viewport is previewing, read only. Shown only
    * while `previewDoc` is still its document: anything that replaces or
@@ -6818,6 +6855,37 @@ export function App() {
   const tweakMode = resolvedWorkspaceMode === 'tweak';
   const drawingMode = resolvedWorkspaceMode === 'drawing';
   const assembleMode = resolvedWorkspaceMode === 'assemble';
+  /**
+   * F06 slice 4: the configuration the View workspace shows, or null for
+   * the active one. It is this view's own: the document's active row stays
+   * the model being edited, and leaving View forgets it.
+   */
+  const [viewerRowId, setViewerRowId] = useState<string | null>(null);
+  if (viewerRowId !== null && !viewMode) setViewerRowId(null);
+  const buildConfigurationRowGeometry = useCallback<BuildRowGeometry>(
+    (rowDocument, options) =>
+      geometryRef.current.previewGeometry(rowDocument, options),
+    []
+  );
+  // Rows named by this view and, in Assemble, by each component.
+  const configurationRows = useConfigurationRowGeometry(
+    viewMode || assembleMode ? (doc ?? null) : null,
+    [
+      viewMode ? viewerRowId : null,
+      ...(assembleMode
+        ? (doc?.assembly?.components.map(
+            (component) => component.configurationId
+          ) ?? [])
+        : [])
+    ],
+    buildConfigurationRowGeometry,
+    exactGeometryReady
+  );
+  /** The row View shows in place of the active one, once it is built. */
+  const viewerRowDocument =
+    viewMode && viewerRowId
+      ? (configurationRows.builds.get(viewerRowId)?.document ?? null)
+      : null;
   /** The sheet the Draw workspace has on screen; null while it is closed. */
   const [drawingActiveSheetId, setDrawingActiveSheetId] =
     useState<DrawingSheetId | null>(null);
@@ -9072,10 +9140,116 @@ export function App() {
   const partBodies = useMemo<BodyRepresentation[]>(
     () =>
       Object.values(
-        previewDoc ? renderedRepresentations : (liveBodyRepresentations ?? {})
+        previewDoc
+          ? renderedRepresentations
+          : // F06: View showing another configuration draws that row.
+            (viewerRowDocument?.derived.bodyRepresentations ??
+              liveBodyRepresentations ??
+              {})
       ).filter((body) => !body.consumed),
-    [liveBodyRepresentations, previewDoc, renderedRepresentations]
+    [
+      liveBodyRepresentations,
+      previewDoc,
+      renderedRepresentations,
+      viewerRowDocument
+    ]
   );
+  /**
+   * F06: Assemble parts that show another configuration. `swaps` maps the
+   * live body a part stands for to that row's body, drawn at the part's
+   * place, or to null when the row does not build it (suppressed, hidden or
+   * consumed there). `added` holds a part's row body when the active row
+   * builds no body for it at all. Membership is read from the current
+   * assembly, never from the cached row, which only lends its geometry.
+   */
+  const componentRows = useMemo(() => {
+    const swaps = new Map<string, BodyRepresentation | null>();
+    const added: BodyRepresentation[] = [];
+    const set = doc?.assembly;
+    if (!assembleMode || !doc || !set || configurationRows.builds.size === 0)
+      return { swaps, added };
+    const liveIn =
+      (bodies: ProjectDocument['derived']['bodyRepresentations']) =>
+      (bodyId: BodyId) =>
+        !!bodies[bodyId] && !bodies[bodyId].consumed;
+    const live = assemblyComponentBodies(
+      doc,
+      liveIn(doc.derived.bodyRepresentations)
+    );
+    for (const component of set.components) {
+      const row = component.configurationId
+        ? configurationRows.builds.get(component.configurationId)?.document
+        : undefined;
+      if (!row) continue;
+      const bodies = row.derived.bodyRepresentations;
+      const rowBody = assemblyComponentBodies(
+        { ...row, assembly: set },
+        liveIn(bodies)
+      ).get(component.id);
+      const shown =
+        rowBody && !getParameterHiddenBodyIds(row).has(rowBody)
+          ? bodies[rowBody]
+          : undefined;
+      const liveBody = live.get(component.id);
+      if (liveBody)
+        swaps.set(liveBody, shown ? { ...shown, bodyId: liveBody } : null);
+      else if (shown) added.push(shown);
+    }
+    return { swaps, added };
+  }, [assembleMode, configurationRows.builds, doc]);
+  /**
+   * The document the viewport draws in Assemble while parts show other
+   * rows: the model's own, with the bodies only those rows build, so the
+   * assembly view places them like any part. In View, the shown row's.
+   */
+  const configurationDisplayDocument = useMemo<ProjectDocument | null>(() => {
+    if (viewerRowDocument) return viewerRowDocument;
+    if (!doc || componentRows.added.length === 0) return null;
+    return {
+      ...doc,
+      derived: {
+        ...doc.derived,
+        bodyRepresentations: {
+          ...doc.derived.bodyRepresentations,
+          ...Object.fromEntries(
+            componentRows.added.map((body) => [body.bodyId, body])
+          )
+        }
+      }
+    };
+  }, [viewerRowDocument, doc, componentRows]);
+  /**
+   * Bodies drawn from a part's own row rather than the document's build:
+   * never the document's exact geometry, so nothing may section or measure
+   * them as if they were.
+   */
+  const configurationDrawnBodyIds = useMemo(
+    () => [
+      ...componentRows.swaps.keys(),
+      ...componentRows.added.map((body) => body.bodyId)
+    ],
+    [componentRows]
+  );
+  /** What the viewport leaves out: the hidden set, as F06 rows change it. */
+  const drawnHiddenBodyIds = useMemo(() => {
+    const base = viewerRowDocument
+      ? new Set<string>([
+          ...localHiddenBodyIds,
+          ...getParameterHiddenBodyIds(viewerRowDocument)
+        ])
+      : hiddenBodyIds;
+    if (componentRows.swaps.size === 0 && componentRows.added.length === 0)
+      return base;
+    const hidden = new Set(base);
+    for (const [bodyId, swap] of componentRows.swaps) {
+      if (swap === null) hidden.add(bodyId);
+      // The part's row decides; only a hide in this browser still holds.
+      else if (!localHiddenBodyIds.has(bodyId)) hidden.delete(bodyId);
+    }
+    for (const body of componentRows.added)
+      if (!localHiddenBodyIds.has(body.bodyId)) hidden.delete(body.bodyId);
+    return hidden;
+  }, [viewerRowDocument, localHiddenBodyIds, hiddenBodyIds, componentRows]);
   /**
    * Bodies the viewer reported it drew away from their document pose, from
    * the frame itself rather than from the mechanism that posed them. A Move
@@ -9108,8 +9282,16 @@ export function App() {
   // Its own memo, so the array the viewer uploads meshes from keeps its
   // identity while a preview comes and goes over the top of it.
   const completedViewerBodies = useMemo<BodyRepresentation[]>(
-    () => partBodies.filter((body) => !hiddenBodyIds.has(body.bodyId)),
-    [partBodies, hiddenBodyIds]
+    () => [
+      ...partBodies
+        .filter((body) => !drawnHiddenBodyIds.has(body.bodyId))
+        .map((body) => componentRows.swaps.get(body.bodyId) ?? body),
+      // Parts whose body only their own row builds.
+      ...componentRows.added.filter(
+        (body) => !drawnHiddenBodyIds.has(body.bodyId)
+      )
+    ],
+    [partBodies, drawnHiddenBodyIds, componentRows]
   );
   const isolationState = useMemo(
     () =>
@@ -9176,7 +9358,7 @@ export function App() {
         : currentGeometrySnapshot
           ? Object.values(currentGeometrySnapshot.bodyRepresentations)
           : completedViewerBodies
-    ).filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId));
+    ).filter((body) => !body.consumed && !drawnHiddenBodyIds.has(body.bodyId));
     // G2: what a command preview would make is drawn in the preview hue
     // until it is applied, including edits that retain an existing body ID.
     // A face drag is the exception: an offset draws its result solid over a
@@ -9190,17 +9372,42 @@ export function App() {
       : bodies;
   }, [
     completedViewerBodies,
-    hiddenBodyIds,
+    drawnHiddenBodyIds,
     currentGeometrySnapshot,
     currentFaceGeometryPreview,
     faceDragInteraction,
     previewDoc,
     representations
   ]);
+  // E2E builds only: each drawn body's width along X, by name, so a spec can
+  // tell which configuration a view or a part is drawing (F06 slice 4).
+  useEffect(() => {
+    if (!E2E_BUILD) return;
+    const bounds = meshBoundsLookup(
+      Object.fromEntries(viewerBodies.map((body) => [body.bodyId, body]))
+    );
+    window.document.documentElement.dataset.e2eDrawnBodies = JSON.stringify(
+      Object.fromEntries(
+        viewerBodies.map((body) => {
+          const box = bounds(body.bodyId);
+          return [
+            body.name,
+            box ? Math.round((box.max.x - box.min.x) * 100) / 100 : null
+          ];
+        })
+      )
+    );
+  }, [viewerBodies]);
   const viewportGeometry = useMemo<ViewportGeometry<ParameterPreviewBody>>(
     () => ({
       document:
-        currentFaceGeometryPreview?.document ?? previewDoc ?? doc ?? null,
+        currentFaceGeometryPreview?.document ??
+        previewDoc ??
+        // F06: a row shown in View is that row's document; parts on other
+        // rows add their bodies to the model's.
+        configurationDisplayDocument ??
+        doc ??
+        null,
       bodies: viewerBodies,
       // A parameter preview stands in for its own result body only; hidden
       // bodies stay hidden and every other part keeps its exact geometry.
@@ -9216,10 +9423,15 @@ export function App() {
       // frame it drew. The Move gizmo poses a body's mesh with no state the
       // workspace can see, and the next mechanism to do that need not
       // announce itself either.
-      drawnElsewhere: bodiesDrawnElsewhere
+      drawnElsewhere:
+        configurationDrawnBodyIds.length > 0
+          ? [...bodiesDrawnElsewhere, ...configurationDrawnBodyIds]
+          : bodiesDrawnElsewhere
     }),
     [
       doc,
+      configurationDisplayDocument,
+      configurationDrawnBodyIds,
       previewDoc,
       viewerBodies,
       hiddenBodyIds,
@@ -12866,6 +13078,10 @@ export function App() {
   }
 
   function cancelPanel() {
+    // Dismissing a failed edit dismisses its "Edit not applied" notice too
+    // (#1596); the Activity log keeps the full refusal. A refusal left behind
+    // by a plain deselection keeps the notice as its link to that entry.
+    if (holdsRefusal(interactionRef.current)) setLastDirectEditFailure(null);
     cancelPendingRegionExtrusion();
     cancelDirectManipulationRef.current?.();
     clearDirectEditPreviews();
@@ -17101,10 +17317,28 @@ export function App() {
       : null;
   }
 
+  /**
+   * Undo or Redo over a failed edit discards the failure and leaves history
+   * alone. The failed edit was never committed, so stepping history would
+   * revert older, unrelated work while the failure's card hides it (#1597).
+   */
+  function discardHeldRefusal(step: 'undo' | 'redo'): boolean {
+    const title = refusalDiscardedByHistoryStep(interactionRef.current);
+    if (title === null) return false;
+    // A drag that retook a validating release would land that release when
+    // the drag is cancelled; Undo leaves history alone, so it goes too.
+    retakenRelease.drop('offset-face');
+    retakenRelease.drop('resize-cylinder-radius');
+    cancelPanel();
+    setStatus(discardedRefusalMessage(step, title));
+    return true;
+  }
+
   function handleUndo() {
     if (!managerRef.current) {
       return;
     }
+    if (discardHeldRefusal('undo')) return;
     // A spent history shortcut must leave an armed hole alone.
     if (!managerRef.current.canUndo && captureHoleHistorySelection()) return;
     // Tweak mode locks modeling, not parameters: an undo entry that touched
@@ -17188,6 +17422,7 @@ export function App() {
     if (!managerRef.current) {
       return;
     }
+    if (discardHeldRefusal('redo')) return;
     // A spent history shortcut must leave an armed hole alone.
     if (!managerRef.current.canRedo && captureHoleHistorySelection()) return;
     // Same split as undo: redoing a parameter-only step is a parameter edit,
@@ -20429,12 +20664,106 @@ export function App() {
     return loop.length > 1 ? loop : [selection];
   }
 
+  // L08 review comments: a plaintext project in the account, for every
+  // member. An encrypted project's are not offered until they can travel as
+  // encrypted records, so nothing about them is sent in plaintext.
+  const commentsUnavailableReason = !doc
+    ? null
+    : isEncryptedProject(doc.projectId)
+      ? ENCRYPTED_COMMENTS_UNAVAILABLE
+      : !session || !activeProjectIsCloud
+        ? 'Save this project to your account to comment on it.'
+        : null;
+  const commentRole: ProjectAccessRole =
+    collaboration.role ??
+    (session && doc?.ownerUserId === session.userId ? 'owner' : 'viewer');
+  const shownComments =
+    doc && projectComments?.projectId === doc.projectId
+      ? projectComments.comments
+      : [];
+  const commentPins: CommentPin[] = shownComments
+    .filter((comment) => comment.parentId === null)
+    .flatMap((comment, index) =>
+      comment.anchor
+        ? [
+            {
+              id: comment.commentId,
+              label: String(index + 1),
+              description: `Comment ${index + 1} by ${comment.authorName}: ${comment.text}`,
+              point: {
+                x: comment.anchor.point[0],
+                y: comment.anchor.point[1],
+                z: comment.anchor.point[2]
+              },
+              resolved: comment.resolvedAt !== null,
+              active: comment.commentId === activeCommentId
+            }
+          ]
+        : []
+    );
+  const loadComments = useCallback(async (projectId: string) => {
+    try {
+      const comments = await projectCommentsApi.list(projectId);
+      if (managerRef.current?.document.projectId !== projectId) return;
+      setProjectComments({ projectId, comments });
+      setCommentsError(null);
+    } catch (error) {
+      setCommentsError(errorMessage(error, 'Comments could not be loaded.'));
+    }
+  }, []);
+  // Loaded when the panel opens on a project that can hold them; closed or
+  // moved to another project, the pins and any placement go.
+  useEffect(() => {
+    setCommentPlacing(false);
+    setCommentDraft(null);
+    setActiveCommentId(null);
+    if (!commentsOpen || !doc || commentsUnavailableReason) return;
+    void loadComments(doc.projectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [commentsOpen, doc?.projectId, commentsUnavailableReason]);
+  function openComments() {
+    setCommentsOpen(true);
+  }
+  /** Runs one comment change, then reloads the list; false when it failed. */
+  async function runCommentAction(
+    action: (projectId: string) => Promise<void>
+  ): Promise<boolean> {
+    const projectId = managerRef.current?.document.projectId;
+    if (!projectId) return false;
+    try {
+      await action(projectId);
+      await loadComments(projectId);
+      return true;
+    } catch (error) {
+      setCommentsError(errorMessage(error, 'That comment could not be saved.'));
+      return false;
+    }
+  }
+
   function handleSelectTopologyFromViewer(
     selection: TopologySelection | null,
     additive: boolean,
     detail?: PickDetail,
     contextMenu?: { x: number; y: number }
   ): boolean {
+    // L08: while a comment is being placed, a press on the model pins it
+    // there and selects nothing.
+    if (commentPlacingRef.current && !contextMenu) {
+      const current = managerRef.current?.document;
+      if (selection && detail?.point && current) {
+        setCommentDraft({
+          point: [detail.point.x, detail.point.y, detail.point.z],
+          ...(detail.normal
+            ? { normal: [detail.normal.x, detail.normal.y, detail.normal.z] }
+            : {}),
+          ...(selection.bodyId ? { bodyId: selection.bodyId } : {}),
+          documentVersion: current.version
+        });
+        setCommentPlacing(false);
+        setStatus('Write your comment in the Comments panel.');
+      }
+      return true;
+    }
     if (inPlaceRef.current.active) {
       // The command owns the model's clicks: profiles, axis lines, curves,
       // and the faces a face tool takes. A stray pick must not open a card
@@ -30135,13 +30464,17 @@ export function App() {
    */
   // A face offset refused at a limit the kernel named offers the value just
   // inside that limit, which is nearer the hand than the last frame that
-  // happened to build; validation still judges it on the way in.
+  // happened to build; validation still judges it on the way in. No refusal
+  // offers to keep the value it just refused (#1596).
   const keepValue =
-    isOperationState(interaction) &&
-    interaction.phase === 'failed' &&
-    interaction.mode === 'face' &&
-    interaction.op === 'offset-face'
-      ? keptOffsetValue(interaction.error?.limit, lastValidPreview)
+    isOperationState(interaction) && interaction.phase === 'failed'
+      ? keptOffsetValue(
+          interaction.mode === 'face' && interaction.op === 'offset-face'
+            ? interaction.error?.limit
+            : undefined,
+          lastValidPreview,
+          interaction.lastValue
+        )
       : lastValidPreview;
   const keepLastValid =
     isOperationState(interaction) &&
@@ -35354,7 +35687,7 @@ export function App() {
   // The parts list is View's panel and Tweak's too; both rails share it.
   const partsProps = {
     bodies: partBodies,
-    hiddenBodyIds,
+    hiddenBodyIds: drawnHiddenBodyIds,
     selectedBodyIds,
     open: phonePartsOpen ?? panelState.viewModeRailOpen,
     onOpenChange: (viewModeRailOpen: boolean) => {
@@ -35537,6 +35870,7 @@ export function App() {
           }
           onGoHome={() => void handleGoHome()}
           onOpenSharing={() => setSharingOpen(true)}
+          {...(shareSession ? {} : { onOpenComments: openComments })}
           onSignIn={() => openSettingsAt('account')}
           onOpenSettings={openSettings}
           encryption={
@@ -36089,6 +36423,13 @@ export function App() {
                     inPlace.values
                   ))
             }
+            commentPlacing={commentPlacing}
+            {...(commentsOpen && commentPins.length
+              ? {
+                  commentPins,
+                  onCommentPinClick: (id: string) => setActiveCommentId(id)
+                }
+              : {})}
             onPlacementClick={(point) =>
               bendPlacementPlane
                 ? pickBendFixedPoint(point)
@@ -36318,7 +36659,29 @@ export function App() {
             modeOverlay={
               modelingLocked ? (
                 <>
-                  {viewMode && <ViewModeRail {...partsProps} />}
+                  {viewMode && (
+                    <ViewModeRail
+                      {...partsProps}
+                      configuration={
+                        doc.configurations
+                          ? {
+                              rows: doc.configurations.rows,
+                              activeRowId: doc.configurations.activeRowId,
+                              shownRowId: viewerRowId,
+                              building:
+                                viewerRowId !== null &&
+                                !viewerRowDocument &&
+                                !configurationRows.errors.has(viewerRowId),
+                              error: viewerRowId
+                                ? (configurationRows.errors.get(viewerRowId) ??
+                                  null)
+                                : null,
+                              onShow: setViewerRowId
+                            }
+                          : null
+                      }
+                    />
+                  )}
                   {viewMode && (
                     <AssemblyPlayer
                       projectId={doc.projectId}
@@ -36781,6 +37144,7 @@ export function App() {
             <div className="assembly-panel-float">
               <AssemblyPanel
                 document={doc}
+                displayDocument={configurationDisplayDocument}
                 execute={assembleApp.execute}
                 onStatus={assembleApp.onStatus}
                 onAnnounce={(message, options) =>
@@ -37968,6 +38332,65 @@ export function App() {
                 }
               }}
               onClose={() => setContextMenu(null)}
+            />
+          ) : null}
+          {commentsOpen && doc && !shareSession ? (
+            <CommentsPanel
+              comments={
+                projectComments?.projectId === doc.projectId
+                  ? projectComments.comments
+                  : null
+              }
+              error={commentsError}
+              unavailableReason={commentsUnavailableReason}
+              currentUserId={session?.userId ?? null}
+              role={commentRole}
+              activeId={activeCommentId}
+              onSelect={setActiveCommentId}
+              placing={commentPlacing}
+              onStartPlacing={() => {
+                setCommentDraft(null);
+                setCommentPlacing(true);
+              }}
+              onCancelPlacing={() => setCommentPlacing(false)}
+              hasDraft={commentDraft !== null}
+              onPostThread={(text) =>
+                commentDraft
+                  ? runCommentAction(async (projectId) => {
+                      const created = await projectCommentsApi.create(
+                        projectId,
+                        { anchor: commentDraft, text }
+                      );
+                      setCommentDraft(null);
+                      setActiveCommentId(created.commentId);
+                    })
+                  : Promise.resolve(false)
+              }
+              onCancelDraft={() => setCommentDraft(null)}
+              onReply={(threadId, text) =>
+                runCommentAction((projectId) =>
+                  projectCommentsApi
+                    .create(projectId, { parentId: threadId, text })
+                    .then(() => undefined)
+                )
+              }
+              onResolve={(threadId, resolved) =>
+                void runCommentAction((projectId) =>
+                  projectCommentsApi
+                    .resolve(projectId, threadId, resolved)
+                    .then(() => undefined)
+                )
+              }
+              onDelete={(commentId) =>
+                void runCommentAction((projectId) =>
+                  projectCommentsApi.remove(projectId, commentId)
+                )
+              }
+              onClose={() => {
+                setCommentsOpen(false);
+                setCommentPlacing(false);
+                setCommentDraft(null);
+              }}
             />
           ) : null}
           {sharingOpen &&

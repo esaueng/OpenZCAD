@@ -359,6 +359,9 @@ test(
     await expect(
       page.locator('.workspace-hint .edit-refusal.is-bar')
     ).toBeVisible();
+    // The preview built 13 but release validation refused it: there is no
+    // "Keep 13 mm" for a value that cannot be built (#1596).
+    await expect(page.getByRole('button', { name: /^Keep \d/ })).toHaveCount(0);
 
     const why = page
       .locator('.workspace-hint')
@@ -388,10 +391,19 @@ test(
     await page.keyboard.press('Escape');
     await expect(page.locator('.edit-refusal-card')).toHaveCount(0);
     await expect(page.locator('.workspace-hint .edit-refusal')).toBeVisible();
-    // After deselection the top bar keeps its link to the full refusal.
-    await page.keyboard.press('Escape');
+    // Undo over the failure discards it and leaves history alone (#1597):
+    // the failed edit was never committed, so stepping history would revert
+    // older work behind the failure's back.
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(page.locator('.workspace-hint .edit-refusal')).toHaveCount(0);
     await expect(
       page.getByRole('button', { name: 'Edit not applied' })
-    ).toBeVisible();
+    ).toHaveCount(0);
+    await expect(page.locator('.workspace-toast')).toContainText(
+      'nothing was undone'
+    );
+    await expect(page.locator('.workspace-toast')).not.toContainText('Undid');
+    await expectBodyCount(page, 2);
+    await expect.poll(() => tallest(canvas)).toBeCloseTo(10, 2);
   }
 );

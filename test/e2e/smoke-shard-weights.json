@@ -19,6 +19,7 @@
   "collaboration.spec.ts": 20,
   "command-bar-names.spec.ts": 8,
   "configuration-export.spec.ts": 14,
+  "configuration-instances.spec.ts": 12,
   "configuration-tweak-link.spec.ts": 16,
   "configuration-views.spec.ts": 12,
   "configurations.spec.ts": 12,
@@ -155,5 +156,6 @@
   "workspace-empty-state.spec.ts": 8,
   "workspace-tour.spec.ts": 7,
   "save-state-versions.spec.ts": 12,
+  "project-comments.spec.ts": 14,
   "share-link-drawings.spec.ts": 20
 }

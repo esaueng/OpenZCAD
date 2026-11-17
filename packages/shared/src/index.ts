@@ -378,7 +378,14 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // older client would draw the active row and drop the choice on its next
 // save, so it must refuse. Builds on v83 (v84, v85, v87 and v88 are claimed
 // by D02/D03, v86 by F06 slice 4a).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 89 as const;
+// v90 adds F06 per-instance configurations (`configurationId` on an assembly
+// component): the row a component shows, built on its own while the active
+// row stays the model being edited. Absent follows the active row, so every
+// older assembly shows unchanged. An older client would show the component
+// as the active row and drop the choice on its next save, so it must refuse.
+// Builds on v89 (F06 first claimed v79 and then v86, which v80, v81 and v89
+// overtook).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 90 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -6324,3 +6331,4 @@ export * from './pipe-threads';
 export * from './thread-span';
 export * from './feature-patterns';
 export * from './sheet-metal';
+export * from './project-comments';

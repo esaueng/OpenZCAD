@@ -348,7 +348,8 @@ test('Objects remain available for body reference picking and command updates', 
   await modelPanel(page, 'Objects')
     .locator('.body-row:not(.consumed) .body-row-main', { hasText: 'Block' })
     .click();
-  await expect(bar).toContainText('aim it');
+  // The body is taken: the hint moves on to the spacing (#1599).
+  await expect(bar).toContainText('Drag the spacing');
   await enterCommandValue(page, 'count', '2');
   await expect(modelPanel(page, 'Objects')).toBeVisible();
   await expect(bar).toBeVisible();

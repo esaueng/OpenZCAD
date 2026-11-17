@@ -51,6 +51,61 @@ describe('usePacedStatus', () => {
     expect(result.current.status).toBe('Note added.');
   });
 
+  describe('settle (#1632)', () => {
+    const PHASE = ' · Rebuilding geometry…';
+    // What the readout passes: a shown line with a phase settles to its
+    // message once the model is ready.
+    const settle = (shown: string, next: string) => {
+      if (!shown.endsWith(PHASE)) return null;
+      const message = shown.slice(0, -PHASE.length);
+      return message === next ? next : message;
+    };
+    const render = (status: string) =>
+      renderHook(
+        ({ status }) =>
+          usePacedStatus<Tone>(status, 'ready', true, undefined, false, settle),
+        { initialProps: { status } }
+      );
+
+    it('retires the phase at once, inside the dwell already begun', () => {
+      const { result, rerender } = render(`Added box.${PHASE}`);
+      act(() => {
+        vi.advanceTimersByTime(1100);
+      });
+      rerender({ status: 'Added box.' });
+      expect(result.current.status).toBe('Added box.');
+      // The dwell did not restart: the next message waits only 100 ms more.
+      act(() => {
+        vi.advanceTimersByTime(50);
+      });
+      rerender({ status: 'Added cylinder.' });
+      expect(result.current.status).toBe('Added box.');
+      act(() => {
+        vi.advanceTimersByTime(60);
+      });
+      expect(result.current.status).toBe('Added cylinder.');
+    });
+
+    it('drops the phase while a newer message waits its turn', () => {
+      const { result, rerender } = render(`Added box.${PHASE}`);
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      rerender({ status: 'Added cylinder.' });
+      expect(result.current.status).toBe('Added box.');
+      act(() => {
+        vi.advanceTimersByTime(STATUS_MIN_DWELL_MS - 200);
+      });
+      expect(result.current.status).toBe('Added cylinder.');
+    });
+
+    it('paces as usual when the shown line has no phase', () => {
+      const { result, rerender } = render('Added box.');
+      rerender({ status: 'Added cylinder.' });
+      expect(result.current.status).toBe('Added box.');
+    });
+  });
+
   it('shows a message at once when the last one has had its dwell', () => {
     const { result, rerender } = renderPaced();
     expect(result.current).toEqual({

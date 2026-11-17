@@ -338,12 +338,38 @@ export function WorkspaceReadout({
   // The log keeps every message; the toast holds each long enough to read.
   // The cut's line is a state coming back, not news to read: held behind a
   // retired message's dwell, the spent message came back with no Turn off.
+  // Live geometry state is not news to pace (#1632). Each line that carries
+  // a phase remembers its message, so once the model is ready the phase
+  // leaves at once while the message keeps its dwell, and a newer message
+  // still waits its turn behind the message alone.
+  const phaseLines = useRef(new Map<string, string>());
+  if (!sectionShown && geometryStatus && messageLive) {
+    if (phaseLines.current.size > 32) phaseLines.current.clear();
+    phaseLines.current.set(line, status);
+  }
+  const geometryReady = geometryStatus === null;
+  const settleGeometry = (shownLine: string, next: string) => {
+    const message = phaseLines.current.get(shownLine);
+    if (message === undefined || !geometryReady) return null;
+    return message === next ? next : message;
+  };
+  // A rebuild that fails says so at once, but only as it fails: ordinary
+  // messages after it are paced again.
+  const failurePhase =
+    geometryStatus !== null && tone === 'warning' ? geometryStatus.phase : null;
+  const announcedFailure = useRef<string | null>(null);
+  const failureArrived =
+    failurePhase !== null && announcedFailure.current !== failurePhase;
+  useEffect(() => {
+    announcedFailure.current = failurePhase;
+  }, [failurePhase]);
   const paced = usePacedStatus(
     line,
     sectionShown ? 'ready' : tone,
     shown,
     isNotableStatus,
-    statusImmediate || sectionShown
+    statusImmediate || sectionShown || failureArrived,
+    settleGeometry
   );
   const undoShown =
     shown && !sectionShown && Boolean(onUndo) && paced.status === line;

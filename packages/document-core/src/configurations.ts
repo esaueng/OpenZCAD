@@ -291,6 +291,18 @@ function viewUsing(
   return undefined;
 }
 
+/** The assembly component that shows a row (F06 slice 4), if any. */
+function componentUsing(
+  document: ProjectDocument,
+  rowId: string | null
+): { name: string } | undefined {
+  return document.assembly?.components.find(
+    (component) =>
+      component.configurationId !== undefined &&
+      (rowId === null || component.configurationId === rowId)
+  );
+}
+
 export function deleteConfigurations(
   document: ProjectDocument
 ): ProjectDocument {
@@ -299,6 +311,11 @@ export function deleteConfigurations(
   if (view)
     throw new Error(
       `A view on ${view.sheet} shows one of these configurations. Set it back to the active configuration before removing the table.`
+    );
+  const user = componentUsing(document, null);
+  if (user)
+    throw new Error(
+      `${user.name} shows one of these configurations. Set it back to the active configuration before removing the table.`
     );
   return commit(document, undefined);
 }
@@ -349,6 +366,11 @@ export function deleteConfigurationRow(
   if (view)
     throw new Error(
       `A view on ${view.sheet} shows "${row.name}". Choose another configuration for it before deleting this one.`
+    );
+  const user = componentUsing(document, row.id);
+  if (user)
+    throw new Error(
+      `${user.name} shows "${row.name}". Choose another configuration for it before deleting this one.`
     );
   set.rows = set.rows.filter((entry) => entry.id !== row.id);
   return commit(document, set);

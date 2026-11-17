@@ -218,9 +218,11 @@ for (const filter of ['Face', 'Any'] as const) {
     await page.keyboard.press('Escape');
     await expect(editBar).toHaveCount(0);
     await clickBlend(5, 'right');
-    await expect(page.getByRole('menuitem', { name: /^Delete/ })).toHaveCount(
-      0
-    );
+    // The blend's menu names its owner both ways: Delete removes the step,
+    // as the Del key does with this pick (#1611); Edit re-arms it.
+    await expect(
+      page.getByRole('menuitem', { name: /^Delete Fillet edges/ })
+    ).toHaveCount(1);
     await page.getByRole('menuitem', { name: /Edit Fillet edges/ }).click();
     await expect(radiusChip).toHaveText('R 5 mm');
     // The armed edit has no card; its pinned row's menu deletes it.
