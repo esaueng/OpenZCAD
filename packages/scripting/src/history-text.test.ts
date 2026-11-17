@@ -336,6 +336,41 @@ describe('history text typing', () => {
       expect.stringMatching(/`distance` holds text here, not true or false\./),
       expect.stringMatching(/`typo` is not a field this step stores/)
     ]);
+    // Null does not stand in for a stored value (re-check finding 1).
+    expect(
+      messages(
+        edited((text) =>
+          text.replace('distance: `width / 4`', 'distance: null')
+        ).diagnostics
+      )
+    ).toEqual([
+      expect.stringMatching(/`distance` holds text here, not null\./)
+    ]);
+    // An added list item is held to the list's kind (re-check finding 2).
+    const document = sampleDocument();
+    const fillet = Object.values(document.nodes).find(
+      (node) => node.kind === 'feature' && node.featureKind === 'fillet'
+    )!;
+    if (fillet.kind !== 'feature' || fillet.data.featureKind !== 'fillet') {
+      throw new Error('fixture');
+    }
+    fillet.data.edgeHashes = [111, 999];
+    expect(
+      messages(
+        edited(
+          (text) =>
+            text.replace(
+              'edgeHashes: [111, 999]',
+              'edgeHashes: [111, 999, true]'
+            ),
+          document
+        ).diagnostics
+      )
+    ).toEqual([
+      expect.stringMatching(
+        /`edgeHashes` is a list of numbers, not true or false\./
+      )
+    ]);
     // A number may become an expression and back.
     expect(
       messages(

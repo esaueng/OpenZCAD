@@ -213,6 +213,17 @@ function article(kind: ValueKind): string {
   }[kind];
 }
 
+function plural(kind: ValueKind): string {
+  return {
+    number: 'numbers',
+    string: 'text values',
+    boolean: 'true or false values',
+    null: 'nulls',
+    list: 'lists',
+    record: 'records'
+  }[kind];
+}
+
 function valueAt(root: unknown, path: Path): unknown {
   let value = root;
   for (const step of path) {
@@ -764,7 +775,6 @@ class Reader {
     const storedKind = storedValueKind(stored);
     const compatible =
       textKind === storedKind ||
-      textKind === 'null' ||
       // A number and an expression stand for each other in a value field;
       // the expression check below decides whether the field takes one.
       (storedKind === 'number' && node.type === 'expression') ||
@@ -802,6 +812,23 @@ class Reader {
       node.items.forEach((item, index) => {
         if (index < stored.length) {
           this.checkAgainstStored(item, stored[index], undefined, key);
+          return;
+        }
+        // An added item is held to the kind of value the list already
+        // holds; a list the document keeps empty is filled in the app.
+        const template: unknown = (stored as unknown[]).find(
+          (value) => value !== null
+        );
+        if (template === undefined) {
+          this.error(
+            `\`${key}\` is empty in the document; add its items in the app.`,
+            item.span
+          );
+        } else if (textValueKind(item) !== storedValueKind(template)) {
+          this.error(
+            `\`${key}\` is a list of ${plural(storedValueKind(template))}, not ${article(textValueKind(item))}.`,
+            item.span
+          );
         }
       });
     }
