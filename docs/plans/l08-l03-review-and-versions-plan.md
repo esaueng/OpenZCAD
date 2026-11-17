@@ -122,6 +122,10 @@ fragment in `docs/roadmap-evidence/`.
 1. **New envelope kinds.** `comment` (member-signed) and `share-comment`
    (unsigned, share-key wrapped) for encrypted projects, as above. The
    alternative, comments inside the document, would let only editors comment.
+   **Confirmed by the owner on 2026-11-17** for the member half, as built in
+   #1690: one `comments` project envelope kind (wire code 7) holding one
+   signed, chained comment log per member, merged by the rules in that PR.
+   The unsigned `share-comment` half belongs to decision 2 and is not built.
 2. **Unsigned visitor comments.** Accept that anyone holding a commenter link
    can write comments members will see, labelled "via link".
 3. **Grant mode `comment`.** Adding a value to the owner-signed link grant's
