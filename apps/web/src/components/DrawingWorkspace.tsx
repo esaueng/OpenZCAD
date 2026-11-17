@@ -232,7 +232,9 @@ import {
 } from '../lib/drawing/sheetSources';
 import {
   ROW_SEPARATOR,
+  activeRowSheet,
   projectionSheet,
+  projectionViewCacheKey,
   projectionViewRow,
   rowBodyKey,
   rowContentKey,
@@ -603,8 +605,8 @@ function useViewProjections(
     /** A section's plane, on its view's configuration row. */
     const planeOf = (view: DrawingView): string | null => {
       const plane = sectionPlaneKey(view);
-      const row = projectionViewRow(view);
-      return plane && row ? `${row}${ROW_SEPARATOR}${plane}` : plane;
+      const cacheKey = projectionViewCacheKey(view);
+      return plane && cacheKey ? `${cacheKey}${ROW_SEPARATOR}${plane}` : plane;
     };
     const cuts = new Map<
       string,
@@ -635,7 +637,7 @@ function useViewProjections(
         sectionKeys.set(key, view);
       } else {
         for (const id of view.bodyIds) {
-          const key = rowBodyKey(row, id);
+          const key = rowBodyKey(projectionViewCacheKey(view), id);
           bodyIds.add(key);
           bodyOf.set(key, { row, id });
         }
@@ -647,7 +649,9 @@ function useViewProjections(
           // In the key's order: the lines come out in body order, and a view
           // whose bodies were removed and re-added must export the same bytes
           // whether its projection was cached or made after a reload.
-          bodyIds: [...view.bodyIds].sort().map((id) => rowBodyKey(row, id))
+          bodyIds: [...view.bodyIds]
+            .sort()
+            .map((id) => rowBodyKey(projectionViewCacheKey(view), id))
         });
       }
       const marker: ViewState = { state: 'projecting' };
@@ -783,7 +787,7 @@ function useViewProjections(
               if (!body) throw new Error(`Body ${id} has no geometry to draw.`);
               if (body.indices.length === 0) continue;
               const inputKey = rowBodyKey(
-                projectionViewRow(view),
+                projectionViewCacheKey(view),
                 sectionInputKey(view, id)
               );
               // Refused by the kernel: the projection cuts its mesh.
@@ -2841,14 +2845,21 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     return new Map(
       sheets.map((entry) => {
         if (geometryPending) return [entry.sheetId, null];
-        const ids = sheetBodyIds(entry);
+        // F06: bodies drawn from the active row only (`activeRowSheet`). A
+        // sheet whose every view draws another row reads nothing of the
+        // active build, so it stays as current as it was made.
+        const rows = viewConfigurationRows(entry, document);
+        const ids = sheetBodyIds(activeRowSheet(entry, rows));
+        if (rows.size > 0 && ids.length === 0)
+          return [entry.sheetId, entry.source.fingerprint];
         const key = [...ids].sort().join(',');
         if (!byBodySet.has(key))
           byBodySet.set(key, drawingSourceFingerprint(bodies, ids));
         return [entry.sheetId, byBodySet.get(key)!];
       })
     );
-  }, [sheets, bodies, geometryPending]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sheets, bodies, geometryPending, document.configurations]);
   // F06: each sheet as projection keys read it, every view carrying the
   // configuration row it draws (a derived view, its source's).
   const configurationKey = useMemo(
@@ -2903,7 +2914,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       sheet
         ? sheetStatus(
             document,
-            sheet,
+            // F06: a body only another row builds is not missing.
+            activeRowSheet(sheet, viewConfigurationRows(sheet, document)),
             bodies,
             geometryPending,
             fingerprints.get(sheet.sheetId) ?? null

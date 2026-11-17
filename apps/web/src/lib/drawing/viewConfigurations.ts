@@ -102,3 +102,28 @@ export function rowContentKey(
     (h2 >>> 0).toString(16).padStart(8, '0')
   );
 }
+
+/**
+ * The views a sheet draws from the active row. A sheet's availability and
+ * its model fingerprint read these alone: a body only another row builds is
+ * not missing, and its freshness is in the row view's own key.
+ */
+export function activeRowSheet<T extends Pick<DrawingSheet, 'views'>>(
+  sheet: T,
+  rows: ReadonlyMap<DrawingViewId, string>
+): T {
+  if (rows.size === 0) return sheet;
+  return {
+    ...sheet,
+    views: sheet.views.filter((view) => !rows.has(view.viewId))
+  };
+}
+
+/**
+ * What a projection-sheet view's geometry is cached under: its row and the
+ * model content it was built from, or null for the active row. A row edit
+ * changes the content, so its meshes and cuts are made again.
+ */
+export function projectionViewCacheKey(view: DrawingView): string | null {
+  return view.configurationId ?? null;
+}

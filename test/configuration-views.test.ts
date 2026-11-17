@@ -28,7 +28,9 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import {
+  activeRowSheet,
   projectionSheet,
+  projectionViewCacheKey,
   projectionViewRow,
   rowBodyKey,
   rowContentKey,
@@ -279,5 +281,33 @@ describe('which row each view draws', () => {
     // Bodies on a row never share a tessellation with the active row's.
     expect(rowBodyKey('large', 'body_a')).not.toBe(rowBodyKey(null, 'body_a'));
     expect(rowBodyKey(null, 'body_a')).toBe('body_a');
+  });
+
+  it('judges a sheet by its active-row views, and caches row geometry by content', () => {
+    const named = updateDrawingView(model(), {
+      sheetId,
+      viewId: frontId,
+      configurationId: 'large'
+    });
+    const sheet = named.drawings!.sheets[0]!;
+    const rows = viewConfigurationRows(sheet, named);
+    // Every view here draws Large, so none reads the active build.
+    expect(activeRowSheet(sheet, rows).views).toEqual([]);
+    expect(activeRowSheet(sheet, new Map())).toBe(sheet);
+    // A row edit gives the row's meshes and cuts a new cache key.
+    const keyed = projectionSheet(sheet, rows, rowContentKey(named));
+    const edited = setConfigurationCell(named, {
+      rowId: 'large',
+      column: named.configurations!.columns[0]!,
+      value: '50'
+    });
+    const rekeyed = projectionSheet(sheet, rows, rowContentKey(edited));
+    expect(projectionViewCacheKey(keyed.views[0]!)).not.toBe(
+      projectionViewCacheKey(rekeyed.views[0]!)
+    );
+    expect(projectionViewRow(rekeyed.views[0]!)).toBe('large');
+    expect(
+      projectionViewCacheKey(projectionSheet(sheet, new Map(), 'x').views[0]!)
+    ).toBeNull();
   });
 });
