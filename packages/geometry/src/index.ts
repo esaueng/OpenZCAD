@@ -513,6 +513,148 @@ export function parallelDatumPlane(
   return reverseNormal ? flipped(frame) : frame;
 }
 
+/**
+ * Schema v108: the in-plane u a plane with this unit normal takes when its
+ * construction names none: the world axis least aligned with the normal
+ * (X, then Y, then Z on a tie within the direction quantum), projected into
+ * the plane. Kernel-neutral, so both builds agree.
+ */
+export function canonicalInPlaneU(normal: DatumVector): DatumVector {
+  const axes: DatumVector[] = [
+    { x: 1, y: 0, z: 0 },
+    { x: 0, y: 1, z: 0 },
+    { x: 0, y: 0, z: 1 }
+  ];
+  let best = axes[0]!;
+  let bestDot = Infinity;
+  for (const axis of axes) {
+    const dot = Math.abs(datumDot(axis, normal));
+    if (dot < bestDot - 1e-6) {
+      best = axis;
+      bestDot = dot;
+    }
+  }
+  const projected = datumSub(best, datumScale(normal, datumDot(best, normal)));
+  return datumScale(projected, 1 / datumLength(projected));
+}
+
+/**
+ * Schema v108: the plane square to an edge at `origin`, its normal the edge's
+ * `tangent` there (end 0 toward end 1). Its u runs toward `centre` when the
+ * edge is an arc, and is {@link canonicalInPlaneU} otherwise. A tangent with
+ * no direction is refused.
+ */
+export function normalToEdgeDatumPlane(
+  origin: DatumVector,
+  tangent: DatumVector,
+  centre: DatumVector | undefined,
+  reverseNormal = false
+): PlaneBasis {
+  requirePoint(origin, 'edge');
+  const length = datumLength(tangent);
+  if (!(length > GEOMETRY_RELATIVE_TOLERANCE) || !Number.isFinite(length)) {
+    throw new Error(
+      'A plane square to an edge needs an edge with a direction at that point.'
+    );
+  }
+  const normal = datumScale(tangent, 1 / length);
+  let u: DatumVector | undefined;
+  if (centre) {
+    requirePoint(centre, 'arc centre');
+    const inward = datumSub(centre, origin);
+    const across = datumSub(
+      inward,
+      datumScale(normal, datumDot(inward, normal))
+    );
+    const size = datumLength(across);
+    if (size > geometryTolerance(datumLength(inward)))
+      u = datumScale(across, 1 / size);
+  }
+  u ??= canonicalInPlaneU(normal);
+  const frame: PlaneBasis = {
+    origin,
+    u,
+    v: datumCross(normal, u),
+    normal
+  };
+  return reverseNormal ? flipped(frame) : frame;
+}
+
+/**
+ * Schema v108: the plane through the straight edge `start` → `end`, turned
+ * `angleDeg` about it (right hand about the edge) from the plane through
+ * the edge parallel to `reference`. Its origin is `start` and its u the
+ * edge. An edge that is not parallel to the reference plane is refused: no
+ * plane through it is parallel to the reference.
+ */
+export function edgeAngleDatumPlane(
+  start: DatumVector,
+  end: DatumVector,
+  reference: PlaneBasis,
+  angleDeg: number,
+  reverseNormal = false
+): PlaneBasis {
+  requirePoint(start, 'edge start');
+  requirePoint(end, 'edge end');
+  requireFrame(reference, 'reference');
+  if (!Number.isFinite(angleDeg)) {
+    throw new Error('The plane angle must be a finite number of degrees.');
+  }
+  const along = datumSub(end, start);
+  const length = datumLength(along);
+  if (length <= geometryTolerance(datumLength(start))) {
+    throw new Error(
+      'A plane through an edge needs an edge of non-zero length.'
+    );
+  }
+  const u = datumScale(along, 1 / length);
+  // The edge leaves the reference's direction by at most the linear
+  // tolerance over its own length.
+  if (Math.abs(datumDot(along, reference.normal)) > geometryTolerance(length)) {
+    throw new Error(
+      'A plane through an edge at an angle needs an edge parallel to the reference plane; this edge is not.'
+    );
+  }
+  // The reference normal made exactly square to the edge, then turned.
+  const base = datumSub(
+    reference.normal,
+    datumScale(u, datumDot(reference.normal, u))
+  );
+  const n0 = datumScale(base, 1 / datumLength(base));
+  const w = datumCross(u, n0);
+  const radians = (angleDeg * Math.PI) / 180;
+  const normal = datumAdd(
+    datumScale(n0, Math.cos(radians)),
+    datumScale(w, Math.sin(radians))
+  );
+  const frame: PlaneBasis = {
+    origin: start,
+    u,
+    v: datumCross(normal, u),
+    normal
+  };
+  return reverseNormal ? flipped(frame) : frame;
+}
+
+/**
+ * Schema v108: the axis square to a face at `foot` (the point carried onto
+ * the face), along the face's outward `normal` there.
+ */
+export function faceNormalDatumAxis(
+  foot: DatumVector,
+  normal: DatumVector,
+  reverseDirection = false
+): DatumAxis {
+  requirePoint(foot, 'face');
+  const length = datumLength(normal);
+  if (!(length > GEOMETRY_RELATIVE_TOLERANCE) || !Number.isFinite(length)) {
+    throw new Error(
+      'An axis square to a face needs a face normal at that point.'
+    );
+  }
+  return axisResult(foot, normal, reverseDirection);
+}
+
 /** A resolved datum axis: a point on the line and its unit direction. */
 export interface DatumAxis {
   origin: DatumVector;
@@ -728,7 +870,9 @@ export function edgeMidpointDatumPoint(
 ): DatumVector {
   requirePoint(start, 'edge start');
   requirePoint(end, 'edge end');
-  if (datumLength(datumSub(end, start)) <= geometryTolerance(datumLength(start))) {
+  if (
+    datumLength(datumSub(end, start)) <= geometryTolerance(datumLength(start))
+  ) {
     throw new Error('A midpoint needs an edge of non-zero length.');
   }
   return datumScale(datumAdd(start, end), 0.5);
@@ -812,7 +956,10 @@ export function placementDatumCsys(
       [{ x: 0, y: 1, z: 0 }, rotationDeg.y],
       [{ x: 0, y: 0, z: 1 }, rotationDeg.z]
     ] as const) {
-      const m = axisRotationMatrix({ origin: { x: 0, y: 0, z: 0 }, direction: axis }, angle);
+      const m = axisRotationMatrix(
+        { origin: { x: 0, y: 0, z: 0 }, direction: axis },
+        angle
+      );
       out = {
         x: m[0]! * out.x + m[1]! * out.y + m[2]! * out.z,
         y: m[4]! * out.x + m[5]! * out.y + m[6]! * out.z,
@@ -882,7 +1029,9 @@ export function csysAlignMatrix(from: DatumCsys, to: DatumCsys): number[] {
   );
   const shift = (i: number) =>
     to.origin[key[i]!] -
-    (r[i]![0]! * from.origin.x + r[i]![1]! * from.origin.y + r[i]![2]! * from.origin.z);
+    (r[i]![0]! * from.origin.x +
+      r[i]![1]! * from.origin.y +
+      r[i]![2]! * from.origin.z);
   return [...r[0]!, shift(0), ...r[1]!, shift(1), ...r[2]!, shift(2)];
 }
 

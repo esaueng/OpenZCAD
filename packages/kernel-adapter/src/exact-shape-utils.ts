@@ -128,6 +128,7 @@ export function faceAttachmentCandidatesForShape(
         witness,
         plane,
         revolution: geometry ? revolutionAxisOf(geometry) : null,
+        value: handle,
         ...(reference
           ? {
               lineage: {

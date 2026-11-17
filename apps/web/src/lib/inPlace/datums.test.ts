@@ -217,3 +217,86 @@ describe('an edge click', () => {
     expect(edgeClickIsEnd(ends, null, true)).toBe(false);
   });
 });
+
+describe('schema v108 picks: a plane on an edge, an axis square to a face', () => {
+  const curve = (straight: boolean, key = 'curve'): RefPick => ({
+    kind: 'curve',
+    key,
+    source: { type: 'edge', bodyId: 'body' } as DatumAxisEdgeSource,
+    ends: [ORIGIN, { x: 10, y: 0, z: 0 }],
+    straight
+  });
+  const face: RefPick = {
+    kind: 'plane',
+    key: 'top',
+    source: {
+      type: 'face',
+      bodyId: 'body' as BodyId,
+      faceReference: { lineageName: 'top' } as never,
+      sourceCentroid: ORIGIN
+    } as never,
+    origin: ORIGIN,
+    normal: UP
+  };
+
+  it('reads an edge as a plane square to it, with a point through it, with a plane at an angle', () => {
+    expect(datumPlaneShape([curve(false)])?.mode).toBe('normal-to-edge');
+    expect(datumPlaneShape([curve(true), point('p')])?.mode).toBe(
+      'normal-through-point'
+    );
+    expect(datumPlaneShape([curve(true), plane('a')])?.mode).toBe('edge-angle');
+    // A curved edge has no single direction for a point or an angle.
+    expect(datumPlaneShape([curve(false), plane('a')])).toBeNull();
+    expect(datumPlaneShape([curve(false), point('p')])).toBeNull();
+  });
+
+  it('keeps one edge, pairs it with the latest plane or point, and toggles it off', () => {
+    const rule = takeDatumPlaneRef;
+    expect(take(rule, plane('a'), curve(true))).toEqual(['curve', 'a']);
+    expect(take(rule, curve(true), point('p'), plane('a'))).toEqual([
+      'curve',
+      'a'
+    ]);
+    expect(take(rule, curve(true), curve(true, 'other'))).toEqual(['other']);
+    expect(take(rule, curve(true), curve(true))).toEqual([]);
+  });
+
+  it('builds the definitions, with a position and an angle handle', () => {
+    const spec = IN_PLACE_TOOL_SPECS['datum-plane'];
+    const ctx = { sketchViews: [], datumAxes: undefined, datumLabel: () => '' };
+    const along = { ...SLOTS, refs: [curve(true)] };
+    expect(spec.request(along, { position: 0.3 }, {}, ctx)).toMatchObject({
+      definition: { kind: 'normal-to-edge', at: { fraction: 0.3 } }
+    });
+    const handle = spec.handles(along, {}, ctx, {})[0];
+    expect(handle).toMatchObject({ valueId: 'position', kind: 'linear' });
+    expect(handle?.kind === 'linear' && handle.params.scale).toBe(10);
+    const tilted = { ...SLOTS, refs: [curve(true), plane('a')] };
+    expect(spec.request(tilted, { angle: 30 }, {}, ctx)).toMatchObject({
+      definition: { kind: 'edge-angle', angleDeg: 30 }
+    });
+    expect(spec.handles(tilted, {}, ctx, {})[0]).toMatchObject({
+      valueId: 'angle',
+      kind: 'angle',
+      params: { axis: { x: 1, y: 0, z: 0 } }
+    });
+  });
+
+  it('reads a face then a point, or a curved face alone, as an axis square to the face', () => {
+    expect(take(takeDatumAxisRef, face, point('p'))).toEqual(['top', 'p']);
+    expect(datumAxisShape([face, point('p')])?.mode).toBe('face-normal');
+    expect(datumAxisShape([BORE, point('p')])?.mode).toBe('face-normal');
+    const dome: RefPick = {
+      kind: 'surface',
+      key: 'dome',
+      source: { type: 'face', bodyId: 'body' } as DatumAxisFaceSource,
+      at: { x: 1, y: 2, z: 3 }
+    };
+    expect(datumAxisShape([dome])).toMatchObject({
+      mode: 'face-normal',
+      point: { type: 'point', point: { x: 1, y: 2, z: 3 } }
+    });
+    // A plane that is not a face still pairs only with a second plane.
+    expect(take(takeDatumAxisRef, plane('a'), point('p'))).toEqual(['p']);
+  });
+});

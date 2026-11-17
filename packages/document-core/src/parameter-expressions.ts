@@ -148,6 +148,10 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       const definition = data.definition;
       if (definition.kind === 'offset')
         fields(definition, ['offset'], rewrite, 'length');
+      if (definition.kind === 'edge-angle')
+        fields(definition, ['angleDeg'], rewrite, 'angle');
+      if (definition.kind === 'normal-to-edge' && 'fraction' in definition.at)
+        fields(definition.at, ['fraction'], rewrite, null);
       for (const source of datumPlaneSources(definition))
         if (source.type === 'canonical')
           fields(source, ['offset'], rewrite, 'length');

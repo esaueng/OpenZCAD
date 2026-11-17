@@ -3045,7 +3045,9 @@ export const commandFactories = {
         offset: 'Add offset plane',
         midplane: 'Add midplane',
         'three-point': 'Add three-point plane',
-        'parallel-point': 'Add parallel plane'
+        'parallel-point': 'Add parallel plane',
+        'normal-to-edge': 'Add plane square to an edge',
+        'edge-angle': 'Add plane through an edge at an angle'
       }[payload.definition.kind],
       withIds,
       (document) => addDatumPlane(document, withIds).document,
@@ -3062,7 +3064,8 @@ export const commandFactories = {
         edge: 'Add axis along edge',
         cylinder: 'Add cylinder axis',
         'plane-intersection': 'Add axis where planes meet',
-        'csys-axis': 'Add coordinate system axis'
+        'csys-axis': 'Add coordinate system axis',
+        'face-normal': 'Add axis square to a face'
       }[payload.definition.kind],
       withIds,
       (document) => addDatumAxis(document, withIds).document,

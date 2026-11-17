@@ -45,10 +45,25 @@ export type RefPick =
       source: DatumAxisEdgeSource;
       ends: [Vector3, Vector3];
     }
-  | { kind: 'revolution'; key: string; source: DatumAxisFaceSource };
+  | { kind: 'revolution'; key: string; source: DatumAxisFaceSource }
+  /**
+   * Schema v108: an open edge, straight or curved, clicked away from its
+   * ends: a Plane stands square to it.
+   */
+  | {
+      kind: 'curve';
+      key: string;
+      source: DatumAxisEdgeSource;
+      ends: [Vector3, Vector3];
+      straight: boolean;
+    }
+  /**
+   * Schema v108: a face that is neither flat nor a cylinder or cone, clicked
+   * at `at`: an Axis stands square to it there.
+   */
+  | { kind: 'surface'; key: string; source: DatumAxisFaceSource; at: Vector3 };
 
 export type RefKind = RefPick['kind'];
-
 
 function ofKind<K extends RefKind>(
   refs: readonly RefPick[],
@@ -89,12 +104,35 @@ type PlaneShape =
   | {
       mode: 'three-point';
       points: Extract<RefPick, { kind: 'point' }>[];
+    }
+  | { mode: 'normal-to-edge'; curve: Extract<RefPick, { kind: 'curve' }> }
+  | {
+      mode: 'normal-through-point';
+      curve: Extract<RefPick, { kind: 'curve' }>;
+      point: Extract<RefPick, { kind: 'point' }>;
+    }
+  | {
+      mode: 'edge-angle';
+      curve: Extract<RefPick, { kind: 'curve' }>;
+      plane: Extract<RefPick, { kind: 'plane' }>;
     };
 
 /** Which plane the picks describe, or null while they describe none yet. */
 export function datumPlaneShape(refs: readonly RefPick[]): PlaneShape | null {
   const planes = ofKind(refs, 'plane');
   const points = ofKind(refs, 'point');
+  const [curve] = ofKind(refs, 'curve');
+  if (curve) {
+    if (planes.length === 0 && points.length === 0)
+      return { mode: 'normal-to-edge', curve };
+    // Through a point or at an angle, the edge must be straight.
+    if (!curve.straight) return null;
+    if (planes.length === 0 && points.length === 1)
+      return { mode: 'normal-through-point', curve, point: points[0]! };
+    if (planes.length === 1 && points.length === 0)
+      return { mode: 'edge-angle', curve, plane: planes[0]! };
+    return null;
+  }
   if (planes.length === 1 && points.length === 0)
     return { mode: 'offset', plane: planes[0]! };
   if (planes.length === 2 && points.length === 0)
@@ -117,6 +155,20 @@ export function takeDatumPlaneRef(
 ): RefPick[] {
   const planes = ofKind(refs, 'plane');
   const points = ofKind(refs, 'point');
+  const curves = ofKind(refs, 'curve');
+  if (refs.some((other) => other.key === ref.key)) {
+    return refs.filter((other) => other.key !== ref.key);
+  }
+  // Schema v108: an edge is square to the plane; with it, one plane sets an
+  // angle about it and one point a plane through the point.
+  if (ref.kind === 'curve') {
+    const partner = planes[0] ?? (points.length === 1 ? points[0] : undefined);
+    return partner ? [ref, partner] : [ref];
+  }
+  if (curves.length > 0) {
+    if (ref.kind === 'plane' || ref.kind === 'point') return [curves[0]!, ref];
+    return [...refs];
+  }
   if (ref.kind === 'plane') {
     if (planes.some((other) => other.key === ref.key)) {
       return refs.filter((other) => other.key !== ref.key);
@@ -141,13 +193,41 @@ export function takeDatumAxisRef(
   refs: readonly RefPick[],
   ref: RefPick
 ): RefPick[] {
-  if (ref.kind === 'edge' || ref.kind === 'revolution') {
+  if (
+    ref.kind === 'edge' ||
+    ref.kind === 'revolution' ||
+    ref.kind === 'surface'
+  ) {
     return refs.length === 1 && refs[0]!.key === ref.key ? [] : [ref];
+  }
+  // Schema v108: a face then a point is the axis square to the face there.
+  const [first] = refs;
+  if (
+    ref.kind === 'point' &&
+    refs.length === 1 &&
+    first &&
+    (first.kind === 'revolution' ||
+      first.kind === 'surface' ||
+      (first.kind === 'plane' && first.source.type === 'face'))
+  ) {
+    return [first, ref];
   }
   // Points pair with points and planes with planes; switching kind starts
   // over from the new pick.
   const same = refs.filter((other) => other.kind === ref.kind);
   return toggled(same, ref, 2);
+}
+
+/** A face pick as the face an axis stands square to. */
+function normalFaceOf(ref: RefPick): DatumAxisFaceSource | null {
+  if (ref.kind === 'revolution' || ref.kind === 'surface') return ref.source;
+  if (ref.kind === 'plane' && ref.source.type === 'face')
+    return {
+      type: 'face',
+      bodyId: ref.source.bodyId,
+      faceReference: ref.source.faceReference
+    };
+  return null;
 }
 
 type AxisShape =
@@ -166,12 +246,22 @@ type AxisShape =
         Extract<RefPick, { kind: 'plane' }>,
         Extract<RefPick, { kind: 'plane' }>
       ];
-    };
+    }
+  | { mode: 'face-normal'; face: DatumAxisFaceSource; point: DatumPointSource };
 
 export function datumAxisShape(refs: readonly RefPick[]): AxisShape | null {
   const [first, second] = refs;
   if (!first) return null;
   if (first.kind === 'edge') return { mode: 'edge', edge: first };
+  const face = normalFaceOf(first);
+  if (face && second?.kind === 'point')
+    return { mode: 'face-normal', face, point: second.source };
+  if (first.kind === 'surface')
+    return {
+      mode: 'face-normal',
+      face: first.source,
+      point: { type: 'point', point: { ...first.at } }
+    };
   if (first.kind === 'revolution') return { mode: 'cylinder', face: first };
   if (!second || second.kind !== first.kind) return null;
   if (first.kind === 'point' && second.kind === 'point')
@@ -236,22 +326,36 @@ export const datumPlane: InPlaceToolSpec = {
   // Numbered from 1, as the card named them: Plane 1, Plane 2…
   featureName: 'Plane 1',
   profileMode: 'none',
-  refKinds: ['plane', 'point'],
+  refKinds: ['plane', 'point', 'curve'],
   takeRef: takeDatumPlaneRef,
   wantsAxis: false,
   wantsPath: false,
   values: [
     // Signed, as the card's Offset: negative is behind the source.
-    { id: 'offset', label: 'Offset', unit: 'length', initial: 10 }
+    { id: 'offset', label: 'Offset', unit: 'length', initial: 10 },
+    // Schema v108: how far along the edge from its end 0, as a fraction.
+    {
+      id: 'position',
+      label: 'Position',
+      unit: 'count',
+      initial: 0.5,
+      min: 0,
+      max: 1,
+      step: 0.05,
+      note: 'How far along the edge from its first end: 0 at it, 1 at the other.'
+    },
+    { id: 'angle', label: 'Angle', unit: 'angle', initial: 0, step: 5 }
   ],
   options: [FLIP_NORMAL],
   hint(slots: InPlaceSlots) {
     const shape = datumPlaneShape(slots.refs);
     const points = ofKind(slots.refs, 'point').length;
     if (!shape) {
-      if (points > 0)
-        return `Point ${points} of 3 · click near an edge end`;
-      return 'Pick a plane, flat face or three edge ends';
+      const [curve] = ofKind(slots.refs, 'curve');
+      if (curve && !curve.straight)
+        return 'Through a point or at an angle, the edge must be straight';
+      if (points > 0) return `Point ${points} of 3 · click near an edge end`;
+      return 'Pick a plane, flat face, an edge or three edge ends';
     }
     switch (shape.mode) {
       case 'offset':
@@ -262,6 +366,12 @@ export const datumPlane: InPlaceToolSpec = {
         return 'Parallel, through the point';
       case 'three-point':
         return 'Through the three points';
+      case 'normal-to-edge':
+        return 'Square to the edge · drag its position · pick a plane to tilt it';
+      case 'normal-through-point':
+        return 'Square to the edge, through the point';
+      case 'edge-angle':
+        return 'Through the edge · turn the ring for the angle';
     }
   },
   ready: (slots) => datumPlaneShape(slots.refs) !== null,
@@ -306,11 +416,87 @@ export const datumPlane: InPlaceToolSpec = {
           ...reverse
         };
         break;
+      case 'normal-to-edge':
+        definition = {
+          kind: 'normal-to-edge',
+          edge: shape.curve.source,
+          at: { fraction: values.position ?? 0.5 },
+          ...reverse
+        };
+        break;
+      case 'normal-through-point':
+        definition = {
+          kind: 'normal-to-edge',
+          edge: shape.curve.source,
+          at: { point: shape.point.source },
+          ...reverse
+        };
+        break;
+      case 'edge-angle':
+        definition = {
+          kind: 'edge-angle',
+          edge: shape.curve.source,
+          reference: shape.plane.source,
+          angleDeg: values.angle ?? 0,
+          ...reverse
+        };
+        break;
     }
     return { tool: 'datum-plane', definition };
   },
   handles(slots): HandleSpec[] {
     const shape = datumPlaneShape(slots.refs);
+    if (shape?.mode === 'normal-to-edge') {
+      // Along the chord from end 0: the value is the fraction, the arrow
+      // stands at that share of the chord.
+      const [a, b] = shape.curve.ends;
+      const chord = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
+      const length = Math.hypot(chord.x, chord.y, chord.z);
+      if (!(length > 0)) return [];
+      return [
+        {
+          valueId: 'position',
+          kind: 'linear',
+          key: `${shape.curve.key}:position`,
+          params: { origin: a, direction: unit(chord), scale: length }
+        }
+      ];
+    }
+    if (shape?.mode === 'edge-angle') {
+      const [a, b] = shape.curve.ends;
+      const along = unit({ x: b.x - a.x, y: b.y - a.y, z: b.z - a.z });
+      const n = shape.plane.normal;
+      const dot = n.x * along.x + n.y * along.y + n.z * along.z;
+      const n0 = unit({
+        x: n.x - along.x * dot,
+        y: n.y - along.y * dot,
+        z: n.z - along.z * dot
+      });
+      // In the plane at angle 0, square to the edge: the ring turns it.
+      const start = {
+        x: n0.y * along.z - n0.z * along.y,
+        y: n0.z * along.x - n0.x * along.z,
+        z: n0.x * along.y - n0.y * along.x
+      };
+      const length = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+      return [
+        {
+          valueId: 'angle',
+          kind: 'angle',
+          key: `${shape.curve.key}:${shape.plane.key}:angle`,
+          params: {
+            center: {
+              x: (a.x + b.x) / 2,
+              y: (a.y + b.y) / 2,
+              z: (a.z + b.z) / 2
+            },
+            axis: along,
+            startDirection: start,
+            radius: Math.max(length / 3, 1)
+          }
+        }
+      ];
+    }
     if (shape?.mode !== 'offset') return [];
     const { plane } = shape;
     return [
@@ -331,7 +517,7 @@ export const datumAxis: InPlaceToolSpec = {
   title: 'Axis',
   featureName: 'Axis 1',
   profileMode: 'none',
-  refKinds: ['edge', 'revolution', 'point', 'plane'],
+  refKinds: ['edge', 'revolution', 'point', 'plane', 'surface'],
   takeRef: takeDatumAxisRef,
   wantsAxis: false,
   wantsPath: false,
@@ -343,10 +529,15 @@ export const datumAxis: InPlaceToolSpec = {
     if (!shape) {
       if (first?.kind === 'point')
         return 'Click near an edge end for the second point';
-      if (first?.kind === 'plane') return 'Pick the second plane';
+      if (first?.kind === 'plane')
+        return first.source.type === 'face'
+          ? 'Pick a second plane, or an edge end for the axis square to the face'
+          : 'Pick the second plane';
       return 'Pick an edge, cylinder, two points or two planes';
     }
     switch (shape.mode) {
+      case 'face-normal':
+        return 'Square to the face';
       case 'edge':
         return 'Along the edge';
       case 'cylinder':
@@ -388,6 +579,14 @@ export const datumAxis: InPlaceToolSpec = {
         definition = {
           kind: 'plane-intersection',
           sources: [shape.planes[0].source, shape.planes[1].source],
+          ...reverse
+        };
+        break;
+      case 'face-normal':
+        definition = {
+          kind: 'face-normal',
+          source: shape.face,
+          point: shape.point,
           ...reverse
         };
         break;
@@ -561,7 +760,8 @@ export const datumCsys: InPlaceToolSpec = {
   hint(slots) {
     const shape = datumCsysShape(slots.refs);
     const points = ofKind(slots.refs, 'point').length;
-    if (!shape) return `Point ${points} of 3 · origin, then X, then the XY plane`;
+    if (!shape)
+      return `Point ${points} of 3 · origin, then X, then the XY plane`;
     switch (shape.mode) {
       case 'placement':
         return 'Drag the origin and turns · or pick three points or a plane';

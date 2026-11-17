@@ -274,6 +274,9 @@ import {
   resolveDatumAxisRefAtHistory,
   resolveDatumCsysRefAtHistory,
   resolveDatumPointEdgeAtHistory,
+  resolveEdgeAngleDatumPlaneAtHistory,
+  resolveFaceNormalDatumAxisAtHistory,
+  resolveNormalToEdgeDatumPlaneAtHistory,
   resolveDatumAxisSourceAtHistory,
   resolveDatumPointAtHistory,
   resolvePlaneRefAtHistory,
@@ -1427,6 +1430,43 @@ function buildDatumPlaneFeature(
         definition.reverseNormal
       );
       break;
+    case 'normal-to-edge':
+      frame = resolveNormalToEdgeDatumPlaneAtHistory(
+        ctx.kernel,
+        ctx.document,
+        definition.edge,
+        'point' in definition.at
+          ? { point: point(definition.at.point) }
+          : {
+              fraction: resolveParamValue(
+                definition.at.fraction,
+                ctx.scope,
+                'datum plane position along the edge',
+                ctx.document.units
+              )
+            },
+        feature.name,
+        ctx.result,
+        definition.reverseNormal
+      );
+      break;
+    case 'edge-angle':
+      frame = resolveEdgeAngleDatumPlaneAtHistory(
+        ctx.kernel,
+        ctx.document,
+        definition.edge,
+        source(definition.reference),
+        resolveParamValue(
+          definition.angleDeg,
+          ctx.scope,
+          'datum plane angle',
+          ctx.document.units
+        ),
+        feature.name,
+        ctx.result,
+        definition.reverseNormal
+      );
+      break;
   }
   ctx.result.datumFrames.set(feature.featureId, frame);
 }
@@ -1461,6 +1501,25 @@ function buildDatumAxisFeature(
       );
       break;
     }
+    case 'face-normal':
+      axis = resolveFaceNormalDatumAxisAtHistory(
+        ctx.kernel,
+        ctx.document,
+        definition.source,
+        resolveDatumPointAtHistory(
+          ctx.kernel,
+          ctx.document,
+          definition.point,
+          feature.name,
+          ctx.result,
+          ctx.scope,
+          'Datum axis'
+        ),
+        feature.name,
+        ctx.result,
+        definition.reverseDirection
+      );
+      break;
     case 'edge':
     case 'cylinder':
       axis = resolveDatumAxisSourceAtHistory(

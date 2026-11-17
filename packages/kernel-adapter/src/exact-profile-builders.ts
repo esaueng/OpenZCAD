@@ -9,11 +9,14 @@ import {
 import {
   computeSketchProfileAnalysis,
   csysPlaneFrame,
+  edgeAngleDatumPlane,
   edgeDatumAxis,
   edgeMidpointDatumPoint,
+  faceNormalDatumAxis,
   frameForPlaneRef,
   geometryTolerance,
   mergeAdjacentProfiles,
+  normalToEdgeDatumPlane,
   requireRevolveAxisInPlane,
   surfaceDatumAxis,
   type DatumAxis,
@@ -50,6 +53,7 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import type { ExactBuildResult, ExactShape } from './exact-types';
+import { edgeEndPoint } from './topology-fingerprint';
 import {
   addFaceCarrierRole,
   buildExtrudeLineage,
@@ -104,6 +108,8 @@ import {
 import {
   resolveDatumAxisEdge,
   resolveDatumAxisFace,
+  resolveDatumAxisNormalFace,
+  resolveDatumPlaneEdge,
   resolveDatumPointEdge,
   resolveEdgeVertex,
   resolveFaceAttachment,
@@ -565,6 +571,18 @@ export function resolveDatumPointEdgeAtHistory(
   if (type !== 'circle') {
     throw fail(`the edge is a ${type}, not a circular arc or circle.`);
   }
+  return exactCircleCentre(kernel, edge, fail);
+}
+
+/**
+ * The centre of a circular kernel edge, read exactly: the circumcentre of
+ * three of its points, checked against a fourth.
+ */
+function exactCircleCentre(
+  kernel: RemusKernel,
+  edge: number,
+  fail: (detail: string) => Error
+): Vec3 {
   const [t0, t1] = kernel.getEdgeParamSpan(edge);
   const at = (f: number): Vec3 => {
     const p = kernel.evaluateEdgeCurve(edge, t0! + (t1! - t0!) * f);
@@ -581,6 +599,259 @@ export function resolveDatumPointEdgeAtHistory(
     throw fail('its points do not lie on one circle.');
   }
   return center;
+}
+
+function sourceFeatureNameOf(
+  document: ProjectDocument,
+  reference: { producingFeatureId: FeatureId }
+): string {
+  return (
+    listFeaturesInOrder(document).find(
+      (candidate) => candidate.featureId === reference.producingFeatureId
+    )?.name ?? String(reference.producingFeatureId)
+  );
+}
+
+function plainVector(v: { x: number; y: number; z: number }): Vec3 {
+  return { x: v.x, y: v.y, z: v.z };
+}
+
+/**
+ * Schema v108: a datum plane square to an edge, read exactly from the edge
+ * its lineage re-finds at the plane's history position. At a fraction, the
+ * point and tangent are the kernel's own evaluation of the edge curve at
+ * that fraction of its span from end 0 (of the length on a line or arc); an
+ * arc also gives the plane's u, toward its centre. Through a point, the edge
+ * must be straight.
+ */
+export function resolveNormalToEdgeDatumPlaneAtHistory(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  source: DatumAxisEdgeSource,
+  at: { fraction: number } | { point: Vec3 },
+  datumName: string,
+  result: ExactBuildResult,
+  reverseNormal: boolean | undefined
+): PlaneBasis {
+  const shape = result.shapes.get(source.bodyId);
+  if (!shape) {
+    throw new Error(
+      `Datum plane "${datumName}" cannot use an edge of body ${source.bodyId} because it is unavailable at the plane's history position.`
+    );
+  }
+  const sourceFeatureName = sourceFeatureNameOf(document, source.edgeReference);
+  const fail = (detail: string) =>
+    new Error(
+      `Datum plane "${datumName}" cannot stand square to an edge of source feature "${sourceFeatureName}": ${detail}`
+    );
+  const candidate = resolveDatumPlaneEdge({
+    reference: source.edgeReference,
+    candidates: edgeVertexCandidatesForShape(kernel, shape),
+    datumName,
+    sourceFeatureName
+  });
+  const start = plainVector(edgeEndPoint(candidate.endpoints!, 0));
+  const end = plainVector(edgeEndPoint(candidate.endpoints!, 1));
+  const type = candidate.witness.curveType.toLowerCase();
+  if ('point' in at) {
+    if (type !== 'line') {
+      throw fail(
+        `the edge is a ${type}; a plane through a point square to an edge needs a straight edge.`
+      );
+    }
+    return normalToEdgeDatumPlane(
+      at.point,
+      subtract(end, start),
+      undefined,
+      reverseNormal
+    );
+  }
+  if (!(at.fraction >= 0 && at.fraction <= 1)) {
+    throw fail(`the fraction ${at.fraction} is not between 0 and 1.`);
+  }
+  const edge = candidate.value;
+  if (typeof edge !== 'number') throw fail('the edge has no exact data.');
+  const [t0, t1] = kernel.getEdgeParamSpan(edge);
+  const first = kernel.evaluateEdgeCurve(edge, t0!);
+  const p0 = { x: first[0]!, y: first[1]!, z: first[2]! };
+  // The curve's own parameter may run from end 1 to end 0.
+  const forward = distance3(p0, start) <= distance3(p0, end);
+  const t = forward
+    ? t0! + (t1! - t0!) * at.fraction
+    : t1! - (t1! - t0!) * at.fraction;
+  const d1 = kernel.evaluateEdgeCurveD1(edge, t);
+  const point = { x: d1[0]!, y: d1[1]!, z: d1[2]! };
+  const sense = forward ? 1 : -1;
+  const tangent = { x: d1[3]! * sense, y: d1[4]! * sense, z: d1[5]! * sense };
+  const centre =
+    type === 'circle' ? exactCircleCentre(kernel, edge, fail) : undefined;
+  try {
+    return normalToEdgeDatumPlane(point, tangent, centre, reverseNormal);
+  } catch (error) {
+    throw fail(errorText(error));
+  }
+}
+
+/**
+ * Schema v108: the straight edge a plane at an angle turns about, end 0
+ * first, re-found through verified lineage at the plane's history position.
+ */
+export function resolveEdgeAngleDatumPlaneAtHistory(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  source: DatumAxisEdgeSource,
+  reference: PlaneBasis,
+  angleDeg: number,
+  datumName: string,
+  result: ExactBuildResult,
+  reverseNormal: boolean | undefined
+): PlaneBasis {
+  const shape = result.shapes.get(source.bodyId);
+  if (!shape) {
+    throw new Error(
+      `Datum plane "${datumName}" cannot use an edge of body ${source.bodyId} because it is unavailable at the plane's history position.`
+    );
+  }
+  const sourceFeatureName = sourceFeatureNameOf(document, source.edgeReference);
+  const candidate = resolveDatumPlaneEdge({
+    reference: source.edgeReference,
+    candidates: edgeVertexCandidatesForShape(kernel, shape),
+    datumName,
+    sourceFeatureName
+  });
+  const type = candidate.witness.curveType.toLowerCase();
+  if (type !== 'line') {
+    throw new Error(
+      `Datum plane "${datumName}" cannot turn about an edge of source feature "${sourceFeatureName}": the edge is a ${type}, not a straight edge.`
+    );
+  }
+  const start = plainVector(edgeEndPoint(candidate.endpoints!, 0));
+  const end = plainVector(edgeEndPoint(candidate.endpoints!, 1));
+  try {
+    return edgeAngleDatumPlane(start, end, reference, angleDeg, reverseNormal);
+  } catch (error) {
+    throw new Error(
+      `Datum plane "${datumName}" cannot turn about an edge of source feature "${sourceFeatureName}": ${errorText(error)}`,
+      { cause: error }
+    );
+  }
+}
+
+/**
+ * Schema v108: the axis square to a face where `point` drops onto it, read
+ * exactly: the kernel carries the point to the nearest point of the face's
+ * surface and evaluates the outward normal there. A foot that does not lie
+ * on the body's boundary has fallen off the face and is refused.
+ */
+export function resolveFaceNormalDatumAxisAtHistory(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  source: DatumAxisFaceSource,
+  point: Vec3,
+  datumName: string,
+  result: ExactBuildResult,
+  reverseDirection: boolean | undefined
+): DatumAxis {
+  const shape = result.shapes.get(source.bodyId);
+  if (!shape) {
+    throw new Error(
+      `Datum axis "${datumName}" cannot use a face of body ${source.bodyId} because it is unavailable at the axis's history position.`
+    );
+  }
+  const sourceFeatureName = sourceFeatureNameOf(document, source.faceReference);
+  const fail = (detail: string) =>
+    new Error(
+      `Datum axis "${datumName}" cannot stand square to a face of source feature "${sourceFeatureName}": ${detail}`
+    );
+  const candidate = resolveDatumAxisNormalFace({
+    reference: source.faceReference,
+    candidates: faceAttachmentCandidatesForShape(kernel, shape),
+    datumName,
+    sourceFeatureName
+  });
+  const face = candidate.value;
+  if (typeof face !== 'number') throw fail('the face has no exact data.');
+  const owner = shape.solids.find((solid) =>
+    Array.from(kernel.getSolidFaces(solid)).includes(face)
+  );
+  if (owner === undefined) throw fail('the face belongs to no solid.');
+  const projected = kernel.projectPointOnSurface(
+    face,
+    point.x,
+    point.y,
+    point.z
+  );
+  const [u, v] = [projected[0]!, projected[1]!];
+  const foot = { x: projected[2]!, y: projected[3]!, z: projected[4]! };
+  if (![u, v, foot.x, foot.y, foot.z].every(Number.isFinite)) {
+    throw fail('the point does not drop onto the face.');
+  }
+  const scaleOf = Math.max(1, Math.hypot(foot.x, foot.y, foot.z));
+  const tolerance = geometryTolerance(scaleOf);
+  let raw: Float64Array;
+  try {
+    raw = kernel.evaluateSurfaceNormal(face, u, v);
+  } catch (error) {
+    throw fail(`the face has no normal there (${errorText(error)}).`);
+  }
+  const normal = { x: raw[0]!, y: raw[1]!, z: raw[2]! };
+  // Off a plane, (u, v) must give back the foot itself; a plane's normal is
+  // the same everywhere, and the kernel evaluates a plane in its own frame.
+  if (candidate.witness.surfaceType.toLowerCase() !== 'plane') {
+    const back = kernel.evaluateSurface(face, u, v);
+    if (
+      distance3({ x: back[0]!, y: back[1]!, z: back[2]! }, foot) >
+      10 * tolerance
+    ) {
+      throw fail('the face cannot be evaluated where the point drops onto it.');
+    }
+  }
+  // On the face: the foot is on the body's boundary, or (where the kernel's
+  // classifier reads a face's own edge or corner as outside) a point ten
+  // tolerances from it, along the face, is.
+  const length = Math.hypot(normal.x, normal.y, normal.z);
+  if (!(length > 0)) throw fail('the face has no normal there.');
+  const n = scale(normal, 1 / length);
+  const seed =
+    Math.abs(n.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+  const t1 = normalized(cross(n, seed));
+  if (!t1) throw fail('the face has no normal there.');
+  const t2 = cross(n, t1);
+  const step = 10 * tolerance;
+  const probes = [
+    foot,
+    ...(
+      [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+        [1, 1],
+        [1, -1],
+        [-1, 1],
+        [-1, -1]
+      ] as const
+    ).map(([a, b]) => ({
+      x: foot.x + (t1.x * a + t2.x * b) * step,
+      y: foot.y + (t1.y * a + t2.y * b) * step,
+      z: foot.z + (t1.z * a + t2.z * b) * step
+    }))
+  ];
+  if (
+    !probes.some(
+      (p) =>
+        kernel.classifyPoint(owner, p.x, p.y, p.z, tolerance) === 'boundary'
+    )
+  ) {
+    throw fail(
+      "the point drops onto the face's surface beyond the face itself."
+    );
+  }
+  try {
+    return faceNormalDatumAxis(foot, normal, reverseDirection);
+  } catch (error) {
+    throw fail(errorText(error));
+  }
 }
 
 function distance3(a: Vec3, b: Vec3): number {
@@ -2592,10 +2863,7 @@ function promotedDefaultProfile(
       return node?.kind === 'sketch-object' ? [[id, node.data] as const] : [];
     })
   );
-  const aliases = resolveSketchPromotionBoundaryTokens(
-    [promotion],
-    allObjects
-  );
+  const aliases = resolveSketchPromotionBoundaryTokens([promotion], allObjects);
   const edges = promotion.edgeIds.map((id) => {
     const data = allObjects.get(id);
     if (data?.objectKind !== 'line')

@@ -412,10 +412,7 @@ export interface ResolveEdgeVertexInput {
 }
 
 export type DatumOwnerKind =
-  | 'Datum plane'
-  | 'Datum axis'
-  | 'Datum point'
-  | 'Coordinate system';
+  'Datum plane' | 'Datum axis' | 'Datum point' | 'Coordinate system';
 
 /**
  * R01: the exact vertex a datum's edge-vertex source names, re-found solely
@@ -435,7 +432,9 @@ export function resolveEdgeVertex(input: ResolveEdgeVertexInput): Vector3 {
   if (resolution.status === 'failed') {
     throw mappedFailureReason(resolution.reason) === 'deleted'
       ? asMissingReference(
-          fail(`its edge was deleted or no longer exists. ${resolution.message}`)
+          fail(
+            `its edge was deleted or no longer exists. ${resolution.message}`
+          )
         )
       : fail(resolution.message);
   }
@@ -564,6 +563,44 @@ export function resolveDatumPointEdge(
       `Datum point "${named(input.datumName, '<unnamed datum>')}" cannot use an edge of source feature "${named(input.sourceFeatureName, '<unnamed source feature>')}": ${detail}`
     );
   return lineageCandidate(input.reference, input.candidates, fail, 'edge');
+}
+
+/**
+ * Schema v108: the edge a datum plane square to an edge, or through one at an
+ * angle, names, re-found solely through verified lineage. A deleted or
+ * ambiguous edge refuses by name; the caller reads its geometry exactly.
+ */
+export function resolveDatumPlaneEdge(
+  input: ResolveDatumAxisEdgeInput
+): EdgeVertexCandidate {
+  const fail = (detail: string) =>
+    new Error(
+      `Datum plane "${named(input.datumName, '<unnamed datum>')}" cannot use an edge of source feature "${named(input.sourceFeatureName, '<unnamed source feature>')}": ${detail}`
+    );
+  const candidate = lineageCandidate(
+    input.reference,
+    input.candidates,
+    fail,
+    'edge'
+  );
+  if (!candidate.endpoints) {
+    throw fail('the edge is closed, so it has no ends to measure from.');
+  }
+  return candidate;
+}
+
+/**
+ * Schema v108: the face a datum axis square to a face names, re-found solely
+ * through verified lineage. A deleted or ambiguous face refuses by name.
+ */
+export function resolveDatumAxisNormalFace(
+  input: ResolveDatumAxisFaceInput
+): FaceAttachmentCandidate {
+  const fail = (detail: string) =>
+    new Error(
+      `Datum axis "${named(input.datumName, '<unnamed datum>')}" cannot stand square to a face of source feature "${named(input.sourceFeatureName, '<unnamed source feature>')}": ${detail}`
+    );
+  return lineageCandidate(input.reference, input.candidates, fail, 'face');
 }
 
 export interface ResolveDatumAxisFaceInput {

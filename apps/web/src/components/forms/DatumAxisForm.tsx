@@ -384,7 +384,12 @@ export function DatumAxisForm({
         />
       </label>
       <div className="plane-chips" role="group" aria-label="Axis type">
-        {MODES.map((mode) => (
+        {[
+          ...MODES,
+          // Schema v108: only for an axis that holds a face (picked in place
+          // with a point); the card cannot pick one.
+          ...(state.mode === 'face-normal' ? (['face-normal'] as const) : [])
+        ].map((mode) => (
           <button
             key={mode}
             type="button"
@@ -416,6 +421,15 @@ export function DatumAxisForm({
             ? `Axis of ${faceLabel ?? 'the picked face'}`
             : 'Pick a cylindrical or conical face in the viewport.'}
         </p>
+      ) : state.mode === 'face-normal' ? (
+        <>
+          <p className="muted" aria-live="polite">
+            {state.face
+              ? `Square to ${faceLabel ?? 'the picked face'}`
+              : 'Pick the face with the Axis tool in the viewport.'}
+          </p>
+          {pointSlot(0, 'At point')}
+        </>
       ) : state.mode === 'csys-axis' ? (
         <>
           <label className="field">

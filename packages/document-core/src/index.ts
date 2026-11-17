@@ -73,6 +73,7 @@ import {
   assertSheetMetalSchema,
   assertDatumPointCsysSchema,
   assertRibSchema,
+  assertDatumReferenceConstructorSchema,
   assertStandardPartSchema,
   assertPatternContentSchema,
   assertHoleContentSchema,
@@ -3128,6 +3129,26 @@ function samePoint(a: DatumPointSource, b: DatumPointSource): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+/** Schema v108: an open model edge named by a qualified lineage reference. */
+function requireOpenEdgeSource(
+  document: ProjectDocument,
+  source: DatumAxisEdgeSource | undefined,
+  label: string
+): void {
+  if (
+    source?.type !== 'edge' ||
+    source.edgeReference?.kind !== 'edge' ||
+    source.edgeReference.witness?.closed !== false
+  ) {
+    throw new Error(
+      `${label} needs an open edge with a qualified lineage reference.`
+    );
+  }
+  if (!document.bodyOrder.includes(source.bodyId)) {
+    throw new Error(`The edge's body ${source.bodyId} does not exist.`);
+  }
+}
+
 function requireFiniteLiteral(value: ParamValue, label: string): void {
   if (typeof value === 'number' && !Number.isFinite(value)) {
     throw new Error(`${label} must be a finite distance.`);
@@ -3162,9 +3183,53 @@ export function validateDatumPlaneDefinition(
       if (!definition.source || !definition.point)
         throw new Error('A parallel plane needs a plane and a point.');
       break;
+    case 'normal-to-edge': {
+      assertDatumReferenceConstructorSchema(document.schemaVersion);
+      requireOpenEdgeSource(
+        document,
+        definition.edge,
+        'A plane square to an edge'
+      );
+      const at: unknown = definition.at;
+      const fraction =
+        typeof at === 'object' && at !== null && 'fraction' in at;
+      const point = typeof at === 'object' && at !== null && 'point' in at;
+      if (fraction === point || Object.keys(at as object).length !== 1) {
+        throw new Error(
+          'A plane square to an edge is placed at a fraction along it or through a point.'
+        );
+      }
+      if ('fraction' in definition.at) {
+        const value = definition.at.fraction;
+        if (typeof value === 'number' && !(value >= 0 && value <= 1)) {
+          throw new Error(
+            'A plane square to an edge sits at a fraction from 0 to 1 along it.'
+          );
+        }
+      }
+      break;
+    }
+    case 'edge-angle':
+      assertDatumReferenceConstructorSchema(document.schemaVersion);
+      requireOpenEdgeSource(
+        document,
+        definition.edge,
+        'A plane through an edge'
+      );
+      if (!definition.reference)
+        throw new Error(
+          'A plane through an edge at an angle needs a reference plane.'
+        );
+      if (
+        typeof definition.angleDeg === 'number' &&
+        !Number.isFinite(definition.angleDeg)
+      ) {
+        throw new Error('The plane angle must be a finite number of degrees.');
+      }
+      break;
     default:
       throw new Error(
-        'A datum plane is an offset plane, a midplane, a three-point plane or a parallel plane through a point.'
+        'A datum plane is an offset plane, a midplane, a three-point plane, a parallel plane through a point, a plane square to an edge or a plane through an edge at an angle.'
       );
   }
   validateDatumPlaneSources(document, sources, ownFeatureId);
@@ -3392,6 +3457,24 @@ export function validateDatumAxisDefinition(
       if (sources.length !== 2)
         throw new Error('An axis where two planes meet needs two planes.');
       break;
+    case 'face-normal':
+      assertDatumReferenceConstructorSchema(document.schemaVersion);
+      if (
+        definition.source?.type !== 'face' ||
+        definition.source.faceReference?.kind !== 'face'
+      ) {
+        throw new Error(
+          'An axis square to a face needs a face with a qualified lineage reference.'
+        );
+      }
+      if (!document.bodyOrder.includes(definition.source.bodyId)) {
+        throw new Error(
+          `The face's body ${definition.source.bodyId} does not exist.`
+        );
+      }
+      if (!definition.point)
+        throw new Error('An axis square to a face needs a point.');
+      break;
     case 'csys-axis':
       if (!['X', 'Y', 'Z'].includes(definition.axis))
         throw new Error('A coordinate system axis is X, Y or Z.');
@@ -3407,7 +3490,7 @@ export function validateDatumAxisDefinition(
       break;
     default:
       throw new Error(
-        'A datum axis runs through two points, along an edge, along a cylinder or cone, where two planes meet, or along a coordinate system axis.'
+        'A datum axis runs through two points, along an edge, along a cylinder or cone, where two planes meet, along a coordinate system axis, or square to a face at a point.'
       );
   }
   validateDatumPlaneSources(document, sources, ownFeatureId);
