@@ -3,6 +3,7 @@ import {
   addPrimitiveFeature,
   addSketchFeature,
   createProjectDocument,
+  extrudeSketch,
   normalizeDocument,
   wrapBody,
   type WrapInput
@@ -207,6 +208,61 @@ describe('wraps in the exact build', { timeout: 180_000 }, () => {
       /needs its sketch in a plane parallel to the cylinder's axis/
     );
   });
+  it('embosses toward the axis and engraves away from it in a bore', async () => {
+    // A tube: radius 10 inside, 15 outside, 20 tall; its bore's material
+    // lies away from the axis.
+    const ring = label(
+      createProjectDocument('Tube', user),
+      [
+        { objectKind: 'circle', radius: 15, centerX: 0, centerY: 0 },
+        { objectKind: 'circle', radius: 10, centerX: 0, centerY: 0 }
+      ],
+      'XY',
+      0
+    );
+    const annulus = ring.profiles.find(
+      (profile) => Math.abs((profile as { sourceArea: number }).sourceArea - Math.PI * 125) < 1e-6
+    )!;
+    const tube = extrudeSketch(ring.document, {
+      name: 'Tube',
+      sketchId: ring.sketchId,
+      distance: 20,
+      profile: annulus
+    });
+    const first = await adapter.syncDocument(tube.document);
+    const bore = first.bodyRepresentations[tube.bodyId]?.topology?.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'cylinder' &&
+        Math.abs((face.geometry.radius ?? 0) - 10) < 1e-9
+    );
+    expect(bore?.reference).toBeDefined();
+    const before = first.bodyRepresentations[tube.bodyId]!.volume;
+    // The label on the plane through the axis, 6 × 4 about 10 up.
+    const sketch = label(tube.document, [rectangle], 'YZ', 0);
+    for (const [mode, change] of [
+      // Into the bore, between radii 9 and 10.
+      ['emboss', (24 * (10 ** 2 - 9 ** 2)) / 20],
+      // Into the wall, between radii 10 and 11.
+      ['engrave', (-24 * (11 ** 2 - 10 ** 2)) / 20]
+    ] as const) {
+      const result = wrapBody(sketch.document, {
+        name: 'Bore label',
+        targetBodyId: tube.bodyId,
+        faceReference: bore!.reference!,
+        sketchId: sketch.sketchId,
+        profiles: sketch.profiles,
+        depth: 1,
+        mode
+      });
+      const derived = await adapter.syncDocument(result.document);
+      expect(derived.warnings).toEqual([]);
+      expect(derived.bodyRepresentations[result.bodyId]!.volume).toBeCloseTo(
+        before + change,
+        6
+      );
+    }
+  });
+
   it('embosses and engraves a label on a cone through its development, one body each', async () => {
     // A frustum: radius 10 at z = 0 to 5 at z = 20, so its apex is at z = 40
     // and its generators stand atan(40 / 10) from the radial plane.

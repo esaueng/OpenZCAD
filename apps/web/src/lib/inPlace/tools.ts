@@ -4183,6 +4183,11 @@ const rib: InPlaceToolSpec = {
   }
 };
 
+/** Whether every picked region is in the first one's sketch. */
+function oneSketch(profiles: readonly { sketchId: string }[]): boolean {
+  return profiles.every((pick) => pick.sketchId === profiles[0]?.sketchId);
+}
+
 /**
  * M12 (schema v111): Wrap in place. Regions of a sketch drawn on a plane
  * parallel to a cylinder are clicked, then the cylinder's face; the depth
@@ -4223,26 +4228,29 @@ const wrap: InPlaceToolSpec = {
   ],
   hint(slots) {
     if (slots.profiles.length === 0) return 'Click the sketch regions to wrap';
+    if (!oneSketch(slots.profiles))
+      return 'Regions of one sketch wrap together · keep the regions of one sketch';
     if (slots.faces.length === 0)
       return `${slots.profiles.length} region${slots.profiles.length === 1 ? '' : 's'} · click the cylinder or cone`;
     return 'Drag the depth, turn or slide along';
   },
   ready: (slots) =>
     slots.profiles.length > 0 &&
+    oneSketch(slots.profiles) &&
     slots.faces.length === 1 &&
     slots.faces[0]!.reference !== undefined,
   request(slots, values, options) {
     const face = slots.faces[0];
     const first = slots.profiles[0];
-    if (!face?.reference || !first) return null;
+    // A wrap reads one sketch: regions of another are refused, never
+    // dropped.
+    if (!face?.reference || !first || !oneSketch(slots.profiles)) return null;
     return {
       tool: 'wrap',
       targetBodyId: face.bodyId,
       faceReference: face.reference,
       sketchId: first.sketchId,
-      profiles: slots.profiles
-        .filter((pick) => pick.sketchId === first.sketchId)
-        .map((pick) => pick.reference),
+      profiles: slots.profiles.map((pick) => pick.reference),
       depth: values.depth ?? 1,
       mode: options.mode === 'engrave' ? 'engrave' : 'emboss',
       ...(values.rotation ? { rotationDeg: values.rotation } : {}),
@@ -4317,7 +4325,12 @@ const wrap: InPlaceToolSpec = {
       y: surface.y - foot.y,
       z: surface.z - foot.z
     });
-    const inward = options.mode === 'engrave' ? -1 : 1;
+    // Out of the face is away from its material: toward the axis in a bore,
+    // when the pick says which way the face looks.
+    const bore =
+      face.normal !== undefined &&
+      face.normal.x * radial.x + face.normal.y * radial.y + face.normal.z * radial.z < 0;
+    const inward = (options.mode === 'engrave') !== bore ? -1 : 1;
     const key = `wrap:${face.bodyId}:${face.hash}`;
     return [
       {

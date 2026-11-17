@@ -56,6 +56,8 @@ export type WrapFrame =
       axis: V3;
       reference: V3;
       radius: number;
+      /** The face is a bore's: its material lies away from the axis. */
+      bore: boolean;
     }
   | {
       kind: 'cone';
@@ -64,6 +66,7 @@ export type WrapFrame =
       reference: V3;
       apex: V3;
       halfAngle: number;
+      bore: boolean;
     };
 
 /**
@@ -147,15 +150,28 @@ export function resolveWrapFrame(
     add(axisPoint, scale(axis, dot(sub(basis.origin, axisPoint), axis))),
     scale(axis, offset)
   );
+  // Which side the material is on: the face's outward normal points away
+  // from the axis on a post or a cup's outside, toward it in a bore.
+  const projected = kernel.projectPointOnSurface(
+    face.value,
+    basis.origin.x,
+    basis.origin.y,
+    basis.origin.z
+  );
+  const at = { x: projected[2]!, y: projected[3]!, z: projected[4]! };
+  const raw = kernel.evaluateSurfaceNormal(face.value, projected[0]!, projected[1]!);
+  const toAxis = sub(at, add(axisPoint, scale(axis, dot(sub(at, axisPoint), axis))));
+  const bore = dot({ x: raw[0]!, y: raw[1]!, z: raw[2]! }, toAxis) < 0;
   return shape.kind === 'cylinder'
-    ? { kind: 'cylinder', origin, axis, reference, radius: shape.radius }
+    ? { kind: 'cylinder', origin, axis, reference, radius: shape.radius, bore }
     : {
         kind: 'cone',
         origin,
         axis,
         reference,
         apex: shape.apex,
-        halfAngle: shape.halfAngle
+        halfAngle: shape.halfAngle,
+        bore
       };
 }
 
@@ -175,12 +191,14 @@ export function buildWrapSolids(
   const depth = resolveParamValue(data.depth, scope, 'wrap depth', document.units);
   if (!(depth > 0)) throw new Error(`Wrap "${name}" needs a positive depth.`);
   const margin = depth / 4;
-  // A cylinder takes radii; a cone takes offsets along its normal.
+  // A cylinder takes radii; a cone takes offsets along its normal. Out of
+  // the face is away from its material: away from the axis on a post, toward
+  // it in a bore.
   const base = frame.kind === 'cylinder' ? frame.radius : 0;
-  const [inner, outer] =
-    data.mode === 'emboss'
-      ? [base - margin, base + depth]
-      : [base - depth, base + margin];
+  const outward = (data.mode === 'emboss') !== frame.bore;
+  const [inner, outer] = outward
+    ? [base - margin, base + depth]
+    : [base - depth, base + margin];
   if (frame.kind === 'cylinder' && !(inner > 0)) {
     throw new Error(
       `Wrap "${name}" is deeper than its cylinder's radius; use a smaller depth.`
