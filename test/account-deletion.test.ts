@@ -166,7 +166,9 @@ describe('account cloud-data deletion', () => {
       documentBytes: 1_024,
       revisionBytes: 2_048,
       revisionCount: 4,
-      collaboratorCount: 2
+      collaboratorCount: 2,
+      // No encrypted projects here; test/e2ee-identity-reset counts them.
+      encryptedProjectCount: 0
     });
   });
 

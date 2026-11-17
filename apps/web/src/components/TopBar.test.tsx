@@ -5,6 +5,7 @@ import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { TopBar, preloadEncryptionIndicator } from './TopBar';
 import type { EncryptionIndicatorProps } from './EncryptionIndicator';
 import { WORKSPACE_MODE_OPTIONS } from '../lib/topBarPresentation';
+import { IDENTITY_DISCONTINUED_PROBLEM } from '../lib/e2ee/encryptionStatus';
 
 function renderTopBar(
   options: {
@@ -923,6 +924,23 @@ describe('TopBar encryption indicator', () => {
         'The account copy needs repair. Your work remains saved on this device; click Repair needed to retry.'
       )
     ).toBeVisible();
+  });
+
+  // Issue #1704: retrying cannot verify a copy secured by keys the account
+  // no longer has, so the problem's own next step replaces "retry".
+  it('gives a discontinued owner identity its own next step, not a retry', () => {
+    renderTopBar({
+      saveState: 'repair',
+      encryption: indicator(
+        { state: 'problem', problem: IDENTITY_DISCONTINUED_PROBLEM },
+        { needsRepair: true }
+      )
+    });
+    fireEvent.click(
+      screen.getByLabelText('End-to-end encrypted · verification failed')
+    );
+    expect(screen.getByText(IDENTITY_DISCONTINUED_PROBLEM)).toBeVisible();
+    expect(screen.queryByText(/click Repair needed to retry/)).toBeNull();
   });
 
   it('says nothing is verified before this page opens or saves a version', () => {

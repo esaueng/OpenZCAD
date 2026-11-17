@@ -6036,11 +6036,25 @@ export interface AccountDeletionPreview {
   revisionBytes: number;
   revisionCount: number;
   collaboratorCount: number;
+  /**
+   * Owned end-to-end encrypted cloud projects, trashed ones included. A
+   * profile deletion keeps them but erases the only account keys that open
+   * them, so the account cannot open their cloud copies again, even after
+   * signing in and setting encryption up anew. Absent from older servers.
+   */
+  encryptedProjectCount?: number;
 }
 
 export interface DeleteAccountDataRequest {
   scope: AccountDeletionScope;
   confirmation: string;
+  /**
+   * How many owned encrypted projects the dialog told the person would
+   * become unreadable (`AccountDeletionPreview.encryptedProjectCount`). A
+   * profile deletion is refused, before anything is deleted, when the
+   * account owns more than this.
+   */
+  acknowledgedEncryptedProjectCount?: number;
 }
 
 export interface DeleteAccountDataResponse {
