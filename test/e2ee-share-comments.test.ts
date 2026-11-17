@@ -369,7 +369,8 @@ describe(
       const db = srv.env.DB as D1Database;
       const racing = new Proxy(db, {
         get(target, key, receiver) {
-          if (key !== 'prepare') return Reflect.get(target, key, receiver);
+          if (key !== 'prepare')
+            return Reflect.get(target, key, receiver) as unknown;
           return (sql: string) => {
             if (sql.includes('INSERT INTO e2ee_share_comments')) {
               srv.db
