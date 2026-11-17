@@ -91,6 +91,13 @@ const GearMeshCard = lazyWithStaleChunkNotice(() =>
 
 export interface AssemblyPanelProps {
   document: ProjectDocument;
+  /**
+   * F06: the document the viewport draws, when parts show other
+   * configurations: the model's, plus bodies only those rows build. The
+   * parts list reads which part has a body from it; everything else (the
+   * BOM, motion and gear setup) still reads `document`.
+   */
+  displayDocument?: ProjectDocument | null;
   execute: AssemblyExecute;
   onStatus(message: string): void;
   /**
@@ -192,6 +199,7 @@ function Section({
 
 function AssemblyLists({
   document,
+  displayDocument,
   execute,
   onStatus,
   onAnnounce,
@@ -201,7 +209,7 @@ function AssemblyLists({
   saveBomCsv,
   checkInterference
 }: AssemblyPanelProps) {
-  const model = useAssemblyModel(document);
+  const model = useAssemblyModel(displayDocument ?? document);
   const selectedComponentId = useAssemblyRuntime((s) => s.selectedComponentId);
   const selectedComponentIds = useAssemblyRuntime(
     (s) => s.selectedComponentIds

@@ -1063,6 +1063,20 @@
   animation: mode-in-left var(--dur-base) var(--ease-out);
 }
 
+/* F06: the configuration this view shows, above its parts. */
+.view-mode-rail-configuration {
+  display: grid;
+  gap: 4px;
+  margin: 0 10px 8px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.view-mode-rail-configuration select {
+  height: 28px;
+  font-size: var(--fs-xs);
+}
+
 .instrument-rail,
 .palette-float > .view-mode-bar {
   animation: mode-in-right var(--dur-base) var(--ease-out);

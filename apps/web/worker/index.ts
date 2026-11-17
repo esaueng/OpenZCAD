@@ -216,6 +216,17 @@ import {
   saveProjectMeasurements
 } from './projectMeasurements';
 import {
+  createProjectComment,
+  deleteProjectComment,
+  isProjectCommentStorageReady,
+  listProjectComments,
+  parseCreateProjectCommentRequest,
+  parseResolveProjectCommentRequest,
+  ProjectCommentRequestError,
+  resolveProjectComment,
+  type CommentActor
+} from './projectComments';
+import {
   isLibraryFolderStorageReady,
   LIBRARY_FOLDERS_ROUTE,
   LibraryFolderRequestError,
@@ -343,6 +354,10 @@ const PROJECT_DOCUMENT_ROUTE = /^\/api\/projects\/([^/]+)\/document$/;
 const WORKSPACE_SESSIONS_ROUTE =
   /^\/api\/projects\/([^/]+)\/workspace-sessions$/;
 const PROJECT_MEASUREMENTS_ROUTE = /^\/api\/projects\/([^/]+)\/measurements$/;
+/** L08 review comments (migration 0058): a project's threads. */
+const PROJECT_COMMENTS_ROUTE = /^\/api\/projects\/([^/]+)\/comments$/;
+/** One comment of a project, to resolve or delete. */
+const PROJECT_COMMENT_ROUTE = /^\/api\/projects\/([^/]+)\/comments\/([^/]+)$/;
 const PROJECT_COLLABORATION_ROUTE = /^\/api\/projects\/([^/]+)\/collaboration$/;
 const PROJECT_COLLABORATION_TICKET_ROUTE =
   /^\/api\/projects\/([^/]+)\/collaboration\/ticket$/;
@@ -2608,6 +2623,64 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return new Response(null, { status: 204 });
   }
 
+  const commentsMatch =
+    PROJECT_COMMENTS_ROUTE.exec(pathname) ??
+    PROJECT_COMMENT_ROUTE.exec(pathname);
+  if (commentsMatch) {
+    const projectId = commentsMatch[1]!;
+    const commentId = commentsMatch[2];
+    if (commentId !== undefined && !/^cmt_[0-9a-f-]{36}$/.test(commentId))
+      return json({ error: 'That comment does not exist.' }, 404);
+    // Members of every role read and write; an encrypted project's comments
+    // are never stored here (assertPlaintextProject refuses the route).
+    const access = await persistence.requireProjectRead(userId, projectId);
+    assertPlaintextProject(access);
+    if (!(await isProjectCommentStorageReady(env.DB)))
+      return json(
+        {
+          error: 'Comments are not available on this server yet.',
+          code: 'COMMENTS_UNAVAILABLE'
+        },
+        503
+      );
+    const actor: CommentActor = {
+      userId,
+      name: session.displayName,
+      role: access.role
+    };
+    if (request.method === 'GET' && !commentId)
+      return json({ comments: await listProjectComments(env.DB!, projectId) });
+    if (request.method === 'POST' && !commentId)
+      return json(
+        {
+          comment: await createProjectComment(
+            env.DB!,
+            projectId,
+            actor,
+            parseCreateProjectCommentRequest(
+              await readJsonBody(request, 8 * 1024)
+            )
+          )
+        },
+        201
+      );
+    if (request.method === 'PATCH' && commentId)
+      return json({
+        comment: await resolveProjectComment(
+          env.DB!,
+          projectId,
+          commentId,
+          actor,
+          parseResolveProjectCommentRequest(await readJsonBody(request, 256))
+        )
+      });
+    if (request.method === 'DELETE' && commentId) {
+      await deleteProjectComment(env.DB!, projectId, commentId, actor);
+      return new Response(null, { status: 204 });
+    }
+    return json({ error: 'Method not allowed.' }, 405);
+  }
+
   if (request.method === 'GET' && projectMatch) {
     if (
       url.searchParams.get('storage') === 'raw' ||
@@ -3219,6 +3292,12 @@ async function dispatchApiRequest(
     }
     if (error instanceof ProjectMeasurementRequestError) {
       return json({ error: error.message }, error.status);
+    }
+    if (error instanceof ProjectCommentRequestError) {
+      return json(
+        { error: error.message, ...(error.code ? { code: error.code } : {}) },
+        error.status
+      );
     }
     if (error instanceof ProjectMeasurementRevisionConflictError) {
       return json(

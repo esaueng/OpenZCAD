@@ -1,3 +1,4 @@
+import { isProjectCommentStorageReady } from './projectComments';
 import { e2eeErasureTables } from './e2ee';
 import { contactErasureStatements } from './e2eeContacts';
 import { invitationErasureStatements } from './e2eeInvitations';
@@ -660,6 +661,18 @@ export async function deleteAccountData(
         // Library folders are profile data (migration 0045), when the
         // table exists.
         ...(await libraryFolderErasureStatements(db, session.userId)),
+        // L08 comments this account wrote in other people's projects
+        // (migration 0058), when the table exists; its own projects'
+        // comments go with them.
+        ...(input.scope === 'all' && (await isProjectCommentStorageReady(db))
+          ? [
+              db
+                .prepare(
+                  'DELETE FROM project_comments WHERE author_user_id = ?'
+                )
+                .bind(session.userId)
+            ]
+          : []),
         // Assistant consents (migration 0041), when the table exists.
         ...(await assistantConsentErasureStatements(db, session.userId)),
         // Encrypted invitations this account received, its KeyPackages

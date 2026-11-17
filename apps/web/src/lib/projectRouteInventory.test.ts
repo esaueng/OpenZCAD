@@ -257,6 +257,18 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
   [String.raw`/^\/api\/projects\/([^/]+)\/measurements$/`]: [
     [`${P}/measurements`, 'plaintext', ['PUT', 'DELETE']]
   ],
+  // L08 review comments: their text and pins describe the model, and an
+  // encrypted project's are never sent (they are refused before a request).
+  [String.raw`/^\/api\/projects\/([^/]+)\/comments$/`]: [
+    [`${P}/comments`, 'plaintext', ['POST']]
+  ],
+  [String.raw`/^\/api\/projects\/([^/]+)\/comments\/([^/]+)$/`]: [
+    [
+      `${P}/comments/cmt_00000000-0000-4000-8000-000000000001`,
+      'plaintext',
+      ['PATCH', 'DELETE']
+    ]
+  ],
   [String.raw`/^\/api\/projects\/([^/]+)\/members\/([^/]+)$/`]: [
     [`${P}/members/user_1`, 'none']
   ],

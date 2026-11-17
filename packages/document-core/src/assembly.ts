@@ -33,7 +33,8 @@ import {
 import {
   assertAssemblyCouplingSchema,
   assertAssemblyExplodeSchema,
-  assertAssemblySchema
+  assertAssemblySchema,
+  assertComponentConfigurationSchema
 } from './document-content-schema';
 import { bodySourceMap } from './object-folders';
 
@@ -67,6 +68,11 @@ export interface AssemblyComponentUpdateInput {
   name?: string;
   grounded?: boolean;
   placement?: AssemblyPlacement;
+  /**
+   * F06 (schema v90): the configuration row the component shows, or null
+   * to follow the document's active row.
+   */
+  configurationId?: string | null;
 }
 
 export interface AssemblyComponentDeleteInput {
@@ -336,9 +342,22 @@ export function updateAssemblyComponent(
   document: ProjectDocument,
   input: AssemblyComponentUpdateInput
 ): ProjectDocument {
+  if (input.configurationId !== undefined) {
+    assertComponentConfigurationSchema(document.schemaVersion);
+    if (
+      input.configurationId !== null &&
+      !document.configurations?.rows.some(
+        (row) => row.id === input.configurationId
+      )
+    )
+      throw new Error('That configuration is not in this document.');
+  }
   return withAssembly(document, (set) => {
     if (input.grounded !== undefined) freezePlacements(set);
     const target = component(set, input.componentId);
+    if (input.configurationId === null) delete target.configurationId;
+    else if (input.configurationId !== undefined)
+      target.configurationId = input.configurationId;
     if (input.name !== undefined)
       target.name = cleanName(input.name, 'A component');
     if (input.grounded !== undefined) target.grounded = input.grounded;

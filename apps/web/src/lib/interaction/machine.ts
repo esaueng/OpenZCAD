@@ -1606,6 +1606,21 @@ export function holdsRefusal(state: InteractionState): boolean {
 }
 
 /**
+ * The failed edit an Undo or Redo discards instead of stepping history: the
+ * title of an operation that holds a refusal, or null. The failed edit was
+ * never committed, so the top history entry is older, unrelated work; a user
+ * who just saw "Not built" and presses Undo means the failure, and stepping
+ * history there would revert that work behind the failure's back (#1597).
+ */
+export function refusalDiscardedByHistoryStep(
+  state: InteractionState
+): string | null {
+  return holdsRefusal(state)
+    ? (commandIdentityFor(state)?.title ?? 'edit')
+    : null;
+}
+
+/**
  * The command's OWN selection went stale. It fails at every value, so "try
  * again" advice would send the user in circles; the error text carries its
  * own repair guidance.

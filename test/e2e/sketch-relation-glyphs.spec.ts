@@ -210,7 +210,16 @@ test('relation glyphs keep clear of their anchors and each other, select on clic
     x: (corners[0]!.x + corners[1]!.x) / 2,
     y: (corners[0]!.y + corners[1]!.y) / 2
   };
-  const labelBox = (await dimensionLabel.boundingBox())!;
+  // The overlay rebuilds its labels once more after the value is applied,
+  // so read the box once the rebuilt label is back rather than in the gap.
+  const labelBox = await (async () => {
+    for (const started = Date.now(); Date.now() - started < 30_000;) {
+      const box = await dimensionLabel.boundingBox();
+      if (box) return box;
+      await page.waitForTimeout(100);
+    }
+    throw new Error('The distance label never came back after its rebuild');
+  })();
   await page.mouse.move(
     labelBox.x + labelBox.width / 2,
     labelBox.y + labelBox.height / 2
