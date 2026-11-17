@@ -100,8 +100,8 @@ export async function packageMeshExport<Id>(input: {
   return { zip: zipSync(entries), names, warnings };
 }
 
-/** One mesh export job, as the activity pill runs it. */
-interface MeshExportJob {
+/** One export job, as the activity pill runs it. */
+export interface MeshExportJob {
   fileName: string;
   label: string;
   kind: ArtifactKind;

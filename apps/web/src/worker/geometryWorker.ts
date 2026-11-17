@@ -440,7 +440,7 @@ export type GeometryExportResult =
       type: 'export';
       ok: true;
       requestId: string;
-      format: 'step' | 'stl' | 'dxf' | 'svg';
+      format: 'step' | 'iges' | 'stl' | 'dxf' | 'svg';
       text: string;
       warnings: string[];
     }
@@ -1590,7 +1590,11 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       const exportBodyIds = request.allShownBodies
         ? await exact.documentExportBodyIds(document)
         : request.bodyIds;
-      if (request.format !== 'step' && request.format !== 'stl') {
+      if (
+        request.format !== 'step' &&
+        request.format !== 'stl' &&
+        request.format !== 'iges'
+      ) {
         const data = await exact.exportMesh(document, exportBodyIds, {
           format: request.format,
           deflection: request.deflection ?? DEFAULT_EXPORT_DEFLECTION,

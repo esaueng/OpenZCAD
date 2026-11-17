@@ -387,6 +387,38 @@ function declined(): StepImportResult {
   };
 }
 
+/**
+ * I06: Import CAD files' exact path for STEP and IGES. An IGES B-rep is
+ * restated as the exact STEP the Remus translator reads it as, and that STEP
+ * is imported under the IGES file's name; a file the translator refuses (a
+ * surface model, an entity outside the qualified subset) goes to `refuse`
+ * before anything is stored.
+ */
+export async function runCadFileImport(
+  deps: StepImportRunDeps & { refuse(message: string): void }
+): Promise<void> {
+  const original = deps.file;
+  if (!/\.(?:igs|iges)$/i.test(original.name)) {
+    await runStepImport(deps);
+    return;
+  }
+  let file: File;
+  try {
+    const { igesAsStepFile } = await import('./igesImport');
+    file = await igesAsStepFile(original, deps.signal);
+  } catch (error) {
+    if (deps.signal?.aborted) {
+      deps.status.setStatus(
+        `${original.name} was not imported: you cancelled it.`
+      );
+    } else {
+      deps.refuse(errorMessage(error, `Could not import ${original.name}.`));
+    }
+    return;
+  }
+  await runStepImport({ ...deps, file, contentType: 'model/step' });
+}
+
 export async function runStepImport(
   deps: StepImportRunDeps
 ): Promise<StepImportResult> {

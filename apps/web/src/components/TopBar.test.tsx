@@ -6,6 +6,7 @@ import { TopBar, preloadEncryptionIndicator } from './TopBar';
 import type { EncryptionIndicatorProps } from './EncryptionIndicator';
 import { WORKSPACE_MODE_OPTIONS } from '../lib/topBarPresentation';
 import { IDENTITY_DISCONTINUED_PROBLEM } from '../lib/e2ee/encryptionStatus';
+import { CAD_IMPORT_ACCEPT } from '../lib/appleTouch';
 
 function renderTopBar(
   options: {
@@ -629,10 +630,7 @@ describe('TopBar File menu', () => {
       'Import STEP or a mesh file…'
     );
     expect(input).toHaveAttribute('type', 'file');
-    expect(input).toHaveAttribute(
-      'accept',
-      '.shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply,.dxf'
-    );
+    expect(input).toHaveAttribute('accept', CAD_IMPORT_ACCEPT);
     const pick = vi.spyOn(input, 'click');
     fireEvent.click(item);
     expect(pick).toHaveBeenCalledOnce();
