@@ -1856,6 +1856,39 @@ describe('DrawingWorkspace', () => {
       });
     });
 
+    it('drops a thread class when a diameter is toleranced instead (D07 v100)', async () => {
+      const sheet = dimensioned();
+      const linear = sheet.annotations![0] as DrawingLinearDimension;
+      sheet.annotations = [
+        {
+          annotationId: 'dann_d' as DrawingAnnotationId,
+          kind: 'diameter',
+          viewId: linear.viewId,
+          edge: { bodyId, hash: 210 },
+          threadClass: '6H',
+          placementMm: { x: 0, y: -15 }
+        }
+      ];
+      const { onCommand } = setup({ sheet });
+      await userEvent.click(
+        await screen.findByRole('option', {
+          name: 'Diameter dimension (broken)'
+        })
+      );
+      await userEvent.selectOptions(
+        screen.getByRole('combobox', { name: 'Tolerance' }),
+        'symmetric'
+      );
+      const command = onCommand.mock.calls.at(-1)![0];
+      expect(command.kind).toBe('drawing.annotation.update');
+      const annotation = (command.payload as { annotation: DrawingAnnotation })
+        .annotation;
+      expect(annotation).toMatchObject({
+        tolerance: { kind: 'symmetric', value: 0.1 }
+      });
+      expect(annotation).not.toHaveProperty('threadClass');
+    });
+
     it('keeps a broken dimension in place, refuses export and offers a re-pick', async () => {
       const { onCommand } = setup({ sheet: dimensioned(999) });
       const canvas = screen.getByRole('application', {

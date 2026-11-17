@@ -148,8 +148,9 @@ describe('D07 fits and general tolerances (schema v105)', () => {
       ['f7', 50, -0.025, -0.05],
       ['F7', 15, 0.034, 0.016],
       ['G7', 25, 0.028, 0.007],
-      // IT7 at 18–30 mm is 21 µm, odd: js7 rounds it down to 20 first.
-      ['js7', 25, 0.01, -0.01],
+      // ±IT/2 exactly: IT7 at 18–30 mm is 21 µm, and JS7 at 6–10 mm 15.
+      ['js7', 25, 0.0105, -0.0105],
+      ['JS7', 10, 0.0075, -0.0075],
       ['JS6', 20, 0.0065, -0.0065],
       // k is 0 below IT4 and above IT7.
       ['k8', 25, 0.033, 0],

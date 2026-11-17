@@ -15,7 +15,7 @@ places a ruled block printing the ISO 2768-1 linear and angular tables for
 class f, m, c or v (with an ISO 2768-2 class), or ± per number of decimals
 written and on angles in the sheet's units. Evidence:
 `test/drawing-fits.test.ts` (ISO 286 limits against eighteen table values
-including range edges, js rounding and k above IT7; validation by name; on
+including range edges, exact ±IT/2 for js and JS, and k above IT7; validation by name; on
 kernel bodies Ø8 H7 and g6, Ø25 g6, inch and decimal-comma sheets, a 520 mm
 pin out of range; an M6 tapped hole classed 6H, refused 2B, a plain tap
 drill not threaded and reamed H7; the ISO 2768 v/m tables and an inch stated

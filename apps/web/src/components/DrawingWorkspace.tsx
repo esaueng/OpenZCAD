@@ -2939,7 +2939,13 @@ function ToleranceFields(props: {
   if (callout) return null;
   const tolerance = selected.tolerance;
   const set = (next: DrawingTolerance | null) => {
-    const { tolerance: _previous, ...rest } = selected;
+    // v100: a toleranced diameter states its diameter, not a hole's
+    // callout, so a thread class goes with the callout.
+    const { tolerance: _previous, ...kept } = selected;
+    const rest =
+      next && 'threadClass' in kept
+        ? (({ threadClass: _thread, ...other }) => other)(kept)
+        : kept;
     if (next && drawingToleranceError(next)) return;
     props.onUpdate(
       next ? { ...rest, tolerance: next } : rest,

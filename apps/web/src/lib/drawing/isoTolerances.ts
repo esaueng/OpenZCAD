@@ -96,10 +96,9 @@ export function fitDeviations(
       break;
     case 'JS':
     case 'js': {
-      // ±IT/2; for IT7–IT11 an odd value in µm is first rounded down to
-      // the even value below it (ISO 286-1 table 2, note 2).
-      const even = grade >= 7 && it % 2 === 1 ? it - 1 : it;
-      [upper, lower] = [even / 2, -even / 2];
+      // ±IT/2 exactly (ISO 286-1:2010, 4.1.2.2; its 1988 edition rounded
+      // an odd IT7–IT11 value down to even first, which 2010 dropped).
+      [upper, lower] = [it / 2, -it / 2];
       break;
     }
     case 'k':

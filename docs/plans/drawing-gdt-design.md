@@ -108,7 +108,7 @@ properties) and `test/e2e/drawing-gdt.spec.ts`.
     and JS, and shafts f, g, h, js, k, m, n and p, in grades 5 to 11. Holes
     K to ZC need the Δ correction, and shafts r to zc need subdivided size
     ranges, so the schema refuses them rather than print a guessed limit.
-  - **js.** An odd IT7–IT11 value is first rounded down to the even one.
+  - **js.** ±IT/2 exactly, as ISO 286-1:2010 states it.
   - **Out of range.** A size outside over 0 up to 500 mm breaks as
     `fit-out-of-range`.
   - **What it replaces.** A fit is the diameter's tolerance and replaces a
