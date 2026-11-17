@@ -133,17 +133,16 @@ fragment in `docs/roadmap-evidence/`.
 3. **Grant mode `comment`.** Adding a value to the owner-signed link grant's
    mode; older browsers refuse a grant with an unknown mode (fail closed), so
    a commenter link opens only on an updated build. **Approved by the owner
-   on 2026-11-17.** **Open follow-up (3a):** the fail-closed reaches further
-   than the link. Every member's browser checks the project's link set,
-   grants included, each time it opens the encrypted document. An older
-   build therefore refuses the whole project as malformed, not just the
-   link, from the moment one commenter link exists. That covers stale tabs
-   and older desktop builds until they update. The alternative keeps the
-   grant's mode `view` and records the comment permission in a separate,
-   optional owner-signed record that older builds ignore. Older members
-   then still open the project, and only the visitor's comment box needs an
-   updated build. Confirm the grant mode as approved, or choose the
-   separate record.
+   on 2026-11-17**, then superseded by 3a.
+   **3a, decided by the owner on 2026-11-17: a separate record.** The
+   fail-closed would have reached further than the link: every member's
+   browser checks the project's link set, grants included, each time it
+   opens the encrypted document, so an older build would refuse the whole
+   project. `comment` is therefore **not** a third grant mode. A commenter
+   link keeps the grant mode `view`, and its comment permission is a
+   separate, optional owner-signed record that older builds ignore. Older
+   members still open the project normally; only the visitor's comment box
+   needs an updated build.
 4. **Drawing sheets on links.** Per-sheet opt-in by an editor, rather than
    per-link by the owner. An editor can already put any text in the model a
    link serves. **Approved by the owner on 2026-11-17**, as built in #1670.
@@ -151,3 +150,8 @@ fragment in `docs/roadmap-evidence/`.
    plaintext project deletes its plaintext comments with the rest of its
    plaintext records (ADR-024 leaves the account no plaintext). Once slice 8
    lands, the migration should carry them as `comment` envelopes instead.
+   **Confirmed by the owner on 2026-11-17, with a warning:** until the
+   migration carries comments over, the encrypt flow names the count (for
+   example "Encrypting deletes 12 comments") and needs an explicit
+   confirmation, so nothing is deleted silently. The warning goes away once
+   comments travel as encrypted envelopes.
