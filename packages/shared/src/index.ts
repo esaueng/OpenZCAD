@@ -43,6 +43,7 @@ import type { AssemblySet } from './assembly';
 import type { ConfigurationSet } from './configurations';
 import type { PipeThreadSize } from './pipe-threads';
 import type {
+  StandardPartBuild,
   StandardPartKind,
   StandardPartSize,
   StandardPartSystem,
@@ -3912,6 +3913,11 @@ export interface DerivedState {
    * as the kernel did. A datum that failed or is suppressed is absent.
    */
   datumFrames?: Record<FeatureId, DatumFrame>;
+  /**
+   * M17: each standard part as the exact build placed it, by its feature
+   * (see {@link StandardPartBuild}). Absent before a rebuild.
+   */
+  standardParts?: Record<FeatureId, StandardPartBuild>;
   /**
    * R01 (schema v28): each datum axis as the exact build resolved it at its
    * own history position. A datum axis that failed or is suppressed is absent.

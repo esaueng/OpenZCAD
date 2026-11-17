@@ -1040,3 +1040,12 @@ export function standardHoleFit(
     ...(hole.style === 'countersink' ? { countersunk: true } : {})
   };
 }
+
+/**
+ * M17: a standard part as the exact build placed it: one entry per part
+ * (one per bore of a hole it is in), each its nominal length in millimetres
+ * for a screw or dowel pin (a hole-matched length included), else null.
+ */
+export interface StandardPartBuild {
+  lengthsMm: (number | null)[];
+}

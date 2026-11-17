@@ -163,6 +163,14 @@ export function buildStandardPartFeature(
     }
     builds.push({ built, frame });
   }
+  (result.standardParts ??= new Map()).set(feature.featureId, {
+    lengthsMm: placements.map(({ length }) =>
+      length === undefined ||
+      (geometry.partKind !== 'screw' && geometry.partKind !== 'dowel')
+        ? null
+        : length * mm
+    )
+  });
   result.shapes.set(feature.bodyId, {
     solids: builds.flatMap(({ built }) => built.solids),
     lineage: partLineage(kernel, feature.featureId, builds)
