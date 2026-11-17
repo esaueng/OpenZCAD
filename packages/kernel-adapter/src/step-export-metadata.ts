@@ -561,8 +561,8 @@ export function finishStepExport(
   }
   if (metadata.pmi?.length && metadata.protocol === 'ap242') {
     if (!parts) {
-      const shapes = data.filter((line) =>
-        /^#\d+ = PRODUCT_DEFINITION_SHAPE\(/.test(line)
+      const shapes = data.filter(
+        (line) => ENTITY_LINE.exec(line)?.[2] === 'PRODUCT_DEFINITION_SHAPE'
       );
       if (shapes.length !== 1) {
         throw new Error(
