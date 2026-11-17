@@ -117,6 +117,30 @@ interface SectionToolboxProps {
  * Small live-view controls. The header switch is the only thing in them that
  * ends the cut; the rail button and Escape put them away and leave it on.
  */
+
+/**
+ * Where the stage's free space starts, in viewport pixels: the stage's top
+ * plus its `--stage-top` clearance under the workspace toolbar. That custom
+ * property holds unresolved CSS math (`calc(40px + 10px * 2)`), which
+ * `parseFloat` reads as NaN, so the controls fell back to 8 px and opened
+ * under the toolbar (#1629). A probe lets layout resolve the length.
+ */
+function stageTopEdge(panel: HTMLElement, stage: Element | null): number {
+  const host = stage instanceof HTMLElement ? stage : panel.parentElement;
+  if (!host) return 8;
+  const probe = document.createElement('div');
+  probe.setAttribute('aria-hidden', 'true');
+  probe.style.cssText =
+    'position:absolute;top:0;left:0;width:0;height:var(--stage-top, 8px);visibility:hidden;pointer-events:none';
+  host.appendChild(probe);
+  const clearance = probe.getBoundingClientRect().height;
+  probe.remove();
+  return (
+    host.getBoundingClientRect().top +
+    (Number.isFinite(clearance) && clearance > 0 ? clearance : 8)
+  );
+}
+
 export function SectionToolbox({
   section,
   range,
@@ -178,10 +202,7 @@ export function SectionToolbox({
       const footer = stage
         ?.querySelector('.command-bar-lane')
         ?.getBoundingClientRect();
-      const stageTop =
-        Number.parseFloat(
-          getComputedStyle(panel).getPropertyValue('--stage-top')
-        ) || 8;
+      const stageTop = stageTopEdge(panel, stage);
       const right = rail?.left ?? window.innerWidth;
       const bottom = footer?.top ?? window.innerHeight;
       const x = Math.max(8, Math.min(box.x, right - box.width - 8));
