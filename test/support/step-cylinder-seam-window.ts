@@ -156,14 +156,27 @@ function edgeCurve(entities: Map<number, Entity>, id: number): Edge | null {
   return { id, start, end, curve, sense: edgeSense };
 }
 
-/** The EDGE_CURVE ids of one EDGE_LOOP, in loop order. */
-function loopEdgeIds(entities: Map<number, Entity>, loop: Entity): number[] {
-  return entityRefs(splitArgs(loop.args)[1] ?? '').flatMap((orientedId) => {
+/**
+ * The EDGE_CURVE ids of one EDGE_LOOP, in loop order, or null when the loop
+ * cannot be read whole: no edges, or an entry that is not an ORIENTED_EDGE
+ * naming its edge. A loop read short would be judged on the edges that are
+ * left, and an empty one would pass as a window nothing crosses.
+ */
+function loopEdgeIds(
+  entities: Map<number, Entity>,
+  loop: Entity
+): number[] | null {
+  const orientedIds = entityRefs(splitArgs(loop.args)[1] ?? '');
+  if (orientedIds.length === 0) return null;
+  const edgeIds: number[] = [];
+  for (const orientedId of orientedIds) {
     const oriented = entities.get(orientedId);
-    if (oriented?.type !== 'ORIENTED_EDGE') return [];
+    if (oriented?.type !== 'ORIENTED_EDGE') return null;
     const edgeId = entityRefs(splitArgs(oriented.args)[3] ?? '')[0];
-    return edgeId === undefined ? [] : [edgeId];
-  });
+    if (edgeId === undefined) return null;
+    edgeIds.push(edgeId);
+  }
+  return edgeIds;
 }
 
 /** Whether `angle` lies in the CCW interval from `from` to `to`, inclusive. */
@@ -198,14 +211,25 @@ export function screenStepSeamWindows(text: string): StepSeamWindowScreen {
       edge.curve.type === 'LINE' &&
       Math.abs(angleOf(edge.start) - angleOf(edge.end)) < ANGLE_TOLERANCE;
 
-    const loops = entityRefs(faceArgs[1] ?? '').flatMap((boundId) => {
+    // Every bound must be read whole, or the face is not judged at all.
+    const loops: { loopId: number; edgeIds: number[] }[] = [];
+    let unread = false;
+    for (const boundId of entityRefs(faceArgs[1] ?? '')) {
       const bound = entities.get(boundId);
       const loopId = entityRefs(splitArgs(bound?.args ?? '')[1] ?? '')[0];
       const loop = loopId === undefined ? undefined : entities.get(loopId);
-      return loop?.type === 'EDGE_LOOP'
-        ? [{ loopId: loopId!, edgeIds: loopEdgeIds(entities, loop) }]
-        : [];
-    });
+      const edgeIds =
+        loop?.type === 'EDGE_LOOP' ? loopEdgeIds(entities, loop) : null;
+      if (loopId === undefined || edgeIds === null) {
+        unread = true;
+        break;
+      }
+      loops.push({ loopId, edgeIds });
+    }
+    if (unread || loops.length === 0) {
+      unscreened += 1;
+      continue;
+    }
     const uses = new Map<number, number>();
     for (const { edgeIds } of loops) {
       for (const edgeId of edgeIds)

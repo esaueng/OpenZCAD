@@ -130,6 +130,38 @@ describe('overlapping cylinder Union STEP export (#1243)', () => {
     expect(screen.findings).toEqual([{ faceId: 62, seamAngle: 0, loopId: 60 }]);
   });
 
+  it('reads a named loop whole, and never judges a loop it cannot read', () => {
+    // A loop name with a comma and a parenthesis in it: the name is text,
+    // so the defect is still found.
+    const named = SEAM_IN_WINDOW.replace(
+      "#60 = EDGE_LOOP('', (",
+      "#60 = EDGE_LOOP('Window, inner (B)', ("
+    );
+    expect(named).not.toBe(SEAM_IN_WINDOW);
+    expect(screenStepSeamWindows(named).findings).toEqual([
+      { faceId: 62, seamAngle: 0, loopId: 60 }
+    ]);
+    // A window whose edge list is empty, or names something that is not an
+    // oriented edge, is unscreened: not a window nothing crosses.
+    for (const broken of [
+      SEAM_IN_WINDOW.replace(
+        "#60 = EDGE_LOOP('', (#55, #56, #57, #58, #59));",
+        "#60 = EDGE_LOOP('', ());"
+      ),
+      SEAM_IN_WINDOW.replace(
+        "#60 = EDGE_LOOP('', (#55, #56, #57, #58, #59));",
+        "#60 = EDGE_LOOP('', (#55, #56, #57, #58, #5));"
+      )
+    ]) {
+      expect(broken).not.toBe(SEAM_IN_WINDOW);
+      expect(screenStepSeamWindows(broken)).toEqual({
+        findings: [],
+        screened: 0,
+        unscreened: 1
+      });
+    }
+  });
+
   it('clears the independently authored source cylinders', () => {
     // Full cylinders: a seam and no window, so nothing to cross.
     for (const step of Object.values(SOURCES)) {

@@ -50,10 +50,14 @@ export function splitArgs(text: string): string[] {
   const out: string[] = [];
   let depth = 0;
   let current = '';
+  // A STEP string is quoted with apostrophes (a doubled one is a literal
+  // apostrophe, which toggles twice). Its commas and parentheses are text.
+  let quoted = false;
   for (const character of text) {
-    if (character === '(') depth += 1;
-    if (character === ')') depth -= 1;
-    if (character === ',' && depth === 0) {
+    if (character === "'") quoted = !quoted;
+    if (!quoted && character === '(') depth += 1;
+    if (!quoted && character === ')') depth -= 1;
+    if (!quoted && character === ',' && depth === 0) {
       out.push(current.trim());
       current = '';
       continue;
@@ -97,11 +101,11 @@ function direction(
   const entity = id === undefined ? undefined : entities.get(id);
   if (entity?.type !== 'DIRECTION') return null;
   const numbers = [
-    ...(splitArgs(entity.args)[1] ?? '').matchAll(/-?\d+\.?\d*(?:[eE][-+]?\d+)?/g)
+    ...(splitArgs(entity.args)[1] ?? '').matchAll(
+      /-?\d+\.?\d*(?:[eE][-+]?\d+)?/g
+    )
   ].map((match) => Number(match[0]));
-  return numbers.length >= 3
-    ? [numbers[0]!, numbers[1]!, numbers[2]!]
-    : null;
+  return numbers.length >= 3 ? [numbers[0]!, numbers[1]!, numbers[2]!] : null;
 }
 
 /** An AXIS2_PLACEMENT_3D's axis: its SECOND reference, after the location. */
