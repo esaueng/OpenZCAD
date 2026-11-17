@@ -9,15 +9,15 @@
  * sides, and the kernel validates that as a clean solid (esaueng/remus#1799).
  * The adapter used to commit it.
  *
- * The adapter now refuses any such result, typed, through both the drag
- * preview (prepared move) and the full rebuild a commit uses, and keeps the
- * plate. The same plate with no chamfer still offsets, and so does the one
- * the kernel already handles: with a fillet on the other hole's rim it
- * carries the chamfer with the face, and that correct result is accepted.
- *
- * When the pinned kernel carries a chamfer-only hole mouth, the refusals
- * below turn into builds: assert then that the chamfer keeps its size, the
- * bounds stay on the plate and both holes stay through.
+ * The adapter refuses any such result, typed, through both the drag preview
+ * (prepared move) and the full rebuild a commit uses, and keeps the plate.
+ * Since Remus 2026.1.146 (esaueng/remus#1808) the kernel carries a
+ * chamfer-only hole mouth with the moved face, so those offsets build: the
+ * body grows or shrinks by exactly the plain slab the face sweeps (the
+ * chamfer keeps its size and both holes stay through), the bounds stay on
+ * the plate, and the guard lets the correct result through. A conical
+ * pocket that runs to its apex is still left in place by the kernel, and
+ * still refused.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -236,85 +236,70 @@ describe(
       if (measured !== undefined) expect(measured).toBeCloseTo(volume, digits);
     }
 
-    /** The plate as it was: its volume, and bounds inside its own outline. */
-    function expectKept(
+    /**
+     * The chamfer moved with the face: no refusal, the body changed by the
+     * plain slab the face swept, and it stays on the plate's outline.
+     */
+    function expectCarried(
       derived: Built,
       candidate: ProjectDocument,
-      volume: number
+      volume: number,
+      bounds: { minZ: number; maxZ: number }
     ) {
-      expectVolume(derived, candidate, volume, 6);
-      const kept = resultOf(derived, candidate);
-      expect(kept.bbox.min.y).toBeCloseTo(0, 6);
-      expect(kept.bbox.max.y).toBeCloseTo(Y, 6);
-      expect(kept.bbox.max.z).toBeCloseTo(Z, 6);
+      expect(derived.warnings).toEqual([]);
+      expect(
+        (derived.featureWarnings ?? []).filter(
+          (warning) => warning.featureName === 'Offset Face'
+        )
+      ).toEqual([]);
+      expectVolume(derived, candidate, volume, 3);
+      const moved = resultOf(derived, candidate);
+      expect(moved.bbox.min.x).toBeCloseTo(0, 6);
+      expect(moved.bbox.max.x).toBeCloseTo(X, 6);
+      expect(moved.bbox.min.y).toBeCloseTo(0, 6);
+      expect(moved.bbox.max.y).toBeCloseTo(Y, 6);
+      expect(moved.bbox.min.z).toBeCloseTo(bounds.minZ, 6);
+      expect(moved.bbox.max.z).toBeCloseTo(bounds.maxZ, 6);
     }
 
-    it('refuses +4, which the kernel builds with a 4.5 mm chamfer', async () => {
-      const source = await part('chamfer', 'none');
-      expect(source.volume).toBeCloseTo(PLATE_AREA * Z - CHAMFER_VOLUME, 2);
-      const candidate = offsetBy(source, 4);
-      for (const derived of await builds(candidate)) {
-        const refusal = refusalOf(derived);
-        expect(refusal.kernelRefusal).toMatchObject({
-          family: 'direct-edit',
-          operation: 'offset-face',
-          category: 'unsupported',
-          code: 'offset_face_hole_chamfer_not_carried'
-        });
-        expect(refusal.message).toContain(
-          'offsetting the face cannot move that chamfer with it yet'
-        );
-        // Nothing of the stretched result is kept.
-        expectKept(derived, candidate, source.volume);
-      }
-    });
-
-    for (const offset of [0.4, 2, 16.5, -1]) {
-      it(`never builds a stretched chamfer at ${offset}`, async () => {
+    for (const offset of [4, 0.4, 2, 16.5, -1]) {
+      it(`carries the chamfer with the face at ${offset}`, async () => {
         const source = await part('chamfer', 'none');
+        expect(source.volume).toBeCloseTo(PLATE_AREA * Z - CHAMFER_VOLUME, 2);
         const candidate = offsetBy(source, offset);
         for (const derived of await builds(candidate)) {
-          // Whether the adapter's check or the kernel caught it, the
-          // refusal reads the same and is typed the same.
-          expect(refusalOf(derived).kernelRefusal).toMatchObject({
-            family: 'direct-edit',
-            operation: 'offset-face',
-            category: 'unsupported',
-            code: 'offset_face_hole_chamfer_not_carried'
-          });
-          expectKept(derived, candidate, source.volume);
+          expectCarried(
+            derived,
+            candidate,
+            source.volume + PLATE_AREA * offset,
+            { minZ: 0, maxZ: Z + offset }
+          );
         }
       });
     }
 
-    it('is not fooled by the far mouth when the recorded normal is reversed', async () => {
+    it('moves the face along its current normal when the recorded one is reversed', async () => {
       // Chamfers at both ends of the hole, and an offset equal to the
       // plate's thickness. The kernel moves the face along its current
-      // outward normal; a check made along the recorded one would look on
-      // the bottom plane and find the untouched bottom mouth there.
+      // outward normal, so the top rises by Z and the bottom mouth stays.
       const source = await part('chamfer-both', 'none');
       const candidate = offsetBy(source, Z, true);
       for (const derived of await builds(candidate)) {
-        expect(refusalOf(derived).kernelRefusal).toMatchObject({
-          family: 'direct-edit',
-          category: 'unsupported',
-          code: 'offset_face_hole_chamfer_not_carried'
+        expectCarried(derived, candidate, source.volume + PLATE_AREA * Z, {
+          minZ: 0,
+          maxZ: 2 * Z
         });
-        expectKept(derived, candidate, source.volume);
       }
     });
 
-    it('guards a face whose outward normal points down', async () => {
+    it('carries the chamfer of a face whose outward normal points down', async () => {
       const source = await part('chamfer-both', 'none');
       const candidate = offsetBy({ ...source, top: source.bottom }, 2);
       for (const derived of await builds(candidate)) {
-        expect(refusalOf(derived).kernelRefusal).toMatchObject({
-          family: 'direct-edit',
-          category: 'unsupported',
-          code: 'offset_face_hole_chamfer_not_carried'
+        expectCarried(derived, candidate, source.volume + PLATE_AREA * 2, {
+          minZ: -2,
+          maxZ: Z
         });
-        expectVolume(derived, candidate, source.volume, 6);
-        expect(resultOf(derived, candidate).bbox.min.z).toBeCloseTo(0, 6);
       }
     });
 

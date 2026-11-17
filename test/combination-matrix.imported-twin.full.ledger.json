@@ -1,7 +1,7 @@
 {
   "summary": {
-    "qualified": 31,
-    "typed-refusal": 38,
+    "qualified": 36,
+    "typed-refusal": 33,
     "untyped-refusal": 0,
     "wrong": 0,
     "timeout": 0
@@ -29,13 +29,13 @@
     "imported-twin/upright/R7/negative-wall": "typed-refusal",
     "imported-twin/upright/R9/rows": "qualified",
     "imported-twin/upright/R9/re-resolve": "qualified",
-    "imported-twin/upright-chamfer/twin/import": "typed-refusal",
-    "imported-twin/upright-chamfer/R1/cap-up": "typed-refusal",
-    "imported-twin/upright-chamfer/R1/cap-down": "typed-refusal",
+    "imported-twin/upright-chamfer/twin/import": "qualified",
+    "imported-twin/upright-chamfer/R1/cap-up": "qualified",
+    "imported-twin/upright-chamfer/R1/cap-down": "qualified",
     "imported-twin/upright-chamfer/R2/wall-grow": "typed-refusal",
     "imported-twin/upright-chamfer/R2/wall-shrink": "typed-refusal",
-    "imported-twin/upright-chamfer/R3/top-up": "typed-refusal",
-    "imported-twin/upright-chamfer/R3/top-down": "typed-refusal",
+    "imported-twin/upright-chamfer/R3/top-up": "qualified",
+    "imported-twin/upright-chamfer/R3/top-down": "qualified",
     "imported-twin/tilted/R1/cap-up": "typed-refusal",
     "imported-twin/tilted/R1/cap-down": "typed-refusal",
     "imported-twin/tilted/R2/wall-grow": "typed-refusal",
