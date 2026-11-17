@@ -806,7 +806,7 @@ describe('WorkspaceReadout message lifetime', () => {
       }
     });
 
-    it('still gives a new message its turn after the one on screen', () => {
+    it('drops the finished phase while a new message waits its turn', () => {
       vi.useFakeTimers();
       try {
         const at = Date.now();
@@ -815,13 +815,42 @@ describe('WorkspaceReadout message lifetime', () => {
         act(() => {
           vi.advanceTimersByTime(200);
         });
-        // A different message is news to read, so it waits its turn.
+        // A different message is news to read, so it waits its turn, but
+        // the finished rebuild is not held on screen meanwhile.
         rerender(view('Added cylinder.', at + 200, null));
-        expect(line).toHaveTextContent('Added box. · Rebuilding geometry…');
+        expect(line).toHaveTextContent('Added box.');
+        expect(line).not.toHaveTextContent('Rebuilding');
         act(() => {
           vi.advanceTimersByTime(STATUS_MIN_DWELL_MS);
         });
         expect(line).toHaveTextContent('Added cylinder.');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('paces ordinary messages again after a failure is shown', () => {
+      vi.useFakeTimers();
+      try {
+        const at = Date.now();
+        const failed = {
+          ...REBUILDING,
+          phase: 'Exact geometry failed: no solid'
+        };
+        const { rerender } = render(view('Added box.', at, REBUILDING));
+        const line = screen.getByRole('status');
+        rerender(view('Added box.', at, failed, 'warning'));
+        expect(line).toHaveTextContent('Exact geometry failed: no solid');
+        act(() => {
+          vi.advanceTimersByTime(100);
+        });
+        rerender(view('Sketch hidden.', at + 100, failed, 'warning'));
+        // The failure keeps its own dwell rather than vanishing in 100 ms.
+        expect(line).toHaveTextContent('Added box. · Exact geometry failed');
+        act(() => {
+          vi.advanceTimersByTime(STATUS_MIN_DWELL_MS);
+        });
+        expect(line).toHaveTextContent('Sketch hidden.');
       } finally {
         vi.useRealTimers();
       }

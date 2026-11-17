@@ -8,14 +8,6 @@ import { useLayoutEffect, useRef, useState } from 'react';
  */
 export const STATUS_MIN_DWELL_MS = 1200;
 
-/**
- * Whether `next` is the line on screen with its trailing live phase retired:
- * "Added box. · Rebuilding geometry…" becoming "Added box." (#1632).
- */
-export function retiresGeometryPhase(shown: string, next: string): boolean {
-  return next !== '' && shown.startsWith(`${next} · `);
-}
-
 export interface PacedStatus<T extends string> {
   status: string;
   tone: T;
@@ -38,10 +30,13 @@ export interface PacedStatus<T extends string> {
  * read, so the latest message is taken over at once and the next one to
  * arrive shows without waiting.
  *
- * `settles(shown, next)` names a change that only retires live progress
- * from the message on screen ("Added box. · Rebuilding geometry…" becoming
- * "Added box."): the message has already been read, and holding the
- * retired phase for the rest of its dwell reports work that has finished.
+ * `settle(shown, next)` retires live progress from the line on screen
+ * without restarting its dwell (#1632): the message has been read, and
+ * holding a finished "Rebuilding geometry…" for the rest of its dwell
+ * reports work that is done. It returns `next` when that is all the change
+ * does ("Added box. · Rebuilding geometry…" becoming "Added box."), an
+ * interim line (the shown message without its phase) when a new message
+ * still has to wait its turn, or null to pace as usual.
  */
 export function usePacedStatus<T extends string>(
   status: string,
@@ -49,7 +44,7 @@ export function usePacedStatus<T extends string>(
   live: boolean,
   notable?: (status: string, tone: T) => boolean,
   immediate = false,
-  settles?: (shown: string, next: string) => boolean
+  settle?: (shown: string, next: string) => string | null
 ): PacedStatus<T> {
   const [shown, setShown] = useState<PacedStatus<T>>({
     status,
@@ -61,8 +56,8 @@ export function usePacedStatus<T extends string>(
   const skippedRef = useRef(0);
   const notableRef = useRef(notable);
   notableRef.current = notable;
-  const settlesRef = useRef(settles);
-  settlesRef.current = settles;
+  const settleRef = useRef(settle);
+  settleRef.current = settle;
 
   // A layout effect so a toast turning visible never paints the previous
   // message for a frame before the current one replaces it.
@@ -92,12 +87,22 @@ export function usePacedStatus<T extends string>(
       setShown({ status, tone, skipped });
     };
     const wait = shownAtRef.current + STATUS_MIN_DWELL_MS - Date.now();
-    if (
-      immediate ||
-      wait <= 0 ||
-      (settlesRef.current?.(shown.status, status) ?? false)
-    ) {
+    if (immediate || wait <= 0) {
       show();
+      return;
+    }
+    const settled = settleRef.current?.(shown.status, status) ?? null;
+    if (settled === status) {
+      // Shown at once, inside the dwell the message already began.
+      const skipped = skippedRef.current;
+      waitingRef.current = null;
+      skippedRef.current = 0;
+      setShown({ status, tone, skipped });
+      return;
+    }
+    if (settled !== null && settled !== shown.status) {
+      // The finished phase leaves now; `status` keeps waiting its turn.
+      setShown((current) => ({ ...current, status: settled, tone }));
       return;
     }
     const timer = window.setTimeout(show, wait);
