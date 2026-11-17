@@ -144,4 +144,30 @@ describe('L03 save-state diff', () => {
       { field: 'name', before: 'Bracket', after: 'Bracket v2' }
     ]);
   });
+  it('reports a parameter whose settings changed under the same expression', () => {
+    const manager = base();
+    const [baseBody, lugBody] = manager.document.bodyOrder as [
+      (typeof manager.document.bodyOrder)[number],
+      (typeof manager.document.bodyOrder)[number]
+    ];
+    manager.execute(
+      commandFactories.configureParameterToggle({
+        name: 'show_lug',
+        bodyIds: [baseBody]
+      })
+    );
+    const before = manager.document;
+    // The same on/off expression, now showing and hiding the other body.
+    manager.execute(
+      commandFactories.configureParameterToggle({
+        name: 'show_lug',
+        bodyIds: [lugBody]
+      })
+    );
+    const diff = diffSaveStates(before, manager.document);
+    expect(diff.identical).toBe(false);
+    expect(diff.parameters).toEqual([
+      { name: 'show_lug', before: '1', after: '1', settingsChanged: true }
+    ]);
+  });
 });

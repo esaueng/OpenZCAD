@@ -36,6 +36,11 @@ export interface SaveStateParameterChange {
   name: string;
   before: string | null;
   after: string | null;
+  /**
+   * Its other settings changed — what it measures, the bodies a toggle
+   * shows, its description or exposure — whether or not its expression did.
+   */
+  settingsChanged?: boolean;
 }
 
 export interface SaveStateDiff {
@@ -188,23 +193,43 @@ export function diffSaveStates(
     (node) => stable(modelContent(node))
   );
 
-  const expressions = (document: ProjectDocument) =>
+  // By name: its expression, and every other canonical setting apart from
+  // the cached evaluation (`value`), which follows from the rest.
+  const parameterSettings = (document: ProjectDocument) =>
     new Map(
       nodesOfKind(document, 'parameter', document.parameterOrder).map(
-        (node) => [node.name, node.expression]
+        (node) => {
+          const {
+            value: _value,
+            expression,
+            ...settings
+          } = modelContent(node) as Record<string, unknown> & {
+            value?: unknown;
+            expression: string;
+          };
+          const { id: _id, parentId: _parentId, ...rest } = settings;
+          return [node.name, { expression, settings: stable(rest) }];
+        }
       )
     );
-  const earlierParameters = expressions(before);
-  const laterParameters = expressions(after);
+  const earlierParameters = parameterSettings(before);
+  const laterParameters = parameterSettings(after);
   const parameters: SaveStateParameterChange[] = [];
-  for (const [name, expression] of laterParameters) {
+  for (const [name, next] of laterParameters) {
     const previous = earlierParameters.get(name);
-    if (previous !== expression)
-      parameters.push({ name, before: previous ?? null, after: expression });
+    const settingsChanged =
+      previous !== undefined && previous.settings !== next.settings;
+    if (previous?.expression !== next.expression || settingsChanged)
+      parameters.push({
+        name,
+        before: previous?.expression ?? null,
+        after: next.expression,
+        ...(settingsChanged ? { settingsChanged } : {})
+      });
   }
-  for (const [name, expression] of earlierParameters)
+  for (const [name, previous] of earlierParameters)
     if (!laterParameters.has(name))
-      parameters.push({ name, before: expression, after: null });
+      parameters.push({ name, before: previous.expression, after: null });
 
   const sheets = (document: ProjectDocument) =>
     (document.drawings?.sheets ?? []).map((sheet) => ({

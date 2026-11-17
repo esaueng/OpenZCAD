@@ -46,7 +46,11 @@ export function describeSaveStateDiff(
           ? `Added ${change.name} = ${change.after}`
           : change.after === null
             ? `Removed ${change.name} (was ${change.before})`
-            : `${change.name}: ${change.before} → ${change.after}`
+            : change.before === change.after
+              ? `${change.name}: settings changed`
+              : `${change.name}: ${change.before} → ${change.after}${
+                  change.settingsChanged ? ', settings changed' : ''
+                }`
       )
     },
     { heading: 'Sketches', lines: groupLines(diff.sketches) },
