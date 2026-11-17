@@ -99,7 +99,6 @@ import type {
 } from './lib/parameterVisualPreview';
 import type { AdoptLocalProjectResult } from './lib/projectIdentityTransfer';
 import { LatestTask } from './lib/latestTask';
-import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import {
   bodyIsolationState,
@@ -17166,6 +17165,9 @@ export function App() {
         setStatus('The project changed while loading that save. Please retry.');
         return;
       }
+      // Loaded on the restore itself, not with the workspace.
+      const { prepareSaveStateRestore } =
+        await import('./lib/saveStateRestore');
       const next = await prepareSaveStateRestore(
         current,
         repairLegacyBracketSaveState(
