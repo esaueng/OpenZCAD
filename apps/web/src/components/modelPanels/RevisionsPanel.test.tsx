@@ -334,4 +334,29 @@ describe('RevisionsPanel', () => {
       screen.queryByRole('img', { name: 'The model at Save b' })
     ).toBeNull();
   });
+  it('offers Compare for a stored save in the document', async () => {
+    const user = userEvent.setup();
+    const stored = checkpoint('a', 1);
+    const unstored = checkpoint('b', 2);
+    const onCompareCheckpoint = vi.fn();
+    render(
+      <RevisionsPanel
+        documentVersion={9}
+        restorableCheckpointIds={new Set(['a'])}
+        onRestoreCheckpoint={vi.fn()}
+        onBranchCheckpoint={vi.fn()}
+        onCompareCheckpoint={onCompareCheckpoint}
+        revisions={{
+          visible: [stored, unstored],
+          canonicalIds: new Set(['a', 'b']),
+          local: []
+        }}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Save b' }));
+    expect(screen.queryByRole('button', { name: 'Compare Save b' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Save a' }));
+    await user.click(screen.getByRole('button', { name: 'Compare Save a' }));
+    expect(onCompareCheckpoint).toHaveBeenCalledWith(stored);
+  });
 });

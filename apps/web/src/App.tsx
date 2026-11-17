@@ -226,6 +226,8 @@ import {
   appendRevision,
   createCheckpoint,
   createSavedRevision,
+  diffSaveStates,
+  type SaveStateDiff,
   createFeatureOnlyIds,
   createSavePoint,
   createProjectDocument,
@@ -1483,6 +1485,11 @@ const LazySharedLinkCopyDialog = lazyWithStaleChunkNotice(() =>
     default: module.SharedLinkCopyDialog
   }))
 );
+const LazySaveStateCompareDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/SaveStateCompareDialog').then((module) => ({
+    default: module.SaveStateCompareDialog
+  }))
+);
 const LazySaveRevisionDialog = lazyWithStaleChunkNotice(() =>
   import('./components/SaveRevisionDialog').then((module) => ({
     default: module.SaveRevisionDialog
@@ -1707,6 +1714,8 @@ const ResumeSessionDialog = withSuspense(LazyResumeSessionDialog);
 const SharedLinkCopyDialog = withSuspense(LazySharedLinkCopyDialog);
 
 const SaveRevisionDialog = withSuspense(LazySaveRevisionDialog);
+
+const SaveStateCompareDialog = withSuspense(LazySaveStateCompareDialog);
 
 const DeleteFeatureDialog = withSuspense(LazyDeleteFeatureDialog);
 
@@ -3298,6 +3307,10 @@ export function App() {
     checkpoint: ProjectCheckpoint;
     document: ProjectDocument;
   } | null>(null);
+  /** L03: the save point the compare dialog starts from. */
+  const [comparingSave, setComparingSave] = useState<ProjectCheckpoint | null>(
+    null
+  );
   /** A banner action that needs the preview's edit lock gone first. */
   const [savePreviewAction, setSavePreviewAction] = useState<{
     kind: 'restore' | 'branch';
@@ -16695,6 +16708,37 @@ export function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  /**
+   * L03: compares a save state with the project now or with another stored
+   * save state. Both are read the way a preview reads them (this device,
+   * then the account's trusted history) and compared in the browser.
+   */
+  async function compareSaveState(
+    from: ProjectCheckpoint,
+    againstId: string
+  ): Promise<SaveStateDiff> {
+    const current = managerRef.current?.document;
+    if (!current) throw new Error('No project is open.');
+    const load = async (checkpoint: ProjectCheckpoint) => {
+      const document = await loadSaveStateDocument(
+        current.projectId,
+        checkpoint
+      );
+      if (!document)
+        throw new Error(
+          `“${checkpointLabel(checkpoint)}” is no longer stored on this device or in your account.`
+        );
+      return document;
+    };
+    const before = await load(from);
+    if (againstId === 'current') return diffSaveStates(before, current);
+    const other = current.checkpoints.find(
+      (point) => point.checkpointId === againstId
+    );
+    if (!other) throw new Error('That save point is not in this project.');
+    return diffSaveStates(before, await load(other));
   }
 
   /** Ends a save-state preview; the project's own model shows again. */
@@ -35175,6 +35219,7 @@ export function App() {
       onPreviewCheckpoint={(checkpoint) =>
         void handlePreviewSaveState(checkpoint)
       }
+      onCompareCheckpoint={setComparingSave}
       previewingCheckpointId={
         savePreviewActive ? savePreview.checkpoint.checkpointId : null
       }
@@ -38078,6 +38123,31 @@ export function App() {
               onApply={() => resolvePendingToolSwitch('apply')}
               onDiscard={() => resolvePendingToolSwitch('discard')}
               onCancel={() => resolvePendingToolSwitch('cancel')}
+            />
+          )}
+          {comparingSave && doc && (
+            <SaveStateCompareDialog
+              label={checkpointLabel(comparingSave)}
+              options={[
+                { id: 'current', label: 'The project now' },
+                ...[...doc.checkpoints]
+                  .reverse()
+                  .filter(
+                    (point) =>
+                      point.checkpointId !== comparingSave.checkpointId &&
+                      restorableCheckpointIds.has(point.checkpointId)
+                  )
+                  .map((point) => ({
+                    id: point.checkpointId,
+                    label: `${checkpointLabel(point)} · ${new Date(
+                      point.createdAt
+                    ).toLocaleString()}`
+                  }))
+              ]}
+              compare={(againstId) =>
+                compareSaveState(comparingSave, againstId)
+              }
+              onClose={() => setComparingSave(null)}
             />
           )}
           {namingSave && doc && (

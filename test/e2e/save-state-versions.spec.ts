@@ -126,3 +126,38 @@ test(
     );
   }
 );
+
+test(
+  'compares a save point with the project now',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Compare Part');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    await page.keyboard.press('ControlOrMeta+s');
+    const saved = revisionRow(page, 'Manual save');
+    await expect(saved).toBeVisible();
+    await expectSaveSettled(page);
+    await createPrimitiveInPlace(page, 'cylinder');
+    await expectBodyCount(page, 2);
+
+    await saved.locator('.revision-reason').click();
+    await saved.getByRole('button', { name: 'Compare Manual save' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Compare “Manual save”' });
+    await expect(dialog).toBeVisible();
+    // From the save to now: the cylinder and its body were added.
+    await expect(
+      dialog.getByRole('region', { name: 'Features' })
+    ).toContainText('Added');
+    await expect(dialog.getByRole('region', { name: 'Bodies' })).toContainText(
+      'Added'
+    );
+    await dialog.getByRole('button', { name: 'Close' }).click();
+    await expect(dialog).toHaveCount(0);
+    // Comparing changed nothing.
+    await expectBodyCount(page, 2);
+  }
+);

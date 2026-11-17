@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Eye, GitBranch, History, Pencil } from 'lucide-react';
+import { Eye, GitBranch, GitCompare, History, Pencil } from 'lucide-react';
 import {
   MAX_CHECKPOINT_NAME_LENGTH,
   checkpointLabel,
@@ -183,6 +183,7 @@ export type RevisionsPanelProps = Pick<
   | 'onBranchCheckpoint'
   | 'onRenameCheckpoint'
   | 'onPreviewCheckpoint'
+  | 'onCompareCheckpoint'
   | 'previewingCheckpointId'
 > & { revisions: RevisionCheckpoints };
 
@@ -242,6 +243,7 @@ export function RevisionsPanel({
   onBranchCheckpoint,
   onRenameCheckpoint,
   onPreviewCheckpoint,
+  onCompareCheckpoint,
   previewingCheckpointId,
   revisions
 }: RevisionsPanelProps) {
@@ -397,17 +399,30 @@ export function RevisionsPanel({
                       : '. Restore brings the project back to it (one Undo away; the current state is saved first). Branch copies it into a new project and leaves this one as it is.'
                     : '. Listed in the project’s history only: its model is no longer stored, so it cannot be restored or branched.'}
                 </p>
-                {canonical && onRenameCheckpoint && !renaming ? (
-                  <button
-                    type="button"
-                    className="revision-action"
-                    aria-label={`Rename ${label}`}
-                    onClick={() => setRenamingId(checkpoint.checkpointId)}
-                  >
-                    <Pencil size={12} aria-hidden="true" />
-                    <span>Rename</span>
-                  </button>
-                ) : null}
+                <span className="revision-detail-actions">
+                  {stored && canonical && onCompareCheckpoint ? (
+                    <button
+                      type="button"
+                      className="revision-action"
+                      aria-label={`Compare ${label}`}
+                      onClick={() => onCompareCheckpoint(checkpoint)}
+                    >
+                      <GitCompare size={12} aria-hidden="true" />
+                      <span>Compare</span>
+                    </button>
+                  ) : null}
+                  {canonical && onRenameCheckpoint && !renaming ? (
+                    <button
+                      type="button"
+                      className="revision-action"
+                      aria-label={`Rename ${label}`}
+                      onClick={() => setRenamingId(checkpoint.checkpointId)}
+                    >
+                      <Pencil size={12} aria-hidden="true" />
+                      <span>Rename</span>
+                    </button>
+                  ) : null}
+                </span>
               </div>
             ) : null}
           </div>

@@ -156,6 +156,13 @@
   margin: 0;
 }
 
+/* Compare and Rename, side by side under an opened row's details. */
+.revision-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
 /* L03: the save point's card, drawn on this device. */
 .revision-thumb {
   display: block;
