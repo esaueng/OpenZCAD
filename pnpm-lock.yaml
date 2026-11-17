@@ -151,6 +151,9 @@ importers:
       '@openzcad/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
+      '@openzcad/scripting':
+        specifier: workspace:*
+        version: link:../../packages/scripting
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -333,6 +336,15 @@ importers:
   packages/mls: {}
 
   packages/persistence:
+    dependencies:
+      '@openzcad/document-core':
+        specifier: workspace:*
+        version: link:../document-core
+      '@openzcad/shared':
+        specifier: workspace:*
+        version: link:../shared
+
+  packages/scripting:
     dependencies:
       '@openzcad/document-core':
         specifier: workspace:*

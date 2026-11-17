@@ -575,6 +575,32 @@ describe('ModelPanel', () => {
     expect(screen.getByText('No warnings in this model.')).toBeVisible();
   });
 
+  it('opens the history as text from the History header (L15)', async () => {
+    const user = userEvent.setup();
+    const document = createProjectDocument('Text', toUserId('owner'));
+    renderPanels(['history'], { document });
+    const region = within(screen.getByRole('region', { name: 'History' }));
+    const toggle = region.getByRole('button', { name: 'History as text' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await user.click(toggle);
+    const dialog = await screen.findByRole('dialog', {
+      name: 'History as text'
+    });
+    expect(dialog).toHaveTextContent('openzcad history 1');
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(
+      screen.queryByRole('dialog', { name: 'History as text' })
+    ).toBeNull();
+  });
+
+  it('offers no history text without a document', () => {
+    renderPanels(['history']);
+    expect(
+      screen.queryByRole('button', { name: 'History as text' })
+    ).toBeNull();
+  });
+
   it('offers Pin and Close in the header, and no Pop out or fold', async () => {
     const user = userEvent.setup();
     const frame = controls();
