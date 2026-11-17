@@ -8,7 +8,7 @@
 //     [--only h02,w01-box,w01-history,f06-switch-box,f06-switch-history,
 //             pattern-node,pattern-browser]
 //     [--out perf-results/active1/<stamp>] [--no-build] [--check]
-//     [--wait-minutes 180]
+//     [--wait-minutes 180] [--heavy-lock ~/.cache/openzcad-heavy.lock]
 //
 // Before every run it waits until the host is quiet (1-minute load average
 // below 2.0, at least 3 GiB available, no cargo, rustc or Playwright process
@@ -52,7 +52,8 @@ function parseArgs(argv) {
     build: true,
     check: false,
     waitMinutes: 180,
-    summarize: null
+    summarize: null,
+    heavyLock: null
   };
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
@@ -67,6 +68,7 @@ function parseArgs(argv) {
     else if (flag === '--out') options.out = value();
     else if (flag === '--no-build') options.build = false;
     else if (flag === '--check') options.check = true;
+    else if (flag === '--heavy-lock') options.heavyLock = value();
     else if (flag === '--wait-minutes') options.waitMinutes = Number(value());
     else if (flag === '--summarize') options.summarize = value();
     else throw new Error(`Unknown option ${flag}`);
@@ -85,11 +87,23 @@ const median = (values) => {
     ? sorted[middle]
     : (sorted[middle - 1] + sorted[middle]) / 2;
 };
+/**
+ * `--heavy-lock <path>`: on a machine whose agent lanes serialize heavy jobs
+ * with one `flock`, every build and probe takes that lock (non-blocking) only
+ * while it runs, and the script never holds it while waiting for a quiet
+ * host. Other lanes' heavy work can then not overlap a probe, so busy
+ * processes stop counting against quiet; load and memory still do.
+ */
+let heavyLock = null;
+const LOCK_BUSY = 75;
+
 async function waitForQuiet(limitMinutes) {
   const deadline = Date.now() + limitMinutes * 60_000;
   for (;;) {
     const snapshot = hostSnapshot(process.pid);
-    const reasons = noisyReasons(snapshot);
+    const reasons = noisyReasons(snapshot).filter(
+      (reason) => !heavyLock || !reason.endsWith('busy processes')
+    );
     if (!reasons.length) return snapshot;
     if (Date.now() > deadline)
       throw new Error(`Host never became quiet: ${reasons.join(', ')}`);
@@ -110,11 +124,21 @@ function freePort() {
 }
 
 function run(command, args, env) {
-  const result = spawnSync(command, args, {
-    stdio: 'inherit',
-    env: { ...process.env, ...env }
-  });
-  return result.status ?? 1;
+  const once = () =>
+    spawnSync(
+      heavyLock ? 'flock' : command,
+      heavyLock
+        ? ['-n', '-E', String(LOCK_BUSY), heavyLock, command, ...args]
+        : args,
+      { stdio: 'inherit', env: { ...process.env, ...env } }
+    ).status ?? 1;
+  for (let attempt = 0; ; attempt += 1) {
+    const status = once();
+    if (!heavyLock || status !== LOCK_BUSY) return status;
+    // Another lane's heavy job holds the lock: wait without holding it.
+    if (attempt === 0) console.log(`[active1] waiting for ${heavyLock}`);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30_000);
+  }
 }
 
 function readJsonl(file) {
@@ -243,6 +267,7 @@ function markdown(rows) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  heavyLock = options.heavyLock;
   if (options.summarize) {
     const rows = summarize(resolve(options.summarize));
     console.log(markdown(rows));

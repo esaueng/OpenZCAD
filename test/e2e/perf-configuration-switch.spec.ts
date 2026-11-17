@@ -124,44 +124,71 @@ async function openFixture(page: Page): Promise<ProjectDocument> {
  * the end of the first `oz:edit.frame` measure for a revision newer than the
  * one on screen before it.
  */
+/**
+ * Waits until every revision the worker was sent has reached a frame, so no
+ * earlier build can still present after a switch and be taken for it.
+ */
+async function settle(page: Page): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const latest = (name: string) =>
+            Math.max(
+              -1,
+              ...performance
+                .getEntriesByName(name, 'measure')
+                .map(
+                  (entry) =>
+                    (entry as unknown as { detail?: { version?: number } })
+                      .detail?.version ?? -1
+                )
+            );
+          const framed = latest('oz:edit.frame');
+          return framed >= 0 && latest('oz:edit.packed') <= framed;
+        }),
+      { timeout: 60_000 }
+    )
+    .toBe(true);
+}
+
+/**
+ * Clicks a row's radio and resolves with Switch → frame: from the click to
+ * the end of the `oz:edit.frame` measure of the revision this switch
+ * committed. That revision is the one on the first `oz:edit.packed` measure
+ * begun after the click, the request the switch sent the worker; a frame of
+ * any other revision is not this switch's.
+ */
 async function switchTo(page: Page, rowName: string): Promise<number> {
   const radio = page.getByRole('radio', {
     name: `Use ${rowName}`,
     exact: true
   });
   await expect(radio).toBeVisible();
+  await settle(page);
   return radio.evaluate(
     (element) =>
       new Promise<number>((resolveSample, reject) => {
-        const before = Math.max(
-          -1,
-          ...performance
-            .getEntriesByName('oz:edit.frame', 'measure')
-            .map(
-              (entry) =>
-                (
-                  entry as PerformanceMeasure & {
-                    detail?: { version?: number };
-                  }
-                ).detail?.version ?? -1
-            )
-        );
+        const versionOf = (entry: PerformanceEntry) =>
+          (entry as unknown as { detail?: { version?: number } }).detail
+            ?.version;
         let clickedAt = 0;
+        let target: number | null = null;
         const timeout = setTimeout(
           () => reject(new Error('No frame for the switch within 60 s.')),
           60_000
         );
         const observer = new PerformanceObserver((list) => {
           for (const entry of list.getEntries()) {
-            const version = (
-              entry as PerformanceMeasure & { detail?: { version?: number } }
-            ).detail?.version;
+            const version = versionOf(entry);
+            if (typeof version !== 'number') continue;
             if (
-              entry.name === 'oz:edit.frame' &&
-              typeof version === 'number' &&
-              version > before &&
-              entry.startTime + entry.duration >= clickedAt
-            ) {
+              target === null &&
+              entry.name === 'oz:edit.packed' &&
+              entry.startTime >= clickedAt
+            )
+              target = version;
+            if (entry.name === 'oz:edit.frame' && version === target) {
               clearTimeout(timeout);
               observer.disconnect();
               resolveSample(entry.startTime + entry.duration - clickedAt);
@@ -198,8 +225,7 @@ test('measures a configuration switch through the viewport frame', async ({
   ).toBeChecked({
     timeout: 60_000
   });
-  // Let the first build settle before timing anything.
-  await page.waitForTimeout(2_000);
+  // Every switch waits for the builds before it to reach a frame.
 
   const samples: number[] = [];
   for (let index = 1; index <= SAMPLES; index++) {
