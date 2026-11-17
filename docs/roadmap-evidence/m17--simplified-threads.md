@@ -1,5 +1,6 @@
 ---
 row: M17
+state: Complete
 ---
 
 Slice 4 is the simplified thread display (schema v83, up from v81, with v82 claimed by D02 #1662).
@@ -21,3 +22,5 @@ Modeled, ten screws are 4.66 M triangles and 17 s to build cold. Evidence:
 - `apps/web/src/lib/inPlace/standardPart.test.ts`, covering the option, storage and reopen.
 - The probes `test/perf/standard-parts-display.bench.ts` and `test/e2e/perf-cad-edit.spec.ts` (`CAD_PERF_BROWSER_FASTENERS`).
 - `test/e2e/standard-parts-threads.spec.ts`. It picks a block's top face with Standard part, chooses an ISO M6 socket screw with Thread: Simplified, drags its length arrow, and checks the stored `thread: 'simplified'`. It also checks that the viewport draws the screw in under 10,000 triangles. `test/e2e/standard-parts.spec.ts` now chooses Modeled, so the cut thread keeps its own pick-and-drag spec.
+
+With this slice M17's contract is met on main: ISO and ANSI screws, nuts, washers, threaded inserts, dowel pins and bearings generated from the M15 thread and M14 gear engines (#1623), inserted into M01 holes with matched size and length (#1644), listed in the AS03 BOM by designation (#1660), and drawn simplified within the H02/W01 budgets (#1666).
