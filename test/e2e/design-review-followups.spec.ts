@@ -671,13 +671,57 @@ for (const colorScheme of ['light', 'dark'] as const) {
       }
       await capture(page, testInfo, '320px-comfortable-header');
       await page.setViewportSize({ width: 390, height: 844 });
+      // The phone lane stops a panel at 40dvh (quiet-stage.css).
+      const laneCap = 844 * 0.4;
       for (const panel of ['History', 'Objects', 'Parameters'] as const) {
         await revealModelPanel(page, panel);
         const surface = page.locator('.panel-lane-float .model-panel');
         await expect(surface).toHaveAttribute('aria-label', panel);
-        await expect
-          .poll(async () => (await surface.boundingBox())!.height)
-          .toBeLessThan(300);
+        if (panel === 'Parameters') {
+          // Parameters is no longer sparse with no parameters: under its
+          // add row stand the print clearance (L09) and the configurations
+          // table (F06), about 400px in all. It stops at the lane's cap and
+          // scrolls instead of growing over the stage, and its last control
+          // is still in reach.
+          const body = surface.locator('.model-panel-body');
+          await expect
+            .poll(async () => (await surface.boundingBox())!.height)
+            .toBeLessThanOrEqual(laneCap + 1);
+          await expect
+            .poll(() =>
+              body.evaluate(
+                (element) => element.scrollHeight > element.clientHeight + 1
+              )
+            )
+            .toBe(true);
+          // The overflow has to be one a person can scroll: a clipped body
+          // (overflow hidden) still lets a programmatic scroll reach the
+          // last control, but not a wheel or a finger.
+          expect(
+            await body.evaluate(
+              (element) => getComputedStyle(element).overflowY
+            )
+          ).toMatch(/^(auto|scroll)$/);
+          await body.evaluate((element) => {
+            element.scrollTop = 0;
+          });
+          await body.hover();
+          await page.mouse.wheel(0, 1000);
+          await expect
+            .poll(() => body.evaluate((element) => element.scrollTop))
+            .toBeGreaterThan(0);
+          const last = body.getByRole('button', {
+            name: 'Add configurations'
+          });
+          await last.scrollIntoViewIfNeeded();
+          await reachable(last);
+        } else {
+          // A sparse panel stands at its content's height, well short of
+          // the lane's cap, so the stage above it stays clear.
+          await expect
+            .poll(async () => (await surface.boundingBox())!.height)
+            .toBeLessThan(300);
+        }
         const rail = page.locator('.workspace-column-float');
         const box = (await surface.boundingBox())!;
         const railBox = (await rail.boundingBox())!;

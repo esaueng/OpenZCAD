@@ -440,6 +440,27 @@ export interface DrawingBalloon extends DrawingAnnotationBase {
   componentId: string;
 }
 
+/**
+ * v92: a picture on the paper (a logo, a photograph of the part, a sketch
+ * from the shop): one of the project's reference images (I05), named by
+ * its id, so the pixels stay in the content-addressed store and travel the
+ * way reference images do. `placementMm` is its centre from the paper's
+ * corner and `widthMm` its printed width; its height keeps the picture's
+ * aspect. A picture deleted from the project leaves the image broken
+ * (`image-missing`) until it is pointed at another one or deleted.
+ */
+export interface DrawingSheetImage extends DrawingAnnotationBase {
+  kind: 'image';
+  /** On the paper, never in a view: the validator refuses one. */
+  viewId?: DrawingViewId;
+  referenceImageId: string;
+  widthMm: number;
+}
+
+/** v92: the narrowest and widest a sheet image prints, paper mm. */
+export const MIN_DRAWING_IMAGE_WIDTH_MM = 2;
+export const MAX_DRAWING_IMAGE_WIDTH_MM = 1200;
+
 /** v73: the annotations that mark geometry rather than state a value. */
 export type DrawingGeometryAnnotation =
   DrawingCenterMark | DrawingIntersectionMark | DrawingCenterline;
@@ -465,6 +486,7 @@ export function isDrawingDimension(
     annotation.kind !== 'note' &&
     annotation.kind !== 'bom-table' &&
     annotation.kind !== 'balloon' &&
+    annotation.kind !== 'image' &&
     !isDrawingGeometryAnnotation(annotation)
   );
 }
@@ -484,7 +506,8 @@ export type DrawingAnnotation =
   | DrawingNote
   | DrawingGeometryAnnotation
   | DrawingBomTable
-  | DrawingBalloon;
+  | DrawingBalloon
+  | DrawingSheetImage;
 
 export type DrawingAnnotationKind = DrawingAnnotation['kind'];
 
@@ -892,6 +915,34 @@ export function drawingAnnotationError(
     return `${where} has a Ø prefix, which only a linear dimension takes.`;
   const counted = countError(value.count, value.kind, where);
   if (counted) return counted;
+  if (value.kind === 'image') {
+    if (
+      [
+        'decimals',
+        'reference',
+        'tolerance',
+        'prefix',
+        'suffix',
+        'provenance'
+      ].some((key) => value[key] !== undefined)
+    )
+      return `${where} is an image, which states no measured value.`;
+    if (value.viewId !== undefined)
+      return `${where} is an image, which sits on the paper, not in a view.`;
+    if (
+      !isShortText(value.referenceImageId, 128) ||
+      !value.referenceImageId.startsWith('rimg_')
+    )
+      return `${where} is an image that names no reference image.`;
+    if (
+      typeof value.widthMm !== 'number' ||
+      !Number.isFinite(value.widthMm) ||
+      value.widthMm < MIN_DRAWING_IMAGE_WIDTH_MM ||
+      value.widthMm > MAX_DRAWING_IMAGE_WIDTH_MM
+    )
+      return `${where} is an image ${MIN_DRAWING_IMAGE_WIDTH_MM}–${MAX_DRAWING_IMAGE_WIDTH_MM} mm wide at most.`;
+    return null;
+  }
   if (value.kind === 'bom-table' || value.kind === 'balloon') {
     if (
       [
@@ -1215,6 +1266,7 @@ export function drawingAnnotationReferences(
     case 'note':
       return annotation.leader ? [annotation.leader] : [];
     case 'bom-table':
+    case 'image':
       return [];
     case 'balloon':
       return [annotation.leader];

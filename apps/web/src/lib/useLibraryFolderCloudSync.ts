@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 import type { LibraryFolders } from './libraryFolders';
 import { watchLibraryFreshness } from './libraryRefresh';
+import { subscribeEncryptionState } from './e2ee/encryptionStateEvents';
+import { subscribeKeySession } from './e2ee/keySession';
 
 /** Lets a burst of shelf edits (a drag, a rename) go up as one write. */
 const PUSH_DELAY_MS = 2_000;
@@ -62,11 +64,22 @@ export function useLibraryFolderCloudSync(
     };
     void run();
     const stopWatching = watchLibraryFreshness(run);
+    // Unlocking/approving a device must apply the sealed shelf immediately,
+    // even when neither the account id nor its local folders have changed.
+    const stopEncryption = subscribeEncryptionState(
+      accountId,
+      () => void run()
+    );
+    const stopKeySession = subscribeKeySession((event) => {
+      if (event.phase === 'ready') void run();
+    });
     return () => {
       cancelled = true;
       clearTimeout(timer);
       request.current = null;
       stopWatching();
+      stopEncryption();
+      stopKeySession();
     };
   }, [accountId]);
 

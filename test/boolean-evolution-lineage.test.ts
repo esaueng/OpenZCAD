@@ -244,7 +244,7 @@ describe('boolean entity-evolution lineage', { timeout: 120_000 }, () => {
     expect(body?.topology?.edges).toHaveLength(12);
   });
 
-  it('carries an untouched edge through a cut and leaves the cut edges alone', async () => {
+  it('carries the plate’s edges and the tool’s own edges through a cut', async () => {
     const document = addPrimitiveFeature(
       createProjectDocument('Edge evolution', user),
       {
@@ -284,19 +284,28 @@ describe('boolean entity-evolution lineage', { timeout: 120_000 }, () => {
       .filter((name): name is string => name !== undefined);
     // The plate's own edges are nowhere near the pocket, so the kernel
     // preserves them and the exact witness agrees.
-    expect(named.length).toBeGreaterThan(0);
-    expect(
-      named.every((name) =>
-        name.startsWith('boolean.edge.target.primitive.box.edge.')
-      )
-    ).toBe(true);
+    const fromPlate = named.filter((name) =>
+      name.startsWith('boolean.edge.target.primitive.box.edge.')
+    );
+    expect(fromPlate).toHaveLength(12);
+    // The pocket's edges are the cutting tool's own. Its extrude names each
+    // by the faces it lies between (a cap and one sketch side, or two
+    // sketch sides), and the kernel reports them preserved, so they come
+    // through the cut under the tool's names exactly as the plate's do
+    // under the plate's: the four rim edges on the top face, the four
+    // around the floor and the four upright corners. Nothing is named by
+    // position: a name is published only for an edge the kernel's own
+    // evolution relation carries, checked against its exact witness.
+    const fromTool = named.filter((name) =>
+      name.startsWith('boolean.edge.tool.sweep.edge.region.')
+    );
+    expect(fromTool).toHaveLength(12);
+    expect(fromPlate.length + fromTool.length).toBe(named.length);
+    expect(new Set(named).size).toBe(named.length);
     for (const edge of edges) {
       if (edge.reference) {
         expect(edge.reference.currentHash).toBe(edge.hash);
       }
     }
-    // The pocket's own rim and floor edges are new: the kernel generates
-    // them, and nothing guesses a name for them.
-    expect(named.length).toBeLessThan(edges.length);
   });
 });

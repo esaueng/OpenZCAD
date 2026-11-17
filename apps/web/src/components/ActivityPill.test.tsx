@@ -1,6 +1,6 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ActivityPill, elapsedLabel } from './ActivityPill';
+import { ActivityPill, elapsedLabel, outcomeDetailText } from './ActivityPill';
 import {
   IMPORT_CARD_DELAY_MS,
   IMPORT_CARD_SUCCESS_LINGER_MS,
@@ -308,6 +308,51 @@ describe('ActivityPill', () => {
    * At ten ticks a second that would be unusable, so the clock is a sibling
    * of the announced line.
    */
+  /**
+   * UX-004: a refused restore's reason was clipped to one ellipsized line,
+   * opening with the file name the title had already shown.
+   */
+  it('lets a refusal wrap in full without repeating the file name', () => {
+    renderPill(
+      settled(
+        {
+          tone: 'error',
+          message:
+            'bad-backup.openzcad is not a readable OpenZCAD project backup. It may be damaged or incomplete.'
+        },
+        { kind: 'restore', fileName: 'bad-backup.openzcad' }
+      )
+    );
+    const pill = screen.getByLabelText('File restore');
+    expect(pill.classList.contains('needs-attention')).toBe(true);
+    expect(document.querySelector('.activity-pill-detail')).toHaveTextContent(
+      /^Not a readable OpenZCAD project backup\. It may be damaged or incomplete\.$/
+    );
+    expect(announced()).toBe(
+      'Not restored bad-backup.openzcadNot a readable OpenZCAD project backup. It may be damaged or incomplete.'
+    );
+  });
+
+  it('keeps the fixed running height for a run in progress', () => {
+    renderPill(running());
+    passDelay();
+    expect(
+      screen.getByLabelText('File import').classList.contains('needs-attention')
+    ).toBe(false);
+  });
+
+  it('drops only a leading file name from the detail', () => {
+    expect(outcomeDetailText('a.step could not be imported.', 'a.step')).toBe(
+      'Could not be imported.'
+    );
+    expect(outcomeDetailText('1 body', 'a.step')).toBe('1 body');
+    // A name that is only a prefix of the first word is not the name.
+    expect(outcomeDetailText('a.stepper failed', 'a.step')).toBe(
+      'a.stepper failed'
+    );
+    expect(outcomeDetailText('a.step', 'a.step')).toBe('a.step');
+  });
+
   it('announces the line without announcing every clock tick', () => {
     renderPill(running());
     passDelay();

@@ -1,0 +1,9 @@
+{
+  "name": "@openzcad/ipad",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "scripts": {
+    "dev": "node ../../scripts/run-ipad-simulator.mjs"
+  }
+}

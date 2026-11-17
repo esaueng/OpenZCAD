@@ -124,12 +124,12 @@ import {
 
 /**
  * Slice 7-3: the encrypted content routes (documents, versions, revisions,
- * project info, measurements, view state and blobs) a project being turned
- * back into plaintext refuses writes on. Its MLS key management (Commits,
+ * project info, measurements, view state, L08 comment logs and blobs) a
+ * project being turned back into plaintext refuses writes on. Its MLS key management (Commits,
  * wraps, resets) keeps working: it changes no content.
  */
 const ENCRYPTED_CONTENT_WRITE_ROUTE =
-  /^\/api\/e2ee\/projects\/([^/]+)\/(?:document|versions|revisions(?:\/[^/]+)?|info|measurements|view-states(?:\/[^/]+)?|blobs(?:\/.*)?)$/;
+  /^\/api\/e2ee\/projects\/([^/]+)\/(?:document|versions|revisions(?:\/[^/]+)?|info|measurements|view-states(?:\/[^/]+)?|comments|blobs(?:\/.*)?)$/;
 /**
  * Writes that would share an encrypted project, or settle a member's
  * departure, while its plaintext is staged (slice 7-3 with Phase 5): share

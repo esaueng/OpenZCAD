@@ -695,6 +695,17 @@
     left: var(--island-gap);
   }
 
+  /* And the sidebar ends above it, at the stage's foot claim, which the
+     timeline publishes (quiet-stage.css). It reached the stage's foot,
+     over the transport, and took Play's press (UX-003); its sections
+     scroll in what is left. */
+  .assembly-panel-float {
+    bottom: max(
+      calc(var(--island-gap) * 2 + var(--readout-reserve, 0px)),
+      calc(var(--stage-foot-claim, 0px) + var(--island-gap))
+    );
+  }
+
   .assembly-player {
     bottom: calc(var(--island-gap) * 3 + var(--command-bar-h) + 36px);
     gap: 6px;

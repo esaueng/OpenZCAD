@@ -3,11 +3,16 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
-import { normalizeDocument } from '@openzcad/document-core';
 import {
+  assemblyInterferenceOperands,
+  normalizeDocument
+} from '@openzcad/document-core';
+import {
+  jointWorldFrames,
   solveAssembly,
   toUserId,
   transformPoint,
+  type ProjectDocument,
   type Vector3
 } from '@openzcad/shared';
 import {
@@ -147,4 +152,89 @@ describe('shared scissors sample', () => {
     }
     expect(gap(max)).toBeGreaterThan(gap(min) * 1.5);
   });
+
+  // #1631: the pivot's child frame sat on the upper blade's top bore edge
+  // (z 4.85) and the parent's on the lower blade's bottom edge (z 0), so
+  // the joint dropped the upper blade 4.85 mm through the pin's head.
+  it('keeps the blades and the captive pin apart through the whole swing', async () => {
+    const set = seed.document.assembly!;
+    const joint = set.joints[0]!;
+    const { min, max } = joint.limits[0]!;
+    // The clearances the sweep relies on, read from the modelled meshes:
+    // the exact check's "clear" alone may leave contact unknown.
+    function zRange(componentId: string, outside = 0) {
+      const component = set.components.find((c) => c.id === componentId)!;
+      const { vertices } =
+        seed.document.derived.bodyRepresentations[component.bodyId]!.mesh;
+      const below: number[] = [];
+      const above: number[] = [];
+      let low = Infinity;
+      let high = -Infinity;
+      for (let i = 0; i < vertices.length; i += 3) {
+        const z = vertices[i + 2]!;
+        if (Math.hypot(vertices[i]!, vertices[i + 1]!) <= outside) continue;
+        low = Math.min(low, z);
+        high = Math.max(high, z);
+        (z < 2.4 ? below : above).push(z);
+      }
+      return { low, high, below, above };
+    }
+    const lower = zRange(joint.parent.componentId);
+    const upper = zRange(joint.child.componentId);
+    const pin = set.components.find(
+      (c) =>
+        c.id !== joint.parent.componentId && c.id !== joint.child.componentId
+    )!;
+    // The pin's head and cap: wider than the Ø6.2 bores they retain.
+    const collars = zRange(pin.id, 3.2);
+    expect(upper.low - lower.high).toBeGreaterThanOrEqual(0.05 - 1e-6);
+    expect(lower.low - Math.max(...collars.below)).toBeGreaterThanOrEqual(
+      0.6 - 1e-6
+    );
+    expect(Math.min(...collars.above) - upper.high).toBeGreaterThanOrEqual(
+      0.2 - 1e-6
+    );
+    const angles = [min, 12, 30, 42, max];
+    for (const angle of angles) {
+      const posed: ProjectDocument = {
+        ...seed.document,
+        assembly: {
+          ...set,
+          joints: [{ ...joint, values: [angle] }]
+        }
+      };
+      const solution = solveAssembly(posed.assembly!);
+      // Coaxial, and seated where it was modelled: the frames meet.
+      const frames = jointWorldFrames(solution, posed.assembly!.joints[0]!)!;
+      expect(frames.child.origin.x).toBeCloseTo(frames.parent.origin.x, 9);
+      expect(frames.child.origin.y).toBeCloseTo(frames.parent.origin.y, 9);
+      expect(frames.child.origin.z).toBeCloseTo(frames.parent.origin.z, 9);
+      const upper = solution.poses.get(joint.child.componentId)!;
+      expect(transformPoint(upper, { x: 0, y: 0, z: 2.45 }).z).toBeCloseTo(
+        2.45,
+        9
+      );
+
+      const { operands, missing } = assemblyInterferenceOperands(
+        posed,
+        () => true
+      );
+      expect(missing).toEqual([]);
+      const report = await adapter.assemblyInterference(posed, operands);
+      expect(report.missing).toEqual([]);
+      expect(report.pairs).toHaveLength(3);
+      for (const pair of report.pairs) {
+        // Proven clear, and not merely touching: the blades keep their
+        // 0.05 mm gap and the pin its head and cap clearances.
+        expect({
+          angle,
+          pair: [pair.a, pair.b],
+          verdict: pair.verdict.kind
+        }).toEqual({ angle, pair: [pair.a, pair.b], verdict: 'clear' });
+        if (pair.verdict.kind === 'clear') {
+          expect(pair.verdict.touching).not.toBe(true);
+        }
+      }
+    }
+  }, 240_000);
 });

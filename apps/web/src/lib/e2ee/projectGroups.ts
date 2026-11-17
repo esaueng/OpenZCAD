@@ -529,7 +529,13 @@ export class ProjectGroupError extends Error {
   override readonly name = 'ProjectGroupError';
   constructor(
     readonly code: ProjectGroupErrorCode,
-    message: string
+    message: string,
+    /**
+     * An `archive-invalid` whose cause is an owner identity the account no
+     * longer continues (`ProjectAuthorityError` `identity-discontinued`):
+     * its message already says what to do, so it is shown unwrapped.
+     */
+    readonly detail?: 'identity-discontinued'
   ) {
     super(message);
   }
@@ -4275,6 +4281,15 @@ export async function epochAuthority(
       (error instanceof DOMException && error.name === 'AbortError')
     )
       throw error;
+    if (
+      error instanceof ProjectAuthorityError &&
+      error.code === 'identity-discontinued'
+    )
+      throw new ProjectGroupError(
+        'archive-invalid',
+        error.message,
+        'identity-discontinued'
+      );
     throw new ProjectGroupError(
       'archive-invalid',
       `Historical MLS authority could not be verified: ${error instanceof Error ? error.message : String(error)}`

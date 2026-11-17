@@ -5,10 +5,9 @@ import { realmStorageName } from './deploymentRealm';
  * Folders on the parts library: a way to group parts on this device's shelf.
  *
  * A folder is shelf furniture, like a pin, but unlike a pin it is not part of
- * a project's organization record: it lives in this browser's storage, under
- * the signed-in account, and never reaches the account or another device.
- * The account mirror would need a folder table and, for encrypted accounts,
- * encrypted folder names (ADR-024); until then folders are per device.
+ * a project's organization record: this module keeps the device copy in
+ * browser storage under the signed-in account. `libraryFolderCloudSync.ts`
+ * merges it with the account copy, sealed for encrypted accounts (ADR-024).
  *
  * Membership is by project id. A part belongs to at most one folder; an id
  * the library no longer lists is kept (the part may be in the trash, or the

@@ -70,6 +70,8 @@ export interface OpenedReplaced {
   readonly hash: string;
   /** The signer's timestamp, Unix ms. */
   readonly signedAt: number;
+  /** The member whose certified device signed it. */
+  readonly signerUserId?: string;
 }
 
 /** What the encrypted project store lends replaced envelopes. */

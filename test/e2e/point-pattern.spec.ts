@@ -222,6 +222,18 @@ test(
     await expect(
       page.getByTestId(`command-handle-instance:${first}`)
     ).toBeVisible();
+    // UX-008: each copy reads and is announced by its pick order, not by
+    // the sketch point's `ent_<uuid>` id, which stays its skip key (the
+    // test ids above, and `skippedInstances` below).
+    await expect(
+      page.getByTestId(`command-handle-instance:${first}`)
+    ).toHaveText('Point 1');
+    await expect(
+      page.getByRole('button', { name: 'Copy at Point 2 · skip it' })
+    ).toBeVisible();
+    await expect(
+      page.locator('.handle-instance-chip', { hasText: /ent_/ })
+    ).toHaveCount(0);
     const chip = page.getByTestId(`command-handle-instance:${second}`);
     await chip.click();
     await expect(

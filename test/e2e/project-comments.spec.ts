@@ -1,12 +1,20 @@
 import type { Page, Route } from '@playwright/test';
-import type { ProjectComment } from '@openzcad/shared';
+import {
+  addPrimitiveFeature,
+  createProjectDocument,
+  sharedProjectSnapshotDocument
+} from '@openzcad/document-core';
+import { toUserId, type ProjectComment } from '@openzcad/shared';
 import {
   createPrimitiveInPlace,
   expect,
   expectBodyCount,
+  stubAnonymousApi,
   stubApi,
   test
 } from './openzcad-fixtures';
+
+const shareToken = 'c'.repeat(43);
 
 /**
  * L08 review comments on a plaintext project in the account: a thread
@@ -131,5 +139,90 @@ test(
 
     await panel.getByRole('button', { name: 'Close comments' }).click();
     await expect(page.locator('.comment-pin')).toHaveCount(0);
+  }
+);
+
+test(
+  'a commenter link’s visitor signs a comment pinned to the shared model',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubAnonymousApi(page);
+    const document = addPrimitiveFeature(
+      createProjectDocument('Shared Review', toUserId('owner')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 30, height: 10, depth: 20 }
+      }
+    );
+    const snapshot = sharedProjectSnapshotDocument(document);
+    await page.route('**/api/share', (route) =>
+      route.fulfill({
+        json: {
+          document: snapshot,
+          project: {
+            projectId: snapshot.projectId,
+            name: snapshot.name,
+            mode: 'tweak',
+            comments: true
+          }
+        }
+      })
+    );
+    const posted: unknown[] = [];
+    const comments: ProjectComment[] = [];
+    await page.route('**/api/share/comments', async (route) => {
+      const request = route.request();
+      // The token rides in its header, never the URL.
+      expect(request.headers()['x-openzcad-share-token']).toBe(shareToken);
+      if (request.method() === 'GET')
+        return route.fulfill({ json: { comments } });
+      const body = request.postDataJSON() as {
+        name: string;
+        anchor?: ProjectComment['anchor'];
+        parentId?: string;
+        text: string;
+      };
+      posted.push(body);
+      const comment: ProjectComment = {
+        commentId: `cmt_00000000-0000-4000-8000-00000000000${comments.length + 1}`,
+        projectId: snapshot.projectId,
+        parentId: body.parentId ?? null,
+        anchor: body.anchor ?? null,
+        text: body.text,
+        authorUserId: null,
+        authorName: `${body.name} (via link)`,
+        createdAt: new Date().toISOString(),
+        resolvedAt: null,
+        resolvedByName: null
+      };
+      comments.push(comment);
+      return route.fulfill({ status: 201, json: { comment } });
+    });
+    await page.goto(`/#share=${shareToken}`);
+    await expect(page.locator('.breadcrumb')).toContainText('Shared Review');
+
+    await page.locator('summary', { hasText: 'File' }).click();
+    await page.getByRole('button', { name: 'Comments', exact: true }).click();
+    const panel = page.getByRole('complementary', { name: 'Comments' });
+    // A visitor signs before commenting, and never resolves or deletes.
+    await expect(panel).toContainText('Type your name to comment.');
+    await panel.getByLabel('Your name').fill('Sam');
+    await panel.getByRole('button', { name: 'Add comment' }).click();
+    await page.locator('.viewer-host canvas').click();
+    await panel
+      .getByRole('textbox', { name: 'New comment' })
+      .fill('Could the corners be rounded?');
+    await panel.getByRole('button', { name: 'Post' }).click();
+    await expect(page.locator('.comment-pin')).toHaveText('1');
+    await expect(panel).toContainText('Sam (via link)');
+    expect(posted).toEqual([
+      expect.objectContaining({
+        name: 'Sam',
+        text: 'Could the corners be rounded?'
+      })
+    ]);
+    await expect(panel.getByRole('button', { name: 'Resolve' })).toHaveCount(0);
+    await expect(panel.getByRole('button', { name: /^Delete/ })).toHaveCount(0);
   }
 );

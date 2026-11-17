@@ -390,7 +390,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // a section cut by a plane at any angle across its source, seen square to
 // it and placed freely. An older client would cut a principal plane at the
 // stored depth instead, so it must refuse. Builds on v90 (F06 slice 4a).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 91 as const;
+// v92 adds D02 sheet images (`kind: 'image'` drawing annotations): one of
+// the project's reference images printed on the paper. An older client
+// would refuse the unknown kind, so it must refuse the document. Builds on
+// v91.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 92 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -4126,6 +4130,13 @@ export interface ProjectDocument {
    * `configurations.ts`. Absent means the document has no configurations.
    */
   configurations?: ConfigurationSet;
+  /**
+   * L08: the drawing sheets this project's share links show, by sheet id.
+   * Absent shows none, as before. Not a schema change: an older client keeps
+   * the list and shares no sheets. See `share-link-sheets.ts` in
+   * document-core.
+   */
+  shareLinkSheetIds?: string[];
 }
 
 export interface SerializedCommand<TPayload = unknown> {
@@ -5314,6 +5325,12 @@ export interface AppSettings {
      * definition and SVG states its physical size, so neither follows it.
      */
     exportUnits: ExportUnits;
+    /**
+     * The STEP application protocol File › STEP writes. Both carry the same
+     * exact geometry, body names and colours; AP242 is the newer protocol
+     * some receivers ask for.
+     */
+    stepProtocol: StepProtocol;
   };
   collaboration: {
     /** Allow project invitations and live collaboration connections. */
@@ -5453,7 +5470,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     cloudAutosaveDelaySeconds: CLOUD_AUTOSAVE_DELAY_BOUNDS.default,
     unitlessImportUnits: 'ask',
     // Millimetres, what every export wrote before the unit became a choice.
-    exportUnits: 'mm'
+    exportUnits: 'mm',
+    // AP214, what every STEP export wrote before the protocol became a choice.
+    stepProtocol: 'ap214'
   },
   collaboration: {
     enabled: true
@@ -5683,6 +5702,8 @@ export interface ProjectShareLinkSummary {
   revokedAt: number | null;
   /** The owner's name for the link; null when unnamed. Never sent to visitors. */
   label: string | null;
+  /** L08: visitors may read and write comments (migration 0059). */
+  comments?: boolean;
 }
 
 /** Longest share-link label, in Unicode code points (SQLite's `length`). */
@@ -5715,6 +5736,8 @@ export interface CreateProjectShareLinkRequest {
   mode: ProjectShareLinkMode;
   /** Optional owner's name for the link. */
   label?: string | null;
+  /** L08: a commenter link; visitors may read and write comments. */
+  comments?: boolean;
 }
 
 export interface UpdateProjectShareLinkRequest {
@@ -5738,6 +5761,8 @@ export interface SharedProjectResponse {
     projectId: string;
     name: string;
     mode: ProjectShareLinkMode;
+    /** L08: a commenter link; absent or false is view or tweak only. */
+    comments?: boolean;
   };
   document: ProjectDocument;
 }
@@ -6011,11 +6036,25 @@ export interface AccountDeletionPreview {
   revisionBytes: number;
   revisionCount: number;
   collaboratorCount: number;
+  /**
+   * Owned end-to-end encrypted cloud projects, trashed ones included. A
+   * profile deletion keeps them but erases the only account keys that open
+   * them, so the account cannot open their cloud copies again, even after
+   * signing in and setting encryption up anew. Absent from older servers.
+   */
+  encryptedProjectCount?: number;
 }
 
 export interface DeleteAccountDataRequest {
   scope: AccountDeletionScope;
   confirmation: string;
+  /**
+   * How many owned encrypted projects the dialog told the person would
+   * become unreadable (`AccountDeletionPreview.encryptedProjectCount`). A
+   * profile deletion is refused, before anything is deleted, when the
+   * account owns more than this.
+   */
+  acknowledgedEncryptedProjectCount?: number;
 }
 
 export interface DeleteAccountDataResponse {
@@ -6210,6 +6249,15 @@ export const EXPORT_UNITS: readonly ExportUnits[] = [
   'm',
   'inch'
 ];
+
+/**
+ * A STEP application protocol the exporter writes: AP214 (automotive design,
+ * ISO 10303-214) or AP242 edition 1 (managed model-based 3D engineering,
+ * ISO 10303-242). Both carry exact B-rep geometry, names and colours.
+ */
+export type StepProtocol = 'ap214' | 'ap242';
+
+export const STEP_PROTOCOLS: readonly StepProtocol[] = ['ap214', 'ap242'];
 
 /** The concrete unit an export preference names for one document. */
 export function resolveExportUnits(

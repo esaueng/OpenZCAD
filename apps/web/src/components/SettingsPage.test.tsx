@@ -14,6 +14,7 @@ import {
   loadLocalAppSettings,
   saveLocalAppSettings
 } from '../lib/appSettings';
+import { APP_BUILD, appBuildDetail, appBuildLabel } from '../lib/appBuild';
 import {
   KERNEL_BUILD,
   kernelBuildDetail,
@@ -1342,6 +1343,18 @@ describe('settings advanced section', () => {
     expect(value.textContent).toMatch(/^Remus /);
   });
 
+  it('reports the app version beside the kernel build', async () => {
+    const user = userEvent.setup();
+    renderSettings();
+
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+
+    expect(screen.getByText('App version')).toBeInTheDocument();
+    const value = screen.getByTitle(appBuildDetail(APP_BUILD));
+    expect(value).toHaveTextContent(appBuildLabel(APP_BUILD));
+    expect(value.textContent).toMatch(/^OpenZCAD /);
+  });
+
   it('regenerates project thumbnails from the library, with progress', async () => {
     const user = userEvent.setup();
     const onRegenerateThumbnails = vi.fn();
@@ -2601,7 +2614,11 @@ describe('settings privacy and data section', () => {
     expect(confirm).toBeEnabled();
     await user.click(confirm);
 
-    expect(onDeleteCloudData).toHaveBeenCalledWith('all', 'PERSON@example.com');
+    expect(onDeleteCloudData).toHaveBeenCalledWith(
+      'all',
+      'PERSON@example.com',
+      undefined
+    );
   });
 
   it('fails closed when the erasure migrations are not ready', () => {
@@ -2779,5 +2796,17 @@ describe('settings page pattern', () => {
         .filter((hint) => hint.length === 0 || hint.length > 100);
       expect({ label, tooLong }).toEqual({ label, tooLong: [] });
     }
+  });
+});
+
+describe('STEP protocol setting', () => {
+  it('saves the protocol File › STEP writes, AP214 until changed', async () => {
+    const user = userEvent.setup();
+    const { latest } = renderStatefulSettings({ initialSection: 'general' });
+    const protocol = screen.getByLabelText('STEP protocol');
+    expect(protocol).toHaveValue('ap214');
+    await user.selectOptions(protocol, 'ap242');
+    expect(latest().files.stepProtocol).toBe('ap242');
+    expect(protocol).toHaveValue('ap242');
   });
 });

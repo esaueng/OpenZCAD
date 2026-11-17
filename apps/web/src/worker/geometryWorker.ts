@@ -18,6 +18,7 @@ import type {
   ProjectDocument,
   ProjectId,
   SketchId,
+  StepProtocol,
   UnitSystem
 } from '@openzcad/shared';
 import type {
@@ -185,6 +186,8 @@ export type GeometryWorkerRequest =
       transparent?: boolean;
       /** 'step' only: the name the file is saved under, for its header. */
       fileName?: string;
+      /** 'step' only: the application protocol to state; AP214 when unset. */
+      stepProtocol?: StepProtocol;
       /**
        * F06: ignore `bodyIds` and write every body the document itself shows
        * once built — a configuration that is not the displayed one, whose
@@ -1603,7 +1606,10 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         request.format === 'step'
           ? await exact.exportStep(document, exportBodyIds, {
               ...(request.units ? { units: request.units } : {}),
-              ...(request.fileName ? { fileName: request.fileName } : {})
+              ...(request.fileName ? { fileName: request.fileName } : {}),
+              ...(request.stepProtocol
+                ? { protocol: request.stepProtocol }
+                : {})
             })
           : await exact.exportStl(document, exportBodyIds, request.deflection, {
               ...(request.units ? { units: request.units } : {}),

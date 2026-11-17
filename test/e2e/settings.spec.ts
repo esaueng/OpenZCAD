@@ -115,7 +115,17 @@ for (const scope of ['profile', 'all'] as const) {
         .click();
       await expect
         .poll(() => deletions)
-        .toEqual([{ scope, confirmation: 'reset@example.test' }]);
+        .toEqual([
+          {
+            scope,
+            confirmation: 'reset@example.test',
+            // A profile deletion acknowledges the encrypted projects the
+            // preview listed (issue #1704); this preview lists none.
+            ...(scope === 'profile'
+              ? { acknowledgedEncryptedProjectCount: 0 }
+              : {})
+          }
+        ]);
       await expect(dialog).toHaveCount(0);
       await page.getByRole('button', { name: 'General', exact: true }).click();
       await expect(

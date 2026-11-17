@@ -90,6 +90,18 @@ const ALLOWANCES: readonly ProseAllowance[] = [
       'trim only inside that refusal prose. It only words the advice ' +
       '(the face’s surface, whether it meets an earlier blend); if the ' +
       'sentence changes, the advice falls back to its generic wording.'
+  },
+  {
+    file: 'exact-offset-face-hole-mouth.ts',
+    fragment: 'leaves the outer loop',
+    reason:
+      'direct-edit family: the journaled face move throws its topology ' +
+      'refusals as prose, typed only as operation_failed/internal. On a ' +
+      'face that has a chamfered hole mouth (read from topology, not from ' +
+      'the message) these three sentences are what a cone the move left ' +
+      'in place produces (#1595). The match only chooses the sentence of ' +
+      'a move that is refused either way; if the wording changes, the ' +
+      'refusal keeps its generic type.'
   }
 ];
 

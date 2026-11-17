@@ -314,7 +314,9 @@
    card or a tool's create card there is what the user is working in, so the
    section panel steps aside while one is up and returns when it closes; the
    cut itself stays on. It used to draw over the Shell, Mirror and Pattern
-   cards opened after it. */
+   cards opened after it. The section button reads the same classes
+   (SECTION_LANE_HELD in ViewerToolbar) so its aria-expanded stays true to
+   what is on screen; keep the two in step. */
 .viewer-area:is(.has-command, .inspector-owns-lane)
   .instrument-rail
   .rail-section-panel {
@@ -1310,11 +1312,12 @@
   --lane-status: 40px;
 }
 
-/* Tracks --activity-pill-h in activity-pill.css, plus the 12px row gap.
+/* Tracks --activity-pill-h in activity-pill.css, plus the 12px row gap; an
+   ending that wraps publishes its real height (ActivityPill) instead.
    The lane in the selector matches the specificity of the two rules above,
    which stay in the DOM while the pill is up; source order then wins. */
 .viewer-area:has(.activity-lane > .activity-pill) .toast {
-  --lane-status: 70px;
+  --lane-status: calc(var(--activity-pill-live-h, 58px) + 12px);
 }
 
 /* The pill has the status row while it is up; the hint waits. */
@@ -3579,6 +3582,21 @@ button.command-rail.is-suggested {
   background-color: transparent;
 }
 
+/* The stage's foot claim (useStageFootClaim): how far up from the stage's
+   bottom edge the task surface standing at its foot reaches — the modeling
+   guide's card, Assemble's animation timeline. Where a floating panel
+   shares that foot on a narrow stage it ends above the claim, so neither
+   stands over the other's controls (design review 16 Nov 2026: the Objects
+   panel took the guide's Finish, the Assemble sidebar the timeline's Play).
+   Both measure themselves, so the claim follows a minimized card or a
+   timeline with more tracks. */
+.viewer-area {
+  --stage-foot-claim: max(
+    var(--workspace-tour-claim, 0px),
+    var(--motion-timeline-claim, 0px)
+  );
+}
+
 /* At a phone width the one panel that shows takes the right lane under the
    command card and the inspector, keeping enough height to read. */
 .panel-lane-float {
@@ -3589,16 +3607,46 @@ button.command-rail.is-suggested {
 }
 
 @media (max-width: 520px) {
+  /* Above the stage's foot claim too: with the modeling guide up, the panel
+     stands over the card rather than across its text and Finish. */
   .viewer-area .stage-right:has(> .panel-lane-float) {
+    --panel-lane-bottom: max(
+      calc(var(--lane-base) + 40px),
+      calc(var(--stage-foot-claim) + var(--island-gap))
+    );
+
     z-index: calc(var(--z-inspector-float) + 2);
     top: auto;
     right: calc(var(--island-gap) * 2 + var(--rail-w));
-    bottom: calc(var(--lane-base) + 40px);
+    bottom: var(--panel-lane-bottom);
     left: calc(var(--island-gap) * 2 + var(--rail-w));
     max-height: min(
       40dvh,
-      calc(100% - var(--stage-top) - var(--lane-base) - 40px)
+      calc(100% - var(--stage-top) - var(--panel-lane-bottom))
     );
+  }
+
+  /* A command card in that lane may take the stage up to the top islands,
+     not the panel's 40dvh, and shrinks into it, its list scrolling. Held
+     at its full height inside the shorter lane, Build's measurement
+     workbench ran out of the lane's foot over the search bar, and on a
+     360 × 640 phone its last actions and Copy all off the screen. The
+     panel yields under it, as it does with no cap. */
+  .viewer-area.has-command .stage-right:has(> .panel-lane-float) {
+    max-height: calc(100% - var(--stage-top) - var(--panel-lane-bottom));
+  }
+
+  .viewer-area.has-command
+    .stage-right:has(> .panel-lane-float)
+    > .command-float {
+    flex-shrink: 1;
+    min-height: 0;
+  }
+
+  /* The panel gives way first, all the way down: shrinking alongside, it
+     kept a third of a 360 × 640 lane and the result list had none. */
+  .viewer-area.has-command .stage-right > .panel-lane-float {
+    flex-shrink: 1000;
   }
 
   .stage-right > .panel-lane-float {

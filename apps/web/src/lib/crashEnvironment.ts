@@ -1,3 +1,4 @@
+import { APP_BUILD } from './appBuild';
 import { KERNEL_BUILD } from './kernelBuild';
 
 /**
@@ -6,15 +7,12 @@ import { KERNEL_BUILD } from './kernelBuild';
  * of the entry chunk.
  */
 
-const UNKNOWN = 'unknown';
-
 /** The app commit this bundle was built from (`unknown` outside Vite). */
-export const APP_BUILD_COMMIT: string =
-  (import.meta.env as { OZ_BUILD_COMMIT?: string }).OZ_BUILD_COMMIT || UNKNOWN;
+export const APP_BUILD_COMMIT: string = APP_BUILD.sourceCommit;
 
 /** The build line every report and the session entry share. */
 export function buildDescription(): string {
-  return `OpenZCAD ${APP_BUILD_COMMIT.slice(0, 12)} · Remus ${KERNEL_BUILD.packageVersion} (${KERNEL_BUILD.sourceCommit.slice(0, 12)})`;
+  return `OpenZCAD ${APP_BUILD.version} (${APP_BUILD_COMMIT.slice(0, 12)}) · Remus ${KERNEL_BUILD.packageVersion} (${KERNEL_BUILD.sourceCommit.slice(0, 12)})`;
 }
 
 export interface EnvironmentSource {

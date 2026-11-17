@@ -32,7 +32,11 @@ import { verticesReadAs } from '../../apps/web/src/lib/importUnits';
  */
 
 export type SolidExchangeFormat =
-  'step' | 'stl-binary' | 'stl' | '3mf' | 'obj' | 'ply' | 'glb';
+  'step' | 'step-ap242' | 'stl-binary' | 'stl' | '3mf' | 'obj' | 'ply' | 'glb';
+
+/** Whether a solid exchange format is STEP, in either protocol. */
+export const isStepFormat = (format: SolidExchangeFormat) =>
+  format === 'step' || format === 'step-ap242';
 
 export interface SolidMeasure {
   /** Bodies the reimport yields (a mesh import is always one body). */
@@ -66,9 +70,12 @@ export async function exportSolids(
   options: { units?: UnitSystem; deflection?: number } = {}
 ): Promise<Uint8Array> {
   const units = options.units ?? 'mm';
-  if (format === 'step') {
+  if (isStepFormat(format)) {
     return new TextEncoder().encode(
-      await adapter.exportStep(document, bodyIds, { units })
+      await adapter.exportStep(document, bodyIds, {
+        units,
+        ...(format === 'step-ap242' ? { protocol: 'ap242' as const } : {})
+      })
     );
   }
   const meshFormat: MeshExportFormat = format === 'stl' ? 'stl-ascii' : format;
@@ -168,7 +175,7 @@ export async function reimportSolids(
   const bodyNames = (options.bodyNames ?? []).some((name) =>
     labels ? labels.some((label) => label.name === name) : text.includes(name)
   );
-  if (format === 'step') {
+  if (isStepFormat(format)) {
     const kernel = new RemusKernel();
     const io = await loadRemusTranslators();
     const solids = [...kernel.deserializeSolids(io.importStep(bytes))];

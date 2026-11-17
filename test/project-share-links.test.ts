@@ -718,8 +718,18 @@ describe('project share links (worker helpers)', () => {
     );
     expect(parseCreateShareLink({ mode: 'view' })).toEqual({
       mode: 'view',
-      label: null
+      label: null,
+      comments: false
     });
+    // L08: a commenter link, and nothing but a boolean says so.
+    expect(parseCreateShareLink({ mode: 'tweak', comments: true })).toEqual({
+      mode: 'tweak',
+      label: null,
+      comments: true
+    });
+    expect(() =>
+      parseCreateShareLink({ mode: 'view', comments: 'yes' })
+    ).toThrow('comments must be true or false.');
     expect(parseShareLinkToken('a'.repeat(43))).toBe('a'.repeat(43));
     expect(parseShareLinkToken('short')).toBeNull();
     expect(parseShareLinkToken(`${'a'.repeat(42)}!`)).toBeNull();

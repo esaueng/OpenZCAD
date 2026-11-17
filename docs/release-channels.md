@@ -87,6 +87,9 @@ Only that workflow can move `stable`:
 - The script refuses a non-dry-run outside GitHub Actions, a ref instead of
   a SHA, a commit not on `origin/main`, and anything but a fast-forward.
 
+Promotion does not change the app version; a stable build reports the
+version of the commit it was promoted from ([App versioning](versioning.md)).
+
 An urgent fix merges to `main` like any change and is then promoted. There
 is no direct path onto `stable`: shipping a fix without the commits before
 it means editing the ruleset by hand, which should stay a rare,

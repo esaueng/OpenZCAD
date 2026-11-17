@@ -695,3 +695,62 @@ test("a window floating over the rail leaves the pick's verbs pressable", async 
   await move.click();
   await expect(page.getByRole('form', { name: 'Move controls' })).toBeVisible();
 });
+
+test(
+  'Section controls open below the workspace mode toolbar',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    // #1629: `--stage-top` is CSS math, which parseFloat read as NaN; the
+    // controls fell back to 8 px and opened under Build / Assemble.
+    await openWorkspace(
+      page,
+      'Section top',
+      { right: [['bodies', 'parameters']] },
+      { width: 1280, height: 800 }
+    );
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: /^Section view/ }).click();
+    const section = page.locator('.rail-section-panel');
+    await expect(section).toBeVisible();
+    const heading = section.locator('.rail-section-heading');
+    const assemble = page.getByRole('button', {
+      name: 'Assemble',
+      exact: true
+    });
+    for (const viewport of [
+      { width: 1280, height: 800 },
+      { width: 1024, height: 768 },
+      { width: 1440, height: 900 },
+      // Short landscape: the controls also stay clear of the command bar.
+      { width: 844, height: 390 }
+    ]) {
+      await page.setViewportSize(viewport);
+      await expect
+        .poll(async () => {
+          const toolbar = await box(assemble);
+          const panel = await box(section);
+          const footer = await box(page.locator('.command-bar-lane'));
+          return (
+            panel.y >= toolbar.y + toolbar.height &&
+            panel.y + panel.height <= footer.y
+          );
+        })
+        .toBe(true);
+      // The heading takes its own presses: Assemble is not under it.
+      const owned = await heading.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(
+          rect.left + Math.min(48, rect.width / 2),
+          rect.top + rect.height / 2
+        );
+        return Boolean(
+          hit && element.closest('.rail-section-panel')!.contains(hit)
+        );
+      });
+      expect(owned).toBe(true);
+    }
+  }
+);
