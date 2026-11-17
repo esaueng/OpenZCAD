@@ -1033,12 +1033,23 @@ export function regionSideSources(
  * edge lies between the same two. A seam, an edge on a side that stayed
  * unnamed, and a boundary a cap shares with one side in several pieces all
  * stay hash-only.
+ *
+ * Two cells of one sketch can be bounded by the same entities (the two ends
+ * of a bar another rectangle crosses), so the entity token alone does not
+ * say which cell an edge belongs to, and a pick on one cell must not resolve
+ * on the other when the extrude's selection changes. The name therefore
+ * carries the cell's boundary as well: how many pieces bound it and which
+ * named sides they are. Cells that still agree on all of that (a circle cut
+ * by a chord) keep the same names, as their faces do; `buildRegionExtrude`
+ * drops any edge name two solids of one feature would share.
  */
 function addRegionBoundaryEdgeRoles(
   kernel: RemusKernel,
   solid: number,
   candidates: ReturnType<typeof topologyCandidatesForSolid>,
   token: string,
+  /** Curves on the cell's boundary loops, named or not. */
+  boundaryPieces: number,
   assignments: RemusSemanticAssignment[]
 ) {
   // The publisher keeps a face role only when the name and the face are
@@ -1104,11 +1115,16 @@ function addRegionBoundaryEdgeRoles(
     if (edges) edges.push(candidate);
     else byPair.set(pair, [candidate]);
   }
+  const sides = [...faceRole.values()]
+    .filter((role) => role.startsWith('side.'))
+    .map((role) => role.slice('side.'.length))
+    .sort();
+  const cell = `${boundaryPieces}:${sides.join(',')}`;
   for (const [pair, edges] of byPair) {
     if (edges.length !== 1) continue;
     assignments.push({
       ...edges[0]!,
-      lineageName: `sweep.edge.region.${token}.${pair}`
+      lineageName: `sweep.edge.region.${token}[${cell}].${pair}`
     });
   }
 }
@@ -1151,7 +1167,10 @@ export function buildRegionExtrude(
     warn(flattenedOutlineWarning(flattenedOutlines));
   }
   const groups = connectedRegionGroups(regions);
-  const lineages: RemusLineageState[] = [];
+  const built: {
+    assignments: RemusSemanticAssignment[];
+    diagnostics: RemusLineageState[];
+  }[] = [];
   const objectsById = new Map(
     sketch.objectIds.flatMap((objectId) => {
       const node = document.nodes[objectId];
@@ -1227,19 +1246,51 @@ export function buildRegionExtrude(
         assignments,
         diagnostics
       });
-      addRegionBoundaryEdgeRoles(kernel, solid, candidates, token, assignments);
+      addRegionBoundaryEdgeRoles(
+        kernel,
+        solid,
+        candidates,
+        token,
+        [merged.outer, ...merged.holes].reduce(
+          (count, loop) => count + loop.curves.length,
+          0
+        ),
+        assignments
+      );
     }
-    lineages.push(
-      mergeRemusLineageStates([
-        createRemusSemanticLineage(feature.featureId, 'sweep', assignments),
-        ...diagnostics
-      ])
-    );
+    built.push({ assignments, diagnostics });
     return solid;
   });
+  // A name is one edge of the feature, not one edge of each solid: where two
+  // disconnected cells would publish the same edge name, neither does.
+  const edgeNameUses = new Map<string, number>();
+  for (const { assignments } of built) {
+    for (const assignment of assignments) {
+      if (assignment.kind !== 'edge') continue;
+      edgeNameUses.set(
+        assignment.lineageName,
+        (edgeNameUses.get(assignment.lineageName) ?? 0) + 1
+      );
+    }
+  }
   return {
     solids,
-    lineage: mergeRemusLineageStates(lineages)
+    lineage: mergeRemusLineageStates(
+      built.map(({ assignments, diagnostics }) =>
+        mergeRemusLineageStates([
+          createRemusSemanticLineage(
+            feature.featureId,
+            'sweep',
+            assignments.filter(
+              (assignment) =>
+                assignment.kind !== 'edge' ||
+                edgeNameUses.get(assignment.lineageName) === 1
+            )
+          ),
+          ...diagnostics
+        ])
+      )
+    )
   };
 }
 

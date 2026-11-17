@@ -8,6 +8,7 @@ import {
   filletEdges,
   findSketch,
   holeBody,
+  listFeaturesInOrder,
   updateFeature
 } from '@openzcad/document-core';
 import {
@@ -25,6 +26,7 @@ import {
   type SketchId,
   type SketchObjectData
 } from '@openzcad/shared';
+import { computeSketchRegions } from '@openzcad/geometry';
 import { solvedSketchCommands } from '../apps/web/src/lib/sketch/applySolve';
 import { checkSketchEdit } from '../apps/web/src/lib/sketch/editing';
 
@@ -337,4 +339,140 @@ describe('#1663 edges of an extruded sketch region are named', () => {
     const edited = await editWidth(repaired, built.sketchId, WIDTH, 50);
     expectPart(edited.derived, built.bodyId, 50);
   }, 240_000);
+
+  describe('two cells bounded by the same sketch entities', () => {
+    // A 40 × 20 bar crossed by a 10 × 40 upright: the bar's left and right
+    // ends are separate cells, and both are bounded by the same two
+    // rectangles. Entity ids alone cannot tell them apart.
+    function crossed() {
+      const sketched = addSketchFeature(createProjectDocument('Cross', user), {
+        name: 'Sketch',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [
+          {
+            objectKind: 'rectangle',
+            width: 40,
+            height: 20,
+            centerX: 0,
+            centerY: 0
+          },
+          {
+            objectKind: 'rectangle',
+            width: 10,
+            height: 40,
+            centerX: 0,
+            centerY: 0
+          }
+        ]
+      });
+      const sketch = findSketch(sketched.document, sketched.sketchId)!;
+      const regions = computeSketchRegions(
+        sketch.objectIds.map((id) => ({
+          id,
+          data: (sketched.document.nodes[id] as { data: SketchObjectData }).data
+        })),
+        Number
+      );
+      const cell = (side: -1 | 1) => {
+        const region = regions.find(
+          (candidate) =>
+            Math.abs(candidate.centroid.x - side * 12.5) < 1e-6 &&
+            Math.abs(candidate.centroid.y) < 1e-6
+        )!;
+        return {
+          profileId: region.profileId,
+          regionFingerprint: region.regionFingerprint,
+          samplePoint: region.centroid,
+          sourceArea: region.area,
+          sourceEntityIds: region.sourceEntityIds
+        };
+      };
+      return { ...sketched, left: cell(-1), right: cell(1) };
+    }
+
+    /** The cell's top edge along y = 10. */
+    const topBack = (body: BodyRepresentation) =>
+      body.topology!.edges.filter((edge) =>
+        liesOn(
+          edge,
+          (_x, y, z) =>
+            Math.abs(y - 10) < 1e-6 && Math.abs(z - THICKNESS) < 1e-6
+        )
+      );
+
+    it('never resolves a pick on one cell on the other', async () => {
+      const { document, sketchId, left, right } = crossed();
+      const extruded = extrudeSketch(document, {
+        name: 'Extrude',
+        sketchId,
+        distance: THICKNESS,
+        profiles: [left]
+      });
+      const built = await adapter.syncDocument(extruded.document);
+      expect(built.warnings).toEqual([]);
+      const picked = topBack(built.bodyRepresentations[extruded.bodyId]!);
+      expect(picked).toHaveLength(1);
+      expect(picked[0]!.reference).toBeDefined();
+      const filleted = filletEdges(extruded.document, {
+        name: 'Fillet',
+        targetBodyId: extruded.bodyId,
+        edgeHashes: [picked[0]!.hash],
+        edgeReferences: [picked[0]!.reference!],
+        size: 1
+      });
+      expect((await adapter.syncDocument(filleted.document)).warnings).toEqual(
+        []
+      );
+      // The extrude now takes the right-hand cell instead. Its matching
+      // edge is a different edge of a different cell: the Fillet must lose
+      // its pick, not move to it.
+      const extrude = listFeaturesInOrder(filleted.document).find(
+        (feature) => feature.name === 'Extrude'
+      )!;
+      const switched = updateFeature(filleted.document, {
+        featureId: extrude.featureId,
+        data: { profiles: [right] }
+      });
+      const after = await validate(switched);
+      const fillet = listFeaturesInOrder(switched).find(
+        (feature) => feature.name === 'Fillet'
+      )!;
+      expect(
+        (after.featureWarnings ?? []).find(
+          (warning) => warning.featureId === fillet.featureId
+        )?.kernelRefusal
+      ).toMatchObject({ family: 'reference' });
+      const other = await adapter.syncDocument(
+        extrudeSketch(document, {
+          name: 'Extrude',
+          sketchId,
+          distance: THICKNESS,
+          profiles: [right]
+        }).document
+      );
+      const otherEdge = topBack(Object.values(other.bodyRepresentations)[0]!);
+      expect(otherEdge[0]!.reference!.lineageName).not.toBe(
+        picked[0]!.reference!.lineageName
+      );
+    }, 240_000);
+
+    it('gives no two edges of one extrude the same name', async () => {
+      const { document, sketchId, left, right } = crossed();
+      const extruded = extrudeSketch(document, {
+        name: 'Extrude',
+        sketchId,
+        distance: THICKNESS,
+        profiles: [left, right]
+      });
+      const built = await adapter.syncDocument(extruded.document);
+      expect(built.warnings).toEqual([]);
+      const names = built.bodyRepresentations[
+        extruded.bodyId
+      ]!.topology!.edges.flatMap((edge) =>
+        edge.reference ? [edge.reference.lineageName] : []
+      );
+      expect(names.length).toBeGreaterThan(0);
+      expect(new Set(names).size).toBe(names.length);
+    }, 240_000);
+  });
 });
