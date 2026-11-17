@@ -294,6 +294,12 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
     [`${P}/workspace-sessions`, 'plaintext', ['PUT']]
   ],
   [String.raw`/^\/api\/share\/([^/]+)$/`]: [['/api/share/share_1', 'read']],
+  // L08 commenter links: a visitor's comment, authorized by the link's token
+  // alone. The visitor holds no project of their own to declare.
+  [String.raw`/^\/api\/share\/([^/]+)\/comments$/`]: [
+    ['/api/share/share_1/comments', 'none', ['POST']]
+  ],
+  '/api/share/comments': [['/api/share/comments', 'none', ['POST']]],
   [String.raw`/^\/api\/share\/([^/]+)\/assets\/([^/]+)$/`]: [
     ['/api/share/share_1/assets/asset_1', 'read']
   ],

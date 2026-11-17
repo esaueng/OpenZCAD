@@ -5683,6 +5683,8 @@ export interface ProjectShareLinkSummary {
   revokedAt: number | null;
   /** The owner's name for the link; null when unnamed. Never sent to visitors. */
   label: string | null;
+  /** L08: visitors may read and write comments (migration 0059). */
+  comments?: boolean;
 }
 
 /** Longest share-link label, in Unicode code points (SQLite's `length`). */
@@ -5715,6 +5717,8 @@ export interface CreateProjectShareLinkRequest {
   mode: ProjectShareLinkMode;
   /** Optional owner's name for the link. */
   label?: string | null;
+  /** L08: a commenter link; visitors may read and write comments. */
+  comments?: boolean;
 }
 
 export interface UpdateProjectShareLinkRequest {
@@ -5738,6 +5742,8 @@ export interface SharedProjectResponse {
     projectId: string;
     name: string;
     mode: ProjectShareLinkMode;
+    /** L08: a commenter link; absent or false is view or tweak only. */
+    comments?: boolean;
   };
   document: ProjectDocument;
 }

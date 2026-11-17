@@ -654,11 +654,7 @@ import {
   LiveSessionNotice
 } from './components/LiveSessionNotice';
 import type { CommentPin } from './components/ModelViewer';
-import {
-  ENCRYPTED_COMMENTS_UNAVAILABLE,
-  projectCommentsApi
-} from './lib/projectCommentsApi';
-import { SaveStatePreviewNotice } from './components/SaveStatePreviewNotice';
+import { ENCRYPTED_COMMENTS_UNAVAILABLE } from './lib/commentsAvailability';
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
   ActivityLogButton,
@@ -1500,6 +1496,15 @@ const LazySharedLinkCopyDialog = lazyWithStaleChunkNotice(() =>
     default: module.SharedLinkCopyDialog
   }))
 );
+// The comment client and the save-state preview notice load on the gesture
+// that needs them (opening Comments, previewing a save state), not with the
+// workspace.
+const loadCommentsApi = () => import('./lib/projectCommentsApi');
+const LazySaveStatePreviewNotice = lazyWithStaleChunkNotice(() =>
+  import('./components/SaveStatePreviewNotice').then((module) => ({
+    default: module.SaveStatePreviewNotice
+  }))
+);
 const LazyCommentsPanel = lazyWithStaleChunkNotice(() =>
   import('./components/CommentsPanel').then((module) => ({
     default: module.CommentsPanel
@@ -1736,6 +1741,15 @@ const SharedLinkCopyDialog = withSuspense(LazySharedLinkCopyDialog);
 const SaveRevisionDialog = withSuspense(LazySaveRevisionDialog);
 
 const CommentsPanel = withSuspense(LazyCommentsPanel);
+function SaveStatePreviewNotice(
+  props: ComponentProps<typeof LazySaveStatePreviewNotice>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazySaveStatePreviewNotice {...props} />
+    </Suspense>
+  );
+}
 const SaveStateCompareDialog = withSuspense(LazySaveStateCompareDialog);
 
 const DeleteFeatureDialog = withSuspense(LazyDeleteFeatureDialog);
@@ -2853,6 +2867,8 @@ export function App() {
   const [shareSession, setShareSession] = useState<{
     token: string;
     encryptedMode?: 'view' | 'tweak';
+    /** L08: a plaintext commenter link; its visitor may comment. */
+    comments?: boolean;
   } | null>(null);
   const shareSessionRef = useRef(shareSession);
   shareSessionRef.current = shareSession;
@@ -3354,6 +3370,8 @@ export function App() {
     kind: 'restore' | 'branch';
     checkpoint: ProjectCheckpoint;
   } | null>(null);
+  /** L08 commenter link: the name its visitor signs comments with. */
+  const [commentVisitorName, setCommentVisitorName] = useState('');
   const [pendingFeatureDelete, setPendingFeatureDelete] = useState<{
     featureId: FeatureId;
     name: string;
@@ -15793,6 +15811,7 @@ export function App() {
           name: string;
           document: ProjectDocument;
           encryptedMode?: 'view' | 'tweak';
+          comments?: boolean;
         } | null;
         if (isEncryptedShareLink(pendingShareToken)) {
           // End to end encrypted (ADR-024 slice 5-11): verified in the ADR's
@@ -15819,7 +15838,8 @@ export function App() {
           );
           shared = plaintext && {
             name: plaintext.project.name,
-            document: plaintext.document
+            document: plaintext.document,
+            ...(plaintext.project.comments ? { comments: true } : {})
           };
         }
         if (!isCurrent()) return;
@@ -15857,7 +15877,10 @@ export function App() {
         setCloudAvailable(false);
         const opened = shared.encryptedMode
           ? { token: pendingShareToken, encryptedMode: shared.encryptedMode }
-          : { token: pendingShareToken };
+          : {
+              token: pendingShareToken,
+              ...(shared.comments ? { comments: true } : {})
+            };
         setShareSession(opened);
         shareSessionRef.current = opened;
         setSharePage(null);
@@ -20654,11 +20677,15 @@ export function App() {
   // encrypted records, so nothing about them is sent in plaintext.
   const commentsUnavailableReason = !doc
     ? null
-    : isEncryptedProject(doc.projectId)
-      ? ENCRYPTED_COMMENTS_UNAVAILABLE
-      : !session || !activeProjectIsCloud
-        ? 'Save this project to your account to comment on it.'
-        : null;
+    : shareSession
+      ? shareSession.comments
+        ? null
+        : 'This link does not take comments.'
+      : isEncryptedProject(doc.projectId)
+        ? ENCRYPTED_COMMENTS_UNAVAILABLE
+        : !session || !activeProjectIsCloud
+          ? 'Save this project to your account to comment on it.'
+          : null;
   const commentRole: ProjectAccessRole =
     collaboration.role ??
     (session && doc?.ownerUserId === session.userId ? 'owner' : 'viewer');
@@ -20688,7 +20715,11 @@ export function App() {
     );
   const loadComments = useCallback(async (projectId: string) => {
     try {
-      const comments = await projectCommentsApi.list(projectId);
+      const link = shareSessionRef.current;
+      const { linkCommentsApi, projectCommentsApi } = await loadCommentsApi();
+      const comments = link?.comments
+        ? await linkCommentsApi.list(link.token)
+        : await projectCommentsApi.list(projectId);
       if (managerRef.current?.document.projectId !== projectId) return;
       setProjectComments({ projectId, comments });
       setCommentsError(null);
@@ -20711,12 +20742,15 @@ export function App() {
   }
   /** Runs one comment change, then reloads the list; false when it failed. */
   async function runCommentAction(
-    action: (projectId: string) => Promise<void>
+    action: (
+      projectId: string,
+      api: Awaited<ReturnType<typeof loadCommentsApi>>
+    ) => Promise<void>
   ): Promise<boolean> {
     const projectId = managerRef.current?.document.projectId;
     if (!projectId) return false;
     try {
-      await action(projectId);
+      await action(projectId, await loadCommentsApi());
       await loadComments(projectId);
       return true;
     } catch (error) {
@@ -35861,7 +35895,9 @@ export function App() {
           }
           onGoHome={() => void handleGoHome()}
           onOpenSharing={() => setSharingOpen(true)}
-          {...(shareSession ? {} : { onOpenComments: openComments })}
+          {...(!shareSession || shareSession.comments
+            ? { onOpenComments: openComments }
+            : {})}
           onSignIn={() => openSettingsAt('account')}
           onOpenSettings={openSettings}
           encryption={
@@ -38325,7 +38361,7 @@ export function App() {
               onClose={() => setContextMenu(null)}
             />
           ) : null}
-          {commentsOpen && doc && !shareSession ? (
+          {commentsOpen && doc && (!shareSession || shareSession.comments) ? (
             <CommentsPanel
               comments={
                 projectComments?.projectId === doc.projectId
@@ -38345,35 +38381,61 @@ export function App() {
               }}
               onCancelPlacing={() => setCommentPlacing(false)}
               hasDraft={commentDraft !== null}
+              {...(shareSession
+                ? {
+                    visitor: {
+                      name: commentVisitorName,
+                      onNameChange: setCommentVisitorName
+                    }
+                  }
+                : {})}
               onPostThread={(text) =>
                 commentDraft
-                  ? runCommentAction(async (projectId) => {
-                      const created = await projectCommentsApi.create(
+                  ? runCommentAction(
+                      async (
                         projectId,
-                        { anchor: commentDraft, text }
-                      );
-                      setCommentDraft(null);
-                      setActiveCommentId(created.commentId);
-                    })
+                        { linkCommentsApi, projectCommentsApi }
+                      ) => {
+                        const input = { anchor: commentDraft, text };
+                        const created = shareSession
+                          ? await linkCommentsApi.create(
+                              shareSession.token,
+                              commentVisitorName,
+                              input
+                            )
+                          : await projectCommentsApi.create(projectId, input);
+                        setCommentDraft(null);
+                        setActiveCommentId(created.commentId);
+                      }
+                    )
                   : Promise.resolve(false)
               }
               onCancelDraft={() => setCommentDraft(null)}
               onReply={(threadId, text) =>
-                runCommentAction((projectId) =>
-                  projectCommentsApi
-                    .create(projectId, { parentId: threadId, text })
-                    .then(() => undefined)
+                runCommentAction(
+                  (projectId, { linkCommentsApi, projectCommentsApi }) =>
+                    (shareSession
+                      ? linkCommentsApi.create(
+                          shareSession.token,
+                          commentVisitorName,
+                          { parentId: threadId, text }
+                        )
+                      : projectCommentsApi.create(projectId, {
+                          parentId: threadId,
+                          text
+                        })
+                    ).then(() => undefined)
                 )
               }
               onResolve={(threadId, resolved) =>
-                void runCommentAction((projectId) =>
+                void runCommentAction((projectId, { projectCommentsApi }) =>
                   projectCommentsApi
                     .resolve(projectId, threadId, resolved)
                     .then(() => undefined)
                 )
               }
               onDelete={(commentId) =>
-                void runCommentAction((projectId) =>
+                void runCommentAction((projectId, { projectCommentsApi }) =>
                   projectCommentsApi.remove(projectId, commentId)
                 )
               }

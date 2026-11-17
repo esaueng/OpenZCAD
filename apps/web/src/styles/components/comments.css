@@ -83,6 +83,25 @@
   font-weight: 400;
 }
 
+/* L08 commenter link: the name a visitor signs with. */
+.comments-visitor-name {
+  display: grid;
+  gap: 2px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.comments-visitor-name input {
+  min-height: 28px;
+  padding: 0 var(--sp-2);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+
 .comments-note {
   margin: 0;
   color: var(--color-text-muted);

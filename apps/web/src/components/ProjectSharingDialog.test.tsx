@@ -485,6 +485,35 @@ describe('ProjectSharingDialog', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it('mints a commenter link when visitors may comment (L08)', async () => {
+    const base = createProjectDocument('Commenter links', owner);
+    const links = shareLinkClient();
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={links}
+        onClose={vi.fn()}
+      />
+    );
+    await user.click(
+      await screen.findByRole('checkbox', { name: /Visitors can comment/ })
+    );
+    await user.click(screen.getByRole('button', { name: 'Create link' }));
+    await waitFor(() =>
+      expect(links.createProjectShareLink).toHaveBeenCalledWith(
+        base.projectId,
+        'tweak',
+        null,
+        true
+      )
+    );
+  });
+
   it('mints a share link shown once, copies it, and revokes active links', async () => {
     const base = createProjectDocument('Share links', owner);
     const links = shareLinkClient();
@@ -526,6 +555,7 @@ describe('ProjectSharingDialog', () => {
       )
     );
     expect(beforeCreate).toHaveBeenCalledOnce();
+
     const url = screen.getByLabelText('Share link');
     expect(url).toHaveValue(`${location.origin}/#share=${'a'.repeat(43)}`);
     await user.click(screen.getByRole('button', { name: 'Copy' }));
