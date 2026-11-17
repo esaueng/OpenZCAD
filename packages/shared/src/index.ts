@@ -4485,7 +4485,7 @@ export interface ProjectDocument {
    */
   referenceImages?: ReferenceImageSet;
   /**
-   * D07 model-based definition (schema v101): datum features and feature
+   * D07 model-based definition (schema v106): datum features and feature
    * control frames on the model's faces. Never read by a rebuild. Absent
    * means the model carries none.
    */

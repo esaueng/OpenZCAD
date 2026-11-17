@@ -1,5 +1,4 @@
 import {
-  lazy,
   Suspense,
   useState,
   useRef,
@@ -61,9 +60,10 @@ import type { ModelPanelSource } from './modelPanelProps';
 import type { ObjectsView } from './panelViews';
 import { ObjectRenameField } from './ObjectRenameField';
 import { BodyAppearanceEditor } from './BodyAppearanceEditor';
+import { lazyWithStaleChunkNotice } from '../../lib/staleChunk';
 // D07: the PMI rows and their modules load on first use, off every
 // eagerly loaded chunk.
-const PmiRows = lazy(() =>
+const PmiRows = lazyWithStaleChunkNotice(() =>
   import('./PmiRows').then((module) => ({ default: module.PmiRows }))
 );
 
