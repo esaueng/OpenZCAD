@@ -530,6 +530,11 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
       'The shell could not be built with this wall thickness. Try a thinner wall or different open faces.'
     ],
     [
+      // Issue #1630: no wall thickness helps, so the thickness advice is wrong.
+      "Remus shell refused: shell: unsupported configuration: a free loop of the shelled body lies in none of the opened faces' planes, so there is no face that closes it",
+      'Shell cannot open a face that a fillet or other rounded face blends into yet, and a thinner wall will not help. Suppress that fillet, or open a different face.'
+    ],
+    [
       'resize blend: exact reconstruction refused: blend-aware planar move requires a prismatic sharp support neighborhood',
       'This face meets a fillet, and a face next to a fillet can only move when the faces around it are flat with sharp edges. Change the size on the original shape in History instead.'
     ],

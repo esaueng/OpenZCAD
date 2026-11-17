@@ -203,6 +203,16 @@ const TRANSLATIONS: readonly Translation[] = [
     sentence: 'This mesh could not be made into a solid.'
   },
   {
+    // Issue #1630. The kernel rims an opened face with flat faces in that
+    // face's plane; a fillet tangent to the opened face leaves the inner
+    // wall's edge below the plane, at any wall thickness. The operation
+    // fallback ("try a thinner wall") would send the user the wrong way.
+    pattern:
+      /free loop of the shelled body lies in none of the opened faces' planes/i,
+    sentence:
+      'Shell cannot open a face that a fillet or other rounded face blends into yet, and a thinner wall will not help. Suppress that fillet, or open a different face.'
+  },
+  {
     pattern:
       /\[object WebAssembly\.Exception\]|RuntimeError|unreachable|panicked|memory access out of bounds|out of memory/i,
     sentence: 'The exact kernel crashed on this operation.'
