@@ -407,9 +407,7 @@ test(
       )
     ).toBe(false);
     await expect(page.getByRole('button', { name: /^Fillet/ })).toBeDisabled();
-    await expect(
-      page.getByRole('status', { name: 'Preparing model details…' })
-    ).toBeVisible();
+    await expect(page.getByText('Preparing…', { exact: true })).toBeVisible();
     await expect(page.getByText('needs repair', { exact: true })).toHaveCount(
       0
     );
@@ -593,9 +591,7 @@ test('blocks staged context actions and exports, then exports both completed bod
     (window as typeof window & { holdAnalysis: boolean }).holdAnalysis = true;
   });
   await finishInPlaceCommand(page, 'Box');
-  await expect(
-    page.getByRole('status', { name: 'Preparing model details…' })
-  ).toBeVisible();
+  await expect(page.getByText('Preparing…', { exact: true })).toBeVisible();
   await expect
     .poll(() =>
       page.evaluate(
@@ -703,9 +699,7 @@ test('shows current staged advisories and clears resolved diagnostics before ana
       scope.heldAnalysis = 0;
     }, warnings);
     await finishInPlaceCommand(page, 'Box');
-    await expect(
-      page.getByRole('status', { name: 'Preparing model details…' })
-    ).toBeVisible();
+    await expect(page.getByText('Preparing…', { exact: true })).toBeVisible();
     await expect
       .poll(() =>
         page.evaluate(
@@ -721,9 +715,7 @@ test('shows current staged advisories and clears resolved diagnostics before ana
         window as typeof window & { releaseAnalysis: () => void }
       ).releaseAnalysis()
     );
-    await expect(
-      page.getByRole('status', { name: 'Preparing model details…' })
-    ).toHaveCount(0);
+    await expect(page.getByText('Preparing…', { exact: true })).toHaveCount(0);
     await expect(diagnosticRows).toHaveText(warnings);
   }
   await expectBodyCount(page, 3);

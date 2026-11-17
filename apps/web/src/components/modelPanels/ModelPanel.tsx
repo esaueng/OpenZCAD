@@ -70,8 +70,9 @@ function ParametersFrame(props: ModelPanelProps) {
 }
 
 function ObjectsFrame(props: ModelPanelProps) {
-  const pending = Boolean(props.geometryPending);
-  const preparing = pending && (props.geometryPendingShown ?? pending);
+  // `geometryPendingShown` defaults to `geometryPending`.
+  const preparing =
+    props.geometryPending && props.geometryPendingShown !== false;
   return (
     <PanelFrame
       id="bodies"

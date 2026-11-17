@@ -52,7 +52,7 @@ export interface ModelPanelSource {
    * commits, so they show no "preparing" glyph for it (#1598); Objects still
    * says its details are incomplete.
    */
-  geometryPendingIsPreview?: boolean;
+  previewPending?: boolean;
   selectedFeatureNodeId: string | null;
   selectedSketchProfileId: string | null;
   selectedBodyIds: string[];

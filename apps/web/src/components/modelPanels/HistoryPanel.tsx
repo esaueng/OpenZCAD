@@ -159,7 +159,7 @@ export type HistoryPanelProps = Pick<
   | 'relatedFeatureIds'
   | 'geometryPending'
   | 'geometryPendingShown'
-  | 'geometryPendingIsPreview'
+  | 'previewPending'
   | 'selectedFeatureNodeId'
   | 'hiddenBodyIds'
   | 'hiddenSketchIds'
@@ -191,7 +191,7 @@ export function HistoryPanel({
   relatedFeatureIds,
   geometryPending = false,
   geometryPendingShown = geometryPending,
-  geometryPendingIsPreview = false,
+  previewPending = false,
   selectedFeatureNodeId,
   hiddenBodyIds,
   hiddenSketchIds,
@@ -228,7 +228,7 @@ export function HistoryPanel({
         revealRequest={repair.reveal}
         relatedFeatureIds={relatedFeatureIds}
         geometryPending={geometryPending}
-        geometryPendingShown={geometryPendingShown && !geometryPendingIsPreview}
+        geometryPendingShown={geometryPendingShown && !previewPending}
         selectedFeatureNodeId={selectedFeatureNodeId}
         hiddenBodyIds={hiddenBodyIds}
         hiddenSketchIds={hiddenSketchIds}

@@ -96,7 +96,7 @@ describe('HistoryPanel', () => {
 
   it('marks no row preparing for an uncommitted live preview (#1598)', () => {
     const { container, rerender } = render(
-      <Harness geometryPending geometryPendingShown geometryPendingIsPreview />
+      <Harness geometryPending geometryPendingShown previewPending />
     );
     // A held face preview cannot change history: no spinner joins the
     // rows' tails, so no value is cut short for it.
