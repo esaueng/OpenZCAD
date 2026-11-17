@@ -9,7 +9,8 @@ import {
   type EdgeTopology,
   type FaceTopology,
   type UnitSystem,
-  type Vector3
+  type Vector3,
+  drawingViewHasOwnFrame
 } from '@openzcad/shared';
 import {
   annotationBody,
@@ -1052,7 +1053,7 @@ export function viewsAlong(
   return sheet.views.filter((view) => {
     if (
       view.orientation === 'iso' ||
-      view.auxiliary ||
+      drawingViewHasOwnFrame(view) ||
       !view.bodyIds.includes(bodyId as never)
     )
       return false;
@@ -1583,7 +1584,7 @@ export function readDimensionState(
         (view) =>
           view.bodyIds.includes(bodyId as never) &&
           view.orientation !== 'iso' &&
-          !view.auxiliary &&
+          !drawingViewHasOwnFrame(view) &&
           group.axes.some((axis) => faceOn(view, axis.direction)) &&
           // A section states it only where its cut leaves one of the circles.
           (!view.section ||
@@ -1599,7 +1600,7 @@ export function readDimensionState(
           (view) =>
             view.bodyIds.includes(bodyId as never) &&
             view.orientation !== 'iso' &&
-            !view.auxiliary &&
+            !drawingViewHasOwnFrame(view) &&
             group.axes.some(
               (axis) =>
                 Math.abs(
@@ -1622,7 +1623,7 @@ export function readDimensionState(
         (view) =>
           view.bodyIds.includes(bodyId as never) &&
           view.orientation !== 'iso' &&
-          !view.auxiliary &&
+          !drawingViewHasOwnFrame(view) &&
           group.axes.some(
             (axis) =>
               Math.abs(dot(axis, drawingViewFrame(view).direction)) <= 1e-6
@@ -1643,7 +1644,7 @@ export function readDimensionState(
         (view) =>
           view.bodyIds.includes(bodyId as never) &&
           view.orientation !== 'iso' &&
-          !view.auxiliary &&
+          !drawingViewHasOwnFrame(view) &&
           !view.section &&
           group.axes.some(
             (axis) =>
@@ -1666,7 +1667,7 @@ export function readDimensionState(
         (view) =>
           view.bodyIds.includes(bodyId as never) &&
           view.orientation !== 'iso' &&
-          !view.auxiliary &&
+          !drawingViewHasOwnFrame(view) &&
           faceOn(view, UNIT[group.along])
       );
       const label = slopeLabel(group, units);
@@ -1684,7 +1685,7 @@ export function readDimensionState(
         (view) =>
           view.bodyIds.includes(bodyId as never) &&
           view.orientation !== 'iso' &&
-          !view.auxiliary &&
+          !drawingViewHasOwnFrame(view) &&
           Math.abs(
             Math.abs(dot(circle.direction, drawingViewFrame(view).direction)) -
               1

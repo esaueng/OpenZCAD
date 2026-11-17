@@ -58,7 +58,12 @@ export interface SectionBodyInput extends ProjectionBodyInput {
 export function sectionPlaneKey(
   view: Pick<DrawingView, 'orientation' | 'section'>
 ): string | null {
-  return view.section ? `${view.orientation}@${view.section.depth}` : null;
+  if (!view.section) return null;
+  // D03 (v91): a free section's plane is named by its normal.
+  const frame = view.section.frame;
+  return frame
+    ? `${frame.direction.x},${frame.direction.y},${frame.direction.z}@${view.section.depth}`
+    : `${view.orientation}@${view.section.depth}`;
 }
 
 /** The projection input key of one body cut by a section view's plane. */
