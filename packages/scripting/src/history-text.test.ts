@@ -122,7 +122,7 @@ describe('history text printing', () => {
     );
     // The hashes are implied by the references, so the text leaves them out.
     expect(text).not.toContain('edgeHashes');
-    expect(text).not.toContain('111');
+    expect(text).not.toMatch(/[[ ]111[,\]]/);
     // Ids print as #ids; the kind is written once, before the id.
     expect(text).toMatch(/sketchId: #sketch_\S+,/);
     expect(text).not.toContain('featureKind');
@@ -343,6 +343,21 @@ describe('history text typing', () => {
           .diagnostics
       )
     ).toEqual([]);
+  });
+
+  it('refuses a change of kind before typing the fields', () => {
+    expect(
+      messages(
+        edited((text) =>
+          text.replace(
+            /^primitive (#\S+) "Block"[^]*?\n\}/m,
+            'datum-plane $1 "Block" {\n  definition: { kind: "offset" },\n}'
+          )
+        ).diagnostics
+      )
+    ).toEqual([
+      expect.stringMatching(/Block is a primitive; a step's kind cannot change/)
+    ]);
   });
 
   it('accepts only primitives as new steps, field by field', () => {

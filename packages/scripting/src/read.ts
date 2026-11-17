@@ -548,6 +548,13 @@ class Reader {
       );
     }
     const stored = findFeature(this.document, statement.id as FeatureId);
+    if (stored && stored.featureKind !== statement.kind) {
+      this.error(
+        `${stored.name} is a ${stored.featureKind}; a step's kind cannot change. Delete it and create the other kind.`,
+        statement.kindSpan
+      );
+      return null;
+    }
     if (stored) {
       this.checkAgainstStored(statement.body, stored.data, STATEMENT_KEYS);
     } else {
