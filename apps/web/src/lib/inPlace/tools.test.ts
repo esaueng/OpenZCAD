@@ -2023,7 +2023,7 @@ describe('review: loft, sweep and counts', () => {
     });
   });
 
-  it('a sweep carries its mode, and a guide rail', () => {
+  it('a new sweep is exact; a saved sampled one kept sampled carries its mode and rail', () => {
     const curve = (entityId: string) => ({
       sketchId: 's2' as SketchId,
       entityId
@@ -2034,15 +2034,25 @@ describe('review: loft, sweep and counts', () => {
       profiles: [section('s1', 1)],
       path: [curve('p1')]
     };
-    expect(sweep.request(base, {}, { mode: 'smooth' }, CTX)).toMatchObject({
-      mode: 'smooth'
-    });
+    // M04: built in place from exact surfaces, with no mode or rail.
+    const exact = sweep.request(base, {}, {}, CTX);
+    expect(exact).toMatchObject({ construction: 'in-place' });
+    expect(exact).not.toHaveProperty('guide');
+    const sampled = { saved: 'sampled', build: 'sampled' };
     expect(
-      sweep.request({ ...base, guide: [curve('g1'), curve('g2')] }, {}, {}, CTX)
-    ).toMatchObject({
+      sweep.request(base, {}, { ...sampled, mode: 'smooth' }, CTX)
+    ).toMatchObject({ mode: 'smooth' });
+    const railed = sweep.request(
+      { ...base, guide: [curve('g1'), curve('g2')] },
+      {},
+      sampled,
+      CTX
+    );
+    expect(railed).toMatchObject({
       mode: 'standard',
       guide: { sketchId: 's2', entityIds: ['g1', 'g2'] }
     });
+    expect(railed).not.toHaveProperty('construction');
   });
 
   it('pattern counts are whole numbers', () => {

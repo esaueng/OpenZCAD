@@ -2323,6 +2323,18 @@ export type FeatureData =
        * adapter refuses anything wider by name.
        */
       guide?: SketchPathReference;
+      /**
+       * M04 `'in-place'`: the profile stays where it is and is carried by the
+       * path's rigid motions (a line moves it along, an arc turns it about
+       * the arc's axis) as exact surfaces — planes, cylinders, cones, tori
+       * and rational NURBS, never facets (the kernel's `sweepExact`). The
+       * path must be tangent-continuous; a corner, a guide rail or a profile
+       * that would fold is refused by name, never sampled instead. `mode`
+       * is kept but builds nothing. Absent means the unchanged sampled
+       * `sweepWithOptions`/`sweepAlongEdges` call every sweep authored before
+       * this field existed took, so those documents replay identically.
+       */
+      construction?: 'in-place';
     }
   | {
       featureKind: 'helical-sweep';

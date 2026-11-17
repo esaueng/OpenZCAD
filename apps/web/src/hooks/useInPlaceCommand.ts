@@ -1461,8 +1461,13 @@ export function useInPlaceCommand(
     if (committingRef.current) return;
     setSession((current) => {
       if (!current) return current;
-      // While Options say so, clicks build a sweep's guide rail instead.
-      const slot = current.options.curves === 'guide' ? 'guide' : 'path';
+      // While Options say so, clicks build a sweep's guide rail instead
+      // (only a sampled sweep takes one; an exact sweep has no rail).
+      const slot =
+        current.options.curves === 'guide' &&
+        current.options.build === 'sampled'
+          ? 'guide'
+          : 'path';
       const path = current.slots[slot];
       const picked = path.some(
         (other) =>

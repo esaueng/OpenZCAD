@@ -542,6 +542,8 @@ export type InPlaceRequest =
       path: { sketchId: SketchId; entityIds: string[] };
       mode: 'standard' | 'smooth';
       guide?: { sketchId: SketchId; entityIds: string[] };
+      /** See the sweep `FeatureData`; absent is the legacy sampled sweep. */
+      construction?: 'in-place';
     }
   | {
       tool: 'helical-sweep';
@@ -1487,6 +1489,48 @@ function loftApex(
   };
 }
 
+/**
+ * M04: how a sweep is built. A new sweep is exact (`'in-place'`): the
+ * profile is carried along the path's lines and arcs as exact surfaces, and
+ * the kernel refuses a corner, a fold or a rail by name instead of sampling.
+ * Only a sweep saved before that existed is `'sampled'`; editing one offers
+ * Exact as an explicit rebuild, with its Mode and Rail rows kept while it
+ * stays sampled. `saved` is never shown: it records which kind was opened.
+ */
+const SWEEP_BUILD_OPTIONS: OptionSpec[] = [
+  {
+    id: 'saved',
+    label: 'Saved as',
+    choices: [
+      { value: 'exact', label: 'Exact' },
+      { value: 'sampled', label: 'Sampled' }
+    ],
+    initial: 'exact',
+    when: () => false
+  },
+  {
+    id: 'build',
+    label: 'Build',
+    choices: [
+      {
+        value: 'exact',
+        label: 'Exact',
+        tip: 'Exact surfaces; a corner is mitred between straight lines only'
+      },
+      {
+        value: 'sampled',
+        label: 'Sampled',
+        tip: 'As saved: built from flat facets'
+      }
+    ],
+    initial: 'exact',
+    when: (state) => state.options.saved === 'sampled'
+  }
+];
+
+const sampledSweep = (state: InPlacePanelState) =>
+  state.options.build === 'sampled';
+
 const sweep: InPlaceToolSpec = {
   id: 'sweep',
   title: 'Sweep',
@@ -1495,8 +1539,10 @@ const sweep: InPlaceToolSpec = {
   wantsPath: true,
   values: [],
   options: [
+    ...SWEEP_BUILD_OPTIONS,
     {
       id: 'mode',
+      when: sampledSweep,
       label: 'Mode',
       choices: [
         { value: 'standard', label: 'Standard' },
@@ -1511,6 +1557,7 @@ const sweep: InPlaceToolSpec = {
     },
     {
       id: 'curves',
+      when: sampledSweep,
       label: 'Picking',
       // A guide rail is the profile's up-vector track: curve clicks add to
       // it instead of the path while this is chosen.
@@ -1527,7 +1574,7 @@ const sweep: InPlaceToolSpec = {
   ],
   hint(slots, options) {
     if (slots.profiles.length === 0) return 'Pick a profile';
-    if (options?.curves === 'guide') {
+    if (options?.build === 'sampled' && options.curves === 'guide') {
       return slots.guide.length === 0
         ? 'Pick the rail curves'
         : `Rail of ${slots.guide.length}${
@@ -1542,6 +1589,19 @@ const sweep: InPlaceToolSpec = {
     const pick = slots.profiles[0];
     const first = slots.path[0];
     if (!pick || !first) return null;
+    if (options.build !== 'sampled') {
+      // Exact: no rail and no sampling mode, both of which only sample.
+      return {
+        tool: 'sweep',
+        profile: section(pick),
+        path: {
+          sketchId: first.sketchId,
+          entityIds: slots.path.map((curve) => curve.entityId)
+        },
+        mode: 'standard',
+        construction: 'in-place'
+      };
+    }
     const rail = slots.guide[0];
     return {
       tool: 'sweep',
@@ -1749,14 +1809,18 @@ function axisFoot(
 }
 
 /**
- * How the coil is built: an edited helix keeps the construction it was made
- * with, whatever is changed; a new one is wound in place (see the
- * helical-sweep `FeatureData`).
+ * How the coil is built: a new one is wound in place (see the helical-sweep
+ * `FeatureData`), and so is an edited one built that way. A faceted helix
+ * saved before stays faceted unless its edit chooses Build: Exact, which
+ * winds it in place from the profile (M04: an explicit, undoable rebuild).
  */
-function coilConstruction(ctx: InPlaceContext): 'in-place' | undefined {
-  return ctx.saved?.featureKind === 'helical-sweep'
-    ? ctx.saved.construction
-    : 'in-place';
+function coilConstruction(
+  ctx: InPlaceContext,
+  options: Readonly<Record<string, string>>
+): 'in-place' | undefined {
+  if (ctx.saved?.featureKind !== 'helical-sweep') return 'in-place';
+  if (ctx.saved.construction === 'in-place') return 'in-place';
+  return options.build === 'exact' ? 'in-place' : undefined;
 }
 
 /**
@@ -1781,7 +1845,7 @@ function coilPath(
   startDirection: Vector3;
   radius: number;
 } | null {
-  if (coilConstruction(ctx) === 'in-place') {
+  if (coilConstruction(ctx, options) === 'in-place') {
     const off = profileOffAxis(outline, axisLine);
     if (!off?.toward || off.crosses || !(off.distance > 0)) return null;
     return {
@@ -1864,7 +1928,12 @@ const helicalSweep: InPlaceToolSpec = {
     },
     ...TYPED_AXIS_VALUES
   ],
-  options: [HELIX_SIZE_OPTION, HELIX_GROW_OPTION, AXIS_MODE_OPTION],
+  options: [
+    HELIX_SIZE_OPTION,
+    HELIX_GROW_OPTION,
+    AXIS_MODE_OPTION,
+    ...SWEEP_BUILD_OPTIONS
+  ],
   layout: [
     { items: ['size', 'grow', 'height', 'pitch', 'turns'] },
     {
@@ -1975,7 +2044,7 @@ const helicalSweep: InPlaceToolSpec = {
     // radius it stores (one made before, or elsewhere, may differ); wound in
     // place, the radius is only a record, so it is measured afresh (or kept
     // when the profile cannot be read).
-    const construction = coilConstruction(ctx);
+    const construction = coilConstruction(ctx, options);
     const off =
       saved && construction !== 'in-place'
         ? null

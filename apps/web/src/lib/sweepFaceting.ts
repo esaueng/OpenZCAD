@@ -50,11 +50,11 @@ export function sweepFacetingAdvisories(
     const data = feature.data;
     if (
       (data.featureKind !== 'sweep' && data.featureKind !== 'helical-sweep') ||
-      // Wound in place as exact NURBS surfaces: no straight steps to
-      // disclose. (Those surfaces are not analytic, so the measurement
-      // below would not see it.)
-      (data.featureKind === 'helical-sweep' &&
-        data.construction === 'in-place') ||
+      // Built in place as exact surfaces (helices as exact NURBS, path
+      // sweeps as planes, quadrics, tori and exact NURBS): no straight steps
+      // to disclose. (Exact NURBS surfaces are not analytic, so the
+      // measurement below would not see it.)
+      data.construction === 'in-place' ||
       isFeatureSuppressed(feature) ||
       !feature.bodyId
     )
@@ -100,7 +100,7 @@ export function sweepFacetingAdvisories(
       featureId: feature.featureId,
       featureName: feature.name,
       kind: 'advisory',
-      message: `Feature "${feature.name}": ${label(feature)} is a faceted approximation, not exact curved surfaces: its curved path is followed in straight steps${detail}. Its ${faces.length} faces are what its volume, mass and STEP export measure.${smooth}`
+      message: `Feature "${feature.name}": ${label(feature)} is a faceted approximation, not exact curved surfaces: its curved path is followed in straight steps${detail}. Its ${faces.length} faces are what its volume, mass and STEP export measure.${smooth} ${rebuild(feature)}`
     });
   }
   return advisories;
@@ -110,6 +110,13 @@ function label(feature: FeatureNode): string {
   return feature.data.featureKind === 'helical-sweep'
     ? 'This helical sweep'
     : 'This sweep';
+}
+
+/** How to replace the facets: the explicit, undoable exact rebuild. */
+function rebuild(feature: FeatureNode): string {
+  return feature.data.featureKind === 'helical-sweep'
+    ? 'Edit it and choose Build: Exact to wind it again from exact surfaces (the coil then starts at the profile).'
+    : 'Edit it and choose Build: Exact to rebuild it from exact surfaces (a corner is mitred between straight lines only).';
 }
 
 function objectOf(document: ProjectDocument, id: string) {

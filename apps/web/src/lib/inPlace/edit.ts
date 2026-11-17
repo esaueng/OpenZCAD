@@ -402,6 +402,9 @@ export function inPlaceEditSeed(
         ? curves(data.guide.sketchId, data.guide.entityIds, 'guide')
         : [];
       seed.options.mode = data.mode;
+      const build = data.construction === 'in-place' ? 'exact' : 'sampled';
+      seed.options.saved = build;
+      seed.options.build = build;
       break;
     }
     case 'helical-sweep': {
@@ -446,6 +449,9 @@ export function inPlaceEditSeed(
       } else {
         seed.options.size = 'pitch';
       }
+      const build = data.construction === 'in-place' ? 'exact' : 'sampled';
+      seed.options.saved = build;
+      seed.options.build = build;
       break;
     }
     case 'datum-point':
@@ -1158,9 +1164,19 @@ export function inPlaceFeatureUpdate(
                   entityIds: request.guide.entityIds
                 } as Extract<FeatureData, { featureKind: 'sweep' }>['path']
               }
+            : {}),
+          ...(request.construction
+            ? { construction: request.construction }
             : {})
         },
-        ...(request.guide ? {} : { clearData: ['guide'] })
+        ...(request.guide && request.construction
+          ? {}
+          : {
+              clearData: [
+                ...(request.guide ? [] : ['guide']),
+                ...(request.construction ? [] : ['construction'])
+              ]
+            })
       };
     case 'datum-point':
     case 'datum-csys':
