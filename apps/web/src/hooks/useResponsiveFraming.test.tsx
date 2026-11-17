@@ -81,6 +81,38 @@ describe('responsive camera framing', () => {
     expect(onFit).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps a mode change pending through a later layout update', async () => {
+    vi.useFakeTimers();
+    const onFit = vi.fn();
+    const props = {
+      projectId: 'a',
+      mode: 'build',
+      layout: defaultPanelLayout(),
+      panels: 'open',
+      enabled: false,
+      onFit
+    };
+    const { rerender } = renderHook(useResponsiveFraming, {
+      initialProps: props
+    });
+    rerender({ ...props, mode: 'tweak' });
+    rerender({
+      ...props,
+      mode: 'tweak',
+      layout: setOption(props.layout, 'compact', true)
+    });
+    await act(() => vi.advanceTimersByTime(200));
+    expect(onFit).not.toHaveBeenCalled();
+    rerender({
+      ...props,
+      mode: 'tweak',
+      layout: setOption(props.layout, 'compact', true),
+      enabled: true
+    });
+    await act(() => vi.advanceTimersByTime(200));
+    expect(onFit).toHaveBeenCalledOnce();
+  });
+
   it('does not move the camera during an edit or replay a skipped desktop resize later', async () => {
     vi.useFakeTimers();
     const onFit = vi.fn();

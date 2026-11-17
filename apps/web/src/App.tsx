@@ -5165,6 +5165,13 @@ export function App() {
    */
   const accountDocumentUnavailableProjectIdRef = useRef<string | null>(null);
   /**
+   * The open project whose account copy could not be reached when it was
+   * opened. Its autosave has no account baseline, so the controller reports
+   * each device save as "local"; that would relabel an account project as
+   * device-only. It stays "offline" until the account acknowledges a save.
+   */
+  const accountUnreachableProjectIdRef = useRef<string | null>(null);
+  /**
    * Projects the account holds, as of the last listing that reached it. Kept
    * apart from `remoteVersionsRef`, which only knows about projects this
    * session has opened or written: the shelf has to mark every local-only
@@ -7567,7 +7574,17 @@ export function App() {
     const controller = new CloudProjectAutosave({
       api,
       onStatus(status) {
-        setSaveState(autosaveReportedSaveState(status.state, status.error));
+        if (status.state === 'synced') {
+          accountUnreachableProjectIdRef.current = null;
+        }
+        setSaveState(
+          autosaveReportedSaveState(
+            status.state,
+            status.error,
+            status.projectId !== null &&
+              status.projectId === accountUnreachableProjectIdRef.current
+          )
+        );
         if (status.state === 'repair' && status.projectId) {
           accountDocumentUnavailableProjectIdRef.current = status.projectId;
           setCloudAvailable(false);
@@ -8509,6 +8526,7 @@ export function App() {
             return;
           }
           if (accountDocumentLoadFailed) {
+            accountUnreachableProjectIdRef.current = restoredDocument.projectId;
             setSaveState('offline');
             setStatus(
               `Reopened ${restoredDocument.name}. The account copy is currently unreachable; your work remains saved on this device.`
@@ -14381,6 +14399,7 @@ export function App() {
     endCloudSettingsAutosave();
     remoteVersionsRef.current.clear();
     accountDocumentUnavailableProjectIdRef.current = null;
+    accountUnreachableProjectIdRef.current = null;
     sessionRef.current = null;
     accountSettingsRef.current = null;
     setSession(null);
@@ -15701,6 +15720,7 @@ export function App() {
         setCloudAvailable(false);
         setArtifacts([]);
         hydrateDocument(localDocument, { activeProjectSince });
+        if (!needsRepair) accountUnreachableProjectIdRef.current = projectId;
         setSaveState(needsRepair ? 'repair' : 'offline');
         setStatus(
           needsRepair
