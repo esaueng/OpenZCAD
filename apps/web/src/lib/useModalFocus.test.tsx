@@ -1,7 +1,9 @@
-import { StrictMode, useRef, useState } from 'react';
+import { StrictMode, useEffect, useRef, useState } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import { ContextMenu } from '../components/ContextMenu';
+import { DeleteFeatureDialog } from '../components/DeleteFeatureDialog';
 import {
   modalHoldsKeyboard,
   modalLendsWorkspaceKeys,
@@ -497,4 +499,73 @@ describe('useModalFocus', () => {
 
     expect(closed).toBe(1);
   });
+});
+
+/**
+ * UX-005: History's More actions → Delete → the dependency prompt. The
+ * prompt mounts while the menu fades out, so the control it saw focused was
+ * the menu's Delete item; Cancel returned focus to that unmounted item, and
+ * the next Tab went to the top of the app. It goes back to the menu's own
+ * opener, whether the menu unmounts after the prompt or with it.
+ */
+describe('a dialog opened from a menu item', () => {
+  function MenuDeleteHarness({ fadeOut }: { fadeOut: boolean }) {
+    const [menu, setMenu] = useState<'open' | 'closing' | null>(null);
+    const [prompt, setPrompt] = useState(false);
+    useEffect(() => {
+      if (menu !== 'closing') return;
+      const timer = window.setTimeout(() => setMenu(null), 20);
+      return () => window.clearTimeout(timer);
+    }, [menu]);
+    return (
+      <>
+        <button
+          type="button"
+          aria-label="More actions for Base plate"
+          onClick={() => setMenu('open')}
+        >
+          More
+        </button>
+        {menu && (
+          <ContextMenu
+            menu={{ x: 0, y: 0, items: [{ id: 'delete', label: 'Delete' }] }}
+            closing={menu === 'closing'}
+            onSelect={() => setPrompt(true)}
+            onClose={() => setMenu(fadeOut ? 'closing' : null)}
+          />
+        )}
+        {prompt && (
+          <DeleteFeatureDialog
+            name="Base plate"
+            dependents={['Wall plate']}
+            onCancel={() => setPrompt(false)}
+            onDelete={() => setPrompt(false)}
+          />
+        )}
+      </>
+    );
+  }
+
+  for (const fadeOut of [true, false]) {
+    it(`returns focus to the menu's opener on Cancel (${fadeOut ? 'menu fades out' : 'menu unmounts at once'})`, async () => {
+      const user = userEvent.setup();
+      render(
+        <StrictMode>
+          <MenuDeleteHarness fadeOut={fadeOut} />
+        </StrictMode>
+      );
+      const opener = screen.getByRole('button', {
+        name: 'More actions for Base plate'
+      });
+      opener.focus();
+      await user.keyboard('{Enter}');
+      await user.keyboard('{End}{Enter}');
+      const cancel = await screen.findByRole('button', { name: 'Cancel' });
+      await waitFor(() => expect(document.activeElement).toBe(cancel));
+      await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+      expect(document.activeElement).toBe(opener);
+    });
+  }
 });

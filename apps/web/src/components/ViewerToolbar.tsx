@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState, type RefObject } from 'react';
 import {
   Camera,
   Ellipsis,
@@ -190,6 +190,37 @@ const PROJECTION_LABELS: Record<ProjectionMode, string> = {
  * viewport state — so the two no longer duplicate each other, and the icons
  * carry their own state rather than needing a label beside each row.
  */
+/**
+ * The classes under which quiet-stage.css hides the rail's section panel:
+ * a command card (Measure's workbench among them) or a tool's card owns
+ * the right lane. Keep in step with that rule.
+ */
+const SECTION_LANE_HELD = ':is(.has-command, .inspector-owns-lane)';
+
+/**
+ * Whether the right lane the section panel opens into is held by a card,
+ * so the panel is hidden however open it is. Read from the viewer area's
+ * classes, which are what the stylesheet hides it by; only inside the
+ * instrument rail, the one place that rule applies.
+ */
+function useLaneHeld(anchorRef: RefObject<HTMLElement | null>): boolean {
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    const anchor = anchorRef.current;
+    const viewer = anchor?.closest('.viewer-area');
+    if (!anchor || !viewer || !anchor.closest('.instrument-rail')) return;
+    const read = () => setHeld(viewer.matches(SECTION_LANE_HELD));
+    read();
+    const observer = new MutationObserver(read);
+    observer.observe(viewer, { attributes: true, attributeFilter: ['class'] });
+    return () => {
+      observer.disconnect();
+      setHeld(false);
+    };
+  }, [anchorRef]);
+  return held;
+}
+
 export function ViewerToolbar({
   settings,
   projection,
@@ -348,6 +379,12 @@ export function ViewerToolbar({
     shownCut !== null &&
     !sectionCovered &&
     (sectionOn ? sectionPanelOpen : heldOff);
+  // A command card or a tool's card holding the right lane hides the panel
+  // (quiet-stage.css) while the cut stays on. The button says only what is
+  // on screen: it announced the controls expanded under Measure while they
+  // were display: none (UX-009).
+  const laneHeld = useLaneHeld(sectionAnchorRef);
+  const sectionControlsShown = sectionPanelShown && !laneHeld;
   const panelId = useId();
   // X-ray rides over the display mode, so it lives in the Display menu
   // rather than on a button of its own: the rail is sized to centre on the
@@ -417,7 +454,7 @@ export function ViewerToolbar({
     return () => window.removeEventListener('pointerdown', onPointerDown, true);
   }, []);
   useEffect(() => {
-    if (!sectionPanelShown) {
+    if (!sectionControlsShown) {
       return;
     }
     function onKeyDown(event: KeyboardEvent) {
@@ -438,7 +475,7 @@ export function ViewerToolbar({
     }
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [sectionPanelShown, sectionOn, setSectionPanelOpen]);
+  }, [sectionControlsShown, sectionOn, setSectionPanelOpen]);
 
   function selectView(view: StandardView) {
     onView(view);
@@ -467,7 +504,7 @@ export function ViewerToolbar({
   function pressSection(button: HTMLButtonElement) {
     // Safari does not focus a clicked button; Escape reads the focus.
     button.focus();
-    if (sectionPanelShown) {
+    if (sectionControlsShown) {
       if (sectionOn) setSectionPanelOpen(false);
       setHeldOff(false);
       return;
@@ -475,6 +512,11 @@ export function ViewerToolbar({
     // Nothing on screen to cut: the button says so instead of switching on
     // a cut with no controls and nothing to show (I49).
     if (!sectionOn && nothingToSection) return;
+    // Measure's workbench and the section controls share the right lane.
+    // Like the views flyout, the one pressed last takes it: asking for the
+    // section controls puts Measure away (UX-009). A command card is work
+    // in progress and keeps the lane; the tooltip says the controls wait.
+    if (laneHeld && measuring) onMeasure?.(false);
     if (!sectionOn || !shownCut) {
       onToggleSection();
       return;
@@ -681,16 +723,20 @@ export function ViewerToolbar({
                   : 'cuts the display only'
                 : !shownCut
                   ? 'click to turn off'
-                  : sectionPanelShown
+                  : sectionControlsShown
                     ? 'click to hide controls'
-                    : 'click for controls'
+                    : laneHeld && !measuring
+                      ? 'controls return when the open card closes'
+                      : laneHeld
+                        ? 'click for controls · closes Measure'
+                        : 'click for controls'
             }`}
           >
             <button
               type="button"
               ref={sectionTriggerRef}
               className={`rail-button ${settings.sectionView ? 'active' : ''} ${
-                sectionPanelShown ? 'open' : ''
+                sectionControlsShown ? 'open' : ''
               }`}
               onClick={(event) => pressSection(event.currentTarget)}
               aria-label={`Section view — now: ${sectionLabel}`}
@@ -698,7 +744,7 @@ export function ViewerToolbar({
               // Greyed by aria, like Undo: a disabled button cannot take
               // focus or show the tooltip that says why.
               aria-disabled={!sectionOn && nothingToSection ? true : undefined}
-              aria-expanded={sectionPanelShown}
+              aria-expanded={sectionControlsShown}
             >
               <SquareSplitVertical size={16} aria-hidden="true" />
             </button>

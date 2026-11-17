@@ -1904,6 +1904,7 @@ import {
   inPlaceFaceMode,
   takesFeatureFaces,
   toggledPatternSkip,
+  patternCopyChip,
   requestNewAxis,
   resolveNewAxis,
   valueInRange,
@@ -26296,15 +26297,14 @@ export function App() {
       inPlace.handles.map((handle) => {
         if (handle.kind === 'instance') {
           // M02: a copy's skip toggle reads its label, and whether it is in.
-          const { label, skipped } = handle.params;
+          // A Point pattern copy's label is a sketch point's id, kept as the
+          // skip key; it reads and is announced by its name (UX-008).
+          const chip = patternCopyChip(handle.params);
           return {
             ...handle,
-            value: skipped ? 1 : 0,
-            format: () => label,
-            describe: () =>
-              skipped
-                ? `Copy ${label}, skipped · bring it back`
-                : `Copy ${label} · skip it`
+            value: handle.params.skipped ? 1 : 0,
+            format: () => chip.text,
+            describe: () => chip.name
           };
         }
         const valueSpec = inPlaceSpec?.values.find(

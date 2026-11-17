@@ -28,6 +28,7 @@ import {
   inPlaceFaceMode,
   takesFeatureFaces,
   toggledPatternSkip,
+  patternCopyChip,
   valueInRange,
   valueRangeSentence,
   type BodyPick,
@@ -1676,6 +1677,28 @@ describe('M02 feature patterns and skipped copies', () => {
       ['p_a', { x: 40, y: 5, z: 2 }],
       ['p_b', { x: 10, y: 35, z: 2 }]
     ]);
+    // UX-008: the chips read and are announced by the pick order, never by
+    // the point's entity id, which stays the skip key (`instance:<id>`, and
+    // `skippedInstances` in the saved feature).
+    const chips = spec
+      .handles(slots, {}, ctx, { skip: 'p_b' })
+      .flatMap((handle) =>
+        handle.kind === 'instance'
+          ? [{ valueId: handle.valueId, ...patternCopyChip(handle.params) }]
+          : []
+      );
+    expect(chips).toEqual([
+      {
+        valueId: 'instance:p_a',
+        text: 'Point 1',
+        name: 'Copy at Point 1 · skip it'
+      },
+      {
+        valueId: 'instance:p_b',
+        text: 'Point 2',
+        name: 'Copy at Point 2, skipped · bring it back'
+      }
+    ]);
     // An edit keeps the reference it stored, wherever the body is now.
     expect(
       spec.request(
@@ -1702,6 +1725,13 @@ describe('M02 feature patterns and skipped copies', () => {
       )
     ).toMatchObject({
       points: { pointIds: ['p_a', 'p_ref', 'p_b'], referencePointId: 'p_a' }
+    });
+  });
+
+  it('names a positional copy by its key', () => {
+    expect(patternCopyChip({ label: '3', skipped: false })).toEqual({
+      text: '3',
+      name: 'Copy 3 · skip it'
     });
   });
 

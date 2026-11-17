@@ -278,3 +278,17 @@
     display: none;
   }
 }
+
+/* The same narrow window with a mouse or trackpad (UX-002). The rule above
+   is for touch, so a fine pointer kept the 296px card at the lane's corner
+   (116px): 92px off a 320px window and 22px off a 390px one, its text, Next
+   and Skip cut. It takes the stage between the two rails as touch does,
+   at its own height. */
+@media (pointer: fine) and (max-width: 520px) {
+  .workspace.column-layout .workspace-tour {
+    left: calc(var(--column-w) + var(--island-gap) * 2);
+    right: var(--lane-end);
+    width: auto;
+    max-width: none;
+  }
+}

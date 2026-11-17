@@ -845,7 +845,13 @@ export type CommandHandleView = (
   | {
       /** M02: a pattern copy's skip toggle, where the copy stands. */
       kind: 'instance';
-      params: { anchor: HandleVec3; label: string; skipped: boolean };
+      params: {
+        anchor: HandleVec3;
+        /** The skip key handed back on a toggle; never shown. */
+        label: string;
+        display?: string;
+        skipped: boolean;
+      };
     }
 ) & {
   valueId: string;
