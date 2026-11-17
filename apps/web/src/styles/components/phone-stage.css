@@ -76,11 +76,44 @@
   /* Opened, the whole rail in three columns: twelve instruments and seven
      panel controls are 339px tall, which the shortest of these stages
      holds. The dividers would each take a row of their own. */
+  .workspace.column-layout {
+    --rail-open-w: calc(44px * 3 + 2px * 2 + 8px);
+  }
+
   .instrument-rail:has(.rail-more-toggle[aria-expanded='true']) > .viewer-rail {
     display: grid;
     grid-template-columns: repeat(3, 44px);
     justify-content: center;
-    width: calc(44px * 3 + 2px * 2 + 8px);
+    width: var(--rail-open-w);
+  }
+
+  /* The right lane steps past the opened rail, as it does past the folded
+     one (--lane-end, with the rail three columns wide): the measurement
+     workbench, or a phone's panel, stood over the rail's left two columns
+     and over its own toggle, so a tap could not fold it again (UX-011).
+     The lane narrows for as long as the rail is open. */
+  .workspace.column-layout:has(.rail-more-toggle[aria-expanded='true'])
+    .viewer-area
+    .stage-right {
+    right: calc(
+      var(--rail-open-w) + 2px + var(--island-gap) * 2 + var(--right-panels-w)
+    );
+  }
+
+  /* So narrowed, the workbench's Units, Precision and Ø/R shared 212px and
+     Units showed "m" for mm: Ø/R take a line of their own under the two
+     fields. */
+  .workspace.column-layout:has(.rail-more-toggle[aria-expanded='true'])
+    .stage-right
+    .measurement-display-controls {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .workspace.column-layout:has(.rail-more-toggle[aria-expanded='true'])
+    .stage-right
+    .measurement-radial-toggle {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(44px, 1fr));
   }
 
   .instrument-rail:has(.rail-more-toggle[aria-expanded='true']) .rail-divider {

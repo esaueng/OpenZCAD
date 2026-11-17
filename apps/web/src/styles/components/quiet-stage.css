@@ -3579,6 +3579,21 @@ button.command-rail.is-suggested {
   background-color: transparent;
 }
 
+/* The stage's foot claim (useStageFootClaim): how far up from the stage's
+   bottom edge the task surface standing at its foot reaches — the modeling
+   guide's card, Assemble's animation timeline. Where a floating panel
+   shares that foot on a narrow stage it ends above the claim, so neither
+   stands over the other's controls (design review 16 Nov 2026: the Objects
+   panel took the guide's Finish, the Assemble sidebar the timeline's Play).
+   Both measure themselves, so the claim follows a minimized card or a
+   timeline with more tracks. */
+.viewer-area {
+  --stage-foot-claim: max(
+    var(--workspace-tour-claim, 0px),
+    var(--motion-timeline-claim, 0px)
+  );
+}
+
 /* At a phone width the one panel that shows takes the right lane under the
    command card and the inspector, keeping enough height to read. */
 .panel-lane-float {
@@ -3589,15 +3604,22 @@ button.command-rail.is-suggested {
 }
 
 @media (max-width: 520px) {
+  /* Above the stage's foot claim too: with the modeling guide up, the panel
+     stands over the card rather than across its text and Finish. */
   .viewer-area .stage-right:has(> .panel-lane-float) {
+    --panel-lane-bottom: max(
+      calc(var(--lane-base) + 40px),
+      calc(var(--stage-foot-claim) + var(--island-gap))
+    );
+
     z-index: calc(var(--z-inspector-float) + 2);
     top: auto;
     right: calc(var(--island-gap) * 2 + var(--rail-w));
-    bottom: calc(var(--lane-base) + 40px);
+    bottom: var(--panel-lane-bottom);
     left: calc(var(--island-gap) * 2 + var(--rail-w));
     max-height: min(
       40dvh,
-      calc(100% - var(--stage-top) - var(--lane-base) - 40px)
+      calc(100% - var(--stage-top) - var(--panel-lane-bottom))
     );
   }
 

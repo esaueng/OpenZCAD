@@ -1,0 +1,307 @@
+import type { Locator, Page } from '@playwright/test';
+import {
+  addAssemblyComponents,
+  addAssemblyJoint,
+  addPrimitiveFeature,
+  createProjectDocument,
+  setAssemblyStudy
+} from '@openzcad/document-core';
+import {
+  toUserId,
+  type AssemblyFrame,
+  type BodyId,
+  type ProjectDocument
+} from '@openzcad/shared';
+import {
+  createProject,
+  expect,
+  expectBodyCount,
+  pickPlanarFace,
+  stubApi,
+  test,
+  waitForSurfacesToSettle
+} from './openzcad-fixtures';
+
+/**
+ * Floating surfaces sharing a phone's stage (design review 16 Nov 2026,
+ * UX-001, UX-003, UX-010, UX-011). At 390 × 844 with touch, one surface
+ * stood over another's controls and took its taps: the Objects panel over
+ * the modeling guide's Finish, the Assemble sidebar over the animation
+ * timeline's Play, the measurement workbench over the opened view tools'
+ * own toggle, and a measurement's Edit and Delete ran past the
+ * workbench's edge once touch sizing grew them to 44 px.
+ *
+ * Each check presses the control as a finger does and asks the page what
+ * is under its centre: Playwright's actionability check alone scrolls a
+ * clipped control into view, which hid UX-010.
+ */
+
+test.use({ hasTouch: true, isMobile: true });
+
+/** Whether a press at the control's centre reaches the control itself. */
+function reachable(control: Locator) {
+  return control.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(
+      box.x + box.width / 2,
+      box.y + box.height / 2
+    );
+    return hit !== null && element.contains(hit);
+  });
+}
+
+async function shot(page: Page, name: string) {
+  await test.info().attach(name, {
+    body: await page.screenshot(),
+    contentType: 'image/png'
+  });
+}
+
+async function openBracket(page: Page) {
+  await stubApi(page, { commandFoldClosed: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+    .click();
+  await expect(
+    page.getByRole('button', { name: 'Tweak', exact: true })
+  ).toBeVisible({ timeout: 90_000 });
+}
+
+/** Build's Measure on the bracket, with one result in the workbench. */
+async function measureTopFace(page: Page) {
+  const more = page.getByRole('button', { name: 'More view tools' });
+  await more.tap();
+  await page.getByRole('button', { name: 'Measure', exact: true }).tap();
+  const workbench = page.locator('.measurement-dock');
+  await expect(workbench).toBeVisible();
+  await expect
+    .poll(
+      async () => (await pickPlanarFace(page, { x: 0, y: 0, z: 1 })) !== null,
+      {
+        timeout: 60_000
+      }
+    )
+    .toBe(true);
+  const row = workbench.locator('.measurement-row').first();
+  await expect(row).toBeVisible();
+  return { more, workbench, row };
+}
+
+test('the modeling guide’s Finish stays clear of the phone’s panel (UX-001)', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  // A new device, laid out on a wide window (the default panels open, as
+  // the review found them) and then narrowed to a phone's width.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await stubApi(page, {
+    workspaceTour: true,
+    panelLayout: null,
+    commandFoldClosed: true
+  });
+  await createProject(page, 'Phone guide');
+  const tour = page.locator('.workspace-tour');
+  await expect(tour).toBeVisible();
+  const next = tour.getByRole('button', { name: 'Next' });
+  for (let step = 0; step < 3; step += 1) await next.tap();
+  await expect(tour).toContainText('4/4');
+  await page.setViewportSize({ width: 390, height: 844 });
+  const panel = page.locator('.panel-lane-float .model-panel');
+  await expect(panel).toBeVisible();
+  const finish = tour.getByRole('button', { name: 'Finish' });
+  await expect(finish).toBeVisible();
+  await waitForSurfacesToSettle(page, [
+    '.workspace-tour',
+    '.panel-lane-float .model-panel'
+  ]);
+  await shot(page, 'ux-001-guide-finish');
+  await expect.poll(() => reachable(finish)).toBe(true);
+  // The two share the stage one above the other, the guide whole.
+  const card = (await tour.boundingBox())!;
+  const lane = (await panel.boundingBox())!;
+  expect(
+    lane.y + lane.height <= card.y + 0.5 || card.y + card.height <= lane.y + 0.5
+  ).toBe(true);
+  // The panel's own "Hide panels" stays in reach too.
+  await expect
+    .poll(() => reachable(panel.getByRole('button', { name: 'Hide panels' })))
+    .toBe(true);
+  await finish.tap();
+  await expect(tour).toBeHidden();
+  // Finished, the panel takes its usual place back.
+  await expect(panel).toBeVisible();
+});
+
+const PIVOT: AssemblyFrame = {
+  origin: { x: 0, y: 0, z: 0 },
+  zAxis: { x: 0, y: 0, z: 1 },
+  xAxis: { x: 1, y: 0, z: 0 }
+};
+
+/** Two blades on a revolute joint with one saved animation of it. */
+function animatedBlades(): ProjectDocument {
+  let document = createProjectDocument('Phone animation', toUserId('user_e2e'));
+  for (const bodyName of ['Blade A', 'Blade B']) {
+    document = addPrimitiveFeature(document, {
+      name: bodyName,
+      bodyName,
+      primitiveKind: 'box',
+      dimensions: { width: 60, height: 4, depth: 12 }
+    });
+  }
+  const [a, b] = document.bodyOrder as [BodyId, BodyId];
+  document = addAssemblyComponents(document, {
+    components: [
+      { componentId: 'comp_a', name: 'Blade A', bodyId: a, grounded: true },
+      { componentId: 'comp_b', name: 'Blade B', bodyId: b, grounded: false }
+    ]
+  });
+  document = addAssemblyJoint(document, {
+    joint: {
+      id: 'joint_pivot',
+      name: 'Pivot',
+      kind: 'revolute',
+      parent: { componentId: 'comp_a', frame: PIVOT },
+      child: { componentId: 'comp_b', frame: PIVOT },
+      values: [0],
+      limits: [{ min: 0, max: 35 }]
+    }
+  });
+  return setAssemblyStudy(document, {
+    study: {
+      id: 'study_phone',
+      name: 'Animation 1',
+      durationS: 2,
+      playback: 'once',
+      tracks: [
+        {
+          jointId: 'joint_pivot',
+          dof: 0,
+          keys: [
+            { t: 0, value: 0, easing: 'linear' },
+            { t: 2, value: 30, easing: 'ease' }
+          ]
+        }
+      ]
+    }
+  });
+}
+
+test('the animation timeline keeps its own band under the Assemble sidebar (UX-003)', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const document = animatedBlades();
+  await stubApi(page, { commandFoldClosed: true });
+  await page.route('**/api/projects', (route) =>
+    route.request().method() === 'POST'
+      ? route.fulfill({
+          status: 201,
+          json: {
+            project: {
+              projectId: document.projectId,
+              name: document.name,
+              revisionCount: 1,
+              updatedAt: new Date().toISOString()
+            },
+            document
+          }
+        })
+      : route.fulfill({ json: { projects: [] } })
+  );
+  await createProject(page, document.name);
+  await expectBodyCount(page, 2);
+  await page.getByRole('button', { name: 'Assemble', exact: true }).tap();
+  const sidebar = page.getByRole('complementary', { name: 'Assembly' });
+  await expect(sidebar).toBeVisible();
+  await sidebar.getByRole('button', { name: /^Animation 1/ }).tap();
+  const timeline = page.locator('.motion-timeline-floating');
+  await expect(timeline).toBeVisible();
+  const play = timeline.getByRole('button', { name: 'Play', exact: true });
+  await expect(play).toBeVisible();
+  await shot(page, 'ux-003-timeline-play');
+  await expect.poll(() => reachable(play)).toBe(true);
+  // The sidebar ends above the timeline rather than over it.
+  const float = page.locator('.assembly-panel-float');
+  await expect
+    .poll(async () => {
+      const side = (await float.boundingBox())!;
+      const band = (await timeline.boundingBox())!;
+      return side.y + side.height <= band.y + 0.5;
+    })
+    .toBe(true);
+  // And the sidebar still shows its sections, scrolling inside its room.
+  await expect(sidebar.getByText('Animations')).toBeVisible();
+  await play.tap();
+  await expect(
+    timeline.getByRole('button', { name: 'Pause', exact: true })
+  ).toBeVisible();
+});
+
+test('opened view tools stand over the measurement workbench and close from their toggle (UX-011)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await openBracket(page);
+  const { more } = await measureTopFace(page);
+  await expect(more).toHaveAttribute('aria-expanded', 'false');
+  await more.tap();
+  await expect(more).toHaveAttribute('aria-expanded', 'true');
+  await shot(page, 'ux-011-view-tools-open');
+  await expect.poll(() => reachable(more)).toBe(true);
+  // Every tool the opened rail shows takes its own press.
+  const rail = page.locator('.instrument-rail');
+  const covered = await rail.evaluate((element) =>
+    [...element.querySelectorAll('.viewer-rail button')]
+      .filter((button) => {
+        const box = button.getBoundingClientRect();
+        if (box.width === 0 || box.height === 0) return false;
+        const hit = document.elementFromPoint(
+          box.x + box.width / 2,
+          box.y + box.height / 2
+        );
+        return !(hit && button.contains(hit));
+      })
+      .map((button) => button.getAttribute('aria-label') ?? button.textContent)
+  );
+  expect(covered).toEqual([]);
+  await more.tap();
+  await expect(more).toHaveAttribute('aria-expanded', 'false');
+  // Folded, the workbench's own controls are in reach again.
+  await expect
+    .poll(() =>
+      reachable(page.locator('.measurement-dock-foot button').first())
+    )
+    .toBe(true);
+});
+
+test('a measurement’s four actions fit the touch workbench (UX-010)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await openBracket(page);
+  const { workbench, row } = await measureTopFace(page);
+  await shot(page, 'ux-010-measure-actions');
+  const list = workbench.locator('.measurement-dock-list');
+  expect(
+    await list.evaluate((element) => element.scrollWidth - element.clientWidth)
+  ).toBeLessThanOrEqual(0);
+  const edge = (await list.boundingBox())!;
+  for (const name of [/^(Hide|Show) /, /^Copy /, /^Edit /, /^Delete /]) {
+    const action = row.getByRole('button', { name });
+    await expect(action).toBeVisible();
+    const box = (await action.boundingBox())!;
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(box.x).toBeGreaterThanOrEqual(edge.x - 0.5);
+    expect(box.x + box.width).toBeLessThanOrEqual(edge.x + edge.width + 0.5);
+    await expect.poll(() => reachable(action)).toBe(true);
+  }
+  // The value keeps its line beside them.
+  await expect(row.locator('.measurement-row-value')).toBeVisible();
+  await row.getByRole('button', { name: /^Edit / }).tap();
+  await expect(row.locator('.measurement-row-editor')).toBeVisible();
+});

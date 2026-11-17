@@ -96,6 +96,18 @@ describe('the phone stage', () => {
     }
   });
 
+  it('steps the right lane past the opened rail, as wide as it draws it', () => {
+    // The workbench (or a phone's panel) stood over the opened rail and its
+    // own toggle, so a tap could not fold it again (UX-011).
+    const block = mediaBlock(PHONE);
+    expect(block).toMatch(
+      /> \.viewer-rail \{[^}]*grid-template-columns:\s*repeat\(3, 44px\);[^}]*width:\s*var\(--rail-open-w\)/
+    );
+    expect(block).toMatch(
+      /\.workspace\.column-layout:has\(\.rail-more-toggle\[aria-expanded='true'\]\)\s+\.viewer-area\s+\.stage-right \{[^}]*right:\s*calc\(\s*var\(--rail-open-w\)/
+    );
+  });
+
   it('keeps what opens over the bar between the two one-column rails', () => {
     const block = mediaBlock(`${PHONE.replace('541px', '621px')}`);
     // A pick's card: from the tool rail to the instrument rail, not on to
