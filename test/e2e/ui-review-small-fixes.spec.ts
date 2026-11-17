@@ -108,10 +108,11 @@ test.describe('UX-002: the first-model guide in a narrow mouse window', () => {
       // Between the rails, as on touch: clear of the instrument rail too.
       const rail = (await page.locator('.instrument-rail').boundingBox())!;
       expect(card.x + card.width).toBeLessThanOrEqual(rail.x);
-      for (const name of ['Next', 'Skip tour']) {
-        const button = tour.getByRole('button', { name }).first();
-        if ((await button.count()) === 0) continue;
+      for (const name of ['Next', 'Skip the tour']) {
+        const button = tour.getByRole('button', { name, exact: true });
+        await expect(button, `${name} present`).toHaveCount(1);
         const box = (await button.boundingBox())!;
+        expect(box.x, `${name} inside`).toBeGreaterThanOrEqual(0);
         expect(box.x + box.width, `${name} inside`).toBeLessThanOrEqual(
           size.width
         );
