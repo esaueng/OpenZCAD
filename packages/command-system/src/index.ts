@@ -53,6 +53,7 @@ import {
   standardPartHasLength,
   standardPartMinimumLengthMm,
   standardPartNoun,
+  standardPartIsThreaded,
   standardPartProblem,
   standardPartForHole,
   createId,
@@ -120,6 +121,7 @@ import {
   type SketchReferenceDimensionDeleteInput,
   type SketchReferenceLabelPositionInput,
   archiveHistorySources,
+  renameCheckpoint,
   setShareLinkSheets,
   type ImportedSourceArchiveIdentity,
   applyDocumentChanges,
@@ -1702,6 +1704,15 @@ function validateStandardPartInput(
 ): void {
   const problem = standardPartProblem(input);
   if (problem) throw new Error(problem);
+  // M17 (schema v83): only a threaded part has a thread to simplify.
+  if (input.thread !== undefined) {
+    if (input.thread !== 'modeled' && input.thread !== 'simplified') {
+      throw new Error('A thread is modeled or simplified.');
+    }
+    if (!standardPartIsThreaded(input.partKind)) {
+      throw new Error(`A ${standardPartNoun(input)} has no thread.`);
+    }
+  }
   const value = (label: string, param: ParamValue) =>
     resolvedModelingValue(document, `standard part ${label}`, param);
   if (input.hole !== undefined) validateStandardPartHole(document, input);
@@ -3392,7 +3403,11 @@ export const commandFactories = {
   },
   updateDrawingView(
     payload: DrawingViewUpdateInput,
-    label = payload.centerMm ? 'Move drawing view' : 'Edit drawing view'
+    label = payload.centerMm
+      ? 'Move drawing view'
+      : payload.configurationId !== undefined
+        ? 'Set view configuration'
+        : 'Edit drawing view'
   ): CommandDefinition<DrawingViewUpdateInput> {
     return makeCommand('drawing.view.update', label, payload, (document) =>
       updateDrawingView(document, payload)
@@ -6173,6 +6188,18 @@ export class CommandManager {
    */
   setShareLinkSheets(sheetIds: readonly string[]): ProjectDocument {
     const next = setShareLinkSheets(this.document, sheetIds);
+    if (next === this.document) return this.document;
+    assertDocumentTextBudget(next);
+    this.document = next;
+    return this.document;
+  }
+
+  /**
+   * Renames a save point (L03): a forward write with no undo entry, since
+   * undo never rewinds the save-point list. See `renameCheckpoint`.
+   */
+  renameCheckpoint(checkpointId: string, name: string): ProjectDocument {
+    const next = renameCheckpoint(this.document, checkpointId, name);
     if (next === this.document) return this.document;
     assertDocumentTextBudget(next);
     this.document = next;

@@ -335,6 +335,57 @@ export interface DrawingView {
    * other view.
    */
   detail?: DrawingDetail;
+  /**
+   * D03 (schema v81): this view is an auxiliary view of its source, looking
+   * square onto a face the source sees edge-on. Absent on every other view.
+   */
+  auxiliary?: DrawingAuxiliary;
+  /**
+   * F06 (schema v89): the configuration row this view draws, built on its
+   * own, while the document's active row stays the model being edited.
+   * Only a base view names one; a view folded from it, cut from it or
+   * detailed from it draws its source's row. Absent: the active row.
+   */
+  configurationId?: string;
+}
+
+/**
+ * An auxiliary view (D03, schema v81): seen along a direction in its source
+ * view's plane, square to an edge the source draws true length, so a face
+ * inclined to every principal view is drawn true size. Its frame is stored
+ * (`direction` of sight and page-right `x`, unit and square to each other;
+ * page-up is the source's own direction of sight), so moving either view
+ * never turns it. It keeps its source's orientation and bodies and is placed
+ * freely, labelled VIEW A with an arrow on the source.
+ */
+export interface DrawingAuxiliary {
+  /** A principal view: not the isometric, a section, a detail or another auxiliary. */
+  sourceViewId: DrawingViewId;
+  /** One or two capitals, in the sequence sections and details share. */
+  label: string;
+  direction: Vector3;
+  x: Vector3;
+}
+
+/**
+ * The frame a view projects in: its named orientation's, or an auxiliary
+ * view's stored one (page-up `x × direction`).
+ */
+export function drawingViewFrame(
+  view: Pick<DrawingView, 'orientation' | 'auxiliary'>
+): DrawingViewFrame {
+  const auxiliary = view.auxiliary;
+  if (!auxiliary) return DRAWING_VIEW_FRAMES[view.orientation];
+  const { direction: d, x } = auxiliary;
+  return {
+    direction: { ...d },
+    x: { ...x },
+    up: {
+      x: x.y * d.z - x.z * d.y,
+      y: x.z * d.x - x.x * d.z,
+      z: x.x * d.y - x.y * d.x
+    }
+  };
 }
 
 /**
@@ -458,7 +509,9 @@ export function nextDrawingSectionLabel(
         ? [view.section.label]
         : view.detail
           ? [view.detail.label]
-          : []
+          : view.auxiliary
+            ? [view.auxiliary.label]
+            : []
     )
   );
   // I, O and Q read as digits on a print; drafting practice skips them.
@@ -618,6 +671,21 @@ function drawingViewError(view: unknown, where: string): string | null {
     return `${where} has an invalid hidden-line setting.`;
   if (view.parentViewId !== undefined && typeof view.parentViewId !== 'string')
     return `${where} has an invalid base view.`;
+  if (view.configurationId !== undefined) {
+    if (
+      typeof view.configurationId !== 'string' ||
+      view.configurationId.length === 0 ||
+      view.configurationId.length > 128
+    )
+      return `${where} names no usable configuration.`;
+    if (
+      view.parentViewId !== undefined ||
+      view.section !== undefined ||
+      view.detail !== undefined ||
+      view.auxiliary !== undefined
+    )
+      return `${where} draws its source view's configuration and cannot name its own.`;
+  }
   if (view.section !== undefined) {
     const section = view.section;
     if (
@@ -635,6 +703,41 @@ function drawingViewError(view: unknown, where: string): string | null {
       return `${where} has an invalid section.`;
     if (view.parentViewId !== undefined)
       return `${where} cannot be both a section and a projected view.`;
+  }
+  if (view.auxiliary !== undefined) {
+    const auxiliary = view.auxiliary;
+    const unit = (value: unknown) =>
+      isRecord(value) &&
+      Object.keys(value).length === 3 &&
+      [value.x, value.y, value.z].every(
+        (component) =>
+          typeof component === 'number' && Number.isFinite(component)
+      ) &&
+      Math.abs(
+        Math.hypot(value.x as number, value.y as number, value.z as number) - 1
+      ) <= 1e-9;
+    if (
+      !isRecord(auxiliary) ||
+      typeof auxiliary.sourceViewId !== 'string' ||
+      typeof auxiliary.label !== 'string' ||
+      !SECTION_LABEL.test(auxiliary.label) ||
+      !unit(auxiliary.direction) ||
+      !unit(auxiliary.x) ||
+      Object.keys(auxiliary).some(
+        (key) => !['sourceViewId', 'label', 'direction', 'x'].includes(key)
+      )
+    )
+      return `${where} has an invalid auxiliary view.`;
+    const d = auxiliary.direction as Vector3;
+    const x = auxiliary.x as Vector3;
+    if (Math.abs(d.x * x.x + d.y * x.y + d.z * x.z) > 1e-9)
+      return `${where} has an auxiliary frame whose axes are not square.`;
+    if (
+      view.parentViewId !== undefined ||
+      view.section !== undefined ||
+      view.detail !== undefined
+    )
+      return `${where} cannot be an auxiliary view and a projected, section or detail view.`;
   }
   if (view.detail !== undefined) {
     const detail = view.detail;
@@ -808,6 +911,7 @@ export function drawingSheetError(value: unknown): string | null {
       !parent ||
       parent.parentViewId !== undefined ||
       parent.detail !== undefined ||
+      parent.auxiliary !== undefined ||
       alignment === null
     )
       return `${where} has a projected view that cannot fold from its base.`;
@@ -832,6 +936,32 @@ export function drawingSheetError(value: unknown): string | null {
   }
   const labels = new Set<string>();
   for (const view of views.values()) {
+    const auxiliary = view.auxiliary as DrawingAuxiliary | undefined;
+    if (!auxiliary) continue;
+    if (labels.has(auxiliary.label))
+      return `${where} names view ${auxiliary.label} twice.`;
+    labels.add(auxiliary.label);
+    const source = views.get(auxiliary.sourceViewId);
+    const sight = source
+      ? DRAWING_VIEW_FRAMES[source.orientation as DrawingViewOrientation]
+          .direction
+      : null;
+    const d = auxiliary.direction;
+    if (
+      !source ||
+      !sight ||
+      source.orientation === 'iso' ||
+      source.section !== undefined ||
+      source.detail !== undefined ||
+      source.auxiliary !== undefined ||
+      source.orientation !== view.orientation ||
+      [...(source.bodyIds as string[])].sort().join('\u0000') !==
+        [...(view.bodyIds as string[])].sort().join('\u0000') ||
+      Math.abs(d.x * sight.x + d.y * sight.y + d.z * sight.z) > 1e-9
+    )
+      return `${where} has an auxiliary view that is not seen square from its source.`;
+  }
+  for (const view of views.values()) {
     const detail = view.detail as DrawingDetail | undefined;
     if (!detail) continue;
     if (labels.has(detail.label))
@@ -848,6 +978,7 @@ export function drawingSheetError(value: unknown): string | null {
       !source ||
       source.section !== undefined ||
       source.detail !== undefined ||
+      source.auxiliary !== undefined ||
       source.orientation !== view.orientation ||
       !sameBodies(source.bodyIds, view.bodyIds)
     )
@@ -864,6 +995,7 @@ export function drawingSheetError(value: unknown): string | null {
       !source ||
       source.section !== undefined ||
       source.detail !== undefined ||
+      source.auxiliary !== undefined ||
       source.orientation === 'iso' ||
       drawingViewAlignment(
         source.orientation as DrawingViewOrientation,

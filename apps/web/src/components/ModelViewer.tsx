@@ -13748,6 +13748,10 @@ export function ModelViewer({
       context.renderer.domElement.dataset.e2eRenderedBodies = String(
         bodies.length
       );
+      // And how many triangles they hand the GPU (M17: simplified threads).
+      context.renderer.domElement.dataset.e2eRenderedTriangles = String(
+        bodies.reduce((sum, body) => sum + body.mesh.indices.length / 3, 0)
+      );
       if (xrayFactor < 1) {
         context.renderer.domElement.dataset.e2eXray = String(xrayFactor);
       } else {

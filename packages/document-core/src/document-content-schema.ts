@@ -51,6 +51,36 @@ export function assertPrintClearanceSchema(version: unknown): void {
  */
 export const CONFIGURATION_SCHEMA_VERSION = 72;
 
+/**
+ * F06 per-view configurations (schema v89): a drawing view's
+ * `configurationId`. An older reader would draw the view as the active row.
+ */
+export const DRAWING_VIEW_CONFIGURATION_SCHEMA_VERSION = 89;
+
+export function assertDrawingViewConfigurationSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    DRAWING_VIEW_CONFIGURATION_SCHEMA_VERSION,
+    'Drawing view configurations'
+  );
+}
+
+/** F06: any view of a drawing section names a configuration. */
+function hasDrawingViewConfiguration(drawings: unknown): boolean {
+  return (
+    record(drawings) &&
+    Array.isArray(drawings.sheets) &&
+    drawings.sheets.some(
+      (sheet) =>
+        record(sheet) &&
+        Array.isArray(sheet.views) &&
+        sheet.views.some(
+          (view) => record(view) && view.configurationId !== undefined
+        )
+    )
+  );
+}
+
 export function assertConfigurationSchema(version: unknown): void {
   assertMinimumProjectSchema(
     version,
@@ -181,6 +211,8 @@ export function assertStandardPartSchema(
   assertMinimumProjectSchema(version, 69, 'Standard parts');
   if (record(data) && data.hole !== undefined)
     assertMinimumProjectSchema(version, 77, 'Parts inserted into holes');
+  if (record(data) && data.thread !== undefined)
+    assertMinimumProjectSchema(version, 83, 'Simplified threads');
 }
 
 /**
@@ -338,6 +370,59 @@ export function hasDrawingBom(value: unknown): boolean {
   return false;
 }
 
+/** D03 auxiliary views (schema v81). */
+export function assertDrawingAuxiliarySchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 81, 'Auxiliary views');
+}
+
+/** Whether `value` holds a v81 auxiliary view. */
+export function hasDrawingAuxiliary(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (typeof entry.viewId === 'string' && entry.auxiliary !== undefined)
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/** D02 arc and three-point angle dimensions (schema v82). */
+export function assertDrawingAngleSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 82, 'Arc and three-point angles');
+}
+
+/** Whether `value` holds a v82 arc or three-point angle. */
+export function hasDrawingAngle(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (
+      typeof entry.annotationId === 'string' &&
+      (entry.kind === 'arc-angle' || entry.kind === 'three-point-angle')
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
 function hasCouplings(assembly: unknown): boolean {
   return record(assembly) && assembly.couplings !== undefined;
 }
@@ -434,6 +519,12 @@ export function assertDocumentContentCommandSchema(
     )
       assertConfigurationSchema(document.schemaVersion);
     if (
+      command.kind === 'drawing.view.update' &&
+      record(command.payload) &&
+      command.payload.configurationId !== undefined
+    )
+      assertDrawingViewConfigurationSchema(document.schemaVersion);
+    if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('drawing.') &&
       hasDrawingDimensionFormat(command.payload)
@@ -460,6 +551,12 @@ export function assertDocumentContentCommandSchema(
     if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('drawing.') &&
+      hasDrawingAngle(command.payload)
+    )
+      assertDrawingAngleSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
       hasDrawingDetail(command.payload)
     )
       assertDrawingDetailSchema(document.schemaVersion);
@@ -469,6 +566,12 @@ export function assertDocumentContentCommandSchema(
       hasDrawingBom(command.payload)
     )
       assertDrawingBomSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingAuxiliary(command.payload)
+    )
+      assertDrawingAuxiliarySchema(document.schemaVersion);
     if (!record(command.payload)) continue;
     if (
       command.kind === 'sketch.composite.add' &&
@@ -518,6 +621,18 @@ export function assertDocumentContentCommandSchema(
         77,
         'Parts inserted into holes'
       );
+    // M17 (schema v83): `thread` is a standard part's only, as `hole` is.
+    if (
+      record(command.payload.data) &&
+      command.payload.data.thread !== undefined &&
+      (command.payload.data.featureKind === undefined ||
+        command.payload.data.featureKind === 'standard-part')
+    )
+      assertMinimumProjectSchema(
+        document.schemaVersion,
+        83,
+        'Simplified threads'
+      );
     switch (command.kind) {
       case 'sketch.add':
       case 'sketch.object.add':
@@ -557,6 +672,16 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         assertPrintClearanceSchema(document.schemaVersion);
   if (document.configurations !== undefined)
     assertConfigurationSchema(document.schemaVersion);
+  if (hasDrawingViewConfiguration(document.drawings))
+    assertDrawingViewConfigurationSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingViewConfiguration(change.before) ||
+          hasDrawingViewConfiguration(change.after))
+      )
+        assertDrawingViewConfigurationSchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
     for (const change of entry.changes)
       if (
@@ -588,10 +713,29 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
     assertDrawingGeometrySchema(document.schemaVersion);
   if (hasDrawingDistance(document.drawings))
     assertDrawingDistanceSchema(document.schemaVersion);
+  if (hasDrawingAngle(document.drawings))
+    assertDrawingAngleSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingAngle(change.before) || hasDrawingAngle(change.after))
+      )
+        assertDrawingAngleSchema(document.schemaVersion);
   if (hasDrawingDetail(document.drawings))
     assertDrawingDetailSchema(document.schemaVersion);
   if (hasDrawingBom(document.drawings))
     assertDrawingBomSchema(document.schemaVersion);
+  if (hasDrawingAuxiliary(document.drawings))
+    assertDrawingAuxiliarySchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingAuxiliary(change.before) ||
+          hasDrawingAuxiliary(change.after))
+      )
+        assertDrawingAuxiliarySchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
     for (const change of entry.changes)
       if (

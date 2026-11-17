@@ -47,6 +47,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { useArrivals } from '../../hooks/useArrivals';
+import { WindowedRow, WINDOWED_ROW_THRESHOLD } from '../WindowedRow';
 import { useCollapsedFolders } from '../../lib/objectFolderView';
 import { datumPlaneRows } from '../../lib/datumPlanes';
 import { datumAxisRows } from '../../lib/datumAxes';
@@ -670,7 +671,9 @@ export function ObjectsPanel({
       renamingBodyId !== body.bodyId &&
       !appearanceOpen;
     return (
-      <div
+      <WindowedRow
+        enabled={bodies.length > WINDOWED_ROW_THRESHOLD}
+        pinned={selected || appearanceOpen || renamingBodyId === body.bodyId}
         key={body.bodyId}
         className={`body-row ${selected ? 'selected' : ''} ${body.consumed ? 'consumed' : ''} ${hidden ? 'hidden-body' : ''}${bodyArrivals.has(body.bodyId) ? ' is-arrival' : ''}`}
         role="listitem"
@@ -688,126 +691,146 @@ export function ObjectsPanel({
         }}
         onDragEnd={endDrag}
       >
-        {renamable && renamingBodyId === body.bodyId ? (
-          <ObjectRenameField
-            name={body.name}
-            label={`Rename body ${body.name}`}
-            icon={bodyIcon(body)}
-            onCommit={(name) => onRenameBody?.(body.bodyId, name)}
-            onDone={(refocus) => {
-              setRenamingBodyId(null);
-              if (refocus)
-                focusRow(`[data-body-row="${CSS.escape(body.bodyId)}"]`);
-            }}
-          />
-        ) : (
-          <button
-            type="button"
-            className="body-row-main"
-            data-body-row={body.bodyId}
-            aria-pressed={selected}
-            aria-keyshortcuts={renamable ? 'F2' : undefined}
-            title={`${body.name}${body.consumed ? ' — combined into a later feature' : ''} — click to select, ⇧click to add${draggable ? ', drag into a folder' : ''}${renamable ? ', double-click or F2 to rename' : ''}`}
-            onClick={(event) => {
-              setAppearanceBodyId(null);
-              onSelectBody(
-                body.bodyId,
-                event.shiftKey || event.metaKey || event.ctrlKey
-              );
-            }}
-            onDoubleClick={() => {
-              if (renamable) setRenamingBodyId(body.bodyId);
-            }}
-            onKeyDown={(event) => {
-              if (renamable && event.key === 'F2') {
-                event.preventDefault();
-                setRenamingBodyId(body.bodyId);
-              }
-            }}
-          >
-            <span className="feature-icon">{bodyIcon(body)}</span>
-            <span className="feature-name">{body.name}</span>
-          </button>
+        {(expanded) => (
+          <>
+            {renamable && renamingBodyId === body.bodyId ? (
+              <ObjectRenameField
+                name={body.name}
+                label={`Rename body ${body.name}`}
+                icon={bodyIcon(body)}
+                onCommit={(name) => onRenameBody?.(body.bodyId, name)}
+                onDone={(refocus) => {
+                  setRenamingBodyId(null);
+                  if (refocus)
+                    focusRow(`[data-body-row="${CSS.escape(body.bodyId)}"]`);
+                }}
+              />
+            ) : (
+              <button
+                type="button"
+                className="body-row-main"
+                data-body-row={body.bodyId}
+                aria-pressed={selected}
+                aria-keyshortcuts={renamable ? 'F2' : undefined}
+                title={`${body.name}${body.consumed ? ' — combined into a later feature' : ''} — click to select, ⇧click to add${draggable ? ', drag into a folder' : ''}${renamable ? ', double-click or F2 to rename' : ''}`}
+                onClick={(event) => {
+                  setAppearanceBodyId(null);
+                  onSelectBody(
+                    body.bodyId,
+                    event.shiftKey || event.metaKey || event.ctrlKey
+                  );
+                }}
+                onDoubleClick={() => {
+                  if (renamable) setRenamingBodyId(body.bodyId);
+                }}
+                onKeyDown={(event) => {
+                  if (renamable && event.key === 'F2') {
+                    event.preventDefault();
+                    setRenamingBodyId(body.bodyId);
+                  }
+                }}
+              >
+                {expanded && (
+                  <span className="feature-icon">{bodyIcon(body)}</span>
+                )}
+                <span className="feature-name">{body.name}</span>
+              </button>
+            )}
+            {!body.consumed && (
+              <button
+                type="button"
+                className="object-color-swatch"
+                ref={appearanceOpen ? appearanceAnchorRef : undefined}
+                data-body-color={body.bodyId}
+                aria-label={`Change color of ${body.name}`}
+                aria-expanded={appearanceOpen}
+                aria-controls={
+                  appearanceOpen ? `body-appearance-${body.bodyId}` : undefined
+                }
+                disabled={!onPreviewBodyAppearance || !onCommitBodyAppearance}
+                title={`${body.name}: ${color}${!onCommitBodyAppearance ? ' — editing unavailable' : ' — color and opacity'}`}
+                style={{ '--body-color': color } as CSSProperties}
+                onClick={() =>
+                  setAppearanceBodyId(appearanceOpen ? null : body.bodyId)
+                }
+              />
+            )}
+            {renamable && renamingBodyId !== body.bodyId && (
+              // Double-click alone is not enough: the first click selects, and
+              // the Inspector that opens for the selection can move the row
+              // before the second click lands.
+              <button
+                type="button"
+                className="row-visibility object-rename"
+                title={`Rename body ${body.name} (F2)`}
+                aria-label={`Rename body ${body.name}`}
+                onClick={() => setRenamingBodyId(body.bodyId)}
+              >
+                {expanded && RENAME_ICON}
+              </button>
+            )}
+            {!body.consumed && onIsolateBody && (
+              <button
+                type="button"
+                className={`row-visibility${isolated ? ' is-active' : ''}`}
+                title={isolated ? 'Exit isolation' : `Isolate ${body.name}`}
+                aria-label={
+                  isolated
+                    ? `Exit isolation of ${body.name}`
+                    : `Isolate body ${body.name}`
+                }
+                aria-pressed={isolated}
+                onClick={() => onIsolateBody(body.bodyId)}
+              >
+                {expanded && ISOLATE_ICON}
+              </button>
+            )}
+            {!body.consumed && (
+              <button
+                type="button"
+                className={`row-visibility ${hidden ? 'is-hidden' : ''}`}
+                title={
+                  hidden ? `Show body ${body.name}` : `Hide body ${body.name}`
+                }
+                aria-label={
+                  hidden ? `Show body ${body.name}` : `Hide body ${body.name}`
+                }
+                aria-pressed={hidden}
+                onClick={() => onToggleBodyVisibility(body.bodyId)}
+              >
+                {expanded && (hidden ? HIDDEN_ICON : SHOWN_ICON)}
+              </button>
+            )}
+            {appearanceOpen &&
+              onPreviewBodyAppearance &&
+              onCommitBodyAppearance && (
+                <BodyAppearanceEditor
+                  body={body}
+                  anchorRef={appearanceAnchorRef}
+                  onPreview={onPreviewBodyAppearance}
+                  onCommit={(patch) =>
+                    onCommitBodyAppearance(body.bodyId, patch)
+                  }
+                  onDismiss={(restoreFocus) => {
+                    // Pin secondary controls through the dismissal commit even
+                    // when the editor's row has scrolled outside the window.
+                    if (restoreFocus)
+                      globalThis.document
+                        .querySelector<HTMLElement>(
+                          `[data-body-row="${CSS.escape(body.bodyId)}"]`
+                        )
+                        ?.focus({ preventScroll: true });
+                    setAppearanceBodyId(null);
+                    if (restoreFocus)
+                      focusRow(
+                        `[data-body-color="${CSS.escape(body.bodyId)}"]`
+                      );
+                  }}
+                />
+              )}
+          </>
         )}
-        {!body.consumed && (
-          <button
-            type="button"
-            className="object-color-swatch"
-            ref={appearanceOpen ? appearanceAnchorRef : undefined}
-            data-body-color={body.bodyId}
-            aria-label={`Change color of ${body.name}`}
-            aria-expanded={appearanceOpen}
-            aria-controls={
-              appearanceOpen ? `body-appearance-${body.bodyId}` : undefined
-            }
-            disabled={!onPreviewBodyAppearance || !onCommitBodyAppearance}
-            title={`${body.name}: ${color}${!onCommitBodyAppearance ? ' — editing unavailable' : ' — color and opacity'}`}
-            style={{ '--body-color': color } as CSSProperties}
-            onClick={() =>
-              setAppearanceBodyId(appearanceOpen ? null : body.bodyId)
-            }
-          />
-        )}
-        {renamable && renamingBodyId !== body.bodyId && (
-          // Double-click alone is not enough: the first click selects, and
-          // the Inspector that opens for the selection can move the row
-          // before the second click lands.
-          <button
-            type="button"
-            className="row-visibility object-rename"
-            title={`Rename body ${body.name} (F2)`}
-            aria-label={`Rename body ${body.name}`}
-            onClick={() => setRenamingBodyId(body.bodyId)}
-          >
-            {RENAME_ICON}
-          </button>
-        )}
-        {!body.consumed && onIsolateBody && (
-          <button
-            type="button"
-            className={`row-visibility${isolated ? ' is-active' : ''}`}
-            title={isolated ? 'Exit isolation' : `Isolate ${body.name}`}
-            aria-label={
-              isolated
-                ? `Exit isolation of ${body.name}`
-                : `Isolate body ${body.name}`
-            }
-            aria-pressed={isolated}
-            onClick={() => onIsolateBody(body.bodyId)}
-          >
-            {ISOLATE_ICON}
-          </button>
-        )}
-        {!body.consumed && (
-          <button
-            type="button"
-            className={`row-visibility ${hidden ? 'is-hidden' : ''}`}
-            title={hidden ? `Show body ${body.name}` : `Hide body ${body.name}`}
-            aria-label={
-              hidden ? `Show body ${body.name}` : `Hide body ${body.name}`
-            }
-            aria-pressed={hidden}
-            onClick={() => onToggleBodyVisibility(body.bodyId)}
-          >
-            {hidden ? HIDDEN_ICON : SHOWN_ICON}
-          </button>
-        )}
-        {appearanceOpen &&
-          onPreviewBodyAppearance &&
-          onCommitBodyAppearance && (
-            <BodyAppearanceEditor
-              body={body}
-              anchorRef={appearanceAnchorRef}
-              onPreview={onPreviewBodyAppearance}
-              onCommit={(patch) => onCommitBodyAppearance(body.bodyId, patch)}
-              onDismiss={(restoreFocus) => {
-                setAppearanceBodyId(null);
-                if (restoreFocus)
-                  focusRow(`[data-body-color="${CSS.escape(body.bodyId)}"]`);
-              }}
-            />
-          )}
-      </div>
+      </WindowedRow>
     );
   }
 

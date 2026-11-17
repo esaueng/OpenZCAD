@@ -8,6 +8,8 @@ import {
   standardPartGoesIn,
   standardPartHasLength,
   standardPartInHole,
+  standardPartIsThreaded,
+  standardPartThreadField,
   standardPartHoleFields,
   standardPartMinimumLengthMm,
   standardPartGeometry,
@@ -207,6 +209,21 @@ export const standardPartSpec: InPlaceToolSpec = {
       }
     },
     {
+      // M17 (schema v83): simplified is the default, light enough for many.
+      id: 'thread',
+      label: 'Thread',
+      choices: [
+        {
+          value: 'simplified',
+          label: 'Simplified',
+          tip: 'Its plain outline, without thread, drive or chamfers: light for many fasteners'
+        },
+        { value: 'modeled', label: 'Modeled', tip: 'Cut as an exact thread' }
+      ],
+      initial: 'simplified',
+      when: (state) => standardPartIsThreaded(chosenRow(state.options).partKind)
+    },
+    {
       id: 'head',
       label: 'Head',
       choices: STANDARD_SCREW_HEADS.map((head) => ({
@@ -245,6 +262,7 @@ export const standardPartSpec: InPlaceToolSpec = {
         'partKind',
         'place',
         'head',
+        'thread',
         'system',
         ...SIZE_OPTIONS.map((option) => option.id),
         'length'
@@ -352,7 +370,12 @@ export const standardPartSpec: InPlaceToolSpec = {
           : {}),
         origin: saved ? { ...saved.origin } : vectorOf(at.origin),
         axis: saved ? { ...saved.axis } : vectorOf(at.axis),
-        ...(saved?.xDirection ? { xDirection: { ...saved.xDirection } } : {})
+        ...(saved?.xDirection ? { xDirection: { ...saved.xDirection } } : {}),
+        ...standardPartThreadField(
+          options,
+          choice.partKind,
+          ctx.saved?.featureKind === 'standard-part' ? ctx.saved : undefined
+        )
       }
     };
   },
@@ -405,7 +428,8 @@ function holeRequest(
     tool: 'standard-part',
     part: {
       ...standardPartHoleFields(inserted, length, keeps ? saved : undefined),
-      ...(saved?.xDirection ? { xDirection: { ...saved.xDirection } } : {})
+      ...(saved?.xDirection ? { xDirection: { ...saved.xDirection } } : {}),
+      ...standardPartThreadField(options, inserted.choice.partKind, saved)
     }
   };
 }

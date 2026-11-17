@@ -526,6 +526,29 @@ notes to D01 sheets:
   "Measure circles to" picks centres, near or far sides.
 - **Schema.** v75, built on v74, with a content gate below it.
 
+## Arc and three-point angles (D02, schema v82)
+
+- **Shape.** `kind: 'arc-angle'` names one circular edge, an arc the view
+  sees face-on; `kind: 'three-point-angle'` names a vertex and two points
+  (each an edge end, a face-on circle's centre or a v73 mark). Both take
+  decimals, tolerance, prefix and suffix and print in the sheet's angle
+  format, like the two-edge angle.
+- **Reading.** An arc angle is the arc's included angle at its centre,
+  between its two ends, the way the arc runs: an arc of more than 180°
+  reads more than 180°, and its dimension arc sweeps the long way (the
+  resolved angle carries the arc's middle as `through`). A whole circle is
+  `closed-edge`, an arc seen edge-on `edge-on`. A three-point angle is the
+  angle at the vertex between the lines to the other two (at most 180°);
+  the three must lie in one plane parallel to the view (`foreshortened`),
+  and three points on one line, or two that coincide, are `no-angle`. Both
+  resolve to the same angle shape as the two-edge angle, so they draw and
+  export through its layout. The isometric view refuses the three-point
+  angle; an arc there is rarely face-on and is refused as `edge-on`.
+- **Tools.** Arc angle (E): pick a face-on arc, then place. 3-point angle
+  (J): pick the vertex, then the two arms' points (ends, circle centres or
+  marks), then place.
+- **Schema.** v82, built on v81, with a content gate below it.
+
 ## Parts lists and balloons (D02, schema v80)
 
 - **Shape.** Two annotation kinds read from the AS03 BOM table model
@@ -550,7 +573,7 @@ notes to D01 sheets:
 - **Tools.** Parts list (P): one click on the paper places it; the panel
   picks its columns. Balloon (O): pick an edge of an assembly part, then
   place the balloon. Both are offered once the assembly has parts.
-- **Schema.** v80, built on v79, with a content gate below it.
+- **Schema.** v80, built on v78 (v79 went unused), with a content gate below it.
 
 ## Finishing-body update repair
 
@@ -676,6 +699,31 @@ principal view. Detail views remain open.
   the smallest preset at least twice the sheet's scale until a click places
   it. The panel edits the detail's scale and radius.
 - **Schema.** v78, built on v77, gated below it.
+
+## Auxiliary views (D03, schema v81)
+
+- **Shape.** `DrawingView.auxiliary`: `sourceViewId`, a label from the
+  shared section/detail sequence, and the view's frame: a unit `direction`
+  of sight square to the source's own, and page-right `x` square to it.
+  Page-up is `x × direction`, which the tool makes the source's direction of
+  sight, as a view folded from it. The frame is stored, not derived from an
+  edge, so neither view moving nor an edit turns it. It keeps its source's
+  orientation and bodies, is placed freely, and is not the source of a
+  section, detail, projected or auxiliary view.
+- **Frames.** One helper, `drawingViewFrame(view)`, returns a named
+  orientation's frame or an auxiliary view's stored one; every projection,
+  measurement, pick and leader reads it, and the projection worker takes the
+  frame with the view. Auto-dimension and the dimension check consider only
+  principal views.
+- **Page.** The source shows an arrow along the direction of sight from
+  outside its footprint, with the letter at its tail; the view is captioned
+  `VIEW A` beneath. Dimensions on it read true lengths where an edge lies in
+  its plane.
+- **Tool.** Auxiliary view (U): pick a straight edge a front, top or side
+  view draws true length and inclined (a horizontal or vertical one is
+  refused: a principal view already sees it), then click on the side to see
+  it from (third angle; the opposite side in first angle) to place it.
+- **Schema.** v81, built on v80, gated below it.
 
 ### Drawing entry and visibility (2026-11-01)
 

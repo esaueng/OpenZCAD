@@ -1,5 +1,5 @@
 import {
-  DRAWING_VIEW_FRAMES,
+  drawingViewFrame,
   drawingEdgeRefError,
   drawingFaceRefError,
   projectToView,
@@ -93,7 +93,7 @@ export function pickableEdges(
   for (const { view, projection } of views) {
     if (!projection.bounds) continue;
     const toPage = viewPageTransform(view, projection.bounds, sheet, units);
-    const frame = DRAWING_VIEW_FRAMES[view.orientation];
+    const frame = drawingViewFrame(view);
     const k = viewPaperPerModelUnit(view, sheet, units);
     const coincidenceMm = drawnCoincidence(bodies, view.bodyIds, k) * k;
     for (const bodyId of view.bodyIds) {
@@ -141,7 +141,7 @@ export function pickableFaces(
   for (const { view, projection } of views) {
     if (!projection.bounds || view.orientation === 'iso') continue;
     const toPage = viewPageTransform(view, projection.bounds, sheet, units);
-    const frame = DRAWING_VIEW_FRAMES[view.orientation];
+    const frame = drawingViewFrame(view);
     const page = (point: Vector3): XY => {
       const p = projectToView(frame, point);
       return toPage(p.u, p.v);
@@ -534,6 +534,9 @@ export type AnnotationToolKind =
   | 'radius'
   | 'diameter'
   | 'angle'
+  /** v82: an arc's included angle, and the angle at a point between two. */
+  | 'arc-angle'
+  | 'three-point-angle'
   | 'chamfer'
   | 'note'
   /** v73 geometry annotations. */
@@ -567,6 +570,8 @@ export const ANNOTATION_TOOL_LABELS: Readonly<
   radius: 'Radius',
   diameter: 'Diameter',
   angle: 'Angle',
+  'arc-angle': 'Arc angle',
+  'three-point-angle': '3-point angle',
   chamfer: 'Chamfer',
   note: 'Note',
   'center-mark': 'Centre mark',
@@ -600,6 +605,12 @@ export function annotationToolHint(tool: AnnotationTool): string {
       return tool.edges.length === 0
         ? 'Angle: pick the first straight edge.'
         : 'Angle: pick the second straight edge.';
+    case 'arc-angle':
+      return 'Arc angle: pick an arc seen face-on.';
+    case 'three-point-angle':
+      return tool.points.length === 0
+        ? '3-point angle: pick the vertex (an edge end, circle or mark).'
+        : `3-point angle: pick the ${tool.points.length === 1 ? 'first' : 'second'} arm’s point (an edge end, circle or mark).`;
     case 'chamfer':
       return 'Chamfer: pick the chamfer’s outline, seen side-on or edge-on.';
     case 'note':
@@ -692,6 +703,10 @@ export function pickedEnough(tool: AnnotationTool): boolean {
       return tool.edges.length === 1;
     case 'angle':
       return tool.edges.length === 2;
+    case 'arc-angle':
+      return tool.edges.length === 1;
+    case 'three-point-angle':
+      return tool.points.length === 3;
     case 'chamfer':
       return tool.faces.length === 1;
     case 'note':
@@ -797,7 +812,7 @@ function nearerSide(
 function isFaceOnCircle(view: DrawingView, edge: EdgeTopology): boolean {
   const circle = edge.curve?.circle;
   if (!circle) return false;
-  const d = DRAWING_VIEW_FRAMES[view.orientation].direction;
+  const d = drawingViewFrame(view).direction;
   return (
     Math.abs(
       Math.abs(
@@ -866,6 +881,7 @@ export function applyAnnotationPick(
     (tool.kind === 'horizontal' ||
       tool.kind === 'vertical' ||
       tool.kind === 'aligned' ||
+      tool.kind === 'three-point-angle' ||
       ((tool.kind === 'centerline' || tool.kind === 'circle-centerline') &&
         tool.edges.length === 0)) &&
     tool.faces.length === 0
@@ -944,6 +960,7 @@ export function applyAnnotationPick(
     tool.kind !== 'radius' &&
     tool.kind !== 'diameter' &&
     tool.kind !== 'center-mark' &&
+    tool.kind !== 'arc-angle' &&
     tool.kind !== 'balloon'
   )
     return {
@@ -979,7 +996,7 @@ export function applyAnnotationPick(
         else {
           // The polyline runs the kernel's way; its start is the page's
           // `first` end when it lies there.
-          const start = projectToView(DRAWING_VIEW_FRAMES[view.orientation], {
+          const start = projectToView(drawingViewFrame(view), {
             x: hit.edge.points[0]!,
             y: hit.edge.points[1]!,
             z: hit.edge.points[2]!
@@ -1043,7 +1060,7 @@ export function applyAnnotationPick(
       }
       // `ends` are in page order; the polyline runs the kernel's way, so
       // match its start to one of them.
-      const start = projectToView(DRAWING_VIEW_FRAMES[view.orientation], {
+      const start = projectToView(drawingViewFrame(view), {
         x: hit.edge.points[0]!,
         y: hit.edge.points[1]!,
         z: hit.edge.points[2]!
@@ -1104,6 +1121,16 @@ export function applyAnnotationPick(
       )
         return { ok: false, message: 'Pick a straight edge.' };
       return { ok: true, tool: { ...next, edges: [...tool.edges, ref] } };
+    case 'arc-angle':
+      if (
+        !isFaceOnCircle(view, hit.edge) ||
+        !edgeEndsInPageOrder(view, hit.edge)
+      )
+        return {
+          ok: false,
+          message: 'Pick an arc (not a whole circle) this view sees face-on.'
+        };
+      return { ok: true, tool: { ...next, edges: [ref] } };
     case 'note':
     case 'balloon':
       return { ok: true, tool: { ...next, edges: [ref] } };
@@ -1131,7 +1158,8 @@ export function applyAnnotationPick(
         };
       return { ok: true, tool: { ...next, edges: [...tool.edges, ref] } };
     case 'centerline':
-    case 'circle-centerline': {
+    case 'circle-centerline':
+    case 'three-point-angle': {
       const ends = edgeEndsInPageOrder(view, hit.edge);
       // A straight edge picked away from its ends is a line (two make a
       // centreline midway between them); otherwise the pick is its nearer
@@ -1184,7 +1212,7 @@ export function applyAnnotationPick(
           }
         };
       }
-      const start = projectToView(DRAWING_VIEW_FRAMES[view.orientation], {
+      const start = projectToView(drawingViewFrame(view), {
         x: hit.edge.points[0]!,
         y: hit.edge.points[1]!,
         z: hit.edge.points[2]!
@@ -1305,6 +1333,22 @@ export function draftAnnotation(
         kind: 'angle',
         viewId: tool.viewId!,
         edges: [tool.edges[0]!, tool.edges[1]!]
+      };
+    case 'arc-angle':
+      return {
+        ...base,
+        kind: 'arc-angle',
+        viewId: tool.viewId!,
+        edge: tool.edges[0]!
+      };
+    case 'three-point-angle':
+      return {
+        ...base,
+        kind: 'three-point-angle',
+        viewId: tool.viewId!,
+        vertex: tool.points[0]!,
+        from: tool.points[1]!,
+        to: tool.points[2]!
       };
     case 'chamfer':
       return {

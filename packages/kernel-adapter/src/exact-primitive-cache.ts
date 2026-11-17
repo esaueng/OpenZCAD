@@ -1,4 +1,8 @@
-import { isFeatureSuppressed, type FeatureNode } from '@openzcad/shared';
+import {
+  isFeatureSuppressed,
+  type FeatureNode,
+  type StandardPartBuild
+} from '@openzcad/shared';
 import type { ExactBuildResult, ExactShape } from './exact-types';
 import { PreparedEditSession } from './prepared-edit-session';
 
@@ -6,6 +10,22 @@ interface Entry {
   index: number;
   digest: string;
   shape: ExactShape;
+  /** A standard part's derived lengths (M17), restored with its shape. */
+  standardPart?: StandardPartBuild;
+}
+
+/**
+ * Builders whose result is a pure function of their own data and digest:
+ * a primitive, and (M17) a standard part on a plane, which reads no other
+ * body and makes its solids afresh. A part in a hole reads the hole's
+ * body, so it is rebuilt.
+ */
+function selfContained(feature: FeatureNode): boolean {
+  const data = feature.data;
+  return (
+    data.featureKind === 'primitive' ||
+    (data.featureKind === 'standard-part' && data.hole === undefined)
+  );
 }
 
 function copyShape(shape: ExactShape): ExactShape {
@@ -30,6 +50,7 @@ function copyShape(shape: ExactShape): ExactShape {
  * unreviewed builder must retain the checkpoint restore path.
  */
 function preservesPrimitiveInputs(feature: FeatureNode): boolean {
+  if (selfContained(feature)) return true;
   switch (feature.data.featureKind) {
     case 'primitive':
     case 'sketch':
@@ -73,10 +94,7 @@ export class PrimitiveBuildCache {
   }
 
   private matching(feature: FeatureNode, digest: string): Entry | undefined {
-    if (
-      feature.data.featureKind !== 'primitive' ||
-      isFeatureSuppressed(feature)
-    ) {
+    if (!selfContained(feature) || isFeatureSuppressed(feature)) {
       return undefined;
     }
     const entry = this.entries.get(feature.featureId);
@@ -114,6 +132,11 @@ export class PrimitiveBuildCache {
     if (!entry || !feature.bodyId || !allowReuse)
       return this.prepared.restore(feature, digest, result, allowReuse);
     result.shapes.set(feature.bodyId, copyShape(entry.shape));
+    if (entry.standardPart) {
+      (result.standardParts ??= new Map()).set(feature.featureId, {
+        lengthsMm: [...entry.standardPart.lengthsMm]
+      });
+    }
     return true;
   }
 
@@ -124,13 +147,17 @@ export class PrimitiveBuildCache {
     result: ExactBuildResult
   ): void {
     this.prepared.store(index, feature, digest, result);
-    if (feature.data.featureKind !== 'primitive' || !feature.bodyId) return;
+    if (!selfContained(feature) || !feature.bodyId) return;
     const shape = result.shapes.get(feature.bodyId);
     if (shape) {
+      const standardPart = result.standardParts?.get(feature.featureId);
       this.entries.set(feature.featureId, {
         index,
         digest,
-        shape: copyShape(shape)
+        shape: copyShape(shape),
+        ...(standardPart
+          ? { standardPart: { lengthsMm: [...standardPart.lengthsMm] } }
+          : {})
       });
     }
   }

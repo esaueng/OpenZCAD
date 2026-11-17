@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { ParameterNode } from '@openzcad/shared';
+import { toBodyId, type ParameterNode } from '@openzcad/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { AddParameterRow, ParameterRow } from './ParameterRows';
 
@@ -18,6 +18,47 @@ function parameter(expression: string): ParameterNode {
 }
 
 describe('ParameterRow evaluated value', () => {
+  it('mounts binding choices on demand and preserves the stored selection across closing', async () => {
+    const user = userEvent.setup();
+    const configure = vi.fn();
+    const a = toBodyId('body-a');
+    const b = toBodyId('body-b');
+    const toggle = { ...parameter('0'), toggle: { bodyIds: [a] } };
+    const props = {
+      parameter: toggle,
+      value: 0,
+      onSet: vi.fn(),
+      onConfigureToggle: configure,
+      bodies: [
+        { bodyId: a, name: 'Part A' },
+        { bodyId: b, name: 'Part B' }
+      ]
+    };
+    const { container, rerender } = render(<ParameterRow {...props} />);
+    expect(container.querySelector('.param-body-choices')).toBeNull();
+    await user.click(screen.getByText('Bodies (1)'));
+    await waitFor(() =>
+      expect(screen.getByRole('checkbox', { name: 'Part A' })).toBeChecked()
+    );
+    await user.click(screen.getByRole('checkbox', { name: 'Part B' }));
+    expect(configure).toHaveBeenCalledWith('width', [a, b]);
+    rerender(
+      <ParameterRow
+        {...props}
+        parameter={{ ...toggle, toggle: { bodyIds: [a, b] } }}
+      />
+    );
+    await user.click(screen.getByText('Bodies (2)'));
+    await waitFor(() =>
+      expect(container.querySelector('.param-body-choices')).toBeNull()
+    );
+    await user.click(screen.getByText('Bodies (2)'));
+    await waitFor(() =>
+      expect(screen.getByRole('checkbox', { name: 'Part A' })).toBeChecked()
+    );
+    expect(screen.getByRole('checkbox', { name: 'Part B' })).toBeChecked();
+  });
+
   it('hides a readout that repeats the canonical expression', () => {
     const { container } = render(
       <ParameterRow parameter={parameter('80')} value={80} onSet={vi.fn()} />

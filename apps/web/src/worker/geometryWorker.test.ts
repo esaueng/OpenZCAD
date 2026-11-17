@@ -20,6 +20,7 @@ import type {
 } from './geometryWorker';
 import type { ExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { geometryContentKey } from './exactRebuildCache';
+import { unpackReplyTopologies } from '../lib/topologyTransport';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -623,13 +624,18 @@ describe('geometry worker rebuild coordination', () => {
       exportableStep: true,
       consumed: false,
       volume: 0,
+      topology: { faces: [], edges: [], reference: undefined },
       bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 0 } }
     };
     const projection: ProjectDocument['derived'] = {
       ...derived('meshes'),
       bodyRepresentations: {
         [bodyId]: body,
-        [aliasId]: { ...body, bodyId: aliasId }
+        [aliasId]: {
+          ...body,
+          bodyId: aliasId,
+          topology: { faces: [], edges: [] }
+        }
       }
     };
     const syncDocument = vi.fn(async () => projection);
@@ -639,6 +645,15 @@ describe('geometry worker rebuild coordination', () => {
       if (message.type !== 'sync' || !message.ok) return;
       expect(options?.transfer).toHaveLength(2);
       const copy = structuredClone(message, options);
+      if (message.requestId === 'cache-hit') {
+        expect(copy.topologyJson).toBeDefined();
+        expect(copy.topologyUndefined).toBeDefined();
+        unpackReplyTopologies(
+          copy.derived,
+          copy.topologyJson,
+          copy.topologyUndefined
+        );
+      } else expect(copy.topologyJson).toBeUndefined();
       expect(
         message.derived.bodyRepresentations[bodyId]!.mesh.vertices.byteLength
       ).toBe(0);
@@ -656,7 +671,14 @@ describe('geometry worker rebuild coordination', () => {
       }
     );
     for (const requestId of ['first', 'cache-hit']) {
-      post(scope, { type: 'sync', document, requestId });
+      post(scope, {
+        type: 'sync',
+        document,
+        requestId,
+        ...(requestId === 'cache-hit'
+          ? { topologyEncoding: 'json-v2' as const }
+          : {})
+      });
     }
     await vi.waitFor(() => expect(received).toHaveLength(2));
     expect(syncDocument).toHaveBeenCalledOnce();
@@ -666,6 +688,18 @@ describe('geometry worker rebuild coordination', () => {
         result.bodyRepresentations[bodyId]!.mesh.vertices.buffer
       );
     }
+    // postMessage still owns the entire received result. Only the worker's
+    // preparation copy borrows metadata; no caller can mutate the cache.
+    received[0]!.bodyRepresentations[bodyId]!.bbox.min.x = 42;
+    received[0]!.warnings.push('caller mutation');
+    received[0]!.bodyRepresentations[bodyId]!.topology!.faces.push({} as never);
+    expect(received[1]!.bodyRepresentations[bodyId]!.topology!.faces).toEqual(
+      []
+    );
+    expect(received[1]!.bodyRepresentations[bodyId]!.bbox.min.x).toBe(0);
+    expect(received[1]!.warnings).toEqual(['meshes']);
+    expect(projection.bodyRepresentations[bodyId]!.bbox.min.x).toBe(0);
+    expect(projection.warnings).toEqual(['meshes']);
     expect(mesh.vertices.byteLength).toBe(36);
     expect(mesh.indices.byteLength).toBe(12);
   });

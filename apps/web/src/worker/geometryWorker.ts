@@ -52,12 +52,15 @@ import {
   geometryContentKey,
   lineageDemandCacheKey,
   rebindSketchGeometryForContent,
-  cloneDerivedSharingBodyGeometry
+  cloneDerivedSharingBodyGeometry,
+  derivedSizeOfSharingBodyGeometry
 } from './exactRebuildCache';
 import { GeometryWorkerQueue } from './geometryWorkerQueue';
+import { TopologyTransport, type TopologyJson } from '../lib/topologyTransport';
 import { geometryYield } from './geometryYield';
 import { geometryProgress } from './geometryProgress';
 import {
+  copyDerivedMeshBuffers,
   derivedMeshTransferables,
   unpackWorkerRequest
 } from '../lib/meshTransport';
@@ -129,6 +132,8 @@ export type GeometryWorkerRequest =
       type: 'sync';
       document: ProjectDocument;
       requestId?: string;
+      /** Optional reply encoding; older clients keep structured-clone topology. */
+      topologyEncoding?: 'json-v1' | 'json-v2';
       analysis?: EditAnalysisRequest;
       /**
        * Transient lineage demand: body ids whose producing booleans must
@@ -401,6 +406,9 @@ export type GeometrySyncResult =
       requestId?: string;
       transient?: boolean;
       derived: ProjectDocument['derived'];
+      /** Topology placeholders are decoded before this result is adopted. */
+      topologyJson?: TopologyJson;
+      topologyUndefined?: TopologyJson;
     }
   | {
       type: 'sync';
@@ -773,12 +781,14 @@ const rebuildCache = new ExactRebuildCache<ProjectDocument['derived']>({
   maxBytes: 32 * 1024 * 1024,
   maxInFlight: 4,
   clone: cloneDerivedSharingBodyGeometry,
+  sizeOf: derivedSizeOfSharingBodyGeometry(),
   // A draft display is published once and refined, never served again.
   cacheable: (derived) =>
     !transientResults.has(derived) && !hasDraftDisplay(derived)
 });
 const broadcastGate = new LatestBroadcastGate();
 const projectionSender = new ProjectionSender();
+const topologyTransport = new TopologyTransport();
 
 /**
  * Persisted kernel sessions: a reopened project restores its history kernel
@@ -1785,7 +1795,15 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       // The body buffers are shared with the result cache and the adapter's
       // retained measurements: transfer a copy, made here rather than on the
       // receiving main thread.
-      const owned = structuredClone(result);
+      const meshCopy = copyDerivedMeshBuffers(result.derived);
+      const owned = {
+        ...result,
+        ...(request.type === 'sync' &&
+        (request.topologyEncoding === 'json-v1' ||
+          request.topologyEncoding === 'json-v2')
+          ? topologyTransport.pack(meshCopy, request.topologyEncoding)
+          : { derived: meshCopy })
+      };
       post(owned, derivedMeshTransferables(owned.derived));
     } else {
       const encodingStartedMs = performance.now();

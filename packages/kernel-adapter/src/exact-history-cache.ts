@@ -658,7 +658,7 @@ export function measurementProvenanceKey(
 ): string {
   const lineage = shape.lineage;
   const native = shape.nativeVertices;
-  return stableJson({
+  return measurementJson({
     importedDiagnostics,
     nativeVertices: native && {
       qualified: [...native.bySolid]
@@ -680,6 +680,28 @@ export function measurementProvenanceKey(
       diagnostics: lineage.diagnostics
     }
   });
+}
+
+/** Same canonical JSON, without a native-to-JS replacer call for every scalar. */
+function measurementJson(value: unknown): string {
+  let needsNativeJson = false;
+  const ordered = (entry: unknown): unknown => {
+    if (!entry || typeof entry !== 'object') return entry;
+    // Provenance is plain JSON data. Preserve native custom-serialization
+    // behavior as well, rather than silently dropping a future toJSON value.
+    if (typeof (entry as { toJSON?: unknown }).toJSON === 'function') {
+      needsNativeJson = true;
+      return entry;
+    }
+    if (Array.isArray(entry)) return entry.map(ordered);
+    const record = entry as Record<string, unknown>;
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(record).sort())
+      if (record[key] !== undefined) sorted[key] = ordered(record[key]);
+    return sorted;
+  };
+  const result = ordered(value);
+  return needsNativeJson ? stableJson(value) : JSON.stringify(result);
 }
 
 /** Serialized metadata estimate plus owned buffers; not a JS heap guarantee. */

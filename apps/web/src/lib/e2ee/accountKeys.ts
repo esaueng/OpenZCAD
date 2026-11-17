@@ -287,30 +287,7 @@ async function defaultDeviceKeys(): Promise<DeviceKeyPairs> {
   };
 }
 
-/** A short name for this browser, such as "Chrome on macOS". */
-export function defaultDeviceLabel(userAgent: string): string {
-  const browser = /Edg\//.test(userAgent)
-    ? 'Edge'
-    : /Firefox\//.test(userAgent)
-      ? 'Firefox'
-      : /Chrome\//.test(userAgent)
-        ? 'Chrome'
-        : /Safari\//.test(userAgent)
-          ? 'Safari'
-          : 'Browser';
-  const system = /iPhone|iPad/.test(userAgent)
-    ? 'iOS'
-    : /Android/.test(userAgent)
-      ? 'Android'
-      : /Mac OS X|Macintosh/.test(userAgent)
-        ? 'macOS'
-        : /Windows/.test(userAgent)
-          ? 'Windows'
-          : /Linux/.test(userAgent)
-            ? 'Linux'
-            : null;
-  return system ? `${browser} on ${system}` : browser;
-}
+export { defaultDeviceLabel } from '../deviceLabel';
 
 /** Trims a typed label to what a device list accepts (1–64 bytes). */
 export function normalizeDeviceLabel(label: string): string {

@@ -1,4 +1,5 @@
 import {
+  type DrawingViewFrame,
   createDrawingSheetId,
   createDrawingViewId,
   DRAWING_SCALE_PRESETS,
@@ -123,7 +124,9 @@ export function drawingSourceFingerprint(
 export function estimateViewExtent(
   bodies: SourceBodies,
   bodyIds: readonly BodyId[],
-  orientation: DrawingViewOrientation
+  orientation: DrawingViewOrientation,
+  /** D03 (v81): an auxiliary view's own frame. */
+  frame?: DrawingViewFrame
 ): ViewExtent | null {
   // A draft display mesh is not the model's settled shape; lay out from the
   // refined one.
@@ -131,7 +134,7 @@ export function estimateViewExtent(
   const meshes = bodyIds
     .map((id) => bodies[id]?.mesh.vertices)
     .filter((vertices): vertices is Float32Array => vertices !== undefined);
-  return projectedExtent(orientation, meshes);
+  return projectedExtent(orientation, meshes, frame);
 }
 
 export function defaultDrawingPaper(units: UnitSystem): {

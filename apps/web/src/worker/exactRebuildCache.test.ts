@@ -7,6 +7,7 @@ import {
   LatestBroadcastGate,
   canonicalProjectContentKey,
   cloneDerivedSharingBodyGeometry,
+  derivedSizeOfSharingBodyGeometry,
   geometryContentKey,
   lineageDemandCacheKey,
   rebindSketchGeometryForContent
@@ -23,6 +24,63 @@ function deferred<T>() {
 }
 
 describe('canonical exact rebuild keys', () => {
+  it('keeps the byte budget across shared geometry, new geometry and changing metadata', async () => {
+    const sizeOf = derivedSizeOfSharingBodyGeometry();
+    const state = {
+      bodyRepresentations: {
+        body_a: {
+          bodyId: 'body_a',
+          name: 'A',
+          volume: 1,
+          mesh: {
+            kind: 'mesh',
+            vertices: new Float32Array(1000),
+            indices: new Uint32Array(300)
+          }
+        }
+      },
+      exportableBodyIds: [],
+      warnings: [],
+      updatedAt: 'now'
+    } as unknown as ProjectDocument['derived'];
+    const budget = sizeOf(state) + 64;
+    const cache = new ExactRebuildCache({
+      maxEntries: 8,
+      maxBytes: budget,
+      maxInFlight: 4,
+      clone: cloneDerivedSharingBodyGeometry,
+      sizeOf
+    });
+    await cache.get('first', async () => state);
+    await cache.get('second', async () => ({ ...state, updatedAt: 'later' }));
+    expect(cache.entryCount).toBe(1);
+    expect(cache.bytes).toBeLessThanOrEqual(budget);
+    await cache.get('large-metadata', async () => ({
+      ...state,
+      warnings: ['x'.repeat(budget)]
+    }));
+    expect(cache.entryCount).toBe(1);
+    const body =
+      state.bodyRepresentations[
+        'body_a' as keyof typeof state.bodyRepresentations
+      ]!;
+    await cache.get('new-geometry', async () => ({
+      ...state,
+      bodyRepresentations: {
+        ...state.bodyRepresentations,
+        [body.bodyId]: {
+          ...body,
+          mesh: { ...body.mesh, vertices: new Float32Array(budget) }
+        }
+      }
+    }));
+    expect(cache.entryCount).toBe(1);
+    expect(cache.bytes).toBeLessThanOrEqual(budget);
+    const reload = vi.fn(async () => state);
+    await cache.get('first', reload);
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
   it('preserves demand distinctions for booleans while sharing equivalent non-boolean results', () => {
     const manager = new CommandManager(
       createProjectDocument('Boolean demand', toUserId('user'))

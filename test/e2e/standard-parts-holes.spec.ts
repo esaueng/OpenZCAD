@@ -228,18 +228,29 @@ test(
     await choose(bar, 'Part', 'Screw');
     await choose(bar, 'Place', 'Into a hole');
     await bar.locator('summary').click();
-    // The bore of the normal M6 clearance hole, 6.6 across. A bore whose
-    // feature is not yet read asks for a second click.
+    // The bore of the normal M6 clearance hole, 6.6 across, clicked once the
+    // model has it. A bore whose feature is not yet read asks for a second
+    // click, but a picked feature's face clicked again comes back out, so it
+    // is clicked again only when no length arrow follows.
     await expect
-      .poll(
-        async () =>
-          (await pickBore(canvas, 3.3)) &&
-          (await commandHandle(canvas, 'length')) !== null,
-        { timeout: 60_000 }
-      )
+      .poll(() => pickBore(canvas, 3.3), { timeout: 60_000 })
       .toBe(true);
-    // The preview of the matched screw settles before the arrow is taken.
+    const arrow = () =>
+      expect
+        .poll(() => commandHandle(canvas, 'length'), { timeout: 10_000 })
+        .not.toBeNull()
+        .then(
+          () => true,
+          () => false
+        );
+    if (!(await arrow())) {
+      await pickBore(canvas, 3.3);
+      expect(await arrow()).toBe(true);
+    }
+    // The preview of the matched screw settles before the arrow is taken;
+    // its handles are drawn again with the settled preview.
     await waitForStillViewport(page);
+    await expect.poll(() => commandHandle(canvas, 'length')).not.toBeNull();
     const handle = (await commandHandle(canvas, 'length'))!;
     // 20 through the block, a 5.2 nut and two pitches: the 30 is the
     // shortest preferred length past 27.2.
@@ -256,10 +267,15 @@ test(
       steps: 16
     });
     await page.mouse.up();
+    // The dragged length, read where the poll saw it (the handle is drawn
+    // again whenever the preview lands).
+    let length = 30;
     await expect
-      .poll(async () => (await commandHandle(canvas, 'length'))?.value ?? 30)
+      .poll(async () => {
+        length = (await commandHandle(canvas, 'length'))?.value ?? length;
+        return length;
+      })
       .toBeGreaterThan(33);
-    const length = (await commandHandle(canvas, 'length'))!.value;
     expect(length).toBeLessThan(40);
     await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
       timeout: 90_000

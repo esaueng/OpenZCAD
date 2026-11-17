@@ -63,6 +63,7 @@ export class DrawingProjectionClient {
             ok: true,
             projection: projectView({
               orientation: view.orientation,
+              ...(view.frame ? { frame: view.frame } : {}),
               hiddenLines: view.hiddenLines,
               bodies: view.bodyIds.flatMap((id) =>
                 bodies[id] ? [bodies[id]] : []

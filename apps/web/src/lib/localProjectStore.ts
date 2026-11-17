@@ -30,6 +30,7 @@ import {
   LOCAL_PROJECT_CLAIM_STORE,
   LOCAL_PROJECT_DATABASE_NAME,
   LOCAL_PROJECT_DATABASE_VERSION,
+  LOCAL_PROJECT_CHECKPOINT_THUMBNAIL_STORE,
   LOCAL_PROJECT_DOCUMENT_STORE
 } from './localProjectSchema';
 
@@ -133,6 +134,8 @@ export const MEASUREMENT_STORE_NAME = 'projectMeasurements';
  * been pruned here is still restorable from the account.
  */
 const CHECKPOINT_STORE_NAME = LOCAL_PROJECT_CHECKPOINT_STORE;
+export const CHECKPOINT_THUMBNAIL_AGE_INDEX = 'byCapturedAt';
+export const CHECKPOINT_THUMBNAIL_PROJECT_INDEX = 'byProject';
 const CHECKPOINT_AGE_INDEX = 'byProjectDocumentVersion';
 const CHECKPOINT_METADATA_INDEX = 'byProjectCheckpointMetadata';
 /**
@@ -335,6 +338,22 @@ function createExpectedStores(
       'documentVersion',
       'createdAt'
     ]);
+  }
+  // L03: empty on an upgraded database; save points made before it have no
+  // card until a preview draws one. Keyed by the save point's own id, which is
+  // random and never reused, so a project changing id (account adoption)
+  // needs no move, and a branch shares the cards of the saves it copied.
+  if (
+    !database.objectStoreNames.contains(
+      LOCAL_PROJECT_CHECKPOINT_THUMBNAIL_STORE
+    )
+  ) {
+    const thumbnails = database.createObjectStore(
+      LOCAL_PROJECT_CHECKPOINT_THUMBNAIL_STORE,
+      { keyPath: 'checkpointId' }
+    );
+    thumbnails.createIndex(CHECKPOINT_THUMBNAIL_AGE_INDEX, 'capturedAt');
+    thumbnails.createIndex(CHECKPOINT_THUMBNAIL_PROJECT_INDEX, 'projectId');
   }
   const checkpoints = upgrade?.objectStore(CHECKPOINT_STORE_NAME);
   if (
@@ -1175,6 +1194,21 @@ async function pruneSaveStates(
  * string, so the pair spans exactly this project's rows whichever of the two
  * the second component holds.
  */
+/** Deletes every record an index lists under `key`. */
+function deleteByIndex(index: IDBIndex, key: IDBValidKey): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cursor = index.openCursor(IDBKeyRange.only(key));
+    cursor.onerror = () =>
+      reject(cursor.error ?? new Error('Local project storage failed.'));
+    cursor.onsuccess = () => {
+      const next = cursor.result;
+      if (!next) return resolve();
+      next.delete();
+      next.continue();
+    };
+  });
+}
+
 export function checkpointKeyRange(projectId: string): IDBKeyRange {
   return IDBKeyRange.bound([projectId], [projectId, []]);
 }
@@ -1743,7 +1777,12 @@ function deleteLocalProjectWhen(
   ];
   const deleted = scopedTransaction(
     'readwrite',
-    [...storeNames, CHECKPOINT_STORE_NAME, ALIAS_STORE_NAME],
+    [
+      ...storeNames,
+      CHECKPOINT_STORE_NAME,
+      LOCAL_PROJECT_CHECKPOINT_THUMBNAIL_STORE,
+      ALIAS_STORE_NAME
+    ],
     async (store) => {
       await assertCurrentProjectId(store(ALIAS_STORE_NAME), projectId);
       const metadata =
@@ -1762,6 +1801,14 @@ function deleteLocalProjectWhen(
         store(name).delete(projectId);
       }
       store(CHECKPOINT_STORE_NAME).delete(checkpointKeyRange(projectId));
+      // L03 save-point cards drawn for this project go with it. A branch
+      // keeps the cards it drew for itself under its own id.
+      await deleteByIndex(
+        store(LOCAL_PROJECT_CHECKPOINT_THUMBNAIL_STORE).index(
+          CHECKPOINT_THUMBNAIL_PROJECT_INDEX
+        ),
+        projectId
+      );
       // Aliases remain as fences: an older tab must never resurrect the removed ID.
       return true;
     }

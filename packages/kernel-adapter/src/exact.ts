@@ -4032,6 +4032,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           draftBodyId = draftCandidate.bodyId;
       }
       const bodies = listNodesByKind(document, 'body');
+      const terminalDimension = listFeaturesInOrder(document).at(-1);
       const features = new Map(
         listNodesByKind(document, 'feature').map((feature) => [
           feature.featureId,
@@ -4470,7 +4471,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         const solidKey = shape.solids.join(',');
         const analysisHashes =
           analysis?.bodyId === bodyId ? analysis.faceHashes : undefined;
-        const terminalDimension = listFeaturesInOrder(document).at(-1);
         // Re-proving unrelated planar moves is capability discovery, not
         // acceptance of a certified radius/diameter edit. Explicit foreground
         // analysis can still request fresh proofs on the resulting body.

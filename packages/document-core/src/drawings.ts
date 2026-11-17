@@ -17,6 +17,7 @@ import {
   type DrawingViewId,
   type ProjectDocument
 } from '@openzcad/shared';
+import { assertDrawingViewConfigurationSchema } from './document-content-schema';
 
 /**
  * D01 drawing commands. Each takes explicit data — the sheet, the view, the
@@ -68,6 +69,11 @@ export interface DrawingViewUpdateInput {
   sectionDepth?: number;
   /** D03 (v78): a detail view's circle and scale; omitted fields are kept. */
   detail?: Partial<Pick<DrawingDetail, 'center' | 'radius' | 'scale'>>;
+  /**
+   * F06 (v89): the configuration row a base view draws, or null for the
+   * active row.
+   */
+  configurationId?: string | null;
 }
 
 export interface DrawingViewDeleteInput {
@@ -386,18 +392,45 @@ export function updateDrawingView(
         input.bodyIds.filter((id) => !view.bodyIds.includes(id))
       );
     if (input.hiddenLines !== undefined) view.hiddenLines = input.hiddenLines;
+    if (input.configurationId !== undefined) {
+      assertDrawingViewConfigurationSchema(document.schemaVersion);
+      if (
+        view.parentViewId !== undefined ||
+        view.section ||
+        view.detail ||
+        view.auxiliary
+      )
+        throw new Error(
+          'This view draws its source view’s configuration; choose it there.'
+        );
+      if (input.configurationId === null) delete view.configurationId;
+      else {
+        if (
+          !document.configurations?.rows.some(
+            (row) => row.id === input.configurationId
+          )
+        )
+          throw new Error('That configuration is not in this document.');
+        view.configurationId = input.configurationId;
+      }
+    }
     if (input.detail !== undefined) {
       if (!view.detail)
         throw new Error(`Drawing view ${input.viewId} is not a detail.`);
       view.detail = deepClone({ ...view.detail, ...input.detail });
     }
     // A detail looks as its source does: its bodies follow the source's.
-    if (input.bodyIds && view.detail)
-      throw new Error('A detail view draws the bodies of its source view.');
+    if (input.bodyIds && (view.detail || view.auxiliary))
+      throw new Error(
+        `A ${view.detail ? 'detail' : 'auxiliary'} view draws the bodies of its source view.`
+      );
     if (input.bodyIds)
-      for (const detail of sheet.views)
-        if (detail.detail?.sourceViewId === view.viewId)
-          detail.bodyIds = [...input.bodyIds];
+      for (const follower of sheet.views)
+        if (
+          follower.detail?.sourceViewId === view.viewId ||
+          follower.auxiliary?.sourceViewId === view.viewId
+        )
+          follower.bodyIds = [...input.bodyIds];
     if (input.sectionDepth !== undefined) {
       if (!view.section)
         throw new Error(`Drawing view ${input.viewId} is not a section.`);
@@ -469,7 +502,8 @@ export function deleteDrawingView(
     for (const view of sheet.views)
       if (
         view.section?.sourceViewId === input.viewId ||
-        view.detail?.sourceViewId === input.viewId
+        view.detail?.sourceViewId === input.viewId ||
+        view.auxiliary?.sourceViewId === input.viewId
       )
         removed.add(view.viewId);
     if (sheet.annotations) {

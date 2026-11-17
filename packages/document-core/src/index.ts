@@ -9,6 +9,14 @@ export {
   shareLinkSheets,
   withShareLinkSheets
 } from './share-link-sheets';
+export {
+  diffSaveStates,
+  type SaveStateDiff,
+  type SaveStateDiffGroup,
+  type SaveStateDiffItem,
+  type SaveStateChangedItem,
+  type SaveStateParameterChange
+} from './save-state-diff';
 import { repairLegacyBracketModel } from './legacy-bracket';
 export {
   repairLegacyBracketModel,
@@ -114,6 +122,9 @@ import {
   BODY_COLOR_METADATA_KEY,
   BODY_OPACITY_METADATA_KEY,
   chosenBodyColor,
+  MAX_CHECKPOINT_AUTHOR_DEVICE_LENGTH,
+  MAX_CHECKPOINT_AUTHOR_NAME_LENGTH,
+  MAX_CHECKPOINT_NAME_LENGTH,
   MAX_CHECKPOINT_REASON_LENGTH,
   millimetresPerUnit,
   documentNodesWithHistory,
@@ -126,6 +137,7 @@ import {
   assertReferenceImageSet,
   featureColor,
   isProjectCheckpoint,
+  isProjectCheckpointAuthor,
   isRevisionRecord,
   MAX_PROJECT_CHECKPOINTS,
   MAX_PROJECT_REVISION_RECORDS,
@@ -184,6 +196,7 @@ import {
   type ProjectDocument,
   type ProjectBranchPoint,
   type ProjectCheckpoint,
+  type ProjectCheckpointAuthor,
   type RevisionRecord,
   type ShaprImportId,
   type ShaprMigrationRecord,
@@ -1088,7 +1101,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   const checkpoints = Array.isArray(document.checkpoints)
     ? document.checkpoints
         .slice(-MAX_PROJECT_CHECKPOINTS)
-        .filter(isProjectCheckpoint)
+        .map(storedCheckpoint)
+        .filter((checkpoint) => checkpoint !== null)
     : fallbackRevision
       ? [
           {
@@ -5074,7 +5088,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'origin',
     'axis',
     'xDirection',
-    'hole'
+    'hole',
+    'thread'
   ],
   // `secondBodyId` is body wiring, not a parameter: never patchable.
   split: ['targetBodyId', 'plane', 'keepOriginal'],
@@ -5238,9 +5253,10 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   hole: ['points', 'standard', 'tapped'],
   // M17: a screw's head goes off a part that is no longer a screw, a length
   // off a part that has none (or, in a hole, is matched again), the
-  // x-direction back to the default, and the hole when the part is placed
-  // on a face instead (schema v77).
-  'standard-part': ['head', 'length', 'xDirection', 'hole'],
+  // x-direction back to the default, the hole when the part is placed on a
+  // face instead (schema v77), and a simplified thread when it is modeled
+  // again (schema v83).
+  'standard-part': ['head', 'length', 'xDirection', 'hole', 'thread'],
   // Schema v53: every size and placement field falls back to the face or its
   // documented default; the custom-profile fields may go only off a custom
   // profile, which the thread validation enforces. A face picked again
@@ -6002,10 +6018,15 @@ export function appendRevision(
 /** A persisted save owns a fresh revision ID; model version and undo stay unchanged. */
 export function createSavedRevision(
   document: ProjectDocument,
-  reason: string
+  reason: string,
+  author?: ProjectCheckpointAuthor
 ): ProjectDocument {
   const appended = appendRevision(document, reason);
-  return createCheckpoint({ ...appended, version: document.version }, reason);
+  return createCheckpoint(
+    { ...appended, version: document.version },
+    reason,
+    author
+  );
 }
 
 /**
@@ -6014,9 +6035,10 @@ export function createSavedRevision(
  */
 export function createAdvancingSavePoint(
   document: ProjectDocument,
-  reason: string
+  reason: string,
+  author?: ProjectCheckpointAuthor
 ): ProjectDocument {
-  return createCheckpoint(appendRevision(document, reason), reason);
+  return createCheckpoint(appendRevision(document, reason), reason, author);
 }
 
 /**
@@ -6054,6 +6076,9 @@ export function withEchoedSavePoints(
   const checkpointIds = new Set(
     echo.checkpoints.map((checkpoint) => checkpoint.checkpointId)
   );
+  const liveCheckpoints = new Map(
+    live.checkpoints.map((checkpoint) => [checkpoint.checkpointId, checkpoint])
+  );
   return {
     ...live,
     revisions: [
@@ -6062,8 +6087,13 @@ export function withEchoedSavePoints(
         (revision) => !revisionIds.has(revision.revisionId)
       )
     ].slice(-MAX_PROJECT_REVISION_RECORDS),
+    // A save point both hold keeps the live copy: it is the newer one, and
+    // may have been renamed (L03) while the save was in flight.
     checkpoints: [
-      ...echo.checkpoints,
+      ...echo.checkpoints.map(
+        (checkpoint) =>
+          liveCheckpoints.get(checkpoint.checkpointId) ?? checkpoint
+      ),
       ...live.checkpoints.filter(
         (checkpoint) => !checkpointIds.has(checkpoint.checkpointId)
       )
@@ -6096,17 +6126,19 @@ export function setShareLinkSheets(
  */
 export function createSavePoint(
   document: ProjectDocument,
-  reason: string
+  reason: string,
+  author?: ProjectCheckpointAuthor
 ): ProjectDocument {
   return document.revisions.length === 0
-    ? createSavedRevision(document, reason)
-    : createCheckpoint(document, reason);
+    ? createSavedRevision(document, reason, author)
+    : createCheckpoint(document, reason, author);
 }
 
 /** Records a durable save point without changing model or undo semantics. */
 export function createCheckpoint(
   document: ProjectDocument,
-  reason: string
+  reason: string,
+  author?: ProjectCheckpointAuthor
 ): ProjectDocument {
   const latestRevision = document.revisions.at(-1);
   if (!latestRevision) {
@@ -6121,6 +6153,7 @@ export function createCheckpoint(
   ) {
     return document;
   }
+  const recordedAuthor = author ? checkpointAuthor(author) : undefined;
   return {
     ...document,
     checkpoints: [
@@ -6130,9 +6163,103 @@ export function createCheckpoint(
         revisionId: latestRevision.revisionId,
         documentVersion: document.version,
         createdAt: nowIso(),
-        reason: normalizedReason
+        reason: normalizedReason,
+        ...(recordedAuthor ? { author: recordedAuthor } : {})
       }
     ].slice(-MAX_PROJECT_CHECKPOINTS)
+  };
+}
+
+function boundedText(value: string | undefined, max: number): string | null {
+  // Control characters would let a name break the row it is shown in.
+  // eslint-disable-next-line no-control-regex
+  const text = value?.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim();
+  if (!text) return null;
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/**
+ * The author fields a save point records, bounded to what
+ * `isProjectCheckpointAuthor` accepts; undefined when nothing is left.
+ */
+export function checkpointAuthor(
+  author: ProjectCheckpointAuthor
+): ProjectCheckpointAuthor | undefined {
+  const userId = boundedText(author.userId, 200);
+  const name = boundedText(author.name, MAX_CHECKPOINT_AUTHOR_NAME_LENGTH);
+  const device = boundedText(
+    author.device,
+    MAX_CHECKPOINT_AUTHOR_DEVICE_LENGTH
+  );
+  const recorded: ProjectCheckpointAuthor = {
+    ...(userId ? { userId } : {}),
+    ...(name ? { name } : {}),
+    ...(device ? { device } : {})
+  };
+  return Object.keys(recorded).length ? recorded : undefined;
+}
+
+/**
+ * Renames a save point (L03). The name is shown in place of the reason the
+ * save was made with; an empty name clears it, so the reason shows again.
+ *
+ * A forward write, not an undoable edit: like the save point itself it is a
+ * record of the timeline, which undo never rewinds (`checkpoints` is not a
+ * history field), and it advances the version so the account, the room and
+ * every other device take it like any other change.
+ */
+export function renameCheckpoint(
+  document: ProjectDocument,
+  checkpointId: string,
+  name: string
+): ProjectDocument {
+  const index = document.checkpoints.findIndex(
+    (checkpoint) => checkpoint.checkpointId === checkpointId
+  );
+  if (index < 0) throw new Error('That save point is not in this project.');
+  const current = document.checkpoints[index]!;
+  const next = boundedText(name, MAX_CHECKPOINT_NAME_LENGTH);
+  // A name equal to the reason is no name at all.
+  const recorded = next === null || next === current.reason ? null : next;
+  if ((current.name ?? null) === recorded) return document;
+  const { name: _previous, ...rest } = current;
+  const renamed: ProjectCheckpoint = recorded
+    ? { ...rest, name: recorded }
+    : rest;
+  return appendRevision(
+    {
+      ...document,
+      checkpoints: document.checkpoints.map((checkpoint, at) =>
+        at === index ? renamed : checkpoint
+      )
+    },
+    'Rename save point'
+  );
+}
+
+/**
+ * A stored save point with any malformed optional field dropped, so a bad
+ * name or author never costs the save point itself; null when the save point
+ * is malformed.
+ */
+function storedCheckpoint(value: unknown): ProjectCheckpoint | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const { name, author, ...base } = value as Record<string, unknown>;
+  if (!isProjectCheckpoint(base)) return null;
+  const candidate = {
+    ...base,
+    ...(name !== undefined ? { name } : {}),
+    ...(author !== undefined ? { author } : {})
+  };
+  if (isProjectCheckpoint(candidate)) return candidate;
+  return {
+    ...base,
+    ...(name !== undefined && isProjectCheckpoint({ ...base, name })
+      ? { name: name as string }
+      : {}),
+    ...(author !== undefined && isProjectCheckpointAuthor(author)
+      ? { author }
+      : {})
   };
 }
 

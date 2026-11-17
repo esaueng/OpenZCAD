@@ -45,6 +45,7 @@ import type { PipeThreadSize } from './pipe-threads';
 import type {
   StandardPartBuild,
   StandardPartKind,
+  StandardPartThread,
   StandardPartSize,
   StandardPartSystem,
   StandardScrewHead
@@ -358,8 +359,26 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // annotations): an assembly's BOM table on the paper and a part's item
 // number at a leader, both read from the AS03 table each time the sheet is
 // drawn. An older client would refuse the unknown kinds, so it must refuse
-// the document. Builds on v79 (F06 assembly component configurations).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 80 as const;
+// the document. Builds on v78 (v79 went unused).
+// v81 adds D03 auxiliary views (`auxiliary` on a drawing view): seen square
+// to an edge its source draws true length, so an inclined face is drawn
+// true size. An older client would draw the source's view instead, so it
+// must refuse. Builds on v80.
+// v82 adds the D02 arc angle (`kind: 'arc-angle'`, an arc's included angle
+// at its centre) and three-point angle (`kind: 'three-point-angle'`, at a
+// vertex point between two others). An older client would refuse the
+// unknown kinds, so it must refuse the document. Builds on v81.
+// v83 adds M17 simplified threads (`thread: 'simplified'` on a standard
+// part): the part is drawn as its plain envelope, with no thread cut. An
+// older client would cut it, so it must refuse. Builds on v82.
+// v89 adds F06 per-view configurations (`configurationId` on a base drawing
+// view): the row the view and every view folded, cut or detailed from it
+// draw, built on its own while the active row stays the model being edited.
+// Absent draws the active row, so every older sheet draws unchanged. An
+// older client would draw the active row and drop the choice on its next
+// save, so it must refuse. Builds on v83 (v84, v85, v87 and v88 are claimed
+// by D02/D03, v86 by F06 slice 4a).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 89 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2419,6 +2438,14 @@ export type FeatureData =
        * and must take the part's size (`standardPartForHole`).
        */
       hole?: { featureId: FeatureId };
+      /**
+       * M17 (schema v72), screws, nuts and threaded inserts: how the thread
+       * is built. `'simplified'` leaves it uncut, the shank or bore the plain
+       * cylinder a drawing shows (and an insert without its knurl), so many
+       * fasteners stay light to build and draw; the designation still names
+       * the thread. Absent is `'modeled'`, the M15 thread.
+       */
+      thread?: StandardPartThread;
     }
   /**
    * M16 (schema v58): a sheet-metal part. The sketch cells in `profiles`
@@ -3473,13 +3500,48 @@ export interface RevisionRecord {
   commandCount: number;
 }
 
+/**
+ * Who made a save point and where (L03), as the saving browser recorded it.
+ * Every field is optional: older save points carry none, and a save made
+ * signed out has no account. On an encrypted project it travels inside the
+ * signed, encrypted document like every other field an editor writes.
+ */
+export interface ProjectCheckpointAuthor {
+  /** The account that saved, when one was signed in. */
+  userId?: string;
+  /** That account's display name at the time. */
+  name?: string;
+  /** A short name for the device, such as "Chrome on macOS". */
+  device?: string;
+}
+
 /** Durable user-visible save point. Command history and undo state remain separate. */
 export interface ProjectCheckpoint {
   checkpointId: string;
   revisionId: RevisionId;
   documentVersion: number;
   createdAt: string;
+  /** The automatic reason, or the name typed when saving. */
   reason: string;
+  /**
+   * A name given after the save (L03 rename). Shown in place of `reason`;
+   * absent until someone renames the save point.
+   */
+  name?: string;
+  author?: ProjectCheckpointAuthor;
+}
+
+/** Longest name a save point may be renamed to. */
+export const MAX_CHECKPOINT_NAME_LENGTH = 120;
+/** Bounds of the author fields a save point records. */
+export const MAX_CHECKPOINT_AUTHOR_NAME_LENGTH = 120;
+export const MAX_CHECKPOINT_AUTHOR_DEVICE_LENGTH = 64;
+
+/** What the versions list calls a save point: its new name, else its reason. */
+export function checkpointLabel(
+  checkpoint: Pick<ProjectCheckpoint, 'name' | 'reason'>
+): string {
+  return checkpoint.name ?? checkpoint.reason;
 }
 
 /**
@@ -3577,7 +3639,30 @@ export function isProjectCheckpoint(
     isBoundedString(checkpoint.revisionId, 200, 1) &&
     isNonnegativeSafeInteger(checkpoint.documentVersion) &&
     isBoundedString(checkpoint.createdAt, 100, 1) &&
-    isBoundedString(checkpoint.reason, 500)
+    isBoundedString(checkpoint.reason, 500) &&
+    (checkpoint.name === undefined ||
+      isBoundedString(checkpoint.name, MAX_CHECKPOINT_NAME_LENGTH, 1)) &&
+    (checkpoint.author === undefined ||
+      isProjectCheckpointAuthor(checkpoint.author))
+  );
+}
+
+export function isProjectCheckpointAuthor(
+  value: unknown
+): value is ProjectCheckpointAuthor {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const author = value as Record<string, unknown>;
+  return (
+    Object.keys(author).every((key) =>
+      ['userId', 'name', 'device'].includes(key)
+    ) &&
+    (author.userId === undefined || isBoundedString(author.userId, 200, 1)) &&
+    (author.name === undefined ||
+      isBoundedString(author.name, MAX_CHECKPOINT_AUTHOR_NAME_LENGTH, 1)) &&
+    (author.device === undefined ||
+      isBoundedString(author.device, MAX_CHECKPOINT_AUTHOR_DEVICE_LENGTH, 1))
   );
 }
 
