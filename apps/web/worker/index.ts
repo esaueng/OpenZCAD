@@ -1253,7 +1253,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     if (
       !token ||
       !(await isProjectCommentStorageReady(env.DB)) ||
-      !(await isShareLinkCommentsReady(env.DB!))
+      !(await isShareLinkCommentsReady(env.DB))
     )
       return notFound();
     const link = await commentLinkProject(
