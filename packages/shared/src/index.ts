@@ -2262,7 +2262,7 @@ export type FeatureData =
     }
   | {
       /**
-       * L15 (schema v98): a custom feature. It runs the embedded script on
+       * L15 (schema v104): a custom feature. It runs the embedded script on
        * its target body, in the kernel worker, as the script's steps would
        * run one after another, and replaces the target with the result. The
        * script's picks are queries evaluated on every build; nothing here is
