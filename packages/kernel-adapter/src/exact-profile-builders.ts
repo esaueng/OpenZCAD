@@ -1972,7 +1972,13 @@ export function sweepPathEdges(
   document: ProjectDocument,
   path: SketchPathReference,
   scope: Record<string, number>,
-  sketchBases: ReadonlyMap<SketchId, PlaneBasis>
+  sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+  /**
+   * Split an arc wider than a quarter turn into quarter-turn pieces, as the
+   * sampled sweeps always have. The exact sweep takes each arc whole: one
+   * motion, one face per profile edge.
+   */
+  splitArcs = true
 ): number[] {
   const sketch = findSketch(document, path.sketchId);
   if (!sketch) {
@@ -2052,7 +2058,9 @@ export function sweepPathEdges(
       throw new Error('Sweep path arc must have a non-zero sweep.');
     }
     const center = planePoint3(basis, center2);
-    const pieces = Math.max(1, Math.ceil(sweep / (Math.PI / 2)));
+    const pieces = splitArcs
+      ? Math.max(1, Math.ceil(sweep / (Math.PI / 2)))
+      : 1;
     return Array.from({ length: pieces }, (_, index) => {
       const angleA = start + (sweep * index) / pieces;
       const angleB = start + (sweep * (index + 1)) / pieces;
@@ -2297,6 +2305,38 @@ function guidedSweepSolid(
   return guided;
 }
 
+/**
+ * M04: the exact in-place sweep. The profile stays where it is and the
+ * kernel carries it along the path's lines and whole arcs as exact surfaces
+ * (`sweepExact`); a corner, a fold or a self-crossing is refused by name and
+ * never sampled instead. A guide rail has no exact construction, so it is
+ * refused rather than rebuilt as facets.
+ */
+function exactSweepSolid(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  face: number,
+  path: SketchPathReference,
+  guided: boolean,
+  scope: Record<string, number>,
+  sketchBases: ReadonlyMap<SketchId, PlaneBasis>
+): number {
+  if (guided) {
+    throw new Error(
+      'A guide rail has no exact sweep construction: the rail turns the profile in a way no exact surface follows, so the sweep would be built from facets. Clear the guide rail.'
+    );
+  }
+  const edges = sweepPathEdges(
+    kernel,
+    document,
+    path,
+    scope,
+    sketchBases,
+    false
+  );
+  return kernel.sweepExact(face, Uint32Array.from(edges));
+}
+
 export function buildProfileSweep(
   kernel: RemusKernel,
   document: ProjectDocument,
@@ -2326,6 +2366,29 @@ export function buildProfileSweep(
   );
   const guide = feature.data.guide;
   const guided = guide !== undefined;
+  if (feature.data.construction === 'in-place') {
+    return {
+      solids: [
+        validateGeneratedSolid(
+          kernel,
+          exactSweepSolid(
+            kernel,
+            document,
+            face,
+            feature.data.path,
+            guided,
+            scope,
+            sketchBases
+          ),
+          'Sweep'
+        )
+      ],
+      lineage: remusHashOnlyLineage(
+        'sweep',
+        'Profile sweep topology has no verified output evolution relation.'
+      )
+    };
+  }
   const solid = guided
     ? guidedSweepSolid(
         kernel,

@@ -324,6 +324,53 @@ const TRANSLATIONS: readonly Translation[] = [
     sentence:
       'That radius is too large for the faces this blend joins. Try a smaller radius.'
   },
+  // M04 exact sweeps (`sweepExact`): each refusal names its cause; nothing
+  // is sampled in their place.
+  {
+    pattern: /sweep path turns a corner of ([\d.]+)° at joint \d+, next to an arc/i,
+    sentence: (match) =>
+      `The sweep path has a ${Math.round(Number(match[1]) * 10) / 10}° corner next to an arc. An exact sweep mitres corners only between straight lines: join the arc tangentially.`
+  },
+  {
+    pattern: /sweep path turns back on itself/i,
+    sentence:
+      'The sweep path turns back on itself; a corner that sharp has no mitre.'
+  },
+  {
+    pattern: /too short for its mitred corners/i,
+    sentence:
+      'A straight run of the sweep path is too short for its mitred corners: lengthen it or use a smaller profile.'
+  },
+  {
+    pattern: /exact sweep paths are lines and circular arcs/i,
+    sentence: 'An exact sweep path can only be made of lines and arcs.'
+  },
+  {
+    pattern:
+      /exact sweep path (?:edges do not form one connected chain|branches)/i,
+    sentence:
+      'The sweep path must be one connected chain of curves, end to end.'
+  },
+  {
+    pattern: /sweep profile reaches the axis of path arc/i,
+    sentence:
+      'The profile is too big for a bend in the sweep path: it would reach past the bend’s centre. Use a larger bend radius or a smaller profile.'
+  },
+  {
+    pattern: /does not cross the sweep profile's plane transversally/i,
+    sentence:
+      'The sweep would fold through itself: the path runs along the profile, or the profile is too big for a bend and reaches past the bend’s centre. Draw the profile across the path, or use a larger bend radius or a smaller profile.'
+  },
+  {
+    pattern: /the swept body could meet itself/i,
+    sentence:
+      'The sweep would run into itself: two parts of the path pass closer than the profile is wide.'
+  },
+  {
+    pattern: /closed sweep path does not bring the profile back/i,
+    sentence:
+      'The closed sweep path does not bring the profile back to where it started.'
+  },
   {
     pattern: /self-intersect/i,
     sentence: 'The resulting body would intersect itself.'

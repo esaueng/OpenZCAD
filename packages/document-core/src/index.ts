@@ -507,6 +507,8 @@ export interface SweepInput {
   mode: 'standard' | 'smooth';
   /** Rail the profile's up-vector tracks along the path; omitted by default. */
   guide?: SketchPathReference;
+  /** See the sweep `FeatureData`; omitted is the legacy sampled sweep. */
+  construction?: 'in-place';
   ids?: BodyFeatureIds;
 }
 
@@ -2876,7 +2878,12 @@ export function sweepProfile(
       mode: input.mode,
       // Written only when asked for; an absent rail is the rotation-minimizing
       // frame every sweep authored before guide rails existed swept with.
-      ...(input.guide === undefined ? {} : { guide: deepClone(input.guide) })
+      ...(input.guide === undefined ? {} : { guide: deepClone(input.guide) }),
+      // Written only when asked for; absent is the sampled sweep every one
+      // authored before the exact in-place construction existed was built as.
+      ...(input.construction === undefined
+        ? {}
+        : { construction: input.construction })
     },
     suppliedIds(input.ids),
     input.bodyName
@@ -5377,7 +5384,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
   ],
   revolve: ['sketchId', 'axis', 'angleDeg', 'axisRef', 'profile'],
   loft: ['sections', 'mode', 'endPoint'],
-  sweep: ['profile', 'path', 'mode', 'guide'],
+  sweep: ['profile', 'path', 'mode', 'guide', 'construction'],
   'helical-sweep': [
     'profile',
     'axisOrigin',

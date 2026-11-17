@@ -72,7 +72,8 @@ describe('faceted sweep disclosure', { timeout: 60_000 }, () => {
         'Feature "Bend": This sweep is a faceted approximation, not exact curved surfaces: its curved path is followed in straight steps, and the profile\'s curved edges become straight chords. Its 902 faces are what its volume, mass and STEP export measure.' +
           (mode === 'smooth'
             ? ' Smooth only samples a path of one line or one arc of up to a quarter turn more finely; this path is built from 3 edges, so Smooth built the same body as Standard.'
-            : '')
+            : '') +
+          ' Edit it and choose Build: Exact to rebuild it from exact surfaces (a corner is mitred between straight lines only).'
       );
     }
   });
@@ -143,7 +144,7 @@ describe('faceted sweep disclosure', { timeout: 60_000 }, () => {
       derived
     });
     expect(advisory?.message).toMatch(
-      /^Feature "Spring": This helical sweep is a faceted approximation, not exact curved surfaces: its curved path is followed in straight steps, and the profile's curved edges become straight chords\. Its \d+ faces are what its volume, mass and STEP export measure\.$/
+      /^Feature "Spring": This helical sweep is a faceted approximation, not exact curved surfaces: its curved path is followed in straight steps, and the profile's curved edges become straight chords\. Its \d+ faces are what its volume, mass and STEP export measure\. Edit it and choose Build: Exact to wind it again from exact surfaces \(the coil then starts at the profile\)\.$/
     );
   });
 

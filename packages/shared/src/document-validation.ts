@@ -353,7 +353,10 @@ const FEATURE_ENUM_FIELDS = {
     mode: valuesOf<FeatureDataOf<'sweep'>['mode']>({
       standard: true,
       smooth: true
-    })
+    }),
+    construction: valuesOf<
+      NonNullable<FeatureDataOf<'sweep'>['construction']>
+    >({ 'in-place': true })
   },
   'helical-sweep': {
     construction: valuesOf<

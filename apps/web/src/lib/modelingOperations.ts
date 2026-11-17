@@ -126,6 +126,11 @@ export interface SweepFormState {
   mode: 'standard' | 'smooth';
   /** Empty is the rotation-minimizing frame, with no rail to track. */
   guideId: string;
+  /**
+   * Carried from the sweep being edited, so the card keeps how it was built
+   * (see the sweep `FeatureData`); absent is the legacy sampled sweep.
+   */
+  construction?: 'in-place';
 }
 
 export interface HelicalSweepFormState {
@@ -450,7 +455,10 @@ export function modelingFormStateFromFeature(
           guideId:
             data.guide === undefined
               ? ''
-              : resolvePathOption(data.guide, paths).id
+              : resolvePathOption(data.guide, paths).id,
+          ...(data.construction === undefined
+            ? {}
+            : { construction: data.construction })
         }
       };
     case 'helical-sweep':
@@ -595,7 +603,8 @@ export function modelingFeatureUpdate(
       };
     }
     case 'sweep': {
-      const { name, profile, path, mode, guide } = submission.input;
+      const { name, profile, path, mode, guide, construction } =
+        submission.input;
       return {
         featureId,
         name,
@@ -604,7 +613,9 @@ export function modelingFeatureUpdate(
           profile,
           path,
           mode,
-          ...(guide === undefined ? {} : { guide })
+          ...(guide === undefined ? {} : { guide }),
+          // Kept as built: an edit never changes how the sweep is made.
+          ...(construction === undefined ? {} : { construction })
         },
         ...(guide === undefined ? { clearData: ['guide'] } : {})
       };
@@ -989,6 +1000,9 @@ export function modelingFormValidationReason(
         return 'Choose a profile and a path.';
       }
       if (state.value.guideId === '') return null;
+      if (state.value.construction === 'in-place') {
+        return 'An exact sweep takes no guide rail: a rail turns the profile in a way no exact surface follows. Clear the guide rail.';
+      }
       if (state.value.guideId === state.value.pathId) {
         return 'The guide rail must be a different path from the sweep path.';
       }
@@ -1208,7 +1222,10 @@ export function buildModelingOperationSubmission(
         mode: state.value.mode,
         ...(state.value.guideId === ''
           ? {}
-          : { guide: requirePath(state.value.guideId, pathOptions) })
+          : { guide: requirePath(state.value.guideId, pathOptions) }),
+        ...(state.value.construction === undefined
+          ? {}
+          : { construction: state.value.construction })
       }
     };
   }

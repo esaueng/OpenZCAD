@@ -25492,7 +25492,10 @@ export function App() {
                   entityIds: request.guide.entityIds as EntityId[]
                 }
               }
-            : {})
+            : {}),
+          ...(request.construction === undefined
+            ? {}
+            : { construction: request.construction })
         });
       case 'helical-sweep':
         return commandFactories.helicalSweepProfile({

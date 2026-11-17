@@ -1716,6 +1716,9 @@ describe('review: a sweep guide rail', () => {
     act(() =>
       hook.result.current.pickCurve({ sketchId: OTHER, entityId: 'p1' })
     );
+    // A rail belongs to a saved sampled sweep kept sampled (M04).
+    act(() => hook.result.current.setOption('saved', 'sampled'));
+    act(() => hook.result.current.setOption('build', 'sampled'));
     act(() => hook.result.current.setOption('curves', 'guide'));
     act(() =>
       hook.result.current.pickCurve({ sketchId: OTHER, entityId: 'g1' })
