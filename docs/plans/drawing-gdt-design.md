@@ -177,3 +177,45 @@ properties) and `test/e2e/drawing-gdt.spec.ts`.
   - **Loading.** The PMI module loads on demand, off the entry chunk.
 - **Schema.** v106, built on v105, gated below it. An older client would drop
   the section on save.
+
+## Slice D: STEP AP242 semantic PMI
+
+- **What is written.** When File › STEP states AP242 (I04), the model's PMI
+  is appended after the presentation entities as AP242 semantic PMI,
+  following the CAx-IF recommended practice for semantic representation.
+  - **A datum feature** is a `DATUM_FEATURE` on its face (a
+    `GEOMETRIC_ITEM_SPECIFIC_USAGE` of the product's shape representation),
+    related by a `SHAPE_ASPECT_RELATIONSHIP` to the `DATUM` that carries its
+    letter.
+  - **A frame** is its characteristic's tolerance entity (`FLATNESS_…`,
+    `ROUNDNESS_…`, `POSITION_…`, …) on a `SHAPE_ASPECT` of its face. Its
+    magnitude is a `LENGTH_MEASURE_WITH_UNIT` in the file's own length
+    unit, so an inch file states inches.
+  - **Datum references** are a `DATUM_SYSTEM` of
+    `DATUM_REFERENCE_COMPARTMENT`s in precedence order. A material condition
+    is a modifier, on the tolerance or on its datum reference.
+  - **A cylindrical zone** is a `TOLERANCE_ZONE` of form 'cylindrical or
+    circular'.
+  - **Entity mapping.** Leaf entities that are already datum-referencing
+    subtypes, and tolerances without modifiers, use the internal mapping;
+    the rest are complex instances, their partial entities in alphabetical
+    order.
+- **Faces.** Each entry's face is resolved on its body's built solid, by
+  lineage then hash, fail-closed. Its index in the kernel's face list is
+  its place in the written shell, and each face is checked against its
+  surface type. A shell or face that does not match refuses the export
+  rather than tie a tolerance to the wrong face.
+- **What is left out.** An entry is left out when:
+  - its face no longer resolves (the workspace shows it broken);
+  - its body is not written or has more than one solid;
+  - it is a frame naming a datum that is not written on its own part.
+
+  An AP214 file carries no PMI. In a file with Objects folders (I02),
+  where each body becomes its own part product, an entry goes on its
+  body's part: that part's `PRODUCT_DEFINITION_SHAPE` and shape
+  representation. A frame names only datums on its own part, since
+  another part's datum is not in its reference frame.
+
+- **Ownership.** The writer is the I0x lane's; this adds `step-pmi.ts` and a
+  call in `finishStepExport` without changing what the writer emits.
+- **Schema.** None: it reads slice C's section.

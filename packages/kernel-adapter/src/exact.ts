@@ -308,6 +308,7 @@ import {
   type StepExportMetadata,
   type StepExportOptions
 } from './step-export-metadata';
+import type { StepPmiEntry } from './step-pmi';
 export {
   type StepBodiesExport,
   type StepBodySkipReason,
@@ -1362,6 +1363,72 @@ function exportAssembly(
 }
 
 /**
+ * D07: the model's PMI as the STEP writer will place it: each entry's face
+ * resolved on its body's built solid (lineage, then hash; fail-closed) and
+ * located by its index in that solid's faces, which is the order the writer
+ * walks its shell. An entry is left out when its body is not written, has
+ * more than one solid, or its face no longer resolves (the workspace shows
+ * it broken); a frame's tolerance is restated in the export's unit.
+ */
+function stepPmiEntries(
+  kernel: RemusKernel,
+  build: ExactBuildResult,
+  document: ProjectDocument,
+  bodies: readonly { bodyId: BodyId; solids: number[] }[],
+  units: UnitSystem
+): StepPmiEntry[] {
+  const annotations = document.pmi?.annotations ?? [];
+  if (annotations.length === 0) return [];
+  const firstSolid = new Map<BodyId, number>();
+  let count = 0;
+  for (const { bodyId, solids } of bodies) {
+    if (solids.length === 1) firstSolid.set(bodyId, count);
+    count += solids.length;
+  }
+  const scale = exportLengthScale(document.units, units);
+  const entries: StepPmiEntry[] = [];
+  for (const annotation of annotations) {
+    const bodyId = annotation.face.bodyId;
+    const solidIndex = firstSolid.get(bodyId);
+    const shape = build.shapes.get(bodyId);
+    if (solidIndex === undefined || !shape || shape.solids.length !== 1)
+      continue;
+    const solid = shape.solids[0]!;
+    let handle: number;
+    try {
+      handle = resolveDirectEditFace(kernel, shape, solid, {
+        faceHash: annotation.face.hash,
+        ...(annotation.face.reference
+          ? { faceReference: annotation.face.reference }
+          : {})
+      }).face;
+    } catch {
+      continue;
+    }
+    const faceIndex = [...kernel.getSolidFaces(solid)].indexOf(handle);
+    if (faceIndex < 0) continue;
+    const face = {
+      solid: solidIndex,
+      face: faceIndex,
+      surface: String(kernel.getSurfaceType(handle))
+    };
+    if (annotation.kind === 'datum-feature')
+      entries.push({ kind: 'datum', letter: annotation.letter, face });
+    else
+      entries.push({
+        kind: 'frame',
+        characteristic: annotation.characteristic,
+        amount: Number((annotation.amount * scale).toPrecision(12)),
+        diameterZone: annotation.diameterZone === true,
+        ...(annotation.material ? { material: annotation.material } : {}),
+        datums: (annotation.datums ?? []).map((datum) => ({ ...datum })),
+        face
+      });
+  }
+  return entries;
+}
+
+/**
  * One STEP of the given bodies' solids, each named after its body and styled
  * in its display colour.
  */
@@ -1370,8 +1437,14 @@ function writeStepBodies(
   io: RemusIo,
   document: ProjectDocument,
   bodies: readonly { bodyId: BodyId; solids: number[] }[],
-  options: StepExportOptions
+  options: StepExportOptions,
+  /** The build the bodies came from, where the model's PMI faces resolve. */
+  build?: ExactBuildResult
 ): string {
+  const pmi =
+    build && options.protocol === 'ap242'
+      ? stepPmiEntries(kernel, build, document, bodies, options.units ?? 'mm')
+      : [];
   const metadata: StepExportMetadata = {
     productName: document.name,
     fileName: options.fileName ?? `${document.name}.step`,
@@ -1381,6 +1454,7 @@ function writeStepBodies(
   };
   const assembly = exportAssembly(document, bodies);
   if (assembly) metadata.assembly = assembly;
+  if (pmi.length > 0) metadata.pmi = pmi;
   // Never fuse: a boolean union changes the geometry (overlaps merge,
   // coincident faces weld). Every root of the arena document becomes its
   // own MANIFOLD_SOLID_BREP inside one shape representation, so the
@@ -5305,7 +5379,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         io,
         document,
         this.exportBodySolidsFor(kernel, build, document, bodyIds, units),
-        options
+        options,
+        build
       )
     );
   }
@@ -5368,7 +5443,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         units
       );
       return {
-        text: writeStepBodies(kernel, io, document, bodies, options),
+        text: writeStepBodies(kernel, io, document, bodies, options, build),
         bodies: bodies.map(({ bodyId, solids }) => ({
           bodyId,
           solidCount: solids.length
