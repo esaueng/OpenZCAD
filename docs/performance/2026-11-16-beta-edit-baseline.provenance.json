@@ -1,0 +1,785 @@
+{
+  "metric": "Applied input event to revision-matched completed viewport render",
+  "quantiles": "Nearest rank, matching test/e2e/perf-cad-edit.spec.ts",
+  "baselineCommit": "5b6cff7d8ffe3d3eb5a20633f23a1f66b0b87e22",
+  "candidateBaseCommit": "5b6cff7d8ffe3d3eb5a20633f23a1f66b0b87e22",
+  "candidateSourceSha256": {
+    "apps/web/src/components/WindowedRow.test.tsx": "7cfdb6bb5e3f11dc309c603bae5c241db45c64d37349bbbe4a5ca036ba395bea",
+    "apps/web/src/components/WindowedRow.tsx": "a8db973c2e059abbc61deae2a3096df7694449a22896eebfcea42dd135fbe6b8",
+    "apps/web/src/lib/topologyTransport.test.ts": "ec5ed2cd0088571a47ea7e09b86540edd43d02f98108e110169b99bdf75c21df",
+    "apps/web/src/lib/topologyTransport.ts": "e4baadfdbee404db6ba65987c4d88558196c3227cc7259c97ebd48fe5f1b77dc",
+    "packages/kernel-adapter/src/exact-measurement-provenance.test.ts": "0e55ac4a6281183e2200de177e70bbc87b245623e5da4a2a6a6ee518589024b8",
+    "test/e2e/windowed-panels.spec.ts": "dfce13f3b6eee838e37c407a0a00164cb6f4041706bf37ed63931b0e61bcd8a0",
+    "apps/web/src/components/HistoryTimeline.tsx": "98bf9ab7151d9ab5935ff5227f4c4d289890ecb84e5aff925e51deb5aa246e45",
+    "apps/web/src/components/ParameterRows.test.tsx": "c3b4945ff84a9d95e97201aed31d4fe75e96d73ee5c83e10fa2f5a748e1d3f18",
+    "apps/web/src/components/ParameterRows.tsx": "4e08bf36a6adea1ab2e45bde6e4cf23f67f2f05bb5b06ac2281b1d494e8bb069",
+    "apps/web/src/components/modelPanels/ObjectsPanel.tsx": "ad38e9858b9dc50c40274df1247b2ab104f1cb7d9ac11125d303be1046df0c56",
+    "apps/web/src/hooks/useGeometryWorker.test.tsx": "996cbd63a3d7adc1bd6572d1a3d4fb1798b4828e45303fc704d92f1404e4f13a",
+    "apps/web/src/hooks/useGeometryWorker.ts": "16f7d70621d6ee167655ea496d2dcc3a774f3da996931612469e1a6765817b5e",
+    "apps/web/src/lib/meshTransport.ts": "1b1803ebb1d5759d536c9536e58589ab4833126e7bdb59c28bb1aecab1340a3c",
+    "apps/web/src/worker/exactRebuildCache.test.ts": "28061a12b802d14796937552d0297dce33765b275f0e91bc57a94968ad560467",
+    "apps/web/src/worker/exactRebuildCache.ts": "760bec181e72390b21f3cac3b9034855a670a81401e71f439531648f004dd329",
+    "apps/web/src/worker/geometryWorker.test.ts": "c1490b15695d25f7fcdb484a1e14a2fe0d2140b749f856ca57b20b64dd7650c3",
+    "apps/web/src/worker/geometryWorker.ts": "f6c599e441b98be5a461de88eff2b311236aa3efb7e27ca7d3775392197dadb7",
+    "packages/kernel-adapter/src/exact-history-cache.ts": "dc66e0ed04f5534887d03cc49ee0804887b3bf9798173dddf46755c055bd5c86",
+    "packages/kernel-adapter/src/exact.ts": "8055394e0d8e5c85cd31cacecd0719aaf42e52dca738faca0ace42c9685236b9",
+    "test/e2e/smoke-shard-weights.json": "c1f10477524b4a6d07a81d37c6ad6ab67129933da288591e7961f207f7fa217b"
+  },
+  "baselineBuildMetaSha256": "c3ffebc0f31289187689bd1891cb6979eee6680d54ee93191e360e60f5c4cee2",
+  "candidateBuildMetaSha256": "602ce96e312366a682f4ef575da56f2f0dc37686c17b9afedf0e590967c16fda",
+  "probeSha256": "1d4f45e1709e34eb4d161f8dcc211141d5675ae44e10bfc535b6102407e8e646",
+  "environment": {
+    "node": "v24.22.2",
+    "cpuModel": "AMD Ryzen 9 5900XT 16-Core Processor",
+    "browserVersion": "156.0.8078.4",
+    "angle": "gl",
+    "installedRemusVersion": "2026.1.141",
+    "installedRemusIoVersion": "2026.1.141",
+    "wasmSha256": "e6df603baee7837cde72abd5133b109449b5cca120f55592ffcdda0e651a1175",
+    "remusIoWasmSha256": "b4c29f840bdb10167ad406d083e4693b9d7a32b5f3643d521f67ba9d11a94863"
+  },
+  "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3090/PCIe/SSE2, OpenGL 4.5.0)",
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "devicePixelRatio": 1,
+  "conditions": {
+    "maxLoadAverage1m": 2,
+    "minAvailableMemoryGiB": 3,
+    "gpuUtilizationBeforeBelowPercent": 20,
+    "externalBuildTestProcesses": 0,
+    "foldingPausedDuringMeasurements": true,
+    "foldingRestorationVerified": true
+  },
+  "pooledInputToFrameMs": {
+    "1": {
+      "original": {
+        "samples": 30,
+        "medianMs": 36.40000003576279,
+        "p95Ms": 40.19999998807907
+      },
+      "candidate": {
+        "samples": 30,
+        "medianMs": 35.89999997615814,
+        "p95Ms": 41.60000002384186
+      }
+    },
+    "100": {
+      "original": {
+        "samples": 30,
+        "medianMs": 112.5,
+        "p95Ms": 130.19999998807907
+      },
+      "candidate": {
+        "samples": 30,
+        "medianMs": 66.90000003576279,
+        "p95Ms": 77.10000002384186
+      }
+    },
+    "500": {
+      "original": {
+        "samples": 90,
+        "medianMs": 514.3999999761581,
+        "p95Ms": 559.2999999523163
+      },
+      "candidate": {
+        "samples": 90,
+        "medianMs": 253.89999997615814,
+        "p95Ms": 286.5
+      }
+    }
+  },
+  "runs": [
+    {
+      "historySetting": 1,
+      "repeat": 1,
+      "order": ["candidate", "original"],
+      "foldingRestored": true,
+      "variants": {
+        "original": {
+          "summaries": {
+            "inputToWorkerRequestMs": {
+              "samples": 30,
+              "medianMs": 0.3999999761581421,
+              "p95Ms": 0.5
+            },
+            "requestToWorkerResponseMs": {
+              "samples": 30,
+              "medianMs": 16.099999964237213,
+              "p95Ms": 17.399999976158142
+            },
+            "workerResponseToBodiesMs": {
+              "samples": 30,
+              "medianMs": 8.800000011920929,
+              "p95Ms": 10.5
+            },
+            "bodyInstallationMs": {
+              "samples": 30,
+              "medianMs": 9.100000023841858,
+              "p95Ms": 10.800000011920929
+            },
+            "bodiesToNextFrameMs": {
+              "samples": 30,
+              "medianMs": 11.399999976158142,
+              "p95Ms": 14.199999988079071
+            },
+            "inputToFrameMs": {
+              "samples": 30,
+              "medianMs": 36.40000003576279,
+              "p95Ms": 40.19999998807907
+            },
+            "inputToAnalysisReadyMs": {
+              "samples": 30,
+              "medianMs": 16.30000001192093,
+              "p95Ms": 17.5
+            }
+          },
+          "actualFeatureCounts": [1],
+          "maxWidthError": 0.0,
+          "runtimeErrorCount": 0,
+          "assertionsPassed": true,
+          "host": {
+            "before": {
+              "loadAverage1m": 0.46,
+              "availableMemoryBytes": 19714441216,
+              "gpu": {
+                "utilizationPercent": 0,
+                "temperatureC": 53,
+                "graphicsMHz": 210,
+                "powerW": 34.76
+              }
+            },
+            "after": {
+              "loadAverage1m": 0.38,
+              "availableMemoryBytes": 19754491904,
+              "gpu": {
+                "utilizationPercent": 2,
+                "temperatureC": 53,
+                "graphicsMHz": 210,
+                "powerW": 35.42
+              }
+            }
+          }
+        },
+        "candidate": {
+          "summaries": {
+            "inputToWorkerRequestMs": {
+              "samples": 30,
+              "medianMs": 0.30000001192092896,
+              "p95Ms": 0.5
+            },
+            "requestToWorkerResponseMs": {
+              "samples": 30,
+              "medianMs": 16,
+              "p95Ms": 16.799999952316284
+            },
+            "workerResponseToBodiesMs": {
+              "samples": 30,
+              "medianMs": 8.800000011920929,
+              "p95Ms": 9.900000035762787
+            },
+            "bodyInstallationMs": {
+              "samples": 30,
+              "medianMs": 9.099999964237213,
+              "p95Ms": 10.300000011920929
+            },
+            "bodiesToNextFrameMs": {
+              "samples": 30,
+              "medianMs": 10.900000035762787,
+              "p95Ms": 14.699999988079071
+            },
+            "inputToFrameMs": {
+              "samples": 30,
+              "medianMs": 35.89999997615814,
+              "p95Ms": 41.60000002384186
+            },
+            "inputToAnalysisReadyMs": {
+              "samples": 30,
+              "medianMs": 16.19999998807907,
+              "p95Ms": 17
+            }
+          },
+          "actualFeatureCounts": [1],
+          "maxWidthError": 0.0,
+          "runtimeErrorCount": 0,
+          "assertionsPassed": true,
+          "host": {
+            "before": {
+              "loadAverage1m": 0.9,
+              "availableMemoryBytes": 19761946624,
+              "gpu": {
+                "utilizationPercent": 0,
+                "temperatureC": 56,
+                "graphicsMHz": 210,
+                "powerW": 37.67
+              }
+            },
+            "after": {
+              "loadAverage1m": 0.59,
+              "availableMemoryBytes": 19728855040,
+              "gpu": {
+                "utilizationPercent": 1,
+                "temperatureC": 52,
+                "graphicsMHz": 210,
+                "powerW": 34.92
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "historySetting": 100,
+      "repeat": 1,
+      "order": ["candidate", "original"],
+      "foldingRestored": true,
+      "variants": {
+        "original": {
+          "summaries": {
+            "inputToWorkerRequestMs": {
+              "samples": 30,
+              "medianMs": 1.300000011920929,
+              "p95Ms": 1.699999988079071
+            },
+            "requestToWorkerResponseMs": {
+              "samples": 30,
+              "medianMs": 41.80000001192093,
+              "p95Ms": 49.299999952316284
+            },
+            "workerResponseToBodiesMs": {
+              "samples": 30,
+              "medianMs": 25.80000001192093,
+              "p95Ms": 34.30000001192093
+            },
+            "bodyInstallationMs": {
+              "samples": 30,
+              "medianMs": 28,
+              "p95Ms": 37.5
+            },
+            "bodiesToNextFrameMs": {
+              "samples": 30,
+              "medianMs": 42,
+              "p95Ms": 49.19999998807907
+            },
+            "inputToFrameMs": {
+              "samples": 30,
+              "medianMs": 112.5,
+              "p95Ms": 130.19999998807907
+            },
+            "inputToAnalysisReadyMs": {
+              "samples": 30,
+              "medianMs": 42.60000002384186,
+              "p95Ms": 50.60000002384186
+            }
+          },
+          "actualFeatureCounts": [101],
+          "maxWidthError": 0.0,
+          "runtimeErrorCount": 0,
+          "assertionsPassed": true,
+          "host": {
+            "before": {
+              "loadAverage1m": 0.5,
+              "availableMemoryBytes": 20174913536,
+              "gpu": {
+                "utilizationPercent": 0,
+                "temperatureC": 52,
+                "graphicsMHz": 210,
+                "powerW": 25.57
+              }
+            },
+            "after": {
+              "loadAverage1m": 0.35,
+              "availableMemoryBytes": 20080992256,
+              "gpu": {
+                "utilizationPercent": 27,
+                "temperatureC": 55,
+                "graphicsMHz": 210,
+                "powerW": 33.61
+              }
+            }
+          }
+        },
+        "candidate": {
+          "summaries": {
+            "inputToWorkerRequestMs": {
+              "samples": 30,
+              "medianMs": 1.300000011920929,
+              "p95Ms": 1.600000023841858
+            },
+            "requestToWorkerResponseMs": {
+              "samples": 30,
+              "medianMs": 24.80000001192093,
+              "p95Ms": 29.100000023841858
+            },
+            "workerResponseToBodiesMs": {
+              "samples": 30,
+              "medianMs": 16,
+              "p95Ms": 18.80000001192093
+            },
+            "bodyInstallationMs": {
+              "samples": 30,
+              "medianMs": 18,
+              "p95Ms": 21
+            },
+            "bodiesToNextFrameMs": {
+              "samples": 30,
+              "medianMs": 24.400000035762787,
+              "p95Ms": 31
+            },
+            "inputToFrameMs": {
+              "samples": 30,
+              "medianMs": 66.90000003576279,
+              "p95Ms": 77.10000002384186
+            },
+            "inputToAnalysisReadyMs": {
+              "samples": 30,
+              "medianMs": 25.700000047683716,
+              "p95Ms": 30
+            }
+          },
+          "actualFeatureCounts": [101],
+          "maxWidthError": 0.0,
+          "runtimeErrorCount": 0,
+          "assertionsPassed": true,
+          "host": {
+            "before": {
+              "loadAverage1m": 1.32,
+              "availableMemoryBytes": 20134653952,
+              "gpu": {
+                "utilizationPercent": 0,
+                "temperatureC": 63,
+                "graphicsMHz": 210,
+                "powerW": 29.38
+              }
+            },
+            "after": {
+              "loadAverage1m": 0.64,
+              "availableMemoryBytes": 20018876416,
+              "gpu": {
+                "utilizationPercent": 0,
+                "temperatureC": 52,
+                "graphicsMHz": 210,
+                "powerW": 33.69
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "historySetting": 500,
+      "repeat": 1,
+      "order": ["original", "candidate"],
+      "foldingRestored": true,
+      "variants": {
+        "original": {
+          "summaries": {
+            "inputToWorkerRequestMs": {
+              "samples": 30,
+              "medianMs": 5,
+              "p95Ms": 5.400000035762787
+            },
+            "requestToWorkerResponseMs": {
+              "samples": 30,
+              "medianMs": 239,
+              "p95Ms": 259.10000002384186
+            },
+            "workerResponseToBodiesMs": {
+              "samples": 30,
+              "medianMs": 98.69999998807907,
+              "p95Ms": 111.79999995231628
+            },
+            "bodyInstallationMs": {
+              "samples": 30,
+              "medianMs": 107.79999995231628,
+              "p95Ms": 124.89999997615814
+            },
+            "bodiesToNextFrameMs": {
+              "samples": 30,
+              "medianMs": 176.10000002384186,
+              "p95Ms": 189.30000001192093
+            },
+            "inputToFrameMs": {
+              "samples": 30,
+              "medianMs": 519.1000000238419,
+              "p95Ms": 561.3000000119209
+            },
+            "inputToAnalysisReadyMs": {
+              "samples": 30,
+              "medianMs": 242.20000004768372,
+              "p95Ms": 262.60000002384186
+            }
+          },
+          "actualFeatureCounts": [501],
+          "maxWidthError": 0.0,
+          "runtimeErrorCount": 0,
+          "assertionsPassed": true,
+          "host": {
+            "before": {
+              "loadAverage1m": 0.88,
+              "availableMemoryBytes": 20391211008,
+              "gpu": {
+                "utilizationPercent": 1,
+                "temperatureC": 60,
+                "graphicsMHz": 210,
+                "powerW": 36.93
+              }
+            },
+            "after": {
+              "loadAverage1m": 0.93,
+              "availableMemoryBytes": 20086157312,
+              "gpu": {
+                "utilizationPercent": 0,
+                "temperatureC": 53,
+                "graphicsMHz": 210,
+                "powerW": 33.19
+              }
+            }
+          }
+        },
+        "candidate": {
+          "summaries": {
+            "inputToWorkerRequestMs": {
+              "samples": 30,
+              "medianMs": 4.899999976158142,
+              "p95Ms": 5.600000023841858
+            },
+            "requestToWorkerResponseMs": {
+              "samples": 30,
+              "medianMs": 139.39999997615814,
+              "p95Ms": 167.69999998807907
+            },
+            "workerResponseToBodiesMs": {
+              "samples": 30,
+              "medianMs": 41.700000047683716,
+              "p95Ms": 48.09999996423721
+            },
+            "bodyInstallationMs": {
+              "samples": 30,
+              "medianMs": 54.69999998807907,
+              "p95Ms": 59.30000001192093
+            },
+            "bodiesToNextFrameMs": {
+              "samples": 30,
+              "medianMs": 66.40000003576279,
+              "p95Ms": 69.69999998807907
+            },
+            "inputToFrameMs": {
+              "samples": 30,
+              "medianMs": 253.89999997615814,
+              "p95Ms": 282.4000000357628
+            },
+            "inputToAnalysisReadyMs": {
+              "samples": 30,
+              "medianMs": 142.30000001192093,
+              "p95Ms": 171.9000000357628
+            }
+          },
+          "actualFeatureCounts": [501],
+          "maxWidthError": 0.0,
+          "runtimeErrorCount": 0,
+          "assertionsPassed": true,
+          "host": {
+            "before": {
+              "loadAverage1m": 0.8,
+              "availableMemoryBytes": 20335624192,
+              "gpu": {
+                "utilizationPercent": 1,
+                "temperatureC": 53,
+                "graphicsMHz": 210,
+                "powerW": 33.26
+              }
+            },
+            "after": {
+              "loadAverage1m": 0.98,
+              "availableMemoryBytes": 19922481152,
+              "gpu": {
+                "utilizationPercent": 0,
+                "temperatureC": 55,
+                "graphicsMHz": 210,
+                "powerW": 33.31
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "historySetting": 500,
+      "repeat": 2,
+      "order": ["candidate", "original"],
+      "foldingRestored": true,
+      "variants": {
+        "original": {
+          "summaries": {
+            "inputToWorkerRequestMs": {
+              "samples": 30,
+              "medianMs": 4.899999976158142,
+              "p95Ms": 5.900000035762787
+            },
+            "requestToWorkerResponseMs": {
+              "samples": 30,
+              "medianMs": 236.69999998807907,
+              "p95Ms": 293
+            },
+            "workerResponseToBodiesMs": {
+              "samples": 30,
+              "medianMs": 97.20000004768372,
+              "p95Ms": 114.69999998807907
+            },
+            "bodyInstallationMs": {
+              "samples": 30,
+              "medianMs": 108,
+              "p95Ms": 126.29999995231628
+            },
+            "bodiesToNextFrameMs": {
+              "samples": 30,
+              "medianMs": 174.69999998807907,
+              "p95Ms": 188.89999997615814
+            },
+            "inputToFrameMs": {
+              "samples": 30,
+              "medianMs": 511.30000001192093,
+              "p95Ms": 593.6000000238419
+            },
+            "inputToAnalysisReadyMs": {
+              "samples": 30,
+              "medianMs": 239.89999997615814,
+              "p95Ms": 297.4000000357628
+            }
+          },
+          "actualFeatureCounts": [501],
+          "maxWidthError": 0.0,
+          "runtimeErrorCount": 0,
+          "assertionsPassed": true,
+          "host": {
+            "before": {
+              "loadAverage1m": 1.43,
+              "availableMemoryBytes": 19243102208,
+              "gpu": {
+                "utilizationPercent": 1,
+                "temperatureC": 53,
+                "graphicsMHz": 210,
+                "powerW": 33.17
+              }
+            },
+            "after": {
+              "loadAverage1m": 1.62,
+              "availableMemoryBytes": 19132649472,
+              "gpu": {
+                "utilizationPercent": 6,
+                "temperatureC": 54,
+                "graphicsMHz": 210,
+                "powerW": 33.26
+              }
+            }
+          }
+        },
+        "candidate": {
+          "summaries": {
+            "inputToWorkerRequestMs": {
+              "samples": 30,
+              "medianMs": 5,
+              "p95Ms": 6.400000035762787
+            },
+            "requestToWorkerResponseMs": {
+              "samples": 30,
+              "medianMs": 137.5,
+              "p95Ms": 183.70000004768372
+            },
+            "workerResponseToBodiesMs": {
+              "samples": 30,
+              "medianMs": 42.5,
+              "p95Ms": 48.5
+            },
+            "bodyInstallationMs": {
+              "samples": 30,
+              "medianMs": 55,
+              "p95Ms": 59.30000001192093
+            },
+            "bodiesToNextFrameMs": {
+              "samples": 30,
+              "medianMs": 68.19999998807907,
+              "p95Ms": 81.29999995231628
+            },
+            "inputToFrameMs": {
+              "samples": 30,
+              "medianMs": 254.19999998807907,
+              "p95Ms": 307.7000000476837
+            },
+            "inputToAnalysisReadyMs": {
+              "samples": 30,
+              "medianMs": 142,
+              "p95Ms": 188.5
+            }
+          },
+          "actualFeatureCounts": [501],
+          "maxWidthError": 0.0,
+          "runtimeErrorCount": 0,
+          "assertionsPassed": true,
+          "host": {
+            "before": {
+              "loadAverage1m": 1.07,
+              "availableMemoryBytes": 20441382912,
+              "gpu": {
+                "utilizationPercent": 0,
+                "temperatureC": 59,
+                "graphicsMHz": 210,
+                "powerW": 36.39
+              }
+            },
+            "after": {
+              "loadAverage1m": 0.99,
+              "availableMemoryBytes": 18813923328,
+              "gpu": {
+                "utilizationPercent": 2,
+                "temperatureC": 53,
+                "graphicsMHz": 210,
+                "powerW": 33.01
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "historySetting": 500,
+      "repeat": 3,
+      "order": ["original", "candidate"],
+      "foldingRestored": true,
+      "variants": {
+        "original": {
+          "summaries": {
+            "inputToWorkerRequestMs": {
+              "samples": 30,
+              "medianMs": 5,
+              "p95Ms": 5.5
+            },
+            "requestToWorkerResponseMs": {
+              "samples": 30,
+              "medianMs": 234.10000002384186,
+              "p95Ms": 244.60000002384186
+            },
+            "workerResponseToBodiesMs": {
+              "samples": 30,
+              "medianMs": 95.69999998807907,
+              "p95Ms": 110.5
+            },
+            "bodyInstallationMs": {
+              "samples": 30,
+              "medianMs": 107.5,
+              "p95Ms": 122.5
+            },
+            "bodiesToNextFrameMs": {
+              "samples": 30,
+              "medianMs": 170.80000001192093,
+              "p95Ms": 181.89999997615814
+            },
+            "inputToFrameMs": {
+              "samples": 30,
+              "medianMs": 508.30000001192093,
+              "p95Ms": 539.5
+            },
+            "inputToAnalysisReadyMs": {
+              "samples": 30,
+              "medianMs": 237.5999999642372,
+              "p95Ms": 248.70000004768372
+            }
+          },
+          "actualFeatureCounts": [501],
+          "maxWidthError": 0.0,
+          "runtimeErrorCount": 0,
+          "assertionsPassed": true,
+          "host": {
+            "before": {
+              "loadAverage1m": 1.55,
+              "availableMemoryBytes": 19516841984,
+              "gpu": {
+                "utilizationPercent": 0,
+                "temperatureC": 56,
+                "graphicsMHz": 210,
+                "powerW": 37.23
+              }
+            },
+            "after": {
+              "loadAverage1m": 1.24,
+              "availableMemoryBytes": 19468161024,
+              "gpu": {
+                "utilizationPercent": 1,
+                "temperatureC": 53,
+                "graphicsMHz": 210,
+                "powerW": 34.67
+              }
+            }
+          }
+        },
+        "candidate": {
+          "summaries": {
+            "inputToWorkerRequestMs": {
+              "samples": 30,
+              "medianMs": 5,
+              "p95Ms": 5.399999976158142
+            },
+            "requestToWorkerResponseMs": {
+              "samples": 30,
+              "medianMs": 135.89999997615814,
+              "p95Ms": 170.30000001192093
+            },
+            "workerResponseToBodiesMs": {
+              "samples": 30,
+              "medianMs": 41.89999997615814,
+              "p95Ms": 47.60000002384186
+            },
+            "bodyInstallationMs": {
+              "samples": 30,
+              "medianMs": 53.39999997615814,
+              "p95Ms": 59.10000002384186
+            },
+            "bodiesToNextFrameMs": {
+              "samples": 30,
+              "medianMs": 66.60000002384186,
+              "p95Ms": 73.69999998807907
+            },
+            "inputToFrameMs": {
+              "samples": 30,
+              "medianMs": 250.5999999642372,
+              "p95Ms": 282.5
+            },
+            "inputToAnalysisReadyMs": {
+              "samples": 30,
+              "medianMs": 140.39999997615814,
+              "p95Ms": 174.4000000357628
+            }
+          },
+          "actualFeatureCounts": [501],
+          "maxWidthError": 0.0,
+          "runtimeErrorCount": 0,
+          "assertionsPassed": true,
+          "host": {
+            "before": {
+              "loadAverage1m": 1.1,
+              "availableMemoryBytes": 19681918976,
+              "gpu": {
+                "utilizationPercent": 0,
+                "temperatureC": 53,
+                "graphicsMHz": 210,
+                "powerW": 34.63
+              }
+            },
+            "after": {
+              "loadAverage1m": 0.74,
+              "availableMemoryBytes": 19487150080,
+              "gpu": {
+                "utilizationPercent": 4,
+                "temperatureC": 54,
+                "graphicsMHz": 210,
+                "powerW": 34.99
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

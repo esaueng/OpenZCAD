@@ -129,5 +129,6 @@
   "viewport.spec.ts": 13,
   "visual-selection-fillet-edit.spec.ts": 12,
   "visual-selection-live-preview.spec.ts": 12,
+  "windowed-panels.spec.ts": 60,
   "workspace-empty-state.spec.ts": 8
 }

@@ -13,6 +13,7 @@ import type {
 import { hasDraftDisplay as hasDraftBodies } from '@openzcad/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { documentForWorker, documentForRebuild } from '../lib/meshTransport';
+import { unpackReplyTopologies } from '../lib/topologyTransport';
 import {
   geometryContentKey,
   lineageDemandCacheKey,
@@ -727,6 +728,31 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       > | null = null;
       worker.onmessage = (event: MessageEvent<GeometryWorkerResult>) => {
         let message = event.data;
+        if (
+          message.type === 'sync' &&
+          message.ok &&
+          (message.topologyJson !== undefined ||
+            message.topologyUndefined !== undefined)
+        ) {
+          try {
+            unpackReplyTopologies(
+              message.derived,
+              message.topologyJson,
+              message.topologyUndefined
+            );
+          } catch {
+            // Use the existing request rejection path; never adopt a partial
+            // graph or leave the caller waiting for a reply that already came.
+            message = {
+              type: 'sync',
+              ok: false,
+              projectId: message.projectId,
+              version: message.version,
+              requestId: message.requestId,
+              error: 'Geometry worker returned an invalid topology encoding.'
+            };
+          }
+        }
         if (message.type === 'projection-delta') {
           recordEditPhase(message, 'received', {
             ...message.packet.metrics,
@@ -1385,6 +1411,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       // default. Only an explicit demand opts one into the idle skip.
       const posted = postRequest(syncRequests.current, {
         type: 'sync',
+        topologyEncoding: 'json-v2',
         document: documentForRebuild(document),
         ...(analysis ? { analysis } : {}),
         ...(lineageDemand ? { lineageDemand: [...lineageDemand] } : {}),
