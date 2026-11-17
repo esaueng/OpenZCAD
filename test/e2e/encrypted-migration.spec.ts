@@ -520,3 +520,77 @@ test('locks the project on another device while it is encrypted, and unlocks it 
     await other.close();
   }
 });
+
+/**
+ * L08 (plan decision 5): encrypting deletes a project's plaintext comments,
+ * which encrypted projects cannot carry yet. The run stops on that project
+ * and names how many, and goes on only once the owner confirms deleting
+ * that many; nothing is staged before.
+ */
+test(
+  'asks before encrypting deletes a project’s comments, naming how many',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(180_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const server = createE2eeServer({ projectsEnabled: true });
+    const projectId = await seedPlaintextProject(server);
+    for (const text of ['Check the fillet', 'And the hole']) {
+      const posted = await call(
+        server,
+        'POST',
+        `/api/projects/${projectId}/comments`,
+        { text, anchor: { point: [0, 0, 0], documentVersion: 1 } }
+      );
+      expect(posted.status).toBe(201);
+    }
+    await stubApi(page);
+    await serveWorker(page, server);
+
+    await page.goto('/');
+    await seedE2eeDevice(page, server);
+    const settings = await openEncryptionSettings(page);
+    await expect(settings.getByText('Encrypt existing projects')).toBeVisible({
+      timeout: SYNC_BUDGET_MS
+    });
+    await settings.getByRole('button', { name: 'Encrypt projects' }).click();
+    const row = settings.getByRole('listitem', { name: 'Secret migrated' });
+    await expect(row.getByText('Waiting for your confirmation')).toBeVisible({
+      timeout: SYNC_BUDGET_MS
+    });
+    await expect(
+      row.getByText(/Encrypting deletes 2 comments\./)
+    ).toBeVisible();
+    // Nothing was staged, and the comments are still there.
+    expect(
+      count(
+        server,
+        'SELECT COUNT(*) AS n FROM e2ee_project_migrations WHERE project_id = ?',
+        projectId
+      )
+    ).toBe(0);
+    expect(
+      count(
+        server,
+        'SELECT COUNT(*) AS n FROM project_comments WHERE project_id = ?',
+        projectId
+      )
+    ).toBe(2);
+
+    await row
+      .getByRole('button', { name: 'Delete 2 comments and encrypt' })
+      .click();
+    await expect(row.getByText('Encrypted', { exact: true })).toBeVisible({
+      timeout: 120_000
+    });
+    expect(
+      count(
+        server,
+        'SELECT COUNT(*) AS n FROM project_comments WHERE project_id = ?',
+        projectId
+      )
+    ).toBe(0);
+    expect(errors).toEqual([]);
+  }
+);
