@@ -43,6 +43,7 @@
   "drawing-sections.spec.ts": 25,
   "drawing-sheet-images.spec.ts": 16,
   "drawing-stepped-sections.spec.ts": 14,
+  "drawing-gdt.spec.ts": 12,
   "drawing-title-block-layouts.spec.ts": 10,
   "drawing-tolerances.spec.ts": 14,
   "drawings.spec.ts": 16,

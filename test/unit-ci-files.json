@@ -122,6 +122,7 @@
     "test/drawing-sheet-format.test.ts",
     "test/drawing-sheet-images.test.ts",
     "test/drawing-stepped-sections.test.ts",
+    "test/drawing-gdt.test.ts",
     "test/drawing-title-block-layouts.test.ts",
     "test/e2e-shards.test.ts",
     "test/e2ee-authority-fork.test.ts",

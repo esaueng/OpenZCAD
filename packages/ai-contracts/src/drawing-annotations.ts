@@ -136,8 +136,9 @@ export interface CadDigestDrawingAnnotation {
   annotationId: string;
   /**
    * A sheet may hold a v48 chamfer, v73 marks and centrelines, v75
-   * distances, v82 arc and three-point angles and v92 sheet images, which
-   * proposals cannot author yet.
+   * distances, v82 arc and three-point angles, v92 sheet images and v98
+   * datum symbols and feature control frames, which proposals cannot author
+   * yet.
    */
   kind:
     | CadDrawingAnnotationKind
@@ -148,6 +149,8 @@ export interface CadDigestDrawingAnnotation {
     | 'bom-table'
     | 'balloon'
     | 'image'
+    | 'datum-feature'
+    | 'feature-control-frame'
     | 'center-mark'
     | 'intersection-mark'
     | 'centerline';

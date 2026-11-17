@@ -4,6 +4,8 @@ import {
   drawingAnnotationError,
   drawingAnnotationCenterlines,
   drawingAnnotationMarks,
+  drawingToleranceHostAllowed,
+  isDrawingToleranceAnnotation,
   MAX_DRAWING_ANNOTATIONS,
   type DrawingAnnotation
 } from './drawing-annotations';
@@ -1283,6 +1285,20 @@ export function drawingSheetError(value: unknown): string | null {
         )
           return `${where} annotation ${annotation.annotationId} measures to ${markId}, which is not a mark on its view.`;
       }
+    // v98: a datum symbol or frame is attached to a dimension (a datum
+    // symbol also to a frame) on its own view. A missing host is not
+    // refused here: deleting it leaves the attachment broken, like a mark.
+    for (const annotation of annotations) {
+      if (!isDrawingToleranceAnnotation(annotation)) continue;
+      const hostId = annotation.attachedTo;
+      const host = hostId ? byId.get(hostId) : undefined;
+      if (
+        host &&
+        (!drawingToleranceHostAllowed(annotation.kind, host) ||
+          host.viewId !== annotation.viewId)
+      )
+        return `${where} annotation ${annotation.annotationId} is attached to ${hostId}, which is not a dimension${annotation.kind === 'datum-feature' ? ' or feature control frame' : ''} on its view.`;
+    }
     // v75: a centreline measured to is a straight one on the same view.
     for (const annotation of annotations)
       for (const lineId of drawingAnnotationCenterlines(annotation)) {
