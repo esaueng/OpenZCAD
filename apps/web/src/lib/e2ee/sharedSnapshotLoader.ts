@@ -59,7 +59,7 @@ import {
   type E2eeDecoder
 } from './decodeWorker';
 import { openSharedSnapshot } from './sharedSnapshot';
-import { linkTakesComments } from './shareComments';
+import { linkTakesComments, type LinkCommentsAccess } from './shareComments';
 import { desktopFetch } from '../desktopBridge';
 
 /** Why a visitor's link did not open. */
@@ -155,13 +155,7 @@ export interface EncryptedSharedProject {
 }
 
 /** What a commenter link's visitor seals comments with. */
-export interface SharedLinkComments {
-  readonly token: string;
-  readonly shareKey: Uint8Array;
-  readonly keyEpoch: number;
-  readonly epochBindingHash: Uint8Array;
-  readonly schemaVersion: number;
-}
+export type SharedLinkComments = LinkCommentsAccess;
 
 /** What opening a link uses; tests replace the network and the stores. */
 export interface SharedSnapshotLoaderDeps {
@@ -416,6 +410,8 @@ export async function loadEncryptedSharedProject(
       document: opened.document,
       comments: takesComments
         ? {
+            projectId: opened.verified.projectId,
+            shareId: opened.verified.shareId,
             token: parts.token,
             shareKey: parts.shareKey,
             keyEpoch: opened.verified.header.keyEpoch,

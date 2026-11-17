@@ -237,7 +237,7 @@ export async function handleE2eeShareCommentsRequest(
             `SELECT share_id, comment_id, envelope, wrapped_version_key,
                created_at
              FROM e2ee_share_comments WHERE project_id = ?
-             ORDER BY created_at, comment_id`
+             ORDER BY created_at, rowid`
           )
           .bind(projectId)
           .all<CommentRow>(),
@@ -333,7 +333,7 @@ async function linkComments(
     .prepare(
       `SELECT share_id, comment_id, envelope, wrapped_version_key, created_at
        FROM e2ee_share_comments WHERE project_id = ? AND share_id = ?
-       ORDER BY created_at, comment_id`
+       ORDER BY created_at, rowid`
     )
     .bind(link.project_id, link.share_id)
     .all<CommentRow>();

@@ -17,6 +17,8 @@ import {
   shiftedDatumFrame
 } from '../lib/datumPlaneDisplay';
 import { datumAxisDisplays } from '../lib/datumAxisDisplay';
+import { commentPinsOf } from '../lib/commentPins';
+import type { ProjectComment } from '@openzcad/shared';
 import { useAssemblyView } from '../lib/assembly/useAssemblyView';
 import type { ReferenceImageDisplay } from '../lib/referenceImageDisplay';
 import type { AutoFrameRequest } from '../lib/autoFrame';
@@ -35,7 +37,6 @@ import {
   type FaceResizeCommit,
   type ModelViewerProps,
   type ViewportContextMenuOptions,
-  type CommentPin,
   type CylinderRadiusHandleTarget,
   type EdgeHandleTarget,
   type OrientationDragControls,
@@ -380,8 +381,12 @@ interface ViewerShellProps {
   /** See `ModelViewer`: the plane an empty click lands on, and where. */
   placementPlane?: { origin: Vector3; normal: Vector3 } | null;
   onPlacementClick?(point: Vector3): void;
-  /** L08: review comment pins, as `ModelViewer` draws them. */
-  commentPins?: readonly CommentPin[];
+  /**
+   * L08: the review comments shown, whose threads `ModelViewer` draws as
+   * numbered pins (`commentPinsOf`), and the one open in the panel.
+   */
+  comments?: readonly ProjectComment[];
+  activeCommentId?: string | null;
   onCommentPinClick?(id: string): void;
   commentPlacing?: boolean;
   /**
@@ -616,7 +621,8 @@ export function ViewerShell({
   onPickDatum,
   placementPlane = null,
   onPlacementClick,
-  commentPins,
+  comments,
+  activeCommentId = null,
   onCommentPinClick,
   commentPlacing = false,
   onDatumOffsetDrag,
@@ -658,6 +664,11 @@ export function ViewerShell({
   sectionOutline,
   runSurfaceAnalysis
 }: ViewerShellProps) {
+  // L08: the shown threads' pins, built here rather than in the workspace.
+  const commentPins = useMemo(
+    () => (comments ? commentPinsOf(comments, activeCommentId) : undefined),
+    [comments, activeCommentId]
+  );
   const { bodies, standIns: parameterVisualPreview } = view;
   // M09 analysis overlays: the analysis the Display menu switched on, run on
   // the bodies drawn as built. A stand-in or a body drawn somewhere else

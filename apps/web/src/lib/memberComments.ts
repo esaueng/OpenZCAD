@@ -28,7 +28,7 @@ const sharing = async () =>
  * Commenter-link visitors' comments on an encrypted project (L08, plan
  * decision 2), with a warning when some could not be opened.
  */
-async function visitorComments(
+async function sharedLinkComments(
   projectId: string
 ): Promise<{ comments: ProjectComment[]; warning: string | null }> {
   try {
@@ -67,7 +67,7 @@ export const memberComments = {
         comments: await projectCommentsApi.list(projectId),
         warning: null
       };
-    const visitors = await visitorComments(projectId);
+    const visitors = await sharedLinkComments(projectId);
     const members = await (
       await encrypted()
     ).list(projectId, context.ownerUserId, visitors.comments);
@@ -152,3 +152,30 @@ function linkApi() {
     postLinkComment: api.postLinkComment!
   };
 }
+
+/** A share link a visitor comments through: plaintext, or encrypted. */
+export interface CommentingLink {
+  readonly token: string;
+  readonly encryptedComments?: LinkCommentsAccess | null;
+}
+
+/**
+ * A commenter link's visitor: an encrypted link's comments are sealed and
+ * opened in this browser; a plaintext link's go to the account's rows.
+ */
+export const visitorComments = {
+  list(link: CommentingLink): Promise<ProjectComment[]> {
+    return link.encryptedComments
+      ? encryptedLinkComments.list(link.encryptedComments)
+      : linkCommentsApi.list(link.token);
+  },
+  create(
+    link: CommentingLink,
+    authorName: string,
+    input: CreateProjectCommentRequest
+  ): Promise<{ commentId: string }> {
+    return link.encryptedComments
+      ? encryptedLinkComments.create(link.encryptedComments, authorName, input)
+      : linkCommentsApi.create(link.token, authorName, input);
+  }
+};

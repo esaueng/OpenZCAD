@@ -296,6 +296,7 @@ import type {
   ProjectCheckpoint,
   ProjectComment,
   ProjectCommentAnchor,
+  CreateProjectCommentRequest,
   PlaneId,
   ProjectDocument,
   ProjectOrganization,
@@ -653,7 +654,6 @@ import {
   LIVE_SESSION_CONNECTING,
   LiveSessionNotice
 } from './components/LiveSessionNotice';
-import type { CommentPin } from './components/ModelViewer';
 import { ENCRYPTED_COMMENTS_UNAVAILABLE } from './lib/commentsAvailability';
 import type { MemberCommentContext } from './lib/memberComments';
 import type { LinkCommentsAccess } from './lib/e2ee/shareComments';
@@ -2876,7 +2876,7 @@ export function App() {
      * L08 (plan decisions 2 and 3a): an encrypted commenter link, whose
      * owner-signed comment grant this browser verified.
      */
-    encryptedComments?: LinkCommentsAccess;
+    encryptedComments?: LinkCommentsAccess | null;
   } | null>(null);
   const shareSessionRef = useRef(shareSession);
   shareSessionRef.current = shareSession;
@@ -15875,7 +15875,7 @@ export function App() {
           document: ProjectDocument;
           encryptedMode?: 'view' | 'tweak';
           comments?: boolean;
-          encryptedComments?: LinkCommentsAccess;
+          encryptedComments?: LinkCommentsAccess | null;
         } | null;
         if (isEncryptedShareLink(pendingShareToken)) {
           // End to end encrypted (ADR-024 slice 5-11): verified in the ADR's
@@ -15891,15 +15891,7 @@ export function App() {
             name: opened.name,
             document: opened.document,
             encryptedMode: opened.mode,
-            ...(opened.comments
-              ? {
-                  encryptedComments: {
-                    projectId: opened.projectId,
-                    shareId: opened.shareId,
-                    ...opened.comments
-                  }
-                }
-              : {})
+            encryptedComments: opened.comments
           };
         } else {
           const { loadSharedProject } =
@@ -15952,12 +15944,8 @@ export function App() {
           ? {
               token: pendingShareToken,
               encryptedMode: shared.encryptedMode,
-              ...(shared.encryptedComments
-                ? {
-                    comments: true,
-                    encryptedComments: shared.encryptedComments
-                  }
-                : {})
+              comments: !!shared.encryptedComments,
+              encryptedComments: shared.encryptedComments
             }
           : {
               token: pendingShareToken,
@@ -20790,39 +20778,13 @@ export function App() {
     doc && projectComments?.projectId === doc.projectId
       ? projectComments.comments
       : [];
-  const commentPins: CommentPin[] = shownComments
-    .filter((comment) => comment.parentId === null)
-    .flatMap((comment, index) =>
-      comment.anchor
-        ? [
-            {
-              id: comment.commentId,
-              label: String(index + 1),
-              description: `Comment ${index + 1} by ${comment.authorName}: ${comment.text}`,
-              point: {
-                x: comment.anchor.point[0],
-                y: comment.anchor.point[1],
-                z: comment.anchor.point[2]
-              },
-              resolved: comment.resolvedAt !== null,
-              active: comment.commentId === activeCommentId
-            }
-          ]
-        : []
-    );
   const loadComments = useCallback(async (projectId: string) => {
     try {
       const link = shareSessionRef.current;
-      const { linkCommentsApi, memberComments, encryptedLinkComments } =
-        await loadCommentsApi();
-      const { comments, warning } = link?.encryptedComments
-        ? {
-            comments: await encryptedLinkComments.list(link.encryptedComments),
-            warning: null
-          }
-        : link?.comments
-          ? { comments: await linkCommentsApi.list(link.token), warning: null }
-          : await memberComments.list(projectId, commentContext());
+      const { visitorComments, memberComments } = await loadCommentsApi();
+      const { comments, warning } = link?.comments
+        ? { comments: await visitorComments.list(link), warning: null }
+        : await memberComments.list(projectId, commentContext());
       if (managerRef.current?.document.projectId !== projectId) return;
       setProjectComments({ projectId, comments });
       // An encrypted project's member log left out is said, not hidden.
@@ -20845,6 +20807,20 @@ export function App() {
     setCommentsOpen(true);
   }
   /** Runs one comment change, then reloads the list; false when it failed. */
+  /** A new comment: a link visitor's, or a member's (L08). */
+  function postComment(
+    projectId: string,
+    {
+      visitorComments,
+      memberComments
+    }: Awaited<ReturnType<typeof loadCommentsApi>>,
+    input: CreateProjectCommentRequest
+  ): Promise<{ commentId: string } | null> {
+    const link = shareSessionRef.current;
+    return link
+      ? visitorComments.create(link, commentVisitorName, input)
+      : memberComments.create(projectId, commentContext(), input);
+  }
   async function runCommentAction(
     action: (
       projectId: string,
@@ -36555,9 +36531,10 @@ export function App() {
                   ))
             }
             commentPlacing={commentPlacing}
-            {...(commentsOpen && commentPins.length
+            {...(commentsOpen && shownComments.length
               ? {
-                  commentPins,
+                  comments: shownComments,
+                  activeCommentId,
                   onCommentPinClick: (id: string) => setActiveCommentId(id)
                 }
               : {})}
@@ -38496,63 +38473,23 @@ export function App() {
                 : {})}
               onPostThread={(text) =>
                 commentDraft
-                  ? runCommentAction(
-                      async (
-                        projectId,
-                        {
-                          linkCommentsApi,
-                          memberComments,
-                          encryptedLinkComments
-                        }
-                      ) => {
-                        const input = { anchor: commentDraft, text };
-                        const created = shareSession?.encryptedComments
-                          ? await encryptedLinkComments.create(
-                              shareSession.encryptedComments,
-                              commentVisitorName,
-                              input
-                            )
-                          : shareSession
-                            ? await linkCommentsApi.create(
-                                shareSession.token,
-                                commentVisitorName,
-                                input
-                              )
-                            : await memberComments.create(
-                                projectId,
-                                commentContext(),
-                                input
-                              );
-                        setCommentDraft(null);
-                        setActiveCommentId(created?.commentId ?? null);
-                      }
-                    )
+                  ? runCommentAction(async (projectId, api) => {
+                      const created = await postComment(projectId, api, {
+                        anchor: commentDraft,
+                        text
+                      });
+                      setCommentDraft(null);
+                      setActiveCommentId(created?.commentId ?? null);
+                    })
                   : Promise.resolve(false)
               }
               onCancelDraft={() => setCommentDraft(null)}
               onReply={(threadId, text) =>
-                runCommentAction(
-                  (
-                    projectId,
-                    { linkCommentsApi, memberComments, encryptedLinkComments }
-                  ) =>
-                    (shareSession?.encryptedComments
-                      ? encryptedLinkComments.create(
-                          shareSession.encryptedComments,
-                          commentVisitorName,
-                          { parentId: threadId, text }
-                        )
-                      : shareSession
-                        ? linkCommentsApi.create(
-                            shareSession.token,
-                            commentVisitorName,
-                            { parentId: threadId, text }
-                          )
-                        : memberComments.create(projectId, commentContext(), {
-                            parentId: threadId,
-                            text
-                          })
-                    ).then(() => undefined)
+                runCommentAction((projectId, api) =>
+                  postComment(projectId, api, {
+                    parentId: threadId,
+                    text
+                  }).then(() => undefined)
                 )
               }
               onResolve={(threadId, resolved) =>
