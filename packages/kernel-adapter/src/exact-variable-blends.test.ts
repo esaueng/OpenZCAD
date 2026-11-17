@@ -11,6 +11,7 @@ import {
 import {
   toUserId,
   type BodyId,
+  type BodyRepresentation,
   type FeatureData,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -71,11 +72,14 @@ function verticalEdgeOf(kernel: RemusKernel, solid: number): number {
   const vertical = edges.filter((edge) => {
     const ends = Array.from(kernel.getEdgeVertices(edge));
     return (
-      Math.abs(ends[0]! - ends[3]!) < 1e-9 && Math.abs(ends[1]! - ends[4]!) < 1e-9
+      Math.abs(ends[0]! - ends[3]!) < 1e-9 &&
+      Math.abs(ends[1]! - ends[4]!) < 1e-9
     );
   });
   if (vertical.length !== 4) {
-    throw new Error(`Expected four vertical edges and found ${vertical.length}.`);
+    throw new Error(
+      `Expected four vertical edges and found ${vertical.length}.`
+    );
   }
   return vertical[0]!;
 }
@@ -90,7 +94,10 @@ function faceAreasByNormal(
       component.toFixed(6)
     ).join(',');
     areas.set(face.toString(), kernel.faceArea(face, DEFLECTION));
-    areas.set(normal, (areas.get(normal) ?? 0) + kernel.faceArea(face, DEFLECTION));
+    areas.set(
+      normal,
+      (areas.get(normal) ?? 0) + kernel.faceArea(face, DEFLECTION)
+    );
   }
   return areas;
 }
@@ -124,7 +131,11 @@ describe('variable-radius fillet', { timeout: 60_000 }, () => {
     expect(length).toBeCloseTo(10, 9);
 
     const constantAtMean =
-      before - kernel.volume(kernel.fillet(box, Uint32Array.from([edge]), 2), DEFLECTION);
+      before -
+      kernel.volume(
+        kernel.fillet(box, Uint32Array.from([edge]), 2),
+        DEFLECTION
+      );
     const variable =
       before -
       kernel.volume(
@@ -146,9 +157,17 @@ describe('variable-radius fillet', { timeout: 60_000 }, () => {
     // Bracket: and never more than the constant blend at the larger radius,
     // nor less than the constant blend at the smaller one.
     const constantAtStart =
-      before - kernel.volume(kernel.fillet(box, Uint32Array.from([edge]), 1), DEFLECTION);
+      before -
+      kernel.volume(
+        kernel.fillet(box, Uint32Array.from([edge]), 1),
+        DEFLECTION
+      );
     const constantAtEnd =
-      before - kernel.volume(kernel.fillet(box, Uint32Array.from([edge]), 3), DEFLECTION);
+      before -
+      kernel.volume(
+        kernel.fillet(box, Uint32Array.from([edge]), 3),
+        DEFLECTION
+      );
     expect(variable).toBeGreaterThan(constantAtStart);
     expect(variable).toBeLessThan(constantAtEnd);
 
@@ -204,9 +223,9 @@ describe('variable-radius fillet', { timeout: 60_000 }, () => {
     expect(() => assertQualifiedVariableFillet('linear', 0, 3)).toThrow(
       /start radius must be a finite value greater than zero/
     );
-    expect(() => assertQualifiedVariableFillet('scurve', 1, Number.NaN)).toThrow(
-      /end radius must be a finite value greater than zero/
-    );
+    expect(() =>
+      assertQualifiedVariableFillet('scurve', 1, Number.NaN)
+    ).toThrow(/end radius must be a finite value greater than zero/);
     expect(() => assertQualifiedVariableFillet('linear', 1, 3)).not.toThrow();
   });
 
@@ -396,7 +415,9 @@ describe('variable blends through the document', { timeout: 120_000 }, () => {
       const bodyId = base.bodyOrder[0] as BodyId;
       const built = await adapter.syncDocument(base);
       const edges = built.bodyRepresentations[bodyId]?.topology?.edges ?? [];
-      const shortEdge = edges.find((edge) => Math.abs((edge.length ?? 0) - 10) < 1e-6)!;
+      const shortEdge = edges.find(
+        (edge) => Math.abs((edge.length ?? 0) - 10) < 1e-6
+      )!;
 
       const constant = filletEdges(base, {
         name: 'Round',
@@ -427,7 +448,9 @@ describe('variable blends through the document', { timeout: 120_000 }, () => {
 
       // 1 → 3 takes more out than a constant 2 does, end to end through the
       // document, not only at the kernel boundary.
-      expect(variableDerived.bodyRepresentations[variable.bodyId]!.volume).toBeLessThan(
+      expect(
+        variableDerived.bodyRepresentations[variable.bodyId]!.volume
+      ).toBeLessThan(
         constantDerived.bodyRepresentations[constant.bodyId]!.volume
       );
     } finally {
@@ -577,14 +600,16 @@ describe('variable blend refusals are typed', { timeout: 120_000 }, () => {
   });
 
   /**
-   * M03 qualification on the 2026.1.138 pin: a variable fillet on any edge
-   * of a box that also carries a cylindrical boss fails the kernel's
-   * postcondition (esaueng/remus#1789: the variable engine rebuilds faces
-   * from their outer polygons and drops inner wires and curved edges). Until
-   * that is fixed it must refuse by type, not ship and not refuse in prose;
-   * the constant fillet and the asymmetric chamfer on the same edge build.
+   * M03 qualification: a variable fillet on an edge of a box that also
+   * carries a cylindrical boss. Up to the 2026.1.145 pin the kernel failed
+   * its postcondition (esaueng/remus#1789: the variable engine rebuilt faces
+   * from their outer polygons and dropped inner wires and curved edges), and
+   * the adapter refused it by type. Since 2026.1.146 (esaueng/remus#1809) it
+   * builds: the body loses exactly the linear-law round's cross-section
+   * integrated along the edge, and the boss's circular edges survive. The
+   * constant fillet and the asymmetric chamfer on the same edge build too.
    */
-  it('refuses a variable fillet on a box that carries a boss by type', async () => {
+  it('builds a variable fillet on a box that carries a boss', async () => {
     const adapter = await createExactKernelAdapter();
     try {
       let document = addPrimitiveFeature(createProjectDocument('Boss', user), {
@@ -628,17 +653,25 @@ describe('variable blend refusals are typed', { timeout: 120_000 }, () => {
         radiusLaw: 'linear'
       });
       const derived = await adapter.syncDocument(variable.document);
-      const refusal = derived.featureWarnings?.find(
-        (warning) =>
-          warning.kind === 'build-failed' || warning.kind === 'refusal'
+      expect(
+        derived.featureWarnings?.filter(
+          (warning) => warning.kind !== 'advisory'
+        )
+      ).toEqual([]);
+      const circles = (body: BodyRepresentation) =>
+        body.topology!.edges.filter(
+          (candidate) => candidate.curve?.type === 'CIRCLE'
+        ).length;
+      const before = built.bodyRepresentations[united]!;
+      const rounded = derived.bodyRepresentations[variable.bodyId]!;
+      // A round of radius r takes (1 − π/4)·r² of section; r runs 1 → 2
+      // linearly over the 60 mm edge: ∫ r² = 60·(1 + 2 + 4)/3 = 140.
+      expect(rounded.volume).toBeCloseTo(
+        before.volume - (1 - Math.PI / 4) * 140,
+        2
       );
-      expect(refusal?.kernelRefusal).toMatchObject({
-        family: 'blend',
-        code: 'invalid-input'
-      });
-      expect(refusal?.message).toMatch(
-        /Variable-radius fillet could not be created/
-      );
+      expect(circles(rounded)).toBeGreaterThanOrEqual(circles(before));
+      expect(rounded.exportableStep).toBe(true);
 
       for (const next of [
         filletEdges(document, { name: 'Round', ...pick, size: 1.5 }),

@@ -88,67 +88,81 @@ describe('local chamfered end offsets on stepped imported bodies', () => {
         expect(arena.faces.filter((face) => face.surface.Nurbs)).toHaveLength(
           1
         );
-        // The whole-cylinder specialization declines this fixture. Native
-        // cone-cap moves now support shortening this end along the fixed
-        // cone; longer sweeps through the unrelated freeform shoulder still
-        // refuse. The local construction below instead carries the chamfer.
+        // The whole-cylinder specialization declines this fixture. Since
+        // Remus 2026.1.146 (esaueng/remus#1808) the native move carries the
+        // chamfer with the cap both ways, as the local construction below
+        // does: the cap plane moves by the offset, the chamfer's cone moves
+        // with it, and every other cone stays where it was.
         expect(
           tryExactChamferedCylinderCapOffset(kernel, solid!, selected, offset)
         ).toBeNull();
-        if (offset < 0) {
-          const native = kernel.moveFaces(
-            solid!,
-            Uint32Array.of(selected),
-            offset
-          );
-          expect(kernel.validateSolid(native)).toBe(0);
-          expect(kernel.getSolidFaces(native).length).toBe(9);
-          const fixedCones = (shape: number) =>
-            [...kernel.getSolidFaces(shape)]
-              .filter((face) => kernel.getSurfaceType(face) === 'cone')
-              .map(
-                (face) =>
-                  JSON.parse(kernel.getAnalyticSurfaceParams(face)) as unknown
-              );
-          expect(fixedCones(native)).toEqual(fixedCones(solid!));
-          const normal = [...kernel.getFaceNormal(selected)];
-          const beforeFrame = JSON.parse(
-            kernel.getAnalyticSurfaceParams(selected)
-          ) as { normal: number[]; d: number };
-          const alignment = normal.reduce(
-            (sum, value, i) => sum + value * beforeFrame.normal[i]!,
-            0
-          );
-          const movedPlanes = [...kernel.getSolidFaces(native)]
-            .filter((face) => kernel.getSurfaceType(face) === 'plane')
+        const native = kernel.moveFaces(
+          solid!,
+          Uint32Array.of(selected),
+          offset
+        );
+        expect(kernel.validateSolid(native)).toBe(0);
+        expect(kernel.getSolidFaces(native).length).toBe(9);
+        const cones = (shape: number) =>
+          [...kernel.getSolidFaces(shape)]
+            .filter((face) => kernel.getSurfaceType(face) === 'cone')
             .map(
               (face) =>
                 JSON.parse(kernel.getAnalyticSurfaceParams(face)) as {
-                  normal: number[];
-                  d: number;
+                  apex: number[];
                 }
             );
-          expect(
-            movedPlanes.some(
-              (plane) =>
-                plane.normal.every(
-                  (value, i) => Math.abs(value - beforeFrame.normal[i]!) < 1e-7
-                ) &&
-                Math.abs(plane.d - beforeFrame.d - offset * alignment) < 1e-7
-            )
-          ).toBe(true);
-          const quality: unknown = kernel.meshQuality(native, 0.01);
-          if (typeof quality !== 'string') {
-            throw new Error('Mesh quality did not return its JSON payload.');
-          }
-          const report: unknown = JSON.parse(quality);
-          expect(report).toMatchObject({ isWatertight: true });
-          expect(kernel.serializeSolid(solid!)).toEqual(before);
-        } else {
-          expect(() =>
-            kernel.moveFaces(solid!, Uint32Array.of(selected), offset)
-          ).toThrow(/offset:/);
+        const capNormal = [...kernel.getFaceNormal(selected)];
+        const sourceCones = cones(solid!);
+        const nativeCones = cones(native);
+        expect(nativeCones).toHaveLength(sourceCones.length);
+        const carried = nativeCones.flatMap((cone, i) =>
+          JSON.stringify(cone) === JSON.stringify(sourceCones[i]) ? [] : [i]
+        );
+        expect(carried).toHaveLength(1);
+        const [carriedFrom, carriedTo] = [
+          sourceCones[carried[0]!]!,
+          nativeCones[carried[0]!]!
+        ];
+        expect({ ...carriedTo, apex: carriedFrom.apex }).toEqual(carriedFrom);
+        carriedFrom.apex.forEach((value, i) =>
+          expect(carriedTo.apex[i]).toBeCloseTo(
+            value + capNormal[i]! * offset,
+            7
+          )
+        );
+        const beforeFrame = JSON.parse(
+          kernel.getAnalyticSurfaceParams(selected)
+        ) as { normal: number[]; d: number };
+        const capAlignment = capNormal.reduce(
+          (sum, value, i) => sum + value * beforeFrame.normal[i]!,
+          0
+        );
+        const movedPlanes = [...kernel.getSolidFaces(native)]
+          .filter((face) => kernel.getSurfaceType(face) === 'plane')
+          .map(
+            (face) =>
+              JSON.parse(kernel.getAnalyticSurfaceParams(face)) as {
+                normal: number[];
+                d: number;
+              }
+          );
+        expect(
+          movedPlanes.some(
+            (plane) =>
+              plane.normal.every(
+                (value, i) => Math.abs(value - beforeFrame.normal[i]!) < 1e-7
+              ) &&
+              Math.abs(plane.d - beforeFrame.d - offset * capAlignment) < 1e-7
+          )
+        ).toBe(true);
+        const quality: unknown = kernel.meshQuality(native, 0.01);
+        if (typeof quality !== 'string') {
+          throw new Error('Mesh quality did not return its JSON payload.');
         }
+        const report: unknown = JSON.parse(quality);
+        expect(report).toMatchObject({ isWatertight: true });
+        expect(kernel.serializeSolid(solid!)).toEqual(before);
         const result = tryExactLocalChamferCapOffset(
           kernel,
           solid!,

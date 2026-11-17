@@ -842,7 +842,16 @@ describe('fillet suggestion on a thin plate', () => {
 });
 
 describe('fillet suggestion beside an earlier, smaller round', () => {
-  it("quotes the earlier round's radius when the ladder steps past it", () => {
+  /**
+   * Up to Remus 2026.1.145 this bottom edge refused r3 and the ladder alone
+   * stopped at 0.375, so the suggestion quoted the earlier r1 round. Since
+   * 2026.1.146 the kernel carries the bottom round onto the r1 band up to
+   * the cliff it reports (radius 7): r3 builds, and a refused r8 is
+   * suggested the ladder's size there. The earlier-round probe still finds
+   * r1 between a low floor and a refused request, and only quotes a size
+   * that builds.
+   */
+  it("finds the earlier round's radius, and suggests what builds at the cliff", () => {
     const kernel = new RemusKernel();
     const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
     type Point = { x: number; y: number; z: number };
@@ -880,42 +889,40 @@ describe('fillet suggestion beside an earlier, smaller round', () => {
     );
     expect(bottom).toHaveLength(1);
 
+    // The bottom edge now carries r3: a valid body inside the block.
+    const r3 = applyEdgeModifier(kernel, body, bottom, 'fillet', 3);
+    expect(r3).not.toBeNull();
+    expect(kernel.validateSolid(r3!)).toBe(0);
+    expect(Array.from(kernel.boundingBox(r3!)).map((v) => v + 0)).toEqual(
+      Array.from(kernel.boundingBox(body)).map((v) => v + 0)
+    );
+    // The earlier round is still found above a low floor, and it builds.
+    expect(acceptedBlendRadiusProbe(kernel, body, bottom, 3, 0.375)).toBe(1);
+
     let reported: string | null = null;
     expect(
-      applyEdgeModifier(kernel, body, bottom, 'fillet', 3, (m) => {
+      applyEdgeModifier(kernel, body, bottom, 'fillet', 8, (m) => {
         reported = m;
       })
     ).toBeNull();
-    // The premise: the ladder alone stops at an eighth of the request.
-    expect(
-      acceptedEdgeModifierProbe(
-        kernel,
-        body,
-        bottom,
-        'fillet',
-        3,
-        blendCliffLimit(reported)
-      )
-    ).toBe(0.375);
-    expect(acceptedBlendRadiusProbe(kernel, body, bottom, 3, 0.375)).toBe(1);
-
+    expect(blendCliffLimit(reported)).toBe(7);
     const message = edgeModifierFailureMessage(
       kernel,
       body,
       bottom,
       'fillet',
-      3,
+      8,
       false,
       reported
     );
-    expect(message).toContain('Try a smaller radius: radius 1 builds here.');
+    expect(message).toContain('Try a smaller radius: radius 6.9 builds here.');
     // And it is a size that builds, exactly.
     const rounded = applyEdgeModifier(
       kernel,
       body,
       bottom,
       'fillet',
-      1,
+      6.9,
       undefined,
       undefined,
       undefined,
