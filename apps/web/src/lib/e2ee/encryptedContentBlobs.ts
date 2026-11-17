@@ -382,6 +382,7 @@ export function contentBlobKindFor(kind: ArtifactKind): {
       // WebP is compressed already.
       return { kind: 'thumbnail', compression: 'none' };
     case 'step-export':
+    case 'iges-export':
     case 'stl-export':
     case '3mf-export':
     case 'obj-export':

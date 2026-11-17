@@ -167,5 +167,6 @@
   "project-comments.spec.ts": 14,
   "export-package.spec.ts": 20,
   "encrypted-comments.spec.ts": 20,
-  "step-structure.spec.ts": 20
+  "step-structure.spec.ts": 20,
+  "iges-exchange.spec.ts": 20
 }

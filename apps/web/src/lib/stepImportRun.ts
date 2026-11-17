@@ -561,7 +561,8 @@ export async function runStepImport(
     // Last boundary before the disposable exact-rebuild worker is created.
     stopIfCancelled();
     const productName = metadata.products[0]?.trim();
-    const importName = productName || file.name.replace(/\.(step|stp)$/i, '');
+    const importName =
+      productName || file.name.replace(/\.(step|stp|igs|iges)$/i, '');
     // Numbered like every other new feature: importing the same file twice
     // listed two bodies and two History rows with one name ("root", the
     // product a CAD exporter wrote), which could not be told apart. The name

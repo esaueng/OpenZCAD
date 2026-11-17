@@ -182,6 +182,8 @@ interface TopBarProps {
   onExportProject?(): void;
   onDownloadArtifact?(artifact: ArtifactRecord): void;
   onExportStep(): void;
+  /** I06: write the shown bodies as exact IGES B-rep solids. */
+  onExportIges?(): void;
   /** Opens the mesh export dialog (3MF / STL with quality control). */
   onOpenMeshExport(): void;
   /** Opens the image export dialog (view PNG / sketch SVG). */
@@ -344,6 +346,7 @@ export function TopBar({
   onExportProject,
   onDownloadArtifact,
   onExportStep,
+  onExportIges,
   onOpenMeshExport,
   onOpenImageExport,
   onOpenFlatPattern,
@@ -535,6 +538,11 @@ export function TopBar({
   function exportStepFromMenu() {
     closeFileMenuForDialog();
     onExportStep();
+  }
+
+  function exportIgesFromMenu() {
+    closeFileMenuForDialog();
+    onExportIges?.();
   }
 
   function openImageExportFromMenu() {
@@ -1244,6 +1252,19 @@ export function TopBar({
                 <span>Export STEP</span>
                 <small>{exportScope ?? 'all bodies'}</small>
               </button>
+              {onExportIges && (
+                <button
+                  type="button"
+                  className="topbar-menu-item"
+                  disabled={!canExport}
+                  title={exportTitle('IGES')}
+                  onClick={exportIgesFromMenu}
+                >
+                  <Download size={13} aria-hidden="true" />
+                  <span>Export IGES</span>
+                  <small>{exportScope ?? 'all bodies'}</small>
+                </button>
+              )}
               <button
                 type="button"
                 className="topbar-menu-item"

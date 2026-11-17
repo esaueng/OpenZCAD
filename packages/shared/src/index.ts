@@ -4200,6 +4200,8 @@ export interface ArtifactRecord {
      */
     | 'reference-image'
     | 'step-export'
+    /** I06: an exact IGES B-rep export. */
+    | 'iges-export'
     | 'stl-export'
     | '3mf-export'
     | 'obj-export'

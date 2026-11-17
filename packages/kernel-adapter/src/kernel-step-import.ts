@@ -35,6 +35,12 @@ import { kernelPayloadCount, readKernelPayload } from './kernel-refusal';
 const MAX_INPUT_BYTES = 128 * 1024 * 1024;
 const MAX_ENTITIES = 2_000_000;
 
+/** The same hostile-input budgets, for the other exact translators (IGES). */
+export const EXACT_IMPORT_BUDGETS = {
+  maxInputBytes: MAX_INPUT_BYTES,
+  maxEntities: MAX_ENTITIES
+} as const;
+
 /** What the reader saw in the file, as data rather than as bytes. */
 export interface StepImportReport {
   /** Solid roots the reader produced. */

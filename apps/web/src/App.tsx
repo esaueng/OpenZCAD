@@ -18615,7 +18615,7 @@ export function App() {
       }
       return;
     }
-    if (!/\.(?:stl|step|stp|3mf|obj|glb|ply)$/i.test(file.name)) {
+    if (!/\.(?:stl|step|stp|igs|iges|3mf|obj|glb|ply)$/i.test(file.name)) {
       refuseImportOnCard(file.name, unsupportedImportMessage(file.name));
       return;
     }
@@ -18921,9 +18921,28 @@ export function App() {
 
     const { runStepImport } = await stepImportRun();
     const abort = startImportAbort();
+    // I06: an IGES B-rep is imported as the exact STEP it restates to.
+    let stepFile = file;
+    if (/\.(?:igs|iges)$/i.test(file.name)) {
+      try {
+        const { igesAsStepFile } = await import('./lib/igesImport');
+        stepFile = await igesAsStepFile(file, abort.signal);
+      } catch (error) {
+        finishImportAbort(abort);
+        if (abort.signal.aborted) {
+          setStatus(`${file.name} was not imported: you cancelled it.`);
+          return;
+        }
+        refuseImportOnCard(
+          file.name,
+          errorMessage(error, `Could not import ${file.name}.`)
+        );
+        return;
+      }
+    }
     await runStepImport({
-      file,
-      contentType,
+      file: stepFile,
+      contentType: stepFile === file ? contentType : 'model/step',
       archive: archiveArtifact,
       validatedFeature,
       signal: abort.signal,
@@ -20052,6 +20071,67 @@ export function App() {
     return exportFileStem(
       rowName && doc ? `${doc.name} ${rowName}` : (doc?.name ?? '')
     );
+  }
+
+  /**
+   * I06: the shown (or selected) bodies as exact IGES B-rep solids, in the
+   * export unit, through the same export job as STEP.
+   */
+  async function handleExportIges() {
+    if (currentGeometrySnapshot !== null) {
+      setStatus(
+        'The model is still updating. Try exporting again when it finishes.'
+      );
+      return;
+    }
+    let target: ReturnType<typeof exportTarget>;
+    try {
+      target = exportTarget(null);
+    } catch (error) {
+      setStatus(errorMessage(error, 'That configuration cannot be exported.'));
+      return;
+    }
+    if (
+      !doc ||
+      !target ||
+      (!target.allShownBodies && target.bodyIds.length === 0)
+    ) {
+      setStatus(emptyExportReason);
+      return;
+    }
+    const { document: exported, bodyIds, allShownBodies } = target;
+    const fileName = `${exportStemFor(null)}.igs`;
+    const contentType = 'model/iges';
+    await runExportJob({
+      fileName,
+      label: 'IGES',
+      kind: 'iges-export',
+      contentType,
+      metadata: {
+        bodyIds: bodyIds.join(','),
+        documentVersion: doc.version,
+        units: doc.units
+      },
+      produce: async (options) => {
+        const result = await geometry.exportModel('iges', exported, bodyIds, {
+          ...options,
+          ...(allShownBodies ? { allShownBodies: true } : {}),
+          fileName,
+          units: resolveExportUnits(
+            appSettingsRef.current.files.exportUnits,
+            doc.units
+          )
+        });
+        if (!('text' in result)) {
+          throw new Error('The IGES export returned no text.');
+        }
+        return {
+          body: new Blob([result.text], { type: contentType }),
+          save: () => saveCadTextFile(fileName, 'igs', result.text),
+          warnings: result.warnings.length
+        };
+      }
+    });
   }
 
   async function handleExportStep(rowId: string | null = null) {
@@ -35957,6 +36037,7 @@ export function App() {
           onSaveAs={openSaveNameDialog}
           onImportFiles={(files) => void handleImportFiles(files)}
           onExportStep={() => void handleExportStep()}
+          onExportIges={() => void handleExportIges()}
           onOpenMeshExport={() => setMeshExportOpen(true)}
           onOpenImageExport={openImageExport}
           {...(hasSheetMetal
@@ -36059,6 +36140,7 @@ export function App() {
             }
             onViewActivityLog={openActivityLog}
             onExportStep={() => void handleExportStep()}
+            onExportIges={() => void handleExportIges()}
             onOpenMeshExport={() => setMeshExportOpen(true)}
             // Make a copy is the top bar's labelled button now (I73).
             share={null}

@@ -88,7 +88,16 @@ import { KernelSessionPersistence } from './kernelSessionPersistence';
  * `svg` draws one saved sketch's exact curves and requires a `sketchId`.
  */
 export type GeometryExportFormat =
-  'step' | 'stl' | 'dxf' | 'svg' | 'stl-binary' | '3mf' | 'obj' | 'glb' | 'ply';
+  | 'step'
+  | 'iges'
+  | 'stl'
+  | 'dxf'
+  | 'svg'
+  | 'stl-binary'
+  | '3mf'
+  | 'obj'
+  | 'glb'
+  | 'ply';
 
 /** The export formats whose payload crosses back as transferred bytes. */
 export type GeometryBinaryExportFormat = Extract<
@@ -1616,12 +1625,22 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
                 ? { protocol: request.stepProtocol }
                 : {})
             })
-          : await exact.exportStl(document, exportBodyIds, request.deflection, {
-              ...(request.units ? { units: request.units } : {}),
-              ...(request.angularTolerance !== undefined
-                ? { angularTolerance: request.angularTolerance }
-                : {})
-            });
+          : request.format === 'iges'
+            ? await exact.exportIges(document, exportBodyIds, {
+                ...(request.units ? { units: request.units } : {}),
+                ...(request.fileName ? { fileName: request.fileName } : {})
+              })
+            : await exact.exportStl(
+                document,
+                exportBodyIds,
+                request.deflection,
+                {
+                  ...(request.units ? { units: request.units } : {}),
+                  ...(request.angularTolerance !== undefined
+                    ? { angularTolerance: request.angularTolerance }
+                    : {})
+                }
+              );
       const result: GeometryExportResult = {
         type: 'export',
         ok: true,

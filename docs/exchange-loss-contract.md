@@ -50,6 +50,7 @@ disabled. Show a body in the viewport to include it in the file.
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
 | STEP (AP214) | Each body as its own solid named after the body and styled in its display colour, the document as the product, exact analytic faces, bounds, volume, closed shells, unit | History                                                                                         |
 | STEP (AP242) | Same as AP214: the protocol changes only the file's schema and application-context statements                                                                            | History                                                                                         |
+| IGES (B-rep) | Each body as its own type 186 solid, exact analytic and B-spline faces, bounds, volume, closed shells, cavities, the stated unit                                         | Names, colours, history                                                                         |
 | STL (binary) | Bounds and volume within the chord tolerance, a closed surface                                                                                                           | Body separation (one facet stream), exact faces, unit, names, colours                           |
 | STL (ASCII)  | Same as binary STL                                                                                                                                                       | Same as binary STL; every body shares one `solid` block                                         |
 | 3MF          | Bounds, volume, a closed surface, declared unit, one object per body in the package, named after the body and coloured in its display colour                             | Body separation **on reimport** (the import merges the objects), exact faces                    |
@@ -101,6 +102,18 @@ colors (.mtl)_. Whenever that makes more than one file, they download
 together as one `.zip` (an OBJ with colours is its `.obj` and `.mtl`). Body
 files are named after the project and the body. The dialog remembers its
 format and package choices in this browser for the next export.
+
+**IGES (I06).** File › Export IGES writes the shown bodies as IGES 5.3
+manifold solid B-rep objects (type 186) in the export unit: planes,
+cylinders, cones, spheres and tori as their exact IGES surfaces, B-spline
+faces as 128, no names or colours. Import CAD files reads `.igs`/`.iges`
+files of 186 solids through the same exact path: the Remus translator
+restates the B-rep as STEP, and that STEP text is what the project stores,
+archives and rebuilds from, under the IGES file's name. A file of trimmed
+surfaces with no 186 solid (a surface model) is refused, naming how many
+surfaces it holds; so are entity types outside that family and non-rigid
+transformations, and a body whose closed edge has no carrier (the torus
+primitive) is refused on export. The legacy preview reader is not used.
 
 **Insert project…** (File menu) copies another project's shown bodies into
 the open one as one undoable step: each keeps its name, chosen colour and

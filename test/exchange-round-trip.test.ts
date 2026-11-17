@@ -56,6 +56,7 @@ const SOLID_FORMATS: [SolidExchangeFormat, SolidFormatContract][] = (
   [
     'step',
     'step-ap242',
+    'iges',
     'stl-binary',
     'stl',
     '3mf',
@@ -183,6 +184,7 @@ describe(
           'ply',
           'step',
           'step-ap242',
+          'iges',
           'stl',
           'stl-binary',
           'svg'
@@ -225,7 +227,11 @@ describe(
             reading: units,
             bodyNames
           });
-          const context = { format, units, exact: isStepFormat(format) };
+          const context = {
+            format,
+            units,
+            exact: isStepFormat(format) || format === 'iges'
+          };
           for (const property of contract.keeps) {
             checkSolidProperty(property, true, measure, context);
           }

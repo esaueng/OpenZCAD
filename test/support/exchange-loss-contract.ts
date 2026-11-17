@@ -98,6 +98,26 @@ export const EXCHANGE_LOSS_CONTRACT = {
         'The reimport is one imported solid per body; features, sketches and parameters are not transferred.'
     }
   },
+  iges: {
+    kind: 'solid',
+    label: 'IGES (B-rep)',
+    keeps: [
+      'body-count',
+      'bounds',
+      'volume',
+      'watertight',
+      'exact-faces',
+      'declared-units'
+    ],
+    drops: ['body-names', 'body-colors', 'history'],
+    units: 'declared',
+    notes: {
+      'body-names': 'The B-rep writer states no entity names (I06 scope).',
+      'body-colors': 'The B-rep writer states no colours (I06 scope).',
+      history:
+        'The reimport is one imported solid per body; features, sketches and parameters are not transferred.'
+    }
+  },
   'stl-binary': {
     kind: 'solid',
     label: 'STL (binary)',
