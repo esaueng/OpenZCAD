@@ -58,6 +58,7 @@ import {
 import {
   MigrationPausedError,
   createProjectMigrationEngine,
+  plaintextCommentCount,
   migratableProjects,
   migrationErrorOf,
   type MigrationAttempt,
@@ -150,6 +151,13 @@ export interface MigrationController {
     approval: readonly MigrationMemberApproval[],
     attempt: MigrationAttempt | undefined
   ): void;
+  /**
+   * L08 (plan decision 5): the owner confirms that encrypting the project
+   * deletes `count` plaintext comments, as the row showed. It holds in this
+   * page until the project is encrypted or cancelled; a project that has
+   * gained comments since asks again.
+   */
+  approveCommentDeletion(projectId: string, count: number): void;
   /**
    * Drops a project's staging and unlocks its plaintext, and forgets any
    * approval of its members not yet spent: a new staging asks again. A
@@ -382,6 +390,8 @@ export function createMigrationController(
       readonly attempt: MigrationAttempt | undefined;
     }
   >();
+  /** L08: comments the owner confirmed encrypting deletes, by project. */
+  const commentDeletions = new Map<string, number>();
 
   /**
    * A sequence bumped on every {@link update}, and its value when each
@@ -432,6 +442,7 @@ export function createMigrationController(
       onCutover: finishEncryptCutover,
       onCutoverFound: noteEncryptCutoverFound,
       onProgress: update,
+      commentCount: (projectId) => plaintextCommentCount(fetcher, projectId),
       ...(deps.renewEveryMs ? { renewEveryMs: deps.renewEveryMs } : {})
     });
     return engine;
@@ -721,12 +732,11 @@ export function createMigrationController(
             approvals.delete(project.projectId);
           }
         };
+        const commentDeletion = commentDeletions.get(project.projectId);
         try {
           await run.during(project.projectId, async () =>
-            (await engineFor()).migrate(
-              project,
-              signal,
-              approval
+            (await engineFor()).migrate(project, signal, {
+              ...(approval
                 ? {
                     approvedMembers: approval.members,
                     // Checked against the attempt as it stands now that
@@ -736,10 +746,14 @@ export function createMigrationController(
                       : {}),
                     onApprovalSpent: spent
                   }
-                : {}
-            )
+                : {}),
+              ...(commentDeletion !== undefined
+                ? { approvedCommentDeletion: commentDeletion }
+                : {})
+            })
           );
           spent();
+          commentDeletions.delete(project.projectId);
         } catch (error) {
           if (error instanceof MigrationPausedError) break;
           // Reported on the project by the engine (an error, or members
@@ -747,7 +761,11 @@ export function createMigrationController(
           const reported = state.projects.find(
             (p) => p.projectId === project.projectId
           )?.phase;
-          if (reported !== 'error' && reported !== 'members') {
+          if (
+            reported !== 'error' &&
+            reported !== 'members' &&
+            reported !== 'comments'
+          ) {
             update({
               ...waiting(project),
               phase: 'error',
@@ -786,6 +804,9 @@ export function createMigrationController(
   return {
     approveMembers(projectId, approval, attempt) {
       approvals.set(projectId, { members: [...approval], attempt });
+    },
+    approveCommentDeletion(projectId, count) {
+      commentDeletions.set(projectId, count);
     },
     getState: () => state,
     subscribe(listener) {
@@ -855,6 +876,7 @@ export function createMigrationController(
       if (state.running) return;
       // Whatever the owner approved belonged to the staging being dropped.
       approvals.delete(projectId);
+      commentDeletions.delete(projectId);
       const project = summaries.find((p) => p.projectId === projectId);
       try {
         await run.during(projectId, async () =>
