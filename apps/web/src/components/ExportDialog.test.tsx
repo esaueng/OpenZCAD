@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MeshQualityReport } from '@openzcad/kernel-adapter/exact';
 import { toBodyId } from '@openzcad/shared';
 import { ExportDialog, type ExportDialogProps } from './ExportDialog';
@@ -75,6 +75,9 @@ function exportOptions() {
   return expect.anything() as unknown;
 }
 
+// I04: the dialog remembers its choices; every test starts from none.
+beforeEach(() => localStorage.clear());
+
 describe('ExportDialog', () => {
   it('offers STL export for references and explains unavailable CAD checks', async () => {
     const user = userEvent.setup();
@@ -115,7 +118,7 @@ describe('ExportDialog', () => {
 
   it('shows no hidden-body choice when nothing is hidden', () => {
     renderDialog();
-    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: /hidden/i })).toBeNull();
   });
 
   it('exports 3MF at the standard preset by default', async () => {
@@ -160,7 +163,7 @@ describe('ExportDialog', () => {
     renderDialog();
     expect(screen.getByText(/in millimeters, ready for slicing/)).toBeVisible();
 
-    await user.click(screen.getByLabelText(/glTF \(GLB\)/));
+    await user.click(screen.getByRole('radio', { name: 'glTF (GLB)' }));
 
     expect(screen.getByText(/in meters, the unit glTF defines/)).toBeVisible();
   });
@@ -682,5 +685,70 @@ describe('ExportDialog', () => {
     expect(
       screen.queryByRole('combobox', { name: 'Configuration to export' })
     ).toBeNull();
+  });
+});
+
+describe('ExportDialog package (I04)', () => {
+  const bodies = [
+    { bodyId: 'body_a', name: 'Block' },
+    { bodyId: 'body_b', name: 'Pin' }
+  ];
+
+  function renderPackageDialog(onExport = vi.fn()) {
+    render(
+      <ExportDialog
+        scopeLabel="all bodies (2)"
+        bodies={bodies as never}
+        revision={1}
+        onClose={vi.fn()}
+        onExport={onExport}
+        onCheckQuality={vi.fn()}
+      />
+    );
+    return onExport;
+  }
+
+  it('sends a per-body split, more formats and OBJ colors as one package', async () => {
+    const user = userEvent.setup();
+    const onExport = renderPackageDialog();
+    await user.click(screen.getByRole('radio', { name: 'OBJ' }));
+    await user.click(
+      screen.getByRole('checkbox', { name: 'One file per body' })
+    );
+    await user.click(
+      screen.getByRole('checkbox', { name: 'OBJ colors (.mtl)' })
+    );
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Also export STL (binary)' })
+    );
+    expect(
+      screen.getByText('The files download together as one .zip.')
+    ).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /^Export OBJ/ }));
+    expect(onExport).toHaveBeenCalledWith('obj', expect.any(Number), {
+      perBody: true,
+      extraFormats: ['stl-binary'],
+      objMaterials: true
+    });
+  });
+
+  it('remembers the last choices as this browser’s favourite', async () => {
+    const user = userEvent.setup();
+    renderPackageDialog();
+    await user.click(screen.getByRole('radio', { name: 'PLY (binary)' }));
+    await user.click(
+      screen.getByRole('checkbox', { name: 'Also export glTF (GLB)' })
+    );
+    await user.click(screen.getByRole('button', { name: /^Export PLY/ }));
+    cleanup();
+    const onExport = renderPackageDialog();
+    expect(screen.getByRole('radio', { name: 'PLY (binary)' })).toHaveProperty(
+      'checked',
+      true
+    );
+    await user.click(screen.getByRole('button', { name: /^Export PLY/ }));
+    expect(onExport).toHaveBeenCalledWith('ply', expect.any(Number), {
+      extraFormats: ['glb']
+    });
   });
 });

@@ -186,6 +186,8 @@ export type GeometryWorkerRequest =
       transparent?: boolean;
       /** 'step' only: the name the file is saved under, for its header. */
       fileName?: string;
+      /** I04, 'obj' only: return a ZIP of `<stem>.obj` and `<stem>.mtl`. */
+      objMaterials?: { stem: string };
       /** 'step' only: the application protocol to state; AP214 when unset. */
       stepProtocol?: StepProtocol;
       /**
@@ -1583,6 +1585,9 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         const data = await exact.exportMesh(document, exportBodyIds, {
           format: request.format,
           deflection: request.deflection ?? DEFAULT_EXPORT_DEFLECTION,
+          ...(request.objMaterials
+            ? { objMaterials: request.objMaterials }
+            : {}),
           ...(request.units ? { units: request.units } : {}),
           ...(request.angularTolerance !== undefined
             ? { angularTolerance: request.angularTolerance }

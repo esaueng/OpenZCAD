@@ -563,6 +563,7 @@ import {
   type CadBinaryExportFormat,
   type DesktopMenuCommand
 } from './lib/desktopBridge';
+import type { MeshExportPackage } from './lib/meshExportPackage';
 import {
   cloudFunctionsAreEnabled,
   setCloudFunctionsEnabled
@@ -20110,7 +20111,7 @@ export function App() {
   function handleExportMesh(
     format: MeshExportDialogFormat,
     deflection: number,
-    tolerances: { angularTolerance?: number } = {}
+    tolerances: { angularTolerance?: number } & MeshExportPackage = {}
   ) {
     if (currentGeometrySnapshot !== null) {
       setStatus(
@@ -20133,52 +20134,26 @@ export function App() {
       setStatus(emptyExportReason);
       return;
     }
-    const { document: exported, bodyIds, allShownBodies, rowName } = target;
-    const info = MESH_EXPORT_FILE_INFO[format];
-    const fileName = `${exportStemFor(rowName)}.${info.extension}`;
-    void runExportJob({
-      fileName,
-      label: rowName ? `${info.label} of ${rowName}` : info.label,
-      kind: info.kind,
-      contentType: info.contentType,
-      metadata: {
-        bodyIds: bodyIds.join(','),
-        documentVersion: doc.version,
-        units: doc.units,
+    const { version, units } = doc;
+    void import('./lib/meshExportPackage').then((lazy) =>
+      lazy.exportMesh({
         format,
-        deflectionMm: deflection,
-        ...(rowName ? { configuration: rowName } : {})
-      },
-      ...(rowName
-        ? {
-            completed: () => `Exported configuration ${rowName} to ${fileName}.`
-          }
-        : {}),
-      produce: async (options) => {
-        const result = await geometry.exportModel(format, exported, bodyIds, {
-          deflection,
-          ...tolerances,
-          ...(allShownBodies ? { allShownBodies: true } : {}),
-          units: resolveExportUnits(
-            appSettingsRef.current.files.exportUnits,
-            doc.units
-          ),
-          ...options
-        });
-        return 'data' in result
-          ? {
-              body: new Blob([result.data], { type: info.contentType }),
-              save: () =>
-                saveCadBinaryFile(fileName, info.binaryFormat, result.data),
-              warnings: result.warnings.length
-            }
-          : {
-              body: new Blob([result.text], { type: info.contentType }),
-              save: () => saveCadTextFile(fileName, 'stl', result.text),
-              warnings: result.warnings.length
-            };
-      }
-    });
+        deflection,
+        options: tolerances,
+        target,
+        info: MESH_EXPORT_FILE_INFO[format],
+        version,
+        documentUnits: units,
+        units: resolveExportUnits(
+          appSettingsRef.current.files.exportUnits,
+          units
+        ),
+        stemOf: exportStemFor,
+        setStatus,
+        runExportJob,
+        exportModel: geometry.exportModel
+      })
+    );
   }
 
   /**

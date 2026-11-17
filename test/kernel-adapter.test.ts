@@ -354,7 +354,22 @@ describe('kernel export', { timeout: 30_000 }, () => {
       deflection: 0.08
     });
     const text = new TextDecoder().decode(obj);
-    expect(text).toContain('# remus OBJ export');
+    // I04: one named object per body, with every face renumbered into
+    // the merged file's vertex list.
+    expect(text).toContain('# OpenZCAD OBJ export');
+    expect(text.match(/^o /gm)).toHaveLength(2);
+    const vertexCount = text
+      .split('\n')
+      .filter((line) => line.startsWith('v ')).length;
+    for (const face of text
+      .split('\n')
+      .filter((line) => line.startsWith('f '))) {
+      for (const corner of face.slice(2).split(' ')) {
+        const index = Number(corner.split('/')[0]);
+        expect(index).toBeGreaterThanOrEqual(1);
+        expect(index).toBeLessThanOrEqual(vertexCount);
+      }
+    }
     // Two boxes: 8 corners each triangulated per face; the exact count is
     // the writer's, but both bodies' vertices must be present.
     const vertexLines = text
