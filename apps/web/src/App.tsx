@@ -576,10 +576,6 @@ import {
   type WorkspaceSaveState
 } from './lib/cloudProjectAutosave';
 import {
-  applyAccountProjectRefresh,
-  loadAccountRefresh
-} from './lib/accountProjectRefresh';
-import {
   decideProjectSync,
   shouldPollForFreshness
 } from './lib/projectSyncDecision';
@@ -7992,7 +7988,14 @@ export function App() {
           // raised by the write that gets fenced rather than guessed at here.
           return;
         }
-        const fetched = await loadAccountRefresh(() =>
+        // Loaded only when a pull is due, outside the entry chunk. Offline
+        // with a stale chunk, this tick is skipped like an outage; the next
+        // poll tries again.
+        const refresh = await import('./lib/accountProjectRefresh').catch(
+          () => null
+        );
+        if (!refresh || cancelled) return;
+        const fetched = await refresh.loadAccountRefresh(() =>
           api.loadProject(current.projectId)
         );
         if (
@@ -8019,7 +8022,7 @@ export function App() {
         ) {
           return;
         }
-        const outcome = await applyAccountProjectRefresh({
+        const outcome = await refresh.applyAccountProjectRefresh({
           before: current,
           remote,
           current: () => managerRef.current?.document ?? null,
