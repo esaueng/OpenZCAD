@@ -91,10 +91,15 @@
      one (--lane-end, with the rail three columns wide): the measurement
      workbench, or a phone's panel, stood over the rail's left two columns
      and over its own toggle, so a tap could not fold it again (UX-011).
-     The lane narrows for as long as the rail is open. */
+     The lane narrows for as long as the rail is open. It starts from the
+     stage's left edge meanwhile, as a command card's does with no panel
+     open: with one open the lane began after the tool rail, and between
+     the two rails a 150px workbench (122px at 360px) cut Hide to a sliver,
+     with its tabs and Units (PR review). */
   .workspace.column-layout:has(.rail-more-toggle[aria-expanded='true'])
     .viewer-area
     .stage-right {
+    left: var(--island-gap);
     right: calc(
       var(--rail-open-w) + 2px + var(--island-gap) * 2 + var(--right-panels-w)
     );

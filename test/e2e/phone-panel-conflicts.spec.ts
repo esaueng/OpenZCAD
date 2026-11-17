@@ -57,9 +57,9 @@ async function shot(page: Page, name: string) {
   });
 }
 
-async function openBracket(page: Page) {
+async function openBracket(page: Page, width = 390, height = 844) {
   await stubApi(page, { commandFoldClosed: true });
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width, height });
   await page.goto('/');
   await page
     .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
@@ -87,6 +87,54 @@ async function measureTopFace(page: Page) {
   const row = workbench.locator('.measurement-row').first();
   await expect(row).toBeVisible();
   return { more, workbench, row };
+}
+
+/**
+ * Each of a result's four actions is a whole 44 px target inside the list,
+ * with nothing to scroll sideways, and a press at its centre reaches it.
+ */
+async function expectActionsFit(workbench: Locator, row: Locator) {
+  const list = workbench.locator('.measurement-dock-list');
+  expect(
+    await list.evaluate((element) => element.scrollWidth - element.clientWidth)
+  ).toBeLessThanOrEqual(0);
+  for (const name of [/^(Hide|Show) /, /^Copy /, /^Edit /, /^Delete /]) {
+    const action = row.getByRole('button', { name });
+    await expect(action).toBeVisible();
+    // A short stage scrolls the list up and down, never across.
+    await action.scrollIntoViewIfNeeded();
+    expect(await list.evaluate((element) => element.scrollLeft)).toBe(0);
+    const edge = (await list.boundingBox())!;
+    const box = (await action.boundingBox())!;
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(box.x).toBeGreaterThanOrEqual(edge.x - 0.5);
+    expect(box.x + box.width).toBeLessThanOrEqual(edge.x + edge.width + 0.5);
+    expect(box.y).toBeGreaterThanOrEqual(edge.y - 0.5);
+    expect(box.y + box.height).toBeLessThanOrEqual(edge.y + edge.height + 0.5);
+    await expectOnScreen(workbench.page(), action);
+    await expect.poll(() => reachable(action)).toBe(true);
+  }
+}
+
+/**
+ * Wholly inside the window, with the page itself unscrolled: a reach for
+ * a control must not be met by scrolling the stage, which a finger cannot.
+ */
+async function expectOnScreen(page: Page, control: Locator) {
+  expect(
+    await page.evaluate(() => [
+      window.scrollX,
+      window.scrollY,
+      document.querySelector('.viewer-area')?.scrollTop ?? 0
+    ])
+  ).toEqual([0, 0, 0]);
+  const box = (await control.boundingBox())!;
+  const view = page.viewportSize()!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(view.width);
+  expect(box.y + box.height).toBeLessThanOrEqual(view.height);
 }
 
 test('the modeling guide’s Finish stays clear of the phone’s panel (UX-001)', async ({
@@ -285,23 +333,58 @@ test('a measurement’s four actions fit the touch workbench (UX-010)', async ({
   await openBracket(page);
   const { workbench, row } = await measureTopFace(page);
   await shot(page, 'ux-010-measure-actions');
-  const list = workbench.locator('.measurement-dock-list');
-  expect(
-    await list.evaluate((element) => element.scrollWidth - element.clientWidth)
-  ).toBeLessThanOrEqual(0);
-  const edge = (await list.boundingBox())!;
-  for (const name of [/^(Hide|Show) /, /^Copy /, /^Edit /, /^Delete /]) {
-    const action = row.getByRole('button', { name });
-    await expect(action).toBeVisible();
-    const box = (await action.boundingBox())!;
-    expect(box.width).toBeGreaterThanOrEqual(44);
-    expect(box.height).toBeGreaterThanOrEqual(44);
-    expect(box.x).toBeGreaterThanOrEqual(edge.x - 0.5);
-    expect(box.x + box.width).toBeLessThanOrEqual(edge.x + edge.width + 0.5);
-    await expect.poll(() => reachable(action)).toBe(true);
-  }
+  await expectActionsFit(workbench, row);
   // The value keeps its line beside them.
   await expect(row.locator('.measurement-row-value')).toBeVisible();
   await row.getByRole('button', { name: /^Edit / }).tap();
   await expect(row.locator('.measurement-row-editor')).toBeVisible();
 });
+
+// The lane steps past the opened rail, and with a model panel open it
+// also started after the tool rail: 150 px of list at 390 px, under the
+// 182 px the four actions take in a row, so Hide was an 8 px sliver whose
+// centre missed (PR review). The workbench and its actions fit with the
+// Objects panel open and the view tools opened, on a narrower phone too.
+for (const { width, height } of [
+  { width: 390, height: 844 },
+  { width: 360, height: 640 }
+]) {
+  test(`with Objects open, opened view tools leave the workbench whole at ${width}px`, async ({
+    page
+  }) => {
+    test.setTimeout(150_000);
+    await openBracket(page, width, height);
+    const objects = page
+      .getByRole('toolbar', { name: 'Model panels' })
+      .getByRole('button', { name: 'Objects panel' });
+    await objects.tap();
+    await expect(objects).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('.panel-lane-float .model-panel')).toBeVisible();
+    const { more, workbench, row } = await measureTopFace(page);
+    await more.tap();
+    await expect(more).toHaveAttribute('aria-expanded', 'true');
+    await expect.poll(() => reachable(more)).toBe(true);
+    await shot(page, `review-objects-measure-rail-${width}`);
+    await expectActionsFit(workbench, row);
+    // And the rest of the workbench, across its whole width.
+    const edge = (await workbench.boundingBox())!;
+    for (const control of [
+      workbench.locator('.measurement-mode-tabs button').first(),
+      workbench.locator('.measurement-mode-tabs button').last(),
+      workbench.getByRole('combobox', { name: 'Measurement units' }),
+      workbench.getByRole('combobox', { name: 'Measurement precision' }),
+      workbench.getByRole('button', { name: 'Radius', exact: true }),
+      // The foot, which ran off a 360 × 640 screen and over the search bar.
+      workbench.locator('.measurement-dock-foot button').last()
+    ]) {
+      const box = (await control.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(edge.x - 0.5);
+      expect(box.x + box.width).toBeLessThanOrEqual(edge.x + edge.width + 0.5);
+      await expectOnScreen(page, control);
+      await expect.poll(() => reachable(control)).toBe(true);
+    }
+    // The workbench ends above the search bar.
+    const bar = (await page.locator('.command-bar').boundingBox())!;
+    expect(edge.y + edge.height).toBeLessThanOrEqual(bar.y + 0.5);
+  });
+}

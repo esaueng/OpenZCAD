@@ -55,6 +55,22 @@ describe('the stage’s foot claim', () => {
     );
   });
 
+  it('lets a command card in a phone’s panel lane shrink into the stage', () => {
+    // Held at full height inside the 40dvh lane, the measurement workbench
+    // ran past the lane's foot and off a 360 × 640 screen (PR review).
+    const block = mediaBlock(read('quiet-stage.css'), '(max-width: 520px)');
+    expect(block).toMatch(
+      /\.viewer-area\.has-command \.stage-right:has\(> \.panel-lane-float\) \{\s*max-height:\s*calc\(100% - var\(--stage-top\) - var\(--panel-lane-bottom\)\);\s*\}/
+    );
+    expect(block).toMatch(
+      /\.viewer-area\.has-command\s+\.stage-right:has\(> \.panel-lane-float\)\s+> \.command-float \{\s*flex-shrink:\s*1;\s*min-height:\s*0;\s*\}/
+    );
+    // The panel gives way before the card does.
+    expect(block).toMatch(
+      /\.viewer-area\.has-command \.stage-right > \.panel-lane-float \{\s*flex-shrink:\s*1000;\s*\}/
+    );
+  });
+
   it('ends Assemble’s narrow sidebar above the timeline (UX-003)', () => {
     const block = mediaBlock(read('motion-study.css'), '(max-width: 620px)');
     expect(block).toMatch(
@@ -79,6 +95,9 @@ describe('a measurement’s actions on touch (UX-010)', () => {
     const actions = /\.measurement-row-actions \{([^}]*)\}/.exec(block)?.[1];
     expect(actions).toMatch(/position:\s*static/);
     expect(actions).toMatch(/width:\s*auto/);
+    // Narrower than the four, they wrap rather than lose one.
+    expect(actions).toMatch(/flex-wrap:\s*wrap/);
+    expect(actions).toMatch(/max-width:\s*100%;/);
     // Nothing waits for hover on touch.
     expect(actions).toMatch(/opacity:\s*1/);
     expect(actions).toMatch(/pointer-events:\s*auto/);

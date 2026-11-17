@@ -106,6 +106,11 @@ describe('the phone stage', () => {
     expect(block).toMatch(
       /\.workspace\.column-layout:has\(\.rail-more-toggle\[aria-expanded='true'\]\)\s+\.viewer-area\s+\.stage-right \{[^}]*right:\s*calc\(\s*var\(--rail-open-w\)/
     );
+    // From the stage's left edge meanwhile, with a model panel open too:
+    // between the two rails the workbench was 150px and cut Hide.
+    expect(block).toMatch(
+      /\.workspace\.column-layout:has\(\.rail-more-toggle\[aria-expanded='true'\]\)\s+\.viewer-area\s+\.stage-right \{[^}]*left:\s*var\(--island-gap\);/
+    );
   });
 
   it('keeps what opens over the bar between the two one-column rails', () => {
