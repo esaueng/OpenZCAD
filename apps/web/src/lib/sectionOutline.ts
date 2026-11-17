@@ -22,8 +22,10 @@ type SectionOutlineReport = Awaited<
  * The section view has two geometries behind it. While the plane moves, the
  * viewport clips the display mesh and caps it — an approximation, and the
  * only one fast enough to drag. At rest, the kernel's own section replaces
- * it: exact curves, a measured area, and the only form of it that may be
- * exported.
+ * it: section curves, a measured area, and the only form of it that may be
+ * exported. That section is exact only where the kernel kept the curves: it
+ * cuts round faces into straight chords, and a section holding any is shown
+ * and exported as the approximation it is.
  *
  * This module is reached lazily (the viewer bar imports it, the workspace
  * imports it inside the handler that needs it) so the launcher chunk carries
@@ -33,10 +35,30 @@ export type SectionOutlineState =
   | { kind: 'clipping' }
   | { kind: 'computing' }
   | {
+      /**
+       * The KERNEL's section is on screen. Whether it is exact is
+       * `boundary`'s to say, not this tag's.
+       */
       kind: 'exact';
       regions: ExactSectionRegionDisplay[];
       /** Total cut area, in document units squared. */
       area: number;
+      /**
+       * `exact` only when every region's outline is the solid's own curves.
+       * `approximate` when any holds straight chords across a curve: the
+       * outline is then a polygon and `area` a polygon's area.
+       */
+      boundary: 'exact' | 'approximate';
+      /**
+       * Farthest a chord strays from its curve, in document units; null
+       * when it was not measured. 0 for an exact boundary.
+       */
+      boundaryDeviation: number | null;
+      /**
+       * How far `area` can be from the true area, in document units
+       * squared; null when it was not measured. 0 for an exact boundary.
+       */
+      areaUncertainty: number | null;
       /**
        * Bodies on screen the plane passed by without cutting — counted as
        * BODIES. The kernel reports per solid, and one body can hold several
@@ -262,9 +284,13 @@ export function sectionOutlineFor(
   return sectionSourceOf(view).document ? outline : { kind: 'clipping' };
 }
 
-/** One line for the rail: which section is on screen, and what it measures. */
+/**
+ * One line for the rail: which section is on screen, and what it measures.
+ * `approximate` is the kernel's section with chords where curves belong —
+ * never reported as `exact`.
+ */
 export interface SectionOutlineStatus {
-  kind: SectionOutlineState['kind'];
+  kind: SectionOutlineState['kind'] | 'approximate';
   detail: string;
 }
 
@@ -396,6 +422,23 @@ export function sectionOutlineFromReport(
       )
       .map((refusal) => refusal.bodyId)
   );
+  // Anything but a region that says `exact` is approximate — a report from
+  // an adapter that does not say is not taken for one that checked.
+  const approximate = report.regions.filter(
+    (region) => region.boundary !== 'exact'
+  );
+  const measured = <K extends 'boundaryDeviation' | 'areaUncertainty'>(
+    key: K,
+    combine: (values: number[]) => number
+  ): number | null => {
+    const values = approximate.map((region) => region[key]);
+    return values.every(
+      (value): value is number =>
+        typeof value === 'number' && Number.isFinite(value)
+    )
+      ? combine(values)
+      : null;
+  };
   return {
     kind: 'exact',
     regions: report.regions.map((region) => ({
@@ -405,6 +448,13 @@ export function sectionOutlineFromReport(
       loops: region.loops
     })),
     area: report.regions.reduce((total, region) => total + region.area, 0),
+    boundary: approximate.length === 0 ? 'exact' : 'approximate',
+    boundaryDeviation: measured('boundaryDeviation', (values) =>
+      Math.max(0, ...values)
+    ),
+    areaUncertainty: measured('areaUncertainty', (values) =>
+      values.reduce((total, value) => total + value, 0)
+    ),
     missed: missedBodies.size,
     unsectioned: unsectionedBodies.size
   };
@@ -444,12 +494,26 @@ export function describeSectionOutline(
         `${outline.missed} ${outline.missed === 1 ? 'body is' : 'bodies are'} not cut here`
       );
     }
+    const area = `${formatMeasuredQuantity(outline.area)} ${units}² of material`;
+    if (outline.boundary !== 'exact') {
+      // The number is a polygon's area, so it is never quoted bare: it is
+      // "about", with how far off it can be and why, wherever that is known.
+      const slack =
+        outline.areaUncertainty === null
+          ? ''
+          : ` (±${formatMeasuredQuantity(outline.areaUncertainty)} ${units}²)`;
+      const reach =
+        outline.boundaryDeviation === null
+          ? ''
+          : `, within ${formatMeasuredQuantity(outline.boundaryDeviation)} ${units} of the curve`;
+      return {
+        kind: 'approximate',
+        detail: `${[`About ${area}${slack}`, ...notes].join(', ')}. Curved edges are cut as straight segments${reach}.`
+      };
+    }
     return {
       kind: 'exact',
-      detail: [
-        `${formatMeasuredQuantity(outline.area)} ${units}² of material`,
-        ...notes
-      ].join(', ')
+      detail: [area, ...notes].join(', ')
     };
   }
   if (outline.kind === 'refused') {
@@ -506,8 +570,10 @@ export async function resolveSectionOutline(
 }
 
 /**
- * Write the exact section — never the display caps — as a DXF drawing,
- * narrating both ends of it through `announce` (the status line).
+ * Write the kernel's section — never the display caps — as a DXF drawing,
+ * narrating both ends of it through `announce` (the status line). A section
+ * with chords where curves belong is written as those chords, and the
+ * announcement says so.
  *
  * It applies `sectionOutlineExportable` itself rather than trusting a
  * caller to: the exporter refuses a body it cannot section exactly rather
@@ -553,9 +619,13 @@ export async function writeSectionDxf(
       throw new Error('The DXF export returned no text.');
     }
     const saved = await save(fileName, 'dxf', result.text);
+    const curves =
+      outline.kind === 'exact' && outline.boundary !== 'exact'
+        ? ' Curved edges are written as straight segments.'
+        : '';
     announce(
       saved
-        ? `Exported the ${section.plane} section to ${fileName}.`
+        ? `Exported the ${section.plane} section to ${fileName}.${curves}`
         : 'DXF export cancelled.'
     );
   } catch (error) {

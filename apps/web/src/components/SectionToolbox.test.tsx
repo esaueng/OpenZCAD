@@ -149,9 +149,7 @@ describe('compact section controls', () => {
   it('always explains the preview and never exports one', () => {
     setup();
     expect(screen.getByText(/Approximate cut/)).toBeVisible();
-    expect(
-      screen.getByLabelText('Export the exact section as DXF')
-    ).toBeDisabled();
+    expect(screen.getByLabelText('Export the section as DXF')).toBeDisabled();
   });
 });
 

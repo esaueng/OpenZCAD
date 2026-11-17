@@ -980,10 +980,14 @@ export interface ExactKernelAdapter {
     options?: { anchor?: SketchSolveAnchor }
   ): Promise<SketchSolveOutcome>;
   /**
-   * The exact, kernel-computed cross-section at one plane — section CURVES,
-   * not the viewport's display caps. Refusals are reported per body rather
+   * The kernel-computed cross-section at one plane — section CURVES, not
+   * the viewport's display caps. Refusals are reported per body rather
    * than thrown: a plane that cuts one body and misses another is an
    * ordinary section, not a failure.
+   *
+   * Each region says whether its `boundary` is `exact` or `approximate`:
+   * the kernel cuts curved faces into straight chords, and a region holding
+   * any is a polygon with a polygon's area, not the true section.
    *
    * `bodyIds` names exactly what to section. Omitting it falls back to the
    * document's own visibility, which is NOT what a viewport is showing —
@@ -996,8 +1000,10 @@ export interface ExactKernelAdapter {
     bodyIds?: BodyId[]
   ): Promise<SectionOutlineReport>;
   /**
-   * The same exact section written as a DXF R12 drawing in millimetres (or
-   * `options.units`, which the header then declares).
+   * The same section written as a DXF R12 drawing in millimetres (or
+   * `options.units`, which the header then declares). Edges are written as
+   * the kernel holds them, so a region `sectionOutline` reports as
+   * `approximate` is written as straight segments, not arcs.
    * Fails closed: a body the plane cuts but the kernel cannot section
    * refuses the whole export rather than quietly dropping a region.
    *
@@ -5406,6 +5412,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         regions.push({
           bodyId,
           area: outcome.area,
+          boundary: outcome.boundary,
+          boundaryDeviation: outcome.boundaryDeviation,
+          areaUncertainty: outcome.areaUncertainty,
           loops: outcome.loops,
           positions: outcome.positions,
           indices: outcome.indices
@@ -5460,7 +5469,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           );
         }
         for (const solid of shape.solids) {
-          const outcome = exactSolidSection(kernel, solid, plane);
+          // Only the faces are wanted: each edge is written as the kernel
+          // holds it, whatever a check of the boundary would say.
+          const outcome = exactSolidSection(kernel, solid, plane, {
+            skipBoundaryCheck: true
+          });
           if (outcome.status === 'ok') {
             faces.push(...outcome.faces);
             cut += 1;

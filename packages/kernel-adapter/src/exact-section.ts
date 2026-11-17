@@ -6,8 +6,8 @@
  * disposable tessellation and `sectionCaps` fills the closed contours it can
  * assemble. That is fast enough to drag, and it is not geometry anyone should
  * export. This module asks the kernel for the real thing instead —
- * `section(solid, plane)` returns cross-section FACE handles, whose wires are
- * exact curves and whose area is the kernel's own.
+ * `section(solid, plane)` returns cross-section FACE handles, whose wires and
+ * area are the kernel's own.
  *
  * The kernel's section is candidate evidence, not proof. Measured against the
  * earlier kernel releases, it had three failure modes that all looked like a
@@ -30,6 +30,17 @@
  * `deflection * perimeter`, which is the tolerance this module allows. A
  * disagreement larger than that is refused with a named reason — never drawn,
  * never exported.
+ *
+ * That witness is itself a tessellation, so it cannot tell a curve from a
+ * polygon inscribed in it, and the kernel's section does hand back such
+ * polygons: where the plane crosses a cylinder, cone, sphere or torus it
+ * returns straight chords (64 round a cylinder, 1024 round a sphere), and a
+ * NURBS face comes back as sampled chords too. A plate with two 3 mm holes sections to 3143.5421 mm^2 where the true
+ * area is 3143.4513 — well inside the witness tolerance. So the boundary is
+ * checked a second way, against the solid's own surfaces: a point in the
+ * middle of every boundary edge has to lie ON the solid. A chord's does not,
+ * and a section holding one is reported as `approximate`, with how far its
+ * chords stray, rather than as exact.
  */
 
 import type { DxfEntity } from '@openzcad/io-dxf';
@@ -68,6 +79,15 @@ export interface ExactSectionKernel extends DxfEdgeKernel {
     nz: number
   ): Uint32Array;
   boundingBox(solid: number): Float64Array;
+  /** Every face of the solid, cavity shells included. */
+  getSolidFaces(solid: number): Uint32Array | number[];
+  /** `[distance, x, y, z]` to the nearest point of the solid's boundary. */
+  pointToSolidDistance(
+    px: number,
+    py: number,
+    pz: number,
+    solid: number
+  ): Float64Array | number[];
   getSurfaceType(face: number): string;
   faceArea(face: number, deflection: number): number;
   getFaceWires(face: number): Uint32Array;
@@ -127,11 +147,42 @@ export interface ExactSectionLoop {
   readonly points: readonly SectionPoint3[];
 }
 
-export interface ExactSectionSuccess {
+/**
+ * Whether a section's boundary is the solid's own intersection curves.
+ *
+ * `exact`: every boundary edge lies on the solid, to the kernel's tolerance.
+ * `approximate`: at least one edge is a chord standing in for a curve (or
+ * could not be checked), so the outline and the area are those of a polygon
+ * inscribed in or around the true section.
+ */
+export type SectionBoundaryFidelity = 'exact' | 'approximate';
+
+export interface SectionBoundaryCheck {
+  readonly boundary: SectionBoundaryFidelity;
+  /**
+   * The farthest a boundary edge's midpoint lies from the solid, in document
+   * units: 0 for an exact boundary, the largest chord sagitta for an
+   * approximate one, and null where an edge could not be measured at all.
+   */
+  readonly boundaryDeviation: number | null;
+  /**
+   * How far the reported area can be from the true one, in document units
+   * squared: each stray edge's deviation times its length. An estimate from
+   * one sample per edge — the segment between a chord and a shallow arc holds
+   * two thirds of that product — and null where an edge was not measured.
+   */
+  readonly areaUncertainty: number | null;
+}
+
+export interface ExactSectionSuccess extends SectionBoundaryCheck {
   readonly status: 'ok';
   /** Kernel face handles of the cross-section, valid until the build unwinds. */
   readonly faces: readonly number[];
-  /** The kernel's cross-section area, in document units squared. */
+  /**
+   * The area of the kernel's cross-section faces, in document units squared.
+   * The true area only where `boundary` is `exact`; otherwise a polygon's,
+   * within `areaUncertainty` of it.
+   */
   readonly area: number;
   /** The independent tessellated area the kernel's had to agree with. */
   readonly witnessArea: number;
@@ -158,12 +209,43 @@ export interface ExactSectionOptions {
    * of a large cross-section. Defaults to a square micrometre.
    */
   readonly areaEpsilon?: number;
+  /**
+   * Leave the boundary unchecked, for a caller that only wants the faces —
+   * the DXF writer draws each edge as the kernel holds it either way. The
+   * result then reports `approximate` with unmeasured figures: a boundary
+   * nobody checked is not an exact one.
+   */
+  readonly skipBoundaryCheck?: boolean;
 }
 
 const DEFAULT_AREA_EPSILON = 1e-6;
 
-/** Distances below this fraction of the body extent count as "on the plane". */
+/**
+ * Distances below this fraction of the body extent count as "on the plane" —
+ * and, for a boundary edge's midpoint, as "on the solid". A true edge's
+ * midpoint measures 1e-15 of the extent from the solid (rounding); the chords
+ * the kernel cuts a circle into miss by 1.2e-3 of its radius at 64 to the
+ * turn and 4.7e-6 at 1024, so this separates the two for any radius above a
+ * few thousandths of the body's size, in whatever unit the document uses.
+ */
 const GRAZE_RATIO = 1e-9;
+
+/**
+ * How many boundary edges are measured for the deviation and uncertainty
+ * FIGURES once a section is known to be approximate. A point-to-solid query
+ * visits the solid's faces (about 0.1 to 0.5 ms each), and a chorded section
+ * has 64 to 1024 edges per curve, so a cut through hundreds of round
+ * features would otherwise spend seconds refining a number. Past the budget
+ * the figures are reported as unmeasured; the verdict itself is never
+ * sampled.
+ */
+const BOUNDARY_PROBE_BUDGET = 2048;
+
+const UNCHECKED_BOUNDARY: SectionBoundaryCheck = {
+  boundary: 'approximate',
+  boundaryDeviation: null,
+  areaUncertainty: null
+};
 
 function refuse(
   reason: ExactSectionRefusalReason,
@@ -367,8 +449,137 @@ function loopArea(
   return Math.abs(total);
 }
 
+/** A point partway along one boundary edge, and the edge's length. */
+function edgeProbe(
+  kernel: ExactSectionKernel,
+  edge: number,
+  deflection: number
+): { point: SectionPoint3; length: number } | null {
+  if (kernel.getEdgeCurveType(edge) === 'LINE') {
+    const ends = kernel.getEdgeVertices(edge);
+    const a: SectionPoint3 = [ends[0]!, ends[1]!, ends[2]!];
+    const b: SectionPoint3 = [ends[3]!, ends[4]!, ends[5]!];
+    const length = norm(sub(b, a));
+    return length > 0
+      ? {
+          point: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2],
+          length
+        }
+      : null;
+  }
+  // A curved edge: the kernel's own samples lie on its curve, so the middle
+  // one is a point of the edge well away from the vertices it shares.
+  const flat = kernel.sampleEdge(edge, deflection);
+  const count = Math.floor(flat.length / 3);
+  if (count < 2) {
+    return null;
+  }
+  const at = (index: number): SectionPoint3 => [
+    flat[index * 3]!,
+    flat[index * 3 + 1]!,
+    flat[index * 3 + 2]!
+  ];
+  let length = 0;
+  for (let i = 1; i < count; i += 1) {
+    length += norm(sub(at(i), at(i - 1)));
+  }
+  return { point: at(Math.floor(count / 2)), length };
+}
+
 /**
- * Compute the exact section of one solid, or refuse with a named reason.
+ * Whether the section's boundary is the solid's own intersection curves, or
+ * chords across them.
+ *
+ * A plane meets a solid's faces in curves that lie on those faces, so every
+ * point of a true boundary edge is on the solid. The midpoint of a chord
+ * across a curved face is not: it sits a sagitta inside the hole or the
+ * material. One sample per edge is enough to tell — a straight line through
+ * three points of a cylinder, cone or sphere lies in it — and unlike the
+ * tessellated witness it is measured against the solid's analytic surfaces,
+ * so no chord tolerance can hide it. `tolerance` is how far from the solid
+ * still counts as on it, in document units.
+ *
+ * It reads what the kernel RETURNED rather than assuming how it sections a
+ * curved face: a kernel that hands back circle edges for the same cut passes
+ * this unchanged, and its section is exact.
+ */
+export function sectionBoundaryCheck(
+  kernel: ExactSectionKernel,
+  solid: number,
+  faces: readonly number[],
+  deflection: number,
+  tolerance: number
+): SectionBoundaryCheck {
+  // Planes meet planes in straight lines, so a solid with no curved face has
+  // no curve for a chord to stand in for. (Cavity shells are listed too.)
+  const curved = Array.from(kernel.getSolidFaces(solid)).some(
+    (face) => kernel.getSurfaceType(face) !== 'plane'
+  );
+  if (!curved) {
+    return { boundary: 'exact', boundaryDeviation: 0, areaUncertainty: 0 };
+  }
+  const edges: number[] = [];
+  for (const face of faces) {
+    for (const wire of kernel.getFaceWires(face)) {
+      edges.push(...kernel.getWireEdges(wire));
+    }
+  }
+  let deviation = 0;
+  let uncertainty = 0;
+  let unmeasured = false;
+  let stray = false;
+  let probes = 0;
+  for (const edge of edges) {
+    // Every edge is measured until one strays: `exact` is never a sample.
+    // After that only the figures are at stake, and they are given up
+    // rather than paid for without limit.
+    if (stray && probes >= BOUNDARY_PROBE_BUDGET) {
+      unmeasured = true;
+      break;
+    }
+    const probe = edgeProbe(kernel, edge, deflection);
+    if (!probe) {
+      continue;
+    }
+    probes += 1;
+    let distance: number;
+    try {
+      distance = kernel.pointToSolidDistance(
+        probe.point[0],
+        probe.point[1],
+        probe.point[2],
+        solid
+      )[0]!;
+    } catch {
+      distance = Number.NaN;
+    }
+    if (!Number.isFinite(distance)) {
+      // An edge that cannot be shown to lie on the solid is not exact, and
+      // with it unmeasured there is no figure left to refine.
+      unmeasured = true;
+      break;
+    }
+    if (distance > tolerance) {
+      stray = true;
+      deviation = Math.max(deviation, distance);
+      uncertainty += distance * probe.length;
+    }
+  }
+  if (unmeasured) {
+    return UNCHECKED_BOUNDARY;
+  }
+  return {
+    boundary: stray ? 'approximate' : 'exact',
+    boundaryDeviation: deviation,
+    areaUncertainty: uncertainty
+  };
+}
+
+/**
+ * Compute the kernel's section of one solid, or refuse with a named reason.
+ *
+ * A success is not yet a claim of exactness: `boundary` says whether the
+ * outline is the solid's own curves or a polygon across them.
  *
  * The returned face handles live in the kernel arena and stay valid only as
  * long as the caller's build does; the loops and triangles are copies and
@@ -506,6 +717,9 @@ export function exactSolidSection(
     area,
     witnessArea,
     areaTolerance,
+    ...(options.skipBoundaryCheck
+      ? UNCHECKED_BOUNDARY
+      : sectionBoundaryCheck(kernel, solid, faces, deflection, grazeTolerance)),
     loops,
     positions: new Float32Array(positions),
     indices: new Uint32Array(indices)
@@ -513,7 +727,9 @@ export function exactSolidSection(
 }
 
 /**
- * The exact section's boundary as 2D DXF entities, in millimetres.
+ * The section's boundary as 2D DXF entities, in millimetres: each kernel edge
+ * as the kernel holds it, so a boundary reported `approximate` is written as
+ * the straight segments it is.
  *
  * Every face shares one frame derived from the cutting plane itself, so the
  * regions of a multi-region cut stay in register with each other — a per-face
@@ -546,8 +762,9 @@ export function sectionDxfEntities(
 }
 
 /** One body's cross-section, as it crosses out of the kernel build. */
-export interface SectionOutlineRegion {
+export interface SectionOutlineRegion extends SectionBoundaryCheck {
   readonly bodyId: string;
+  /** The true area only where `boundary` is `exact`. */
   readonly area: number;
   readonly loops: readonly ExactSectionLoop[];
   readonly positions: Float32Array;
@@ -562,7 +779,7 @@ export interface SectionOutlineRefusal {
 }
 
 /**
- * The exact section of a whole document at one plane. Face handles stay
+ * The kernel's section of a whole document at one plane. Face handles stay
  * behind in the kernel arena: everything here is a copy the viewport and the
  * exporter can keep.
  */

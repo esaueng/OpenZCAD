@@ -25,6 +25,7 @@ let kernel: ExactSectionKernel & {
   makeBox(dx: number, dy: number, dz: number): number;
   makeCylinder(radius: number, height: number): number;
   makeSphere(radius: number, segments: number): number;
+  getFaceNormal(face: number): Float64Array;
   cut(a: number, b: number): number;
   transformSolid(solid: number, matrix: Float64Array): void;
   free?(): void;
@@ -105,6 +106,10 @@ describe('exact section of a known part', () => {
     expect(Math.abs(section.area - section.witnessArea)).toBeLessThanOrEqual(
       section.areaTolerance
     );
+    // Four straight edges on four planar faces: nothing stands in for a curve.
+    expect(section.boundary).toBe('exact');
+    expect(section.boundaryDeviation).toBe(0);
+    expect(section.areaUncertainty).toBe(0);
     expect(section.loops).toHaveLength(1);
     expect(section.loops[0]!.kind).toBe('outer');
     expect(section.loops[0]!.points).toHaveLength(4);
@@ -143,14 +148,133 @@ describe('a through hole in the section', () => {
     const outer = loopArea(section.loops[0]!.points, cut);
     const hole = loopArea(section.loops[1]!.points, cut);
     expect(outer).toBeCloseTo(200, 6);
-    // The kernel's bore wall is a 64-sided prism, so the hole is that
-    // polygon's area rather than pi r^2 — within 0.2% of the circle.
+    // The bore wall is a true cylinder, but the kernel's section cuts its
+    // circle into 64 chords, so the hole is that polygon's area rather than
+    // pi r^2 — within 0.2% of the circle.
     expect(hole).toBeGreaterThan(Math.PI * 4 * 0.99);
     expect(hole).toBeLessThan(Math.PI * 4);
     expect(section.area).toBeCloseTo(outer - hole, 6);
     // The cut surface is drawn as material only, never over the bore.
     expect(section.positions.length / 3).toBeGreaterThan(4);
   });
+
+  it('reports a chorded bore as an approximate boundary, never an exact one', () => {
+    const bar = boredBar();
+    const cut = plane([0, 0, 3], [0, 0, 1]);
+    const section = expectOk(exactSolidSection(kernel, bar, cut));
+    const trueArea = 200 - Math.PI * 4;
+    const polygonError = Math.abs(section.area - trueArea);
+    // The tessellated witness cannot see this: the polygon is well inside
+    // the slack a display mesh is allowed.
+    expect(polygonError).toBeGreaterThan(1e-3);
+    expect(polygonError).toBeLessThan(section.areaTolerance);
+    const curved = section.loops.some((loop) => loop.points.length > 4);
+    const exactArea = polygonError <= trueArea * 1e-6;
+    // Either the kernel kept the circle and its area, or the section says
+    // it did not. A polygon reported as exact is the defect.
+    expect(curved).toBe(true);
+    expect(section.boundary).toBe(exactArea ? 'exact' : 'approximate');
+    // Each chord of a 64-gon in a radius-2 circle misses it by its sagitta.
+    const sagitta = 2 * (1 - Math.cos(Math.PI / 64));
+    expect(section.boundaryDeviation).toBeCloseTo(exactArea ? 0 : sagitta, 9);
+    // The disclosed uncertainty covers the real error, without burying it.
+    expect(section.areaUncertainty!).toBeGreaterThanOrEqual(polygonError);
+    expect(section.areaUncertainty!).toBeLessThan(polygonError * 2 + 1e-9);
+  });
+
+  it('accepts circle edges that lie on the solid as an exact boundary', () => {
+    // What a kernel that keeps analytic section curves returns for a round
+    // bar: one planar face bounded by a circle edge. A second, shorter bar's
+    // top cap is that face, at the height the taller one is cut.
+    const rod = kernel.makeCylinder(5, 10);
+    const stub = kernel.makeCylinder(5, 4);
+    const cap = Array.from(kernel.getSolidFaces(stub)).find(
+      (face) =>
+        kernel.getSurfaceType(face) === 'plane' &&
+        kernel.getFaceNormal(face)[2]! > 0.5
+    )!;
+    const cut = plane([0, 0, 4], [0, 0, 1]);
+    const section = vi
+      .spyOn(kernel, 'section')
+      .mockReturnValue(Uint32Array.of(cap));
+    try {
+      const outcome = expectOk(exactSolidSection(kernel, rod, cut));
+      expect(outcome.boundary).toBe('exact');
+      expect(outcome.boundaryDeviation).toBe(0);
+      expect(outcome.areaUncertainty).toBe(0);
+      expect(Math.abs(outcome.area - Math.PI * 25)).toBeLessThan(
+        Math.PI * 25 * 1e-9
+      );
+      const entities = sectionDxfEntities(kernel, outcome.faces, cut, 1);
+      expect(entities).toHaveLength(1);
+      expect(entities[0]).toMatchObject({ kind: 'circle' });
+      if (entities[0]!.kind !== 'circle') return;
+      expect(entities[0]!.radius).toBeCloseTo(5, 9);
+    } finally {
+      section.mockRestore();
+    }
+  });
+
+  it('does not call a boundary exact when an edge cannot be measured', () => {
+    const bar = boredBar();
+    const distance = vi
+      .spyOn(kernel, 'pointToSolidDistance')
+      .mockImplementation(() => {
+        throw new Error('no point-to-face distance witness was found');
+      });
+    try {
+      const section = expectOk(
+        exactSolidSection(kernel, bar, plane([0, 0, 3], [0, 0, 1]))
+      );
+      expect(section.boundary).toBe('approximate');
+      expect(section.boundaryDeviation).toBeNull();
+      expect(section.areaUncertainty).toBeNull();
+    } finally {
+      distance.mockRestore();
+    }
+  });
+
+  it('reports an unchecked boundary as approximate, at no cost', () => {
+    const bar = kernel.makeBox(20, 10, 6);
+    const distance = vi.spyOn(kernel, 'pointToSolidDistance');
+    try {
+      const section = expectOk(
+        exactSolidSection(kernel, bar, plane([0, 0, 3], [0, 0, 1]), {
+          skipBoundaryCheck: true
+        })
+      );
+      // Even a box: nobody looked, so nobody may call it exact.
+      expect(section.boundary).toBe('approximate');
+      expect(section.boundaryDeviation).toBeNull();
+      expect(section.areaUncertainty).toBeNull();
+      expect(distance).not.toHaveBeenCalled();
+    } finally {
+      distance.mockRestore();
+    }
+  });
+
+  it('stops refining the figures past the probe budget, never the verdict', () => {
+    // 33 radius-0.2 bores in a row: 2112 chords, more than the budget.
+    let bar = kernel.makeBox(40, 4, 2);
+    for (let i = 0; i < 33; i += 1) {
+      const bore = kernel.makeCylinder(0.2, 6);
+      kernel.transformSolid(bore, translation(1 + i * 1.15, 2, -2));
+      bar = kernel.cut(bar, bore);
+    }
+    const distance = vi.spyOn(kernel, 'pointToSolidDistance');
+    try {
+      const section = expectOk(
+        exactSolidSection(kernel, bar, plane([0, 0, 1], [0, 0, 1]))
+      );
+      expect(section.loops).toHaveLength(34);
+      expect(section.boundary).toBe('approximate');
+      expect(section.boundaryDeviation).toBeNull();
+      expect(section.areaUncertainty).toBeNull();
+      expect(distance.mock.calls.length).toBeLessThanOrEqual(2048);
+    } finally {
+      distance.mockRestore();
+    }
+  }, 60_000);
 
   it('refuses a bore-parallel section without authoritative cap clipping', () => {
     const bar = boredBar();
@@ -236,7 +360,18 @@ describe('planes that break a naive section', () => {
     expect(cavity).toBeGreaterThan(Math.PI * 16 * 0.98);
     expect(cavity).toBeLessThan(Math.PI * 16);
     expect(section.area).toBeCloseTo(400 - cavity, 6);
-  });
+    // The sphere's great circle comes back as chords too — finer ones than
+    // a cylinder's, and still not the circle. The cavity is an inner shell:
+    // its faces count when deciding whether the solid has a curve to chord.
+    const chords = section.loops[1]!.points.length;
+    expect(chords).toBeGreaterThan(8);
+    expect(section.boundary).toBe('approximate');
+    expect(section.boundaryDeviation).toBeCloseTo(
+      4 * (1 - Math.cos(Math.PI / chords)),
+      9
+    );
+    // A thousand distance queries: seconds, not milliseconds, on a busy box.
+  }, 30_000);
 
   it('sections a rotated and translated body in document space', () => {
     const bar = kernel.makeBox(20, 10, 6);
@@ -245,6 +380,8 @@ describe('planes that break a naive section', () => {
     const section = expectOk(exactSolidSection(kernel, bar, cut));
     // A rotation about Z leaves the horizontal cross-section area alone.
     expect(section.area).toBeCloseTo(200, 6);
+    // Rounding in a turned body's vertices is not a chord.
+    expect(section.boundary).toBe('exact');
     expect(loopArea(section.loops[0]!.points, cut)).toBeCloseTo(200, 6);
     for (const point of section.loops[0]!.points) {
       expect(point[2]).toBeCloseTo(4, 9);
@@ -259,6 +396,7 @@ describe('planes that break a naive section', () => {
     expect(Math.abs(section.area - section.witnessArea)).toBeLessThanOrEqual(
       section.areaTolerance
     );
+    expect(section.boundary).toBe('exact');
     for (const point of section.loops[0]!.points) {
       const signed =
         (point[0] - 10) * axis + (point[1] - 5) * axis + (point[2] - 3) * axis;
@@ -355,7 +493,10 @@ describe('section DXF export', () => {
     const unitsAt = pairs.find(([, value]) => value === '$INSUNITS')![0];
     expect(lines[unitsAt + 1]).toBe('70');
     expect(lines[unitsAt + 2]).toBe('4');
-    // Four outline lines plus the bore's 64 wall segments.
+    // Four outline lines plus the 64 chords the kernel cuts the bore's
+    // circle into: the file holds what the section holds, which is why that
+    // section is reported as approximate.
+    expect(section.boundary).toBe('approximate');
     expect(entities.filter((entity) => entity.kind === 'line')).toHaveLength(
       68
     );

@@ -170,16 +170,24 @@ async function createBox(
   ).toBeVisible();
 }
 
-async function openExactSection(page: Page) {
+/**
+ * Opens the section and waits for the kernel's own. A cut through flat faces
+ * only is `Exact`; one through a round face comes back as chords and has to
+ * say `Approximate`.
+ */
+async function openExactSection(
+  page: Page,
+  label: 'Exact' | 'Approximate' = 'Exact'
+) {
   const sectionButton = page.getByRole('button', { name: /^Section view/ });
   await sectionButton.click();
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'true');
   await expect(
     page.getByRole('slider', { name: 'Section plane offset' })
   ).toBeVisible();
-  await expect(
-    page.locator('.rail-section-state-kind', { hasText: 'Exact' })
-  ).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('.rail-section-state-kind')).toHaveText(label, {
+    timeout: 30_000
+  });
   await expect
     .poll(async () => (await sectionState(page)).exactSections.length)
     .toBe(1);
@@ -285,7 +293,7 @@ test('restores each duplicated project’s own exact section with shared body ID
       `${area} mm² of material`
     );
     await expect(
-      page.getByRole('button', { name: 'Export the exact section as DXF' })
+      page.getByRole('button', { name: 'Export the section as DXF' })
     ).toBeEnabled();
     await page.getByTitle('Back to projects').click();
   }
@@ -326,7 +334,7 @@ test('exports the exact section of a transformed body as a measured DXF', async 
     path: testInfo.outputPath('transformed-exact-section.png')
   });
   const exportButton = page.getByRole('button', {
-    name: 'Export the exact section as DXF'
+    name: 'Export the section as DXF'
   });
   await expect(exportButton).toBeEnabled();
   const downloadPromise = page.waitForEvent('download');
@@ -416,17 +424,22 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   await expect(subtract.getByTitle('Feature failed to build')).toHaveCount(0);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
-  await openExactSection(page);
+  // UX-013: the bore's circle is 64 chords in this section, so the rail may
+  // not call it exact, and has to say how far off the polygon can be.
+  await openExactSection(page, 'Approximate');
   const exactState = await sectionState(page);
   expect(exactState.sectionCaps).toEqual([]);
   expect(exactState.exactSections[0]!.triangles).toBeGreaterThanOrEqual(2);
   const sectionDetail = await page
     .locator('.rail-section-state-detail')
     .textContent();
+  expect(sectionDetail).toMatch(
+    /^About [0-9.]+ mm² of material \(±[0-9.]+ mm²\)\. Curved edges are cut as straight segments, within [0-9.]+ mm of the curve\.$/
+  );
   const measuredArea = Number(sectionDetail?.match(/([0-9.]+) mm²/)?.[1]);
   expect(measuredArea).toBeCloseTo(1200 - Math.PI * 36, 0);
   const exportButton = page.getByRole('button', {
-    name: 'Export the exact section as DXF'
+    name: 'Export the section as DXF'
   });
   await expect(exportButton).toBeEnabled();
 
@@ -491,6 +504,6 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   // With the cut already off, that press can only hide the panel.
   if ((await sectionPanel.count()) > 0) await sectionButton.click();
   await expect(sectionPanel).toHaveCount(0);
-  await openExactSection(page);
+  await openExactSection(page, 'Approximate');
   await expect(exportButton).toBeEnabled();
 });
