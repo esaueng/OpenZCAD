@@ -106,6 +106,10 @@ import {
   isE2eeProjectEnvelopePath
 } from './e2eeProjectEnvelopes';
 import {
+  handleE2eeShareCommentsRequest,
+  isE2eeShareCommentsPath
+} from './e2eeShareComments';
+import {
   handleE2eeProjectMigrationRequest,
   isE2eeProjectMigrationPath
 } from './e2eeProjectMigrations';
@@ -129,7 +133,7 @@ import {
  * wraps, resets) keeps working: it changes no content.
  */
 const ENCRYPTED_CONTENT_WRITE_ROUTE =
-  /^\/api\/e2ee\/projects\/([^/]+)\/(?:document|versions|revisions(?:\/[^/]+)?|info|measurements|view-states(?:\/[^/]+)?|comments|blobs(?:\/.*)?)$/;
+  /^\/api\/e2ee\/projects\/([^/]+)\/(?:document|versions|revisions(?:\/[^/]+)?|info|measurements|view-states(?:\/[^/]+)?|comments|share-comments(?:\/[^/]+)?|blobs(?:\/.*)?)$/;
 /**
  * Writes that would share an encrypted project, or settle a member's
  * departure, while its plaintext is staged (slice 7-3 with Phase 5): share
@@ -2348,6 +2352,25 @@ export async function handleE2eeRequest(
         projectsEnabled,
         db.authorization,
         migrationLease
+      );
+    }
+    if (isE2eeShareCommentsPath(pathname)) {
+      // L08: commenter-link visitors' comments on encrypted projects
+      // (e2eeShareComments.ts, migration 0061).
+      if (!projectsEnabled) {
+        return json(
+          {
+            error: 'Encrypted projects are not available for this account yet.',
+            code: 'FEATURE_DISABLED'
+          },
+          501
+        );
+      }
+      return await handleE2eeShareCommentsRequest(
+        request,
+        pathname,
+        rawDb,
+        userId
       );
     }
     if (isE2eeShareLinkPath(pathname)) {

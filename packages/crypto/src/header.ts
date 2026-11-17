@@ -44,8 +44,10 @@ const MAX_U32 = 0xffffffff;
  * list is append-only, since a kind's wire code is its position plus one:
  * `project-info` (5: name, thumbnail and archived exports) and
  * `key-archive` (6: an epoch's previous project keys and epoch record)
- * came after the first four, and `comments` (7: one member's L08 review
- * comments on the project, replaced whole) after them.
+ * came after the first four, `comments` (7: one member's L08 review
+ * comments on the project, replaced whole) after them, and `share-comment`
+ * (8: one comment a commenter link's visitor wrote, unsigned, its key
+ * wrapped under the link's share key) after that.
  */
 export const PROJECT_ENVELOPE_KINDS = Object.freeze([
   'document',
@@ -54,7 +56,8 @@ export const PROJECT_ENVELOPE_KINDS = Object.freeze([
   'share-snapshot',
   'project-info',
   'key-archive',
-  'comments'
+  'comments',
+  'share-comment'
 ] as const);
 export type ProjectEnvelopeKind = (typeof PROJECT_ENVELOPE_KINDS)[number];
 
@@ -91,6 +94,8 @@ export const PLAINTEXT_CEILINGS: Readonly<
   'key-archive': 1024 * 1024,
   // L08: one member's comments, at most 500 of 2000 characters with pins.
   comments: 2 * 1024 * 1024,
+  // L08: one visitor comment of at most 2000 characters, a name and a pin.
+  'share-comment': 64 * 1024,
   'import-source': 128 * 1024 * 1024,
   'mesh-payload': 128 * 1024 * 1024,
   export: 128 * 1024 * 1024,

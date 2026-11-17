@@ -638,7 +638,7 @@ describe('decompression limits', () => {
     expect(PROJECT_ENVELOPE_KINDS[0]).toBe('document');
   });
 
-  it('appends project-info, key-archive and comments without renumbering', async () => {
+  it('appends project-info, key-archive, comments and share-comment without renumbering', async () => {
     // Wire codes are positions plus one; the first four never move.
     expect(PROJECT_ENVELOPE_KINDS).toEqual([
       'document',
@@ -647,14 +647,16 @@ describe('decompression limits', () => {
       'share-snapshot',
       'project-info',
       'key-archive',
-      'comments'
+      'comments',
+      'share-comment'
     ]);
     for (const [kind, code] of [
       ['document', 1],
       ['share-snapshot', 4],
       ['project-info', 5],
       ['key-archive', 6],
-      ['comments', 7]
+      ['comments', 7],
+      ['share-comment', 8]
     ] as const) {
       const key = EnvelopeKey.generate();
       const keyBytes = key.bytes;
@@ -683,14 +685,14 @@ describe('decompression limits', () => {
         'limit-exceeded'
       );
     }
-    // An eighth kind code is still unknown.
+    // A ninth kind code is still unknown.
     const envelope = await encryptProjectEnvelope(
       EnvelopeKey.generate(),
       { ...HEADER, blobIds: [] },
       text('{}')
     );
     const unknown = new Uint8Array(envelope);
-    unknown[9] = 8;
+    unknown[9] = 9;
     expect(() => parseEnvelope(unknown)).toThrow(
       expect.objectContaining({ code: 'malformed' }) as unknown
     );

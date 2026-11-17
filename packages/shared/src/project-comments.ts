@@ -191,6 +191,12 @@ export interface E2eeCommentLogUpload {
 export const E2EE_COMMENTS_CONFLICT_CODE = 'E2EE_COMMENTS_CONFLICT';
 
 const COMMENT_ID = /^cmt_[0-9a-f-]{36}$/;
+/**
+ * A comment another entry may name: a member's, or a commenter-link
+ * visitor's on an encrypted project (L08, plan decision 2), which members
+ * reply to, the owner resolves and hides like any other.
+ */
+const REFERENCED_ID = /^(?:cmt|lcm)_[0-9a-f-]{36}$/;
 
 function isIso(value: unknown): value is string {
   return (
@@ -233,7 +239,8 @@ export function parseCommentLog(
       !COMMENT_ID.test(entry.commentId) ||
       !(
         entry.parentId === null ||
-        (typeof entry.parentId === 'string' && COMMENT_ID.test(entry.parentId))
+        (typeof entry.parentId === 'string' &&
+          REFERENCED_ID.test(entry.parentId))
       ) ||
       text === null ||
       !isIso(entry.createdAt)
@@ -257,7 +264,7 @@ export function parseCommentLog(
     const entry = raw as Record<string, unknown>;
     if (
       typeof entry.threadId !== 'string' ||
-      !COMMENT_ID.test(entry.threadId) ||
+      !REFERENCED_ID.test(entry.threadId) ||
       typeof entry.resolved !== 'boolean' ||
       !isIso(entry.at)
     )
@@ -269,7 +276,7 @@ export function parseCommentLog(
     });
   }
   const hidden = record.hidden as unknown[];
-  if (!hidden.every((id) => typeof id === 'string' && COMMENT_ID.test(id)))
+  if (!hidden.every((id) => typeof id === 'string' && REFERENCED_ID.test(id)))
     return null;
   const ancestors = record.ancestors ?? [];
   if (
@@ -299,7 +306,12 @@ export function parseCommentLog(
  */
 export function mergeCommentLogs(
   logs: readonly { userId: string; record: CommentLogRecord }[],
-  ownerUserId: string
+  ownerUserId: string,
+  /**
+   * Commenter-link visitors' comments (L08, plan decision 2): threads and
+   * replies like members', resolved only by the owner.
+   */
+  visitors: readonly ProjectComment[] = []
 ): ProjectComment[] {
   const owner = logs.find((log) => log.userId === ownerUserId);
   const hidden = new Set(owner?.record.hidden ?? []);
@@ -325,6 +337,12 @@ export function mergeCommentLogs(
         resolvedByName: null
       });
     }
+  for (const comment of visitors) {
+    if (authors.has(comment.commentId)) continue;
+    // No member wrote it: only the owner's resolutions count.
+    authors.set(comment.commentId, ownerUserId);
+    all.push({ ...comment, resolvedAt: null, resolvedByName: null });
+  }
   const threads = new Set(
     all
       .filter((comment) => comment.parentId === null)

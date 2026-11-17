@@ -9,6 +9,7 @@
  *   GET and POST /api/share/comments (L08: a commenter link's comments)
  *   GET /api/e2ee/share               (an encrypted link's snapshot)
  *   GET /api/e2ee/share/blobs/:blobId
+ *   GET and POST /api/e2ee/share/comments (L08: an encrypted commenter link's)
  *
  * Each is served exactly as the path form that names the token,
  * `/api/share/:token…` and `/api/e2ee/share/:token…`, which the Worker
@@ -23,7 +24,8 @@ const TOKEN_FREE_SHARE_ROUTES: readonly [RegExp, string][] = [
   [/^\/api\/share(\/(?:assets|sources)\/[^/]+)$/, '/api/share/'],
   [/^\/api\/share(\/comments)$/, '/api/share/'],
   [/^\/api\/e2ee\/share()$/, '/api/e2ee/share/'],
-  [/^\/api\/e2ee\/share(\/blobs\/[^/]+)$/, '/api/e2ee/share/']
+  [/^\/api\/e2ee\/share(\/blobs\/[^/]+)$/, '/api/e2ee/share/'],
+  [/^\/api\/e2ee\/share(\/comments)$/, '/api/e2ee/share/']
 ];
 
 /**

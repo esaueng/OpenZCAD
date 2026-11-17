@@ -32,6 +32,11 @@ export interface EncryptedShareLinkRow {
   readonly status:
     'active' | 'needs-confirming' | 'not-published' | 'revocation-pending';
   readonly expiresAt: number | null;
+  /**
+   * L08: whether the link's visitors may comment, by a grant one of the
+   * owner's current devices signed; absent where that is not known.
+   */
+  readonly comments?: boolean;
 }
 
 export interface EncryptedShareLinksState {
@@ -64,9 +69,19 @@ export interface EncryptedShareLinkClient {
   list(projectId: string): Promise<EncryptedShareLinksState>;
   create(
     projectId: string,
-    mode: EncryptedShareLinkMode
+    mode: EncryptedShareLinkMode,
+    /**
+     * L08 (plan decisions 2 and 3a): sign a comment grant for the new link,
+     * so its visitors can comment.
+     */
+    options?: { readonly comments?: boolean }
   ): Promise<{ url: string }>;
   revoke(projectId: string, shareId: string): Promise<void>;
+  /**
+   * L08: lets an existing link's visitors comment, or signs its grant again
+   * once the device that signed it was removed.
+   */
+  allowComments?(projectId: string, shareId: string): Promise<void>;
   /** Confirms sharing with the identity key, then states every link. */
   confirm(projectId: string, confirmation: ShareConfirmation): Promise<void>;
   /** New links (ids and keys) in place of these, of the same modes. */
@@ -109,13 +124,18 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       projectId,
       upkeep?.head ?? undefined
     );
+    // L08: which links take comments; unknown when that cannot be read.
+    const commenting = await Promise.resolve()
+      .then(() => links.commentingShareLinks(ctx, projectId))
+      .catch(() => null);
     return {
       links: view.links.map((link) => ({
         shareId: link.shareId,
         mode: link.mode,
         url: link.url,
         status: link.status,
-        expiresAt: link.expiresAt
+        expiresAt: link.expiresAt,
+        ...(commenting ? { comments: commenting.has(link.shareId) } : {})
       })),
       needsConfirmation:
         view.isOwner && links.delegationNeedsRenewal(view.delegation),
@@ -130,19 +150,33 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
         snapshotProblem(upkeep)
     };
   },
-  async create(projectId, mode) {
-    const [{ encryptedShareLinks }, { createShareLink }] = await Promise.all([
+  async create(projectId, mode, options) {
+    const [{ encryptedShareLinks }, links] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
-    const created = await createShareLink(
-      (await encryptedShareLinks()).ctx,
-      projectId,
-      mode
-    );
+    const ctx = (await encryptedShareLinks()).ctx;
+    const created = await links.createShareLink(ctx, projectId, mode);
     const problem = shareLinkCreationProblem(created);
     if (problem) throw new Error(problem);
+    if (options?.comments) {
+      await links.allowShareLinkComments(ctx, projectId, {
+        shareId: created.shareId,
+        shareKey: created.fragment.shareKey
+      });
+    }
     return { url: created.url };
+  },
+  async allowComments(projectId, shareId) {
+    const [{ encryptedShareLinks }, links] = await Promise.all([
+      import('../lib/e2ee/encryptedProjects'),
+      import('../lib/e2ee/shareLinks')
+    ]);
+    await links.allowShareLinkCommentsById(
+      (await encryptedShareLinks()).ctx,
+      projectId,
+      shareId
+    );
   },
   async revoke(projectId, shareId) {
     const [{ encryptedShareLinks }, { revokeShareLink }] = await Promise.all([
@@ -279,6 +313,8 @@ export function EncryptedShareLinks({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<string | null>(null);
+  // L08: whether the next link's visitors may comment (plan decision 3a).
+  const [withComments, setWithComments] = useState(false);
   // The link whose Revoke is waiting for a yes (design review I2).
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
@@ -350,7 +386,12 @@ export function EncryptedShareLinks({
   const createLink = async () => {
     setCreated(null);
     setCopied(null);
-    setCreated((await client.create(projectId, 'view')).url);
+    setCreated(
+      (withComments
+        ? await client.create(projectId, 'view', { comments: true })
+        : await client.create(projectId, 'view')
+      ).url
+    );
   };
   // Inside the confirmation's own run: a refused confirmation creates nothing.
   const finishConfirm = async () => {
@@ -441,6 +482,16 @@ export function EncryptedShareLinks({
           Create link
         </button>
       </div>
+      <label className="sharing-link-comments">
+        <input
+          type="checkbox"
+          checked={withComments}
+          disabled={disabled || confirming}
+          onChange={(event) => setWithComments(event.target.checked)}
+        />
+        Visitors can comment (their comments are encrypted with the link’s key,
+        and they see only this link’s comments)
+      </label>
 
       {error ? (
         <p className="sharing-share-hint" role="alert">
@@ -649,8 +700,26 @@ export function EncryptedShareLinks({
                   </span>
                   <span className="sharing-row-detail" data-status={row.status}>
                     {expiryText(row)}
+                    {row.comments ? ' · Visitors can comment' : ''}
                   </span>
                 </span>
+                {row.comments === false &&
+                row.status === 'active' &&
+                client.allowComments ? (
+                  <button
+                    type="button"
+                    className="sharing-row-action"
+                    disabled={busy !== null}
+                    aria-label={`Allow comments on ${MODE_LABEL[row.mode]} link`}
+                    onClick={() =>
+                      void run(`comments:${row.shareId}`, () =>
+                        client.allowComments!(projectId, row.shareId)
+                      )
+                    }
+                  >
+                    Allow comments
+                  </button>
+                ) : null}
                 {row.url ? (
                   <button
                     type="button"

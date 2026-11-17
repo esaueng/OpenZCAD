@@ -126,7 +126,9 @@ export interface EncryptedComments {
   /** The merged comments, and a warning when a member's log was left out. */
   list(
     projectId: string,
-    ownerUserId: string
+    ownerUserId: string,
+    /** Commenter-link visitors' comments to merge in (L08, decision 2). */
+    visitors?: readonly ProjectComment[]
   ): Promise<{ comments: ProjectComment[]; warning: string | null }>;
   create(
     projectId: string,
@@ -362,10 +364,10 @@ export function createEncryptedComments(deps: CommentDeps): EncryptedComments {
   }
 
   return {
-    async list(projectId, ownerUserId) {
+    async list(projectId, ownerUserId, visitors = []) {
       const { logs, warnings } = await read(projectId);
       return {
-        comments: mergeCommentLogs(logs, ownerUserId),
+        comments: mergeCommentLogs(logs, ownerUserId, visitors),
         warning: warnings.length ? warnings.join(' ') : null
       };
     },
@@ -377,12 +379,17 @@ export function createEncryptedComments(deps: CommentDeps): EncryptedComments {
           'A comment needs 1 to 2000 characters of text.'
         );
       if (input.parentId !== undefined) {
-        const { comments } = await this.list(projectId, ownerUserId);
-        const thread = comments.find(
-          (comment) => comment.commentId === input.parentId
-        );
-        if (!thread || thread.parentId !== null)
-          throw new ApiError(400, 'Reply to a thread of this project.');
+        // A reply to a commenter-link visitor's thread (L08, decision 2):
+        // that thread is not in the members' logs, so it is not looked up
+        // here; the merge drops the reply if the thread is gone.
+        if (!input.parentId.startsWith('lcm_')) {
+          const { comments } = await this.list(projectId, ownerUserId);
+          const thread = comments.find(
+            (comment) => comment.commentId === input.parentId
+          );
+          if (!thread || thread.parentId !== null)
+            throw new ApiError(400, 'Reply to a thread of this project.');
+        }
       } else if (!input.anchor) {
         throw new ApiError(400, 'A new thread needs a point on the model.');
       }

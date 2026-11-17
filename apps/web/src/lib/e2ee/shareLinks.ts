@@ -58,6 +58,7 @@ import {
   encryptProjectEnvelope,
   epochBinding,
   fromBase64Url,
+  verifyShareCommentGrant,
   fromHex,
   openShareKey,
   shareKeyHash,
@@ -89,6 +90,8 @@ import {
   type E2eeShareLinkRecord,
   type E2eeShareLinksApi,
   type E2eeShareLinksResponse,
+  type E2eeSignedStatement,
+  type ProjectComment,
   type ProjectDocument
 } from '@openzcad/shared';
 import type { BlobReferenceRegistry } from './blobReferences';
@@ -116,6 +119,7 @@ import {
   type ShareRemovalNotice
 } from './shareWorkStore';
 import { getKeySessionRevision } from './keySession';
+import { openShareComments, signLinkCommentGrant } from './shareComments';
 import {
   shareLinkToken,
   shareLinkTokenHash,
@@ -142,7 +146,9 @@ export type ShareLinksErrorCode =
   | 'link-not-found'
   | 'key-unavailable'
   /** Tombstoned in the project; the server did not confirm forgetting it. */
-  | 'revocation-pending';
+  | 'revocation-pending'
+  /** L08: this server does not take comments on encrypted links. */
+  | 'unavailable';
 
 export class ShareLinksError extends Error {
   override readonly name = 'ShareLinksError';
@@ -1944,4 +1950,148 @@ export async function shareLinksAfterDeviceRemoval(
   );
   if (owner !== ctx.groups.account.userId) return null;
   return issueShareAuthorities(ctx, removal.projectId, { head });
+}
+
+// --- L08 commenter links (plan decisions 2 and 3a) --------------------------
+
+/**
+ * The owner lets a link's visitors comment: an owner-signed comment grant
+ * the server keeps beside the link (never a link-grant mode, which older
+ * builds would refuse inside the document).
+ */
+export async function allowShareLinkComments(
+  ctx: ShareLinksContext,
+  projectId: string,
+  link: { readonly shareId: string; readonly shareKey: Uint8Array }
+): Promise<void> {
+  if (!ctx.api.putCommentGrant) {
+    throw new ShareLinksError(
+      'unavailable',
+      'Comments on encrypted links are not available on this server.'
+    );
+  }
+  const { device, record: own } = requireDevice(ctx);
+  const grant = await signLinkCommentGrant({
+    ownerDeviceKey: device.signing.privateKey,
+    ownerDeviceKeyHash: own.signingKeyHash,
+    projectId,
+    shareId: link.shareId,
+    shareKey: link.shareKey,
+    now: nowOf(ctx)
+  });
+  await ctx.api.putCommentGrant(projectId, link.shareId, grant);
+}
+
+/**
+ * The project's active links whose comment grant one of the owner's current
+ * devices signed (as this member's pinned list certifies them): the links
+ * that take comments. A grant signed by a device since removed no longer
+ * counts until the owner signs again (`allowShareLinkCommentsById`).
+ */
+export async function commentingShareLinks(
+  ctx: ShareLinksContext,
+  projectId: string,
+  grants?: readonly { shareId: string; grant: E2eeSignedStatement }[]
+): Promise<Set<string>> {
+  const taking = new Set<string>();
+  const listed =
+    grants ?? (await ctx.api.shareComments?.(projectId))?.grants ?? [];
+  if (!listed.length) return taking;
+  const head = await ctx.store.shareHead(projectId);
+  const owner = await projectOwnerOf(ctx.groups, projectId, head.keyEpoch);
+  const ownerList = owner
+    ? await ownerDeviceList(ctx.groups, projectId, owner)
+    : null;
+  const ownerKeys = (ownerList?.devices ?? []).map((d) => d.signingKey);
+  for (const link of head.shareLinks?.links ?? []) {
+    const grant = listed.find((g) => g.shareId === link.shareId);
+    if (!grant) continue;
+    try {
+      await verifyShareCommentGrant(
+        {
+          statement: fromBase64Url(grant.grant.statement),
+          signature: fromBase64Url(grant.grant.signature)
+        },
+        { projectId, shareId: link.shareId, shareKeyHash: link.shareKeyHash },
+        ownerKeys
+      );
+      taking.add(link.shareId);
+    } catch {
+      // Not a grant the owner's current devices signed.
+    }
+  }
+  return taking;
+}
+
+/**
+ * The owner lets an existing link's visitors comment, or signs its grant
+ * again after the device that signed it was removed.
+ */
+export async function allowShareLinkCommentsById(
+  ctx: ShareLinksContext,
+  projectId: string,
+  shareId: string
+): Promise<void> {
+  const head = await ctx.store.shareHead(projectId);
+  const link = (head.shareLinks?.links ?? []).find(
+    (candidate) => candidate.shareId === shareId
+  );
+  const record = (await ctx.api.list(projectId)).links.find(
+    (candidate) => candidate.shareId === shareId
+  );
+  if (!link || !record || !record.keys.length) {
+    throw new ShareLinksError(
+      'link-not-found',
+      'This share link does not exist.'
+    );
+  }
+  const shareKey = await shareKeyFor(
+    ctx,
+    projectId,
+    shareId,
+    link.shareKeyHash,
+    record,
+    Math.max(...record.keys.map((k) => k.keyEpoch))
+  );
+  await allowShareLinkComments(ctx, projectId, { shareId, shareKey });
+}
+
+/**
+ * Every commenter link's visitor comments a member can open: links in the
+ * project's active set whose share key this member holds and whose comment
+ * grant is signed by one of the owner's devices as the member's pinned
+ * list certifies them. Comments of any other link are left out, and
+ * counted.
+ */
+export async function listShareLinkComments(
+  ctx: ShareLinksContext,
+  projectId: string
+): Promise<{ comments: ProjectComment[]; leftOut: number }> {
+  if (!ctx.api.shareComments) return { comments: [], leftOut: 0 };
+  const answer = await ctx.api.shareComments(projectId);
+  if (!answer.comments.length) return { comments: [], leftOut: 0 };
+  const taking = await commentingShareLinks(ctx, projectId, answer.grants);
+  const head = await ctx.store.shareHead(projectId);
+  const listed = await ctx.api.list(projectId);
+  const keys = new Map<string, Uint8Array>();
+  for (const link of head.shareLinks?.links ?? []) {
+    const record = listed.links.find((l) => l.shareId === link.shareId);
+    if (!taking.has(link.shareId) || !record || !record.keys.length) continue;
+    try {
+      keys.set(
+        link.shareId,
+        await shareKeyFor(
+          ctx,
+          projectId,
+          link.shareId,
+          link.shareKeyHash,
+          record,
+          Math.max(...record.keys.map((k) => k.keyEpoch))
+        )
+      );
+    } catch {
+      // A link whose key this member cannot open: its comments stay out.
+    }
+  }
+  return openShareComments(projectId, answer.comments, keys);
 }
