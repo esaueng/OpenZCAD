@@ -1,0 +1,222 @@
+/* ── L08 review comments: the pins over the model and the side panel ── */
+
+/* A thread's pin, centred on its point; the HUD places it every frame. */
+.comment-pin {
+  position: absolute;
+  z-index: calc(var(--z-viewer-overlay) + 1);
+  display: grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  color: var(--color-on-accent);
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  line-height: 1;
+  background: var(--color-accent);
+  border: 2px solid var(--color-surface);
+  border-radius: 11px 11px 11px 2px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transform: translate(0, -100%);
+  cursor: pointer;
+  user-select: none;
+  /* The HUD layer passes presses to the stage; a pin takes its own. */
+  pointer-events: auto;
+}
+
+.comment-pin.is-resolved {
+  color: var(--color-text-muted);
+  background: var(--color-surface-raised);
+  border-color: var(--color-border-strong);
+}
+
+.comment-pin.is-active {
+  outline: 2px solid var(--color-accent-hi);
+  outline-offset: 1px;
+}
+
+.comment-pin:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.comments-panel {
+  position: fixed;
+  top: 64px;
+  right: 16px;
+  z-index: var(--z-panel-float);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: var(--sp-2);
+  width: min(340px, calc(100vw - 32px));
+  max-height: calc(100dvh - 160px);
+  overflow-y: auto;
+  padding: var(--sp-3);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+}
+
+.comments-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.comments-panel-head h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  font-size: var(--fs-base);
+}
+
+.comments-count {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+
+.comments-note {
+  margin: 0;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.comments-add {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: var(--sp-1);
+}
+
+.comment-composer {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.comment-composer textarea {
+  width: 100%;
+  min-height: 52px;
+  padding: var(--sp-1) var(--sp-2);
+  color: var(--color-text);
+  font: inherit;
+  resize: vertical;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.comment-composer-actions,
+.comment-thread-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+}
+
+.comment-threads,
+.comment-replies {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.comment-thread {
+  display: grid;
+  gap: 2px;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+}
+
+.comment-thread.is-active {
+  background: var(--color-surface-raised);
+  border-color: var(--color-border);
+}
+
+.comment-thread.is-resolved .comment-thread-text {
+  color: var(--color-text-muted);
+}
+
+.comment-thread-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.comment-number {
+  display: grid;
+  flex: none;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  color: var(--color-on-accent);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  background: var(--color-accent);
+  border-radius: 10px 10px 10px 2px;
+}
+
+.comment-thread-text,
+.comment-reply-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.comment-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.comment-thread-body {
+  display: grid;
+  gap: var(--sp-2);
+  padding-top: var(--sp-1);
+}
+
+.comment-reply {
+  padding-left: var(--sp-3);
+  border-left: 2px solid var(--color-border);
+}
+
+.comment-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 24px;
+  padding: 0 6px;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--fs-xs);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.comment-action:hover {
+  color: var(--color-text);
+  background: var(--color-surface-raised);
+  border-color: var(--color-border);
+}

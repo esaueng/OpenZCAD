@@ -1,3 +1,4 @@
+import { isProjectCommentStorageReady } from './projectComments';
 /**
  * Moving an existing plaintext project to encrypted storage (ADR-024 Phase
  * 7, slice 7-1; roadmap L11), under `/api/e2ee/projects/:id/migration…`.
@@ -1959,7 +1960,21 @@ async function purgeStep(
       };
     }
     case 'records': {
+      // L08: a plaintext project's review comments are plaintext the
+      // account must not keep once the project is encrypted (ADR-024).
+      // Encrypted comments are not offered yet, so they are not carried.
+      const comments = (await isProjectCommentStorageReady(db))
+        ? [
+            db
+              .prepare(
+                `DELETE FROM project_comments
+                 WHERE project_id = ? AND ${PURGING_FENCE}`
+              )
+              .bind(projectId, projectId)
+          ]
+        : [];
       const results = await runBatch(db, [
+        ...comments,
         db
           .prepare(
             `DELETE FROM project_measurements

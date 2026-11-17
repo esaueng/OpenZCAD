@@ -154,5 +154,6 @@
   "windowed-panels.spec.ts": 60,
   "workspace-empty-state.spec.ts": 8,
   "workspace-tour.spec.ts": 7,
-  "save-state-versions.spec.ts": 12
+  "save-state-versions.spec.ts": 12,
+  "project-comments.spec.ts": 14
 }

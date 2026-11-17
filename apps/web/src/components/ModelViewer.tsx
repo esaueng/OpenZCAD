@@ -287,6 +287,7 @@ import {
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 import { isBehindCamera } from '../lib/cameraDepth';
+import { commentPlacementTarget } from '../lib/commentPlacement';
 import {
   chipPanelDodge,
   edgeChipCenterX,
@@ -1041,6 +1042,18 @@ let analysisOverlayModule: Promise<AnalysisOverlayModule> | undefined;
 const loadAnalysisOverlay = () =>
   (analysisOverlayModule ??= import('@openzcad/viewport/analysis-overlay'));
 
+/** L08: a review comment's pin, drawn at its point on the model. */
+export interface CommentPin {
+  id: string;
+  /** The thread's number, printed on the pin. */
+  label: string;
+  /** What a screen reader hears for the pin. */
+  description: string;
+  point: Vector3;
+  resolved?: boolean;
+  active?: boolean;
+}
+
 export interface ModelViewerProps {
   parameterVisualPreview?: ParameterVisualPreview | null;
   bodies: GeometryBodyRepresentation[];
@@ -1406,6 +1419,15 @@ export interface ModelViewerProps {
    */
   placementPlane?: { origin: Vector3; normal: Vector3 } | null;
   onPlacementClick?(point: Vector3): void;
+  /** L08: review comment pins; a press on one reports its id. */
+  commentPins?: readonly CommentPin[];
+  onCommentPinClick?(id: string): void;
+  /**
+   * L08: a comment is being placed. A press reports only the body surface
+   * under it, through `onSelectTopology`; no sketch, region, plane or
+   * placement handler sees it.
+   */
+  commentPlacing?: boolean;
   /**
    * U09: a primitive placed by a press-drag. A press on a flat face of one of
    * `bodyIds` draws on that face's plane, anywhere else on the ground (or
@@ -2489,6 +2511,9 @@ export function ModelViewer({
   onPickDatum,
   placementPlane = null,
   onPlacementClick,
+  commentPins,
+  onCommentPinClick,
+  commentPlacing = false,
   onMeasurePreview,
   regionHandle,
   modelPanelsHidden = false,
@@ -2873,6 +2898,19 @@ export function ModelViewer({
   placementPlaneRef.current = placementPlane;
   const onPlacementClickRef = useRef(onPlacementClick);
   onPlacementClickRef.current = onPlacementClick;
+  const onCommentPinClickRef = useRef(onCommentPinClick);
+  onCommentPinClickRef.current = onCommentPinClick;
+  const commentPlacingRef = useRef(commentPlacing);
+  commentPlacingRef.current = commentPlacing;
+  /** Places a comment under a press; set when the viewer mounts. */
+  const placeCommentRef = useRef<((event: PointerEvent) => void) | null>(null);
+  const updateCommentPinsRef = useRef<(() => void) | null>(null);
+  /** Makes one comment pin on the HUD; set when the viewer mounts. */
+  const commentPinFactoryRef = useRef<(() => HTMLDivElement) | null>(null);
+  /** L08 comment pins, each placed at its point every frame. */
+  const commentPinsRef = useRef<
+    { id: string; element: HTMLDivElement; origin: THREE.Vector3 }[]
+  >([]);
   const planePickerOffsetRef = useRef(planePickerOffset);
   planePickerOffsetRef.current = planePickerOffset;
   const datumPlaneRigRef = useRef<DatumPlaneRig | null>(null);
@@ -5045,6 +5083,30 @@ export function ModelViewer({
       return chip;
     };
     axisLabelFactoryRef.current = () => hud.create('axis-pick-label');
+    commentPinFactoryRef.current = () => hud.create('comment-pin');
+    /** Sets each comment pin on its point; hides one behind the camera. */
+    function updateCommentPins() {
+      const pins = commentPinsRef.current;
+      if (pins.length === 0) return;
+      const camera = context.activeCamera;
+      const width = canvasWidth();
+      const height = canvasHeight();
+      for (const pin of pins) {
+        if (isBehindCamera(pin.origin, camera)) {
+          pin.element.hidden = true;
+          continue;
+        }
+        const ndc = pin.origin.clone().project(camera);
+        const x = ((ndc.x + 1) / 2) * width;
+        const y = ((1 - ndc.y) / 2) * height;
+        if (x < 0 || y < 0 || x > width || y > height) {
+          pin.element.hidden = true;
+          continue;
+        }
+        hud.showAt(pin.element, x, y);
+      }
+    }
+    updateCommentPinsRef.current = updateCommentPins;
     /**
      * Sets each axis name tag a little way along its own line from the
      * line's origin, on whichever side stays on the canvas; hides it behind
@@ -7390,6 +7452,33 @@ export function ModelViewer({
       );
     }
 
+    /**
+     * L08: places a comment on the nearest body surface among `stack`
+     * (`commentPlacementTarget`), reported through `onSelectTopology`;
+     * nothing else under the press acts.
+     */
+    function placeComment(stack: ReturnType<typeof picker.pickAll>) {
+      const surface = commentPlacementTarget(stack);
+      if (!surface) return;
+      onSelectTopologyRef.current(surface.selection, false, {
+        point: {
+          x: surface.hit.point.x,
+          y: surface.hit.point.y,
+          z: surface.hit.point.z
+        },
+        ...(surface.faceNormal
+          ? {
+              normal: {
+                x: surface.faceNormal.x,
+                y: surface.faceNormal.y,
+                z: surface.faceNormal.z
+              }
+            }
+          : {})
+      });
+    }
+    placeCommentRef.current = (event) => placeComment(picker.pickAll(event));
+
     function selectAtPointer(event: PointerEvent) {
       // The release that got here was a click, not the end of a gesture.
       gestureReleases[1] = false;
@@ -7407,6 +7496,13 @@ export function ModelViewer({
       );
       depthCycle = stepped.cycle;
       const result = stepped.candidate;
+      // L08: placing a comment takes the nearest body surface under the
+      // press and nothing else: no sketch profile, region, ghost plane,
+      // datum or placement plane may act on it.
+      if (commentPlacingRef.current) {
+        placeComment(stack);
+        return;
+      }
       // A ghost plane starts the sketch instead, even through a face in
       // front of it: it is armed precisely to be clicked, and it sits where
       // a part at the origin usually is (see ghostPlaneTakesPick).
@@ -12600,7 +12696,24 @@ export function ModelViewer({
     let penLiftedAt = Number.NEGATIVE_INFINITY;
     /** Fingers ignored until they lift: palms, and touches a pen displaced. */
     const rejectedTouches = new Set<number>();
+    /** The press that placed a comment, whose release is consumed too. */
+    let placementPointerId: number | null = null;
     const routePointerDown = (event: PointerEvent) => {
+      // L08: while a comment is being placed the primary press is the
+      // placement and nothing else: no handle, box selection, orbit or
+      // click selection starts from it. A touch tap reaches the same
+      // placement through `selectAtPointer`.
+      if (
+        commentPlacingRef.current &&
+        event.pointerType !== 'touch' &&
+        event.button === 0
+      ) {
+        event.stopImmediatePropagation();
+        event.preventDefault();
+        placementPointerId = event.pointerId;
+        placeCommentRef.current?.(event);
+        return;
+      }
       if (event.pointerType === 'pen') {
         penSeen = true;
         penPointerId = event.pointerId;
@@ -12636,6 +12749,11 @@ export function ModelViewer({
       return rejectedTouches.delete(event.pointerId);
     };
     const routePointerUp = (event: PointerEvent) => {
+      if (event.pointerId === placementPointerId) {
+        placementPointerId = null;
+        event.stopImmediatePropagation();
+        return;
+      }
       if (releaseRejected(event)) return;
       if (!touchNavigation.up(event)) {
         handlePointerUp(event);
@@ -12966,6 +13084,7 @@ export function ModelViewer({
       // of its own: the command's anchor has to be the frame's last word.
       updateCommandChips();
       updateAxisLabels();
+      updateCommentPinsRef.current?.();
       // Read the current presentation after every preview has posed its meshes.
       // Reuse the body's bounds for the scale bar, then include sketches in the
       // camera range without letting grids, axes or HUD decorations set it.
@@ -15789,6 +15908,57 @@ export function ModelViewer({
     }
     contextRef.current?.requestRender();
   }, [selectedAxisId, axisPickerKey]);
+
+  // L08 comment pins: rebuilt when the set of pins or their state changes,
+  // placed every frame by `updateCommentPins`.
+  const commentPinsKey = (commentPins ?? [])
+    .map(
+      (pin) =>
+        `${pin.id}:${pin.label}:${pin.point.x},${pin.point.y},${pin.point.z}:${pin.resolved ? 1 : 0}${pin.active ? 1 : 0}:${pin.description}`
+    )
+    .join('|');
+  const commentPinsPropRef = useRef(commentPins);
+  commentPinsPropRef.current = commentPins;
+  useEffect(() => {
+    const context = contextRef.current;
+    const makePin = commentPinFactoryRef.current;
+    if (!context || !makePin) return;
+    const pins = (commentPinsPropRef.current ?? []).map((pin) => {
+      const element = makePin();
+      element.textContent = pin.label;
+      element.setAttribute('role', 'button');
+      element.setAttribute('aria-label', pin.description);
+      element.tabIndex = 0;
+      element.dataset.commentId = pin.id;
+      element.classList.toggle('is-resolved', Boolean(pin.resolved));
+      element.classList.toggle('is-active', Boolean(pin.active));
+      const open = (event: Event) => {
+        event.stopPropagation();
+        onCommentPinClickRef.current?.(pin.id);
+      };
+      element.addEventListener('pointerdown', (event) =>
+        event.stopPropagation()
+      );
+      element.addEventListener('click', open);
+      element.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        open(event);
+      });
+      return {
+        id: pin.id,
+        element,
+        origin: new THREE.Vector3(pin.point.x, pin.point.y, pin.point.z)
+      };
+    });
+    commentPinsRef.current = pins;
+    context.requestRender();
+    return () => {
+      for (const pin of pins) pin.element.remove();
+      if (commentPinsRef.current === pins) commentPinsRef.current = [];
+      context.requestRender();
+    };
+  }, [commentPinsKey]);
 
   // U09 command handles: each built per key and disposed with it; a key
   // that survives keeps its rig, so a value change never rebuilds one. A
