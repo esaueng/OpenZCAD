@@ -303,7 +303,7 @@ describe('ObjectsPanel', () => {
   });
 
   it('keeps a brief rebuild quiet without claiming the model is empty', () => {
-    renderPanel({ geometryPending: true, geometryPendingShown: false });
+    renderPanel({ geometryPending: true });
     expect(screen.queryByText('Preparing model details…')).toBeNull();
     expect(
       screen.queryByText(

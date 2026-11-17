@@ -473,7 +473,9 @@ test('reuses an exact frame on reversal and waits for complete validation on rel
   // While the release validates, the open Objects panel must disclose the
   // preview's incomplete analysis.
   await revealModelPanel(page, 'Objects');
-  await expect(page.getByText('Preparing model details…')).toBeVisible();
+  await expect(
+    page.getByRole('status', { name: 'Preparing model details…' })
+  ).toBeVisible();
   await expect(page.getByRole('contentinfo')).not.toContainText(
     'Cylinder height set to 31 mm.'
   );
@@ -492,7 +494,9 @@ test('reuses an exact frame on reversal and waits for complete validation on rel
   );
   await expect(chip).toBeVisible();
   await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
-  await expect(page.getByText('Preparing model details…')).toBeHidden();
+  await expect(
+    page.getByRole('status', { name: 'Preparing model details…' })
+  ).toBeHidden();
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect
     .poll(readAxisLength, { timeout: PREVIEW_BUDGET_MS })
@@ -1458,7 +1462,9 @@ for (const surface of ['top-cap', 'wall'] as const) {
       .toBe(1);
     expect(await fullRequests()).toBe(fullBefore + 1);
     await revealModelPanel(page, 'Objects');
-    await expect(page.getByText('Preparing model details…')).toBeVisible();
+    await expect(
+      page.getByRole('status', { name: 'Preparing model details…' })
+    ).toBeVisible();
     // The preview cannot change history before the complete worker result.
     await revealModelPanel(page, 'History');
     await expect(page.locator('.feature-row')).toHaveCount(2);
@@ -1468,7 +1474,9 @@ for (const surface of ['top-cap', 'wall'] as const) {
         window as typeof window & { facePreviewGate: FacePreviewGate }
       ).facePreviewGate.releaseFinal()
     );
-    await expect(page.getByText('Preparing model details…')).toBeHidden();
+    await expect(
+      page.getByRole('status', { name: 'Preparing model details…' })
+    ).toBeHidden();
     await expect(page.getByRole('contentinfo')).toContainText(
       surface === 'wall' ? 'Adjusted cylinder diameter' : 'height set'
     );
