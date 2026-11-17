@@ -207,12 +207,13 @@ async function sampleShoulderColumn(page: Page): Promise<ColumnSample[]> {
   // The front view looks along +Y. A point just inside the wall at x = 6,
   // clear of the Z axis drawn through the middle, lands on the wall facing
   // the camera whichever of the draft, blend or chamfer surfaces is there
-  // (the chamfer cone lies inside the draft one); x = -40 is open stage.
+  // (the chamfer cone lies inside the draft one); x = 40 is open stage (to
+  // the left, x = -40 lands under the Tools panel's list on this layout).
   const points = heights.flatMap((z) => {
     const draftRadius = BOTTOM_RADIUS + z * TAN_DRAFT;
     return [
       [6, -Math.sqrt(draftRadius ** 2 - 36) + 1.5, z],
-      [-40, 0, z]
+      [40, 0, z]
     ];
   });
   const screen = await canvas.evaluate(
