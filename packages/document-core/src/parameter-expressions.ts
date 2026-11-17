@@ -266,6 +266,9 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
     case 'thicken':
       fields(data, ['thickness'], rewrite, 'length');
       return;
+    case 'rib':
+      fields(data, ['thickness'], rewrite, 'length');
+      return;
     case 'solid-offset':
       fields(data, ['distance'], rewrite, 'length');
       return;

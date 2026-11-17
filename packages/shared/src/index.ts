@@ -417,7 +417,9 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // X/Y/Z, and Moves aligned from one system onto another. An older client
 // cannot resolve any of them, so it must refuse. Builds on v98 (v95 and v97
 // were left unused when I02 and D07 landed first).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 99 as const;
+// v101 adds M06 ribs (`rib` features): an older client cannot build one, so
+// it must refuse. Builds on v99 (v100 is claimed by D07's #1737).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 101 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -476,6 +478,7 @@ export type FeatureKind =
   | 'mirror'
   | 'shell'
   | 'solid-offset'
+  | 'rib'
   | 'draft'
   | 'thicken'
   | 'fillet'
@@ -2814,6 +2817,32 @@ export type FeatureData =
       targetBodyId: BodyId;
       /** Positive values offset every face outward. */
       distance: ParamValue;
+    }
+  | {
+      /**
+       * M06 (schema v101): a rib or web from an open profile, joined to the
+       * body it braces. `parallel` fills from the profile to the body within
+       * the sketch plane, its thickness across the plane; `normal` thickens
+       * the profile within the plane and runs it along the sketch normal
+       * until it meets the body. The material is exactly the region the
+       * profile and the body close off: one that never closes (the profile
+       * does not reach the body) is refused by name, never extended to a
+       * guess.
+       */
+      featureKind: 'rib';
+      targetBodyId: BodyId;
+      /** An open chain of lines and arcs in one sketch. */
+      profile: SketchPathReference;
+      thickness: ParamValue;
+      /** Where the thickness lies: about the profile, or wholly to a side. */
+      thicknessSide: 'symmetric' | 'first' | 'second';
+      direction: 'parallel' | 'normal';
+      /**
+       * Absent: the side of the profile (`parallel`) or the way along the
+       * sketch normal (`normal`) that closes against the body, the left or
+       * along the normal when both do. True: the other one.
+       */
+      flip?: boolean;
     }
   | {
       featureKind: 'draft';
@@ -6509,6 +6538,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   mirror: '#a78bfa',
   shell: '#14b8a6',
   'solid-offset': '#06b6d4',
+  rib: '#0e7490',
   draft: '#0d9488',
   thicken: '#0891b2',
   fillet: '#f59e0b',

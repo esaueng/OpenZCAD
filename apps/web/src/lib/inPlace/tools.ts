@@ -108,6 +108,7 @@ export type InPlaceToolId =
   | 'bend'
   | 'standard-part'
   | 'shell'
+  | 'rib'
   | 'thicken'
   | 'solid-offset'
   | 'draft'
@@ -144,6 +145,7 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'bend',
   'standard-part',
   'shell',
+  'rib',
   'thicken',
   'solid-offset',
   'draft',
@@ -463,6 +465,11 @@ export interface InPlaceContext {
    * a pattern on sketch points; empty when the sketch has none.
    */
   sketchPoints?(sketchId: SketchId): readonly SketchPointSpot[];
+  /** M06: a sketch curve's middle in the world and its plane's normal. */
+  curveMiddle?(
+    sketchId: SketchId,
+    entityId: string
+  ): { at: Vector3; normal: Vector3 } | null;
   /**
    * M17 (schema v71): an M01 hole feature's stored data and its entry
    * face's outward normal, for a part inserted into it; null when the
@@ -544,6 +551,16 @@ export type InPlaceRequest =
       guide?: { sketchId: SketchId; entityIds: string[] };
       /** See the sweep `FeatureData`; absent is the legacy sampled sweep. */
       construction?: 'in-place';
+    }
+  | {
+      /** M06 (schema v101): a rib from an open profile, joined to a body. */
+      tool: 'rib';
+      targetBodyId: BodyId;
+      profile: { sketchId: SketchId; entityIds: string[] };
+      thickness: ParamValue;
+      thicknessSide: 'symmetric' | 'first' | 'second';
+      direction: 'parallel' | 'normal';
+      flip?: true;
     }
   | {
       tool: 'helical-sweep';
@@ -4040,6 +4057,115 @@ const shell: InPlaceToolSpec = {
   handles: (slots) => normalHandle('thickness', slots.faces[0], -1)
 };
 
+/**
+ * M06 (schema v101): Rib in place. Its profile is clicks on sketch curves
+ * (an open chain of lines and arcs), the body it braces a body click; the
+ * thickness drags along the sketch's normal from the profile's middle.
+ * `parallel` fills from the profile to the body in the sketch plane;
+ * `normal` runs the thickened profile along the sketch normal to the body.
+ */
+const rib: InPlaceToolSpec = {
+  id: 'rib',
+  title: 'Rib',
+  profileMode: 'none',
+  bodyMode: 'one',
+  wantsAxis: false,
+  wantsPath: true,
+  values: [
+    {
+      id: 'thickness',
+      label: 'Thickness',
+      unit: 'length',
+      initial: 2,
+      min: 0,
+      exclusive: true
+    }
+  ],
+  options: [
+    {
+      id: 'direction',
+      label: 'Fills',
+      choices: [
+        {
+          value: 'parallel',
+          label: 'In the plane',
+          tip: 'From the profile to the body, across the sketch plane'
+        },
+        {
+          value: 'normal',
+          label: 'Along the normal',
+          tip: 'The thickened profile runs along the sketch normal to the body'
+        }
+      ],
+      initial: 'parallel'
+    },
+    {
+      id: 'side',
+      label: 'Thickness',
+      choices: [
+        { value: 'symmetric', label: 'Centred' },
+        { value: 'first', label: 'One side' },
+        { value: 'second', label: 'Other side' }
+      ],
+      initial: 'symmetric'
+    },
+    {
+      id: 'flip',
+      label: 'Side',
+      choices: [
+        {
+          value: 'as-drawn',
+          label: 'Closing',
+          tip: 'The side or way that closes against the body'
+        },
+        { value: 'flipped', label: 'Other', tip: 'The other side or way' }
+      ],
+      initial: 'as-drawn'
+    }
+  ],
+  hint(slots) {
+    if (slots.path.length === 0) return 'Pick the rib profile curves';
+    if (slots.bodies.length === 0)
+      return `Profile of ${slots.path.length} · click the body to brace`;
+    return `Profile of ${slots.path.length} · drag the thickness`;
+  },
+  ready: (slots) => slots.path.length > 0 && slots.bodies.length > 0,
+  request(slots, values, options) {
+    const first = slots.path[0];
+    const body = slots.bodies[0];
+    if (!first || !body) return null;
+    return {
+      tool: 'rib',
+      targetBodyId: body.bodyId,
+      profile: {
+        sketchId: first.sketchId,
+        entityIds: slots.path.map((curve) => curve.entityId)
+      },
+      thickness: values.thickness ?? 2,
+      thicknessSide:
+        options.side === 'first' || options.side === 'second'
+          ? options.side
+          : 'symmetric',
+      direction: options.direction === 'normal' ? 'normal' : 'parallel',
+      ...(options.flip === 'flipped' ? { flip: true as const } : {})
+    };
+  },
+  handles(slots, _values, ctx) {
+    const first = slots.path[0];
+    if (!first) return [];
+    const middle = ctx.curveMiddle?.(first.sketchId, first.entityId);
+    if (!middle) return [];
+    return [
+      {
+        valueId: 'thickness',
+        kind: 'linear',
+        key: `rib:${first.sketchId}:${first.entityId}:${middle.at.x}:${middle.at.y}:${middle.at.z}`,
+        params: { origin: middle.at, direction: unit(middle.normal) }
+      }
+    ];
+  }
+};
+
 const thicken: InPlaceToolSpec = {
   id: 'thicken',
   title: 'Thicken',
@@ -6497,6 +6623,7 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   bend: bendSpec,
   'standard-part': standardPartSpec,
   shell,
+  rib,
   thicken,
   'solid-offset': solidOffset,
   draft,

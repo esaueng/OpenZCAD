@@ -126,6 +126,53 @@ export function sketchPointSpots(
   });
 }
 
+/**
+ * M06: where a sketch line or arc's middle stands in the world, and its
+ * sketch plane's normal, for a handle placed on a rib's profile. Null for
+ * another curve or one whose values do not resolve.
+ */
+export function sketchCurveMiddle(
+  document: ProjectDocument,
+  views: readonly { sketchId: string; basis: PlaneBasis }[],
+  sketchId: SketchId,
+  entityId: string,
+  resolve: (value: unknown) => number
+): { at: Vector3; normal: Vector3 } | null {
+  const view = views.find((candidate) => candidate.sketchId === sketchId);
+  const node = ownEntry(document.nodes, entityId);
+  if (!view || node?.kind !== 'sketch-object') return null;
+  const { basis } = view;
+  let x: number;
+  let y: number;
+  try {
+    const data = node.data;
+    if (data.objectKind === 'line') {
+      x = (resolve(data.x1) + resolve(data.x2)) / 2;
+      y = (resolve(data.y1) + resolve(data.y2)) / 2;
+    } else if (data.objectKind === 'arc') {
+      const a0 = (resolve(data.startAngleDeg) * Math.PI) / 180;
+      let a1 = (resolve(data.endAngleDeg) * Math.PI) / 180;
+      if (a1 < a0) a1 += 2 * Math.PI;
+      const mid = (a0 + a1) / 2;
+      x = resolve(data.centerX) + resolve(data.radius) * Math.cos(mid);
+      y = resolve(data.centerY) + resolve(data.radius) * Math.sin(mid);
+    } else {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return {
+    at: {
+      x: basis.origin.x + basis.u.x * x + basis.v.x * y,
+      y: basis.origin.y + basis.u.y * x + basis.v.y * y,
+      z: basis.origin.z + basis.u.z * x + basis.v.z * y
+    },
+    normal: { ...basis.normal }
+  };
+}
+
 /** Half the side of the square a point is picked by, in model units. */
 const POINT_PICK_HALF = 1;
 

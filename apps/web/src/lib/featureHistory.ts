@@ -156,6 +156,10 @@ export function featureHistory(document: ProjectDocument) {
         body(data.targetBodyId);
         if (isDatumPlaneRef(data.plane)) datum(data.plane.datumFeatureId);
         break;
+      case 'rib':
+        sketch(data.profile.sketchId);
+        body(data.targetBodyId);
+        break;
       case 'hole':
       case 'transform':
       case 'shell':

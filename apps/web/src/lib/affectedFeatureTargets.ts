@@ -53,6 +53,7 @@ const HANDLED_FEATURE_KINDS: ReadonlySet<FeatureKind> = new Set<FeatureKind>([
   'mirror',
   'shell',
   'solid-offset',
+  'rib',
   'draft',
   'thicken',
   'fillet',
@@ -294,6 +295,11 @@ export function affectedFeatureTargets(
           affectedBodies.has(data.targetBodyId) ||
           (isDatumPlaneRef(data.plane) &&
             affectedDatums.has(data.plane.datumFeatureId));
+        break;
+      case 'rib':
+        affected =
+          affectedBodies.has(data.targetBodyId) ||
+          affectedSketches.has(data.profile.sketchId);
         break;
       case 'hole':
       case 'transform':

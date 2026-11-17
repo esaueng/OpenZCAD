@@ -317,6 +317,8 @@ import {
   setSketchDimensionLabelPosition,
   shellBody,
   type ShellInput,
+  ribBody,
+  type RibInput,
   type ShaprGuidedImportInput,
   type SketchConstraintAddInput,
   type SketchConstraintDeleteInput,
@@ -415,6 +417,7 @@ export type CommandKind =
   | 'feature.standard-part'
   | 'feature.thread'
   | 'feature.shell'
+  | 'feature.rib'
   | 'feature.solid-offset'
   | 'feature.draft'
   | 'feature.thicken'
@@ -2262,6 +2265,20 @@ function validateShellInput(
   }
 }
 
+/** M06: a rib braces an existing body with a positive thickness. */
+function validateRibInput(document: ProjectDocument, input: RibInput): void {
+  validateBodyTarget(document, input.targetBodyId);
+  validatePositiveModelingValue(document, 'Rib thickness', input.thickness);
+  const sketch = findSketch(document, input.profile.sketchId);
+  if (!sketch) throw new Error('The rib profile sketch no longer exists.');
+  if (
+    input.profile.entityIds.length === 0 ||
+    input.profile.entityIds.some((id) => !sketch.objectIds.includes(id))
+  ) {
+    throw new Error('The rib profile names a curve its sketch does not hold.');
+  }
+}
+
 function validateModelingFeatureUpdate(
   document: ProjectDocument,
   input: FeatureUpdateInput
@@ -2480,6 +2497,11 @@ function validateModelingFeatureUpdate(
         thickness: feature.data.thickness
       });
       break;
+    case 'rib': {
+      const { featureKind: _kind, ...rib } = feature.data;
+      validateRibInput(preview, { name: feature.name, ...rib });
+      break;
+    }
     case 'solid-offset':
       validateBodyTarget(preview, feature.data.targetBodyId);
       validatePositiveModelingValue(
@@ -3138,6 +3160,16 @@ export const commandFactories = {
       withIds,
       (document) => threadBody(document, withIds).document,
       (document) => validateThreadInput(document, withIds)
+    );
+  },
+  ribBody(payload: RibInput): CommandDefinition<RibInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.rib',
+      'Add rib',
+      withIds,
+      (document) => ribBody(document, withIds).document,
+      (document) => validateRibInput(document, withIds)
     );
   },
   shellBody(payload: ShellInput): CommandDefinition<ShellInput> {
@@ -4393,6 +4425,7 @@ class LocalBodyScope {
           break;
         case 'shell':
         case 'solid-offset':
+        case 'rib':
         case 'draft':
         case 'fillet':
         case 'chamfer':
@@ -6597,6 +6630,9 @@ export function replayCommands(
         break;
       case 'feature.shell':
         next = shellBody(next, command.payload as ShellInput).document;
+        break;
+      case 'feature.rib':
+        next = ribBody(next, command.payload as RibInput).document;
         break;
       case 'feature.solid-offset':
         next = offsetSolidBody(

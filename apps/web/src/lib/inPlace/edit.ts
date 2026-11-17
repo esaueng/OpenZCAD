@@ -177,6 +177,7 @@ export function inPlaceToolForFeature(data: FeatureData): InPlaceToolId | null {
     case 'loft':
     case 'sweep':
     case 'helical-sweep':
+    case 'rib':
     case 'hole':
     case 'thread':
     case 'shell':
@@ -405,6 +406,23 @@ export function inPlaceEditSeed(
       const build = data.construction === 'in-place' ? 'exact' : 'sampled';
       seed.options.saved = build;
       seed.options.build = build;
+      break;
+    }
+    case 'rib': {
+      seed.slots.path = inOrder(
+        data.profile.entityIds.map((entityId) => {
+          if (ctx.curve(data.profile.sketchId, entityId))
+            return { sketchId: data.profile.sketchId, entityId };
+          missing.push('path');
+          return null;
+        }),
+        'path'
+      );
+      body(data.targetBodyId);
+      value('thickness', data.thickness);
+      seed.options.direction = data.direction;
+      seed.options.side = data.thicknessSide;
+      seed.options.flip = data.flip ? 'flipped' : 'as-drawn';
       break;
     }
     case 'helical-sweep': {
@@ -1186,6 +1204,25 @@ export function inPlaceFeatureUpdate(
         name,
         data: { featureKind: request.tool, definition: request.definition }
       } as FeatureUpdateInput;
+    case 'rib':
+      if (saved.featureKind !== 'rib') return null;
+      return {
+        featureId,
+        name,
+        data: {
+          featureKind: 'rib',
+          targetBodyId: request.targetBodyId,
+          profile: {
+            sketchId: request.profile.sketchId,
+            entityIds: request.profile.entityIds
+          } as Extract<FeatureData, { featureKind: 'rib' }>['profile'],
+          thickness: request.thickness,
+          thicknessSide: request.thicknessSide,
+          direction: request.direction,
+          ...(request.flip ? { flip: true } : {})
+        },
+        ...(request.flip ? {} : { clearData: ['flip'] })
+      };
     case 'gear': {
       if (saved.featureKind !== 'gear') return null;
       // Optional fields the edit no longer sets go back to their defaults.
@@ -1435,6 +1472,8 @@ export function inPlaceEditSourceSketchIds(data: FeatureData): SketchId[] {
       ];
     case 'helical-sweep':
       return [data.profile.sketchId];
+    case 'rib':
+      return [data.profile.sketchId];
     // M16: the blank's sketch, and each bend line's.
     case 'sheet-metal':
       return [
@@ -1465,6 +1504,7 @@ const SINGLE_LINEAGE_KINDS = new Set<FeatureData['featureKind']>([
   'draft',
   'thicken',
   'solid-offset',
+  'rib',
   'split',
   'transform',
   'mirror',

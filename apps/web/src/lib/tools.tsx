@@ -8,6 +8,7 @@ import {
   Crosshair,
   Cylinder,
   Drill,
+  Grip,
   FlipHorizontal2,
   ImagePlus,
   LocateFixed,
@@ -73,6 +74,7 @@ export type ToolId =
   | 'mirror'
   | 'split'
   | 'shell'
+  | 'rib'
   | 'solid-offset'
   | 'draft'
   | 'thicken'
@@ -297,6 +299,12 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     group: 'edges-faces',
     hint: 'Hollow a body, opening faces'
   },
+  rib: {
+    label: 'Rib',
+    icon: icon(<Grip size={16} aria-hidden="true" />),
+    group: 'edges-faces',
+    hint: 'A rib or web from an open sketch profile'
+  },
   draft: {
     label: 'Draft',
     icon: draftGlyph,
@@ -439,6 +447,7 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
         'gear-teeth',
         'bend',
         'shell',
+        'rib',
         'draft',
         'thicken',
         'solid-offset'
@@ -599,6 +608,7 @@ export function toolDisabledReason(
       tool === 'split' ||
       tool === 'shell' ||
       tool === 'solid-offset' ||
+      tool === 'rib' ||
       tool === 'draft' ||
       tool === 'thicken' ||
       tool === 'hole' ||
@@ -645,6 +655,7 @@ export function toolDisabledReason(
       tool === 'split' ||
       tool === 'shell' ||
       tool === 'solid-offset' ||
+      tool === 'rib' ||
       tool === 'draft' ||
       tool === 'thicken' ||
       tool === 'hole' ||
