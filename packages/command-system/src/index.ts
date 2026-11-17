@@ -2494,6 +2494,30 @@ function validateModelingFeatureUpdate(
 // command is serialized, so replaying a command log rebuilds the exact same
 // entity graph. Without this, commands that reference earlier results
 // (extrude -> sketch, boolean/transform -> bodies) would dangle on replay.
+/** Mesh formats whose import names its format in undo and the log. */
+const MESH_IMPORT_FORMATS = new Set([
+  'stl',
+  '3mf',
+  'obj',
+  'glb',
+  'gltf',
+  'ply'
+]);
+
+/**
+ * The undo and Activity log label of a mesh import: the source file's format
+ * ("Import 3MF mesh"), or a format-neutral "Import mesh" when the name gives
+ * none. Every mesh format shares one command, and its label used to say STL
+ * whatever was imported (#1638).
+ */
+export function meshImportLabel(sourceName: string): string {
+  const extension = /\.([a-z0-9]+)$/i.exec(sourceName.trim())?.[1];
+  const format = extension?.toLowerCase();
+  return format && MESH_IMPORT_FORMATS.has(format)
+    ? `Import ${format.toUpperCase()} mesh`
+    : 'Import mesh';
+}
+
 export const commandFactories = {
   addPrimitive(payload: PrimitiveInput): CommandDefinition<PrimitiveInput> {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
@@ -3314,7 +3338,7 @@ export const commandFactories = {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
     return makeCommand(
       'import.mesh',
-      'Import STL mesh',
+      meshImportLabel(payload.sourceName),
       withIds,
       (document) => importMeshBody(document, withIds).document
     );
