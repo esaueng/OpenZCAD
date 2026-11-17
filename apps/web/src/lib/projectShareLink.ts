@@ -16,26 +16,47 @@ export const PROJECT_SHARE_HASH_PREFIX = 'share=';
  */
 export const SHARE_CONFIGURATION_PARAM = 'configuration';
 
+/**
+ * Longest parameter suffix read after the capability. A link carries one
+ * short row id; anything longer is not one of ours and is not parsed, so a
+ * crafted fragment cannot make every reader below do unbounded work.
+ */
+const MAX_SHARE_PARAMS_LENGTH = 512;
+
+/** The text after `share=`, or null when the hash is not a share fragment. */
+function shareRest(hash: string): string | null {
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  return raw.startsWith(PROJECT_SHARE_HASH_PREFIX)
+    ? raw.slice(PROJECT_SHARE_HASH_PREFIX.length)
+    : null;
+}
+
 /** The fragment's capability part and its optional parameters. */
 function splitShareHash(hash: string): {
   capability: string;
   params: URLSearchParams;
 } | null {
-  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
-  if (!raw.startsWith(PROJECT_SHARE_HASH_PREFIX)) return null;
-  const rest = raw.slice(PROJECT_SHARE_HASH_PREFIX.length);
+  const rest = shareRest(hash);
+  if (rest === null) return null;
   const cut = rest.indexOf('&');
-  return cut < 0
-    ? { capability: rest.trim(), params: new URLSearchParams() }
-    : {
-        capability: rest.slice(0, cut).trim(),
-        params: new URLSearchParams(rest.slice(cut + 1))
-      };
+  if (cut < 0)
+    return { capability: rest.trim(), params: new URLSearchParams() };
+  const suffix = rest.slice(cut + 1);
+  return {
+    capability: rest.slice(0, cut).trim(),
+    params: new URLSearchParams(
+      suffix.length <= MAX_SHARE_PARAMS_LENGTH ? suffix : ''
+    )
+  };
 }
 
 /** Recognize the share destination even when its capability is incomplete. */
 export function shareRequestFromHash(hash: string): string | null {
-  return splitShareHash(hash)?.capability ?? null;
+  // The capability alone: no parameters are parsed to find it.
+  const rest = shareRest(hash);
+  if (rest === null) return null;
+  const cut = rest.indexOf('&');
+  return (cut < 0 ? rest : rest.slice(0, cut)).trim();
 }
 
 /** F06: the configuration row a share link opens on, or null for none. */

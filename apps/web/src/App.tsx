@@ -15450,6 +15450,14 @@ export function App() {
         // a safe device copy may leave without their network response.
         if (!accountSavePendingRef.current) await draining;
         if (!isCurrent()) return;
+        // F06: a link naming a configuration opens on it once that row is
+        // known to build; otherwise the model opens as saved.
+        const opening = await sharedDocumentOnRow(
+          shared.document,
+          shareRowId,
+          (candidate) => geometryRef.current.previewGeometry(candidate)
+        );
+        if (!isCurrent()) return;
         // Before the document lands: the collaboration hook and the cloud
         // autosave controller must treat this project as not account-backed,
         // whatever this browser knew about the account before.
@@ -15460,7 +15468,6 @@ export function App() {
         setShareSession(opened);
         shareSessionRef.current = opened;
         setSharePage(null);
-        const opening = sharedDocumentOnRow(shared.document, shareRowId);
         hydrateSharedDocumentRef.current(opening.document, {
           rememberProject: false
         });

@@ -18,7 +18,8 @@ import {
   renameConfigurationRow,
   setConfigurationCell,
   setNodeMetadata,
-  setParameter
+  setParameter,
+  transformBody
 } from '@openzcad/document-core';
 import {
   CommandManager,
@@ -38,6 +39,7 @@ import {
   isDocumentHistory,
   isFeatureManuallySuppressed,
   toUserId,
+  type FeatureWarning,
   type ParameterId,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -364,33 +366,111 @@ describe('storage and history', () => {
     expect(isDocumentHistory(history, manager.document.projectId)).toBe(false);
   });
 
-  it('opens a shared model on the row its link names (Tweak link)', () => {
+  it('opens a shared model on the row its link names (Tweak link)', async () => {
     const { document } = table();
-    const opened = sharedDocumentOnRow(document, 'large');
+    const builds: ProjectDocument[] = [];
+    const clean = (candidate: ProjectDocument) => {
+      builds.push(candidate);
+      return Promise.resolve({ warnings: [] });
+    };
+    const opened = await sharedDocumentOnRow(document, 'large', clean);
     expect(opened.document.configurations!.activeRowId).toBe('large');
     expect(listParameters(opened.document)[0]!.expression).toBe('45');
     expect(opened.note).toBe('Showing Large.');
-    // No row named, or the active one: the model as saved.
-    expect(sharedDocumentOnRow(document, null)).toEqual({
+    // The row and the saved model were both built before it was accepted.
+    expect(builds.map((built) => built.configurations!.activeRowId)).toEqual([
+      'large',
+      'small'
+    ]);
+    // No row named, or the saved one: the model as saved, with no build.
+    builds.length = 0;
+    expect(await sharedDocumentOnRow(document, null, clean)).toEqual({
       document,
       note: null
     });
-    expect(sharedDocumentOnRow(document, 'small').document).toBe(document);
+    expect((await sharedDocumentOnRow(document, 'small', clean)).document).toBe(
+      document
+    );
+    expect(builds).toEqual([]);
     // A row the model no longer has opens it as saved, saying so.
-    const gone = sharedDocumentOnRow(document, 'deleted');
+    const gone = await sharedDocumentOnRow(document, 'deleted', clean);
     expect(gone.document).toBe(document);
     expect(gone.note).toMatch(/no longer in the model/);
     // A model without a table ignores the row.
     const plain = model().document;
-    expect(sharedDocumentOnRow(plain, 'large').document).toBe(plain);
-    // A row the model cannot take is refused, not half applied.
+    expect((await sharedDocumentOnRow(plain, 'large', clean)).document).toBe(
+      plain
+    );
+    // A row the model refuses is not half applied.
     const broken = structuredClone(document);
     broken.configurations!.rows[1]!.parameters[
       Object.keys(broken.configurations!.rows[1]!.parameters)[0] as ParameterId
     ] = 'missing_parameter * 2';
-    const refused = sharedDocumentOnRow(broken, 'large');
+    const refused = await sharedDocumentOnRow(broken, 'large', clean);
     expect(refused.document).toBe(broken);
     expect(refused.note).toMatch(/Large could not be built/);
+    // A row whose rebuild warns where the saved model's does not, or whose
+    // build fails outright, opens the model as saved.
+    const failure = 'Feature "Lug placement": Transform target is unavailable.';
+    const warns = await sharedDocumentOnRow(document, 'large', (candidate) =>
+      Promise.resolve(
+        candidate.configurations!.activeRowId === 'large'
+          ? {
+              warnings: [failure],
+              featureWarnings: [
+                {
+                  featureId: 'feature_placement',
+                  featureName: 'Lug placement',
+                  message: failure,
+                  kind: 'build-failed'
+                } as FeatureWarning
+              ]
+            }
+          : { warnings: [], featureWarnings: [] }
+      )
+    );
+    expect(warns.document).toBe(document);
+    expect(warns.note).toMatch(/Large could not be built/);
+    // A feature the row suppresses on purpose is not a failure.
+    const suppressedNote =
+      'Feature "Lug": Suppressed; skipped during exact rebuild.';
+    const paused = await sharedDocumentOnRow(document, 'large', (candidate) =>
+      Promise.resolve(
+        candidate.configurations!.activeRowId === 'large'
+          ? {
+              warnings: [suppressedNote],
+              featureWarnings: [
+                {
+                  featureId: 'feature_lug',
+                  featureName: 'Lug',
+                  message: suppressedNote,
+                  kind: 'suppressed'
+                } as FeatureWarning
+              ]
+            }
+          : { warnings: [], featureWarnings: [] }
+      )
+    );
+    expect(paused.document.configurations!.activeRowId).toBe('large');
+    // Nor without typed records.
+    const untyped = await sharedDocumentOnRow(document, 'large', (candidate) =>
+      Promise.resolve({
+        warnings:
+          candidate.configurations!.activeRowId === 'large'
+            ? [suppressedNote]
+            : []
+      })
+    );
+    expect(untyped.document.configurations!.activeRowId).toBe('large');
+    // A failure the saved model shares too is not the row's doing.
+    const shared = await sharedDocumentOnRow(document, 'large', () =>
+      Promise.resolve({ warnings: ['A warning both rows have.'] })
+    );
+    expect(shared.document.configurations!.activeRowId).toBe('large');
+    const fails = await sharedDocumentOnRow(document, 'large', () =>
+      Promise.reject(new Error('Worker lost.'))
+    );
+    expect(fails.document).toBe(document);
   });
 
   it('keeps row names out of a diagnostic reproduction', () => {
@@ -416,6 +496,29 @@ describe('the exact model', () => {
     adapter = await createExactKernelAdapter();
   });
   afterAll(() => adapter.dispose());
+
+  it('opens a shared link as saved when its row breaks a later feature', async () => {
+    // Large suppresses Lug but leaves a transform that moves Lug's body:
+    // the row is applied without complaint, and only its rebuild fails.
+    let { document } = table();
+    const lugBody = document.bodyOrder[1]!;
+    document = transformBody(document, {
+      name: 'Lug placement',
+      targetBodyId: lugBody,
+      translation: { x: 0, y: 0, z: 20 }
+    }).document;
+    const lug = features(document)[1]!;
+    document = setConfigurationCell(document, {
+      rowId: 'large',
+      column: { kind: 'suppression', featureId: lug.featureId },
+      value: true
+    });
+    const build = async (candidate: ProjectDocument) =>
+      adapter.previewGeometry(candidate);
+    const opened = await sharedDocumentOnRow(document, 'large', build);
+    expect(opened.document).toBe(document);
+    expect(opened.note).toMatch(/Large could not be built/);
+  }, 90_000);
 
   it('rebuilds each row, and exports only what the row shows', async () => {
     const { document, plateBody, lugBody } = table();

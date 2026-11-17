@@ -102,4 +102,16 @@ describe('share link fragments', () => {
       'https://example.test/p'
     );
   });
+
+  it('reads the capability without parsing what follows, and bounds what it parses (F06)', () => {
+    const flood = `&configuration=small${'&x=1'.repeat(10_000)}`;
+    // The capability readers never touch the suffix.
+    expect(shareTokenFromHash(`#share=${token}${flood}`)).toBe(token);
+    expect(shareRequestFromHash(`#share=${token}${flood}`)).toBe(token);
+    // A suffix longer than any link of ours names no configuration.
+    expect(shareConfigurationFromHash(`#share=${token}${flood}`)).toBeNull();
+    expect(
+      shareConfigurationFromHash(`#share=${token}&configuration=small`)
+    ).toBe('small');
+  });
 });
