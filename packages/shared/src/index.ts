@@ -398,7 +398,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // aligned section whose cutting line steps to other depths along its run.
 // An older client would cut one plane at the first depth, so it must
 // refuse. Builds on v92.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 93 as const;
+// v94 adds D02 title-block layouts (`titleBlockLayout: 'shop'` on a drawing
+// sheet) and the shop fields (company, material, finish, checked, approved,
+// general tolerances). An older client would refuse the unknown title-block
+// fields, so it must refuse the document. Builds on v93.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 94 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

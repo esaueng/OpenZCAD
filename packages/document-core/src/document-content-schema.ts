@@ -410,6 +410,47 @@ export function hasDrawingAuxiliary(value: unknown): boolean {
   return false;
 }
 
+/** D02 title-block layouts and shop fields (schema v94). */
+export function assertDrawingTitleBlockLayoutSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 94, 'Title-block layouts');
+}
+
+const SHOP_TITLE_FIELDS = [
+  'company',
+  'material',
+  'finish',
+  'checkedBy',
+  'approvedBy',
+  'tolerances'
+];
+
+/** Whether `value` holds a v94 title-block layout or shop field. */
+export function hasDrawingTitleBlockLayout(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    // A layout, or (in an update) its clearing to null.
+    if (entry.titleBlockLayout !== undefined) return true;
+    const block = entry.titleBlock;
+    if (
+      typeof block === 'object' &&
+      block !== null &&
+      SHOP_TITLE_FIELDS.some((key) => key in block)
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
 /** D03 stepped sections (schema v93). */
 export function assertDrawingSteppedSectionSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 93, 'Stepped sections');
@@ -698,6 +739,12 @@ export function assertDocumentContentCommandSchema(
     if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('drawing.') &&
+      hasDrawingTitleBlockLayout(command.payload)
+    )
+      assertDrawingTitleBlockLayoutSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
       hasDrawingDetail(command.payload)
     )
       assertDrawingDetailSchema(document.schemaVersion);
@@ -899,6 +946,16 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
           hasDrawingSteppedSection(change.after))
       )
         assertDrawingSteppedSectionSchema(document.schemaVersion);
+  if (hasDrawingTitleBlockLayout(document.drawings))
+    assertDrawingTitleBlockLayoutSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingTitleBlockLayout(change.before) ||
+          hasDrawingTitleBlockLayout(change.after))
+      )
+        assertDrawingTitleBlockLayoutSchema(document.schemaVersion);
   if (hasDrawingDetail(document.drawings))
     assertDrawingDetailSchema(document.schemaVersion);
   if (hasDrawingBom(document.drawings))
