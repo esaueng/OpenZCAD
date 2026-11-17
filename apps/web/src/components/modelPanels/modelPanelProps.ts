@@ -1,4 +1,18 @@
 import type { CadPatchProposal } from '@openzcad/ai-contracts';
+
+/**
+ * L15: what a non-assistant patch brings to the app's apply path: its undo
+ * label, the edit-permission action, its status wording, and the document
+ * version it was written against (a moved document refuses it). Supplied by
+ * the lazily loaded caller, so none of it sits in the entry bundle.
+ */
+export interface PatchSource {
+  label: string;
+  action: string;
+  checking: string;
+  moved: string;
+  baseVersion: number;
+}
 import type { LocalHistoryAppend } from '../../lib/localHistoryAppend';
 import type { ReactNode } from 'react';
 import type {
@@ -77,7 +91,7 @@ export interface ModelPanelSource {
    */
   onApplyHistoryText?(
     proposal: CadPatchProposal,
-    baseVersion: number
+    source: PatchSource
   ): Promise<boolean>;
   /** Datum planes hidden by their eye toggle: view state, as sketches' is. */
   hiddenDatumIds?: ReadonlySet<string>;

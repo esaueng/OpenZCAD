@@ -10,6 +10,7 @@ import type { CadPatchProposal } from '@openzcad/ai-contracts';
 import { readHistoryText } from '@openzcad/scripting';
 import { toUserId } from '@openzcad/shared';
 import HistoryTextDialog from './HistoryTextDialog';
+import type { PatchSource } from './modelPanels/modelPanelProps';
 
 function block(width: string) {
   let document = createProjectDocument('Bracket', toUserId('owner'));
@@ -108,11 +109,14 @@ describe('HistoryTextDialog', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Apply' }));
     expect(onApply).toHaveBeenCalledTimes(1);
-    const [proposal, baseVersion] = onApply.mock.calls[0]! as [
+    const [proposal, source] = onApply.mock.calls[0]! as [
       CadPatchProposal,
-      number
+      PatchSource
     ];
-    expect(baseVersion).toBe(document.version);
+    expect(source).toMatchObject({
+      label: 'Edit history text',
+      baseVersion: document.version
+    });
     expect(proposal.operations).toEqual([
       expect.objectContaining({
         kind: 'update_feature',

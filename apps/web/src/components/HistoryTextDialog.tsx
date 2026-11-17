@@ -9,6 +9,7 @@ import {
 } from '@openzcad/scripting';
 import type { ProjectDocument } from '@openzcad/shared';
 import { useModalFocus } from '../lib/useModalFocus';
+import type { PatchSource } from './modelPanels/modelPanelProps';
 
 export interface HistoryTextDialogProps {
   document: ProjectDocument;
@@ -19,7 +20,7 @@ export interface HistoryTextDialogProps {
    * resolves false when it was refused (the app says why). Absent, the text
    * is read only.
    */
-  onApply?(proposal: CadPatchProposal, baseVersion: number): Promise<boolean>;
+  onApply?(proposal: CadPatchProposal, source: PatchSource): Promise<boolean>;
   onClose(): void;
 }
 
@@ -102,7 +103,14 @@ export default function HistoryTextDialog({
     setApplying(true);
     setStatus('Checking against exact geometry…');
     try {
-      const applied = await onApply(result.proposal, draft.baseVersion);
+      const applied = await onApply(result.proposal, {
+        label: 'Edit history text',
+        action: 'edit the history text',
+        checking: 'Checking the history text against exact geometry…',
+        moved:
+          'The model changed while the history text was checked. Reload the text and make the edit again.',
+        baseVersion: draft.baseVersion
+      });
       if (applied) {
         setDraft(null);
         setChecked(null);

@@ -221,6 +221,7 @@ import type {
   CadSelectionContext
 } from '@openzcad/ai-contracts';
 import type { DrawingAssistantSource } from './lib/drawing/assistantContext';
+import type { PatchSource } from './components/modelPanels/modelPanelProps';
 import {
   appendRevision,
   createCheckpoint,
@@ -18417,13 +18418,8 @@ export function App() {
 
   async function applyPatch(
     proposal: CadPatchProposal,
-    /**
-     * L15 history text: the undo label, and the document version the text
-     * was printed from. A text written against an older version is refused
-     * before preflight, as the assistant's version fence refuses a stale
-     * proposal.
-     */
-    source?: { label: string; baseVersion: number; action: string }
+    /** L15 history text: its wording, label and version fence. */
+    source?: PatchSource
   ): Promise<boolean> {
     if (isDrawingProposal(proposal)) return applyDrawingPatch(proposal);
     if (!ensureCanEdit(source?.action ?? 'apply this AI proposal')) {
@@ -18434,9 +18430,7 @@ export function App() {
       return false;
     }
     if (source && current.version !== source.baseVersion) {
-      setStatus(
-        'The model changed since this text was printed. Reload the text and make the edit again.'
-      );
+      setStatus(source.moved);
       return false;
     }
     setBusy(true);
@@ -18450,9 +18444,7 @@ export function App() {
     if (e2eApplyGate) window.__openzcadE2EApplyCheckInFlight = true;
     try {
       setStatus(
-        source
-          ? 'Checking the history text against exact geometry…'
-          : 'Checking the AI change against exact geometry…'
+        source?.checking ?? 'Checking the AI change against exact geometry…'
       );
       let preflight: Awaited<ReturnType<typeof preflightCadPatch>>;
       if (e2eApplyGate) {
@@ -18476,9 +18468,8 @@ export function App() {
         live.version !== current.version
       ) {
         throw new Error(
-          source
-            ? 'The model changed while the history text was checked. Reload the text and make the edit again.'
-            : 'The document changed during exact AI preflight. Review the refreshed proposal before applying it.'
+          source?.moved ??
+            'The document changed during exact AI preflight. Review the refreshed proposal before applying it.'
         );
       }
       const applied = executeTransaction(
@@ -35604,13 +35595,7 @@ export function App() {
       hiddenSketchIds={hiddenSketchIds}
       document={doc}
       historyTextEditBlocked={editDisabledReason}
-      onApplyHistoryText={(proposal, baseVersion) =>
-        applyPatch(proposal, {
-          label: 'Edit history text',
-          baseVersion,
-          action: 'edit the history text'
-        })
-      }
+      onApplyHistoryText={applyPatch}
       hiddenDatumIds={hiddenDatumIds}
       onHiddenDatumIdsChange={setHiddenDatumIds}
       hiddenReferenceImageIds={hiddenReferenceImageIds}
