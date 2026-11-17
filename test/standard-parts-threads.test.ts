@@ -155,7 +155,7 @@ describe('M17 simplified threads: exact build', () => {
     expect(names.has('standard-part.face.seat')).toBe(true);
     // Top, head side, seat, shank and tip: few edges to sample and draw.
     expect(body.topology!.faces).toHaveLength(5);
-    expect(body.topology!.edges!.length).toBeLessThanOrEqual(8);
+    expect(body.topology!.edges.length).toBeLessThanOrEqual(8);
   }, 900_000);
 
   it.each([

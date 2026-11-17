@@ -440,10 +440,7 @@ describe('M17 Standard part thread display (schema v83)', () => {
     expect(armed.seed.options.thread).toBe('simplified');
     // A part stored before v83 reopens as modeled, as it was built.
     const { thread: _dropped, ...older } = data;
-    const old = inPlaceEditSeed(
-      { ...feature, data: older },
-      ctx
-    )!;
+    const old = inPlaceEditSeed({ ...feature, data: older }, ctx)!;
     expect(old.seed.options.thread).toBe('modeled');
     const request = standardPartSpec.request(
       { ...SLOTS, plane: armed.seed.slots.plane },
