@@ -87,6 +87,7 @@
     "test/combination-matrix.test.ts",
     "test/command-system.test.ts",
     "test/configuration-export.test.ts",
+    "test/configuration-views.test.ts",
     "test/configurations.test.ts",
     "test/css-class-coverage.test.ts",
     "test/cylinder-radius-across-boolean.test.ts",

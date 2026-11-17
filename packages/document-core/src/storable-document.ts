@@ -301,6 +301,29 @@ export function assertStorableDocument(value: unknown): ProjectDocument {
     if (error)
       throw new UnstorableDocumentError(`"document.${section}": ${error}`);
   }
+  // F06: a drawing view shows a row of this document's table, or none.
+  const rowIds = new Set(
+    Array.isArray(
+      (record.configurations as { rows?: unknown } | undefined)?.rows
+    )
+      ? (record.configurations as { rows: { id: string }[] }).rows.map(
+          (row) => row.id
+        )
+      : []
+  );
+  for (const sheet of (
+    record.drawings as
+      | { sheets?: { name: string; views?: { configurationId?: string }[] }[] }
+      | undefined
+  )?.sheets ?? [])
+    for (const view of sheet.views ?? [])
+      if (
+        view.configurationId !== undefined &&
+        !rowIds.has(view.configurationId)
+      )
+        throw new UnstorableDocumentError(
+          `"document.drawings": a view on ${sheet.name} shows a configuration that is not in the document.`
+        );
   let document!: ProjectDocument;
   attempt(() => {
     document = normalizeDocument(value as ProjectDocument);

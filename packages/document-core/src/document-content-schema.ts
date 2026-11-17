@@ -51,6 +51,36 @@ export function assertPrintClearanceSchema(version: unknown): void {
  */
 export const CONFIGURATION_SCHEMA_VERSION = 72;
 
+/**
+ * F06 per-view configurations (schema v89): a drawing view's
+ * `configurationId`. An older reader would draw the view as the active row.
+ */
+export const DRAWING_VIEW_CONFIGURATION_SCHEMA_VERSION = 89;
+
+export function assertDrawingViewConfigurationSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    DRAWING_VIEW_CONFIGURATION_SCHEMA_VERSION,
+    'Drawing view configurations'
+  );
+}
+
+/** F06: any view of a drawing section names a configuration. */
+function hasDrawingViewConfiguration(drawings: unknown): boolean {
+  return (
+    record(drawings) &&
+    Array.isArray(drawings.sheets) &&
+    drawings.sheets.some(
+      (sheet) =>
+        record(sheet) &&
+        Array.isArray(sheet.views) &&
+        sheet.views.some(
+          (view) => record(view) && view.configurationId !== undefined
+        )
+    )
+  );
+}
+
 export function assertConfigurationSchema(version: unknown): void {
   assertMinimumProjectSchema(
     version,
@@ -489,6 +519,12 @@ export function assertDocumentContentCommandSchema(
     )
       assertConfigurationSchema(document.schemaVersion);
     if (
+      command.kind === 'drawing.view.update' &&
+      record(command.payload) &&
+      command.payload.configurationId !== undefined
+    )
+      assertDrawingViewConfigurationSchema(document.schemaVersion);
+    if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('drawing.') &&
       hasDrawingDimensionFormat(command.payload)
@@ -636,6 +672,16 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         assertPrintClearanceSchema(document.schemaVersion);
   if (document.configurations !== undefined)
     assertConfigurationSchema(document.schemaVersion);
+  if (hasDrawingViewConfiguration(document.drawings))
+    assertDrawingViewConfigurationSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingViewConfiguration(change.before) ||
+          hasDrawingViewConfiguration(change.after))
+      )
+        assertDrawingViewConfigurationSchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
     for (const change of entry.changes)
       if (

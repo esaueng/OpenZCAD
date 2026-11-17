@@ -371,7 +371,14 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // v83 adds M17 simplified threads (`thread: 'simplified'` on a standard
 // part): the part is drawn as its plain envelope, with no thread cut. An
 // older client would cut it, so it must refuse. Builds on v82.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 83 as const;
+// v89 adds F06 per-view configurations (`configurationId` on a base drawing
+// view): the row the view and every view folded, cut or detailed from it
+// draw, built on its own while the active row stays the model being edited.
+// Absent draws the active row, so every older sheet draws unchanged. An
+// older client would draw the active row and drop the choice on its next
+// save, so it must refuse. Builds on v83 (v84, v85, v87 and v88 are claimed
+// by D02/D03, v86 by F06 slice 4a).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 89 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

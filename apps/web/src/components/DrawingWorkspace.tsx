@@ -49,6 +49,7 @@ import {
 } from '@openzcad/command-system';
 import {
   ASSEMBLY_BOM_COLUMNS,
+  documentForConfiguration,
   updateDrawingView
 } from '@openzcad/document-core';
 import {
@@ -229,6 +230,14 @@ import {
   sheetBodyIds,
   type SectionBodyInput
 } from '../lib/drawing/sheetSources';
+import {
+  ROW_SEPARATOR,
+  projectionSheet,
+  projectionViewRow,
+  rowBodyKey,
+  rowContentKey,
+  viewConfigurationRows
+} from '../lib/drawing/viewConfigurations';
 import { saveCadBinaryFile, saveCadTextFile } from '../lib/desktopBridge';
 import {
   sectionLineFromDrag,
@@ -408,7 +417,9 @@ function viewIntentKey(view: DrawingView): string {
         .map((v) => `${v.x},${v.y},${v.z}`)
         .join('|')}`
     : '';
-  return `${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}${cut}${aux}`;
+  // F06: a view on another configuration row (`projectionSheet`).
+  const row = view.configurationId ? `|row:${view.configurationId}` : '';
+  return `${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}${cut}${aux}${row}`;
 }
 
 function projectionKey(fingerprint: string, view: DrawingView): string {
@@ -515,7 +526,8 @@ function useViewProjections(
    */
   const tessellations = useRef<{
     fingerprint: string;
-    bodies: Map<BodyId, ProjectionBodyInput>;
+    /** By tessellation key (`rowBodyKey`): body id, on its configuration row. */
+    bodies: Map<string, ProjectionBodyInput>;
     /** D03 cut bodies, per section plane (`sectionPlaneKey`). */
     sections: Map<string, Record<string, SectionBodyInput>>;
   } | null>(null);
@@ -583,11 +595,22 @@ function useViewProjections(
     // geometry once however many views draw it. A section view's bodies are
     // the model's cut by its plane, asked for once per plane.
     const views: DrawingProjectionViewRequest[] = [];
-    const bodyIds = new Set<BodyId>();
+    // F06: bodies by tessellation key (`rowBodyKey`): a view on another
+    // configuration row meshes that row's bodies, kept apart from the
+    // active row's.
+    const bodyIds = new Set<string>();
+    const bodyOf = new Map<string, { row: string | null; id: BodyId }>();
+    /** A section's plane, on its view's configuration row. */
+    const planeOf = (view: DrawingView): string | null => {
+      const plane = sectionPlaneKey(view);
+      const row = projectionViewRow(view);
+      return plane && row ? `${row}${ROW_SEPARATOR}${plane}` : plane;
+    };
     const cuts = new Map<
       string,
       {
         plane: { normal: Vector3; depth: number };
+        row: string | null;
         bodyIds: Set<BodyId>;
         views: DrawingView[];
       }
@@ -597,10 +620,12 @@ function useViewProjections(
     for (const view of sheet.views) {
       const key = projectionKey(fingerprint, view);
       if (cache.current.has(key) || passMarkers.has(key)) continue;
-      const planeKey = sectionPlaneKey(view);
+      const planeKey = planeOf(view);
+      const row = projectionViewRow(view);
       if (planeKey && view.section) {
         const cut = cuts.get(planeKey) ?? {
           plane: drawingSectionPlane({ ...view, section: view.section }),
+          row,
           bodyIds: new Set<BodyId>(),
           views: []
         };
@@ -609,7 +634,11 @@ function useViewProjections(
         cuts.set(planeKey, cut);
         sectionKeys.set(key, view);
       } else {
-        for (const id of view.bodyIds) bodyIds.add(id);
+        for (const id of view.bodyIds) {
+          const key = rowBodyKey(row, id);
+          bodyIds.add(key);
+          bodyOf.set(key, { row, id });
+        }
         views.push({
           key,
           orientation: view.orientation,
@@ -618,7 +647,7 @@ function useViewProjections(
           // In the key's order: the lines come out in body order, and a view
           // whose bodies were removed and re-added must export the same bytes
           // whether its projection was cached or made after a reload.
-          bodyIds: [...view.bodyIds].sort()
+          bodyIds: [...view.bodyIds].sort().map((id) => rowBodyKey(row, id))
         });
       }
       const marker: ViewState = { state: 'projecting' };
@@ -643,6 +672,17 @@ function useViewProjections(
         requestTessellation: tessellate,
         requestSection: section
       } = latest.current;
+      // F06: each configuration row a view draws, built on its own.
+      const rowDocuments = new Map<string, ProjectDocument>();
+      const documentFor = (row: string | null): ProjectDocument => {
+        if (!row) return current;
+        let built = rowDocuments.get(row);
+        if (!built) {
+          built = documentForConfiguration(current, row);
+          rowDocuments.set(row, built);
+        }
+        return built;
+      };
       /** A section refused by the kernel: final, not a transport failure. */
       const refusals = new Map<string, string>();
       const sectioned = [...cuts].map(([planeKey, cut]) => {
@@ -652,7 +692,7 @@ function useViewProjections(
             refusals.set(planeKey, 'Section views cannot be drawn here.')
           ).then(() => undefined);
         return section(
-          current,
+          documentFor(cut.row),
           [...cut.bodyIds].sort(),
           cut.plane,
           signal
@@ -674,7 +714,32 @@ function useViewProjections(
       });
       Promise.all([
         missing.length > 0
-          ? tessellate(current, missing.sort(), signal)
+          ? // One request per configuration row, each against that row.
+            Promise.all(
+              [
+                ...missing.reduce((groups, key) => {
+                  const row = bodyOf.get(key)!.row ?? '';
+                  groups.set(row, [...(groups.get(row) ?? []), key]);
+                  return groups;
+                }, new Map<string, string[]>())
+              ].map(async ([row, keys]) => {
+                const meshed = await tessellate(
+                  documentFor(row || null),
+                  keys.map((key) => bodyOf.get(key)!.id).sort(),
+                  signal
+                );
+                return keys.flatMap((key) => {
+                  const input = meshed[bodyOf.get(key)!.id];
+                  return input ? [[key, input] as const] : [];
+                });
+              })
+            ).then(
+              (entries) =>
+                Object.fromEntries(entries.flat()) as Record<
+                  string,
+                  ProjectionBodyInput
+                >
+            )
           : Promise.resolve<Record<string, ProjectionBodyInput>>({}),
         ...sectioned
       ])
@@ -701,7 +766,7 @@ function useViewProjections(
           // front of the plane is simply not in the section. A refused cut
           // is shown on its view at once: retrying cannot change it.
           for (const [key, view] of sectionKeys) {
-            const planeKey = sectionPlaneKey(view)!;
+            const planeKey = planeOf(view)!;
             const refusal = refusals.get(planeKey);
             const cut = known.sections.get(planeKey);
             if (refusal || !cut) {
@@ -717,7 +782,10 @@ function useViewProjections(
               const body = cut[id];
               if (!body) throw new Error(`Body ${id} has no geometry to draw.`);
               if (body.indices.length === 0) continue;
-              const inputKey = sectionInputKey(view, id);
+              const inputKey = rowBodyKey(
+                projectionViewRow(view),
+                sectionInputKey(view, id)
+              );
               // Refused by the kernel: the projection cuts its mesh.
               inputs[inputKey] = body.approximate
                 ? {
@@ -743,7 +811,7 @@ function useViewProjections(
             projection: ViewProjection
           ): ViewProjection => {
             const view = sectionKeys.get(key);
-            const cut = view && known.sections.get(sectionPlaneKey(view)!);
+            const cut = view && known.sections.get(planeOf(view)!);
             if (!view || !cut) return projection;
             const approximate = view.bodyIds
               .map((id) => cut[id]?.approximate)
@@ -2781,16 +2849,55 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       })
     );
   }, [sheets, bodies, geometryPending]);
+  // F06: each sheet as projection keys read it, every view carrying the
+  // configuration row it draws (a derived view, its source's).
+  const configurationKey = useMemo(
+    () =>
+      sheets.some((entry) => entry.views.some((view) => view.configurationId))
+        ? rowContentKey(document)
+        : '',
+    // The model content, not the document: a drawing edit keeps both.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sheets, document.nodes, document.configurations]
+  );
+  const keySheets = useMemo(
+    () =>
+      new Map(
+        sheets.map((entry) => [
+          entry.sheetId,
+          projectionSheet(
+            entry,
+            viewConfigurationRows(entry, document),
+            configurationKey
+          )
+        ])
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sheets, document.configurations, configurationKey]
+  );
+  /** A view as its projection key reads it (`projectionSheet`). */
+  const keyView = useCallback(
+    (sheetId: DrawingSheetId, view: DrawingView): DrawingView => {
+      const keyed = keySheets
+        .get(sheetId)
+        ?.views.find((entry) => entry.viewId === view.viewId);
+      const { configurationId: _own, ...rest } = view;
+      return keyed?.configurationId
+        ? { ...rest, configurationId: keyed.configurationId }
+        : rest;
+    },
+    [keySheets]
+  );
   const wanted = useMemo(() => {
     const keys = new Set<string>();
     for (const entry of sheets) {
       const fingerprint = fingerprints.get(entry.sheetId);
       if (fingerprint)
         for (const view of entry.views)
-          keys.add(projectionKey(fingerprint, view));
+          keys.add(projectionKey(fingerprint, keyView(entry.sheetId, view)));
     }
     return keys;
-  }, [sheets, fingerprints]);
+  }, [sheets, fingerprints, keyView]);
   const status = useMemo(
     () =>
       sheet
@@ -2805,7 +2912,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     [document, sheet, bodies, geometryPending, fingerprints]
   );
   const liveProjections = useViewProjections(
-    sheet,
+    sheet
+      ? {
+          ...sheet,
+          views: sheet.views.map((view) => keyView(sheet.sheetId, view))
+        }
+      : null,
     wanted,
     status,
     document,
@@ -2839,11 +2951,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     if (!keptDrawing || !sheet) return liveProjections;
     const states = new Map<DrawingViewId, ViewState>();
     for (const view of sheet.views) {
-      const projection = keptDrawing.projections.get(viewIntentKey(view));
+      const projection = keptDrawing.projections.get(
+        viewIntentKey(keyView(sheet.sheetId, view))
+      );
       if (projection) states.set(view.viewId, { state: 'ready', projection });
     }
     return states;
-  }, [keptDrawing, sheet, liveProjections]);
+  }, [keptDrawing, sheet, liveProjections, keyView]);
   /** The bodies the drawing on screen measures: the kept model's, if kept. */
   const modelBodies = keptDrawing?.bodies ?? bodies;
   /** Its holes' callouts, likewise: the kept document's, if kept. */
@@ -2935,7 +3049,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         ?.projections
     );
     for (const { view, projection } of drawnViews)
-      projections.set(viewIntentKey(view), projection);
+      projections.set(
+        viewIntentKey(keyView(shownSheet.sheetId, view)),
+        projection
+      );
     keptDrawings.set(
       shownSheet.sheetId,
       [
@@ -2948,7 +3065,15 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         ...previous.filter((entry) => entry.fingerprint !== status.fingerprint)
       ].slice(0, KEPT_DRAWINGS_PER_SHEET)
     );
-  }, [shownSheet, status, drawnViews, bodies, keptDrawings, liveHoleCallouts]);
+  }, [
+    shownSheet,
+    status,
+    drawnViews,
+    bodies,
+    keptDrawings,
+    liveHoleCallouts,
+    keyView
+  ]);
   // While the model rebuilds the sheet shows its last drawing faded instead
   // of empty outlines; it is only ever seen, never picked from, annotated or
   // exported, since the rebuild may not leave the model it was drawn from.
@@ -2957,10 +3082,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const last = keptDrawings.get(shownSheet.sheetId)?.[0]?.projections;
     if (!last) return [];
     return shownSheet.views.flatMap((view) => {
-      const projection = last.get(viewIntentKey(view));
+      const projection = last.get(
+        viewIntentKey(keyView(shownSheet.sheetId, view))
+      );
       return projection ? [{ view, projection }] : [];
     });
-  }, [shownSheet, status, keptDrawings]);
+  }, [shownSheet, status, keptDrawings, keyView]);
   // Every annotation against the model the sheet draws: the current one, or
   // the kept one of a sheet not yet updated. Only a drawn sheet draws or
   // reports them. A leader whose edge its view no longer draws at all is
@@ -5908,6 +6035,43 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               />
               Hidden lines
             </label>
+            {document.configurations &&
+              (selectedView.parentViewId ||
+              selectedView.section ||
+              selectedView.detail ||
+              selectedView.auxiliary ? (
+                <p className="drawing-hint">
+                  Draws its source view’s configuration.
+                </p>
+              ) : (
+                <label className="drawing-field">
+                  <span>Configuration</span>
+                  <select
+                    value={selectedView.configurationId ?? ''}
+                    disabled={!editable}
+                    onChange={(event) =>
+                      run(
+                        commandFactories.updateDrawingView({
+                          sheetId: sheet.sheetId,
+                          viewId: selectedView.viewId,
+                          configurationId: event.target.value || null
+                        })
+                      )
+                    }
+                  >
+                    <option value="">{`Active (${
+                      document.configurations.rows.find(
+                        (row) => row.id === document.configurations!.activeRowId
+                      )?.name ?? 'none'
+                    })`}</option>
+                    {document.configurations.rows.map((row) => (
+                      <option key={row.id} value={row.id}>
+                        {row.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
             <fieldset className="drawing-bodies">
               <legend>Bodies</legend>
               {[
