@@ -134,7 +134,7 @@ describe('#1630 shell through a face a fillet runs into', () => {
   }
 
   const ADVICE =
-    'Shell cannot open a face that a fillet or other rounded face blends into yet, and a thinner wall will not help. Suppress that fillet, or open a different face.';
+    'Shell cannot close this opening yet: the wall it exposes has no flat rim. That happens when two open faces share an edge, or a fillet or other rounded face blends into an open face. A thinner wall will not help. Open faces that do not touch, or suppress the fillet.';
 
   it.each([
     ['x', 2],
@@ -177,6 +177,43 @@ describe('#1630 shell through a face a fillet runs into', () => {
     },
     300_000
   );
+
+  it('reads the same for a plain box opened through two adjacent faces', async () => {
+    // The kernel gives this sentence for any opening without a flat rim,
+    // and a box with its top and one side opened has no fillet to blame:
+    // the card must name that cause too.
+    let document = addPrimitiveFeature(createProjectDocument('Box', user), {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 65, height: 40, depth: 10 }
+    });
+    const built = await adapter.syncDocument(document);
+    const box = built.bodyRepresentations[last(document)]!;
+    const side = box.topology!.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        (face.geometry.normal?.x ?? 0) > 0.999
+    )!;
+    document = shellBody(document, {
+      name: 'Shell',
+      targetBodyId: last(document),
+      openingFaceHashes: [topFace(box).hash, side.hash],
+      thickness: 2
+    }).document;
+    const derived = await adapter.syncDocument(document);
+    const warning = shellWarning(document, derived);
+    expect(warning?.kernelRefusal).toMatchObject({
+      family: 'modeling',
+      category: 'unsupported',
+      code: 'shell_refused'
+    });
+    const plain = plainRefusal(
+      warning!.message.replace(/^Feature "Shell": /, ''),
+      warning!.kernelRefusal
+    );
+    expect(plain.message).toBe(ADVICE);
+    expect(plain.message).toContain('two open faces share an edge');
+  }, 300_000);
 
   it('shells the same plate at 2 mm once the fillet is suppressed', async () => {
     const { document } = await recipe('x', 2);
