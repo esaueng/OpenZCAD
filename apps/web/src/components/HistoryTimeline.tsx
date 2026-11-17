@@ -62,6 +62,7 @@ import type {
   UnitSystem
 } from '@openzcad/shared';
 import { useArrivals } from '../hooks/useArrivals';
+import { WindowedRow, WINDOWED_ROW_THRESHOLD } from './WindowedRow';
 import {
   featureNeedsRepair,
   historyFailureTier,
@@ -508,6 +509,7 @@ interface HistoryRowProps {
   icon: ReactNode;
   index: number;
   className: string;
+  windowed: boolean;
   delay: number;
   /** The value summary. Never replaced by a status: that has its own slot. */
   value: string;
@@ -602,6 +604,7 @@ const HistoryRow = memo(function HistoryRow({
   icon,
   index,
   className,
+  windowed,
   delay,
   value,
   status,
@@ -623,7 +626,9 @@ const HistoryRow = memo(function HistoryRow({
 }: HistoryRowProps) {
   const spoken = status ? STATUS_WORDS[status] : null;
   return (
-    <div
+    <WindowedRow
+      enabled={windowed}
+      pinned={selected || inBatch || renaming || refusalTitle !== null}
       key={feature.id}
       data-node-id={feature.id}
       data-history-index={index}
@@ -664,227 +669,248 @@ const HistoryRow = memo(function HistoryRow({
         ctx.setDropFeatureId(null);
       }}
     >
-      <span className="history-dot" aria-hidden="true" />
-      {/* The step's icon at rest, the grip under the pointer: one 24px slot
+      {(expanded) => (
+        <>
+          {expanded && <span className="history-dot" aria-hidden="true" />}
+          {/* The step's icon at rest, the grip under the pointer: one 24px slot
           that reorders on a drag and selects the row on a plain click. */}
-      <button
-        type="button"
-        className="row-action feature-row-grip"
-        aria-label={`Reorder ${feature.name}. Use the arrow keys to move it.`}
-        // A filtered list hides the rows a move would pass, so a
-        // step could jump past an invisible one: reorder only the
-        // whole history.
-        title={
-          filtering
-            ? 'Clear the filter to reorder'
-            : reorderBusy
-              ? 'Reorder once the current rebuild finishes'
-              : 'Drag to reorder'
-        }
-        disabled={filtering}
-        // Not `disabled`: that would drop keyboard focus mid-press.
-        aria-disabled={reorderBusy || undefined}
-        draggable={!filtering && !reorderBusy}
-        onClick={(event) => {
-          // A drag never clicks; a press that did not move selects the
-          // row, as a click on its icon always has. Keyboard presses
-          // (detail 0) keep to the grip: Enter is not a selection here.
-          if (event.detail === 0) return;
-          context.current!.activateRow(feature, event);
-        }}
-        onDragStart={(event) => {
-          event.dataTransfer.effectAllowed = 'move';
-          event.dataTransfer.setData('text/plain', feature.featureId);
-          const row = event.currentTarget.closest('.feature-row');
-          if (row instanceof HTMLElement) {
-            // Without this the drag ghost is the grip alone, which
-            // gives no clue which row is being moved.
-            event.dataTransfer.setDragImage(row, 16, 16);
-          }
-          const ctx = context.current!;
-          ctx.cancelPendingCommit();
-          ctx.setDragFeatureId(feature.featureId);
-        }}
-        onDragEnd={() => {
-          const ctx = context.current!;
-          ctx.setDragFeatureId(null);
-          ctx.setDropFeatureId(null);
-        }}
-        onKeyDown={(event) => {
-          const offset =
-            event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
-          const ctx = context.current!;
-          if (offset === 0 || ctx.filtering) {
-            return;
-          }
-          event.preventDefault();
-          event.stopPropagation();
-          if (ctx.reorderBusy) {
-            return;
-          }
-          // Clamped so the ends of the list are a no-op rather than
-          // a move to -1 or past the end. The command layer refuses
-          // those too, but a keypress that cannot do anything should
-          // not travel that far to find out.
-          const target = index + offset;
-          if (target < 0 || target > ctx.last) {
-            return;
-          }
-          ctx.cancelPendingCommit();
-          ctx.onReorderFeature(feature.featureId, target);
-        }}
-      >
-        <span className="feature-icon">{icon}</span>
-        <span className="feature-row-grip-glyph">{GRIP_ICON}</span>
-      </button>
-      {renaming ? (
-        <FeatureRenameField
-          feature={feature}
-          onCommit={(name) =>
-            context.current!.onRenameFeature?.(feature.featureId, name)
-          }
-          onDone={(refocus) => {
-            const ctx = context.current!;
-            ctx.setRenamingId(null);
-            if (!refocus) return;
-            // The field unmounts with focus in it; give it back to
-            // the row it replaced rather than dropping it on the page.
-            requestAnimationFrame(() =>
-              ctx.listRef.current
-                ?.querySelector<HTMLElement>(
-                  `[data-node-id="${CSS.escape(feature.id)}"] .feature-row-main`
-                )
-                ?.focus()
-            );
-          }}
-        />
-      ) : (
-        <button
-          type="button"
-          className="feature-row-main"
-          aria-pressed={selected || inBatch}
-          onMouseDown={(event) => {
-            // Shift-click would otherwise also select page text.
-            if (context.current!.canDelete && event.shiftKey)
+          <button
+            type="button"
+            className="row-action feature-row-grip"
+            aria-label={`Reorder ${feature.name}. Use the arrow keys to move it.`}
+            // A filtered list hides the rows a move would pass, so a
+            // step could jump past an invisible one: reorder only the
+            // whole history.
+            title={
+              filtering
+                ? 'Clear the filter to reorder'
+                : reorderBusy
+                  ? 'Reorder once the current rebuild finishes'
+                  : 'Drag to reorder'
+            }
+            disabled={filtering}
+            // Not `disabled`: that would drop keyboard focus mid-press.
+            aria-disabled={reorderBusy || undefined}
+            draggable={expanded && !filtering && !reorderBusy}
+            onClick={(event) => {
+              // A drag never clicks; a press that did not move selects the
+              // row, as a click on its icon always has. Keyboard presses
+              // (detail 0) keep to the grip: Enter is not a selection here.
+              if (event.detail === 0) return;
+              context.current!.activateRow(feature, event);
+            }}
+            onDragStart={(event) => {
+              event.dataTransfer.effectAllowed = 'move';
+              event.dataTransfer.setData('text/plain', feature.featureId);
+              const row = event.currentTarget.closest('.feature-row');
+              if (row instanceof HTMLElement) {
+                // Without this the drag ghost is the grip alone, which
+                // gives no clue which row is being moved.
+                event.dataTransfer.setDragImage(row, 16, 16);
+              }
+              const ctx = context.current!;
+              ctx.cancelPendingCommit();
+              ctx.setDragFeatureId(feature.featureId);
+            }}
+            onDragEnd={() => {
+              const ctx = context.current!;
+              ctx.setDragFeatureId(null);
+              ctx.setDropFeatureId(null);
+            }}
+            onKeyDown={(event) => {
+              const offset =
+                event.key === 'ArrowUp'
+                  ? -1
+                  : event.key === 'ArrowDown'
+                    ? 1
+                    : 0;
+              const ctx = context.current!;
+              if (offset === 0 || ctx.filtering) {
+                return;
+              }
               event.preventDefault();
-          }}
-          onClick={(event) => context.current!.activateRow(feature, event)}
-          // A sketch opens for editing on double-click, as in the Objects
-          // panel; the first click of the pair already selected the row.
-          onDoubleClick={(event) => {
-            if (
-              feature.data.featureKind !== 'sketch' ||
-              event.shiftKey ||
-              event.metaKey ||
-              event.ctrlKey
-            )
-              return;
-            context.current!.onEditSketch?.(context.current!.latest(feature));
-          }}
-          // Every row used to announce the same generic kind label, so
-          // a history read aloud was a list of identical items. The
-          // feature's own name comes first, as on screen.
-          // The value beside the name can be cut short in a narrow
-          // panel, and fades for the row's actions on hover: the
-          // tooltip carries it whole, and the status with its cause.
-          title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}${value ? ` (${value})` : ''}${consumed ? ', combined into a later feature' : ''}${statusNote(status, failureRoot)}, click to edit`}
-        >
-          <span className="feature-name">
-            {markedName(feature.name, needle)}
-          </span>
-          {spoken && (
-            // After the name, so the row's text and name still start
-            // with it; the words the row used to show, spoken only.
-            <span className="visually-hidden">
-              {' '}
-              <span>{spoken.word}</span>
-              {spoken.qualifier ? `, ${spoken.qualifier}` : ''}
-            </span>
-          )}
-          {refusalTitle !== null && (
-            <span
-              className="feature-flag error history-row-refused"
-              role="status"
-              title={`${refusalTitle} not applied: ${refusalMessage}`}
+              event.stopPropagation();
+              if (ctx.reorderBusy) {
+                return;
+              }
+              // Clamped so the ends of the list are a no-op rather than
+              // a move to -1 or past the end. The command layer refuses
+              // those too, but a keypress that cannot do anything should
+              // not travel that far to find out.
+              const target = index + offset;
+              if (target < 0 || target > ctx.last) {
+                return;
+              }
+              ctx.cancelPendingCommit();
+              ctx.onReorderFeature(feature.featureId, target);
+            }}
+          >
+            {expanded && (
+              <>
+                <span className="feature-icon">{icon}</span>
+                <span className="feature-row-grip-glyph">{GRIP_ICON}</span>
+              </>
+            )}
+          </button>
+          {renaming ? (
+            <FeatureRenameField
+              feature={feature}
+              onCommit={(name) =>
+                context.current!.onRenameFeature?.(feature.featureId, name)
+              }
+              onDone={(refocus) => {
+                const ctx = context.current!;
+                ctx.setRenamingId(null);
+                if (!refocus) return;
+                // The field unmounts with focus in it; give it back to
+                // the row it replaced rather than dropping it on the page.
+                requestAnimationFrame(() =>
+                  ctx.listRef.current
+                    ?.querySelector<HTMLElement>(
+                      `[data-node-id="${CSS.escape(feature.id)}"] .feature-row-main`
+                    )
+                    ?.focus()
+                );
+              }}
+            />
+          ) : (
+            <button
+              type="button"
+              className="feature-row-main"
+              aria-pressed={selected || inBatch}
+              onMouseDown={(event) => {
+                // Shift-click would otherwise also select page text.
+                if (context.current!.canDelete && event.shiftKey)
+                  event.preventDefault();
+              }}
+              onClick={(event) => context.current!.activateRow(feature, event)}
+              // A sketch opens for editing on double-click, as in the Objects
+              // panel; the first click of the pair already selected the row.
+              onDoubleClick={(event) => {
+                if (
+                  feature.data.featureKind !== 'sketch' ||
+                  event.shiftKey ||
+                  event.metaKey ||
+                  event.ctrlKey
+                )
+                  return;
+                context.current!.onEditSketch?.(
+                  context.current!.latest(feature)
+                );
+              }}
+              // Every row used to announce the same generic kind label, so
+              // a history read aloud was a list of identical items. The
+              // feature's own name comes first, as on screen.
+              // The value beside the name can be cut short in a narrow
+              // panel, and fades for the row's actions on hover: the
+              // tooltip carries it whole, and the status with its cause.
+              title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}${value ? ` (${value})` : ''}${consumed ? ', combined into a later feature' : ''}${statusNote(status, failureRoot)}, click to edit`}
             >
-              {ROW_ALERT_ICON}
-              <span>edit not applied</span>
+              <span className="feature-name">
+                {markedName(feature.name, needle)}
+              </span>
+              {spoken && (
+                // After the name, so the row's text and name still start
+                // with it; the words the row used to show, spoken only.
+                <span className="visually-hidden">
+                  {' '}
+                  <span>{spoken.word}</span>
+                  {spoken.qualifier ? `, ${spoken.qualifier}` : ''}
+                </span>
+              )}
+              {refusalTitle !== null && (
+                <span
+                  className="feature-flag error history-row-refused"
+                  role="status"
+                  title={`${refusalTitle} not applied: ${refusalMessage}`}
+                >
+                  {ROW_ALERT_ICON}
+                  <span>edit not applied</span>
+                </span>
+              )}
+            </button>
+          )}
+          {expanded && (
+            <span className="history-row-tail">
+              <span className="history-row-value mono">{value}</span>
+              {statusGlyph(status)}
             </span>
           )}
-        </button>
+          <span className="history-row-actions">
+            <button
+              type="button"
+              className={`row-suppression${suppressed ? ' is-suppressed' : ''}`}
+              title={
+                suppressed
+                  ? `Resume ${feature.name}`
+                  : `Suppress ${feature.name}`
+              }
+              aria-label={
+                suppressed
+                  ? `Resume ${feature.name}`
+                  : `Suppress ${feature.name}`
+              }
+              aria-pressed={suppressed}
+              onClick={() => {
+                const ctx = context.current!;
+                ctx.onToggleFeatureSuppression(ctx.latest(feature));
+              }}
+            >
+              {expanded && (suppressed ? RESUME_ICON : SUPPRESS_ICON)}
+            </button>
+            <button
+              type="button"
+              className={`row-rollback${rollbackActive ? ' is-active' : ''}`}
+              title={`Roll back history after ${feature.name}`}
+              aria-label={`Roll back history after ${feature.name}`}
+              aria-pressed={rollbackActive}
+              onClick={() => {
+                const ctx = context.current!;
+                ctx.rollBackAfter(ctx.latest(feature));
+              }}
+            >
+              {expanded && ROLLBACK_ICON}
+            </button>
+            <button
+              type="button"
+              className="row-more"
+              title="More actions"
+              aria-label={`More actions for ${feature.name}`}
+              aria-haspopup="menu"
+              onClick={(event) => {
+                const box = event.currentTarget.getBoundingClientRect();
+                const ctx = context.current!;
+                const latest = ctx.latest(feature);
+                ctx.onFeatureContextMenu(
+                  { clientX: box.left, clientY: box.bottom + 2 },
+                  latest,
+                  ctx.rowActions(latest, index)
+                );
+              }}
+            >
+              {expanded && MORE_ICON}
+            </button>
+          </span>
+          {hidden && (
+            <button
+              type="button"
+              className="row-visibility is-hidden"
+              title={`Show ${feature.name}`}
+              aria-label={`Show ${feature.name}`}
+              aria-pressed={true}
+              onClick={() => {
+                const ctx = context.current!;
+                if (sketchId) ctx.onToggleSketchVisibility(sketchId);
+                else if (feature.bodyId)
+                  ctx.onToggleBodyVisibility(feature.bodyId);
+              }}
+            >
+              {expanded && HIDDEN_ICON}
+            </button>
+          )}
+        </>
       )}
-      <span className="history-row-tail">
-        <span className="history-row-value mono">{value}</span>
-        {statusGlyph(status)}
-      </span>
-      <span className="history-row-actions">
-        <button
-          type="button"
-          className={`row-suppression${suppressed ? ' is-suppressed' : ''}`}
-          title={
-            suppressed ? `Resume ${feature.name}` : `Suppress ${feature.name}`
-          }
-          aria-label={
-            suppressed ? `Resume ${feature.name}` : `Suppress ${feature.name}`
-          }
-          aria-pressed={suppressed}
-          onClick={() => {
-            const ctx = context.current!;
-            ctx.onToggleFeatureSuppression(ctx.latest(feature));
-          }}
-        >
-          {suppressed ? RESUME_ICON : SUPPRESS_ICON}
-        </button>
-        <button
-          type="button"
-          className={`row-rollback${rollbackActive ? ' is-active' : ''}`}
-          title={`Roll back history after ${feature.name}`}
-          aria-label={`Roll back history after ${feature.name}`}
-          aria-pressed={rollbackActive}
-          onClick={() => {
-            const ctx = context.current!;
-            ctx.rollBackAfter(ctx.latest(feature));
-          }}
-        >
-          {ROLLBACK_ICON}
-        </button>
-        <button
-          type="button"
-          className="row-more"
-          title="More actions"
-          aria-label={`More actions for ${feature.name}`}
-          aria-haspopup="menu"
-          onClick={(event) => {
-            const box = event.currentTarget.getBoundingClientRect();
-            const ctx = context.current!;
-            const latest = ctx.latest(feature);
-            ctx.onFeatureContextMenu(
-              { clientX: box.left, clientY: box.bottom + 2 },
-              latest,
-              ctx.rowActions(latest, index)
-            );
-          }}
-        >
-          {MORE_ICON}
-        </button>
-      </span>
-      {hidden && (
-        <button
-          type="button"
-          className="row-visibility is-hidden"
-          title={`Show ${feature.name}`}
-          aria-label={`Show ${feature.name}`}
-          aria-pressed={true}
-          onClick={() => {
-            const ctx = context.current!;
-            if (sketchId) ctx.onToggleSketchVisibility(sketchId);
-            else if (feature.bodyId) ctx.onToggleBodyVisibility(feature.bodyId);
-          }}
-        >
-          {HIDDEN_ICON}
-        </button>
-      )}
-    </div>
+    </WindowedRow>
   );
 }, sameHistoryRow);
 
@@ -1956,6 +1982,7 @@ export function HistoryTimeline({
               feature={feature}
               icon={featureIcon(feature)}
               index={index}
+              windowed={visible.length > WINDOWED_ROW_THRESHOLD}
               className={`feature-row${sketchId ? ' is-sketch' : ''}${selected ? ' selected' : ''}${inBatch ? ' in-batch' : ''}${consumed ? ' consumed' : ''}${hidden ? ' hidden-body' : ''}${manual ? ' suppressed' : ''}${paused ? ' paused' : ''}${failed ? ' failed' : ''}${editing ? ' is-editing' : ''}${dragFeatureId === feature.featureId ? ' is-dragging' : ''}${dropFeatureId === feature.featureId ? ' is-drop-target' : ''}${featureArrivals.has(feature.id) ? ' is-arrival' : ''}`}
               delay={delay}
               value={summaries[index] ?? ''}

@@ -526,6 +526,105 @@ describe('useGeometryWorker', () => {
     expect(host.onDerived).not.toHaveBeenCalled();
   });
 
+  it.each(['v1', 'v2', 'invalid-json', 'invalid-marker', 'marker-only'])(
+    'decodes topology before settling a one-off reply: %s',
+    async (encoding) => {
+      const malformed =
+        encoding.startsWith('invalid') || encoding === 'marker-only';
+      installWorker();
+      const document = createProjectDocument('Transport', toUserId('user'));
+      const host = {
+        manager: () => null,
+        onDerived: vi.fn(),
+        onError: vi.fn()
+      };
+      const { result } = renderHook(() => useGeometryWorker(host));
+      const worker = FakeWorker.instances[0]!;
+      const pending = result.current.syncOnce(document);
+      const request = worker.postMessage.mock.calls.at(-1)![0] as {
+        requestId: string;
+      };
+      expect(request).toMatchObject({ topologyEncoding: 'json-v2' });
+      const settled = malformed
+        ? expect(pending).rejects.toThrow('invalid topology encoding')
+        : expect(pending).resolves.toMatchObject({
+            bodyRepresentations: {
+              body_wire: { topology: { faces: [], edges: [] } }
+            }
+          });
+      const bodyId = toBodyId('body_wire');
+      act(() =>
+        worker.emit({
+          type: 'sync',
+          ok: true,
+          projectId: document.projectId,
+          version: document.version,
+          requestId: request.requestId,
+          derived: {
+            ...document.derived,
+            bodyRepresentations: {
+              [bodyId]: {
+                bodyId,
+                name: 'Box',
+                source: 'primitive',
+                faceCount: 0,
+                mesh: {
+                  kind: 'mesh',
+                  vertices: new Float32Array(),
+                  indices: new Uint32Array()
+                },
+                bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } },
+                volume: 1,
+                color: '#ffffff',
+                consumed: false,
+                exportableStep: true,
+                topology: undefined
+              }
+            }
+          },
+          ...(encoding === 'marker-only'
+            ? {}
+            : {
+                topologyJson: {
+                  [bodyId]:
+                    encoding === 'invalid-json'
+                      ? '{'
+                      : '{"faces":[],"edges":[],"reference":null}'
+                }
+              }),
+          ...(encoding === 'v1'
+            ? {}
+            : {
+                topologyUndefined: {
+                  [bodyId]:
+                    encoding === 'invalid-marker'
+                      ? '[["missing"]]'
+                      : '[["reference"]]'
+                }
+              })
+        })
+      );
+      await settled;
+      if (encoding === 'v2') {
+        const decoded = await pending;
+        expect(
+          Object.hasOwn(
+            decoded.bodyRepresentations[bodyId]!.topology!,
+            'reference'
+          )
+        ).toBe(true);
+        expect(
+          (
+            decoded.bodyRepresentations[bodyId]!.topology as unknown as {
+              reference: unknown;
+            }
+          ).reference
+        ).toBeUndefined();
+      }
+      expect(host.onDerived).not.toHaveBeenCalled();
+    }
+  );
+
   it('routes disposable geometry previews to their caller without completing live analysis', async () => {
     installWorker();
     const document = createProjectDocument('Drag geometry', toUserId('user'));

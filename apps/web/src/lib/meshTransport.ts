@@ -1,5 +1,27 @@
 import type { ProjectDocument, GeometryReadyState } from '@openzcad/shared';
 
+/**
+ * Copy only the buffers a publication will transfer. postMessage clones the
+ * remaining metadata itself, so cloning topology here would copy it twice.
+ * The returned metadata is borrowed until posting; do not mutate it.
+ */
+export function copyDerivedMeshBuffers<
+  T extends Pick<GeometryReadyState, 'bodyRepresentations'>
+>(derived: T): T {
+  const entries = Object.entries(derived.bodyRepresentations);
+  // Clone the mesh graph together to preserve shared buffers and view offsets.
+  const meshes = structuredClone(entries.map(([, body]) => body.mesh));
+  return {
+    ...derived,
+    bodyRepresentations: Object.fromEntries(
+      entries.map(([id, body], index) => [
+        id,
+        { ...body, mesh: meshes[index]! }
+      ])
+    )
+  };
+}
+
 /** Only caller-owned projections may transfer; adapter/cache buffers stay live. */
 export function derivedMeshTransferables(
   derived: Pick<GeometryReadyState, 'bodyRepresentations'>
