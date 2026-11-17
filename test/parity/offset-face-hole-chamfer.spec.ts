@@ -318,6 +318,60 @@ describe(
       }
     });
 
+    it('guards a conical pocket that runs to its apex', async () => {
+      // A cone-shaped pocket, r 6 at the face down to a point 6 below: its
+      // cone has only the rim and a seam, whichever way the seam runs. The
+      // kernel leaves the cone in place here too, so the mouth would widen.
+      const kernel = new RemusKernel();
+      const io = await loadRemusTranslators();
+      let step: string;
+      try {
+        const tool = kernel.makeCone(0, 6, 6);
+        kernel.transformSolid(tool, translation(15, 10, 4));
+        step = new TextDecoder().decode(
+          io.exportStep(
+            kernel.serializeSolids(
+              Uint32Array.of(kernel.cut(kernel.makeBox(30, 20, 10), tool))
+            )
+          )
+        );
+      } finally {
+        kernel.free();
+      }
+      const imported = importStepBody(
+        createProjectDocument('Pocket', toUserId('user_offset_hole_chamfer')),
+        {
+          name: 'Pocket',
+          sourceName: 'pocket.step',
+          artifactId: 'artifact_pocket',
+          stepText: step
+        }
+      );
+      const derived = await adapter.syncDocument(imported.document);
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[imported.bodyId]!;
+      expect(body.volume).toBeCloseTo(30 * 20 * 10 - (Math.PI * 36 * 6) / 3, 3);
+      const top = body.topology!.faces.find(
+        (face) =>
+          face.geometry?.surfaceType === 'plane' &&
+          face.geometry.normal!.z > 0.999 &&
+          Math.abs(face.geometry.center.z - 10) < 1e-6
+      )!;
+      const candidate = offsetBy(
+        { document: imported.document, bodyId: imported.bodyId, top },
+        1
+      );
+      for (const built of await builds(candidate)) {
+        expect(refusalOf(built).kernelRefusal).toMatchObject({
+          family: 'direct-edit',
+          category: 'unsupported',
+          code: 'offset_face_hole_chamfer_not_carried'
+        });
+        expectVolume(built, candidate, body.volume, 6);
+        expect(resultOf(built, candidate).bbox.max.z).toBeCloseTo(10, 6);
+      }
+    });
+
     it('leaves a tapered boss standing on the face alone', async () => {
       // A Ø8 → Ø4 boss, 5 tall, sunk 1 into a 30 × 20 × 5 plate. Its flank
       // meets the plate's top on an inner loop, like a hole's chamfer, but

@@ -94,6 +94,14 @@ function edgeStart(kernel: RemusKernel, edge: number): Vec3 | null {
   return finiteVec3([vertices[0], vertices[1], vertices[2]]);
 }
 
+function edgeEnds(kernel: RemusKernel, edge: number): Vec3[] {
+  const vertices = kernel.getEdgeVertices(edge);
+  return [
+    finiteVec3([vertices[0], vertices[1], vertices[2]]),
+    finiteVec3([vertices[3], vertices[4], vertices[5]])
+  ].filter((point): point is Vec3 => point !== null);
+}
+
 /** The solid's cone faces about `normal`, each with the edges that bound it. */
 function coaxialCones(kernel: RemusKernel, solid: number, normal: Vec3) {
   const cones: { axisPoint: Vec3; axis: Vec3; edges: Set<number> }[] = [];
@@ -137,10 +145,13 @@ export function holeMouthRims(
     // A hole's mouth runs from the face into the body; a tapered boss
     // standing on the face rises out of it, and moving the face up its
     // flank is a correct result. Only a cone wholly behind the face counts.
-    const depths = [...cone.edges].flatMap((other) => {
-      const point = edgeStart(kernel, other);
-      return point ? [dot(subtract(point, start), normal)] : [];
-    });
+    // Both ends of every edge: a pocket that runs to its apex has only the
+    // rim and a seam, and the seam may start on the rim.
+    const depths = [...cone.edges].flatMap((other) =>
+      edgeEnds(kernel, other).map((point) =>
+        dot(subtract(point, start), normal)
+      )
+    );
     const tolerance = lengthTolerance(
       radialDistance(start, cone.axisPoint, cone.axis)
     );
