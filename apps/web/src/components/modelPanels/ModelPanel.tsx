@@ -1,6 +1,7 @@
-import { lazy, Suspense, useState } from 'react';
+import { Suspense, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { PanelId } from '../../lib/panelLayout';
+import { lazyWithStaleChunkNotice } from '../../lib/staleChunk';
 import { DiagnosticsPanel, diagnosticCount } from './DiagnosticsPanel';
 import {
   HistoryFindToggle,
@@ -22,7 +23,9 @@ import {
 } from './RevisionsPanel';
 
 /** L15: loaded with the scripting package only when it is first opened. */
-const HistoryTextDialog = lazy(() => import('../HistoryTextDialog'));
+const HistoryTextDialog = lazyWithStaleChunkNotice(
+  () => import('../HistoryTextDialog')
+);
 
 export interface ModelPanelProps extends ModelPanelSource {
   id: PanelId;
