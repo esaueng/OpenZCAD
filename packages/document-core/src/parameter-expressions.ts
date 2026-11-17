@@ -273,6 +273,10 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
     case 'rib':
       fields(data, ['thickness'], rewrite, 'length');
       return;
+    case 'wrap':
+      fields(data, ['depth', 'axialOffset'], rewrite, 'length');
+      fields(data, ['rotationDeg'], rewrite, 'angle');
+      return;
     case 'solid-offset':
       fields(data, ['distance'], rewrite, 'length');
       return;

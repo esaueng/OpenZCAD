@@ -406,6 +406,8 @@ export function featureValueSummary(
       return length(data.distance);
     case 'rib':
       return `${length(data.thickness) ?? '?'} ${data.direction === 'normal' ? 'along normal' : 'in plane'}`;
+    case 'wrap':
+      return `${data.mode} ${length(data.depth) ?? '?'}`;
     case 'datum-plane': {
       const flip = data.definition.reverseNormal ? ' flipped' : '';
       if (data.definition.kind === 'midplane') return `midplane${flip}`;

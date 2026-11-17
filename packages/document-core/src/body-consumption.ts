@@ -53,6 +53,7 @@ export function replacedInputBodyId(data: FeatureData): BodyId | null {
     case 'shell':
     case 'solid-offset':
     case 'rib':
+    case 'wrap':
     case 'draft':
     case 'fillet':
     case 'chamfer':

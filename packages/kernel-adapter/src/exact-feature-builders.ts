@@ -159,7 +159,8 @@ import {
   formatMeasuredVolume,
   importMeshSolid,
   inheritMeshOrigin,
-  resolveParametricPoint
+  resolveParametricPoint,
+  validateGeneratedSolid
 } from './exact-shape-utils';
 import {
   importedStepCacheKey,
@@ -284,6 +285,7 @@ import {
   resolveSketchBasisAtHistory
 } from './exact-profile-builders';
 import { buildRibSolid } from './exact-rib';
+import { buildWrapSolids, resolveWrapFrame } from './exact-wrap';
 import { applyDirectEdit } from './exact-direct-edit-ops';
 import { resolveSketchProjectionsAtHistory } from './exact-sketch-projection';
 import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
@@ -2362,6 +2364,70 @@ function buildRibFeature(
     lineage: remusHashOnlyLineage(
       'rib',
       'Rib topology has no verified output evolution relation.'
+    )
+  });
+  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+}
+
+/**
+ * M12 (schema v111): the wrap's exact material (see `exact-wrap.ts`), united
+ * with the body (emboss) or cut from it (engrave): one body either way.
+ */
+function buildWrapFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'wrap'>
+): void {
+  const { kernel, result } = ctx;
+  if (!feature.bodyId) throw new Error('Wrap has no result body.');
+  const target = result.shapes.get(data.targetBodyId);
+  if (!target || target.solids.length !== 1) {
+    throw new Error('Wrap target body is unavailable.');
+  }
+  const basis = result.sketchBases.get(data.sketchId);
+  if (!basis) {
+    throw new Error('The wrap sketch plane did not resolve at its history position.');
+  }
+  const frame = resolveWrapFrame(
+    kernel,
+    ctx.document,
+    data,
+    target,
+    basis,
+    ctx.scope,
+    feature.name
+  );
+  const pieces = buildWrapSolids(
+    kernel,
+    ctx.document,
+    data,
+    frame,
+    basis,
+    ctx.scope,
+    (message) => raiseFeatureWarning(result, feature, message, 'advisory'),
+    feature.name
+  );
+  let solid: number;
+  if (data.mode === 'emboss') {
+    solid = fuseUniformSolidChecked(
+      kernel,
+      [target.solids[0]!, ...pieces],
+      [`body of "${feature.name}"`, ...pieces.map(() => `wrap "${feature.name}"`)]
+    ).solid;
+  } else {
+    solid = target.solids[0]!;
+    for (const piece of pieces) {
+      const cut = kernel.cut(solid, piece);
+      kernel.deleteSolid(piece);
+      solid = validateGeneratedSolid(kernel, cut, `Engrave "${feature.name}"`);
+    }
+  }
+  result.consumed.add(data.targetBodyId);
+  result.shapes.set(feature.bodyId, {
+    solids: [solid],
+    lineage: remusHashOnlyLineage(
+      'wrap',
+      'Wrap topology has no verified output evolution relation.'
     )
   });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
@@ -4582,6 +4648,9 @@ function buildFeatureByKind(
       break;
     case 'rib':
       buildRibFeature(ctx, feature, feature.data);
+      break;
+    case 'wrap':
+      buildWrapFeature(ctx, feature, feature.data);
       break;
     case 'draft':
       buildDraftFeature(ctx, feature, feature.data);

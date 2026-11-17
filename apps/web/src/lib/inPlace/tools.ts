@@ -109,6 +109,7 @@ export type InPlaceToolId =
   | 'standard-part'
   | 'shell'
   | 'rib'
+  | 'wrap'
   | 'thicken'
   | 'solid-offset'
   | 'draft'
@@ -146,6 +147,7 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'standard-part',
   'shell',
   'rib',
+  'wrap',
   'thicken',
   'solid-offset',
   'draft',
@@ -217,6 +219,8 @@ export interface FacePick {
   center?: Vector3;
   /** Where the click landed on it (a hole goes there). */
   point?: Vector3;
+  /** M12: a cone's apex, unit axis and remus half-angle (radial plane to generator). */
+  cone?: { apex: Vector3; axis: Vector3; halfAngle: number };
   /**
    * A cylinder's axis through the trimmed face, end to end, and its radius:
    * where a thread on it starts, how long it may run, and what it is sized
@@ -563,6 +567,18 @@ export type InPlaceRequest =
       flip?: true;
     }
   | {
+      /** M12 (schema v111): regions wrapped onto a cylindrical face. */
+      tool: 'wrap';
+      targetBodyId: BodyId;
+      faceReference: FaceTopologyReferenceV5;
+      sketchId: SketchId;
+      profiles: SketchProfileReference[];
+      depth: ParamValue;
+      mode: 'emboss' | 'engrave';
+      rotationDeg?: ParamValue;
+      axialOffset?: ParamValue;
+    }
+  | {
       tool: 'helical-sweep';
       profile: SketchSectionReference;
       axisOrigin: ParametricVector3;
@@ -898,7 +914,8 @@ export interface InPlaceToolSpec {
     values: Record<string, number>;
   };
   /** `planar` refuses curved faces; `cylindrical` takes cylinders only. */
-  faceFilter?: 'planar' | 'cylindrical';
+  /** `revolution` takes a cylinder or a cone. */
+  faceFilter?: 'planar' | 'cylindrical' | 'revolution';
   /**
    * While this option has this value (a pattern's Repeat: Features), the
    * command takes faces, many on one body, each naming the feature that made
@@ -4166,6 +4183,183 @@ const rib: InPlaceToolSpec = {
   }
 };
 
+/** Whether every picked region is in the first one's sketch. */
+function oneSketch(profiles: readonly { sketchId: string }[]): boolean {
+  return profiles.every((pick) => pick.sketchId === profiles[0]?.sketchId);
+}
+
+/**
+ * M12 (schema v111): Wrap in place. Regions of a sketch drawn on a plane
+ * parallel to a cylinder are clicked, then the cylinder's face; the depth
+ * drags out of the face (emboss) or into it (engrave), the turn rides a
+ * ring about the axis and the offset slides along it. Done embosses or
+ * engraves the wrapped regions into the body, leaving one body.
+ */
+const wrap: InPlaceToolSpec = {
+  id: 'wrap',
+  title: 'Wrap',
+  profileMode: 'many',
+  faceMode: 'one',
+  faceFilter: 'revolution',
+  wantsAxis: false,
+  wantsPath: false,
+  values: [
+    {
+      id: 'depth',
+      label: 'Depth',
+      unit: 'length',
+      initial: 1,
+      min: 0,
+      exclusive: true
+    },
+    { id: 'rotation', label: 'Turn', unit: 'angle', initial: 0 },
+    { id: 'offset', label: 'Along', unit: 'length', initial: 0 }
+  ],
+  options: [
+    {
+      id: 'mode',
+      label: 'Wrap',
+      choices: [
+        { value: 'emboss', label: 'Emboss', tip: 'Stand the regions out' },
+        { value: 'engrave', label: 'Engrave', tip: 'Cut the regions in' }
+      ],
+      initial: 'emboss'
+    }
+  ],
+  hint(slots) {
+    if (slots.profiles.length === 0) return 'Click the sketch regions to wrap';
+    if (!oneSketch(slots.profiles))
+      return 'Regions of one sketch wrap together · keep the regions of one sketch';
+    if (slots.faces.length === 0)
+      return `${slots.profiles.length} region${slots.profiles.length === 1 ? '' : 's'} · click the cylinder or cone`;
+    return 'Drag the depth, turn or slide along';
+  },
+  ready: (slots) =>
+    slots.profiles.length > 0 &&
+    oneSketch(slots.profiles) &&
+    slots.faces.length === 1 &&
+    slots.faces[0]!.reference !== undefined,
+  request(slots, values, options) {
+    const face = slots.faces[0];
+    const first = slots.profiles[0];
+    // A wrap reads one sketch: regions of another are refused, never
+    // dropped.
+    if (!face?.reference || !first || !oneSketch(slots.profiles)) return null;
+    return {
+      tool: 'wrap',
+      targetBodyId: face.bodyId,
+      faceReference: face.reference,
+      sketchId: first.sketchId,
+      profiles: slots.profiles.map((pick) => pick.reference),
+      depth: values.depth ?? 1,
+      mode: options.mode === 'engrave' ? 'engrave' : 'emboss',
+      ...(values.rotation ? { rotationDeg: values.rotation } : {}),
+      ...(values.offset ? { axialOffset: values.offset } : {})
+    };
+  },
+  handles(slots, values, _ctx, options) {
+    const face = slots.faces[0];
+    const at = face?.point ?? face?.centroid;
+    if (!face || !at) return [];
+    // The axis, the axis foot under the click, the click's point on the
+    // face and the face's outward normal there.
+    let axis: Vector3;
+    let foot: Vector3;
+    let surface: Vector3;
+    let normal: Vector3;
+    let reach: number;
+    if (face.cylinder) {
+      const cylinder = face.cylinder;
+      axis = unit({
+        x: cylinder.axisEnd.x - cylinder.axisStart.x,
+        y: cylinder.axisEnd.y - cylinder.axisStart.y,
+        z: cylinder.axisEnd.z - cylinder.axisStart.z
+      });
+      const along =
+        (at.x - cylinder.axisStart.x) * axis.x +
+        (at.y - cylinder.axisStart.y) * axis.y +
+        (at.z - cylinder.axisStart.z) * axis.z;
+      foot = {
+        x: cylinder.axisStart.x + axis.x * along,
+        y: cylinder.axisStart.y + axis.y * along,
+        z: cylinder.axisStart.z + axis.z * along
+      };
+      normal = unit({ x: at.x - foot.x, y: at.y - foot.y, z: at.z - foot.z });
+      surface = {
+        x: foot.x + normal.x * cylinder.radius,
+        y: foot.y + normal.y * cylinder.radius,
+        z: foot.z + normal.z * cylinder.radius
+      };
+      reach = cylinder.radius;
+    } else if (face.cone) {
+      const { apex, halfAngle } = face.cone;
+      axis = unit(face.cone.axis);
+      const toward = {
+        x: at.x - apex.x,
+        y: at.y - apex.y,
+        z: at.z - apex.z
+      };
+      // Into the cone, toward the face.
+      if (toward.x * axis.x + toward.y * axis.y + toward.z * axis.z < 0)
+        axis = scaled(axis, -1);
+      const along = toward.x * axis.x + toward.y * axis.y + toward.z * axis.z;
+      foot = {
+        x: apex.x + axis.x * along,
+        y: apex.y + axis.y * along,
+        z: apex.z + axis.z * along
+      };
+      const radial = unit({ x: at.x - foot.x, y: at.y - foot.y, z: at.z - foot.z });
+      const [sin, cos] = [Math.sin(halfAngle), Math.cos(halfAngle)];
+      normal = unit({
+        x: radial.x * sin - axis.x * cos,
+        y: radial.y * sin - axis.y * cos,
+        z: radial.z * sin - axis.z * cos
+      });
+      surface = at;
+      reach = Math.hypot(at.x - foot.x, at.y - foot.y, at.z - foot.z);
+    } else {
+      return [];
+    }
+    const radial = unit({
+      x: surface.x - foot.x,
+      y: surface.y - foot.y,
+      z: surface.z - foot.z
+    });
+    // Out of the face is away from its material: toward the axis in a bore,
+    // when the pick says which way the face looks.
+    const bore =
+      face.normal !== undefined &&
+      face.normal.x * radial.x + face.normal.y * radial.y + face.normal.z * radial.z < 0;
+    const inward = (options.mode === 'engrave') !== bore ? -1 : 1;
+    const key = `wrap:${face.bodyId}:${face.hash}`;
+    return [
+      {
+        valueId: 'depth',
+        kind: 'linear',
+        key: `${key}:depth:${inward}`,
+        params: { origin: surface, direction: scaled(normal, inward) }
+      },
+      {
+        valueId: 'rotation',
+        kind: 'angle',
+        key: `${key}:turn`,
+        params: {
+          center: foot,
+          axis,
+          startDirection: radial,
+          radius: reach * 1.3 + (values.depth ?? 1)
+        }
+      },
+      {
+        valueId: 'offset',
+        kind: 'linear',
+        key: `${key}:along`,
+        params: { origin: surface, direction: axis }
+      }
+    ];
+  }
+};
+
 const thicken: InPlaceToolSpec = {
   id: 'thicken',
   title: 'Thicken',
@@ -6624,6 +6818,7 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   'standard-part': standardPartSpec,
   shell,
   rib,
+  wrap,
   thicken,
   'solid-offset': solidOffset,
   draft,

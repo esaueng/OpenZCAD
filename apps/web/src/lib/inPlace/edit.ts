@@ -178,6 +178,7 @@ export function inPlaceToolForFeature(data: FeatureData): InPlaceToolId | null {
     case 'sweep':
     case 'helical-sweep':
     case 'rib':
+    case 'wrap':
     case 'hole':
     case 'thread':
     case 'shell':
@@ -423,6 +424,18 @@ export function inPlaceEditSeed(
       seed.options.direction = data.direction;
       seed.options.side = data.thicknessSide;
       seed.options.flip = data.flip ? 'flipped' : 'as-drawn';
+      break;
+    }
+    case 'wrap': {
+      for (const reference of data.profiles)
+        profile({ sketchId: data.sketchId, profile: reference });
+      const face = ctx.face(data.targetBodyId, data.faceReference.currentHash, data.faceReference);
+      if (face) seed.slots.faces.push(face);
+      else missing.push('face');
+      value('depth', data.depth);
+      value('rotation', data.rotationDeg);
+      value('offset', data.axialOffset);
+      seed.options.mode = data.mode;
       break;
     }
     case 'helical-sweep': {
@@ -1223,6 +1236,31 @@ export function inPlaceFeatureUpdate(
         },
         ...(request.flip ? {} : { clearData: ['flip'] })
       };
+    case 'wrap':
+      if (saved.featureKind !== 'wrap') return null;
+      return {
+        featureId,
+        name,
+        data: {
+          featureKind: 'wrap',
+          targetBodyId: request.targetBodyId,
+          faceReference: request.faceReference,
+          sketchId: request.sketchId,
+          profiles: request.profiles,
+          depth: request.depth,
+          mode: request.mode,
+          ...(request.rotationDeg === undefined
+            ? {}
+            : { rotationDeg: request.rotationDeg }),
+          ...(request.axialOffset === undefined
+            ? {}
+            : { axialOffset: request.axialOffset })
+        },
+        clearData: [
+          ...(request.rotationDeg === undefined ? ['rotationDeg'] : []),
+          ...(request.axialOffset === undefined ? ['axialOffset'] : [])
+        ]
+      };
     case 'gear': {
       if (saved.featureKind !== 'gear') return null;
       // Optional fields the edit no longer sets go back to their defaults.
@@ -1474,6 +1512,8 @@ export function inPlaceEditSourceSketchIds(data: FeatureData): SketchId[] {
       return [data.profile.sketchId];
     case 'rib':
       return [data.profile.sketchId];
+    case 'wrap':
+      return [data.sketchId];
     // M16: the blank's sketch, and each bend line's.
     case 'sheet-metal':
       return [
@@ -1505,6 +1545,7 @@ const SINGLE_LINEAGE_KINDS = new Set<FeatureData['featureKind']>([
   'thicken',
   'solid-offset',
   'rib',
+  'wrap',
   'split',
   'transform',
   'mirror',

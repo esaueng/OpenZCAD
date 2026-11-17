@@ -9,6 +9,7 @@ import type {
   DatumAxisDefinition,
   FeatureId,
   SketchId,
+  SketchProfileReference,
   Vector3
 } from '@openzcad/shared';
 import { TOOL_META } from '../tools';
@@ -2806,5 +2807,33 @@ describe('a new primitive over a model that has bodies', () => {
     expect(cylinder.hint(EMPTY, {}, ctx(['box']))).toBe(
       'Drag a footprint on the ground or a face · Done adds it as a separate body where it shows'
     );
+  });
+});
+
+describe('Wrap in place', () => {
+  const wrap = IN_PLACE_TOOL_SPECS.wrap;
+  const region = (sketchId: string, regionFingerprint: number) => ({
+    sketchId: sketchId as SketchId,
+    reference: { regionFingerprint } as unknown as SketchProfileReference,
+    regionFingerprint
+  });
+  const side: FacePick = {
+    ...TOP,
+    surfaceType: 'cylinder',
+    reference: { kind: 'face' } as unknown as FacePick['reference']
+  };
+
+  it('wraps the regions of one sketch together', () => {
+    const slots = { ...EMPTY, profiles: [region('s1', 1), region('s1', 2)], faces: [side] };
+    expect(wrap.ready(slots)).toBe(true);
+    const request = wrap.request(slots, {}, {}, CTX);
+    expect(request?.tool === 'wrap' && request.profiles).toHaveLength(2);
+  });
+
+  it('refuses regions of two sketches instead of dropping one', () => {
+    const slots = { ...EMPTY, profiles: [region('s1', 1), region('s2', 2)], faces: [side] };
+    expect(wrap.ready(slots)).toBe(false);
+    expect(wrap.request(slots, {}, {}, CTX)).toBeNull();
+    expect(wrap.hint(slots, {}, {} as never)).toMatch(/one sketch/);
   });
 });

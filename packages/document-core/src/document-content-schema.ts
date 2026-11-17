@@ -120,6 +120,11 @@ export function hasDatumReferenceConstructorKind(value: unknown): boolean {
   return false;
 }
 
+/** M12 wraps (schema v111). */
+export function assertWrapSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 111, 'Wraps');
+}
+
 /** I01 (schema v59): slot composites, wherever a document or command holds one. */
 export function assertSlotSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 59, 'Sketch slots');
@@ -881,6 +886,7 @@ export function assertDocumentContentCommandSchema(
       hasDatumReferenceConstructorKind(command.payload)
     )
       assertDatumReferenceConstructorSchema(document.schemaVersion);
+    if (command.kind === 'feature.wrap') assertWrapSchema(document.schemaVersion);
     if (command.kind === 'feature.standard-part')
       assertStandardPartSchema(document.schemaVersion, command.payload);
     if (command.kind === 'printClearance.set')
@@ -1294,6 +1300,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       hasDatumReferenceConstructorContent(node.data)
     )
       assertDatumReferenceConstructorSchema(document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'wrap')
+      assertWrapSchema(document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'standard-part')
       assertStandardPartSchema(document.schemaVersion, node.data);
     if (

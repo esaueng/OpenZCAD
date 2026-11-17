@@ -12682,6 +12682,18 @@ export function App() {
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
       ...(cylinder ? { cylinder } : {}),
+      ...(geometry?.surfaceType.toLowerCase() === 'cone' &&
+      geometry.apex &&
+      geometry.axis &&
+      geometry.halfAngle !== undefined
+        ? {
+            cone: {
+              apex: geometry.apex,
+              axis: geometry.axis,
+              halfAngle: geometry.halfAngle
+            }
+          }
+        : {}),
       ...(point ? { point } : {})
     };
   }
@@ -25560,6 +25572,22 @@ export function App() {
           thicknessSide: request.thicknessSide,
           direction: request.direction,
           ...(request.flip ? { flip: true } : {})
+        });
+      case 'wrap':
+        return commandFactories.wrapBody({
+          name,
+          targetBodyId: request.targetBodyId,
+          faceReference: request.faceReference,
+          sketchId: request.sketchId,
+          profiles: request.profiles,
+          depth: request.depth,
+          mode: request.mode,
+          ...(request.rotationDeg === undefined
+            ? {}
+            : { rotationDeg: request.rotationDeg }),
+          ...(request.axialOffset === undefined
+            ? {}
+            : { axialOffset: request.axialOffset })
         });
       case 'helical-sweep':
         return commandFactories.helicalSweepProfile({

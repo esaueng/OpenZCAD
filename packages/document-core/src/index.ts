@@ -74,6 +74,7 @@ import {
   assertDatumPointCsysSchema,
   assertRibSchema,
   assertDatumReferenceConstructorSchema,
+  assertWrapSchema,
   assertStandardPartSchema,
   assertPatternContentSchema,
   assertHoleContentSchema,
@@ -720,6 +721,20 @@ export interface RibInput {
   thicknessSide: 'symmetric' | 'first' | 'second';
   direction: 'parallel' | 'normal';
   flip?: boolean;
+  ids?: BodyFeatureIds;
+}
+
+/** M12 (schema v111): regions wrapped onto a cylinder, embossed or engraved. */
+export interface WrapInput {
+  name: string;
+  targetBodyId: BodyId;
+  faceReference: FaceTopologyReferenceV5;
+  sketchId: SketchId;
+  profiles: SketchProfileReference[];
+  depth: ParamValue;
+  mode: 'emboss' | 'engrave';
+  rotationDeg?: ParamValue;
+  axialOffset?: ParamValue;
   ids?: BodyFeatureIds;
 }
 
@@ -4067,6 +4082,7 @@ function addBodyResultFeature(
     | 'shell'
     | 'solid-offset'
     | 'rib'
+    | 'wrap'
     | 'loft'
     | 'sweep'
     | 'helical-sweep'
@@ -4089,6 +4105,7 @@ function addBodyResultFeature(
         | 'shell'
         | 'solid-offset'
         | 'rib'
+        | 'wrap'
         | 'loft'
         | 'sweep'
         | 'helical-sweep'
@@ -4394,6 +4411,38 @@ export function ribBody(
       thicknessSide: input.thicknessSide,
       direction: input.direction,
       ...(input.flip ? { flip: true } : {})
+    },
+    suppliedIds(input.ids)
+  );
+}
+
+/** Adds an M12 wrap (schema v111); it replaces the body it is wrapped on. */
+export function wrapBody(
+  document: ProjectDocument,
+  input: WrapInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  assertWrapSchema(document.schemaVersion);
+  if (input.profiles.length === 0) {
+    throw new Error('A wrap needs at least one sketch region.');
+  }
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'wrap',
+    {
+      featureKind: 'wrap',
+      targetBodyId: input.targetBodyId,
+      faceReference: deepClone(input.faceReference),
+      sketchId: input.sketchId,
+      profiles: deepClone(input.profiles),
+      depth: input.depth,
+      mode: input.mode,
+      ...(input.rotationDeg === undefined
+        ? {}
+        : { rotationDeg: input.rotationDeg }),
+      ...(input.axialOffset === undefined
+        ? {}
+        : { axialOffset: input.axialOffset })
     },
     suppliedIds(input.ids)
   );
@@ -5648,6 +5697,16 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'thicknessSide',
     'direction',
     'flip'
+  ],
+  wrap: [
+    'targetBodyId',
+    'faceReference',
+    'sketchId',
+    'profiles',
+    'depth',
+    'mode',
+    'rotationDeg',
+    'axialOffset'
   ],
   draft: [
     'targetBodyId',
