@@ -84,8 +84,13 @@ const APPROVED_LAZY_ASSETS = [
     reason: 'Exact geometry kernel, loaded only for non-empty geometry'
   },
   {
+    // 2026-11-17: raised from 4 MiB to 4.5 MiB at the maintainer's
+    // direction. Remus 2026.1.147 is 4,227,738 bytes: the STEP product
+    // structure reader (I02) and the exact IGES B-rep reader and writer (I06)
+    // took it 32 KiB past 4 MiB. It is still fetched only around an import
+    // or export, never at start-up.
     pattern: TRANSLATOR_WASM_ASSET_PATTERN,
-    maxBytes: 4 * 1024 * 1024,
+    maxBytes: 4.5 * 1024 * 1024,
     reason:
       'Remus file-format translators, loaded only around an import or export'
   },
