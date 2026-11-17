@@ -86,7 +86,6 @@ function ObjectsFrame(props: ModelPanelProps) {
             className="model-panel-status"
             role="status"
             aria-label="Preparing model details…"
-            title="Preparing model details…"
           >
             Preparing…
           </span>
