@@ -68,13 +68,15 @@ turns on the H02 probe's within-run ratio checks and the Node pattern
 probe's own assertion. `--summarize <dir>` re-reads a finished run.
 `--only` selects probes:
 
-| Probe             | Spec                                                                             | Measures                                                                                                         |
-| ----------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `h02`             | `test/e2e/perf-holder-reload.spec.ts`                                            | Reload and the first, second and immediate edits on the drilled (15 features) and lettered (31 features) holders |
-| `w01-box`         | `test/e2e/perf-cad-edit.spec.ts`                                                 | 30 width edits of a simple box                                                                                   |
-| `w01-history`     | `test/e2e/perf-cad-edit.spec.ts` (`CAD_PERF_BROWSER_HISTORY=100`, isolated part) | 30 width edits in a 100-feature history                                                                          |
-| `pattern-node`    | `test/perf/pattern-preview.bench.ts`                                             | Adapter frame sync of 3 × 3, 3 × 10 and 10 × 10 grids, the commit after it, and per-method kernel time           |
-| `pattern-browser` | `test/e2e/perf-pattern-preview.spec.ts`                                          | The Grid pattern card: pick the bar (3 × 3), then count 10 (10 × 3), then count 2 10 (10 × 10)                   |
+| Probe                | Spec                                                                             | Measures                                                                                                         |
+| -------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `h02`                | `test/e2e/perf-holder-reload.spec.ts`                                            | Reload and the first, second and immediate edits on the drilled (15 features) and lettered (31 features) holders |
+| `w01-box`            | `test/e2e/perf-cad-edit.spec.ts`                                                 | 30 width edits of a simple box                                                                                   |
+| `w01-history`        | `test/e2e/perf-cad-edit.spec.ts` (`CAD_PERF_BROWSER_HISTORY=100`, isolated part) | 30 width edits in a 100-feature history                                                                          |
+| `f06-switch-box`     | `test/e2e/perf-configuration-switch.spec.ts`                                     | 30 configuration row switches of a simple box ([F06 record](2026-11-17-f06-row-switch.md))                       |
+| `f06-switch-history` | `test/e2e/perf-configuration-switch.spec.ts` (`CONFIG_SWITCH_HISTORY=100`)       | 30 row switches in a 100-feature history, isolated part                                                          |
+| `pattern-node`       | `test/perf/pattern-preview.bench.ts`                                             | Adapter frame sync of 3 × 3, 3 × 10 and 10 × 10 grids, the commit after it, and per-method kernel time           |
+| `pattern-browser`    | `test/e2e/perf-pattern-preview.spec.ts`                                          | The Grid pattern card: pick the bar (3 × 3), then count 10 (10 × 3), then count 2 10 (10 × 10)                   |
 
 None of them runs in CI. Timings depend on the machine, its load and its GPU,
 and the runs take about 20 minutes. `pnpm typecheck` and `pnpm lint` cover

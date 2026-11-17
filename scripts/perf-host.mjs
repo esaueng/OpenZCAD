@@ -54,6 +54,54 @@ function processTable() {
  * default it is the topmost ancestor still running pnpm, Playwright, Vitest
  * or the baseline runner, or `OZ_PERF_OWN_ROOT` when the runner set it.
  */
+/** A `flock` still waiting for its lock: it has started nothing yet. */
+const FLOCK = /^\S*\bflock\s/;
+
+/**
+ * The rows of `rows` that make the host noisy: cargo, rustc and Playwright
+ * work outside the process tree rooted at `root`. A job only queued behind
+ * the shared heavy-job lock (`flock … playwright …` with no child yet, and
+ * the shells above it with nothing else running) loads nothing, and counting
+ * it would make a probe that holds the lock wait on its own queue.
+ */
+export function busyRows(rows, root) {
+  const parent = new Map(rows.map((row) => [row.pid, row.ppid]));
+  const children = new Map();
+  for (const row of rows) {
+    const list = children.get(row.ppid) ?? [];
+    list.push(row);
+    children.set(row.ppid, list);
+  }
+  const own = (pid) => {
+    for (let at = pid, hops = 0; at && hops < 64; hops++) {
+      if (at === root) return true;
+      at = parent.get(at);
+    }
+    return false;
+  };
+  const waitingFlock = (row) =>
+    FLOCK.test(row.args) && !children.get(row.pid)?.length;
+  /** Every process below `row`, or null past a sane depth. */
+  const descendants = (row) => {
+    const found = [];
+    const queue = [...(children.get(row.pid) ?? [])];
+    while (queue.length && found.length < 256) {
+      const next = queue.shift();
+      found.push(next);
+      queue.push(...(children.get(next.pid) ?? []));
+    }
+    return found;
+  };
+  const onlyWaiting = (row) => {
+    if (waitingFlock(row)) return true;
+    const below = descendants(row);
+    return below.length > 0 && below.every(waitingFlock);
+  };
+  return rows.filter(
+    (row) => BUSY_PROCESS.test(row.args) && !own(row.pid) && !onlyWaiting(row)
+  );
+}
+
 export function busyProcesses(ownRoot) {
   const rows = processTable();
   const parent = new Map(rows.map((row) => [row.pid, row.ppid]));
@@ -67,16 +115,9 @@ export function busyProcesses(ownRoot) {
       at = parent.get(at);
     }
   }
-  const own = (pid) => {
-    for (let at = pid, hops = 0; at && hops < 64; hops++) {
-      if (at === root) return true;
-      at = parent.get(at);
-    }
-    return false;
-  };
-  return rows
-    .filter((row) => BUSY_PROCESS.test(row.args) && !own(row.pid))
-    .map((row) => `${row.pid} ${row.args.slice(0, 120)}`);
+  return busyRows(rows, root).map(
+    (row) => `${row.pid} ${row.args.slice(0, 120)}`
+  );
 }
 
 export function hostSnapshot(ownRoot) {

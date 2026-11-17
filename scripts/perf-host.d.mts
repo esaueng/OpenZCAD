@@ -18,6 +18,10 @@ export interface QuietHostRule {
 
 export const BUSY_PROCESS: RegExp;
 export const QUIET_HOST: Readonly<QuietHostRule>;
+export function busyRows<T extends { pid: number; ppid: number; args: string }>(
+  rows: readonly T[],
+  root: number
+): T[];
 export function busyProcesses(ownRoot?: number): string[];
 export function hostSnapshot(ownRoot?: number): HostSnapshot;
 export function noisyReasons(
