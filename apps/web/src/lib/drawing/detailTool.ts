@@ -29,7 +29,10 @@ export function detailSourceAt(
 ): ComposedView | null {
   for (const entry of views) {
     const { view, projection } = entry;
-    if (!projection.bounds || view.section || view.detail) continue;
+    // A detail's source is a principal view: not a section, another detail
+    // or (v81) an auxiliary view, which validation refuses as a source.
+    if (!projection.bounds || view.section || view.detail || view.auxiliary)
+      continue;
     const box = viewPageBox(view, projection.bounds, sheet, units);
     if (
       point[0] >= box.x &&

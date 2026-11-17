@@ -1,4 +1,5 @@
 import {
+  type DrawingViewFrame,
   DRAWING_SCALE_PRESETS,
   DRAWING_VIEW_FRAMES,
   DRAWING_VIEW_ORIENTATIONS,
@@ -269,9 +270,11 @@ export interface ViewExtent {
 /** Projected extent of world points (xyz triples) in a view; null when empty. */
 export function projectedExtent(
   orientation: DrawingViewOrientation,
-  points: Iterable<ArrayLike<number>>
+  points: Iterable<ArrayLike<number>>,
+  /** D03 (v81): an auxiliary view's own frame. */
+  own?: DrawingViewFrame
 ): ViewExtent | null {
-  const frame = DRAWING_VIEW_FRAMES[orientation];
+  const frame = own ?? DRAWING_VIEW_FRAMES[orientation];
   const extent = {
     minU: Infinity,
     minV: Infinity,
@@ -631,6 +634,7 @@ export function composeSheetPage(
 ): SheetPage {
   const marks = composeSectionMarks(sheet, views, context.units);
   const details = composeDetailMarks(sheet, views, context.units);
+  const auxiliaries = composeAuxiliaryMarks(sheet, views, context.units);
   const paper = drawingPaperMm(sheet.paper);
   const strokes: SheetStroke[] = [
     {
@@ -689,12 +693,14 @@ export function composeSheetPage(
       ...strokes,
       ...marks.strokes,
       ...details.strokes,
+      ...auxiliaries.strokes,
       ...(annotations?.strokes ?? []),
       ...block.strokes
     ].flatMap((stroke) => clipStroke(stroke, onPaper)),
     texts: [
       ...marks.texts,
       ...details.texts,
+      ...auxiliaries.texts,
       ...(annotations?.texts ?? []),
       ...block.texts
     ].filter((text) => insideRect(onPaper, text.x, text.y))
@@ -1103,6 +1109,97 @@ export function composeDetailMarks(
       bold: true,
       align: 'middle'
     });
+  }
+  return { strokes, texts };
+}
+
+/**
+ * D03 (v81): an auxiliary view's direction of sight on its source's paper:
+ * a unit (x, y), the way the arrow beside the source points.
+ */
+export function auxiliarySightOnSource(
+  view: Pick<DrawingView, 'auxiliary'> & {
+    auxiliary: NonNullable<DrawingView['auxiliary']>;
+  },
+  source: Pick<DrawingView, 'orientation'>
+): [number, number] {
+  const frame = DRAWING_VIEW_FRAMES[source.orientation];
+  const d = view.auxiliary.direction;
+  const u = d.x * frame.x.x + d.y * frame.x.y + d.z * frame.x.z;
+  const v = d.x * frame.up.x + d.y * frame.up.y + d.z * frame.up.z;
+  const length = Math.hypot(u, v) || 1;
+  return [u / length, v / length];
+}
+
+/** "VIEW A": an auxiliary view's caption, under it. */
+export function auxiliaryCaption(label: string): string {
+  return `VIEW ${label}`;
+}
+
+/** How far outside its source's footprint the auxiliary arrow starts. */
+const AUXILIARY_ARROW_GAP_MM = 6;
+
+/**
+ * D03 (v81): each auxiliary view's arrow beside its source, pointing along
+ * its direction of sight at the source's middle, with its letter at the
+ * tail, and its caption under the view.
+ */
+export function composeAuxiliaryMarks(
+  sheet: Pick<DrawingSheet, 'scale' | 'views'>,
+  views: readonly ComposedView[],
+  units: UnitSystem
+): { strokes: SheetStroke[]; texts: SheetText[] } {
+  const strokes: SheetStroke[] = [];
+  const texts: SheetText[] = [];
+  const drawn = new Map(views.map((entry) => [entry.view.viewId, entry]));
+  for (const view of sheet.views) {
+    const auxiliary = view.auxiliary;
+    if (!auxiliary) continue;
+    const source = drawn.get(auxiliary.sourceViewId);
+    if (source?.projection.bounds) {
+      const box = viewPageBox(
+        source.view,
+        source.projection.bounds,
+        sheet,
+        units
+      );
+      const sight = auxiliarySightOnSource({ auxiliary }, source.view);
+      const centre: [number, number] = [
+        box.x + box.width / 2,
+        box.y + box.height / 2
+      ];
+      // From outside the footprint, on the side the view is seen from.
+      const reach =
+        Math.abs(sight[0]) * (box.width / 2) +
+        Math.abs(sight[1]) * (box.height / 2) +
+        AUXILIARY_ARROW_GAP_MM +
+        SECTION_ARROW_MM;
+      const tail: [number, number] = [
+        centre[0] - sight[0] * reach,
+        centre[1] - sight[1] * reach
+      ];
+      strokes.push(...sectionArrow(tail, sight));
+      texts.push({
+        x: tail[0] - sight[0] * 3,
+        y: tail[1] - sight[1] * 3 - SECTION_LABEL_MM / 2,
+        sizeMm: SECTION_LABEL_MM,
+        text: auxiliary.label,
+        bold: true,
+        align: 'middle'
+      });
+    }
+    const own = drawn.get(view.viewId);
+    if (own?.projection.bounds) {
+      const box = viewPageBox(view, own.projection.bounds, sheet, units);
+      texts.push({
+        x: view.centerMm.x,
+        y: box.y - SECTION_CAPTION_GAP_MM,
+        sizeMm: SECTION_LABEL_MM * 0.7,
+        text: auxiliaryCaption(auxiliary.label),
+        bold: true,
+        align: 'middle'
+      });
+    }
   }
   return { strokes, texts };
 }

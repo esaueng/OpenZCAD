@@ -392,12 +392,17 @@ export function updateDrawingView(
       view.detail = deepClone({ ...view.detail, ...input.detail });
     }
     // A detail looks as its source does: its bodies follow the source's.
-    if (input.bodyIds && view.detail)
-      throw new Error('A detail view draws the bodies of its source view.');
+    if (input.bodyIds && (view.detail || view.auxiliary))
+      throw new Error(
+        `A ${view.detail ? 'detail' : 'auxiliary'} view draws the bodies of its source view.`
+      );
     if (input.bodyIds)
-      for (const detail of sheet.views)
-        if (detail.detail?.sourceViewId === view.viewId)
-          detail.bodyIds = [...input.bodyIds];
+      for (const follower of sheet.views)
+        if (
+          follower.detail?.sourceViewId === view.viewId ||
+          follower.auxiliary?.sourceViewId === view.viewId
+        )
+          follower.bodyIds = [...input.bodyIds];
     if (input.sectionDepth !== undefined) {
       if (!view.section)
         throw new Error(`Drawing view ${input.viewId} is not a section.`);
@@ -469,7 +474,8 @@ export function deleteDrawingView(
     for (const view of sheet.views)
       if (
         view.section?.sourceViewId === input.viewId ||
-        view.detail?.sourceViewId === input.viewId
+        view.detail?.sourceViewId === input.viewId ||
+        view.auxiliary?.sourceViewId === input.viewId
       )
         removed.add(view.viewId);
     if (sheet.annotations) {

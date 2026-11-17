@@ -359,7 +359,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // number at a leader, both read from the AS03 table each time the sheet is
 // drawn. An older client would refuse the unknown kinds, so it must refuse
 // the document. Builds on v79 (F06 assembly component configurations).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 80 as const;
+// v81 adds D03 auxiliary views (`auxiliary` on a drawing view): seen square
+// to an edge its source draws true length, so an inclined face is drawn
+// true size. An older client would draw the source's view instead, so it
+// must refuse. Builds on v80.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 81 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

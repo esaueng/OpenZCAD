@@ -4,12 +4,17 @@ import {
   type ProjectionBodyInput,
   type ViewProjection
 } from '../lib/drawing/projectView';
-import type { DrawingViewOrientation } from '@openzcad/shared';
+import type {
+  DrawingViewFrame,
+  DrawingViewOrientation
+} from '@openzcad/shared';
 
 /** One view to project from the batch's shared bodies. */
 export interface DrawingProjectionViewRequest {
   key: string;
   orientation: DrawingViewOrientation;
+  /** D03 (v81): an auxiliary view's own frame. */
+  frame?: DrawingViewFrame;
   hiddenLines: boolean;
   bodyIds: string[];
 }
@@ -79,6 +84,7 @@ self.onmessage = (
     try {
       const projection = projectView({
         orientation: view.orientation,
+        ...(view.frame ? { frame: view.frame } : {}),
         hiddenLines: view.hiddenLines,
         bodies: view.bodyIds.flatMap((id) => {
           const body = bodies[id];
