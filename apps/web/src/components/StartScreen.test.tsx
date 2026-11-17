@@ -1043,6 +1043,21 @@ describe('StartScreen cloud project status', () => {
     ).toBeNull();
   });
 
+  it('says it is checking while an unreached account is asked again', () => {
+    renderStartScreen({
+      accountProjectListReached: false,
+      accountListingPending: true,
+      onRetryAccountListing: vi.fn()
+    });
+
+    expect(screen.getByText('Checking account…')).toBeInTheDocument();
+    expect(screen.queryByText('Account unavailable')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Retry/ })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: 'Save it to my account' })
+    ).toBeNull();
+  });
+
   it('offers Retry for an account listing that failed', () => {
     const onRetryAccountListing = vi.fn();
     renderStartScreen({

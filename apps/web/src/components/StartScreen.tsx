@@ -208,6 +208,11 @@ interface StartScreenProps {
    */
   accountProjectListReached: boolean;
   /**
+   * True while a listing asks an account the last one did not reach: the
+   * shelf says it is checking rather than that the account is unavailable.
+   */
+  accountListingPending?: boolean;
+  /**
    * Projects whose two copies diverged and were never reconciled. Surfaced on
    * the shelf because the divergence outlives the session that found it, and a
    * user who closed the dialog needs a way back to it.
@@ -721,6 +726,7 @@ export function StartScreen({
   loadProperties,
   cloudProjectIds,
   accountProjectListReached,
+  accountListingPending = false,
   conflictedProjectIds,
   signedIn,
   cloudUnavailable = false,
@@ -3328,6 +3334,9 @@ export function StartScreen({
           run: onSignIn ?? onOpenSettings
         }
       };
+    }
+    if (!accountProjectListReached && accountListingPending) {
+      return { tone: 'idle', Icon: Cloud, text: 'Checking account…' };
     }
     if (!accountProjectListReached) {
       return {

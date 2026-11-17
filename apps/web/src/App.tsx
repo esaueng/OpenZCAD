@@ -5180,6 +5180,8 @@ export function App() {
    */
   const [accountProjectListReached, setAccountProjectListReached] =
     useState(false);
+  /** A listing is asking an account the last one did not reach. */
+  const [accountListingPending, setAccountListingPending] = useState(false);
   const thumbnailBackfillRuntimeRef = useRef({
     cloudProjectIds
   });
@@ -8361,8 +8363,18 @@ export function App() {
           accountOwnsStartupProject &&
           isProjectDocumentUnavailableError(rememberedRemoteResult.error)
         );
+        // A listing that never reached the account cannot say who owns the
+        // project. One this device has synced before is the account's, so a
+        // failed load of it is an unreachable account copy, not a project
+        // that was only ever local ("Save to my account" after a reload).
+        const accountMayOwnStartupProject = Boolean(
+          accountOwnsStartupProject ||
+          (startupProjectId &&
+            !listed.remoteReached &&
+            lastSyncedVersion !== null)
+        );
         const accountDocumentLoadFailed = Boolean(
-          accountOwnsStartupProject && rememberedRemoteResult.error
+          accountMayOwnStartupProject && rememberedRemoteResult.error
         );
         const restoredOutcome = chooseProjectDocument(
           rememberedLocal,
@@ -15626,6 +15638,9 @@ export function App() {
     }
     const activeProjectSince = snapshotActiveProject();
     const finishBusy = startNavigationBusy(listed?.name ?? 'project');
+    // Load the viewport while the saved copies are checked, as creating a
+    // project does; the two loader phases otherwise ran one after the other.
+    void loadWhenOnline(() => LazyViewerShell.preload()).catch(() => undefined);
     try {
       await flushPendingLocalSave();
       if (!isCurrent()) return;
@@ -16179,6 +16194,12 @@ export function App() {
     setSelectedSketchProfileId(null);
     setSelectedProfiles([]);
     setTool(null);
+    // An account the last listing missed is being asked again: the shelf says
+    // so instead of "Account unavailable" over this device's projects alone.
+    const listingPending = Boolean(
+      sessionRef.current && !accountProjectListReached
+    );
+    if (listingPending) setAccountListingPending(true);
     try {
       // The flush above just started this project's card upload. The shelf
       // already shows the card; the listing behind it is read once the upload
@@ -16200,6 +16221,8 @@ export function App() {
       if (isCurrent()) {
         setStatus(errorMessage(error, 'Failed to refresh projects.'));
       }
+    } finally {
+      if (listingPending) setAccountListingPending(false);
     }
   }
   leaveShareSessionRef.current = handleGoHome;
@@ -34091,7 +34114,16 @@ export function App() {
           onCreate={(name, units) => void handleCreateProject(name, units)}
           onOpen={(projectId) => void handleOpenProject(projectId)}
           onOpenDemo={(definition) => void handleOpenDemo(definition)}
-          onOpenIntent={() => geometry.prepareKernel?.()}
+          onOpenIntent={() => {
+            geometry.prepareKernel?.();
+            // Pointing at a card also warms the viewport, so opening does not
+            // wait for its download after the project itself has loaded.
+            if (!prefersSavingData()) {
+              void loadWhenOnline(() => LazyViewerShell.preload()).catch(
+                () => undefined
+              );
+            }
+          }}
           onOpenSettings={openSettings}
           onSignIn={() => openSettingsAt('account')}
           onDuplicate={(project) => void handleDuplicateProject(project)}
@@ -34099,6 +34131,7 @@ export function App() {
           loadProperties={loadProperties}
           cloudProjectIds={cloudProjectIds}
           accountProjectListReached={accountProjectListReached}
+          accountListingPending={accountListingPending}
           conflictedProjectIds={conflictedProjectIds}
           signedIn={Boolean(session)}
           cloudUnavailable={
@@ -35852,7 +35885,11 @@ export function App() {
           exportUnavailableReason={emptyExportReason}
           saveState={presentedSaveState}
           saveToAccount={
-            cloudFunctionsEnabled && !!session && !activeProjectIsCloud
+            // Not known to be device-only until the account has answered.
+            cloudFunctionsEnabled &&
+            !!session &&
+            !activeProjectIsCloud &&
+            accountProjectListReached
           }
           knownDeviceOnly={
             cloudFunctionsEnabled &&
