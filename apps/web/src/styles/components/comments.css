@@ -51,7 +51,7 @@
   align-content: start;
   gap: var(--sp-2);
   width: min(340px, calc(100vw - 32px));
-  max-height: calc(100vh - 160px);
+  max-height: calc(100dvh - 160px);
   overflow-y: auto;
   padding: var(--sp-3);
   color: var(--color-text);
