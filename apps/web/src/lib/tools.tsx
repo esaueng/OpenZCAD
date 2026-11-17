@@ -479,6 +479,13 @@ export interface ToolAvailability {
    * them: a Fillet tile that lights up on a ghost body refuses the click.
    */
   liveBodyCount: number;
+  /**
+   * A Union, Subtract or Intersect command is running. Its sibling
+   * operations switch it, keeping the bodies it holds, so they stay offered
+   * whatever the body count: an edited boolean has consumed its sources
+   * into one result (#1654).
+   */
+  booleanCommandRunning?: boolean;
   /** Exact projection matches the visible project/version (not stale). */
   exactGeometryReady: boolean;
   /** An exact edge is picked in the viewport (enables fillet/chamfer). */
@@ -601,7 +608,8 @@ export function toolDisabledReason(
   }
   if (
     (tool === 'union' || tool === 'subtract' || tool === 'intersect') &&
-    avail.liveBodyCount < 2
+    avail.liveBodyCount < 2 &&
+    !avail.booleanCommandRunning
   ) {
     return 'Needs at least two bodies';
   }

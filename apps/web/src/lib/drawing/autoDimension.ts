@@ -20,7 +20,8 @@ import {
   type EdgeTopology,
   type FaceTopology,
   type UnitSystem,
-  type Vector3
+  type Vector3,
+  drawingViewHasOwnFrame
 } from '@openzcad/shared';
 import {
   annotationAnchor,
@@ -271,7 +272,9 @@ export function planAutoDimensions(
   // the isometric one.
   const measuring = contexts.filter(
     // Principal views only: an auxiliary view's axes are no model axes.
-    (context) => context.view.orientation !== 'iso' && !context.view.auxiliary
+    (context) =>
+      context.view.orientation !== 'iso' &&
+      !drawingViewHasOwnFrame(context.view)
   );
   /** What a view measures of a body: a section's cut edges, else the model's. */
   const edgesOf = (context: ViewContext, bodyId: string) =>

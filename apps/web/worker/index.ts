@@ -63,6 +63,7 @@ import {
   accountEntitlements,
   drainPendingObjects,
   PENDING_OBJECT_GRACE_MS,
+  isShareLinkCommentsReady,
   syncStoredAccountLimits
 } from '@openzcad/cloudflare-adapters';
 import {
@@ -216,6 +217,21 @@ import {
   saveProjectMeasurements
 } from './projectMeasurements';
 import {
+  commentLinkProject,
+  createLinkComment,
+  createProjectComment,
+  deleteProjectComment,
+  listLinkComments,
+  parseLinkCommentRequest,
+  isProjectCommentStorageReady,
+  listProjectComments,
+  parseCreateProjectCommentRequest,
+  parseResolveProjectCommentRequest,
+  ProjectCommentRequestError,
+  resolveProjectComment,
+  type CommentActor
+} from './projectComments';
+import {
   isLibraryFolderStorageReady,
   LIBRARY_FOLDERS_ROUTE,
   LibraryFolderRequestError,
@@ -239,6 +255,7 @@ import {
   MAX_CLOUD_PROJECT_WRITE_BYTES,
   LEGACY_PROJECT_FRAME_CONTENT_TYPE,
   importedSourceReferenceOf,
+  PROJECT_SHARE_LINK_TTL_SECONDS,
   toUserId,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -343,6 +360,10 @@ const PROJECT_DOCUMENT_ROUTE = /^\/api\/projects\/([^/]+)\/document$/;
 const WORKSPACE_SESSIONS_ROUTE =
   /^\/api\/projects\/([^/]+)\/workspace-sessions$/;
 const PROJECT_MEASUREMENTS_ROUTE = /^\/api\/projects\/([^/]+)\/measurements$/;
+/** L08 review comments (migration 0058): a project's threads. */
+const PROJECT_COMMENTS_ROUTE = /^\/api\/projects\/([^/]+)\/comments$/;
+/** One comment of a project, to resolve or delete. */
+const PROJECT_COMMENT_ROUTE = /^\/api\/projects\/([^/]+)\/comments\/([^/]+)$/;
 const PROJECT_COLLABORATION_ROUTE = /^\/api\/projects\/([^/]+)\/collaboration$/;
 const PROJECT_COLLABORATION_TICKET_ROUTE =
   /^\/api\/projects\/([^/]+)\/collaboration\/ticket$/;
@@ -355,6 +376,8 @@ const PROJECT_SHARE_LINKS_ROUTE = /^\/api\/projects\/([^/]+)\/share-links$/;
 const PROJECT_SHARE_LINK_ROUTE =
   /^\/api\/projects\/([^/]+)\/share-links\/([^/]+)$/;
 const SHARED_PROJECT_ROUTE = /^\/api\/share\/([^/]+)$/;
+/** L08: a commenter link's comments, read and written by its visitor. */
+const SHARED_PROJECT_COMMENTS_ROUTE = /^\/api\/share\/([^/]+)\/comments$/;
 const SHARED_PROJECT_ASSET_ROUTE = /^\/api\/share\/([^/]+)\/assets\/([^/]+)$/;
 const SHARED_PROJECT_SOURCE_ROUTE = /^\/api\/share\/([^/]+)\/sources\/([^/]+)$/;
 /**
@@ -1197,12 +1220,60 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         project: {
           projectId: shared.projectId,
           name: shared.name,
-          mode: shared.mode
+          mode: shared.mode,
+          ...(shared.comments ? { comments: true } : {})
         },
         document: shared.document
       },
       200,
       { 'cache-control': 'no-store' }
+    );
+  }
+
+  // L08 commenter links: the link's visitor reads and writes the project's
+  // comments. The token is the whole authorization, as for the read above;
+  // a link made without comments, an unknown, revoked or expired token, and
+  // an encrypted project's link all answer the same opaque 404. Rate limited
+  // per client address like every public share route.
+  const sharedCommentsMatch = SHARED_PROJECT_COMMENTS_ROUTE.exec(pathname);
+  if (
+    sharedCommentsMatch &&
+    (request.method === 'GET' || request.method === 'POST')
+  ) {
+    const notFound = () => json({ error: 'Share link not found.' }, 404);
+    if (!projectCollaborationRollout(env).sharingEnabled) return notFound();
+    if (env.ENVIRONMENT !== 'development') {
+      const address = await publicRequestBucket(request, env, 'share');
+      await enforceWorkersCeiling(env, 'SHARE_READ_CEILING_LIMITER', address);
+      await enforceRequestLimit(env, 'SHARE_LINK_LIMITER', address);
+    }
+    const token = parseShareLinkToken(sharedCommentsMatch[1]!);
+    // Comments need migration 0058, and commenter links 0059; before
+    // either, every link is one that takes no comments.
+    if (
+      !token ||
+      !(await isProjectCommentStorageReady(env.DB)) ||
+      !(await isShareLinkCommentsReady(env.DB))
+    )
+      return notFound();
+    const link = await commentLinkProject(
+      env.DB!,
+      await hashProjectInvitationToken(token),
+      Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS
+    );
+    if (!link) return notFound();
+    if (request.method === 'GET')
+      return json(
+        { comments: await listLinkComments(env.DB!, link.projectId) },
+        200,
+        { 'cache-control': 'no-store' }
+      );
+    const { name, input } = parseLinkCommentRequest(
+      await readJsonBody(request, 8 * 1024)
+    );
+    return json(
+      { comment: await createLinkComment(env.DB!, link, name, input) },
+      201
     );
   }
 
@@ -2608,6 +2679,64 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return new Response(null, { status: 204 });
   }
 
+  const commentsMatch =
+    PROJECT_COMMENTS_ROUTE.exec(pathname) ??
+    PROJECT_COMMENT_ROUTE.exec(pathname);
+  if (commentsMatch) {
+    const projectId = commentsMatch[1]!;
+    const commentId = commentsMatch[2];
+    if (commentId !== undefined && !/^cmt_[0-9a-f-]{36}$/.test(commentId))
+      return json({ error: 'That comment does not exist.' }, 404);
+    // Members of every role read and write; an encrypted project's comments
+    // are never stored here (assertPlaintextProject refuses the route).
+    const access = await persistence.requireProjectRead(userId, projectId);
+    assertPlaintextProject(access);
+    if (!(await isProjectCommentStorageReady(env.DB)))
+      return json(
+        {
+          error: 'Comments are not available on this server yet.',
+          code: 'COMMENTS_UNAVAILABLE'
+        },
+        503
+      );
+    const actor: CommentActor = {
+      userId,
+      name: session.displayName,
+      role: access.role
+    };
+    if (request.method === 'GET' && !commentId)
+      return json({ comments: await listProjectComments(env.DB!, projectId) });
+    if (request.method === 'POST' && !commentId)
+      return json(
+        {
+          comment: await createProjectComment(
+            env.DB!,
+            projectId,
+            actor,
+            parseCreateProjectCommentRequest(
+              await readJsonBody(request, 8 * 1024)
+            )
+          )
+        },
+        201
+      );
+    if (request.method === 'PATCH' && commentId)
+      return json({
+        comment: await resolveProjectComment(
+          env.DB!,
+          projectId,
+          commentId,
+          actor,
+          parseResolveProjectCommentRequest(await readJsonBody(request, 256))
+        )
+      });
+    if (request.method === 'DELETE' && commentId) {
+      await deleteProjectComment(env.DB!, projectId, commentId, actor);
+      return new Response(null, { status: 204 });
+    }
+    return json({ error: 'Method not allowed.' }, 405);
+  }
+
   if (request.method === 'GET' && projectMatch) {
     if (
       url.searchParams.get('storage') === 'raw' ||
@@ -3219,6 +3348,12 @@ async function dispatchApiRequest(
     }
     if (error instanceof ProjectMeasurementRequestError) {
       return json({ error: error.message }, error.status);
+    }
+    if (error instanceof ProjectCommentRequestError) {
+      return json(
+        { error: error.message, ...(error.code ? { code: error.code } : {}) },
+        error.status
+      );
     }
     if (error instanceof ProjectMeasurementRevisionConflictError) {
       return json(

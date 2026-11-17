@@ -6,6 +6,7 @@
  *   GET /api/share                    (the shared project)
  *   GET /api/share/assets/:assetId
  *   GET /api/share/sources/:sourceId
+ *   GET and POST /api/share/comments (L08: a commenter link's comments)
  *   GET /api/e2ee/share               (an encrypted link's snapshot)
  *   GET /api/e2ee/share/blobs/:blobId
  *
@@ -20,6 +21,7 @@ export const SHARE_LINK_TOKEN_HEADER = 'x-openzcad-share-token';
 const TOKEN_FREE_SHARE_ROUTES: readonly [RegExp, string][] = [
   [/^\/api\/share()$/, '/api/share/'],
   [/^\/api\/share(\/(?:assets|sources)\/[^/]+)$/, '/api/share/'],
+  [/^\/api\/share(\/comments)$/, '/api/share/'],
   [/^\/api\/e2ee\/share()$/, '/api/e2ee/share/'],
   [/^\/api\/e2ee\/share(\/blobs\/[^/]+)$/, '/api/e2ee/share/']
 ];

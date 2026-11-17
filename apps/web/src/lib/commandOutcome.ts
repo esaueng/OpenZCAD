@@ -78,3 +78,14 @@ export function historyStepMessage(
   const trimmed = label?.trim().replace(/[.!?]+$/, '') ?? '';
   return trimmed ? `${verb} ${trimmed}.` : `${verb} the last change.`;
 }
+
+/**
+ * Undo or Redo pressed over a failed edit discards the failure and leaves
+ * history alone; the status says both, so nobody hunts for a reverted step.
+ */
+export function discardedRefusalMessage(
+  step: 'undo' | 'redo',
+  title: string
+): string {
+  return `Discarded the failed ${title} · nothing was ${step === 'undo' ? 'undone' : 'redone'}.`;
+}

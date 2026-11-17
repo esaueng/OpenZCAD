@@ -78,16 +78,117 @@ export class DrawingSectionError extends Error {
 
 const AXES = ['x', 'y', 'z'] as const;
 
-/** The plane's normal as a principal axis and sign: views are principal. */
-function principalAxis(normal: Vector3): { axis: 0 | 1 | 2; sign: 1 | -1 } {
+/** The plane's normal as a principal axis and sign, or null when inclined. */
+function principalAxis(
+  normal: Vector3
+): { axis: 0 | 1 | 2; sign: 1 | -1 } | null {
   for (const [index, key] of AXES.entries()) {
     const value = normal[key];
     if (Math.abs(Math.abs(value) - 1) < 1e-12)
       return { axis: index as 0 | 1 | 2, sign: value > 0 ? 1 : -1 };
   }
-  throw new DrawingSectionError(
-    'A section plane must be normal to a principal axis.'
+  return null;
+}
+
+/**
+ * D03 free sections (v91): a box over the removed side of an inclined plane
+ * (`dot(normal, p) < depth`), a margin past the solid's bounding box on
+ * every side, built axis-aligned and turned into the plane's frame (normal,
+ * e1, normal × e1, so the turn is proper). Null when the plane misses the
+ * box: `behind` says on which side it lies.
+ */
+function inclinedTool(
+  kernel: RemusKernel,
+  box: ArrayLike<number>,
+  plane: DrawingSectionPlane
+): { tool: number | null; behind: boolean; ahead: boolean } {
+  const length = Math.hypot(plane.normal.x, plane.normal.y, plane.normal.z);
+  if (!(Math.abs(length - 1) < 1e-9))
+    throw new DrawingSectionError('A section plane needs a unit normal.');
+  const n: [number, number, number] = [
+    plane.normal.x,
+    plane.normal.y,
+    plane.normal.z
+  ];
+  // e1: square to n, from the world axis least along it.
+  const least = n
+    .map((value, index) => [Math.abs(value), index] as const)
+    .sort((a, b) => a[0] - b[0])[0]![1];
+  const axis: [number, number, number] = [0, 0, 0];
+  axis[least] = 1;
+  const along = n[least]!;
+  const raw: [number, number, number] = [
+    axis[0] - along * n[0],
+    axis[1] - along * n[1],
+    axis[2] - along * n[2]
+  ];
+  const rawLength = Math.hypot(...raw);
+  const e1 = raw.map((value) => value / rawLength) as [number, number, number];
+  const e2: [number, number, number] = [
+    n[1] * e1[2] - n[2] * e1[1],
+    n[2] * e1[0] - n[0] * e1[2],
+    n[0] * e1[1] - n[1] * e1[0]
+  ];
+  const corners: [number, number, number][] = [];
+  for (const x of [box[0]!, box[3]!])
+    for (const y of [box[1]!, box[4]!])
+      for (const z of [box[2]!, box[5]!]) corners.push([x, y, z]);
+  const range = (axisVector: [number, number, number]) => {
+    const values = corners.map(
+      (corner) =>
+        corner[0] * axisVector[0] +
+        corner[1] * axisVector[1] +
+        corner[2] * axisVector[2]
+    );
+    return [Math.min(...values), Math.max(...values)] as const;
+  };
+  const [nLow, nHigh] = range(n);
+  const span = Math.max(
+    box[3]! - box[0]!,
+    box[4]! - box[1]!,
+    box[5]! - box[2]!,
+    1e-9
   );
+  const flush = span * 1e-9;
+  if (nHigh <= plane.depth + flush)
+    return { tool: null, behind: false, ahead: true };
+  if (nLow >= plane.depth - flush)
+    return { tool: null, behind: true, ahead: false };
+  const margin = span;
+  const [aLow, aHigh] = range(e1);
+  const [bLow, bHigh] = range(e2);
+  const start = nLow - margin;
+  const tool = kernel.makeBox(
+    plane.depth - start,
+    aHigh - aLow + 2 * margin,
+    bHigh - bLow + 2 * margin
+  );
+  const origin = [0, 1, 2].map(
+    (i) => start * n[i]! + (aLow - margin) * e1[i]! + (bLow - margin) * e2[i]!
+  );
+  // Row-major: local x → n, y → e1, z → e2, then the corner.
+  kernel.transformSolid(
+    tool,
+    Float64Array.of(
+      n[0],
+      e1[0],
+      e2[0],
+      origin[0]!,
+      n[1],
+      e1[1],
+      e2[1],
+      origin[1]!,
+      n[2],
+      e1[2],
+      e2[2],
+      origin[2]!,
+      0,
+      0,
+      0,
+      1
+    )
+  );
+  return { tool, behind: false, ahead: false };
 }
 
 /** Row-major translation, the matrix layout the kernel accepts. */
@@ -111,13 +212,37 @@ function cutSolids(
   cut: boolean;
   refusal: string | null;
 } {
-  const { axis, sign } = principalAxis(plane.normal);
+  const principal = principalAxis(plane.normal);
   const solids: number[] = [];
   const uncut: number[] = [];
   let cut = false;
   let refusal: string | null = null;
   for (const solid of shape.solids) {
     const box = kernel.boundingBox(solid);
+    if (!principal) {
+      const { tool, behind, ahead } = inclinedTool(kernel, box, plane);
+      if (ahead) continue;
+      uncut.push(solid);
+      if (behind || tool === null) {
+        solids.push(solid);
+        continue;
+      }
+      cut = true;
+      let result: number;
+      try {
+        result = kernel.cut(solid, tool);
+      } catch (error) {
+        refusal ??= `The kernel could not cut it exactly (${error instanceof Error ? error.message : String(error)}).`;
+        continue;
+      }
+      if (kernel.validateSolidRelaxed(result) !== 0) {
+        refusal ??= 'The kernel cut it into an invalid solid.';
+        continue;
+      }
+      solids.push(result);
+      continue;
+    }
+    const { axis, sign } = principal;
     const low = box[axis]!;
     const high = box[axis + 3]!;
     // Along the axis, the kept side in world coordinates.

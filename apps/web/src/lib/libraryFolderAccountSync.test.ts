@@ -43,6 +43,10 @@ vi.mock('./api', () => ({
 
 // Locked keys: a sealed round waits rather than sending anything.
 vi.mock('./e2ee/unlockedKeys', () => ({ unlockedAccount: () => undefined }));
+vi.mock('./e2ee/accountKeys', () => ({
+  loadEncryption: async () => ({ kind: 'ready', account: { unlocked: false } })
+}));
+vi.mock('./e2ee/keychainDeviceKeys', () => ({ deviceKeyStore: () => ({}) }));
 
 afterEach(() => {
   state.saves = [];

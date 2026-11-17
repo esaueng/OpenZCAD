@@ -405,16 +405,19 @@ for (const completed of [true, false]) {
         await expect(
           page.getByRole('button', { name: 'Edit not applied' })
         ).toBeVisible({ timeout: 30_000 });
-        await page.keyboard.press('Escape');
-        await expect(
-          page.getByRole('button', { name: 'Edit not applied' })
-        ).toBeVisible();
         const notice = page.getByRole('button', { name: 'Edit not applied' });
         const refusalText = (await notice.getAttribute('title'))!.replace(
           ' Open the activity log for details.',
           ''
         );
-        await notice.click();
+        // Escape dismisses the failed edit and its notice together (#1596);
+        // the Activity log keeps the full refusal.
+        await page.keyboard.press('Escape');
+        await expect(notice).toHaveCount(0);
+        await page
+          .getByRole('button', { name: /^Open activity log/ })
+          .first()
+          .click();
         const log = page.getByRole('region', { name: 'Activity log' });
         await expect(log).toContainText(refusalText);
         await expect(log.locator('ol')).toBeVisible();

@@ -17,6 +17,7 @@ import {
   type DrawingViewId,
   type ProjectDocument
 } from '@openzcad/shared';
+import { assertDrawingViewConfigurationSchema } from './document-content-schema';
 
 /**
  * D01 drawing commands. Each takes explicit data — the sheet, the view, the
@@ -68,6 +69,11 @@ export interface DrawingViewUpdateInput {
   sectionDepth?: number;
   /** D03 (v78): a detail view's circle and scale; omitted fields are kept. */
   detail?: Partial<Pick<DrawingDetail, 'center' | 'radius' | 'scale'>>;
+  /**
+   * F06 (v89): the configuration row a base view draws, or null for the
+   * active row.
+   */
+  configurationId?: string | null;
 }
 
 export interface DrawingViewDeleteInput {
@@ -144,14 +150,17 @@ function alignmentBase(
   sheet: DrawingSheet,
   view: DrawingView
 ): DrawingView | undefined {
-  const id = view.parentViewId ?? view.section?.sourceViewId;
+  // A free section (v91) is placed freely, like an auxiliary view.
+  const id =
+    view.parentViewId ??
+    (view.section?.frame ? undefined : view.section?.sourceViewId);
   return id ? sheet.views.find((entry) => entry.viewId === id) : undefined;
 }
 
 function alignedWith(view: DrawingView, base: DrawingView): boolean {
   return (
     view.parentViewId === base.viewId ||
-    view.section?.sourceViewId === base.viewId
+    (view.section?.sourceViewId === base.viewId && !view.section.frame)
   );
 }
 
@@ -295,9 +304,10 @@ function mirrorProjectedViews(sheet: DrawingSheet): void {
     if (base) mirror(view, base);
   }
   for (const view of sheet.views) {
-    const source = view.section
-      ? byId.get(view.section.sourceViewId)
-      : undefined;
+    const source =
+      view.section && !view.section.frame
+        ? byId.get(view.section.sourceViewId)
+        : undefined;
     if (source) mirror(view, source);
   }
 }
@@ -386,6 +396,28 @@ export function updateDrawingView(
         input.bodyIds.filter((id) => !view.bodyIds.includes(id))
       );
     if (input.hiddenLines !== undefined) view.hiddenLines = input.hiddenLines;
+    if (input.configurationId !== undefined) {
+      assertDrawingViewConfigurationSchema(document.schemaVersion);
+      if (
+        view.parentViewId !== undefined ||
+        view.section ||
+        view.detail ||
+        view.auxiliary
+      )
+        throw new Error(
+          'This view draws its source view’s configuration; choose it there.'
+        );
+      if (input.configurationId === null) delete view.configurationId;
+      else {
+        if (
+          !document.configurations?.rows.some(
+            (row) => row.id === input.configurationId
+          )
+        )
+          throw new Error('That configuration is not in this document.');
+        view.configurationId = input.configurationId;
+      }
+    }
     if (input.detail !== undefined) {
       if (!view.detail)
         throw new Error(`Drawing view ${input.viewId} is not a detail.`);

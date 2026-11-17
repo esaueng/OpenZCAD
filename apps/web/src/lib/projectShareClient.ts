@@ -25,7 +25,9 @@ export interface ProjectShareLinkClient {
   createProjectShareLink(
     projectId: string,
     mode: ProjectShareLinkMode,
-    label?: string | null
+    label?: string | null,
+    /** L08: a commenter link, whose visitors may comment. */
+    comments?: boolean
   ): Promise<CreateProjectShareLinkResponse>;
   listProjectShareLinks(projectId: string): Promise<ProjectShareLinkSummary[]>;
   /** Names a link for its owner; null or blank clears the name. */
@@ -97,14 +99,18 @@ export function createProjectShareLinkClient(
   fetcher: typeof fetch = desktopFetch
 ): ProjectShareLinkClient {
   return {
-    async createProjectShareLink(projectId, mode, label = null) {
+    async createProjectShareLink(projectId, mode, label = null, comments) {
       const response = await fetcher(
         `/api/projects/${routePart(projectId, 'Project ID')}/share-links`,
         {
           method: 'POST',
           credentials: 'same-origin',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(label === null ? { mode } : { mode, label })
+          body: JSON.stringify({
+            mode,
+            ...(label === null ? {} : { label }),
+            ...(comments ? { comments: true } : {})
+          })
         }
       );
       if (!response.ok) {

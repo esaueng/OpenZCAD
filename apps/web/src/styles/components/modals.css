@@ -1597,6 +1597,16 @@
   text-transform: uppercase;
 }
 
+/* L08: the next link's commenter option, under General access. */
+.sharing-link-comments {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
 .sharing-hint {
   margin: 0;
   color: var(--color-text-muted);

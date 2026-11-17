@@ -107,7 +107,7 @@ def load_sql(data: bytes):
 
 
 # Migrations above 0050 reviewed one by one (other numbers are still in review).
-REVIEWED_AFTER_0050 = frozenset({53, 54, 55, 56, 57})
+REVIEWED_AFTER_0050 = frozenset({53, 54, 55, 56, 57, 58, 59})
 
 
 def required_objects(db):
@@ -135,6 +135,10 @@ def required_objects(db):
     # account_erasure_requests.request_token: no objects.
     # 0057 adds only user_settings.sealed_settings (an account's settings
     # sealed under its account key, base64url text): no stored objects or keys.
+    # 0058 adds project_comments (L08 review comments: text, pins and author
+    # names in D1 rows, deleted with their project): no stored objects or keys.
+    # 0059 adds project_share_links.allow_comments (a flag) and
+    # project_comments.share_link_id (a link id): no stored objects or keys.
     # 0051-0052 are intentionally unused.
     if any(int(name[:4]) > 50 and int(name[:4]) not in REVIEWED_AFTER_0050
            for name in migrations):

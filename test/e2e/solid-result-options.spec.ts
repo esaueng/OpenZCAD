@@ -176,3 +176,86 @@ test('switches an extrude to Intersect with the block it crosses', async ({
     'true'
   );
 });
+
+test('U and X switch an edited boolean whose sources it consumed', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  let document = createProjectDocument(
+    'Switched boolean',
+    toUserId('user_e2e')
+  );
+  for (const name of ['Left', 'Right']) {
+    document = addPrimitiveFeature(document, {
+      name,
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 10 }
+    });
+  }
+  document = transformBody(document, {
+    name: 'Offset Right',
+    targetBodyId: document.bodyOrder[1]!,
+    translation: { x: 5, y: 5, z: 0 }
+  }).document;
+  await openSeeded(page, document);
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2', {
+    timeout: 30_000
+  });
+  await pressTool(page, /^Subtract \(X\)/);
+  await pickObjectsBody(page, 'Left');
+  await pickObjectsBody(page, 'Right');
+  await finishInPlaceCommand(page, 'Subtract');
+  // Keep None: one result body is left, so the rail counts one body.
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
+    timeout: 30_000
+  });
+  const row = page.locator('.feature-row-main', { hasText: 'Subtract' }).last();
+  const featureRow = page.locator('.feature-row', { has: row });
+  await expectFeatureMeasurement(page, featureRow, '750');
+
+  // U over the edit switches its operation, as Options → Union does
+  // (#1654). The bar keeps the feature's own name.
+  const editBar = page.getByRole('group', { name: 'Edit Subtract command' });
+  await row.click();
+  await expect(editBar).toBeVisible();
+  await page.keyboard.press('u');
+  await expect(barChoice(editBar, 'Operation', 'Union')).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
+  await expect(page.getByRole('contentinfo')).not.toContainText(
+    'Needs at least two bodies'
+  );
+  await finishInPlaceCommand(page, 'Edit Subtract');
+  await expectFeatureMeasurement(page, featureRow, '1750');
+
+  // And X switches it back.
+  await row.click();
+  await expect(editBar).toBeVisible();
+  await page.keyboard.press('x');
+  await expect(barChoice(editBar, 'Operation', 'Subtract')).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
+  await finishInPlaceCommand(page, 'Edit Subtract');
+  await expectFeatureMeasurement(page, featureRow, '750');
+
+  // The command palette offers the same switch rather than refusing it
+  // for the one result body on screen.
+  await row.click();
+  await expect(editBar).toBeVisible();
+  await page.keyboard.press('ControlOrMeta+k');
+  await page
+    .getByRole('combobox', { name: 'Search commands', exact: true })
+    .fill('intersect');
+  const option = page.getByRole('option', { name: /^Intersect/ }).first();
+  await expect(option).not.toContainText('Needs at least two bodies');
+  await page.keyboard.press('Enter');
+  await expect(barChoice(editBar, 'Operation', 'Intersect')).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
+  await finishInPlaceCommand(page, 'Edit Subtract');
+  await expectFeatureMeasurement(page, featureRow, '250');
+});

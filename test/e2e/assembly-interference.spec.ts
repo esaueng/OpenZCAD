@@ -130,6 +130,18 @@ test(
     await page.setViewportSize({ width: 1440, height: 900 });
     const document = clashingBlades('Assembly interference');
     await openDocument(page, document);
+    // Assemble has no section panel, so the Top (XY) cut this test measures
+    // is picked in Build first and switched off; turning the cut on again
+    // brings that remembered cut back. A first cut would be Front (XZ).
+    const sectionButton = page.getByRole('button', { name: /^Section view/ });
+    await sectionButton.click();
+    const top = page
+      .getByRole('group', { name: 'Section plane' })
+      .getByRole('button', { name: 'Top (XY plane)' });
+    await top.click();
+    await expect(top).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('switch', { name: 'Section cut' }).click();
+    await expect(sectionButton).toHaveAttribute('aria-pressed', 'false');
     await page.getByRole('button', { name: 'Assemble', exact: true }).click();
     const panel = page.getByRole('complementary', { name: 'Assembly' });
     const interference = panel.getByRole('region', { name: 'Interference' });
@@ -164,11 +176,10 @@ test(
 
     // M09: the section cut through the blades shows their overlap, drawn on
     // the cut and labelled as display evidence. The pin is not in it.
-    const sectionButton = page.getByRole('button', { name: /^Section view/ });
     await sectionButton.click();
     await expect(sectionButton).toHaveAttribute('aria-pressed', 'true');
     // Assemble keeps the toolbox put away and says the cut is on in the
-    // status line, which carries the overlap note. The default cut is XY
+    // status line, which carries the overlap note. The remembered cut is XY
     // through the middle of the model, across both blades.
     const line = page.locator('.workspace-toast:not(.hidden)');
     await expect(line.getByRole('status')).toHaveText(

@@ -24,6 +24,7 @@ import {
   LoaderCircle,
   Pencil,
   RotateCw,
+  MessageSquare,
   Save,
   Settings as SettingsIcon,
   TriangleAlert,
@@ -194,6 +195,8 @@ interface TopBarProps {
   onRenameProject(name: string): void;
   onGoHome(): void;
   onOpenSharing(): void;
+  /** L08: opens the project's review comments; absent hides the item. */
+  onOpenComments?(): void;
   /**
    * Where the sharing chip goes while signed out: Settings → Account, so the
    * one action it points at is a click away instead of a dead button.
@@ -348,6 +351,7 @@ export function TopBar({
   onRenameProject,
   onGoHome,
   onOpenSharing,
+  onOpenComments,
   onSignIn,
   onOpenSettings,
   encryption = null
@@ -1133,6 +1137,25 @@ export function TopBar({
                   </small>
                 )}
               </button>
+              {onOpenComments ? (
+                <>
+                  <div className="topbar-menu-sep" />
+                  <strong className="topbar-menu-label">Review</strong>
+                  <button
+                    type="button"
+                    className="topbar-menu-item"
+                    disabled={!projectName}
+                    title="Comments pinned to points on the model"
+                    onClick={() => {
+                      if (fileMenuRef.current) fileMenuRef.current.open = false;
+                      onOpenComments();
+                    }}
+                  >
+                    <MessageSquare size={13} aria-hidden="true" />
+                    <span>Comments</span>
+                  </button>
+                </>
+              ) : null}
               <div className="topbar-menu-sep" />
               <strong className="topbar-menu-label">Import</strong>
               {/* A button beside its input, as ProjectImportButton is: a

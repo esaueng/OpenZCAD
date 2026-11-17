@@ -276,10 +276,47 @@ export function createConfigurations(
 }
 
 /** Removes the table. The model keeps the active row's values. */
+/** A drawing view that shows a row (F06 slice 4b), if any. */
+function viewUsing(
+  document: ProjectDocument,
+  rowId: string | null
+): { sheet: string } | undefined {
+  for (const sheet of document.drawings?.sheets ?? [])
+    for (const view of sheet.views)
+      if (
+        view.configurationId !== undefined &&
+        (rowId === null || view.configurationId === rowId)
+      )
+        return { sheet: sheet.name };
+  return undefined;
+}
+
+/** The assembly component that shows a row (F06 slice 4), if any. */
+function componentUsing(
+  document: ProjectDocument,
+  rowId: string | null
+): { name: string } | undefined {
+  return document.assembly?.components.find(
+    (component) =>
+      component.configurationId !== undefined &&
+      (rowId === null || component.configurationId === rowId)
+  );
+}
+
 export function deleteConfigurations(
   document: ProjectDocument
 ): ProjectDocument {
   table(document);
+  const view = viewUsing(document, null);
+  if (view)
+    throw new Error(
+      `A view on ${view.sheet} shows one of these configurations. Set it back to the active configuration before removing the table.`
+    );
+  const user = componentUsing(document, null);
+  if (user)
+    throw new Error(
+      `${user.name} shows one of these configurations. Set it back to the active configuration before removing the table.`
+    );
   return commit(document, undefined);
 }
 
@@ -324,6 +361,16 @@ export function deleteConfigurationRow(
   if (row.id === set.activeRowId)
     throw new Error(
       `"${row.name}" is active. Activate another configuration before deleting it.`
+    );
+  const view = viewUsing(document, row.id);
+  if (view)
+    throw new Error(
+      `A view on ${view.sheet} shows "${row.name}". Choose another configuration for it before deleting this one.`
+    );
+  const user = componentUsing(document, row.id);
+  if (user)
+    throw new Error(
+      `${user.name} shows "${row.name}". Choose another configuration for it before deleting this one.`
     );
   set.rows = set.rows.filter((entry) => entry.id !== row.id);
   return commit(document, set);

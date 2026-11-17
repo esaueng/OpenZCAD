@@ -215,3 +215,30 @@ describe('toolDescription', () => {
     ).toBe('Waiting for exact geometry');
   });
 });
+
+describe('boolean tools over a running boolean (#1654)', () => {
+  const base = {
+    sketchCount: 0,
+    liveBodyCount: 1,
+    exactGeometryReady: true,
+    hasEdgeSelected: false
+  };
+
+  it('needs two bodies to start a boolean', () => {
+    expect(toolDisabledReason('union', base)).toBe('Needs at least two bodies');
+  });
+
+  it('offers the sibling operations while a boolean runs', () => {
+    const running = { ...base, booleanCommandRunning: true };
+    expect(toolDisabledReason('union', running)).toBeNull();
+    expect(toolDisabledReason('subtract', running)).toBeNull();
+    expect(toolDisabledReason('intersect', running)).toBeNull();
+    // Other gates still apply.
+    expect(
+      toolDisabledReason('union', {
+        ...running,
+        editDisabledReason: 'Read-only'
+      })
+    ).not.toBeNull();
+  });
+});

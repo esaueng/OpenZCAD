@@ -178,6 +178,28 @@ describe('beta deployment safety', () => {
     }
   });
 
+  it('keeps the edge from injecting scripts into the HTML pages', () => {
+    // A zone with Cloudflare Web Analytics automatic setup injects its beacon
+    // into every HTML response the proxy may transform, and the CSP refuses
+    // it (#1633). no-transform is the documented way to stop the injection
+    // without widening script-src. `/` also covers every app route, since the
+    // Worker answers them with the shell fetched as `/`.
+    const rules = cacheControlByRule('apps/web/public/_headers');
+    for (const page of ['/', '/privacy']) {
+      const directives = (rules.get(page) ?? '')
+        .split(',')
+        .map((directive) => directive.trim().toLowerCase());
+      expect(directives, page).toContain('no-transform');
+      // Stable URLs still revalidate on every load (see the rule above).
+      expect(directives, page).toEqual(
+        expect.arrayContaining(['max-age=0', 'must-revalidate'])
+      );
+    }
+    expect(readFileSync('apps/web/worker/assetFallback.ts', 'utf8')).toContain(
+      "new URL('/', url)"
+    );
+  });
+
   it('ships baseline security headers on every served path', () => {
     const text = readFileSync('apps/web/public/_headers', 'utf8');
     const lines = text.split('\n');

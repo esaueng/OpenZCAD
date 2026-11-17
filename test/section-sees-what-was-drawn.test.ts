@@ -70,7 +70,10 @@ describe('the viewer reports what it drew, in the frame it drew it', () => {
       'onBodiesDrawnElsewhere={setBodiesDrawnElsewhere}'
     );
     // Into the one value the section derives its source from...
-    expect(workspace).toContain('drawnElsewhere: bodiesDrawnElsewhere');
+    // (F06 adds parts drawn from another configuration beside them.)
+    expect(workspace).toMatch(
+      /drawnElsewhere:[\s\S]{0,240}?\bbodiesDrawnElsewhere\b/
+    );
     // ...and into what takes a drawn section down when that value changes.
     expect(workspace).toContain('viewportGeometry.drawnElsewhere');
   });

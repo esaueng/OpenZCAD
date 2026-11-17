@@ -38,6 +38,7 @@ import {
   archiveArtifact,
   type ArchiveArtifactTransport
 } from './archiveArtifact';
+import { encryptedLocalOnly } from './api';
 
 beforeEach(() => {
   globalThis.indexedDB = new IDBFactory();
@@ -253,6 +254,49 @@ describe('archiving a mesh import', () => {
     // The status line says what other devices are missing.
     expect(archived.note).toBe(
       ' (cloud archive unavailable; mesh saved locally).'
+    );
+  });
+
+  // #1637: an encrypted project refuses the original by design, so the note
+  // says so instead of reporting an upload that could be retried.
+  it('says an encrypted project keeps the mesh, not the original file', async () => {
+    const archived = await archiveImportedMesh({
+      hold: { bytes: new Uint8Array([1, 2, 3]) },
+      sourceName: 'plate.3mf',
+      original: {
+        ...original,
+        fileName: 'plate.3mf',
+        contentType: 'model/3mf',
+        kind: 'mesh-import'
+      },
+      archive: async (input) => {
+        if (input.kind === 'mesh-payload') return 'blob_payload';
+        throw encryptedLocalOnly('Stored files');
+      },
+      newId
+    });
+    expect(archived).toEqual({
+      artifactId: 'blob_payload',
+      payloadArchived: true,
+      originalArchived: false,
+      note: ' (original file not stored: an encrypted project keeps the imported mesh, not the original file).'
+    });
+  });
+
+  it('still reports a failed original upload as unavailable', async () => {
+    const archived = await archiveImportedMesh({
+      hold: { bytes: new Uint8Array([1, 2, 3]) },
+      sourceName: 'scan.stl',
+      original,
+      archive: async (input) => {
+        if (input.kind === 'mesh-payload') return 'artifact_payload';
+        throw new Error('offline');
+      },
+      newId
+    });
+    expect(archived.originalArchived).toBe(false);
+    expect(archived.note).toBe(
+      ' (original file not archived: upload unavailable).'
     );
   });
 

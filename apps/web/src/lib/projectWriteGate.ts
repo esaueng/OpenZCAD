@@ -240,12 +240,15 @@ const ENCRYPTED_CREATE_ROUTE = /^\/api\/e2ee\/projects\/?$/;
 const FINALIZE_ROUTE = /^\/api\/(?:artifacts|imports)\/finalize$/;
 /** The model digest, conversation and attachments of one project. */
 const ASSISTANT_ROUTE = /^\/api\/assistant\/proposals$/;
-/** Project subroutes whose writes are the project's content. */
+/**
+ * Project subroutes whose writes are the project's content. L08 review
+ * comments count: their text and pins describe the model.
+ */
 const CONTENT_SUBROUTES =
-  /^\/(?:document|revisions|duplicate|measurements|workspace-sessions|collaboration)(?:\/|$)/;
+  /^\/(?:document|revisions|duplicate|measurements|workspace-sessions|collaboration|comments)(?:\/|$)/;
 /** Of those, the ones that only ever carry plaintext. */
 const PLAINTEXT_SUBROUTES =
-  /^\/(?:document|revisions|duplicate|measurements|workspace-sessions)(?:\/|$)/;
+  /^\/(?:document|revisions|duplicate|measurements|workspace-sessions|comments)(?:\/|$)/;
 /**
  * The one encrypted-route write that carries plaintext: the decrypt run's
  * decrypted measurements and view state.

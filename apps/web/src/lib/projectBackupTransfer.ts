@@ -82,9 +82,11 @@ export async function readBackupResponse(
  */
 async function archivedBytes(
   artifactId: string,
-  limit?: number
+  limit?: number,
+  /** The project the artifact is listed under, when the caller knows it. */
+  projectId?: string
 ): Promise<Uint8Array<ArrayBuffer>> {
-  const encrypted = encryptedBlobSource(artifactId);
+  const encrypted = encryptedBlobSource(artifactId, projectId);
   if (encrypted) {
     const bytes = await encrypted.read();
     if (limit !== undefined && bytes.byteLength > limit)
@@ -394,7 +396,7 @@ export async function downloadProjectArtifact(
   );
   const bytes = local
     ? backupFileBytes(local)
-    : await archivedBytes(artifact.artifactId);
+    : await archivedBytes(artifact.artifactId, undefined, artifact.projectId);
   downloadBackupFile(
     artifact.name,
     new Blob([bytes], { type: artifact.contentType })

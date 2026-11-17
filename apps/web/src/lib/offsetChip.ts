@@ -204,8 +204,32 @@ export function valueInsideLimit(limit: number): number | null {
  * limit the refusal named, unless the last frame that built already went at
  * least that far on the same side — that one is proven. Without a limit, the
  * last frame that built, as before.
+ *
+ * Never the value that was just refused: the live preview and the release
+ * check build differently, so the last frame that built can be the very
+ * value release validation refused, and "Keep" would offer a value that
+ * cannot be built (#1596). Null then — there is nothing to keep.
  */
 export function keptOffsetValue(
+  limit: number | undefined,
+  lastValid: number | null,
+  refused: number | null = null
+): number | null {
+  // The refused value is no candidate at all, so a limit the refusal named
+  // still offers its way out when the last built frame was that value.
+  const built =
+    lastValid !== null &&
+    refused !== null &&
+    sameOffsetValue(lastValid, refused)
+      ? null
+      : lastValid;
+  const kept = keptOffsetCandidate(limit, built);
+  return kept !== null && refused !== null && sameOffsetValue(kept, refused)
+    ? null
+    : kept;
+}
+
+function keptOffsetCandidate(
   limit: number | undefined,
   lastValid: number | null
 ): number | null {
@@ -219,6 +243,10 @@ export function keptOffsetValue(
     return lastValid;
   }
   return inside;
+}
+
+function sameOffsetValue(a: number, b: number): boolean {
+  return Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
 }
 
 /** The gap kept between an edge chip and the right lane or the stage edge. */
