@@ -402,6 +402,16 @@ export async function runCadFileImport(
     await runStepImport(deps);
     return;
   }
+  // The STEP import binds its commit to the open project only once it starts,
+  // after the conversion: an import started in one project must not land in
+  // another the user switched to meanwhile.
+  const startedIn = deps.currentDocument()?.projectId ?? null;
+  const stillCurrent = () =>
+    (deps.currentDocument()?.projectId ?? null) === startedIn &&
+    (deps.stillCurrent?.() ?? true);
+  // The conversion can take a while on a large file: the card shows it, and
+  // its Cancel aborts the conversion worker through the same signal.
+  deps.progress?.start({ fileName: original.name, phases: ['preparing'] });
   let file: File;
   try {
     const { igesAsStepFile } = await import('./igesImport');
@@ -411,12 +421,25 @@ export async function runCadFileImport(
       deps.status.setStatus(
         `${original.name} was not imported: you cancelled it.`
       );
+      deps.progress?.finish({ tone: 'cancelled', message: 'cancelled' });
     } else {
+      // Replaces the conversion's card with the refusal.
       deps.refuse(errorMessage(error, `Could not import ${original.name}.`));
     }
     return;
   }
-  await runStepImport({ ...deps, file, contentType: 'model/step' });
+  if (!stillCurrent()) {
+    const message = `${original.name} was not imported: the project changed before it could land.`;
+    deps.status.setStatus(message);
+    deps.progress?.finish({ tone: 'error', message });
+    return;
+  }
+  await runStepImport({
+    ...deps,
+    file,
+    contentType: 'model/step',
+    stillCurrent
+  });
 }
 
 export async function runStepImport(
