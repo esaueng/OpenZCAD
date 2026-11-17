@@ -130,3 +130,7 @@ fragment in `docs/roadmap-evidence/`.
 4. **Drawing sheets on links.** Per-sheet opt-in by an editor, rather than
    per-link by the owner. An editor can already put any text in the model a
    link serves.
+5. **Comments on encryption.** Until encrypted comments exist, encrypting a
+   plaintext project deletes its plaintext comments with the rest of its
+   plaintext records (ADR-024 leaves the account no plaintext). Once slice 8
+   lands, the migration should carry them as `comment` envelopes instead.
