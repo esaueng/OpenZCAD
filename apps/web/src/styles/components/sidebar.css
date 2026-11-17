@@ -33,6 +33,19 @@
   line-height: 1.5;
 }
 
+/* Objects' "Preparing model details…" comes and goes within a second or
+   two. Placed after the rows and held to the bottom of the scrolled view,
+   it reflows nothing above it: in-flow at the top it pushed every row down
+   a line and back (#1598). */
+.objects-preparing {
+  order: 1;
+  position: sticky;
+  bottom: 0;
+  margin: 0;
+  padding: 6px 2px;
+  background: var(--color-surface);
+}
+
 .object-filter {
   display: flex;
   align-items: center;

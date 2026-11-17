@@ -885,7 +885,9 @@ export function ObjectsPanel({
       </div>
       <div className="feature-list" role="list" aria-label="Objects">
         {geometryPending && geometryPendingShown && (
-          <p className="muted sidebar-hint" role="status">
+          // Laid out after the rows (see sidebar.css), so announcing it
+          // never pushes the list down a row and back (#1598).
+          <p className="muted sidebar-hint objects-preparing" role="status">
             Preparing model details…
           </p>
         )}
