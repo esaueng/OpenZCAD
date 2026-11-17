@@ -15,6 +15,20 @@ interface PartsProps {
   /** Hides every other body; running it on the only visible body undoes it. */
   onIsolate(bodyId: string): void;
   onShowAll(): void;
+  /**
+   * F06: the configuration this view shows. Picking one draws that row
+   * here without changing the model's active row.
+   */
+  configuration?: {
+    rows: readonly { id: string; name: string }[];
+    activeRowId: string;
+    /** The row shown, or null for the active one. */
+    shownRowId: string | null;
+    /** Set while the chosen row is still being built. */
+    building?: boolean;
+    error?: string | null;
+    onShow(rowId: string | null): void;
+  } | null;
 }
 
 type PartsListMode = 'view' | 'tweak';
@@ -123,7 +137,8 @@ export function PartsList({
   onSelectBody,
   onToggleVisibility,
   onIsolate,
-  onShowAll
+  onShowAll,
+  configuration = null
 }: Omit<PartsProps, 'open' | 'onOpenChange'>) {
   const mode = useContext(PartsListModeContext);
   const hiddenCount = bodies.filter((body) =>
@@ -139,6 +154,35 @@ export function PartsList({
         <h2>Parts</h2>
         <span className="view-mode-rail-count">{bodies.length}</span>
       </header>
+      {configuration && configuration.rows.length > 0 && (
+        <label className="view-mode-rail-configuration">
+          <span>Configuration</span>
+          <select
+            value={configuration.shownRowId ?? ''}
+            onChange={(event) =>
+              configuration.onShow(event.target.value || null)
+            }
+          >
+            <option value="">{`Active (${
+              configuration.rows.find(
+                (row) => row.id === configuration.activeRowId
+              )?.name ?? 'none'
+            })`}</option>
+            {configuration.rows
+              .filter((row) => row.id !== configuration.activeRowId)
+              .map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.name}
+                </option>
+              ))}
+          </select>
+          {configuration.error ? (
+            <span role="alert">{configuration.error}</span>
+          ) : configuration.building ? (
+            <span role="status">Building…</span>
+          ) : null}
+        </label>
+      )}
       <div className="view-mode-rail-list" role="list">
         {bodies.length === 0 && (
           <p className="view-mode-rail-empty">
