@@ -99,7 +99,7 @@ it('writes each body as its own named, coloured glTF node and mesh', async () =>
       glb.buffer,
       glb.byteOffset + 20 + view.getUint32(12, true)
     ).getUint32(0, true);
-    expect(json.buffers[0].byteLength).toBe(binLength);
+    expect(json.buffers[0]!.byteLength).toBe(binLength);
     for (const bufferView of json.bufferViews)
       expect(bufferView.byteOffset + bufferView.byteLength).toBeLessThanOrEqual(
         binLength
