@@ -56,7 +56,17 @@ export async function packageMeshExport<Id>(input: {
     names.push(unique);
   };
   const formats = [...new Set(input.formats)];
-  for (const scope of input.scopes) {
+  // Unique stems before anything is written: an OBJ names its MTL by stem,
+  // so renaming a file after the fact would point it at another's library.
+  const taken = new Set<string>();
+  const scopes = input.scopes.map((scope) => {
+    let stem = scope.stem;
+    for (let copy = 2; taken.has(stem); copy += 1)
+      stem = `${scope.stem} ${copy}`;
+    taken.add(stem);
+    return { ...scope, stem };
+  });
+  for (const scope of scopes) {
     for (const format of formats) {
       const withMaterials = format === 'obj' && input.objMaterials;
       const result = await input.write(

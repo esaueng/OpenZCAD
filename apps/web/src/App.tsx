@@ -20040,6 +20040,14 @@ export function App() {
     // I04: several files (more formats, a file per body, an OBJ with its
     // MTL) travel as one ZIP of the same export scope.
     if (perBody || (extraFormats?.length ?? 0) > 0 || objMaterials) {
+      if (perBody && allShownBodies) {
+        // The bodies of a configuration not on screen are only known once
+        // it is built, so they cannot be split here.
+        setStatus(
+          `One file per body writes the configuration shown in the viewport. Show ${rowName ?? 'that configuration'} first, or export it without splitting.`
+        );
+        return;
+      }
       const stem = exportStemFor(rowName);
       const zipName = `${stem}.zip`;
       const bodyNames = new Map(
@@ -20065,13 +20073,12 @@ export function App() {
           const { packageMeshExport } = await import('./lib/meshExportPackage');
           const files = await packageMeshExport({
             formats: [format, ...(extraFormats ?? [])],
-            scopes:
-              perBody && !allShownBodies
-                ? bodyIds.map((bodyId) => ({
-                    bodyIds: [bodyId],
-                    stem: `${stem}-${exportStemFor(bodyNames.get(bodyId) ?? bodyId)}`
-                  }))
-                : [{ bodyIds, stem }],
+            scopes: perBody
+              ? bodyIds.map((bodyId) => ({
+                  bodyIds: [bodyId],
+                  stem: `${stem}-${exportStemFor(bodyNames.get(bodyId) ?? bodyId)}`
+                }))
+              : [{ bodyIds, stem }],
             objMaterials: Boolean(objMaterials),
             write: (entry, ids, extra) =>
               geometry.exportModel(entry, exported, ids, {
