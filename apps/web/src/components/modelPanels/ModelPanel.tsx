@@ -1,9 +1,13 @@
+import { Suspense, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { PanelId } from '../../lib/panelLayout';
+import { lazyWithStaleChunkNotice } from '../../lib/staleChunk';
 import { DiagnosticsPanel, diagnosticCount } from './DiagnosticsPanel';
 import {
   HistoryFindToggle,
   HistoryPanel,
   HistoryRepairChip,
+  HistoryTextToggle,
   historyCount,
   useHistoryRepair
 } from './HistoryPanel';
@@ -17,6 +21,11 @@ import {
   revisionCount,
   useRevisionCheckpoints
 } from './RevisionsPanel';
+
+/** L15: loaded with the scripting package only when it is first opened. */
+const HistoryTextDialog = lazyWithStaleChunkNotice(
+  () => import('../HistoryTextDialog')
+);
 
 export interface ModelPanelProps extends ModelPanelSource {
   id: PanelId;
@@ -101,6 +110,8 @@ function ObjectsFrame(props: ModelPanelProps) {
 function HistoryFrame(props: ModelPanelProps) {
   const find = props.views.historyFind;
   const repair = useHistoryRepair(props);
+  const [textOpen, setTextOpen] = useState(false);
+  const document = props.document;
   return (
     <PanelFrame
       id="history"
@@ -114,12 +125,29 @@ function HistoryFrame(props: ModelPanelProps) {
               selectedFeatureNodeId={props.selectedFeatureNodeId}
               onSelectFeature={props.onSelectFeature}
             />
+            {document && (
+              <HistoryTextToggle
+                open={textOpen}
+                onToggle={() => setTextOpen((open) => !open)}
+              />
+            )}
             <HistoryFindToggle find={find} />
           </>
         ) : undefined
       }
     >
       <HistoryPanel {...props} find={find} repair={repair} />
+      {textOpen &&
+        document &&
+        createPortal(
+          <Suspense fallback={null}>
+            <HistoryTextDialog
+              document={document}
+              onClose={() => setTextOpen(false)}
+            />
+          </Suspense>,
+          window.document.body
+        )}
     </PanelFrame>
   );
 }

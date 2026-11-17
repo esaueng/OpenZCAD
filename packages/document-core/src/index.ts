@@ -27,7 +27,11 @@ import {
   rewriteNodeExpressions,
   type ExpressionFieldDimension
 } from './parameter-expressions';
-export type { ExpressionFieldDimension } from './parameter-expressions';
+export type {
+  ExpressionFieldDimension,
+  ExpressionFieldSite
+} from './parameter-expressions';
+export { rewriteNodeExpressions } from './parameter-expressions';
 import { localizeImportedSourceArtifacts } from './imported-source-artifacts';
 export { localizeImportedSourceArtifacts } from './imported-source-artifacts';
 import { mergeJsonRecords } from './collaboration-merge';

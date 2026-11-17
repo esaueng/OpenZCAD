@@ -80,7 +80,7 @@ export function meshExtent(vertices: ArrayLike<number>): number[] {
   return min.map((low, axis) => (Number.isFinite(low) ? max[axis]! - low : 0));
 }
 
-/** Width and height of sketch lines, arcs and circles. */
+/** Width and height of sketch lines, arcs, circles, ellipses and splines. */
 export function sketchObjectsExtent(
   objects: readonly SketchObjectData[]
 ): number[] {
@@ -123,6 +123,33 @@ export function sketchObjectsExtent(
         quadrant += 90
       ) {
         at(quadrant);
+      }
+    } else if (object.objectKind === 'ellipse') {
+      // Sampled densely enough for a three-figure size readout.
+      const cx = Number(object.centerX);
+      const cy = Number(object.centerY);
+      const a = Number(object.radiusX);
+      const b = Number(object.radiusY);
+      const rotation = (Number(object.rotationDeg) * Math.PI) / 180;
+      const from =
+        object.startParamDeg === undefined ? 0 : Number(object.startParamDeg);
+      let to =
+        object.endParamDeg === undefined ? 360 : Number(object.endParamDeg);
+      while (to <= from) to += 360;
+      const ux = Math.cos(rotation);
+      const uy = Math.sin(rotation);
+      const steps = 720;
+      for (let step = 0; step <= steps; step += 1) {
+        const t = ((from + ((to - from) * step) / steps) * Math.PI) / 180;
+        const x = a * Math.cos(t);
+        const y = b * Math.sin(t);
+        include(cx + x * ux - y * uy, cy + x * uy + y * ux);
+      }
+    } else if (object.objectKind === 'spline') {
+      // A control spline lies inside its control polygon's hull (and a fit
+      // spline passes through its points): close enough to size a prompt.
+      for (const point of object.points) {
+        include(Number(point.x), Number(point.y));
       }
     }
   }

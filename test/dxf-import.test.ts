@@ -237,13 +237,13 @@ describe('DXF sketch import (D04)', () => {
       '0',
       'HATCH',
       '0',
-      'ELLIPSE',
+      '3DFACE',
       '10',
       '0',
       '20',
       '0',
       '0',
-      'SPLINE',
+      'HELIX',
       // A circle drawn on the underside (-Z extrusion) mirrors in 2D.
       '0',
       'CIRCLE',
@@ -276,8 +276,8 @@ describe('DXF sketch import (D04)', () => {
     ]);
     expect(result.dropped).toEqual({ TEXT: 2, HATCH: 1 });
     expect(result.refused).toEqual({
-      ELLIPSE: 1,
-      SPLINE: 1,
+      '3DFACE': 1,
+      HELIX: 1,
       'CIRCLE off the XY plane': 1
     });
     expect(describeDxfCounts(result.dropped)).toBe('2 TEXT, 1 HATCH');
@@ -2314,15 +2314,26 @@ describe('DXF sketch import plan', () => {
         '0',
         '1',
         'Note',
+        // Fit points alone: the curve is the writer's own interpolation.
         '0',
-        'SPLINE'
+        'SPLINE',
+        '74',
+        '2',
+        '11',
+        '0',
+        '21',
+        '0',
+        '11',
+        '1',
+        '21',
+        '1'
       ],
       1
     );
     const base = doc();
     const plan = dxfSketchImportPlan(base, 'bracket.DXF', text, (n) => n);
     expect(plan.status).toBe(
-      'Imported 2 curves from bracket.DXF as sketch "bracket", converted from inches · left out 1 TEXT; could not sketch 1 SPLINE.'
+      'Imported 2 curves from bracket.DXF as sketch "bracket", converted from inches · left out 1 TEXT; could not sketch 1 SPLINE (fit points only).'
     );
     const manager = new CommandManager(base);
     manager.execute(plan.command);
@@ -2420,11 +2431,11 @@ describe('DXF sketch import plan', () => {
       dxfSketchImportPlan(
         doc(),
         'notes.dxf',
-        dxf(['0', 'TEXT', '1', 'a', '0', 'ELLIPSE']),
+        dxf(['0', 'TEXT', '1', 'a', '0', 'HELIX']),
         (n) => n
       )
     ).toThrow(
-      'notes.dxf has no lines, arcs, circles or polylines to sketch (only 1 TEXT, 1 ELLIPSE).'
+      'notes.dxf has no lines, arcs, circles, polylines, ellipses or splines to sketch (only 1 TEXT, 1 HELIX).'
     );
   });
 });

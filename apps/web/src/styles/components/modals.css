@@ -744,6 +744,72 @@
   gap: var(--sp-2);
 }
 
+/* ── L15 history as text (HistoryTextDialog) ── */
+.history-text-dialog {
+  width: min(760px, 100%);
+  max-height: calc(88vh - 16px);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+}
+
+.history-text-dialog h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  font-size: var(--fs-lg);
+}
+
+.history-text-dialog p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.history-text-dialog .history-text-error {
+  color: var(--color-error-text);
+}
+
+.history-text-body {
+  min-height: 0;
+  margin: 0;
+  padding: var(--sp-3);
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  white-space: pre;
+  tab-size: 2;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.history-text-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+.history-text-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+
 /* ── Delete or suppress a feature other features build on ── */
 /* The unapplied-card question (F15) and the shared destructive confirm
    (ConfirmDialog: library deletes, resets, clears) are the same small

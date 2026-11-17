@@ -36,6 +36,7 @@
     "@openzcad/kernel-adapter": "workspace:*",
     "@openzcad/mls": "workspace:*",
     "@openzcad/persistence": "workspace:*",
+    "@openzcad/scripting": "workspace:*",
     "@openzcad/shared": "workspace:*",
     "@openzcad/viewport": "workspace:*",
     "@tauri-apps/api": "^2.12.4",

@@ -747,6 +747,7 @@ import type {
   SlicerTarget
 } from './components/ExportDialog';
 import type {
+  ImageExportKind,
   PngExportOptions,
   SvgExportOptions
 } from './components/ImageExportDialog';
@@ -3260,11 +3261,16 @@ export function App() {
   const importUnitsAnswerRef = useRef<
     ((units: UnitSystem | null) => void) | null
   >(null);
-  /** The view's size when Export image… opened; null while it is closed. */
+  /**
+   * The view's size when Export image… opened; null while it is closed.
+   * A sketch's own Export DXF… (D04) also names the sketch and the kind.
+   */
   const [imageExportView, setImageExportView] = useState<{
     width: number;
     height: number;
     maxSide: number;
+    sketchId?: string;
+    kind?: ImageExportKind;
   } | null>(null);
   /** M16: the sheet-metal feature the flat-pattern view opened on. */
   const [flatPatternFeatureId, setFlatPatternFeatureId] =
@@ -19547,13 +19553,14 @@ export function App() {
     setFlatPatternFeatureId(target.featureId);
   }
 
-  function openImageExport() {
+  function openImageExport(sketch?: { sketchId: string; kind: 'svg' | 'dxf' }) {
     const source = viewportImageRef.current;
     const size = source?.viewSize();
     setImageExportView({
       width: size && size.width > 0 ? size.width : 1280,
       height: size && size.height > 0 ? size.height : 720,
-      maxSide: source?.maxSide ?? 4096
+      maxSide: source?.maxSide ?? 4096,
+      ...(sketch ?? {})
     });
   }
 
@@ -32881,6 +32888,15 @@ export function App() {
                 icon: <Eye size={13} aria-hidden="true" />
               },
               run: () => toggleSketchVisibility(sketchId)
+            },
+            // D04: the sketch's own export, opened on it as DXF.
+            {
+              item: {
+                id: 'sketch-export-dxf',
+                label: 'Export DXF…',
+                icon: <Download size={13} aria-hidden="true" />
+              },
+              run: () => openImageExport({ sketchId, kind: 'dxf' })
             }
           ]
         : []),
@@ -34817,7 +34833,7 @@ export function App() {
       group: 'File',
       keywords: ['png', 'svg', 'image', 'screenshot', 'picture', 'sketch'],
       icon: <Download size={16} aria-hidden="true" />,
-      run: openImageExport
+      run: () => openImageExport()
     },
     {
       // The support exports left the File menu for Settings › Advanced; the
@@ -35957,7 +35973,7 @@ export function App() {
           onExportStep={() => void handleExportStep()}
           onExportIges={() => void handleExportIges()}
           onOpenMeshExport={() => setMeshExportOpen(true)}
-          onOpenImageExport={openImageExport}
+          onOpenImageExport={() => openImageExport()}
           {...(hasSheetMetal
             ? {
                 onOpenFlatPattern: () =>
@@ -38894,14 +38910,20 @@ export function App() {
                   : null
               }
               sketches={sketchOptions}
-              initialSketchId={initialImageSketchId({
-                editing:
-                  interaction.mode === 'sketch'
-                    ? interaction.session.sketchId
-                    : null,
-                selected: selectedSketch?.sketchId ?? null,
-                profiles: selectedProfiles.map((profile) => profile.sketchId)
-              })}
+              initialSketchId={
+                imageExportView.sketchId ??
+                initialImageSketchId({
+                  editing:
+                    interaction.mode === 'sketch'
+                      ? interaction.session.sketchId
+                      : null,
+                  selected: selectedSketch?.sketchId ?? null,
+                  profiles: selectedProfiles.map((profile) => profile.sketchId)
+                })
+              }
+              {...(imageExportView.kind
+                ? { initialKind: imageExportView.kind }
+                : {})}
               initialShowGrid={viewerSettings.showGrid}
               units={doc.units}
               onClose={() => setImageExportView(null)}
