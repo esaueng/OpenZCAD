@@ -137,6 +137,7 @@ import {
   millimetresPerUnit,
   documentNodesWithHistory,
   type ProjectId,
+  type CustomFeatureScript,
   createId,
   deepClone,
   assertDrawingSet,
@@ -4070,7 +4071,8 @@ function addBodyResultFeature(
     | 'sweep'
     | 'helical-sweep'
     | 'draft'
-    | 'thicken',
+    | 'thicken'
+    | 'custom-feature',
   data: Extract<
     FeatureData,
     {
@@ -4091,7 +4093,8 @@ function addBodyResultFeature(
         | 'sweep'
         | 'helical-sweep'
         | 'draft'
-        | 'thicken';
+        | 'thicken'
+        | 'custom-feature';
     }
   >,
   ids?: BodyFeatureIds,
@@ -4452,6 +4455,38 @@ export function thickenFace(
         ? { faceReference: deepClone(input.faceReference) }
         : {}),
       thickness: input.thickness
+    },
+    suppliedIds(input.ids)
+  );
+}
+
+/** L15: a custom feature on one body (see `customFeatureBody`). */
+export interface CustomFeatureInput {
+  name: string;
+  targetBodyId: BodyId;
+  script: CustomFeatureScript;
+  inputs: Record<string, ParamValue>;
+  ids?: BodyFeatureIds;
+}
+
+/**
+ * L15: adds a custom feature that runs `script` on the target body and
+ * replaces it, like an edge modifier. The script is embedded as given; the
+ * command system checks its pin and inputs before this runs.
+ */
+export function customFeatureBody(
+  document: ProjectDocument,
+  input: CustomFeatureInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'custom-feature',
+    {
+      featureKind: 'custom-feature',
+      targetBodyId: input.targetBodyId,
+      script: deepClone(input.script),
+      inputs: { ...input.inputs }
     },
     suppliedIds(input.ids)
   );
@@ -5631,6 +5666,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'endRadius',
     'radiusLaw'
   ],
+  'custom-feature': ['targetBodyId', 'script', 'inputs'],
   chamfer: [
     'targetBodyId',
     'edgeHashes',

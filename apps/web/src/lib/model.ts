@@ -208,6 +208,7 @@ export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   thicken: 'Thicken',
   fillet: 'Fillet',
   chamfer: 'Chamfer',
+  'custom-feature': 'Custom feature',
   pattern: 'Pattern',
   'direct-edit': 'Direct edit',
   'imported-step': 'Imported STEP',

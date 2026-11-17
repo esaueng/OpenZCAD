@@ -277,6 +277,17 @@ export function assertImportedStepContentSchema(
     );
 }
 
+/** L15: custom features need the schema that declares them. */
+export const CUSTOM_FEATURE_SCHEMA_VERSION = 110;
+
+export function assertCustomFeatureSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    CUSTOM_FEATURE_SCHEMA_VERSION,
+    'Custom features'
+  );
+}
+
 export function assertHoleContentSchema(data: unknown, version: unknown): void {
   if (!record(data)) return;
   if (data.points !== undefined)
@@ -982,6 +993,8 @@ export function assertDocumentContentCommandSchema(
       assertThreadContentSchema(command.payload, document.schemaVersion);
     if (command.kind === 'import.step')
       assertImportedStepContentSchema(command.payload, document.schemaVersion);
+    if (command.kind === 'feature.custom-feature')
+      assertCustomFeatureSchema(document.schemaVersion);
     if (command.kind === 'feature.pattern')
       assertPatternContentSchema(command.payload, document.schemaVersion);
     if (command.kind === 'feature.hole')
@@ -1264,6 +1277,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       assertThreadContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'imported-step')
       assertImportedStepContentSchema(node.data, document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'custom-feature')
+      assertCustomFeatureSchema(document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'pattern')
       assertPatternContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'hole')

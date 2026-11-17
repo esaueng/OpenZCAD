@@ -170,6 +170,7 @@ export function featureHistory(document: ProjectDocument) {
       case 'chamfer':
       case 'pattern':
       case 'direct-edit':
+      case 'custom-feature':
         body(data.targetBodyId);
         for (const ref of featureDatumAxisRefs(data)) datum(ref.datumFeatureId);
         // M02: a pattern on sketch points reads its sketch, and so does an

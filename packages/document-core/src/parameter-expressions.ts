@@ -332,6 +332,11 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       vector(data.axis, rewrite, null);
       vector(data.xDirection, rewrite, null);
       return;
+    case 'custom-feature':
+      // L15: each input is an expression; its quantity is the script's to
+      // declare, and the build checks it against that.
+      fields(data.inputs, Object.keys(data.inputs), rewrite, null);
+      return;
     case 'sketch':
     case 'sweep':
     case 'imported-mesh':

@@ -86,6 +86,19 @@ const SAMPLES: { [Kind in OperationKind]: OperationOf<Kind> } = {
     data: { distance: 'width / 2' },
     clearData: ['symmetric']
   },
+  add_custom_feature: {
+    kind: 'add_custom_feature',
+    name: 'Tray',
+    targetBodyId: 'body_1',
+    script: {
+      id: 'acme/tray',
+      version: '1.0.0',
+      api: 1,
+      source: 'script "acme/tray" "1.0.0" api 1 {}',
+      digest: '0'
+    },
+    inputs: {}
+  },
   reorder_feature: {
     kind: 'reorder_feature',
     featureId: toFeatureId('feat_3'),
@@ -420,6 +433,9 @@ describe('patch operation descriptions', () => {
   it('describes the history text operations (L15)', () => {
     expect(describeOperation(SAMPLES.update_feature)).toBe(
       'Edit distance, no symmetric on feat_3'
+    );
+    expect(describeOperation(SAMPLES.add_custom_feature)).toBe(
+      'Tray — acme/tray 1.0.0 on body_1'
     );
     expect(describeOperation(SAMPLES.reorder_feature)).toBe(
       'Move feat_3 to step 1'

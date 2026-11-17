@@ -2,7 +2,13 @@ import type {
   CadPatchOperation,
   CadPatchProposal
 } from '@openzcad/ai-contracts';
-import type { FeatureId, ProjectDocument, SketchId } from '@openzcad/shared';
+import type {
+  CustomFeatureScript,
+  FeatureId,
+  ProjectDocument,
+  SketchId
+} from '@openzcad/shared';
+import { publishScript } from './script';
 import {
   historyModelOf,
   type HistoryFeature,
@@ -232,6 +238,10 @@ class Compiler {
   }
 
   private addFeature(feature: HistoryFeature): void {
+    if (feature.featureKind === 'custom-feature') {
+      this.addCustomFeature(feature);
+      return;
+    }
     if (feature.featureKind !== 'primitive') {
       this.refuse(
         feature.featureId,
@@ -267,6 +277,72 @@ class Compiler {
       dimensions
     });
     this.summary.push(`Add ${data.primitiveKind} ${feature.name}`);
+  }
+
+  /** The script the text gives, published with its pin; null when refused. */
+  private textScript(
+    featureId: string,
+    value: unknown,
+    stored: CustomFeatureScript | null
+  ): CustomFeatureScript | null {
+    const script = value as Partial<CustomFeatureScript>;
+    const published = publishScript(script.source ?? '');
+    if (!published.script) {
+      this.refuse(featureId, 'The script does not compile.');
+      return null;
+    }
+    if (
+      stored &&
+      stored.id === published.script.id &&
+      stored.version === published.script.version &&
+      stored.source === published.script.source &&
+      (script.digest === undefined || script.digest === stored.digest)
+    )
+      return stored;
+    if (
+      stored &&
+      stored.id === published.script.id &&
+      stored.version === published.script.version &&
+      stored.source !== published.script.source
+    ) {
+      this.refuse(
+        featureId,
+        `${stored.id} ${stored.version} is published and cannot change; give the edited script a new version.`
+      );
+      return null;
+    }
+    if (
+      script.digest !== undefined &&
+      script.digest !== published.script.digest
+    ) {
+      this.refuse(
+        featureId,
+        `The script's digest does not match its source; leave \`digest\` out and it is computed when the script is published.`
+      );
+      return null;
+    }
+    return published.script;
+  }
+
+  private addCustomFeature(feature: HistoryFeature): void {
+    const data = feature.data as Extract<
+      HistoryFeature['data'],
+      { featureKind: 'custom-feature' }
+    >;
+    if (feature.metadata) {
+      this.refuse(feature.featureId, 'A new step takes no @metadata.');
+      return;
+    }
+    const script = this.textScript(feature.featureId, data.script, null);
+    if (!script) return;
+    this.additions.push({
+      kind: 'add_custom_feature',
+      name: feature.name,
+      targetBodyId: data.targetBodyId,
+      script,
+      inputs: { ...(data.inputs ?? {}) }
+    });
+    this.summary.push(`Add ${feature.name} (${script.id} ${script.version})`);
   }
 
   private editFeature(stored: HistoryFeature, feature: HistoryFeature): void {
@@ -335,6 +411,13 @@ class Compiler {
         );
         return;
       }
+    }
+    if (stored.featureKind === 'custom-feature' && 'script' in data) {
+      const before = (stored.data as { script: CustomFeatureScript }).script;
+      const script = this.textScript(feature.featureId, data.script, before);
+      if (!script) return;
+      if (script === before) delete data.script;
+      else data.script = script;
     }
     if (Object.keys(data).length === 0 && clearData.length === 0) return;
     this.featureEdits.push({
