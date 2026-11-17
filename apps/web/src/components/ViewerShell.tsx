@@ -47,7 +47,8 @@ import {
   type RegionHandleTarget,
   type SketchModeState,
   type SketchViewData,
-  type OffsetHandleTarget
+  type OffsetHandleTarget,
+  type ViewerPmiLabel
 } from './ModelViewer';
 import type {
   DisplayMode,
@@ -172,6 +173,8 @@ interface ViewerShellProps {
   view: ViewportGeometry<ParameterPreviewBody>;
   sketches: SketchOverlay[];
   measurementAnnotations: MeasurementViewportAnnotation[];
+  /** D07: the model's PMI labels. */
+  pmiLabels?: readonly ViewerPmiLabel[];
   measurementCloudSync?: MeasurementCloudSyncState;
   projectThumbnailSync?: ProjectThumbnailSyncState;
   selectedBodyIds: string[];
@@ -498,6 +501,7 @@ export function ViewerShell({
   view,
   sketches,
   measurementAnnotations,
+  pmiLabels,
   measurementCloudSync,
   projectThumbnailSync,
   selectedBodyIds,
@@ -909,6 +913,7 @@ export function ViewerShell({
         parameterVisualPreview={parameterVisualPreview}
         sketches={sketches}
         measurementAnnotations={placedMeasurements}
+        {...(pmiLabels ? { pmiLabels } : {})}
         selectedBodyIds={selectedBodyIds}
         selectedTopology={selectedTopology}
         previewFaceHighlights={previewFaceHighlights}

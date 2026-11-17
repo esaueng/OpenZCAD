@@ -108,6 +108,7 @@ export function geometryContentKey(document: ProjectDocument): string {
     objectFolders: _objectFolders,
     referenceImages: _referenceImages,
     assembly: _assembly,
+    pmi: _pmi,
     ...model
   } = document;
   return canonicalProjectContentKey(model);

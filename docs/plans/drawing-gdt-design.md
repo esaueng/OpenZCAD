@@ -13,7 +13,7 @@ and stay attached through model edits or show as broken.
 | ----- | ------------------------------------------------------------------------------------------------------------------------- | -------- |
 | A     | Datum feature symbols and feature control frames on drawing views                                                         | v98      |
 | B     | General-tolerance block (ISO 2768-1 classes, or a stated block) and hole and thread tolerance classes on M01 callouts     | additive |
-| C     | Model-based definition: datum features and frames stored on the model's faces, shown in the viewport, and listed per body | additive |
+| C     | Model-based definition: datum features and frames stored on the model's faces, shown in the viewport, and listed per body | v106     |
 | D     | STEP AP242 semantic PMI written from slice C, through the I0x lane's STEP writer                                          | none     |
 
 Slice D depends on the I0x lane: it owns the STEP writer and the AP242
@@ -133,5 +133,47 @@ properties) and `test/e2e/drawing-gdt.spec.ts`.
     the W key) places an ISO 2768-m block, and Properties switches its
     scheme and classes. It is not on the tool rail, which has no row to
     spare at phone width.
-- **Schema.** v105, built on v101 (#1739), gated below it. An older client would print
+- **Schema.** v105, built on v106 (#1739), gated below it. An older client would print
   a fitted diameter without its fit.
+
+## Slice C: model-based definition (schema v106)
+
+- **Shape.** A top-level `pmi` section (`ModelPmiSet`) holds datum features
+  and feature control frames on the model.
+  - **Face.** Each names one face of a body (a `DrawingFaceRef`: lineage
+    first, then hash).
+  - **Anchor.** A point on that face, where its label's leader lands: the
+    point the face was clicked at, or the face's centre.
+  - **Fields.** The datum and frame fields mean what they do on a drawing
+    (one validator, `toleranceFieldsError`). The exception is a frame's
+    amount, which is in the document's units.
+  - **One datum reference frame per model.** A letter is declared at most
+    once, and a second declaration is refused.
+- **Commands.** `pmi.add`, `pmi.update` (the whole entry) and `pmi.delete`
+  are undoable and replay. They never rebuild: the section is left out of
+  the geometry content key, rebuild inputs and diagnostics. Undo and redo
+  of a PMI-only step keep the ready geometry, as reference images do.
+- **Resolution.** Each entry's face is resolved against the current bodies
+  each time it is shown, so an entry follows its face through a model edit
+  by lineage. When nothing resolves, the entry is broken by name and
+  nothing rebinds:
+  - `body-missing`, `not-found` or `ambiguous`: its face no longer
+    resolves to exactly one face.
+  - `datum-undefined`: a frame names a letter no datum declares.
+
+  A broken entry shows amber in the viewport and in Objects. "Move to
+  selected face" re-points it and keeps its fields.
+
+- **Workspace.**
+  - **Objects.** With a face selected, Objects offers Datum feature and
+    Feature control frame. Each entry lists with its state, and the open
+    one edits its letter, characteristic, tolerance, zone, modifier and
+    datums, with the same constraints as the drawing panel.
+  - **Viewport.** The viewport draws each entry as a CSS2D label: a dot on
+    the face, and the frame or datum symbol in SVG made from the drawing's
+    own frame geometry. The dot is the stored anchor snapped to the nearest
+    point of the face as it is now, so a label follows a moved or resized
+    face and never sits on another one.
+  - **Loading.** The PMI module loads on demand, off the entry chunk.
+- **Schema.** v106, built on v105, gated below it. An older client would drop
+  the section on save.

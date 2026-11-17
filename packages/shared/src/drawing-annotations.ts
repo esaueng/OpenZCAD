@@ -1271,6 +1271,19 @@ function toleranceAnnotationError(
       value.attachedTo === value.annotationId)
   )
     return `${where} is a ${name} attached to an invalid annotation id.`;
+  return toleranceFieldsError(value, where);
+}
+
+/**
+ * v98: a datum symbol's letter, or a frame's characteristic, amount, zone,
+ * modifier and datum references, or why they are malformed. Shared by the
+ * drawing annotations and (v106) the model's PMI.
+ */
+export function toleranceFieldsError(
+  value: Record<string, unknown>,
+  where: string
+): string | null {
+  const datum = value.kind === 'datum-feature';
   if (datum) {
     if (
       typeof value.letter !== 'string' ||

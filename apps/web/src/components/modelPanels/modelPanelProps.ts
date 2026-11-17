@@ -20,6 +20,7 @@ import type {
   BodyRepresentation,
   FeatureId,
   FeatureNode,
+  ModelPmiAnnotation,
   ParameterKind,
   ParameterNode,
   ParamValue,
@@ -43,6 +44,23 @@ import type { ConfigurationTableProps } from '../ConfigurationTable';
 export interface PendingHistoryStep {
   title: string;
   message: string;
+}
+
+/** D07: what the Objects panel's PMI rows read and offer. */
+export interface PmiActions {
+  /** The face selected in the viewport: what Add puts PMI on. */
+  selectedFace: { bodyId: BodyId; hash: number } | null;
+  selectedPmiId: string | null;
+  /** The document's units, which a frame's tolerance is written in. */
+  units: UnitSystem;
+  /** False where the model cannot be edited: rows list, nothing changes. */
+  editable: boolean;
+  onSelect(pmiId: string | null): void;
+  onAdd(kind: ModelPmiAnnotation['kind']): void;
+  onUpdate(annotation: ModelPmiAnnotation, label: string): void;
+  onDelete(pmiId: string): void;
+  /** Re-points an entry at the selected face, keeping the rest. */
+  onRepick(pmiId: string): void;
 }
 
 export interface ModelPanelSource {
@@ -103,6 +121,8 @@ export interface ModelPanelSource {
   selectedReferenceImageId?: string | null;
   /** Opens a reference image's card. */
   onSelectReferenceImage?(imageId: string): void;
+  /** D07: the model's PMI rows and what they may do; absent, none list. */
+  pmiActions?: PmiActions;
   warnings: DiagnosticRow[];
   historyDetails?: ReactNode;
   /**

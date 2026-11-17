@@ -78,10 +78,15 @@ import {
 } from './lib/referenceImageDisplay';
 import { hasDraftDisplay, referenceImagesWithHistory } from '@openzcad/shared';
 import type {
+  DrawingFaceRef,
+  ModelPmiId,
   ReferenceImage,
   ReferenceImageId,
   ReferenceImagePlane
 } from '@openzcad/shared';
+import type { PmiViewportLabel } from './lib/pmi/modelPmi';
+import type * as ModelPmiModule from './lib/pmi/modelPmi';
+import type { PmiActions } from './components/modelPanels/modelPanelProps';
 import type { ReferenceImageUpdateInput } from '@openzcad/document-core';
 import {
   topologyReferenceRepairCommand,
@@ -215,6 +220,7 @@ import {
   isDrawingCommand,
   isObjectFolderCommandKind,
   isReferenceImageCommandKind,
+  isModelPmiCommandKind,
   type AnyCommand
 } from '@openzcad/command-system';
 import type {
@@ -3486,6 +3492,15 @@ export function App() {
   }
   const [selectedTopology, setSelectedTopology] =
     useState<TopologySelection | null>(null);
+  // D07: the model PMI entry open in Objects, the last face pick's point
+  // (where a new entry's leader lands), and the viewport's PMI labels.
+  const [selectedPmiId, setSelectedPmiId] = useState<string | null>(null);
+  const lastFacePickRef = useRef<{
+    bodyId: string;
+    hash: number;
+    point: { x: number; y: number; z: number };
+  } | null>(null);
+  const [pmiLabels, setPmiLabels] = useState<PmiViewportLabel[]>([]);
   // Viewport-only edge picks for one fillet/chamfer feature. The document
   // remains the source of truth once the command is committed.
   const [selectedEdges, setSelectedEdges] = useState<TopologySelection[]>([]);
@@ -8878,6 +8893,25 @@ export function App() {
     () => doc?.derived.bodyRepresentations ?? {},
     [doc?.derived.bodyRepresentations]
   );
+  // D07: the model's PMI labels, drawn by an on-demand module (none of the
+  // frame geometry weighs on the entry chunk).
+  const modelPmi = doc?.pmi;
+  useEffect(() => {
+    if (!modelPmi) {
+      setPmiLabels((current) => (current.length ? [] : current));
+      return;
+    }
+    let cancelled = false;
+    void import('./lib/pmi/modelPmi').then((module) => {
+      if (!cancelled)
+        setPmiLabels(
+          module.pmiViewportLabels(modelPmi, representations, selectedPmiId)
+        );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [modelPmi, representations, selectedPmiId]);
   // Set up motion centres its axis on, and sizes its slide from, these boxes.
   const assemblyBodyBounds = useMemo(
     () => meshBoundsLookup(representations),
@@ -11193,6 +11227,7 @@ export function App() {
       if (
         isDrawingCommand(command) ||
         isReferenceImageCommandKind(command.kind) ||
+        isModelPmiCommandKind(command.kind) ||
         isObjectFolderCommandKind(command.kind) ||
         isAssemblyOnlyCommand(command) ||
         isConfigurationTableOnlyCommand(command, beforeDocument)
@@ -14166,6 +14201,105 @@ export function App() {
   function applyReferenceImage(update: ReferenceImageUpdateInput): boolean {
     return executeCommand(commandFactories.updateReferenceImage(update));
   }
+
+  /** D07: the PMI actions Objects offers, on the face selected now. */
+  const selectedPmiFace =
+    selectedTopology?.kind === 'face' && selectedTopology.hash !== undefined
+      ? { bodyId: selectedTopology.bodyId, hash: selectedTopology.hash }
+      : null;
+  async function pmiFacePick(): Promise<{
+    module: typeof ModelPmiModule;
+    face: DrawingFaceRef;
+    anchor: { x: number; y: number; z: number };
+  } | null> {
+    const current = managerRef.current?.document;
+    if (!selectedPmiFace || !current) return null;
+    const module = await import('./lib/pmi/modelPmi');
+    const bodies = current.derived.bodyRepresentations;
+    const face = module.pmiFaceRef(
+      bodies,
+      selectedPmiFace.bodyId,
+      selectedPmiFace.hash
+    );
+    const topology = bodies[selectedPmiFace.bodyId]?.topology?.faces.find(
+      (candidate) => candidate.hash === selectedPmiFace.hash
+    );
+    const picked = lastFacePickRef.current;
+    const anchor =
+      picked &&
+      picked.bodyId === selectedPmiFace.bodyId &&
+      picked.hash === selectedPmiFace.hash
+        ? picked.point
+        : topology
+          ? module.faceAnchor(topology)
+          : null;
+    if (!face || !anchor) {
+      setStatus(
+        'That face cannot be told apart from another one in the model. Pick a different face.'
+      );
+      return null;
+    }
+    return { module, face, anchor };
+  }
+  const pmiActions: PmiActions = {
+    selectedFace: selectedPmiFace,
+    selectedPmiId,
+    units: doc?.units ?? 'mm',
+    editable: Boolean(doc) && !editDisabledReason,
+    onSelect: setSelectedPmiId,
+    onAdd(kind) {
+      if (!ensureCanEdit('add PMI')) return;
+      void pmiFacePick().then((pick) => {
+        const current = managerRef.current?.document;
+        if (!pick || !current) return;
+        const annotation = pick.module.draftModelPmi(
+          kind,
+          pick.face,
+          pick.anchor,
+          current.pmi,
+          current.units
+        );
+        if (executeCommand(commandFactories.addModelPmi({ annotation }))) {
+          setSelectedPmiId(annotation.pmiId);
+          setStatus(
+            kind === 'datum-feature'
+              ? `Datum ${annotation.kind === 'datum-feature' ? annotation.letter : ''} added to the face.`
+              : 'Feature control frame added. Choose its characteristic, tolerance and datums in Objects.'
+          );
+        }
+      });
+    },
+    onUpdate(annotation, label) {
+      if (!ensureCanEdit('edit PMI')) return;
+      executeCommand(commandFactories.updateModelPmi({ annotation }, label));
+    },
+    onDelete(pmiId) {
+      if (!ensureCanEdit('delete PMI')) return;
+      if (
+        executeCommand(
+          commandFactories.deleteModelPmi({ pmiId: pmiId as ModelPmiId })
+        )
+      )
+        setSelectedPmiId((current) => (current === pmiId ? null : current));
+    },
+    onRepick(pmiId) {
+      if (!ensureCanEdit('edit PMI')) return;
+      void pmiFacePick().then((pick) => {
+        const previous = managerRef.current?.document.pmi?.annotations.find(
+          (entry) => entry.pmiId === pmiId
+        );
+        if (!pick || !previous) return;
+        executeCommand(
+          commandFactories.updateModelPmi(
+            {
+              annotation: { ...previous, face: pick.face, anchor: pick.anchor }
+            },
+            'Re-pick PMI face'
+          )
+        );
+      });
+    }
+  };
 
   function deleteReferenceImage(imageId: ReferenceImageId) {
     if (executeCommand(commandFactories.deleteReferenceImage({ imageId }))) {
@@ -17467,7 +17601,9 @@ export function App() {
     const parametersOnly = managerRef.current.undoIsParameterOnly;
     const drawingOnly = managerRef.current.undoIsDrawingOnly;
     const folderOnly = managerRef.current.undoIsObjectFolderOnly;
-    const imageOnly = managerRef.current.undoIsReferenceImageOnly;
+    const imageOnly =
+      managerRef.current.undoIsReferenceImageOnly ||
+      managerRef.current.undoIsModelPmiOnly;
     const assemblyOnly = managerRef.current.undoIsAssemblyOnly;
     if (drawingOnly) {
       if (!ensureCanEditDrawings('undo')) return;
@@ -17549,7 +17685,9 @@ export function App() {
     const parametersOnly = managerRef.current.redoIsParameterOnly;
     const drawingOnly = managerRef.current.redoIsDrawingOnly;
     const folderOnly = managerRef.current.redoIsObjectFolderOnly;
-    const imageOnly = managerRef.current.redoIsReferenceImageOnly;
+    const imageOnly =
+      managerRef.current.redoIsReferenceImageOnly ||
+      managerRef.current.redoIsModelPmiOnly;
     const assemblyOnly = managerRef.current.redoIsAssemblyOnly;
     if (drawingOnly) {
       if (!ensureCanEditDrawings('redo')) return;
@@ -20874,6 +21012,17 @@ export function App() {
     detail?: PickDetail,
     contextMenu?: { x: number; y: number }
   ): boolean {
+    // D07: a new PMI entry's leader lands where its face was clicked.
+    if (
+      selection?.kind === 'face' &&
+      selection.hash !== undefined &&
+      detail?.point
+    )
+      lastFacePickRef.current = {
+        bodyId: selection.bodyId,
+        hash: selection.hash,
+        point: { x: detail.point.x, y: detail.point.y, z: detail.point.z }
+      };
     // L08: while a comment is being placed, a press on the model pins it
     // there and selects nothing.
     if (commentPlacingRef.current && !contextMenu) {
@@ -35676,6 +35825,7 @@ export function App() {
       onSelectReferenceImage={(imageId) =>
         openReferenceImage(imageId as ReferenceImageId)
       }
+      pmiActions={pmiActions}
       warnings={diagnostics}
       pendingHistoryStep={pendingHistoryStepFor(commandSession)}
       editingHistoryFeatureId={editedFeatureIdFor(interaction, offsetPlanEdit)}
@@ -36226,6 +36376,7 @@ export function App() {
             }
             view={viewportGeometry}
             measurementAnnotations={measurementAnnotations}
+            pmiLabels={pmiLabels}
             measurementCloudSync={[
               doc.projectId,
               deploymentHealth?.projectMeasurementSyncEnabled,

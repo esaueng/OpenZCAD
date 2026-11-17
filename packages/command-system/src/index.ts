@@ -304,6 +304,12 @@ import {
   type ReferenceImageAddInput,
   type ReferenceImageUpdateInput,
   type ReferenceImageDeleteInput,
+  addModelPmi,
+  updateModelPmi,
+  deleteModelPmi,
+  type ModelPmiAddInput,
+  type ModelPmiUpdateInput,
+  type ModelPmiDeleteInput,
   resolveParamValue,
   resolvedSketchDocument,
   resolveSketchInput,
@@ -479,7 +485,10 @@ export type CommandKind =
   | 'drawing.annotation.delete'
   | 'reference-image.add'
   | 'reference-image.update'
-  | 'reference-image.delete';
+  | 'reference-image.delete'
+  | 'pmi.add'
+  | 'pmi.update'
+  | 'pmi.delete';
 
 /**
  * The feature kind each feature-creating command creates: every
@@ -607,7 +616,10 @@ export type AnyCommand =
   | CommandDefinition<DrawingAnnotationDeleteInput>
   | CommandDefinition<ReferenceImageAddInput>
   | CommandDefinition<ReferenceImageUpdateInput>
-  | CommandDefinition<ReferenceImageDeleteInput>;
+  | CommandDefinition<ReferenceImageDeleteInput>
+  | CommandDefinition<ModelPmiAddInput>
+  | CommandDefinition<ModelPmiUpdateInput>
+  | CommandDefinition<ModelPmiDeleteInput>;
 
 function makeCommand<TPayload>(
   kind: CommandKind,
@@ -3849,6 +3861,32 @@ export const commandFactories = {
       payload,
       (document) => deleteReferenceImage(document, payload)
     );
+  },
+  /** D07 (v106): a datum feature or feature control frame on the model. */
+  addModelPmi(payload: ModelPmiAddInput): CommandDefinition<ModelPmiAddInput> {
+    return makeCommand(
+      'pmi.add',
+      payload.annotation.kind === 'datum-feature'
+        ? `Add datum ${payload.annotation.letter}`
+        : 'Add feature control frame',
+      payload,
+      (document) => addModelPmi(document, payload)
+    );
+  },
+  updateModelPmi(
+    payload: ModelPmiUpdateInput,
+    label = 'Edit PMI'
+  ): CommandDefinition<ModelPmiUpdateInput> {
+    return makeCommand('pmi.update', label, payload, (document) =>
+      updateModelPmi(document, payload)
+    );
+  },
+  deleteModelPmi(
+    payload: ModelPmiDeleteInput
+  ): CommandDefinition<ModelPmiDeleteInput> {
+    return makeCommand('pmi.delete', 'Delete PMI', payload, (document) =>
+      deleteModelPmi(document, payload)
+    );
   }
 };
 
@@ -6008,6 +6046,15 @@ export function isReferenceImageCommandKind(kind: string): boolean {
   return kind.startsWith('reference-image.');
 }
 
+/** D07: a command that edits the model's PMI and never its geometry. */
+export function isModelPmiCommandKind(kind: string): boolean {
+  return kind.startsWith('pmi.');
+}
+
+function modelPmiOnly(entry: DocumentHistoryEntry | undefined): boolean {
+  return sectionOnly(entry, isModelPmiCommandKind, 'pmi');
+}
+
 /** Whether a history entry edits reference images and nothing else. */
 function referenceImageOnly(entry: DocumentHistoryEntry | undefined): boolean {
   return sectionOnly(entry, isReferenceImageCommandKind, 'referenceImages');
@@ -6016,7 +6063,7 @@ function referenceImageOnly(entry: DocumentHistoryEntry | undefined): boolean {
 function sectionOnly(
   entry: DocumentHistoryEntry | undefined,
   isSectionKind: (kind: string) => boolean,
-  field: 'drawings' | 'referenceImages' | 'assembly'
+  field: 'drawings' | 'referenceImages' | 'assembly' | 'pmi'
 ): boolean {
   if (!entry?.commandKinds?.length) return false;
   if (!entry.commandKinds.every(isSectionKind)) return false;
@@ -6210,6 +6257,13 @@ export class CommandManager {
   }
   get redoIsReferenceImageOnly(): boolean {
     return referenceImageOnly(this.history?.entries[this.history.cursor]);
+  }
+  /** D07: whether undo would revert PMI edits only, leaving the geometry. */
+  get undoIsModelPmiOnly(): boolean {
+    return modelPmiOnly(this.history?.entries[(this.history?.cursor ?? 0) - 1]);
+  }
+  get redoIsModelPmiOnly(): boolean {
+    return modelPmiOnly(this.history?.entries[this.history.cursor]);
   }
   /**
    * Whether undo would revert assembly edits only (placements, joints,
@@ -6951,6 +7005,15 @@ export function replayCommands(
           next,
           command.payload as ReferenceImageDeleteInput
         );
+        break;
+      case 'pmi.add':
+        next = addModelPmi(next, command.payload as ModelPmiAddInput);
+        break;
+      case 'pmi.update':
+        next = updateModelPmi(next, command.payload as ModelPmiUpdateInput);
+        break;
+      case 'pmi.delete':
+        next = deleteModelPmi(next, command.payload as ModelPmiDeleteInput);
         break;
       default:
         // Unknown kinds are skipped (not fatal) so documents written by newer

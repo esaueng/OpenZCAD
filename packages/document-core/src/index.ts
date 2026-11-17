@@ -92,6 +92,7 @@ export * from './hole-callout';
 export * from './print-clearance';
 export * from './configurations';
 export * from './reference-images';
+export * from './model-pmi';
 export * from './body-consumption';
 export {
   constantRigidTransform,
@@ -140,6 +141,7 @@ import {
   assertDrawingSet,
   assertObjectFolderSet,
   assertAssemblySet,
+  assertModelPmiSet,
   assertReferenceImageSet,
   featureColor,
   isProjectCheckpoint,
@@ -707,7 +709,7 @@ export interface ShellInput {
   ids?: BodyFeatureIds;
 }
 
-/** M06 (schema v101): a rib from an open profile, joined to its body. */
+/** M06 (schema v106): a rib from an open profile, joined to its body. */
 export interface RibInput {
   name: string;
   targetBodyId: BodyId;
@@ -1132,6 +1134,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   assertObjectFolderSet(document.objectFolders);
   // Schema v54 assemblies: the same.
   assertAssemblySet(document.assembly);
+  // Schema v106 model PMI: the same.
+  assertModelPmiSet(document.pmi);
   assertDocumentContentSchema(document);
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch') {
@@ -4283,7 +4287,7 @@ export function shellBody(
   );
 }
 
-/** Adds an M06 rib (schema v101); it replaces the body it braces. */
+/** Adds an M06 rib (schema v106); it replaces the body it braces. */
 export function ribBody(
   document: ProjectDocument,
   input: RibInput

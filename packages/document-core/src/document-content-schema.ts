@@ -60,7 +60,7 @@ export function hasDatumPointCsysContent(value: unknown): boolean {
   return false;
 }
 
-/** M06 ribs (schema v101). */
+/** M06 ribs (schema v106). */
 export function assertRibSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 101, 'Ribs');
 }
@@ -89,6 +89,14 @@ export function assertAssemblyCouplingSchema(version: unknown): void {
  */
 export function assertPrintClearanceSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 60, 'A print clearance');
+}
+
+/**
+ * D07 model-based definition (schema v106): `pmi` and its commands. An
+ * older reader would drop the section on save.
+ */
+export function assertModelPmiSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 106, 'Model PMI');
 }
 
 /**
@@ -805,6 +813,8 @@ export function assertDocumentContentCommandSchema(
       assertStandardPartSchema(document.schemaVersion, command.payload);
     if (command.kind === 'printClearance.set')
       assertPrintClearanceSchema(document.schemaVersion);
+    if (typeof command.kind === 'string' && command.kind.startsWith('pmi.'))
+      assertModelPmiSchema(document.schemaVersion);
     if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('configuration.')
@@ -991,6 +1001,14 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         (change.before !== undefined || change.after !== undefined)
       )
         assertObjectFolderSchema(document.schemaVersion);
+  if (document.pmi !== undefined) assertModelPmiSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'pmi' &&
+        (change.before !== undefined || change.after !== undefined)
+      )
+        assertModelPmiSchema(document.schemaVersion);
   if (document.printClearance !== undefined)
     assertPrintClearanceSchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
