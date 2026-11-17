@@ -778,7 +778,7 @@ function encodeRecordBody(
   field: 'record' | 'session',
   value: unknown,
   header: BodyEnvelopeHeader,
-  kind: 'measurements' | 'view-state',
+  kind: 'measurements' | 'view-state' | 'comments',
   what: string
 ): Bytes {
   checkKind(header, [kind], 'invalid-argument');
@@ -797,7 +797,7 @@ function decodeRecordBody(
   field: 'record' | 'session',
   bytes: Uint8Array,
   header: BodyEnvelopeHeader,
-  kind: 'measurements' | 'view-state',
+  kind: 'measurements' | 'view-state' | 'comments',
   what: string
 ): Readonly<Record<string, unknown>> {
   checkKind(header, [kind], 'malformed');
@@ -867,6 +867,43 @@ export function decodeViewStateBody(
       header,
       'view-state',
       'View state body'
+    )
+  };
+}
+
+/**
+ * The body of a `comments` envelope (L08): one member's review comments on
+ * the project and the resolutions they made, as the app writes them. The app
+ * checks the record after decoding (`parseCommentLog`).
+ */
+export interface CommentsBody {
+  readonly record: Readonly<Record<string, unknown>>;
+}
+
+export function encodeCommentsBody(
+  body: CommentsBody,
+  header: BodyEnvelopeHeader
+): Bytes {
+  return encodeRecordBody(
+    'record',
+    body?.record,
+    header,
+    'comments',
+    'Comments body'
+  );
+}
+
+export function decodeCommentsBody(
+  bytes: Uint8Array,
+  header: BodyEnvelopeHeader
+): CommentsBody {
+  return {
+    record: decodeRecordBody(
+      'record',
+      bytes,
+      header,
+      'comments',
+      'Comments body'
     )
   };
 }

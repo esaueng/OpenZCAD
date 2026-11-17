@@ -16,6 +16,8 @@ import {
   encodeMeasurementsBody,
   encodeProjectInfoBody,
   encodeViewStateBody,
+  encodeCommentsBody,
+  decodeCommentsBody,
   type BodyEnvelopeHeader,
   type EncryptedDocumentBody,
   type KeyArchiveBody,
@@ -869,6 +871,14 @@ describe('measurement and view-state bodies', () => {
         encodeViewStateBody({ session: value }, h),
       decode: (bytes: Uint8Array, h: BodyEnvelopeHeader) =>
         decodeViewStateBody(bytes, h).session
+    },
+    {
+      kind: 'comments' as const,
+      field: 'record',
+      encode: (value: Record<string, unknown>, h: BodyEnvelopeHeader) =>
+        encodeCommentsBody({ record: value }, h),
+      decode: (bytes: Uint8Array, h: BodyEnvelopeHeader) =>
+        decodeCommentsBody(bytes, h).record
     }
   ];
 

@@ -37,8 +37,11 @@ import {
   type ProjectEnvelopeHeader
 } from '@openzcad/crypto';
 import {
+  E2EE_COMMENTS_CONFLICT_CODE,
   E2EE_MEASUREMENT_CONFLICT_CODE,
   MAX_WORKSPACE_SESSION_BYTES,
+  type E2eeCommentLogRecord,
+  type E2eeCommentLogsResponse,
   type E2eeMeasurementsResponse,
   type E2eeProjectEnvelopeRecord,
   type E2eeReplacedEnvelopeKind,
@@ -70,7 +73,7 @@ import {
 } from './e2eeProjects';
 
 const ROUTE =
-  /^\/api\/e2ee\/projects\/([^/]+)\/(measurements|view-states|view-states\/[^/]+)$/;
+  /^\/api\/e2ee\/projects\/([^/]+)\/(measurements|view-states|view-states\/[^/]+|comments)$/;
 
 /** The encrypted measurement and view-state routes this module serves. */
 export function isE2eeProjectEnvelopePath(pathname: string): boolean {
@@ -137,7 +140,7 @@ async function envelopeInput(
   ctx: Context,
   input: Record<string, unknown>,
   projectId: string,
-  kind: 'measurements' | 'view-state',
+  kind: 'measurements' | 'view-state' | 'comments',
   version: number,
   maxBytes: number
 ): Promise<EnvelopeInput> {
@@ -552,6 +555,169 @@ async function saveViewState(
   return new Response(null, { status: 204 });
 }
 
+// --- Comments (L08, held for the owner: #1667) ---------------------------------
+//
+// One signed comment log per member (migration 0060): any member, viewers
+// included, replaces only its own, chained on the hash of the one it
+// replaces, as measurements are; every member reads them all.
+
+/** A log of 500 comments of 2000 characters, compressed, plus framing. */
+const MAX_COMMENT_LOG_ENVELOPE_BYTES = 1024 * 1024;
+
+const isCommentLogStorageReady = async (db: D1Database): Promise<boolean> =>
+  (
+    await db
+      .prepare(
+        `SELECT 1 AS ready FROM sqlite_master
+         WHERE type = 'table' AND name = 'e2ee_project_comment_logs'`
+      )
+      .first<{ ready: number }>()
+  )?.ready === 1;
+
+interface CommentLogRow extends EnvelopeRow {
+  user_id: string;
+}
+
+const commentLogRecord = (
+  projectId: string,
+  row: CommentLogRow
+): E2eeCommentLogRecord => ({
+  projectId,
+  userId: row.user_id,
+  keyEpoch: row.key_epoch,
+  sequence: row.sequence,
+  envelope: row.envelope,
+  wrappedVersionKey: row.wrapped_version_key,
+  signature: row.signature,
+  signerDeviceId: row.signer_device_id,
+  updatedAt: row.updated_at
+});
+
+const COMMENT_LOG_COLUMNS = `user_id, '' AS scope, sequence, key_epoch, envelope,
+  wrapped_version_key, signature, signer_device_id, updated_at`;
+
+async function loadCommentLogs(
+  ctx: Context,
+  projectId: string
+): Promise<Response> {
+  const { results } = await ctx.db
+    .prepare(
+      `SELECT ${COMMENT_LOG_COLUMNS} FROM e2ee_project_comment_logs
+       WHERE project_id = ? ORDER BY user_id`
+    )
+    .bind(projectId)
+    .all<CommentLogRow>();
+  return json({
+    logs: (results ?? []).map((row) => commentLogRecord(projectId, row))
+  } satisfies E2eeCommentLogsResponse);
+}
+
+async function ownCommentLog(
+  ctx: Context,
+  projectId: string
+): Promise<CommentLogRow | null> {
+  return ctx.db
+    .prepare(
+      `SELECT ${COMMENT_LOG_COLUMNS} FROM e2ee_project_comment_logs
+       WHERE project_id = ? AND user_id = ?`
+    )
+    .bind(projectId, ctx.userId)
+    .first<CommentLogRow>();
+}
+
+const commentsConflict = (currentSequence: number): never =>
+  refuse(
+    409,
+    E2EE_COMMENTS_CONFLICT_CODE,
+    `Your comments are at sequence ${currentSequence}.`,
+    { currentSequence }
+  );
+
+async function saveCommentLog(
+  ctx: Context,
+  projectId: string,
+  request: Request
+): Promise<Response> {
+  const body = await readJson(request);
+  const sequence = uintField(body.sequence, 'sequence');
+  if (sequence < 1) invalid('sequence starts at 1');
+  const input = await envelopeInput(
+    ctx,
+    body,
+    projectId,
+    'comments',
+    sequence,
+    MAX_COMMENT_LOG_ENVELOPE_BYTES
+  );
+  await requireCurrentEpoch(ctx, projectId, input.header.keyEpoch);
+  const stored = await ownCommentLog(ctx, projectId);
+  const storedSequence = stored?.sequence ?? 0;
+  if (sequence !== storedSequence + 1) commentsConflict(storedSequence);
+  // Each log names the one it replaces, as measurements do.
+  const storedHash = stored
+    ? toHex(await versionHash(fromBase64Url(stored.envelope)))
+    : null;
+  const previous = input.header.previousVersionHash;
+  if ((previous ? toHex(previous) : null) !== storedHash) {
+    commentsConflict(storedSequence);
+  }
+  const signer = deviceListUnchanged(ctx.userId, input.signerList);
+  const fence = projectFence(ctx.access, projectId, ctx.userId, 'member');
+  const now = new Date().toISOString();
+  const [result] = await runBatch(ctx.db, [
+    ctx.db
+      .prepare(
+        `INSERT INTO e2ee_project_comment_logs
+           (project_id, user_id, sequence, key_epoch, envelope,
+            wrapped_version_key, signature, signer_device_id, updated_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+         WHERE ${ctx.authorization.sql}
+           AND ${fence.sql}
+           AND EXISTS (SELECT 1 FROM e2ee_project_groups
+                       WHERE project_id = ? AND key_epoch_base + epoch = ?)
+           AND ${signer.sql}
+         ON CONFLICT (project_id, user_id) DO UPDATE SET
+           sequence = excluded.sequence, key_epoch = excluded.key_epoch,
+           envelope = excluded.envelope,
+           wrapped_version_key = excluded.wrapped_version_key,
+           signature = excluded.signature,
+           signer_device_id = excluded.signer_device_id,
+           updated_at = excluded.updated_at
+         WHERE e2ee_project_comment_logs.sequence = ?`
+      )
+      .bind(
+        projectId,
+        ctx.userId,
+        sequence,
+        input.header.keyEpoch,
+        input.envelope,
+        input.wrappedVersionKey,
+        input.signature,
+        input.signerDeviceId,
+        now,
+        ...ctx.authorization.binds,
+        ...fence.binds,
+        projectId,
+        input.header.keyEpoch,
+        ...signer.binds,
+        storedSequence
+      )
+  ]);
+  if ((result?.meta?.changes ?? 0) !== 1) {
+    if (await deviceListMoved(ctx.db, ctx.userId, input.signerList)) {
+      refuseDeviceListMoved();
+    }
+    const current = (await ownCommentLog(ctx, projectId))?.sequence ?? 0;
+    if (current !== storedSequence) commentsConflict(current);
+    refuse(
+      401,
+      'E2EE_SESSION_REQUIRED',
+      'Sign in again before saving this encrypted project.'
+    );
+  }
+  return new Response(null, { status: 204 });
+}
+
 // --- Dispatch ----------------------------------------------------------------
 
 /**
@@ -606,8 +772,15 @@ export async function handleE2eeProjectEnvelopeRequest(
     const known =
       (route === 'measurements' && (method === 'GET' || method === 'PUT')) ||
       (route === 'view-states' && method === 'GET') ||
+      (route === 'comments' && (method === 'GET' || method === 'PUT')) ||
       (sessionId !== null && method === 'PUT');
     if (!known) refuse(404, 'NOT_FOUND', 'Not found.');
+    if (route === 'comments' && !(await isCommentLogStorageReady(db)))
+      refuse(
+        503,
+        'E2EE_COMMENTS_UNAVAILABLE',
+        'Comments on encrypted projects are unavailable until the database is updated.'
+      );
     // Any member reads, and keeps its own view state; the owner and editors
     // write measurements (slice 5-2), as the plaintext routes' read and edit
     // access. The owner reads a project in the recycle bin (4-8).
@@ -618,6 +791,12 @@ export async function handleE2eeProjectEnvelopeRequest(
       method === 'PUT' && route === 'measurements' ? 'write' : 'read',
       { allowDeleted: method === 'GET', migrationLease }
     );
+    // L08: any member reads every comment log and keeps its own.
+    if (route === 'comments') {
+      return method === 'GET'
+        ? await loadCommentLogs(ctx, projectId)
+        : await saveCommentLog(ctx, projectId, request);
+    }
     if (route === 'measurements') {
       return method === 'GET'
         ? json(
