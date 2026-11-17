@@ -22,6 +22,7 @@ import type {
 } from '@openzcad/shared';
 import type { ProjectGroupContext } from './projectGroups';
 import { getKeySessionRevision, isCurrentKeySession } from './keySession';
+import { IDENTITY_DISCONTINUED_PROBLEM } from './encryptionStatus';
 import {
   groupInfoContextBytes,
   parseGroupInfoContext,
@@ -38,7 +39,11 @@ export class ProjectAuthorityError extends Error {
   override readonly name = 'ProjectAuthorityError';
   constructor(
     message: string,
-    readonly code: 'invalid' | 'signer-untrusted' = 'invalid'
+    readonly code:
+      | 'invalid'
+      | 'signer-untrusted'
+      /** See `identityDiscontinued`: still a refusal, never a bypass. */
+      | 'identity-discontinued' = 'invalid'
   ) {
     super(message);
   }
@@ -192,6 +197,49 @@ export async function cachedProjectAuthorityState(
     ? decodeMlsAuthorityTrust(fromBase64Url(local.accepted.authority.record))
     : null;
 }
+/**
+ * Whether a withdrawn authority belongs to an owner identity this account
+ * no longer continues (issue #1704): the device independently pinned this
+ * account as the project's owner under an identity key other than the
+ * current one, and the current identity's genesis names no identity it
+ * replaces, i.e. it was set up afresh (as after a profile deletion) rather
+ * than rotated with a signed transition. Only the wording and next action
+ * change: the load is refused exactly as any withdrawal, and every pin
+ * stays. A rotated identity, an unpinned owner or another owner's project
+ * keeps the generic withdrawal refusal.
+ */
+function identityDiscontinued(
+  ctx: ProjectGroupContext,
+  local: ProjectAuthorityLocalState
+): boolean {
+  let owner: { userId: string; identityKeyHash: string } | null = local.owner;
+  if (!owner && local.accepted) {
+    try {
+      const manifest = decodeMlsAuthorityManifest(
+        signed(
+          decodeMlsAuthorityTrust(
+            fromBase64Url(local.accepted.authority.record)
+          ).manifest
+        ).statement
+      );
+      owner = {
+        userId: manifest.ownerUserId,
+        identityKeyHash: manifest.ownerIdentityKeyHash
+      };
+    } catch {
+      // An unreadable pin says nothing about the owner: generic refusal.
+      return false;
+    }
+  }
+  const genesis = ctx.account.list.entries[0]?.entry;
+  return (
+    !!owner &&
+    !!genesis &&
+    owner.userId === ctx.account.userId &&
+    owner.identityKeyHash !== toHex(ctx.account.list.identityKeyHash) &&
+    genesis.previousIdentityKeyHash === null
+  );
+}
 export interface TrustedProjectAuthority {
   readonly record: E2eeProjectAuthorityRecord;
   readonly value: MlsAuthorityTrust;
@@ -209,10 +257,16 @@ export async function loadProjectAuthority(
   const local = await storeFor(ctx).read(ctx.account.userId, projectId);
   const { authority } = await ctx.api.authority(projectId);
   if (!authority) {
-    if (local.accepted)
+    if (local.accepted) {
+      if (identityDiscontinued(ctx, local))
+        throw new ProjectAuthorityError(
+          IDENTITY_DISCONTINUED_PROBLEM,
+          'identity-discontinued'
+        );
       fail(
         'The account withdrew project authority this device already verified.'
       );
+    }
     return null;
   }
   const record = fromBase64Url(authority.record);

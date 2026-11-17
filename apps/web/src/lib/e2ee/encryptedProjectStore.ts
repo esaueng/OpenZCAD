@@ -174,6 +174,7 @@ import {
 } from './projectGroups';
 import { verifyHeadShareLinks } from './shareLinkSet';
 import { forgetProjectKeys } from './unlockedProjectKeys';
+import { ProjectAuthorityError } from './projectAuthority';
 import { projectAuthorityStore } from './projectAuthorityStore';
 import {
   versionPins,
@@ -551,6 +552,16 @@ async function groupCutoffs(
 
 /** Group and key-store refusals become ApiErrors the sync paths understand. */
 function asApiError(error: unknown): unknown {
+  // Issue #1704: an owner identity the account no longer continues. Still
+  // an integrity refusal; its own words carry the way forward.
+  if (
+    (error instanceof ProjectGroupError &&
+      error.code === 'archive-invalid' &&
+      error.detail === 'identity-discontinued') ||
+    (error instanceof ProjectAuthorityError &&
+      error.code === 'identity-discontinued')
+  )
+    return new EncryptedProjectIntegrityError('authority', error.message);
   if (error instanceof ProjectGroupError && error.code === 'archive-invalid')
     return new EncryptedProjectIntegrityError(
       'authority',

@@ -205,7 +205,8 @@ interface SettingsPageProps {
   onLogout(choice: DeviceKeySignOutChoice): Promise<void>;
   onDeleteCloudData(
     scope: AccountDeletionScope,
-    confirmation: string
+    confirmation: string,
+    acknowledgedEncryptedProjectCount?: number
   ): Promise<void>;
   onReset(): void;
   onApplyViewportDefaults(): void;
@@ -3108,8 +3109,8 @@ export function SettingsPage({
       {deletionScope ? (
         <CloudDataDeletionDialog
           scope={deletionScope}
-          onConfirm={async (scope, confirmation) => {
-            await onDeleteCloudData(scope, confirmation);
+          onConfirm={async (scope, confirmation, acknowledged) => {
+            await onDeleteCloudData(scope, confirmation, acknowledged);
             setDeletionScope(null);
           }}
           onClose={() => setDeletionScope(null)}

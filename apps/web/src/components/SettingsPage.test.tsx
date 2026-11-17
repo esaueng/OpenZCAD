@@ -2601,7 +2601,11 @@ describe('settings privacy and data section', () => {
     expect(confirm).toBeEnabled();
     await user.click(confirm);
 
-    expect(onDeleteCloudData).toHaveBeenCalledWith('all', 'PERSON@example.com');
+    expect(onDeleteCloudData).toHaveBeenCalledWith(
+      'all',
+      'PERSON@example.com',
+      undefined
+    );
   });
 
   it('fails closed when the erasure migrations are not ready', () => {

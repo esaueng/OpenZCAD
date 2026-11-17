@@ -5,9 +5,10 @@ import {
   Settings as SettingsIcon,
   ShieldAlert
 } from 'lucide-react';
-import type {
-  EncryptionStatus,
-  EncryptionStatusState
+import {
+  IDENTITY_DISCONTINUED_PROBLEM,
+  type EncryptionStatus,
+  type EncryptionStatusState
 } from '../lib/e2ee/encryptionStatus';
 
 export interface EncryptionIndicatorProps {
@@ -96,7 +97,11 @@ function presentationOf(
         status: failed ? 'Verification failed' : 'Repair needed',
         text: [
           ...(problem !== undefined ? [problem] : []),
-          ...(needsRepair ? [REPAIR_SENTENCE] : [])
+          // Retrying cannot verify a copy secured by keys the account no
+          // longer has; that problem already names the way forward.
+          ...(needsRepair && problem !== IDENTITY_DISCONTINUED_PROBLEM
+            ? [REPAIR_SENTENCE]
+            : [])
         ].join(' ')
       };
     }

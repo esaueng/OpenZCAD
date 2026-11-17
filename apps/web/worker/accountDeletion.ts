@@ -27,6 +27,7 @@ import {
   erasePendingObjectOwnerStatement,
   isPendingObjectStorageReady,
   isProjectInstanceReady,
+  isProjectStorageFormatReady,
   type CloudflareEnv,
   type ProjectCollaborationRoom
 } from '@openzcad/cloudflare-adapters';
@@ -101,11 +102,64 @@ function parseDeletionRequest(value: unknown): DeleteAccountDataRequest {
     value && typeof value === 'object'
       ? (value as Record<string, unknown>)
       : {};
+  const acknowledged = input.acknowledgedEncryptedProjectCount;
   return {
     scope: parseScope(input.scope),
     confirmation:
-      typeof input.confirmation === 'string' ? input.confirmation : ''
+      typeof input.confirmation === 'string' ? input.confirmation : '',
+    acknowledgedEncryptedProjectCount:
+      typeof acknowledged === 'number' &&
+      Number.isSafeInteger(acknowledged) &&
+      acknowledged >= 0
+        ? acknowledged
+        : 0
   };
+}
+
+/**
+ * Owned end-to-end encrypted projects, trashed ones included. A profile
+ * deletion keeps them while erasing every key of this account that opens
+ * them (its identity, account keys, project-key wraps, leaf
+ * certifications and authority records). User ids are stable per email, so
+ * signing in again returns to the same account and these projects, and a
+ * fresh encryption setup there is a new identity that continues none of
+ * the erased keys: the cloud copies stay unreadable to the account, and
+ * its other browsers, which still pin the erased identity, refuse them
+ * (issue #1704). Zero before migration 0031.
+ */
+async function ownedEncryptedProjectCount(
+  db: D1Database,
+  userId: UserId
+): Promise<number> {
+  if (!(await isProjectStorageFormatReady(db))) return 0;
+  const row = await db
+    .prepare(
+      'SELECT COUNT(*) AS n FROM projects WHERE user_id = ? AND storage_format = 2'
+    )
+    .bind(userId)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/**
+ * Refuses a profile deletion that would strand more encrypted projects
+ * than the person was told about, before any fence or deletion. Deleting
+ * the projects too (`all`) strands none, and projects-only keeps the keys.
+ */
+async function assertEncryptedProjectsAcknowledged(
+  db: D1Database,
+  userId: UserId,
+  input: DeleteAccountDataRequest
+): Promise<void> {
+  if (input.scope !== 'profile') return;
+  const owned = await ownedEncryptedProjectCount(db, userId);
+  if (owned > (input.acknowledgedEncryptedProjectCount ?? 0)) {
+    throw new AccountDeletionError(
+      409,
+      'ACCOUNT_DELETION_ENCRYPTED_PROJECTS',
+      `You own ${owned === 1 ? 'an end-to-end encrypted cloud project' : `${owned} end-to-end encrypted cloud projects`} that deleting your profile would leave unreadable to your account. Review the deletion again before continuing. No cloud data was deleted.`
+    );
+  }
 }
 
 function confirmationFor(
@@ -167,7 +221,11 @@ export async function accountDeletionPreview(
     documentBytes: usage.documentBytes,
     revisionBytes: usage.revisionBytes,
     revisionCount: usage.revisionCount,
-    collaboratorCount: collaborators?.collaborator_count ?? 0
+    collaboratorCount: collaborators?.collaborator_count ?? 0,
+    encryptedProjectCount: await ownedEncryptedProjectCount(
+      env.DB!,
+      session.userId
+    )
   };
 }
 
@@ -575,6 +633,7 @@ export async function deleteAccountData(
   }
 
   const db = env.DB!;
+  await assertEncryptedProjectsAcknowledged(db, session.userId, input);
   // This attempt's request: an overlapping retry that completes it removes
   // it, and this attempt then stops before its next destructive step.
   const request = await beginErasure(db, session.userId, input.scope);

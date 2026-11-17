@@ -42,6 +42,18 @@ export interface EncryptionStatus {
   readonly problem?: string;
 }
 
+/**
+ * The refusal for a project whose verified owner is this account under an
+ * identity the account no longer has: its authority record is gone and the
+ * current identity was set up afresh, continuing none of the pinned one
+ * (issue #1704; a profile deletion followed by a new setup does exactly
+ * this). Nothing can verify the account copy again, so retrying is futile;
+ * this device's copy is the way forward. Here, crypto-free, so the
+ * indicator can recognize it.
+ */
+export const IDENTITY_DISCONTINUED_PROBLEM =
+  'This project was secured with encryption keys your account no longer has: your account’s encryption was set up again with new keys that don’t continue them, so this device can’t verify the account copy and won’t sync it. Nothing was changed, and your work stays on this device. To keep it in your account, choose Export project in the File menu, then Import project and save the imported copy.';
+
 /** A project-scoped verification outcome; the lock is device-wide. */
 interface ProjectRecord {
   readonly verified: boolean;
