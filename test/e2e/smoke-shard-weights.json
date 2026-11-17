@@ -146,5 +146,6 @@
   "visual-selection-fillet-edit.spec.ts": 12,
   "visual-selection-live-preview.spec.ts": 12,
   "workspace-empty-state.spec.ts": 8,
-  "workspace-tour.spec.ts": 7
+  "workspace-tour.spec.ts": 7,
+  "save-state-versions.spec.ts": 12
 }
