@@ -2939,7 +2939,7 @@ function ToleranceFields(props: {
   if (callout) return null;
   const tolerance = selected.tolerance;
   const set = (next: DrawingTolerance | null) => {
-    // v100: a toleranced diameter states its diameter, not a hole's
+    // v105: a toleranced diameter states its diameter, not a hole's
     // callout, so a thread class goes with the callout.
     const { tolerance: _previous, ...kept } = selected;
     const rest =
@@ -3142,7 +3142,9 @@ function DrawingToolRail(props: {
     ['angle', 'arc-angle', 'three-point-angle'],
     ['center-mark', 'intersection-mark', 'centerline', 'circle-centerline'],
     ['note', 'balloon', 'parts-list', 'image'],
-    ['datum-feature', 'feature-control-frame', 'general-tolerance']
+    // The general-tolerance block is placed from Sheet Properties (and W):
+    // a phone-width rail has no row to spare.
+    ['datum-feature', 'feature-control-frame']
   ];
   return (
     <div
@@ -7658,6 +7660,20 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 updateSheet({ format }, 'Change drawing properties')
               }
             />
+            <div className="drawing-panel-section">
+              <h3>General tolerances</h3>
+              <button
+                type="button"
+                className="secondary"
+                disabled={!canUseTool('general-tolerance')}
+                title="Place a block stating ISO 2768 or per-decimal general tolerances (W)"
+                onClick={() =>
+                  chooseTool(startAnnotationTool('general-tolerance'))
+                }
+              >
+                <Diff size={13} aria-hidden="true" /> Add general tolerances
+              </button>
+            </div>
             <div className="drawing-panel-section">
               <h3>Title block</h3>
               <label className="drawing-field">

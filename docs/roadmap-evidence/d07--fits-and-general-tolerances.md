@@ -10,8 +10,8 @@ deviations ISO 286-1 tables 1–3 state for the size the model has now
 grades 5–11, up to 500 mm, others refused by name rather than guessed), and
 a tapped hole's callout an ISO 965 or UN internal thread class
 ("M6×1-6H"), broken by name on a plain bore (`not-threaded`) or the other
-system's class (`thread-class-mismatch`). The General tolerances tool (W)
-places a ruled block printing the ISO 2768-1 linear and angular tables for
+system's class (`thread-class-mismatch`). Add general tolerances in Sheet Properties (or
+W) places a ruled block printing the ISO 2768-1 linear and angular tables for
 class f, m, c or v (with an ISO 2768-2 class), or ± per number of decimals
 written and on angles in the sheet's units. Evidence:
 `test/drawing-fits.test.ts` (ISO 286 limits against eighteen table values

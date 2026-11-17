@@ -129,7 +129,9 @@ properties) and `test/e2e/drawing-gdt.spec.ts`.
   - **By decimal places.** `decimal` states ± for values written to 0–4
     decimals, and on angles, in the sheet's units. This is the common
     block for inch drawings.
-  - **Tool and Properties.** General tolerances (W) places an ISO 2768-m
-    block, and Properties switches its scheme and classes.
+  - **Tool and Properties.** Sheet Properties' Add general tolerances (or
+    the W key) places an ISO 2768-m block, and Properties switches its
+    scheme and classes. It is not on the tool rail, which has no row to
+    spare at phone width.
 - **Schema.** v105, built on v101 (#1739), gated below it. An older client would print
   a fitted diameter without its fit.

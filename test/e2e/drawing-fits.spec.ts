@@ -89,7 +89,9 @@ test(
     ).toBeVisible();
 
     // The general-tolerance block, one click on the paper.
-    await tools.getByRole('button', { name: 'General tolerances' }).click();
+    // Placed from Sheet Properties, back on the sheet.
+    await panel.getByRole('button', { name: 'Back to the sheet' }).click();
+    await panel.getByRole('button', { name: /Add general tolerances/ }).click();
     await page.mouse.click(top.right + 40 * top.pxPerMm, top.centreY);
     await expect(
       canvas.getByRole('button', { name: 'General tolerances ISO 2768-m' })

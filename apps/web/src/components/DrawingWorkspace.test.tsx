@@ -1856,7 +1856,7 @@ describe('DrawingWorkspace', () => {
       });
     });
 
-    it('drops a thread class when a diameter is toleranced instead (D07 v100)', async () => {
+    it('drops a thread class when a diameter is toleranced instead (D07 v105)', async () => {
       const sheet = dimensioned();
       const linear = sheet.annotations![0] as DrawingLinearDimension;
       sheet.annotations = [
