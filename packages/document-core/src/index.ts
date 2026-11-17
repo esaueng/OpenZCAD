@@ -2995,7 +2995,8 @@ export function booleanBodies(
 function datumFeaturesBefore(
   document: ProjectDocument,
   beforeFeatureId: FeatureId | null,
-  kind: 'datum-plane' | 'datum-axis' | 'datum-point' | 'datum-csys' = 'datum-plane'
+  kind:
+    'datum-plane' | 'datum-axis' | 'datum-point' | 'datum-csys' = 'datum-plane'
 ): Set<FeatureId> {
   const datums = new Set<FeatureId>();
   for (const feature of listFeaturesInOrder(document)) {
@@ -3084,7 +3085,8 @@ function requireEarlierDatumOf(
 function requireRefOnly(ref: object, extra: readonly string[] = []): void {
   if (
     Object.keys(ref).some(
-      (key) => key !== 'type' && key !== 'datumFeatureId' && !extra.includes(key)
+      (key) =>
+        key !== 'type' && key !== 'datumFeatureId' && !extra.includes(key)
     )
   ) {
     throw new Error('A datum reference carries only the datum id.');
@@ -3420,6 +3422,12 @@ export function datumPlaneDependents(
       uses = datumPlaneSources(data.definition).some(usesDatum);
     } else if (data.featureKind === 'datum-axis') {
       uses = datumAxisPlaneSources(data.definition).some(usesDatum);
+    } else if (data.featureKind === 'datum-point') {
+      // R01 (schema v97): a point where an axis pierces this plane.
+      uses = datumPointDefinitionPlaneSources(data.definition).some(usesDatum);
+    } else if (data.featureKind === 'datum-csys') {
+      // R01 (schema v97): a system on this plane's frame.
+      uses = datumCsysPlaneSources(data.definition).some(usesDatum);
     } else if (data.featureKind === 'mirror' || data.featureKind === 'split') {
       uses = usesDatum(data.plane);
     } else if (data.featureKind === 'sketch') {
@@ -3456,7 +3464,9 @@ function validateEdgeSource(
   what: string
 ): void {
   if (source?.type !== 'edge' || source.edgeReference?.kind !== 'edge') {
-    throw new Error(`${what} needs an edge with a qualified lineage reference.`);
+    throw new Error(
+      `${what} needs an edge with a qualified lineage reference.`
+    );
   }
   if (!document.bodyOrder.includes(source.bodyId)) {
     throw new Error(`The edge's body ${String(source.bodyId)} does not exist.`);
@@ -3522,7 +3532,9 @@ export function validateDatumCsysDefinition(
   switch (definition?.kind) {
     case 'three-point':
       if (points.length !== 3)
-        throw new Error('A coordinate system through three points needs three points.');
+        throw new Error(
+          'A coordinate system through three points needs three points.'
+        );
       for (const [a, b] of [
         [0, 1],
         [0, 2],
@@ -3569,7 +3581,12 @@ export function validateCsysAlign(
     if (ref?.type !== 'datum-csys')
       throw new Error('A Move aligns from and to coordinate systems.');
     requireRefOnly(ref);
-    requireEarlierDatumOf(document, 'datum-csys', ref.datumFeatureId, ownFeatureId);
+    requireEarlierDatumOf(
+      document,
+      'datum-csys',
+      ref.datumFeatureId,
+      ownFeatureId
+    );
   }
   if (align.from && align.from.datumFeatureId === align.to.datumFeatureId)
     throw new Error('A Move aligns between two different coordinate systems.');

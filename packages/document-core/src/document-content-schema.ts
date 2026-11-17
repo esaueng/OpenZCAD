@@ -758,9 +758,11 @@ export function assertDocumentContentCommandSchema(
     if (command.kind === 'feature.sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
     if (
-      typeof command.kind === 'string' &&
-      command.kind.startsWith('feature.') &&
-      hasDatumPointCsysContent(command.payload)
+      command.kind === 'feature.datum-point' ||
+      command.kind === 'feature.datum-csys' ||
+      (typeof command.kind === 'string' &&
+        command.kind.startsWith('feature.') &&
+        hasDatumPointCsysContent(command.payload))
     )
       assertDatumPointCsysSchema(document.schemaVersion);
     if (command.kind === 'feature.standard-part')
