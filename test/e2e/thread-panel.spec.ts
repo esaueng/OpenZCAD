@@ -112,9 +112,9 @@ test('Thread options: custom numbers show where they apply, More folds shut', as
   await expect(panel.getByText('Starts', { exact: true })).toBeVisible();
   // A custom fit is a gap typed in place.
   await expect(panel.getByText('Gap', { exact: true })).toHaveCount(0);
+  // Five fits since Document joined them (L09, #1563): a list, not radios.
   await panel
-    .getByRole('radiogroup', { name: 'Fit' })
-    .getByRole('radio', { name: 'Custom' })
-    .click();
+    .getByRole('combobox', { name: 'Fit' })
+    .selectOption({ label: 'Custom' });
   await expect(panel.getByText('Gap', { exact: true })).toBeVisible();
 });

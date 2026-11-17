@@ -267,11 +267,10 @@ test('Rectangle types and Polygon draw held lines named as one shape', async ({
     sideLengths(drawn, polygon),
     Array<number>(5).fill(20 * Math.sin(Math.PI / 5))
   );
-  expect(drawn.objects.get(polygon.helperIds![0]!)).toMatchObject({
-    objectKind: 'circle',
-    radius: 10,
-    construction: true
-  });
+  const helper = drawn.objects.get(polygon.helperIds![0]!);
+  expect(helper).toMatchObject({ objectKind: 'circle', construction: true });
+  // Solved, so exact only to rounding: 9.999999999999998 has been read.
+  expect((helper as { radius: number }).radius).toBeCloseTo(10, 9);
   expect(relationKinds(drawn, polygon)).toEqual(
     [
       ...Array<string>(5).fill('coincident'),
