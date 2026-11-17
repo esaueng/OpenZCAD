@@ -10,7 +10,9 @@ import {
 } from 'react';
 import {
   Angle,
+  ChartPie,
   Crosshair,
+  DraftingCompass,
   Diameter,
   FileDown,
   Maximize,
@@ -980,6 +982,8 @@ const ANNOTATION_TOOLS: readonly AnnotationToolKind[] = [
   'radius',
   'diameter',
   'angle',
+  'arc-angle',
+  'three-point-angle',
   'chamfer',
   'note',
   'center-mark',
@@ -999,6 +1003,8 @@ const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
     radius: Radius,
     diameter: Diameter,
     angle: Angle,
+    'arc-angle': ChartPie,
+    'three-point-angle': DraftingCompass,
     chamfer: TriangleRight,
     note: StickyNote,
     'center-mark': Crosshair,
@@ -1018,6 +1024,8 @@ const ANNOTATION_TOOL_KEYS: Readonly<Record<AnnotationToolKind, string>> = {
   radius: 'R',
   diameter: 'D',
   angle: 'G',
+  'arc-angle': 'E',
+  'three-point-angle': 'J',
   chamfer: 'C',
   note: 'N',
   'center-mark': 'M',
@@ -1079,6 +1087,8 @@ const ANNOTATION_KIND_LABELS: Readonly<
   radius: 'Radius',
   diameter: 'Diameter',
   angle: 'Angle',
+  'arc-angle': 'Arc angle',
+  'three-point-angle': '3-point angle',
   chamfer: 'Chamfer',
   note: 'Note',
   'center-mark': 'Centre mark',
@@ -1604,7 +1614,10 @@ function AnnotationProperties(props: {
       ) : resolution?.ok && isDrawingDimension(selected) ? (
         <p className="drawing-annotation-value">
           {resolution.resolved.label}
-          {selected.kind === 'angle' || selected.kind === 'chamfer'
+          {selected.kind === 'angle' ||
+          selected.kind === 'arc-angle' ||
+          selected.kind === 'three-point-angle' ||
+          selected.kind === 'chamfer'
             ? ''
             : ` ${props.numberFormat.units}`}
         </p>
@@ -1655,7 +1668,9 @@ function AnnotationProperties(props: {
           >
             <option value="">
               Default (
-              {selected.kind === 'angle'
+              {selected.kind === 'angle' ||
+              selected.kind === 'arc-angle' ||
+              selected.kind === 'three-point-angle'
                 ? props.numberFormat.angleDecimals
                 : props.numberFormat.lengthDecimals}
               )
@@ -2088,7 +2103,8 @@ function DrawingToolRail(props: {
   const { tool, section, detail, auxiliary } = props;
   const groups: AnnotationToolKind[][] = [
     ['horizontal', 'vertical', 'aligned', 'distance'],
-    ['radius', 'diameter', 'angle', 'chamfer'],
+    ['radius', 'diameter', 'chamfer'],
+    ['angle', 'arc-angle', 'three-point-angle'],
     ['center-mark', 'intersection-mark', 'centerline', 'circle-centerline'],
     ['note', 'balloon', 'parts-list']
   ];
