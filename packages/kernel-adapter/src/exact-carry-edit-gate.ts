@@ -339,6 +339,8 @@ export function upstreamSnapshot(
     | 'sketchBases'
     | 'datumFrames'
     | 'datumAxes'
+    | 'datumPoints'
+    | 'datumCsys'
     | 'sketchObjectOverrides'
     | 'sketchProjections'
   >
@@ -411,6 +413,8 @@ export function upstreamSnapshot(
           sketchBases: resolved.sketchBases,
           datumFrames: resolved.datumFrames,
           datumAxes: resolved.datumAxes,
+          datumPoints: resolved.datumPoints ?? new Map(),
+          datumCsys: resolved.datumCsys ?? new Map(),
           projected: resolved.sketchObjectOverrides ?? new Map(),
           projections: resolved.sketchProjections ?? new Map()
         })

@@ -212,7 +212,9 @@ export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   'imported-step': 'Imported STEP',
   'imported-mesh': 'Imported mesh',
   'datum-plane': 'Datum plane',
-  'datum-axis': 'Datum axis'
+  'datum-axis': 'Datum axis',
+  'datum-point': 'Datum point',
+  'datum-csys': 'Coordinate system'
 };
 
 /**

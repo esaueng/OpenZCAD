@@ -272,6 +272,8 @@ function suppressedScopeSource(feature: FeatureNode): BodyId | null {
     case 'imported-step':
     case 'datum-plane':
     case 'datum-axis':
+    case 'datum-point':
+    case 'datum-csys':
       return null;
     default:
       data satisfies never;
@@ -395,6 +397,8 @@ function featureScopeForBodies(
       case 'imported-mesh':
       case 'datum-plane':
       case 'datum-axis':
+      case 'datum-point':
+      case 'datum-csys':
         // A datum consumes no body; its own dimensions are not proposed yet.
         break;
       default:
@@ -671,6 +675,8 @@ function nativeCandidates(
       case 'imported-mesh':
       case 'datum-plane':
       case 'datum-axis':
+      case 'datum-point':
+      case 'datum-csys':
         break;
       default:
         data satisfies never;

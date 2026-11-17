@@ -45,7 +45,16 @@ import {
 import { throughAllSpan, unionBounds } from './through-all';
 import { toFaceSweepFeature } from './extrude-options';
 import {
+  axisPlaneDatumPoint,
   axisRotationMatrix,
+  csysAlignMatrix,
+  csysDatumAxis,
+  offsetDatumPoint,
+  placementDatumCsys,
+  planeDatumCsys,
+  threePointDatumCsys,
+  WORLD_CSYS,
+  type DatumCsys,
   geometryTolerance,
   midDatumPlane,
   offsetDatumPlane,
@@ -263,6 +272,8 @@ import {
   buildProfileSweep,
   buildHelicalSweep,
   resolveDatumAxisRefAtHistory,
+  resolveDatumCsysRefAtHistory,
+  resolveDatumPointEdgeAtHistory,
   resolveDatumAxisSourceAtHistory,
   resolveDatumPointAtHistory,
   resolvePlaneRefAtHistory,
@@ -1218,7 +1229,30 @@ function resolveTransformFeature(
       z: resolveParamValue(pivot.z, scope, 'pivot Z', document.units)
     }
   );
-  const matrix = axisTurn ? composeAffine(authored, axisTurn) : authored;
+  // R01 (schema v95): the coordinate-system alignment applies before the
+  // axis turn and the authored transform.
+  const align =
+    data.csysAlign &&
+    affineMatrix(
+      csysAlignMatrix(
+        data.csysAlign.from
+          ? resolveDatumCsysRefAtHistory(
+              document,
+              data.csysAlign.from,
+              `Move "${feature.name}"`,
+              result
+            )
+          : WORLD_CSYS,
+        resolveDatumCsysRefAtHistory(
+          document,
+          data.csysAlign.to,
+          `Move "${feature.name}"`,
+          result
+        )
+      )
+    );
+  const turned = axisTurn ? composeAffine(authored, axisTurn) : authored;
+  const matrix = align ? composeAffine(turned, align) : turned;
   // Both primitive planners convert world-space drags through uniform scale.
   const allowUniformScale = ['cylinder', 'box'].includes(
     modifierChainRootPrimitive(document, data.targetBodyId) ?? ''
@@ -1242,7 +1276,7 @@ function buildTransformFeature(
   );
   result.shapes.set(resultBodyId, transformed);
   try {
-    if (data.axisRotation) ctx.idleLineageView?.abandon();
+    if (data.axisRotation || data.csysAlign) ctx.idleLineageView?.abandon();
     else
       ctx.idleLineageView?.transform(
         kernel,
@@ -1269,7 +1303,7 @@ export function completePreparedFeatureLineage(
   try {
     const data = feature.data;
     if (data.featureKind === 'transform') {
-      if (data.axisRotation) return view.abandon();
+      if (data.axisRotation || data.csysAlign) return view.abandon();
       const { resultBodyId, matrix, allowUniformScale } =
         resolveTransformFeature(ctx, feature, data);
       const transformed = ctx.result.shapes.get(resultBodyId);
@@ -1454,8 +1488,147 @@ function buildDatumAxisFeature(
       );
       break;
     }
+    case 'csys-axis':
+      axis = csysDatumAxis(
+        resolveDatumCsysRefAtHistory(
+          ctx.document,
+          definition.csys,
+          `Datum axis "${feature.name}"`,
+          ctx.result
+        ),
+        definition.axis,
+        definition.reverseDirection
+      );
+      break;
   }
   ctx.result.datumAxes.set(feature.featureId, axis);
+}
+
+/**
+ * R01 (schema v95): resolves a datum point once at its history position, for
+ * every later plane, axis, coordinate system and point built from it. It
+ * makes no body.
+ */
+function buildDatumPointFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'datum-point'>
+): void {
+  const { definition } = data;
+  const value = (v: ParamValue, name: string) =>
+    resolveParamValue(v, ctx.scope, `datum point ${name}`, ctx.document.units);
+  let point: Vec3;
+  switch (definition.kind) {
+    case 'offset':
+      point = offsetDatumPoint(
+        resolveDatumPointAtHistory(
+          ctx.kernel,
+          ctx.document,
+          definition.from,
+          feature.name,
+          ctx.result,
+          ctx.scope,
+          'Datum point'
+        ),
+        {
+          x: value(definition.offset.x, 'X offset'),
+          y: value(definition.offset.y, 'Y offset'),
+          z: value(definition.offset.z, 'Z offset')
+        }
+      );
+      break;
+    case 'edge-midpoint':
+    case 'arc-center':
+      point = resolveDatumPointEdgeAtHistory(
+        ctx.kernel,
+        ctx.document,
+        definition.source,
+        definition.kind,
+        feature.name,
+        ctx.result
+      );
+      break;
+    case 'axis-plane':
+      point = axisPlaneDatumPoint(
+        resolveDatumAxisRefAtHistory(
+          ctx.document,
+          definition.axis,
+          `Datum point "${feature.name}"`,
+          ctx.result
+        ),
+        resolvePlaneRefAtHistory(
+          ctx.kernel,
+          ctx.document,
+          definition.plane,
+          { kind: 'Datum point', name: feature.name },
+          ctx.result,
+          ctx.scope
+        )
+      );
+      break;
+  }
+  (ctx.result.datumPoints ??= new Map()).set(feature.featureId, point);
+}
+
+/**
+ * R01 (schema v95): resolves a coordinate system once at its history
+ * position, for the planes, axes and Moves that use it. It makes no body.
+ */
+function buildDatumCsysFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'datum-csys'>
+): void {
+  const { definition } = data;
+  const point = (source: DatumPointSource) =>
+    resolveDatumPointAtHistory(
+      ctx.kernel,
+      ctx.document,
+      source,
+      feature.name,
+      ctx.result,
+      ctx.scope,
+      'Coordinate system'
+    );
+  let csys: DatumCsys;
+  switch (definition.kind) {
+    case 'three-point':
+      csys = threePointDatumCsys(
+        point(definition.points[0]),
+        point(definition.points[1]),
+        point(definition.points[2])
+      );
+      break;
+    case 'plane':
+      csys = planeDatumCsys(
+        resolvePlaneRefAtHistory(
+          ctx.kernel,
+          ctx.document,
+          definition.source,
+          { kind: 'Coordinate system', name: feature.name },
+          ctx.result,
+          ctx.scope
+        ),
+        definition.origin ? point(definition.origin) : undefined
+      );
+      break;
+    case 'placement': {
+      const angle = (v: ParamValue, name: string) =>
+        resolveParamValue(
+          v,
+          ctx.scope,
+          `coordinate system ${name}`,
+          ctx.document.units
+        );
+      csys = placementDatumCsys(point(definition.origin), {
+        x: angle(definition.rotationDeg.x, 'X rotation'),
+        y: angle(definition.rotationDeg.y, 'Y rotation'),
+        z: angle(definition.rotationDeg.z, 'Z rotation')
+      });
+      break;
+    }
+  }
+  (ctx.result.datumCsys ??= new Map()).set(feature.featureId, csys);
 }
 
 function buildMirrorFeature(
@@ -4321,6 +4494,12 @@ function buildFeatureByKind(
       break;
     case 'datum-axis':
       buildDatumAxisFeature(ctx, feature, feature.data);
+      break;
+    case 'datum-point':
+      buildDatumPointFeature(ctx, feature, feature.data);
+      break;
+    case 'datum-csys':
+      buildDatumCsysFeature(ctx, feature, feature.data);
       break;
   }
 }

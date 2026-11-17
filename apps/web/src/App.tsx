@@ -70,6 +70,7 @@ import {
   earlierDatumPlanes
 } from './lib/datumPlaneDisplay';
 import type { DatumVertexRepairSession } from './lib/datumVertexRepair';
+import type { DatumFeatureKind } from './lib/datumPlanes';
 import {
   referenceImageDisplays,
   referenceImageInsertPlane,
@@ -12015,7 +12016,7 @@ export function App() {
     derived: ProjectDocument['derived'],
     featureId: FeatureId,
     name: string,
-    kind: 'datum-plane' | 'datum-axis'
+    kind: DatumFeatureKind
   ): void {
     const picks = datumPicksRef.current;
     if (picks && base) {
@@ -12025,7 +12026,11 @@ export function App() {
     const resolved =
       kind === 'datum-plane'
         ? derived.datumFrames?.[featureId]
-        : derived.datumAxes?.[featureId];
+        : kind === 'datum-axis'
+          ? derived.datumAxes?.[featureId]
+          : kind === 'datum-point'
+            ? derived.datumPoints?.[featureId]
+            : derived.datumCsys?.[featureId];
     if (!resolved) throw new Error(`${name} did not resolve.`);
   }
 
@@ -25625,6 +25630,16 @@ export function App() {
           name,
           definition: request.definition
         });
+      case 'datum-point':
+        return commandFactories.addDatumPoint({
+          name,
+          definition: request.definition
+        });
+      case 'datum-csys':
+        return commandFactories.addDatumCsys({
+          name,
+          definition: request.definition
+        });
       case 'reference-image':
         return commandFactories.addReferenceImage({ image: request.image });
     }
@@ -25633,8 +25648,13 @@ export function App() {
   function inPlaceDatum(
     request: InPlaceRequest,
     command: AnyCommand
-  ): { featureId: FeatureId; kind: 'datum-plane' | 'datum-axis' } | null {
-    if (request.tool !== 'datum-plane' && request.tool !== 'datum-axis')
+  ): { featureId: FeatureId; kind: DatumFeatureKind } | null {
+    if (
+      request.tool !== 'datum-plane' &&
+      request.tool !== 'datum-axis' &&
+      request.tool !== 'datum-point' &&
+      request.tool !== 'datum-csys'
+    )
       return null;
     const featureId = (
       command.payload as { ids?: { featureId?: FeatureId } } | undefined
@@ -25898,13 +25918,33 @@ export function App() {
     buildCommand: (request, title, edit) => {
       if (edit) {
         const command = inPlaceEditCommand(request, edit);
+        // R01: an edited point or system has no body; its own resolution,
+        // and every datum built on it, is the proof, as for a new one.
+        const datumKind =
+          edit.data.featureKind === 'datum-point' ||
+          edit.data.featureKind === 'datum-csys'
+            ? edit.data.featureKind
+            : null;
+        const base = managerRef.current?.document;
         return {
           validate: (document) => command.validate(document),
           // A suppressed feature previews built, so its edit is checked by
           // the same rebuild that would refuse it once turned back on.
           apply: (document) =>
             withFeatureBuilt(command.apply(document), edit.featureId),
-          resultBodyId: inPlaceEditResultBodyId(request, edit)
+          resultBodyId: inPlaceEditResultBodyId(request, edit),
+          ...(datumKind
+            ? {
+                check: (derived: ProjectDocument['derived']) =>
+                  checkNewDatum(
+                    base,
+                    derived,
+                    edit.featureId,
+                    edit.name,
+                    datumKind
+                  )
+              }
+            : {})
         };
       }
       // A pattern's frame is named as its commit names it, so Done can land

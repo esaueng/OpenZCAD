@@ -210,6 +210,19 @@ export function inPlaceToolForFeature(data: FeatureData): InPlaceToolId | null {
       if (scale !== undefined && !data.axisRotation) return 'scale';
       return null;
     }
+    // R01 (schema v95): a point typed from the world origin, and a system
+    // placed at a typed origin, reopen their tool with the drag handles.
+    case 'datum-point':
+      return data.definition.kind === 'offset' &&
+        data.definition.from.type === 'point' &&
+        zeroVector(data.definition.from.point)
+        ? 'datum-point'
+        : null;
+    case 'datum-csys':
+      return data.definition.kind === 'placement' &&
+        data.definition.origin.type === 'point'
+        ? 'datum-csys'
+        : null;
     default:
       return null;
   }
@@ -435,6 +448,26 @@ export function inPlaceEditSeed(
       }
       break;
     }
+    case 'datum-point':
+      if (data.definition.kind === 'offset') {
+        value('x', data.definition.offset.x);
+        value('y', data.definition.offset.y);
+        value('z', data.definition.offset.z);
+      }
+      break;
+    case 'datum-csys':
+      if (
+        data.definition.kind === 'placement' &&
+        data.definition.origin.type === 'point'
+      ) {
+        value('ox', data.definition.origin.point.x);
+        value('oy', data.definition.origin.point.y);
+        value('oz', data.definition.origin.point.z);
+        value('rx', data.definition.rotationDeg.x);
+        value('ry', data.definition.rotationDeg.y);
+        value('rz', data.definition.rotationDeg.z);
+      }
+      break;
     case 'hole': {
       const face = ctx.face(
         data.targetBodyId,
@@ -1129,6 +1162,14 @@ export function inPlaceFeatureUpdate(
         },
         ...(request.guide ? {} : { clearData: ['guide'] })
       };
+    case 'datum-point':
+    case 'datum-csys':
+      if (saved.featureKind !== request.tool) return null;
+      return {
+        featureId,
+        name,
+        data: { featureKind: request.tool, definition: request.definition }
+      } as FeatureUpdateInput;
     case 'gear': {
       if (saved.featureKind !== 'gear') return null;
       // Optional fields the edit no longer sets go back to their defaults.

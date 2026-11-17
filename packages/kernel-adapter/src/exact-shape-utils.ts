@@ -226,6 +226,9 @@ export function edgeVertexCandidatesForShape(
         currentHash: topologyHashOfWitness('edge', witness),
         witnessVersion: 1 as const,
         witness,
+        // The kernel handle, for a caller that reads the resolved edge's
+        // exact geometry (an R01 datum point's arc centre).
+        value: handle,
         endpoints: sample.closed ? null : sample.endpoints,
         ...(nativeEndpoints ? { nativeEndpoints } : {}),
         ...(reference

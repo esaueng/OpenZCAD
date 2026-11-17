@@ -19,6 +19,47 @@ export function assertMinimumProjectSchema(
     throw new Error(`${content} require project schema v${minimum} or newer.`);
 }
 
+/** R01 datum points and coordinate systems (schema v95). */
+export function assertDatumPointCsysSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    95,
+    'Datum points and coordinate systems'
+  );
+}
+
+/**
+ * Whether `value` holds R01 v95 content anywhere: a datum point or
+ * coordinate system feature, a datum-point or coordinate-system source, an
+ * axis along a coordinate system, or a Move aligned by them. An older client
+ * would fail to resolve every one of them, so a document holding one refuses.
+ */
+export function hasDatumPointCsysContent(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const item = pending.pop();
+    if (typeof item !== 'object' || item === null || seen.has(item)) continue;
+    seen.add(item);
+    if (Array.isArray(item)) {
+      for (const child of item as unknown[]) pending.push(child);
+      continue;
+    }
+    const entry = item as Record<string, unknown>;
+    if (
+      entry.featureKind === 'datum-point' ||
+      entry.featureKind === 'datum-csys' ||
+      entry.type === 'datum-point' ||
+      entry.type === 'datum-csys' ||
+      entry.kind === 'csys-axis' ||
+      entry.csysAlign !== undefined
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
 /** I01 (schema v59): slot composites, wherever a document or command holds one. */
 export function assertSlotSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 59, 'Sketch slots');
@@ -716,6 +757,12 @@ export function assertDocumentContentCommandSchema(
       assertComponentConfigurationSchema(document.schemaVersion);
     if (command.kind === 'feature.sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('feature.') &&
+      hasDatumPointCsysContent(command.payload)
+    )
+      assertDatumPointCsysSchema(document.schemaVersion);
     if (command.kind === 'feature.standard-part')
       assertStandardPartSchema(document.schemaVersion, command.payload);
     if (command.kind === 'printClearance.set')
@@ -1091,6 +1138,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       assertHoleContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
+    if (node.kind === 'feature' && hasDatumPointCsysContent(node.data))
+      assertDatumPointCsysSchema(document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'standard-part')
       assertStandardPartSchema(document.schemaVersion, node.data);
     if (

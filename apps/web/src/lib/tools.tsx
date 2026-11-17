@@ -5,10 +5,12 @@ import {
   Box,
   Cog,
   Cone,
+  Crosshair,
   Cylinder,
   Drill,
   FlipHorizontal2,
   ImagePlus,
+  LocateFixed,
   Move3d,
   PenLine,
   Radius,
@@ -54,6 +56,8 @@ export type ToolId =
   | 'sketch'
   | 'datum-plane'
   | 'datum-axis'
+  | 'datum-point'
+  | 'datum-csys'
   | 'reference-image'
   | 'extrude'
   | 'revolve'
@@ -147,6 +151,18 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     icon: icon(<Axis3d size={16} aria-hidden="true" />),
     group: 'create',
     hint: 'Axis along an edge, cylinder or two points'
+  },
+  'datum-point': {
+    label: 'Point',
+    icon: icon(<Crosshair size={16} aria-hidden="true" />),
+    group: 'create',
+    hint: 'A point at coordinates, an edge end, midpoint or arc centre'
+  },
+  'datum-csys': {
+    label: 'Coordinate system',
+    icon: icon(<LocateFixed size={16} aria-hidden="true" />),
+    group: 'create',
+    hint: 'A named frame from three points, a plane, or a placement'
   },
   'reference-image': {
     label: 'Image',
@@ -392,6 +408,8 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
         'sketch',
         'datum-plane',
         'datum-axis',
+        'datum-point',
+        'datum-csys',
         'reference-image',
         ...PRIMITIVE_TOOLS,
         'gear',

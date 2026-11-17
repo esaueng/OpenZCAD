@@ -31,6 +31,7 @@ import {
   datumVertexFromEdgePick,
   datumVertexKey,
   datumVertexOption,
+  datumPointOptions,
   faceSourceOption,
   newDatumPlaneFormState,
   nextDatumPlaneName,
@@ -649,13 +650,18 @@ export function DatumPlaneCard({
     editing?.featureId ?? null,
     ownFaces
   );
-  const ownVertices = editing
-    ? initial.points.flatMap((point) =>
-        point?.type === 'vertex'
-          ? [datumVertexOption(document, point.source)]
-          : []
-      )
-    : [];
+  const datumPoints = datumPointOptions(document, editing?.featureId ?? null);
+  const ownVertices = [
+    ...datumPoints,
+    ...(editing
+      ? initial.points.flatMap((point) =>
+          point?.type === 'vertex' &&
+          !datumPoints.some((option) => option.key === datumVertexKey(point.source))
+            ? [datumVertexOption(document, point.source)]
+            : []
+        )
+      : [])
+  ];
   return (
     <DatumPlaneForm
       initial={initial}

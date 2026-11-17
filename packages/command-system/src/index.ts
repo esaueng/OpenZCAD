@@ -134,6 +134,11 @@ import {
   addSketchFeature,
   addSketchObjects,
   addDatumAxis,
+  addDatumCsys,
+  addDatumPoint,
+  validateDatumCsysDefinition,
+  validateCsysAlign,
+  validateDatumPointDefinition,
   addDatumPlane,
   addSplitFeature,
   appendRevision,
@@ -147,6 +152,8 @@ import {
   createSketchFeatureIds,
   createSplitFeatureIds,
   type DatumAxisInput,
+  type DatumCsysInput,
+  type DatumPointInput,
   type DatumPlaneInput,
   deleteFeature,
   deleteParameter,
@@ -400,6 +407,8 @@ export type CommandKind =
   | 'feature.split'
   | 'feature.datum-plane'
   | 'feature.datum-axis'
+  | 'feature.datum-point'
+  | 'feature.datum-csys'
   | 'feature.hole'
   | 'feature.gear'
   | 'feature.sheet-metal'
@@ -2970,6 +2979,7 @@ export const commandFactories = {
         }
         if (payload.axisRotation)
           validateDatumAxisRef(document, payload.axisRotation.axis, null);
+        validateCsysAlign(document, payload.csysAlign, null);
       }
     );
   },
@@ -3017,12 +3027,40 @@ export const commandFactories = {
         'two-point': 'Add axis through two points',
         edge: 'Add axis along edge',
         cylinder: 'Add cylinder axis',
-        'plane-intersection': 'Add axis where planes meet'
+        'plane-intersection': 'Add axis where planes meet',
+        'csys-axis': 'Add coordinate system axis'
       }[payload.definition.kind],
       withIds,
       (document) => addDatumAxis(document, withIds).document,
       (document) =>
         validateDatumAxisDefinition(document, withIds.definition, null)
+    );
+  },
+  addDatumPoint(payload: DatumPointInput): CommandDefinition<DatumPointInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createFeatureOnlyIds() };
+    return makeCommand(
+      'feature.datum-point',
+      {
+        offset: 'Add point',
+        'edge-midpoint': 'Add point at edge midpoint',
+        'arc-center': 'Add point at arc centre',
+        'axis-plane': 'Add point where axis meets plane'
+      }[payload.definition.kind],
+      withIds,
+      (document) => addDatumPoint(document, withIds).document,
+      (document) =>
+        validateDatumPointDefinition(document, withIds.definition, null)
+    );
+  },
+  addDatumCsys(payload: DatumCsysInput): CommandDefinition<DatumCsysInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createFeatureOnlyIds() };
+    return makeCommand(
+      'feature.datum-csys',
+      'Add coordinate system',
+      withIds,
+      (document) => addDatumCsys(document, withIds).document,
+      (document) =>
+        validateDatumCsysDefinition(document, withIds.definition, null)
     );
   },
   holeBody(payload: HoleInput): CommandDefinition<HoleInput> {
@@ -6498,6 +6536,12 @@ export function replayCommands(
         break;
       case 'feature.datum-axis':
         next = addDatumAxis(next, command.payload as DatumAxisInput).document;
+        break;
+      case 'feature.datum-point':
+        next = addDatumPoint(next, command.payload as DatumPointInput).document;
+        break;
+      case 'feature.datum-csys':
+        next = addDatumCsys(next, command.payload as DatumCsysInput).document;
         break;
       case 'feature.hole':
         next = holeBody(next, command.payload as HoleInput).document;

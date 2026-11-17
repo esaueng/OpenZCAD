@@ -411,7 +411,11 @@ export interface ResolveEdgeVertexInput {
   readonly ownerKind?: DatumOwnerKind;
 }
 
-export type DatumOwnerKind = 'Datum plane' | 'Datum axis';
+export type DatumOwnerKind =
+  | 'Datum plane'
+  | 'Datum axis'
+  | 'Datum point'
+  | 'Coordinate system';
 
 /**
  * R01: the exact vertex a datum's edge-vertex source names, re-found solely
@@ -544,6 +548,22 @@ export function resolveDatumAxisEdge(
     { x: start.x, y: start.y, z: start.z },
     { x: end.x, y: end.y, z: end.z }
   ];
+}
+
+/**
+ * R01 (schema v95): the edge a datum point's midpoint or arc-centre source
+ * names, re-found solely through verified lineage at the point's history
+ * position. A deleted or ambiguous edge refuses by name; its geometry is
+ * then read exactly from the kernel by the caller.
+ */
+export function resolveDatumPointEdge(
+  input: ResolveDatumAxisEdgeInput
+): EdgeVertexCandidate {
+  const fail = (detail: string) =>
+    new Error(
+      `Datum point "${named(input.datumName, '<unnamed datum>')}" cannot use an edge of source feature "${named(input.sourceFeatureName, '<unnamed source feature>')}": ${detail}`
+    );
+  return lineageCandidate(input.reference, input.candidates, fail, 'edge');
 }
 
 export interface ResolveDatumAxisFaceInput {

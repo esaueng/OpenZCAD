@@ -8,13 +8,16 @@ import {
 } from '@openzcad/document-core';
 import {
   computeSketchProfileAnalysis,
+  csysPlaneFrame,
   edgeDatumAxis,
+  edgeMidpointDatumPoint,
   frameForPlaneRef,
   geometryTolerance,
   mergeAdjacentProfiles,
   requireRevolveAxisInPlane,
   surfaceDatumAxis,
   type DatumAxis,
+  type DatumCsys,
   type PlaneBasis,
   type RegionCurve,
   type SketchRegion,
@@ -33,7 +36,9 @@ import {
   type SketchId,
   type ParamValue,
   type SketchNode,
+  type CsysPlaneSource,
   type DatumAxisEdgeSource,
+  type FeatureId,
   type DatumAxisFaceSource,
   type DatumAxisRef,
   type DatumPointSource,
@@ -99,6 +104,7 @@ import {
 import {
   resolveDatumAxisEdge,
   resolveDatumAxisFace,
+  resolveDatumPointEdge,
   resolveEdgeVertex,
   resolveFaceAttachment,
   type DatumOwnerKind
@@ -300,9 +306,16 @@ export function resolveSketchBasisAtHistory(
 export function resolvePlaneRefAtHistory(
   kernel: RemusKernel,
   document: ProjectDocument,
-  planeRef: SketchPlaneRef,
+  planeRef: SketchPlaneRef | CsysPlaneSource,
   ownerRef: {
-    kind: 'Sketch' | 'Datum plane' | 'Datum axis' | 'Mirror' | 'Split';
+    kind:
+      | 'Sketch'
+      | 'Datum plane'
+      | 'Datum axis'
+      | 'Datum point'
+      | 'Coordinate system'
+      | 'Mirror'
+      | 'Split';
     name: string;
   },
   result: ExactBuildResult,
@@ -312,6 +325,12 @@ export function resolvePlaneRefAtHistory(
     ownerRef.kind === 'Mirror' || ownerRef.kind === 'Split'
       ? ownerRef.kind
       : `${ownerRef.kind} "${ownerRef.name}"`;
+  if (planeRef.type === 'datum-csys') {
+    return csysPlaneFrame(
+      resolveDatumCsysRefAtHistory(document, planeRef, owner, result),
+      planeRef.plane
+    );
+  }
   if (planeRef.type === 'datum') {
     const frame = result.datumFrames.get(planeRef.datumFeatureId);
     if (!frame) {
@@ -387,6 +406,18 @@ export function resolveDatumPointAtHistory(
   scope: Record<string, number>,
   ownerKind: DatumOwnerKind = 'Datum plane'
 ): Vec3 {
+  if (point.type === 'datum-point') {
+    const at = result.datumPoints?.get(point.datumFeatureId);
+    if (!at) {
+      const datum = listFeaturesInOrder(document).find(
+        (candidate) => candidate.featureId === point.datumFeatureId
+      );
+      throw new Error(
+        `${ownerKind} "${datumName}" cannot use datum point "${datum?.name ?? point.datumFeatureId}" because it is unavailable at this point in history.`
+      );
+    }
+    return at;
+  }
   if (point.type === 'point') {
     const axis = (value: ParamValue, name: string) =>
       resolveParamValue(value, scope, `datum point ${name}`, document.units);
@@ -459,6 +490,132 @@ export function resolveDatumAxisSourceAtHistory(
     sourceFeatureName
   });
   return surfaceDatumAxis(axis.point, axis.direction, reverseDirection);
+}
+
+/**
+ * R01 (schema v95): the coordinate system a reference resolved to earlier in
+ * this build. One that failed, is suppressed or comes later is refused by
+ * name; nothing stands in for it.
+ */
+export function resolveDatumCsysRefAtHistory(
+  document: ProjectDocument,
+  ref: { datumFeatureId: FeatureId },
+  owner: string,
+  result: ExactBuildResult
+): DatumCsys {
+  const csys = result.datumCsys?.get(ref.datumFeatureId);
+  if (!csys) {
+    const datum = listFeaturesInOrder(document).find(
+      (candidate) => candidate.featureId === ref.datumFeatureId
+    );
+    throw new Error(
+      `${owner} cannot use coordinate system "${datum?.name ?? ref.datumFeatureId}" because it is unavailable at this point in history.`
+    );
+  }
+  return csys;
+}
+
+/**
+ * R01 (schema v95): a datum point's edge source at the point's history
+ * position, read exactly: the midpoint of a straight edge, or the centre of
+ * a circular one (the circumcentre of three of its points, checked against
+ * a fourth). Re-found through verified lineage; refused by name otherwise.
+ */
+export function resolveDatumPointEdgeAtHistory(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  source: DatumAxisEdgeSource,
+  kind: 'edge-midpoint' | 'arc-center',
+  datumName: string,
+  result: ExactBuildResult
+): Vec3 {
+  const shape = result.shapes.get(source.bodyId);
+  if (!shape) {
+    throw new Error(
+      `Datum point "${datumName}" cannot use an edge of body ${source.bodyId} because it is unavailable at the point's history position.`
+    );
+  }
+  const sourceFeatureName =
+    listFeaturesInOrder(document).find(
+      (candidate) =>
+        candidate.featureId === source.edgeReference.producingFeatureId
+    )?.name ?? String(source.edgeReference.producingFeatureId);
+  if (kind === 'edge-midpoint') {
+    const [start, end] = resolveDatumAxisEdge({
+      reference: source.edgeReference,
+      candidates: edgeVertexCandidatesForShape(kernel, shape),
+      datumName,
+      sourceFeatureName
+    });
+    return edgeMidpointDatumPoint(start, end);
+  }
+  const candidate = resolveDatumPointEdge({
+    reference: source.edgeReference,
+    candidates: edgeVertexCandidatesForShape(kernel, shape),
+    datumName,
+    sourceFeatureName
+  });
+  const fail = (detail: string) =>
+    new Error(
+      `Datum point "${datumName}" cannot take the centre of an edge of source feature "${sourceFeatureName}": ${detail}`
+    );
+  const edge = candidate.value;
+  if (typeof edge !== 'number') throw fail('the edge has no exact data.');
+  const type = kernel.getEdgeCurveType(edge).toLowerCase();
+  if (type !== 'circle') {
+    throw fail(`the edge is a ${type}, not a circular arc or circle.`);
+  }
+  const [t0, t1] = kernel.getEdgeParamSpan(edge);
+  const at = (f: number): Vec3 => {
+    const p = kernel.evaluateEdgeCurve(edge, t0! + (t1! - t0!) * f);
+    return { x: p[0]!, y: p[1]!, z: p[2]! };
+  };
+  const [a, b, c, d] = [at(0), at(1 / 3), at(2 / 3), at(0.5)];
+  const center = circumcenter(a, b, c);
+  if (!center) throw fail('its points do not define a circle.');
+  const radius = distance3(center, a);
+  if (
+    Math.abs(distance3(center, d) - radius) >
+    geometryTolerance(Math.max(radius, distance3(center, { x: 0, y: 0, z: 0 })))
+  ) {
+    throw fail('its points do not lie on one circle.');
+  }
+  return center;
+}
+
+function distance3(a: Vec3, b: Vec3): number {
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+/** The centre of the circle through three points, or null when collinear. */
+function circumcenter(a: Vec3, b: Vec3, c: Vec3): Vec3 | null {
+  const ab = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
+  const ac = { x: c.x - a.x, y: c.y - a.y, z: c.z - a.z };
+  const n = {
+    x: ab.y * ac.z - ab.z * ac.y,
+    y: ab.z * ac.x - ab.x * ac.z,
+    z: ab.x * ac.y - ab.y * ac.x
+  };
+  const nn = n.x * n.x + n.y * n.y + n.z * n.z;
+  if (!(nn > 0)) return null;
+  const ab2 = ab.x * ab.x + ab.y * ab.y + ab.z * ab.z;
+  const ac2 = ac.x * ac.x + ac.y * ac.y + ac.z * ac.z;
+  // ((|ab|² ac − |ac|² ab) × n) / (2 |n|²)
+  const w = {
+    x: ab2 * ac.x - ac2 * ab.x,
+    y: ab2 * ac.y - ac2 * ab.y,
+    z: ab2 * ac.z - ac2 * ab.z
+  };
+  const cross = {
+    x: w.y * n.z - w.z * n.y,
+    y: w.z * n.x - w.x * n.z,
+    z: w.x * n.y - w.y * n.x
+  };
+  return {
+    x: a.x + cross.x / (2 * nn),
+    y: a.y + cross.y / (2 * nn),
+    z: a.z + cross.z / (2 * nn)
+  };
 }
 
 /**

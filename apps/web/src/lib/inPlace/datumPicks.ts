@@ -18,7 +18,8 @@ import {
   datumVertexFromEdgePick,
   datumVertexKey,
   edgeEnds,
-  requireResolvedDatums
+  requireResolvedDatums,
+  type DatumFeatureKind
 } from '../datumPlanes';
 import { edgeClickIsEnd, type RefPick } from './datums';
 import type { RevolveAxisCandidate } from './revolve';
@@ -145,6 +146,22 @@ export function edgeRef(
   const straight = Boolean(
     witness && !witness.closed && /^line$/i.test(witness.curveType)
   );
+  // R01 (schema v95): a circle or arc clicked away from its ends is its
+  // centre, for a datum point.
+  if (
+    kinds.includes('circle') &&
+    witness &&
+    /circle/i.test(witness.curveType) &&
+    edge?.reference &&
+    (ends === null || !edgeClickIsEnd(ends, click, true, 8))
+  ) {
+    const source = {
+      type: 'edge' as const,
+      bodyId: selection.bodyId,
+      edgeReference: edge.reference
+    };
+    return { kind: 'circle', key: `circle:${JSON.stringify(source)}`, source };
+  }
   const asEnd =
     !kinds.includes('edge') ||
     pointsPicked > 0 ||
@@ -172,7 +189,7 @@ export function requireNewDatum(
   derived: ProjectDocument['derived'],
   featureId: FeatureId,
   name: string,
-  kind: 'datum-plane' | 'datum-axis'
+  kind: DatumFeatureKind
 ): void {
   requireResolvedDatums(base, derived, featureId, name, kind);
 }

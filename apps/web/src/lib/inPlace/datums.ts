@@ -4,7 +4,9 @@ import type {
   DatumAxisFaceSource,
   DatumPlaneDefinition,
   DatumPlaneSource,
-  EdgeVertexPointSource,
+  DatumCsysDefinition,
+  DatumPointDefinition,
+  DatumPointSource,
   Vector3
 } from '@openzcad/shared';
 import type {
@@ -34,7 +36,9 @@ export type RefPick =
       origin: Vector3;
       normal: Vector3;
     }
-  | { kind: 'point'; key: string; source: EdgeVertexPointSource; at: Vector3 }
+  | { kind: 'point'; key: string; source: DatumPointSource; at: Vector3 }
+  /** R01 (schema v95): a circle or arc, whose centre a datum point takes. */
+  | { kind: 'circle'; key: string; source: DatumAxisEdgeSource }
   | {
       kind: 'edge';
       key: string;
@@ -186,7 +190,9 @@ export function datumAxisShape(refs: readonly RefPick[]): AxisShape | null {
 export function edgeClickIsEnd(
   ends: readonly [Vector3, Vector3],
   click: Vector3 | null,
-  straight: boolean
+  straight: boolean,
+  /** The share of the chord counted as near an end (a quarter by default). */
+  fraction = 4
 ): boolean {
   if (!straight) return true;
   if (!click) return false;
@@ -196,7 +202,7 @@ export function edgeClickIsEnd(
     Math.hypot(click.x - a.x, click.y - a.y, click.z - a.z),
     Math.hypot(click.x - b.x, click.y - b.y, click.z - b.z)
   );
-  return length > 0 && near <= length / 4;
+  return length > 0 && near <= length / fraction;
 }
 
 const FLIP_NORMAL: OptionSpec = {
@@ -389,4 +395,255 @@ export const datumAxis: InPlaceToolSpec = {
     return { tool: 'datum-axis', definition };
   },
   handles: () => []
+};
+
+const WORLD_AXES = {
+  x: { x: 1, y: 0, z: 0 },
+  y: { x: 0, y: 1, z: 0 },
+  z: { x: 0, y: 0, z: 1 }
+} as const;
+
+const WORLD_ORIGIN: DatumPointSource = {
+  type: 'point',
+  point: { x: 0, y: 0, z: 0 }
+};
+
+/** A Point takes one source: a vertex, a straight edge or a circle. */
+export function takeDatumPointRef(
+  refs: readonly RefPick[],
+  ref: RefPick
+): RefPick[] {
+  if (refs.length === 1 && refs[0]!.key === ref.key) return [];
+  if (ref.kind === 'point' || ref.kind === 'edge' || ref.kind === 'circle')
+    return [ref];
+  return [...refs];
+}
+
+/** Arrows along world X, Y and Z from `base`, one per offset value. */
+function offsetHandles(
+  base: Vector3,
+  prefix: string,
+  ids: readonly [string, string, string]
+): HandleSpec[] {
+  return (['x', 'y', 'z'] as const).map((axis, index) => ({
+    valueId: ids[index]!,
+    kind: 'linear' as const,
+    key: `${prefix}:${axis}:${base.x}:${base.y}:${base.z}`,
+    params: { origin: base, direction: WORLD_AXES[axis] }
+  }));
+}
+
+/**
+ * R01 (schema v95): a datum Point. Nothing picked, it stands at typed world
+ * coordinates; a picked edge end (or earlier point) offsets from it; a
+ * straight edge gives its midpoint and a circle or arc its centre. The X, Y
+ * and Z arrows drag the offsets.
+ */
+export const datumPoint: InPlaceToolSpec = {
+  id: 'datum-point',
+  title: 'Point',
+  featureName: 'Point 1',
+  profileMode: 'none',
+  refKinds: ['point', 'edge', 'circle'],
+  takeRef: takeDatumPointRef,
+  wantsAxis: false,
+  wantsPath: false,
+  values: [
+    { id: 'x', label: 'X', unit: 'length', initial: 0 },
+    { id: 'y', label: 'Y', unit: 'length', initial: 0 },
+    { id: 'z', label: 'Z', unit: 'length', initial: 0 }
+  ],
+  options: [],
+  hint(slots) {
+    const [ref] = slots.refs;
+    if (!ref) return 'Drag X, Y, Z · or pick an edge end, edge or arc';
+    if (ref.kind === 'edge') return 'At the middle of the edge';
+    if (ref.kind === 'circle') return 'At the centre of the arc';
+    return 'Drag X, Y, Z from the picked point';
+  },
+  ready: () => true,
+  request(slots, values) {
+    const [ref] = slots.refs;
+    let definition: DatumPointDefinition;
+    if (ref?.kind === 'edge') {
+      definition = { kind: 'edge-midpoint', source: ref.source };
+    } else if (ref?.kind === 'circle') {
+      definition = { kind: 'arc-center', source: ref.source };
+    } else {
+      definition = {
+        kind: 'offset',
+        from: ref?.kind === 'point' ? ref.source : WORLD_ORIGIN,
+        offset: { x: values.x ?? 0, y: values.y ?? 0, z: values.z ?? 0 }
+      };
+    }
+    return { tool: 'datum-point', definition };
+  },
+  handles(slots) {
+    const [ref] = slots.refs;
+    if (ref && ref.kind !== 'point') return [];
+    return offsetHandles(
+      ref?.kind === 'point' ? ref.at : { x: 0, y: 0, z: 0 },
+      'datum-point',
+      ['x', 'y', 'z']
+    );
+  }
+};
+
+/**
+ * A Coordinate system's picks: three points (origin, X, XY plane), or a
+ * plane with an optional origin point. A pick that fits neither starts over.
+ */
+export function takeDatumCsysRef(
+  refs: readonly RefPick[],
+  ref: RefPick
+): RefPick[] {
+  if (refs.some((other) => other.key === ref.key))
+    return refs.filter((other) => other.key !== ref.key);
+  const planes = ofKind(refs, 'plane');
+  const points = ofKind(refs, 'point');
+  if (ref.kind === 'plane') {
+    if (points.length >= 2) return [ref];
+    return [ref, ...points];
+  }
+  if (ref.kind !== 'point') return [...refs];
+  if (planes.length > 0) return [planes[0]!, ref];
+  return toggled(points, ref, 3);
+}
+
+type CsysShape =
+  | {
+      mode: 'three-point';
+      points: Extract<RefPick, { kind: 'point' }>[];
+    }
+  | {
+      mode: 'plane';
+      plane: Extract<RefPick, { kind: 'plane' }>;
+      origin?: Extract<RefPick, { kind: 'point' }>;
+    }
+  | { mode: 'placement' };
+
+export function datumCsysShape(refs: readonly RefPick[]): CsysShape | null {
+  const planes = ofKind(refs, 'plane');
+  const points = ofKind(refs, 'point');
+  if (refs.length === 0) return { mode: 'placement' };
+  if (planes.length === 1)
+    return points.length === 0
+      ? { mode: 'plane', plane: planes[0]! }
+      : { mode: 'plane', plane: planes[0]!, origin: points[0]! };
+  if (points.length === 3) return { mode: 'three-point', points };
+  return null;
+}
+
+/**
+ * R01 (schema v95): a named coordinate System. Nothing picked, it is placed
+ * by typed origin and turns (the origin arrows and the three turn rings
+ * drag them); three points give origin, X and the XY plane; a plane gives
+ * its own frame, moved to a picked point when there is one.
+ */
+export const datumCsys: InPlaceToolSpec = {
+  id: 'datum-csys',
+  title: 'Coordinate system',
+  featureName: 'System 1',
+  profileMode: 'none',
+  refKinds: ['point', 'plane'],
+  takeRef: takeDatumCsysRef,
+  wantsAxis: false,
+  wantsPath: false,
+  values: [
+    { id: 'ox', label: 'Origin X', unit: 'length', initial: 0 },
+    { id: 'oy', label: 'Origin Y', unit: 'length', initial: 0 },
+    { id: 'oz', label: 'Origin Z', unit: 'length', initial: 0 },
+    { id: 'rx', label: 'Turn X', unit: 'angle', initial: 0 },
+    { id: 'ry', label: 'Turn Y', unit: 'angle', initial: 0 },
+    { id: 'rz', label: 'Turn Z', unit: 'angle', initial: 0 }
+  ],
+  options: [],
+  hint(slots) {
+    const shape = datumCsysShape(slots.refs);
+    const points = ofKind(slots.refs, 'point').length;
+    if (!shape) return `Point ${points} of 3 · origin, then X, then the XY plane`;
+    switch (shape.mode) {
+      case 'placement':
+        return 'Drag the origin and turns · or pick three points or a plane';
+      case 'three-point':
+        return 'Origin, X toward the second, Y toward the third';
+      case 'plane':
+        return shape.origin
+          ? "The plane's axes, at the picked point"
+          : "The plane's own axes · pick a point to move its origin";
+    }
+  },
+  ready: (slots) => datumCsysShape(slots.refs) !== null,
+  request(slots, values) {
+    const shape = datumCsysShape(slots.refs);
+    if (!shape) return null;
+    let definition: DatumCsysDefinition;
+    switch (shape.mode) {
+      case 'three-point':
+        definition = {
+          kind: 'three-point',
+          points: [
+            shape.points[0]!.source,
+            shape.points[1]!.source,
+            shape.points[2]!.source
+          ]
+        };
+        break;
+      case 'plane':
+        definition = {
+          kind: 'plane',
+          source: shape.plane.source,
+          ...(shape.origin ? { origin: shape.origin.source } : {})
+        };
+        break;
+      case 'placement':
+        definition = {
+          kind: 'placement',
+          origin: {
+            type: 'point',
+            point: {
+              x: values.ox ?? 0,
+              y: values.oy ?? 0,
+              z: values.oz ?? 0
+            }
+          },
+          rotationDeg: {
+            x: values.rx ?? 0,
+            y: values.ry ?? 0,
+            z: values.rz ?? 0
+          }
+        };
+        break;
+    }
+    return { tool: 'datum-csys', definition };
+  },
+  handles(slots, values) {
+    if (datumCsysShape(slots.refs)?.mode !== 'placement') return [];
+    const origin = {
+      x: values.ox ?? 0,
+      y: values.oy ?? 0,
+      z: values.oz ?? 0
+    };
+    const rings: HandleSpec[] = (
+      [
+        ['rx', 'x', 'y'],
+        ['ry', 'y', 'z'],
+        ['rz', 'z', 'x']
+      ] as const
+    ).map(([valueId, axis, start]) => ({
+      valueId,
+      kind: 'angle' as const,
+      key: `datum-csys:${valueId}:${origin.x}:${origin.y}:${origin.z}`,
+      params: {
+        center: origin,
+        axis: WORLD_AXES[axis],
+        startDirection: WORLD_AXES[start],
+        radius: 12
+      }
+    }));
+    return [
+      ...offsetHandles({ x: 0, y: 0, z: 0 }, 'datum-csys', ['ox', 'oy', 'oz']),
+      ...rings
+    ];
+  }
 };

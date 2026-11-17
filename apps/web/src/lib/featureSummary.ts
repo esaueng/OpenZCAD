@@ -421,10 +421,24 @@ export function featureValueSummary(
           'two-point': '2 points',
           edge: 'along edge',
           cylinder: 'cylinder axis',
-          'plane-intersection': 'planes meet'
+          'plane-intersection': 'planes meet',
+          'csys-axis': `${data.definition.kind === 'csys-axis' ? data.definition.axis : ''} axis`
         }[data.definition.kind]
       }${reversed}`;
     }
+    case 'datum-point':
+      return {
+        offset: 'at point',
+        'edge-midpoint': 'edge midpoint',
+        'arc-center': 'arc centre',
+        'axis-plane': 'axis meets plane'
+      }[data.definition.kind];
+    case 'datum-csys':
+      return {
+        'three-point': '3 points',
+        plane: 'on plane',
+        placement: 'placed'
+      }[data.definition.kind];
     case 'draft': {
       const angle = num(data.angleDeg);
       return angle === null ? null : `${angle}°`;

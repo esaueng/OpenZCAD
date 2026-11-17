@@ -709,6 +709,184 @@ export function axisRotationMatrix(
 }
 
 /**
+ * R01 (schema v95): a point at `offset` from `from`. A zero offset is the
+ * source itself.
+ */
+export function offsetDatumPoint(
+  from: DatumVector,
+  offset: DatumVector
+): DatumVector {
+  requirePoint(from, 'source');
+  requirePoint(offset, 'offset');
+  return datumAdd(from, offset);
+}
+
+/** R01 (schema v95): halfway along a straight edge. */
+export function edgeMidpointDatumPoint(
+  start: DatumVector,
+  end: DatumVector
+): DatumVector {
+  requirePoint(start, 'edge start');
+  requirePoint(end, 'edge end');
+  if (datumLength(datumSub(end, start)) <= geometryTolerance(datumLength(start))) {
+    throw new Error('A midpoint needs an edge of non-zero length.');
+  }
+  return datumScale(datumAdd(start, end), 0.5);
+}
+
+/**
+ * R01 (schema v95): where an axis pierces a plane. An axis parallel to the
+ * plane (within the midplane's parallelism tolerance) meets it nowhere, or
+ * everywhere, and is refused.
+ */
+export function axisPlaneDatumPoint(
+  axis: DatumAxis,
+  plane: PlaneBasis
+): DatumVector {
+  requirePoint(axis.origin, 'axis');
+  requireFrame(plane, 'plane');
+  const along = datumDot(axis.direction, plane.normal);
+  if (Math.abs(along) <= GEOMETRY_RELATIVE_TOLERANCE) {
+    throw new Error(
+      'A point where an axis meets a plane needs an axis that crosses the plane; this one runs parallel to it.'
+    );
+  }
+  const t = datumDot(datumSub(plane.origin, axis.origin), plane.normal) / along;
+  return datumAdd(axis.origin, datumScale(axis.direction, t));
+}
+
+/** R01 (schema v95): a resolved coordinate system, right-handed and orthonormal. */
+export interface DatumCsys {
+  origin: DatumVector;
+  x: DatumVector;
+  y: DatumVector;
+  z: DatumVector;
+}
+
+/**
+ * Origin at the first point, X toward the second, Y in the plane of the
+ * three on the third's side, Z = X × Y: the three-point plane's frame, so
+ * the same coincident and collinear refusals apply.
+ */
+export function threePointDatumCsys(
+  origin: DatumVector,
+  onX: DatumVector,
+  inXY: DatumVector
+): DatumCsys {
+  const frame = threePointDatumPlane(origin, onX, inXY);
+  return { origin: frame.origin, x: frame.u, y: frame.v, z: frame.normal };
+}
+
+/**
+ * A plane's own frame as a coordinate system (u as X, v as Y, normal as Z),
+ * with its origin moved to `origin`'s foot on the plane when one is given.
+ */
+export function planeDatumCsys(
+  plane: PlaneBasis,
+  origin?: DatumVector
+): DatumCsys {
+  requireFrame(plane, 'source');
+  let at = plane.origin;
+  if (origin) {
+    requirePoint(origin, 'origin');
+    const height = datumDot(datumSub(origin, plane.origin), plane.normal);
+    at = datumSub(origin, datumScale(plane.normal, height));
+  }
+  return { origin: at, x: plane.u, y: plane.v, z: plane.normal };
+}
+
+/**
+ * At `origin`, turned from the world axes by `rotationDeg`: about world X
+ * first, then world Y, then world Z (right-handed, degrees).
+ */
+export function placementDatumCsys(
+  origin: DatumVector,
+  rotationDeg: DatumVector
+): DatumCsys {
+  requirePoint(origin, 'origin');
+  requirePoint(rotationDeg, 'rotation');
+  const turn = (v: DatumVector): DatumVector => {
+    let out = v;
+    for (const [axis, angle] of [
+      [{ x: 1, y: 0, z: 0 }, rotationDeg.x],
+      [{ x: 0, y: 1, z: 0 }, rotationDeg.y],
+      [{ x: 0, y: 0, z: 1 }, rotationDeg.z]
+    ] as const) {
+      const m = axisRotationMatrix({ origin: { x: 0, y: 0, z: 0 }, direction: axis }, angle);
+      out = {
+        x: m[0]! * out.x + m[1]! * out.y + m[2]! * out.z,
+        y: m[4]! * out.x + m[5]! * out.y + m[6]! * out.z,
+        z: m[8]! * out.x + m[9]! * out.y + m[10]! * out.z
+      };
+    }
+    return out;
+  };
+  return {
+    origin,
+    x: turn({ x: 1, y: 0, z: 0 }),
+    y: turn({ x: 0, y: 1, z: 0 }),
+    z: turn({ x: 0, y: 0, z: 1 })
+  };
+}
+
+/**
+ * A principal plane of a coordinate system: XY keeps X as u and Y as v
+ * (normal Z), YZ takes Y and Z (normal X), ZX takes Z and X (normal Y), each
+ * through the system's origin, so u × v = normal stays right-handed.
+ */
+export function csysPlaneFrame(
+  csys: DatumCsys,
+  plane: 'XY' | 'YZ' | 'ZX'
+): PlaneBasis {
+  switch (plane) {
+    case 'XY':
+      return { origin: csys.origin, u: csys.x, v: csys.y, normal: csys.z };
+    case 'YZ':
+      return { origin: csys.origin, u: csys.y, v: csys.z, normal: csys.x };
+    case 'ZX':
+      return { origin: csys.origin, u: csys.z, v: csys.x, normal: csys.y };
+  }
+}
+
+/** One of a coordinate system's axes through its origin. */
+export function csysDatumAxis(
+  csys: DatumCsys,
+  axis: 'X' | 'Y' | 'Z',
+  reverseDirection = false
+): DatumAxis {
+  const direction = axis === 'X' ? csys.x : axis === 'Y' ? csys.y : csys.z;
+  return axisResult(csys.origin, direction, reverseDirection);
+}
+
+/** The world axes as a coordinate system. */
+export const WORLD_CSYS: DatumCsys = {
+  origin: { x: 0, y: 0, z: 0 },
+  x: { x: 1, y: 0, z: 0 },
+  y: { x: 0, y: 1, z: 0 },
+  z: { x: 0, y: 0, z: 1 }
+};
+
+/**
+ * The row-major 3×4 rigid transform carrying coordinate system `from` onto
+ * `to`: a point at (a, b, c) in `from` lands at (a, b, c) in `to`.
+ */
+export function csysAlignMatrix(from: DatumCsys, to: DatumCsys): number[] {
+  // R = [to.x to.y to.z] · [from.x from.y from.z]ᵀ
+  const f = [from.x, from.y, from.z];
+  const t = [to.x, to.y, to.z];
+  const key = ['x', 'y', 'z'] as const;
+  const r = key.map((row) =>
+    key.map((col) =>
+      [0, 1, 2].reduce((sum, k) => sum + t[k]![row] * f[k]![col], 0)
+    )
+  );
+  const shift = (i: number) =>
+    to.origin[key[i]!] -
+    (r[i]![0]! * from.origin.x + r[i]![1]! * from.origin.y + r[i]![2]! * from.origin.z);
+  return [...r[0]!, shift(0), ...r[1]!, shift(1), ...r[2]!, shift(2)];
+}
+
+/**
  * Resolves a sketch plane reference to a concrete basis. This is the single
  * shared resolution path — the kernel adapter and the viewport must agree on
  * where a sketch plane sits. Canonical refs carry a parametric offset, so the

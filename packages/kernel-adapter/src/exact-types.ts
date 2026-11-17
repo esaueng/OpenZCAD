@@ -4,7 +4,7 @@
  * diagnostics. Types only — no runtime code — so any module may import them
  * without creating a cycle.
  */
-import type { DatumAxis, PlaneBasis, Vec3 } from '@openzcad/geometry';
+import type { DatumAxis, DatumCsys, PlaneBasis, Vec3 } from '@openzcad/geometry';
 import type {
   BodyId,
   FaceTopologyReferenceV5,
@@ -79,6 +79,13 @@ export interface ExactBuildResult {
    * that failed is absent, and its consumers refuse by name.
    */
   datumAxes: Map<FeatureId, DatumAxis>;
+  /**
+   * R01 (schema v95) datum points and coordinate systems, each resolved once
+   * at its own history position. A failed one is absent and its consumers
+   * refuse by name. Absent on builds resumed from before they existed.
+   */
+  datumPoints?: Map<FeatureId, Vec3>;
+  datumCsys?: Map<FeatureId, DatumCsys>;
   consumed: Set<BodyId>;
   /**
    * Per-body import validation, recorded where the import happens rather than

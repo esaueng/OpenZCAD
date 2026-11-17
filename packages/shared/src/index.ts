@@ -405,14 +405,19 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // v96 adds I02 structured STEP imports (`stepReader: 'structure'` on an
 // imported STEP): its solid indices number the product-structure reader's
 // placed occurrences, not the flat reader's unplaced definitions. An older
-// client would rebuild the wrong solids, so it must refuse. Builds on v94
-// (v95 is claimed by #1719, R01 datum points).
+// client would rebuild the wrong solids, so it must refuse. Builds on v94.
 // v98 adds D07 geometric tolerancing (`datum-feature` and
 // `feature-control-frame` drawing annotations): datum feature symbols and
 // feature control frames on a leader or attached to a dimension. An older
 // client would refuse the unknown kinds, so it must refuse the document.
-// Builds on v97 (claimed by #1719, R01 datum points).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 98 as const;
+// Builds on v96 (v97 was claimed by #1719, which then landed after it).
+// v99 adds R01 datum points and coordinate systems: `datum-point` and
+// `datum-csys` features, datum-point sources for planes, axes and systems,
+// a system's principal planes as datum plane sources, axes along a system's
+// X/Y/Z, and Moves aligned from one system onto another. An older client
+// cannot resolve any of them, so it must refuse. Builds on v98 (v95 and v97
+// were left unused when I02 and D07 landed first).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 99 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -486,7 +491,9 @@ export type FeatureKind =
   | 'imported-step'
   | 'imported-mesh'
   | 'datum-plane'
-  | 'datum-axis';
+  | 'datum-axis'
+  | 'datum-point'
+  | 'datum-csys';
 export type SketchObjectKind =
   | 'rectangle'
   | 'circle'
@@ -765,6 +772,29 @@ export interface DatumAxisRef {
   type: 'datum-axis';
   datumFeatureId: FeatureId;
 }
+
+/**
+ * Schema v95: a reference to an R01 datum point by the feature that defines
+ * it. The point resolves once, at its own history position; every consumer
+ * reads that position and never re-derives it from final topology.
+ */
+export interface DatumPointRef {
+  type: 'datum-point';
+  datumFeatureId: FeatureId;
+}
+
+/**
+ * Schema v95: a reference to an R01 coordinate system by the feature that
+ * defines it, resolved once at its own history position like every datum.
+ */
+export interface DatumCsysRef {
+  type: 'datum-csys';
+  datumFeatureId: FeatureId;
+}
+
+/** One of a coordinate system's three principal planes or axes. */
+export type CsysPlaneName = 'XY' | 'YZ' | 'ZX';
+export type CsysAxisName = 'X' | 'Y' | 'Z';
 
 export type FaceDistanceMoveMode =
   'symmetric' | 'one-sided-first' | 'one-sided-second';
@@ -1141,8 +1171,22 @@ export type FacePlaneSource = Extract<SketchPlaneRef, { type: 'face' }> & {
  */
 export type ExtrudeToFaceTarget = FacePlaneSource;
 
+/**
+ * Schema v95: a principal plane of a coordinate system, as a datum source.
+ * XY keeps the system's X as u and Y as v (normal Z); YZ takes Y and Z
+ * (normal X); ZX takes Z and X (normal Y). Its origin is the system's.
+ */
+export interface CsysPlaneSource {
+  type: 'datum-csys';
+  datumFeatureId: FeatureId;
+  plane: CsysPlaneName;
+}
+
 export type DatumPlaneSource =
-  CanonicalPlaneSource | DatumPlaneRef | FacePlaneSource;
+  | CanonicalPlaneSource
+  | DatumPlaneRef
+  | FacePlaneSource
+  | CsysPlaneSource;
 
 /**
  * Schema v25: a model vertex, named as one end of an open edge whose
@@ -1164,7 +1208,10 @@ export interface EdgeVertexPointSource {
  * coordinates in document units, or a model vertex by reference.
  */
 export type DatumPointSource =
-  { type: 'point'; point: ParametricVector3 } | EdgeVertexPointSource;
+  | { type: 'point'; point: ParametricVector3 }
+  | EdgeVertexPointSource
+  /** Schema v95: an earlier datum point, by reference. */
+  | DatumPointRef;
 
 export type DatumPlaneDefinition =
   | {
@@ -1264,7 +1311,145 @@ export type DatumAxisDefinition =
       kind: 'plane-intersection';
       sources: [DatumPlaneSource, DatumPlaneSource];
       reverseDirection?: boolean;
+    }
+  | {
+      /**
+       * Schema v95: one of an earlier coordinate system's axes, through its
+       * origin along its X, Y or Z.
+       */
+      kind: 'csys-axis';
+      csys: DatumCsysRef;
+      axis: CsysAxisName;
+      reverseDirection?: boolean;
     };
+
+/**
+ * Schema v95: how a datum point is placed. Each is refused by name rather
+ * than guessed when it has no single position: an edge that is not straight
+ * (midpoint) or not circular (centre), an axis parallel to the plane it
+ * should pierce, a source missing at the point's history position.
+ */
+export type DatumPointDefinition =
+  | {
+      /**
+       * At `offset` (world X, Y, Z in document units, expressions allowed)
+       * from a point source: typed coordinates, a model vertex or an earlier
+       * datum point. A zero offset is the source itself.
+       */
+      kind: 'offset';
+      from: DatumPointSource;
+      offset: ParametricVector3;
+    }
+  | {
+      /** Halfway along a straight edge, by its schema-v5 lineage. */
+      kind: 'edge-midpoint';
+      source: DatumAxisEdgeSource;
+    }
+  | {
+      /** The centre of a circular edge (an arc or a whole circle). */
+      kind: 'arc-center';
+      source: DatumAxisEdgeSource;
+    }
+  | {
+      /** Where an earlier datum axis pierces a plane source. */
+      kind: 'axis-plane';
+      axis: DatumAxisRef;
+      plane: DatumPlaneSource;
+    };
+
+/**
+ * Schema v95: how a coordinate system is placed. Every one is right-handed
+ * and orthonormal; degenerate inputs (coincident or collinear points) are
+ * refused by name, never repaired.
+ */
+export type DatumCsysDefinition =
+  | {
+      /**
+       * Origin at the first point, X toward the second, Y in the plane of
+       * the three, on the third's side; Z = X × Y.
+       */
+      kind: 'three-point';
+      points: [DatumPointSource, DatumPointSource, DatumPointSource];
+    }
+  | {
+      /**
+       * A plane source's own frame (u as X, v as Y, normal as Z), with its
+       * origin moved to `origin`'s foot on the plane when one is given.
+       */
+      kind: 'plane';
+      source: DatumPlaneSource;
+      origin?: DatumPointSource;
+    }
+  | {
+      /**
+       * At a point, turned from the world axes by `rotationDeg`: about world
+       * X first, then world Y, then world Z (right-handed, degrees).
+       */
+      kind: 'placement';
+      origin: DatumPointSource;
+      rotationDeg: ParametricVector3;
+    };
+
+/** The point sources a datum point definition reads, in role order. */
+export function datumPointDefinitionPointSources(
+  definition: DatumPointDefinition
+): DatumPointSource[] {
+  return definition.kind === 'offset' ? [definition.from] : [];
+}
+
+/** The plane sources a datum point definition reads, in role order. */
+export function datumPointDefinitionPlaneSources(
+  definition: DatumPointDefinition
+): DatumPlaneSource[] {
+  return definition.kind === 'axis-plane' ? [definition.plane] : [];
+}
+
+/** The point sources a coordinate system definition reads, in role order. */
+export function datumCsysPointSources(
+  definition: DatumCsysDefinition
+): DatumPointSource[] {
+  switch (definition.kind) {
+    case 'three-point':
+      return [...definition.points];
+    case 'plane':
+      return definition.origin ? [definition.origin] : [];
+    case 'placement':
+      return [definition.origin];
+  }
+}
+
+/** The plane sources a coordinate system definition reads, in role order. */
+export function datumCsysPlaneSources(
+  definition: DatumCsysDefinition
+): DatumPlaneSource[] {
+  return definition.kind === 'plane' ? [definition.source] : [];
+}
+
+/** The bodies whose topology a datum point reads directly. */
+export function datumPointSourceBodyIds(
+  definition: DatumPointDefinition
+): BodyId[] {
+  const bodies = new Set<BodyId>();
+  if (definition.kind === 'edge-midpoint' || definition.kind === 'arc-center')
+    bodies.add(definition.source.bodyId);
+  for (const point of datumPointDefinitionPointSources(definition))
+    if (point.type === 'edge-vertex') bodies.add(point.bodyId);
+  for (const source of datumPointDefinitionPlaneSources(definition))
+    if (source.type === 'face') bodies.add(source.bodyId);
+  return [...bodies];
+}
+
+/** The bodies whose topology a coordinate system reads directly. */
+export function datumCsysSourceBodyIds(
+  definition: DatumCsysDefinition
+): BodyId[] {
+  const bodies = new Set<BodyId>();
+  for (const point of datumCsysPointSources(definition))
+    if (point.type === 'edge-vertex') bodies.add(point.bodyId);
+  for (const source of datumCsysPlaneSources(definition))
+    if (source.type === 'face') bodies.add(source.bodyId);
+  return [...bodies];
+}
 
 /** The plane sources a datum axis definition reads, in role order. */
 export function datumAxisPlaneSources(
@@ -1301,6 +1486,70 @@ export function datumAxisSourceBodyIds(
  * `axisRef` and a Move's `axisRotation`. Suppressed features count; their
  * references are still live.
  */
+/**
+ * Every coordinate system a feature's data reads: a datum axis or plane
+ * built on one, and a Move aligned by them. Suppressed features count.
+ */
+export function featureDatumCsysRefs(data: FeatureData): FeatureId[] {
+  const ids: FeatureId[] = [];
+  const planes = (sources: readonly DatumPlaneSource[]) => {
+    for (const source of sources)
+      if (source.type === 'datum-csys') ids.push(source.datumFeatureId);
+  };
+  switch (data.featureKind) {
+    case 'datum-plane':
+      planes(datumPlaneSources(data.definition));
+      break;
+    case 'datum-axis':
+      if (data.definition.kind === 'csys-axis')
+        ids.push(data.definition.csys.datumFeatureId);
+      planes(datumAxisPlaneSources(data.definition));
+      break;
+    case 'datum-point':
+      planes(datumPointDefinitionPlaneSources(data.definition));
+      break;
+    case 'datum-csys':
+      planes(datumCsysPlaneSources(data.definition));
+      break;
+    case 'transform':
+      if (data.csysAlign) {
+        if (data.csysAlign.from) ids.push(data.csysAlign.from.datumFeatureId);
+        ids.push(data.csysAlign.to.datumFeatureId);
+      }
+      break;
+    default:
+      break;
+  }
+  return ids;
+}
+
+/**
+ * Every datum point a feature's data reads, by reference. Suppressed
+ * features count.
+ */
+export function featureDatumPointRefs(data: FeatureData): FeatureId[] {
+  let points: DatumPointSource[];
+  switch (data.featureKind) {
+    case 'datum-plane':
+      points = datumPointSources(data.definition);
+      break;
+    case 'datum-axis':
+      points = datumAxisPointSources(data.definition);
+      break;
+    case 'datum-point':
+      points = datumPointDefinitionPointSources(data.definition);
+      break;
+    case 'datum-csys':
+      points = datumCsysPointSources(data.definition);
+      break;
+    default:
+      points = [];
+  }
+  return points.flatMap((point) =>
+    point.type === 'datum-point' ? [point.datumFeatureId] : []
+  );
+}
+
 export function featureDatumAxisRefs(data: FeatureData): DatumAxisRef[] {
   switch (data.featureKind) {
     case 'revolve':
@@ -1308,6 +1557,10 @@ export function featureDatumAxisRefs(data: FeatureData): DatumAxisRef[] {
       return data.axisRef ? [data.axisRef] : [];
     case 'transform':
       return data.axisRotation ? [data.axisRotation.axis] : [];
+    case 'datum-point':
+      return data.definition.kind === 'axis-plane'
+        ? [data.definition.axis]
+        : [];
     default:
       return [];
   }
@@ -1908,6 +2161,24 @@ export type FeatureData =
       definition: DatumAxisDefinition;
     }
   | {
+      /**
+       * R01 (schema v95): a datum point. It owns no body; its resolved
+       * position is published at its history position for the planes, axes,
+       * coordinate systems and points built from it.
+       */
+      featureKind: 'datum-point';
+      definition: DatumPointDefinition;
+    }
+  | {
+      /**
+       * R01 (schema v95): a named coordinate system. It owns no body; its
+       * resolved frame is published at its history position for the planes,
+       * axes and Moves that use it.
+       */
+      featureKind: 'datum-csys';
+      definition: DatumCsysDefinition;
+    }
+  | {
       featureKind: 'primitive';
       primitiveKind: PrimitiveKind;
       dimensions: Record<string, ParamValue>;
@@ -2107,6 +2378,13 @@ export type FeatureData =
        * Move every older document holds.
        */
       axisRotation?: { axis: DatumAxisRef; angleDeg: ParamValue };
+      /**
+       * R01 (schema v95): carry the body from coordinate system `from` (the
+       * world axes when absent) onto `to`, before `axisRotation` and
+       * `transform` apply: a point at (x, y, z) in `from` lands at (x, y, z)
+       * in `to`. Absent is the Move every older document holds.
+       */
+      csysAlign?: { from?: DatumCsysRef; to: DatumCsysRef };
     }
   | {
       featureKind: 'mirror';
@@ -4036,6 +4314,14 @@ export interface DatumAxisLine {
   direction: Vector3;
 }
 
+/** Schema v95: a resolved coordinate system, right-handed and orthonormal. */
+export interface DatumCsysFrame {
+  origin: Vector3;
+  x: Vector3;
+  y: Vector3;
+  z: Vector3;
+}
+
 export interface DerivedState {
   editAnalysis?: EditAnalysisRequest;
   bodyRepresentations: Record<BodyId, BodyRepresentation>;
@@ -4055,6 +4341,16 @@ export interface DerivedState {
    * own history position. A datum axis that failed or is suppressed is absent.
    */
   datumAxes?: Record<FeatureId, DatumAxisLine>;
+  /**
+   * R01 (schema v95): each datum point as the exact build resolved it at its
+   * own history position. A failed or suppressed one is absent.
+   */
+  datumPoints?: Record<FeatureId, Vector3>;
+  /**
+   * R01 (schema v95): each coordinate system as the exact build resolved it
+   * at its own history position. A failed or suppressed one is absent.
+   */
+  datumCsys?: Record<FeatureId, DatumCsysFrame>;
   /**
    * I01 (schema v33): each linked sketch projection's state as the exact
    * build found it at its sketch's history position, keyed by object id.
@@ -6216,7 +6512,9 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff',
   'datum-plane': '#9aa5b8',
-  'datum-axis': '#9aa5b8'
+  'datum-axis': '#9aa5b8',
+  'datum-point': '#9aa5b8',
+  'datum-csys': '#9aa5b8'
 };
 
 export const featureColor = (kind: FeatureKind): string =>
