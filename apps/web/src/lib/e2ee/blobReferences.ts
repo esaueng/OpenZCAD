@@ -133,15 +133,29 @@ export function setEncryptedBlobReader(reader: EncryptedBlobReader | null) {
 /**
  * How to read an artifact id as an encrypted blob of this page, or null
  * when it is not one (a plaintext artifact, or a page without the keys).
+ *
+ * `owner` names the project the caller holds the file under. A copy of an
+ * encrypted project keeps its blob ids, and the registry's id-to-project
+ * map names whichever copy was opened last, so a Stored files download
+ * passes its own project rather than reading another copy's blob (which
+ * may since have been deleted).
  */
-export function encryptedBlobSource(artifactId: string): {
+export function encryptedBlobSource(
+  artifactId: string,
+  owner?: string
+): {
   projectId: string;
   read(
     signal?: AbortSignal,
     onProgress?: () => void
   ): Promise<Uint8Array<ArrayBuffer>>;
 } | null {
-  const projectId = pageBlobReferences.projectOf(artifactId);
+  const projectId =
+    owner === undefined
+      ? pageBlobReferences.projectOf(artifactId)
+      : pageBlobReferences.get(owner, artifactId)
+        ? owner
+        : null;
   const reader = pageReader;
   if (!projectId || !reader) return null;
   return {

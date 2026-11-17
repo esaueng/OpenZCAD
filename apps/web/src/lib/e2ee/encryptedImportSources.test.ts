@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { ContentBlobReference } from '@openzcad/crypto';
 import { createProjectDocument, importStepBody } from '@openzcad/document-core';
 import {
@@ -7,7 +7,12 @@ import {
   type ArtifactRecord,
   type ProjectDocument
 } from '@openzcad/shared';
-import { createBlobReferenceRegistry } from './blobReferences';
+import {
+  createBlobReferenceRegistry,
+  encryptedBlobSource,
+  pageBlobReferences,
+  setEncryptedBlobReader
+} from './blobReferences';
 import {
   encryptedImportSourceArtifacts,
   withEncryptedImportSources
@@ -130,5 +135,36 @@ describe("an encrypted project's archived STEP sources (#1649)", () => {
     ).toEqual(['blob_export', 'blob_a', 'blob_c', 'blob_b']);
     const listed = [exported];
     expect(withEncryptedImportSources(listed, [])).toEqual(listed);
+  });
+});
+
+describe('reading a listed source from its own project', () => {
+  afterEach(() => {
+    setEncryptedBlobReader(null);
+    pageBlobReferences.clear();
+  });
+
+  // A copy keeps its blob ids, and the page map names the copy opened
+  // last: a source listed under the original must still read from it.
+  it('reads the blob under the project the file is listed in', async () => {
+    const reads: string[] = [];
+    setEncryptedBlobReader(async (projectId) => {
+      reads.push(projectId);
+      return new Uint8Array([1]);
+    });
+    pageBlobReferences.remember(
+      'project_original',
+      reference('blob_shared', 'import-source', 1)
+    );
+    pageBlobReferences.remember(
+      'project_copy',
+      reference('blob_shared', 'import-source', 1)
+    );
+    await encryptedBlobSource('blob_shared', 'project_original')!.read();
+    expect(reads).toEqual(['project_original']);
+    // Without an owner the last-opened copy still answers, as before.
+    expect(encryptedBlobSource('blob_shared')!.projectId).toBe('project_copy');
+    // A project this page holds no reference under reads nothing.
+    expect(encryptedBlobSource('blob_shared', 'project_other')).toBeNull();
   });
 });
