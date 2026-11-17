@@ -34136,16 +34136,7 @@ export function App() {
           onCreate={(name, units) => void handleCreateProject(name, units)}
           onOpen={(projectId) => void handleOpenProject(projectId)}
           onOpenDemo={(definition) => void handleOpenDemo(definition)}
-          onOpenIntent={() => {
-            geometry.prepareKernel?.();
-            // Pointing at a card also warms the viewport, so opening does not
-            // wait for its download after the project itself has loaded.
-            if (!prefersSavingData()) {
-              void loadWhenOnline(() => LazyViewerShell.preload()).catch(
-                () => undefined
-              );
-            }
-          }}
+          onOpenIntent={() => geometry.prepareKernel?.()}
           onOpenSettings={openSettings}
           onSignIn={() => openSettingsAt('account')}
           onDuplicate={(project) => void handleDuplicateProject(project)}
