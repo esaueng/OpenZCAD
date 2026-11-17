@@ -44,6 +44,7 @@
   "drawings.spec.ts": 16,
   "edge-form-preview.spec.ts": 9,
   "edge-overlay-growth.spec.ts": 8,
+  "encrypted-migration.spec.ts": 30,
   "encrypted-projects.spec.ts": 14,
   "encrypted-room.spec.ts": 15,
   "encrypted-share-links.spec.ts": 21,
@@ -157,6 +158,5 @@
   "workspace-empty-state.spec.ts": 8,
   "workspace-tour.spec.ts": 7,
   "save-state-versions.spec.ts": 12,
-  "project-comments.spec.ts": 14,
-  "encrypted-migration.spec.ts": 30
+  "project-comments.spec.ts": 14
 }
