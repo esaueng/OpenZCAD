@@ -63,7 +63,14 @@ const CHECK = process.argv.includes('--check');
 // shown writes); the Tweak link, per-instance rows and per-view rows add
 // a few more KB of App wiring. Export diagnostics now loads on its gesture
 // beside it. The tripwire stays a tripwire.
-const DEFAULT_RAW_BUDGET = (1024 + 24) * 1024;
+//
+// 2026-11-17: raised by 8 KiB at the maintainer's direction. Main sat a few
+// hundred bytes under the edge, and steadying the reload, open and
+// return-home transitions (account listing pending state, unreachable account
+// copies kept offline, viewport warm-up on open) adds under 1 KB of App
+// wiring. The tripwire stays a tripwire: the next raise should come with a
+// split.
+const DEFAULT_RAW_BUDGET = (1024 + 32) * 1024;
 const APPROVED_LAZY_ASSETS = [
   {
     pattern: /^assets\/three-.*\.js$/,
