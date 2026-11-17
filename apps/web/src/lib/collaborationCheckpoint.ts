@@ -181,7 +181,7 @@ export async function saveCollaborationCheckpoint(
       // members could not open (the save is then kept on this device), and
       // send it as the checks normalized it.
       const minted = assertStorableDocument(
-        createAdvancingSavePoint(base, label)
+        createAdvancingSavePoint(base, label, options.author)
       );
       const savedRevisionId = minted.revisions.at(-1)!.revisionId;
       const response = await abortableCheckpoint(

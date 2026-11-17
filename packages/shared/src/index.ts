@@ -3477,13 +3477,48 @@ export interface RevisionRecord {
   commandCount: number;
 }
 
+/**
+ * Who made a save point and where (L03), as the saving browser recorded it.
+ * Every field is optional: older save points carry none, and a save made
+ * signed out has no account. On an encrypted project it travels inside the
+ * signed, encrypted document like every other field an editor writes.
+ */
+export interface ProjectCheckpointAuthor {
+  /** The account that saved, when one was signed in. */
+  userId?: string;
+  /** That account's display name at the time. */
+  name?: string;
+  /** A short name for the device, such as "Chrome on macOS". */
+  device?: string;
+}
+
 /** Durable user-visible save point. Command history and undo state remain separate. */
 export interface ProjectCheckpoint {
   checkpointId: string;
   revisionId: RevisionId;
   documentVersion: number;
   createdAt: string;
+  /** The automatic reason, or the name typed when saving. */
   reason: string;
+  /**
+   * A name given after the save (L03 rename). Shown in place of `reason`;
+   * absent until someone renames the save point.
+   */
+  name?: string;
+  author?: ProjectCheckpointAuthor;
+}
+
+/** Longest name a save point may be renamed to. */
+export const MAX_CHECKPOINT_NAME_LENGTH = 120;
+/** Bounds of the author fields a save point records. */
+export const MAX_CHECKPOINT_AUTHOR_NAME_LENGTH = 120;
+export const MAX_CHECKPOINT_AUTHOR_DEVICE_LENGTH = 64;
+
+/** What the versions list calls a save point: its new name, else its reason. */
+export function checkpointLabel(
+  checkpoint: Pick<ProjectCheckpoint, 'name' | 'reason'>
+): string {
+  return checkpoint.name ?? checkpoint.reason;
 }
 
 /**
@@ -3581,7 +3616,30 @@ export function isProjectCheckpoint(
     isBoundedString(checkpoint.revisionId, 200, 1) &&
     isNonnegativeSafeInteger(checkpoint.documentVersion) &&
     isBoundedString(checkpoint.createdAt, 100, 1) &&
-    isBoundedString(checkpoint.reason, 500)
+    isBoundedString(checkpoint.reason, 500) &&
+    (checkpoint.name === undefined ||
+      isBoundedString(checkpoint.name, MAX_CHECKPOINT_NAME_LENGTH, 1)) &&
+    (checkpoint.author === undefined ||
+      isProjectCheckpointAuthor(checkpoint.author))
+  );
+}
+
+export function isProjectCheckpointAuthor(
+  value: unknown
+): value is ProjectCheckpointAuthor {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const author = value as Record<string, unknown>;
+  return (
+    Object.keys(author).every((key) =>
+      ['userId', 'name', 'device'].includes(key)
+    ) &&
+    (author.userId === undefined || isBoundedString(author.userId, 200, 1)) &&
+    (author.name === undefined ||
+      isBoundedString(author.name, MAX_CHECKPOINT_AUTHOR_NAME_LENGTH, 1)) &&
+    (author.device === undefined ||
+      isBoundedString(author.device, MAX_CHECKPOINT_AUTHOR_DEVICE_LENGTH, 1))
   );
 }
 

@@ -108,14 +108,68 @@
   opacity: 1;
 }
 
-.revision-details {
+/* L03 versions-list columns: editor, device and where the save is stored,
+   on one wrapping line under the time. */
+.revision-meta {
   grid-column: 1 / -1;
   grid-row: 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 4px;
+  min-width: 0;
+  white-space: pre-wrap;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.revision-editor,
+.revision-device,
+.revision-sync {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.revision-details {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  grid-column: 1 / -1;
+  grid-row: 4;
   margin: 0;
   color: var(--color-text-muted);
   font-size: var(--fs-mini);
   line-height: var(--lh-normal);
   overflow-wrap: anywhere;
+}
+
+.revision-details p {
+  margin: 0;
+}
+
+/* Renaming a save point in place of its name (L03). */
+.revision-rename {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.revision-rename-input {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  color: var(--color-text);
+  font: inherit;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.revision-rename-input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 0;
 }
 
 .revision-time {
