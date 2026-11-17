@@ -59,6 +59,12 @@ import type { DrawingViewId } from './drawings';
  *
  * Schema v82 (D02) adds the arc angle (an arc's included angle at its
  * centre) and the three-point angle (at a vertex point between two others).
+ *
+ * Schema v98 (D07) adds geometric tolerancing: datum feature symbols and
+ * feature control frames (ASME Y14.5-2018 and ISO 1101 symbols), each
+ * pointing at an edge with a leader or attached to the dimension of a
+ * feature of size (a datum symbol may also hang from a frame). Like every
+ * annotation they store intent only, and break by name rather than rebind.
  */
 
 export type DrawingAnnotationId = Brand<string, 'DrawingAnnotationId'>;
@@ -461,6 +467,164 @@ export interface DrawingSheetImage extends DrawingAnnotationBase {
 export const MIN_DRAWING_IMAGE_WIDTH_MM = 2;
 export const MAX_DRAWING_IMAGE_WIDTH_MM = 1200;
 
+/**
+ * v98 (D07): the geometric characteristics a feature control frame states,
+ * in the ASME Y14.5-2018 / ISO 1101 order: form, profile, orientation,
+ * location, runout. Concentricity and symmetry are ISO 1101's; Y14.5-2018
+ * dropped them, so a sheet in that standard states position or profile
+ * instead (the UI says so; the schema keeps both).
+ */
+export const DRAWING_GEOMETRIC_CHARACTERISTICS = [
+  'straightness',
+  'flatness',
+  'circularity',
+  'cylindricity',
+  'profile-line',
+  'profile-surface',
+  'parallelism',
+  'perpendicularity',
+  'angularity',
+  'position',
+  'concentricity',
+  'symmetry',
+  'circular-runout',
+  'total-runout'
+] as const;
+export type DrawingGeometricCharacteristic =
+  (typeof DRAWING_GEOMETRIC_CHARACTERISTICS)[number];
+
+/** v98: form tolerances, which control a feature alone and take no datum. */
+export const DRAWING_FORM_CHARACTERISTICS: readonly DrawingGeometricCharacteristic[] =
+  ['straightness', 'flatness', 'circularity', 'cylindricity'];
+
+/**
+ * v98: characteristics that are meaningless without a datum: orientation
+ * is to a datum, runout about one, and concentricity and symmetry to one.
+ */
+export const DRAWING_DATUM_REQUIRED_CHARACTERISTICS: readonly DrawingGeometricCharacteristic[] =
+  [
+    'parallelism',
+    'perpendicularity',
+    'angularity',
+    'concentricity',
+    'symmetry',
+    'circular-runout',
+    'total-runout'
+  ];
+
+/**
+ * v98: characteristics whose zone may be cylindrical (a Ø before the
+ * tolerance): those that can control an axis.
+ */
+export const DRAWING_DIAMETER_ZONE_CHARACTERISTICS: readonly DrawingGeometricCharacteristic[] =
+  [
+    'straightness',
+    'parallelism',
+    'perpendicularity',
+    'angularity',
+    'position',
+    'concentricity'
+  ];
+
+/**
+ * v98: characteristics whose tolerance may carry a material condition
+ * modifier (Ⓜ, Ⓛ): those that may apply to a feature of size and are not
+ * defined regardless of feature size by the standard.
+ */
+export const DRAWING_MATERIAL_CHARACTERISTICS: readonly DrawingGeometricCharacteristic[] =
+  ['straightness', 'parallelism', 'perpendicularity', 'angularity', 'position'];
+
+/** v98: characteristics whose datum references may carry Ⓜ or Ⓛ. */
+export const DRAWING_DATUM_MATERIAL_CHARACTERISTICS: readonly DrawingGeometricCharacteristic[] =
+  [
+    'parallelism',
+    'perpendicularity',
+    'angularity',
+    'position',
+    'profile-line',
+    'profile-surface'
+  ];
+
+/** v98: maximum (Ⓜ) or least (Ⓛ) material condition. */
+export type DrawingMaterialCondition = 'mmc' | 'lmc';
+
+/** v98: a datum reference in a frame: its letter and an optional modifier. */
+export interface DrawingDatumReference {
+  letter: string;
+  material?: DrawingMaterialCondition;
+}
+
+/**
+ * v98: datum letters. Both standards skip I, O and Q (they read as 1, 0
+ * and a circle); after Z, letters double (AA, AB, …).
+ */
+export const DRAWING_DATUM_LETTER_PATTERN = /^[A-HJ-NPR-Z]{1,2}$/;
+
+/** v98: a frame names a primary, secondary and tertiary datum at most. */
+export const MAX_DRAWING_DATUM_REFERENCES = 3;
+
+/**
+ * v98: what a datum symbol or frame applies to. A leader to an edge points
+ * at a surface (seen edge-on) or a feature's outline; `attachedTo` names
+ * the dimension of a feature of size (a frame below its value, a datum
+ * symbol on it) or, for a datum symbol, the frame it hangs from. Exactly
+ * one of the two is stored; the host is on the same view, and a missing
+ * one leaves the annotation broken (`host-missing`), never reattached.
+ */
+interface DrawingToleranceAnnotationBase extends DrawingAnnotationBase {
+  viewId: DrawingViewId;
+  leader?: DrawingEdgeRef;
+  attachedTo?: DrawingAnnotationId;
+}
+
+/** v98: a datum feature symbol: its letter in a frame, on a triangle. */
+export interface DrawingDatumFeature extends DrawingToleranceAnnotationBase {
+  kind: 'datum-feature';
+  letter: string;
+}
+
+/**
+ * v98: a feature control frame: the characteristic's symbol, the tolerance
+ * (a cylindrical zone's Ø, then the amount and any material modifier),
+ * then up to three datum references in order of precedence. `amount`, the
+ * tolerance zone's size, is in the units the sheet prints in, like a
+ * dimension's tolerance.
+ */
+export interface DrawingFeatureControlFrame extends DrawingToleranceAnnotationBase {
+  kind: 'feature-control-frame';
+  characteristic: DrawingGeometricCharacteristic;
+  amount: number;
+  diameterZone?: true;
+  material?: DrawingMaterialCondition;
+  datums?: DrawingDatumReference[];
+}
+
+/** v98: the geometric tolerancing annotations. */
+export type DrawingToleranceAnnotation =
+  DrawingDatumFeature | DrawingFeatureControlFrame;
+
+export function isDrawingToleranceAnnotation(
+  annotation: DrawingAnnotation
+): annotation is DrawingToleranceAnnotation {
+  return (
+    annotation.kind === 'datum-feature' ||
+    annotation.kind === 'feature-control-frame'
+  );
+}
+
+/**
+ * v98: the annotation kinds each tolerancing kind may attach to: a frame to
+ * a dimension; a datum symbol to a dimension or a frame. A datum symbol is
+ * never a host, so attachments nest at most two deep and never cycle.
+ */
+export function drawingToleranceHostAllowed(
+  kind: DrawingToleranceAnnotation['kind'],
+  host: DrawingAnnotation
+): boolean {
+  if (isDrawingDimension(host)) return true;
+  return kind === 'datum-feature' && host.kind === 'feature-control-frame';
+}
+
 /** v73: the annotations that mark geometry rather than state a value. */
 export type DrawingGeometryAnnotation =
   DrawingCenterMark | DrawingIntersectionMark | DrawingCenterline;
@@ -487,6 +651,8 @@ export function isDrawingDimension(
     annotation.kind !== 'bom-table' &&
     annotation.kind !== 'balloon' &&
     annotation.kind !== 'image' &&
+    annotation.kind !== 'datum-feature' &&
+    annotation.kind !== 'feature-control-frame' &&
     !isDrawingGeometryAnnotation(annotation)
   );
 }
@@ -507,7 +673,8 @@ export type DrawingAnnotation =
   | DrawingGeometryAnnotation
   | DrawingBomTable
   | DrawingBalloon
-  | DrawingSheetImage;
+  | DrawingSheetImage
+  | DrawingToleranceAnnotation;
 
 export type DrawingAnnotationKind = DrawingAnnotation['kind'];
 
@@ -868,6 +1035,128 @@ function affixError(value: unknown, name: string): string | null {
   return null;
 }
 
+const DATUM_FEATURE_KEYS = new Set([
+  'annotationId',
+  'kind',
+  'placementMm',
+  'viewId',
+  'leader',
+  'attachedTo',
+  'letter'
+]);
+const FEATURE_CONTROL_FRAME_KEYS = new Set([
+  'annotationId',
+  'kind',
+  'placementMm',
+  'viewId',
+  'leader',
+  'attachedTo',
+  'characteristic',
+  'amount',
+  'diameterZone',
+  'material',
+  'datums'
+]);
+
+function isMaterialCondition(value: unknown): boolean {
+  return value === 'mmc' || value === 'lmc';
+}
+
+/** v98: why a datum symbol or frame is malformed, or null. */
+function toleranceAnnotationError(
+  value: Record<string, unknown>,
+  where: string
+): string | null {
+  const datum = value.kind === 'datum-feature';
+  const name = datum ? 'datum feature symbol' : 'feature control frame';
+  const known = datum ? DATUM_FEATURE_KEYS : FEATURE_CONTROL_FRAME_KEYS;
+  const extra = Object.keys(value).find((key) => !known.has(key));
+  if (extra !== undefined)
+    return `${where} is a ${name}, which has no ${extra}.`;
+  if (value.viewId === undefined)
+    return `${where} is a ${name} that belongs to no view.`;
+  if ((value.leader === undefined) === (value.attachedTo === undefined))
+    return `${where} is a ${name} that needs either a leader to an edge or a dimension to attach to, not both.`;
+  if (value.leader !== undefined) {
+    const error = edgeRefError(value.leader);
+    if (error) return `${where} ${error}.`;
+  }
+  if (
+    value.attachedTo !== undefined &&
+    (typeof value.attachedTo !== 'string' ||
+      !value.attachedTo.startsWith(DRAWING_ANNOTATION_ID_PREFIX) ||
+      value.attachedTo.length > 64 ||
+      value.attachedTo === value.annotationId)
+  )
+    return `${where} is a ${name} attached to an invalid annotation id.`;
+  if (datum) {
+    if (
+      typeof value.letter !== 'string' ||
+      !DRAWING_DATUM_LETTER_PATTERN.test(value.letter)
+    )
+      return `${where} is a datum feature symbol whose letter is not one or two capitals other than I, O and Q.`;
+    return null;
+  }
+  const characteristic = value.characteristic as DrawingGeometricCharacteristic;
+  if (!DRAWING_GEOMETRIC_CHARACTERISTICS.includes(characteristic))
+    return `${where} is a feature control frame with an unknown characteristic.`;
+  if (!isDeviation(value.amount) || value.amount <= 0)
+    return `${where} is a feature control frame whose tolerance is not a positive amount of at most six decimals.`;
+  if (value.diameterZone !== undefined) {
+    if (value.diameterZone !== true)
+      return `${where} is a feature control frame with a malformed Ø zone.`;
+    if (!DRAWING_DIAMETER_ZONE_CHARACTERISTICS.includes(characteristic))
+      return `${where} states ${characteristic} in a cylindrical (Ø) zone, which it cannot have.`;
+  }
+  if (value.material !== undefined) {
+    if (!isMaterialCondition(value.material))
+      return `${where} is a feature control frame with an unknown material condition.`;
+    if (!DRAWING_MATERIAL_CHARACTERISTICS.includes(characteristic))
+      return `${where} modifies ${characteristic} by a material condition, which it cannot take.`;
+  }
+  const datums = value.datums;
+  if (datums !== undefined) {
+    if (
+      !Array.isArray(datums) ||
+      datums.length === 0 ||
+      datums.length > MAX_DRAWING_DATUM_REFERENCES
+    )
+      return `${where} is a feature control frame with other than one to ${MAX_DRAWING_DATUM_REFERENCES} datum references.`;
+    const letters = new Set<string>();
+    for (const reference of datums as unknown[]) {
+      if (
+        !isRecord(reference) ||
+        typeof reference.letter !== 'string' ||
+        !DRAWING_DATUM_LETTER_PATTERN.test(reference.letter) ||
+        Object.keys(reference).some(
+          (key) => key !== 'letter' && key !== 'material'
+        )
+      )
+        return `${where} is a feature control frame with a malformed datum reference.`;
+      if (letters.has(reference.letter))
+        return `${where} references datum ${reference.letter} twice.`;
+      letters.add(reference.letter);
+      if (reference.material !== undefined) {
+        if (!isMaterialCondition(reference.material))
+          return `${where} is a feature control frame with an unknown datum material condition.`;
+        if (!DRAWING_DATUM_MATERIAL_CHARACTERISTICS.includes(characteristic))
+          return `${where} modifies a datum of ${characteristic} by a material condition, which it cannot take.`;
+      }
+    }
+  }
+  if (
+    datums !== undefined &&
+    DRAWING_FORM_CHARACTERISTICS.includes(characteristic)
+  )
+    return `${where} states ${characteristic}, a form tolerance, which takes no datum.`;
+  if (
+    datums === undefined &&
+    DRAWING_DATUM_REQUIRED_CHARACTERISTICS.includes(characteristic)
+  )
+    return `${where} states ${characteristic}, which needs at least one datum.`;
+  return null;
+}
+
 /**
  * Why `value` is not a valid annotation of a sheet whose views are
  * `viewIds`, or null. Shape only: the edges may be gone from the model.
@@ -943,6 +1232,8 @@ export function drawingAnnotationError(
       return `${where} is an image ${MIN_DRAWING_IMAGE_WIDTH_MM}–${MAX_DRAWING_IMAGE_WIDTH_MM} mm wide at most.`;
     return null;
   }
+  if (value.kind === 'datum-feature' || value.kind === 'feature-control-frame')
+    return toleranceAnnotationError(value, where);
   if (value.kind === 'bom-table' || value.kind === 'balloon') {
     if (
       [
@@ -1270,6 +1561,9 @@ export function drawingAnnotationReferences(
       return [];
     case 'balloon':
       return [annotation.leader];
+    case 'datum-feature':
+    case 'feature-control-frame':
+      return annotation.leader ? [annotation.leader] : [];
     case 'distance':
       return [
         ...distanceTargetReferences(annotation.from),
@@ -1306,6 +1600,15 @@ export function drawingAnnotationCenterlines(
         'centerline' in target ? [target.centerline] : []
       )
     : [];
+}
+
+/** v98: the dimension or frame a tolerancing annotation is attached to. */
+export function drawingAnnotationHost(
+  annotation: DrawingAnnotation
+): DrawingAnnotationId | undefined {
+  return isDrawingToleranceAnnotation(annotation)
+    ? annotation.attachedTo
+    : undefined;
 }
 
 /** v73: the marks an annotation measures to, by id. */

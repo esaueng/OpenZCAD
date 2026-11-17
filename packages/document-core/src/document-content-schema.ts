@@ -400,6 +400,34 @@ export function hasDrawingBom(value: unknown): boolean {
   return false;
 }
 
+/** D07 datum feature symbols and feature control frames (schema v98). */
+export function assertDrawingToleranceSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 98, 'Geometric tolerancing');
+}
+
+/** Whether `value` holds a v98 datum feature symbol or feature control frame. */
+export function hasDrawingTolerance(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (
+      typeof entry.annotationId === 'string' &&
+      (entry.kind === 'datum-feature' || entry.kind === 'feature-control-frame')
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
 /** D03 auxiliary views (schema v81). */
 export function assertDrawingAuxiliarySchema(version: unknown): void {
   assertMinimumProjectSchema(version, 81, 'Auxiliary views');
@@ -772,6 +800,12 @@ export function assertDocumentContentCommandSchema(
     if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('drawing.') &&
+      hasDrawingTolerance(command.payload)
+    )
+      assertDrawingToleranceSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
       hasDrawingAuxiliary(command.payload)
     )
       assertDrawingAuxiliarySchema(document.schemaVersion);
@@ -977,6 +1011,16 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
     assertDrawingDetailSchema(document.schemaVersion);
   if (hasDrawingBom(document.drawings))
     assertDrawingBomSchema(document.schemaVersion);
+  if (hasDrawingTolerance(document.drawings))
+    assertDrawingToleranceSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingTolerance(change.before) ||
+          hasDrawingTolerance(change.after))
+      )
+        assertDrawingToleranceSchema(document.schemaVersion);
   if (hasDrawingAuxiliary(document.drawings))
     assertDrawingAuxiliarySchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])

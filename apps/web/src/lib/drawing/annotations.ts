@@ -36,6 +36,10 @@ import {
   type DrawingGeometryAnnotation,
   type DrawingIntersectionMark,
   isDrawingGeometryAnnotation,
+  isDrawingToleranceAnnotation,
+  drawingAnnotationHost,
+  drawingToleranceHostAllowed,
+  type DrawingToleranceAnnotation,
   type DrawingSheetFormat,
   millimetresPerUnit,
   MAX_DRAWING_DIMENSION_DECIMALS,
@@ -84,6 +88,15 @@ import {
   virtualSharp,
   type SharpCurve
 } from './surfaceSharps';
+import {
+  datumFeatureLayout,
+  featureControlFrameLabel,
+  featureControlFrameLayout,
+  frameLeader,
+  nearestOnBox,
+  FRAME_HEIGHT_MM,
+  type FrameCells
+} from './toleranceFrames';
 
 /**
  * D02 annotation geometry: from a stored annotation to what it measures in
@@ -198,7 +211,15 @@ export type AnnotationBreak =
   | 'not-in-bom'
   | 'not-on-part'
   | 'no-angle'
-  | 'image-missing';
+  | 'image-missing'
+  /** v98: the dimension or frame this was attached to has been deleted. */
+  | 'host-missing'
+  /** v98: the dimension or frame this is attached to is broken. */
+  | 'host-broken'
+  /** v98: a frame names a datum no datum feature symbol declares. */
+  | 'datum-undefined'
+  /** v98: two datum feature symbols on the drawing share a letter. */
+  | 'datum-duplicate';
 
 type UV = [number, number];
 
@@ -245,6 +266,30 @@ export function sheetPictures(document: {
 }
 
 export type ResolvedAnnotation =
+  | {
+      /**
+       * v98: a datum feature symbol's letter, and what it stands on: the
+       * leader edge (as a note's, below) or, attached, its host's box.
+       */
+      kind: 'datum-feature';
+      label: string;
+      attached: boolean;
+      leader?: number[];
+      leaderDepths?: number[];
+      leaderEdge?: { bodyId: string; topologyId: string };
+      leaderPieces?: number[][];
+    }
+  | {
+      /** v98: a feature control frame's compartments, and its leader. */
+      kind: 'feature-control-frame';
+      label: string;
+      cells: FrameCells;
+      attached: boolean;
+      leader?: number[];
+      leaderDepths?: number[];
+      leaderEdge?: { bodyId: string; topologyId: string };
+      leaderPieces?: number[][];
+    }
   | {
       /** v92: a picture on the paper, its printed size in paper mm. */
       kind: 'image';
@@ -427,6 +472,14 @@ export function annotationBreakMessage(reason: AnnotationBreak): string {
       return 'The three points now lie on one line (or two coincide), so they make no angle.';
     case 'image-missing':
       return 'The picture this image showed has been deleted from the project.';
+    case 'host-missing':
+      return 'The dimension or frame this was attached to has been deleted.';
+    case 'host-broken':
+      return 'The dimension or frame this is attached to is broken; repair it first.';
+    case 'datum-undefined':
+      return 'This frame names a datum that no datum feature symbol on the drawing declares.';
+    case 'datum-duplicate':
+      return 'Another datum feature symbol on the drawing has the same letter; each datum is declared once.';
   }
 }
 
@@ -1173,6 +1226,102 @@ function leaderOf(
   };
 }
 
+/**
+ * D07 v98: how many datum feature symbols declare each letter, across every
+ * sheet of a drawing: a frame may name a datum declared on another sheet,
+ * and a letter declared twice is ambiguous wherever it is read.
+ */
+export type DatumLetters = ReadonlyMap<string, number>;
+
+export function drawingDatumLetters(
+  sheets: readonly Pick<DrawingSheet, 'annotations'>[]
+): DatumLetters {
+  const counts = new Map<string, number>();
+  for (const sheet of sheets)
+    for (const annotation of sheet.annotations ?? [])
+      if (annotation.kind === 'datum-feature')
+        counts.set(annotation.letter, (counts.get(annotation.letter) ?? 0) + 1);
+  return counts;
+}
+
+/** D07 v98: a frame's tolerance amount in the sheet's number format. */
+export function formatFrameTolerance(
+  value: number,
+  format: DrawingNumberFormat
+): string {
+  return writeNumber(value, significantDecimals(value), 'length', format, true);
+}
+
+/**
+ * D07 v98: a datum feature symbol or feature control frame. Its leader edge
+ * resolves like a note's; an attachment needs its host on the same view (a
+ * deleted one is `host-missing`; a broken one is marked after the sheet
+ * resolves, see resolveSheetAnnotations). A letter declared twice, or a
+ * frame naming an undeclared datum, breaks by name rather than guessing.
+ */
+function resolveToleranceAnnotation(
+  annotation: DrawingToleranceAnnotation,
+  view: DrawingView | undefined,
+  bodies: AnnotationBodies,
+  format: DrawingNumberFormat,
+  marks: MarkLookup | undefined,
+  datums: DatumLetters | undefined
+): AnnotationResolution {
+  if (!view) return failure('not-in-view');
+  let leader: ReturnType<typeof leaderOf> | undefined;
+  if (annotation.attachedTo !== undefined) {
+    const host = marks?.(annotation.attachedTo);
+    if (
+      !host ||
+      host.viewId !== annotation.viewId ||
+      !drawingToleranceHostAllowed(annotation.kind, host)
+    )
+      return failure('host-missing');
+  } else if (annotation.leader) {
+    const found = lookupEdge(annotation.leader, view, bodies);
+    if (!found.ok) return failure(found.reason);
+    leader = leaderOf(view, annotation.leader, found.edge);
+  }
+  const attached = annotation.attachedTo !== undefined;
+  if (annotation.kind === 'datum-feature') {
+    if (datums && (datums.get(annotation.letter) ?? 0) > 1)
+      return failure('datum-duplicate');
+    return {
+      ok: true,
+      resolved: {
+        kind: 'datum-feature',
+        label: annotation.letter,
+        attached,
+        ...leader
+      }
+    };
+  }
+  if (
+    datums &&
+    (annotation.datums ?? []).some(
+      (reference) => (datums.get(reference.letter) ?? 0) === 0
+    )
+  )
+    return failure('datum-undefined');
+  const cells: FrameCells = {
+    characteristic: annotation.characteristic,
+    tolerance: formatFrameTolerance(annotation.amount, format),
+    diameterZone: annotation.diameterZone === true,
+    ...(annotation.material ? { material: annotation.material } : {}),
+    datums: (annotation.datums ?? []).map((reference) => ({ ...reference }))
+  };
+  return {
+    ok: true,
+    resolved: {
+      kind: 'feature-control-frame',
+      label: featureControlFrameLabel(cells),
+      cells,
+      attached,
+      ...leader
+    }
+  };
+}
+
 /** A straight edge's projected ends, or why it cannot serve as a ray. */
 function straightEnds(
   view: DrawingView,
@@ -1596,8 +1745,22 @@ export function resolveDrawingAnnotation(
   /** D02 v80: the assembly's BOM, for parts lists and balloons. */
   bom?: SheetBom,
   /** D02 v92: the project's pictures, for sheet images. */
-  pictures?: SheetPictureLookup
+  pictures?: SheetPictureLookup,
+  /**
+   * D07 v98: how many datum feature symbols declare each letter across the
+   * drawing; absent skips the datum checks (a draft before it is placed).
+   */
+  datums?: DatumLetters
 ): AnnotationResolution {
+  if (isDrawingToleranceAnnotation(annotation))
+    return resolveToleranceAnnotation(
+      annotation,
+      view,
+      bodies,
+      format,
+      marks,
+      datums
+    );
   if (annotation.kind === 'image') {
     const picture = pictures?.get(annotation.referenceImageId);
     if (!picture) return failure('image-missing');
@@ -2420,6 +2583,7 @@ export function annotationModelReading(
     annotation.kind === 'bom-table' ||
     annotation.kind === 'balloon' ||
     annotation.kind === 'image' ||
+    isDrawingToleranceAnnotation(annotation) ||
     isDrawingGeometryAnnotation(annotation)
   )
     return null;
@@ -3274,9 +3438,16 @@ export function layoutAnnotation(
   resolved: ResolvedAnnotation,
   toPage: ((u: number, v: number) => XY) | null,
   k: number,
-  anchor: XY
+  anchor: XY,
+  /** v98: the laid-out box of the dimension or frame this is attached to. */
+  host?: AnnotationBox
 ): AnnotationLayout {
   if (resolved.kind === 'note') return noteLayout(resolved, toPage, anchor);
+  if (
+    resolved.kind === 'datum-feature' ||
+    resolved.kind === 'feature-control-frame'
+  )
+    return toleranceLayout(resolved, toPage, anchor, host);
   if (resolved.kind === 'bom-table') return bomTableLayout(resolved, anchor);
   if (resolved.kind === 'image') {
     // Centred on its placement, its picture's own aspect.
@@ -3393,6 +3564,66 @@ function bomTableLayout(
     texts,
     box: { x: x0, y: y0 - height, width: total, height }
   };
+}
+
+/** A leader's drawn pieces on the paper (see markHiddenLeaders). */
+function leaderPagePieces(
+  resolved: { leader?: number[]; leaderPieces?: number[][] },
+  toPage: (u: number, v: number) => XY
+): XY[][] {
+  return (
+    resolved.leaderPieces ?? (resolved.leader ? [resolved.leader] : [])
+  ).map((flat) => {
+    const points: XY[] = [];
+    for (let i = 0; i + 1 < flat.length; i += 2)
+      points.push(toPage(flat[i]!, flat[i + 1]!));
+    return points;
+  });
+}
+
+/** v98: the gap between a dimension's text and the frame beneath it. */
+const FRAME_BELOW_HOST_MM = 1;
+
+/**
+ * v98: a feature control frame or datum feature symbol. A frame on a
+ * leader has the middle of its left side at the placement and a leader
+ * from its nearer side to the nearest drawn point of its edge; a frame
+ * attached to a dimension sits just below the dimension's text, left
+ * aligned, and moves with it (Y14.5 fig. 3-25: a feature of size's frame
+ * under its size). A datum symbol is centred on its placement, its
+ * triangle on the nearest drawn point of its edge or of its host's box.
+ */
+function toleranceLayout(
+  resolved: Extract<
+    ResolvedAnnotation,
+    { kind: 'datum-feature' | 'feature-control-frame' }
+  >,
+  toPage: ((u: number, v: number) => XY) | null,
+  anchor: XY,
+  host: AnnotationBox | undefined
+): AnnotationLayout {
+  const pieces = toPage ? leaderPagePieces(resolved, toPage) : [];
+  if (resolved.kind === 'datum-feature') {
+    const foot =
+      resolved.attached && host
+        ? nearestOnBox(host, anchor)
+        : nearestOnPieces(pieces, anchor);
+    return datumFeatureLayout(resolved.label, anchor, foot);
+  }
+  const topLeft: XY =
+    resolved.attached && host
+      ? [host.x, host.y - FRAME_BELOW_HOST_MM]
+      : [anchor[0], anchor[1] + FRAME_HEIGHT_MM / 2];
+  const frame = featureControlFrameLayout(resolved.cells, topLeft);
+  if (!resolved.attached) {
+    const box = frame.box;
+    const tip = nearestOnPieces(pieces, [
+      box.x + box.width / 2,
+      box.y + box.height / 2
+    ]);
+    if (tip) frame.strokes.push(...frameLeader(box, tip));
+  }
+  return frame;
 }
 
 /** v80: a balloon's circle, at least this radius. */
@@ -3687,11 +3918,17 @@ export function resolveSheetAnnotations(
   /** D02 v80: the assembly's BOM, for parts lists and balloons. */
   bom?: SheetBom,
   /** D02 v92: the project's pictures, for sheet images. */
-  pictures?: SheetPictureLookup
+  pictures?: SheetPictureLookup,
+  /**
+   * D07 v98: datum letters across the whole drawing (see
+   * drawingDatumLetters); absent counts this sheet's alone, and null skips
+   * the datum checks (a placement preview).
+   */
+  datums: DatumLetters | null = drawingDatumLetters([sheet])
 ): Map<DrawingAnnotationId, AnnotationResolution> {
   const views = new Map(sheet.views.map((view) => [view.viewId, view]));
   const marks = sheetMarkLookup(sheet);
-  return new Map(
+  const out = new Map(
     (sheet.annotations ?? []).map((annotation) => [
       annotation.annotationId,
       resolveDrawingAnnotation(
@@ -3703,10 +3940,39 @@ export function resolveSheetAnnotations(
         sheetNumberFormat(sheet, units),
         marks,
         bom,
-        pictures
+        pictures,
+        datums ?? undefined
       )
     ])
   );
+  return markBrokenHosts(sheet, out);
+}
+
+/**
+ * v98: `resolutions` with every attachment whose host is broken marked
+ * `host-broken`: it has nowhere to be drawn, and export must wait for the
+ * host's repair. A datum symbol may hang from a frame that hangs from a
+ * dimension, so this runs until nothing changes (at most twice).
+ */
+export function markBrokenHosts(
+  sheet: Pick<DrawingSheet, 'annotations'>,
+  resolutions: ReadonlyMap<DrawingAnnotationId, AnnotationResolution>
+): Map<DrawingAnnotationId, AnnotationResolution> {
+  const out = new Map(resolutions);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const annotation of sheet.annotations ?? []) {
+      const hostId = drawingAnnotationHost(annotation);
+      if (!hostId || !out.get(annotation.annotationId)?.ok) continue;
+      const host = out.get(hostId);
+      if (host && !host.ok) {
+        out.set(annotation.annotationId, failure('host-broken'));
+        changed = true;
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -3723,10 +3989,12 @@ export function markHiddenLeaders(
   bodies: AnnotationBodies
 ): Map<DrawingAnnotationId, AnnotationResolution> {
   const out = new Map(resolutions);
-  // Notes' leaders and (v80) balloons'.
+  // Notes' leaders, (v80) balloons' and (v98) datum symbols' and frames'.
   const leaders = (sheet.annotations ?? []).filter(
     (annotation) =>
-      (annotation.kind === 'note' && annotation.leader) ||
+      ((annotation.kind === 'note' ||
+        isDrawingToleranceAnnotation(annotation)) &&
+        annotation.leader) ||
       annotation.kind === 'balloon'
   );
   if (leaders.length === 0) return out;
@@ -3737,7 +4005,9 @@ export function markHiddenLeaders(
     if (
       !resolution?.ok ||
       (resolution.resolved.kind !== 'note' &&
-        resolution.resolved.kind !== 'balloon') ||
+        resolution.resolved.kind !== 'balloon' &&
+        resolution.resolved.kind !== 'datum-feature' &&
+        resolution.resolved.kind !== 'feature-control-frame') ||
       !resolution.resolved.leader ||
       !entry?.projection.bounds
     )
@@ -3873,7 +4143,12 @@ function nearestWithDepth(
  * the drawn line is the other edge's, not this one's.
  */
 function ownedLeaderPieces(
-  resolved: Extract<ResolvedAnnotation, { kind: 'note' | 'balloon' }>,
+  resolved: Extract<
+    ResolvedAnnotation,
+    {
+      kind: 'note' | 'balloon' | 'datum-feature' | 'feature-control-frame';
+    }
+  >,
   entry: ComposedView,
   bodies: AnnotationBodies,
   tolerance: number
@@ -3963,13 +4238,36 @@ export function previewAnnotationLayer(
   bodies: AnnotationBodies,
   units: UnitSystem
 ): ReturnType<typeof composeSheetAnnotations> {
-  const withDraft = { ...sheet, annotations: [draft] };
+  // v98: an attachment is laid out against its host, so the host (and a
+  // frame's own host) is laid out with it.
+  const byId = sheetMarkLookup(sheet);
+  const hosts: DrawingAnnotation[] = [];
+  for (
+    let hostId = drawingAnnotationHost(draft), depth = 0;
+    hostId && depth < 2;
+    depth += 1
+  ) {
+    const host = byId(hostId);
+    if (!host) break;
+    hosts.unshift(host);
+    hostId = drawingAnnotationHost(host);
+  }
+  const withDraft = { ...sheet, annotations: [...hosts, draft] };
   return composeSheetAnnotations(
     withDraft,
     views,
     markHiddenLeaders(
       withDraft,
-      resolveSheetAnnotations(withDraft, bodies, units),
+      resolveSheetAnnotations(
+        withDraft,
+        bodies,
+        units,
+        undefined,
+        undefined,
+        undefined,
+        // A draft is checked against the letters once it is placed.
+        null
+      ),
       views,
       units,
       bodies
@@ -4000,9 +4298,30 @@ export function composeSheetAnnotations(
   const images: SheetImage[] = [];
   const boxes = new Map<DrawingAnnotationId, AnnotationBox>();
   const drawn = new Map(views.map((entry) => [entry.view.viewId, entry]));
-  for (const annotation of sheet.annotations ?? []) {
+  // v98: attachments after their hosts (a datum symbol may hang from a
+  // frame on a dimension), each in sheet order; a sheet without them keeps
+  // its order, so it lays out byte-identical.
+  const all = sheet.annotations ?? [];
+  const byId = new Map(all.map((entry) => [entry.annotationId, entry]));
+  // Hosts never nest deeper than a datum on a frame on a dimension.
+  const depth = (annotation: DrawingAnnotation): number => {
+    const hostId = drawingAnnotationHost(annotation);
+    const host = hostId ? byId.get(hostId) : undefined;
+    if (!hostId) return 0;
+    return host && drawingAnnotationHost(host) ? 2 : 1;
+  };
+  const ordered = all.some((annotation) => drawingAnnotationHost(annotation))
+    ? [0, 1, 2].flatMap((level) =>
+        all.filter((annotation) => depth(annotation) === level)
+      )
+    : all;
+  for (const annotation of ordered) {
     const resolution = resolutions.get(annotation.annotationId);
     if (!resolution?.ok) continue;
+    const hostId = drawingAnnotationHost(annotation);
+    const host = hostId ? boxes.get(hostId) : undefined;
+    // An attachment whose host is not drawn (its view not yet drawn) waits.
+    if (hostId && !host) continue;
     let toPage: ((u: number, v: number) => XY) | null = null;
     let view: DrawingView | undefined;
     let k = drawingPaperPerModelUnit(sheet.scale, units);
@@ -4018,7 +4337,8 @@ export function composeSheetAnnotations(
       resolution.resolved,
       toPage,
       k,
-      annotationAnchor(annotation, view)
+      annotationAnchor(annotation, view),
+      host
     );
     strokes.push(...layout.strokes);
     texts.push(...layout.texts);

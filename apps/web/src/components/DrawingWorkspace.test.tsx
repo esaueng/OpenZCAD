@@ -27,6 +27,7 @@ import {
   type DrawingAnnotation,
   type DrawingAnnotationId,
   type DrawingLinearDimension,
+  type DrawingEdgeRef,
   type DrawingSheet,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -1722,6 +1723,82 @@ describe('DrawingWorkspace', () => {
       expect(
         (command.payload as { annotation: DrawingAnnotation }).annotation
       ).not.toHaveProperty('tolerance');
+    });
+
+    it('states a frame’s characteristic, tolerance and datums (D07 v98)', async () => {
+      const sheet = dimensioned();
+      const linear = sheet.annotations![0] as DrawingLinearDimension;
+      const edge = linear.from as { edge: DrawingEdgeRef };
+      sheet.annotations = [
+        linear,
+        {
+          annotationId: 'dann_a' as DrawingAnnotationId,
+          kind: 'datum-feature',
+          viewId: linear.viewId,
+          leader: edge.edge,
+          letter: 'A',
+          placementMm: { x: 0, y: -30 }
+        },
+        {
+          annotationId: 'dann_f' as DrawingAnnotationId,
+          kind: 'feature-control-frame',
+          viewId: linear.viewId,
+          attachedTo: linear.annotationId,
+          characteristic: 'flatness',
+          amount: 0.1,
+          placementMm: { x: 0, y: 0 }
+        }
+      ];
+      const { onCommand } = setup({ sheet });
+      const canvas = screen.getByRole('application', {
+        name: 'Sheet Sheet 1'
+      });
+      await within(canvas).findByRole('button', {
+        name: 'Datum feature A'
+      });
+      const frame = await within(canvas).findByRole('button', {
+        name: 'Feature control frame Flatness | 0.1'
+      });
+      expect(
+        [...canvas.querySelectorAll('text')].map((text) => text.textContent)
+      ).toEqual(expect.arrayContaining(['0.1', 'A']));
+      await userEvent.click(frame);
+      // Flatness is a form tolerance: no Ø zone, no modifier, no datums.
+      expect(
+        screen.getByRole('checkbox', { name: 'Cylindrical zone (Ø)' })
+      ).toBeDisabled();
+      expect(
+        screen.getByRole('combobox', { name: 'Material condition' })
+      ).toBeDisabled();
+      expect(
+        screen.getByText(/A form tolerance controls the feature alone/)
+      ).toBeInTheDocument();
+      // Perpendicularity needs a datum: the declared A is named.
+      await userEvent.selectOptions(
+        screen.getByRole('combobox', { name: 'Characteristic' }),
+        'perpendicularity'
+      );
+      let command = onCommand.mock.calls.at(-1)![0];
+      expect(command.kind).toBe('drawing.annotation.update');
+      expect(command.payload).toMatchObject({
+        annotation: {
+          characteristic: 'perpendicularity',
+          datums: [{ letter: 'A' }]
+        }
+      });
+      // A tolerance that is not positive is refused and reverts.
+      const calls = onCommand.mock.calls.length;
+      const amount = screen.getByRole<HTMLInputElement>('spinbutton', {
+        name: 'Frame tolerance'
+      });
+      await userEvent.clear(amount);
+      await userEvent.type(amount, '-1{Enter}');
+      expect(onCommand.mock.calls.length).toBe(calls);
+      expect(amount.value).toBe('0.1');
+      await userEvent.clear(amount);
+      await userEvent.type(amount, '0.05{Enter}');
+      command = onCommand.mock.calls.at(-1)![0];
+      expect(command.payload).toMatchObject({ annotation: { amount: 0.05 } });
     });
 
     it('keeps a broken dimension in place, refuses export and offers a re-pick', async () => {

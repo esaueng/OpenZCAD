@@ -407,7 +407,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // placed occurrences, not the flat reader's unplaced definitions. An older
 // client would rebuild the wrong solids, so it must refuse. Builds on v94
 // (v95 is claimed by #1719, R01 datum points).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 96 as const;
+// v98 adds D07 geometric tolerancing (`datum-feature` and
+// `feature-control-frame` drawing annotations): datum feature symbols and
+// feature control frames on a leader or attached to a dimension. An older
+// client would refuse the unknown kinds, so it must refuse the document.
+// Builds on v97 (claimed by #1719, R01 datum points).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 98 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

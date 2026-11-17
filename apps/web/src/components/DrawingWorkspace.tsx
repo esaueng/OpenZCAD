@@ -29,6 +29,8 @@ import {
   Scissors,
   StickyNote,
   MessageCircle,
+  Anchor,
+  Columns3,
   TableProperties,
   ImageIcon,
   Sun,
@@ -61,6 +63,7 @@ import {
   MAX_DRAWING_DIMENSION_COUNT,
   drawingToleranceError,
   MAX_DRAWING_DIMENSION_DECIMALS,
+  MAX_DRAWING_TOLERANCE,
   MAX_DRAWING_IMAGE_WIDTH_MM,
   MAX_DRAWING_SECTION_STEPS,
   MAX_DRAWING_NOTE_LENGTH,
@@ -71,6 +74,17 @@ import {
   type DrawingDimension,
   isDrawingDimension,
   isDrawingGeometryAnnotation,
+  drawingToleranceHostAllowed,
+  DRAWING_GEOMETRIC_CHARACTERISTICS,
+  DRAWING_DATUM_REQUIRED_CHARACTERISTICS,
+  DRAWING_DIAMETER_ZONE_CHARACTERISTICS,
+  DRAWING_FORM_CHARACTERISTICS,
+  DRAWING_MATERIAL_CHARACTERISTICS,
+  DRAWING_DATUM_MATERIAL_CHARACTERISTICS,
+  MAX_DRAWING_DATUM_REFERENCES,
+  type DrawingGeometricCharacteristic,
+  type DrawingMaterialCondition,
+  type UnitSystem,
   type DrawingLineClass,
   type DrawingSheetFormat,
   DRAWING_LINE_CLASSES,
@@ -191,11 +205,14 @@ import {
   sheetNumberFormat,
   type DrawingNumberFormat,
   markHiddenLeaders,
+  markBrokenHosts,
   sheetBom,
   sheetPictures,
   balloonComponent,
   previewAnnotationLayer,
   resolveSheetAnnotations,
+  drawingDatumLetters,
+  type DatumLetters,
   holeCalloutLookup,
   type HoleCalloutLookup,
   type SheetPictureLookup,
@@ -218,6 +235,8 @@ import {
   draftAnnotation,
   draftRefusal,
   isGeometryTool,
+  isToleranceTool,
+  nextDatumLetter,
   drawingViewSignature,
   drawnLines,
   drawnOutlines,
@@ -234,6 +253,7 @@ import {
   type PickableEdge,
   type PickableFace
 } from '../lib/drawing/annotationPicking';
+import { CHARACTERISTIC_LABELS } from '../lib/drawing/toleranceFrames';
 import {
   createStarterSheet,
   defaultDrawingPaper,
@@ -1116,7 +1136,9 @@ const ANNOTATION_TOOLS: readonly AnnotationToolKind[] = [
   'circle-centerline',
   'balloon',
   'parts-list',
-  'image'
+  'image',
+  'datum-feature',
+  'feature-control-frame'
 ];
 
 const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
@@ -1138,7 +1160,9 @@ const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
     'circle-centerline': CircleDashed,
     balloon: MessageCircle,
     'parts-list': TableProperties,
-    image: ImageIcon
+    image: ImageIcon,
+    'datum-feature': Anchor,
+    'feature-control-frame': Columns3
   };
 
 /** One key per tool, live while Draw is open and focus is not in a field. */
@@ -1160,7 +1184,20 @@ const ANNOTATION_TOOL_KEYS: Readonly<Record<AnnotationToolKind, string>> = {
   'circle-centerline': 'B',
   balloon: 'O',
   'parts-list': 'P',
-  image: 'I'
+  image: 'I',
+  'datum-feature': 'Q',
+  'feature-control-frame': 'F'
+};
+
+/**
+ * D07 (v98): a new frame's tolerance, by the units the sheet prints in:
+ * about a tenth of a millimetre, a round number in each.
+ */
+const DEFAULT_FRAME_AMOUNT: Readonly<Record<UnitSystem, number>> = {
+  mm: 0.1,
+  cm: 0.01,
+  m: 0.0001,
+  inch: 0.004
 };
 
 /** D03: the section view tool's key, beside the annotation tools'. */
@@ -1226,7 +1263,9 @@ const ANNOTATION_KIND_LABELS: Readonly<
   centerline: 'Centreline',
   'bom-table': 'Parts list',
   balloon: 'Balloon',
-  image: 'Image'
+  image: 'Image',
+  'datum-feature': 'Datum feature',
+  'feature-control-frame': 'Feature control frame'
 };
 
 function annotationTitle(annotation: DrawingAnnotation): string {
@@ -1241,6 +1280,8 @@ function annotationTitle(annotation: DrawingAnnotation): string {
     : annotation.kind === 'note' ||
         annotation.kind === 'bom-table' ||
         annotation.kind === 'balloon' ||
+        annotation.kind === 'datum-feature' ||
+        annotation.kind === 'feature-control-frame' ||
         isDrawingGeometryAnnotation(annotation)
       ? ANNOTATION_KIND_LABELS[annotation.kind]
       : `${ANNOTATION_KIND_LABELS[annotation.kind]} dimension`;
@@ -1825,6 +1866,8 @@ function AnnotationProperties(props: {
   resolutions: ReadonlyMap<DrawingAnnotationId, AnnotationResolution>;
   /** D02 (v92): the project's pictures a sheet image may show. */
   pictures: SheetPictureLookup;
+  /** D07 (v98): datum letters declared across the drawing. */
+  datumLetters: DatumLetters;
   onTool: (tool: AnnotationTool | null) => void;
   onDeselect: () => void;
   onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
@@ -1927,6 +1970,15 @@ function AnnotationProperties(props: {
           Names the item number its part has in the assembly&apos;s parts list;
           it follows the list&apos;s numbering.
         </p>
+      ) : selected.kind === 'datum-feature' ||
+        selected.kind === 'feature-control-frame' ? (
+        <ToleranceAnnotationFields
+          selected={selected}
+          editable={editable}
+          datumLetters={props.datumLetters}
+          numberFormat={props.numberFormat}
+          onUpdate={props.onUpdate}
+        />
       ) : selected.kind === 'note' ? (
         <TextField
           label="Text"
@@ -2022,6 +2074,348 @@ function AnnotationProperties(props: {
         </button>
       </div>
     </div>
+  );
+}
+
+/** D07 (v98): the single datum letters, A to Z without I, O and Q. */
+const DATUM_LETTERS = [...'ABCDEFGHJKLMNPRSTUVWXYZ'];
+
+const MATERIAL_LABELS: Readonly<Record<DrawingMaterialCondition, string>> = {
+  mmc: 'MMC (M)',
+  lmc: 'LMC (L)'
+};
+
+const DATUM_PRECEDENCE = ['Primary', 'Secondary', 'Tertiary'] as const;
+
+/**
+ * D07 (v98): a datum symbol's letter, or a frame's characteristic,
+ * tolerance, zone, modifier and datum references. Choices the standard
+ * forbids for the characteristic are disabled, and changing it drops what
+ * it no longer takes, so every update is one the schema accepts.
+ */
+function ToleranceAnnotationFields(props: {
+  selected: Extract<
+    DrawingAnnotation,
+    { kind: 'datum-feature' | 'feature-control-frame' }
+  >;
+  editable: boolean;
+  datumLetters: DatumLetters;
+  numberFormat: DrawingNumberFormat;
+  onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
+}) {
+  const { selected, editable, datumLetters } = props;
+  if (selected.kind === 'datum-feature') {
+    const free = DATUM_LETTERS.filter(
+      (letter) =>
+        letter === selected.letter || (datumLetters.get(letter) ?? 0) === 0
+    );
+    return (
+      <>
+        <label className="drawing-field">
+          <span>Letter</span>
+          <select
+            value={selected.letter}
+            disabled={!editable}
+            onChange={(event) =>
+              props.onUpdate(
+                { ...selected, letter: event.target.value },
+                'Change datum letter'
+              )
+            }
+          >
+            {free.includes(selected.letter) ? null : (
+              <option value={selected.letter}>{selected.letter}</option>
+            )}
+            {free.map((letter) => (
+              <option key={letter} value={letter}>
+                {letter}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="drawing-hint">
+          Declares datum {selected.letter} for the drawing. Frames that name it
+          break if it is renamed or deleted.
+        </p>
+      </>
+    );
+  }
+  const frame = selected;
+  const declared = [...datumLetters]
+    .filter(([, count]) => count > 0)
+    .map(([letter]) => letter)
+    .sort((a, b) => a.length - b.length || a.localeCompare(b));
+  const datums = frame.datums ?? [];
+  const takesDatums = !DRAWING_FORM_CHARACTERISTICS.includes(
+    frame.characteristic
+  );
+  const datumModifiers = DRAWING_DATUM_MATERIAL_CHARACTERISTICS.includes(
+    frame.characteristic
+  );
+  const update = (
+    next: Extract<DrawingAnnotation, { kind: 'feature-control-frame' }>,
+    label: string
+  ) => props.onUpdate(next, label);
+  const withDatums = (
+    list: { letter: string; material?: DrawingMaterialCondition }[]
+  ) => {
+    const { datums: _previous, ...rest } = frame;
+    return list.length ? { ...rest, datums: list } : rest;
+  };
+  const chooseCharacteristic = (
+    characteristic: DrawingGeometricCharacteristic
+  ) => {
+    const { diameterZone, material, datums: previous, ...rest } = frame;
+    const keepModifiers =
+      DRAWING_DATUM_MATERIAL_CHARACTERISTICS.includes(characteristic);
+    const nextDatums = DRAWING_FORM_CHARACTERISTICS.includes(characteristic)
+      ? []
+      : (previous ?? []).map((reference) =>
+          keepModifiers ? reference : { letter: reference.letter }
+        );
+    // Orientation, runout, concentricity and symmetry need a datum: the
+    // first declared one, until another is chosen.
+    if (
+      nextDatums.length === 0 &&
+      DRAWING_DATUM_REQUIRED_CHARACTERISTICS.includes(characteristic) &&
+      declared[0]
+    )
+      nextDatums.push({ letter: declared[0] });
+    update(
+      {
+        ...rest,
+        characteristic,
+        ...(diameterZone &&
+        DRAWING_DIAMETER_ZONE_CHARACTERISTICS.includes(characteristic)
+          ? { diameterZone }
+          : {}),
+        ...(material &&
+        DRAWING_MATERIAL_CHARACTERISTICS.includes(characteristic)
+          ? { material }
+          : {}),
+        ...(nextDatums.length ? { datums: nextDatums } : {})
+      },
+      'Change frame characteristic'
+    );
+  };
+  return (
+    <>
+      <label className="drawing-field">
+        <span>Characteristic</span>
+        <select
+          value={frame.characteristic}
+          disabled={!editable}
+          onChange={(event) =>
+            chooseCharacteristic(
+              event.target.value as DrawingGeometricCharacteristic
+            )
+          }
+        >
+          {DRAWING_GEOMETRIC_CHARACTERISTICS.map((characteristic) => (
+            <option
+              key={characteristic}
+              value={characteristic}
+              disabled={
+                declared.length === 0 &&
+                DRAWING_DATUM_REQUIRED_CHARACTERISTICS.includes(characteristic)
+              }
+            >
+              {CHARACTERISTIC_LABELS[characteristic]}
+              {characteristic === 'concentricity' ||
+              characteristic === 'symmetry'
+                ? ' (ISO 1101)'
+                : ''}
+            </option>
+          ))}
+        </select>
+      </label>
+      <FrameAmountField
+        value={frame.amount}
+        units={props.numberFormat.units}
+        disabled={!editable}
+        onCommit={(amount) =>
+          update({ ...frame, amount }, 'Change frame tolerance')
+        }
+      />
+      <label className="drawing-check">
+        <input
+          type="checkbox"
+          checked={frame.diameterZone === true}
+          disabled={
+            !editable ||
+            !DRAWING_DIAMETER_ZONE_CHARACTERISTICS.includes(
+              frame.characteristic
+            )
+          }
+          onChange={(event) => {
+            const { diameterZone: _previous, ...rest } = frame;
+            update(
+              event.target.checked ? { ...rest, diameterZone: true } : rest,
+              'Change frame zone'
+            );
+          }}
+        />
+        Cylindrical zone (Ø)
+      </label>
+      <label className="drawing-field">
+        <span>Material condition</span>
+        <select
+          value={frame.material ?? ''}
+          disabled={
+            !editable ||
+            !DRAWING_MATERIAL_CHARACTERISTICS.includes(frame.characteristic)
+          }
+          onChange={(event) => {
+            const { material: _previous, ...rest } = frame;
+            const value = event.target.value as DrawingMaterialCondition | '';
+            update(
+              value ? { ...rest, material: value } : rest,
+              'Change frame modifier'
+            );
+          }}
+        >
+          <option value="">Regardless of size</option>
+          <option value="mmc">{MATERIAL_LABELS.mmc}</option>
+          <option value="lmc">{MATERIAL_LABELS.lmc}</option>
+        </select>
+      </label>
+      {takesDatums ? (
+        <fieldset className="drawing-bodies">
+          <legend>Datums</legend>
+          {Array.from({ length: MAX_DRAWING_DATUM_REFERENCES }, (_, index) => {
+            const reference = datums[index];
+            // A later datum waits for the earlier ones.
+            const reachable = index <= datums.length;
+            const others = datums
+              .filter((_, other) => other !== index)
+              .map((entry) => entry.letter);
+            const required =
+              DRAWING_DATUM_REQUIRED_CHARACTERISTICS.includes(
+                frame.characteristic
+              ) && datums.length === 1;
+            return (
+              <div key={index} className="drawing-field-row">
+                <label className="drawing-field">
+                  <span>{DATUM_PRECEDENCE[index]}</span>
+                  <select
+                    value={reference?.letter ?? ''}
+                    disabled={!editable || !reachable}
+                    onChange={(event) => {
+                      const letter = event.target.value;
+                      const next = letter
+                        ? datums.length > index
+                          ? datums.map((entry, at) =>
+                              at === index ? { ...entry, letter } : entry
+                            )
+                          : [...datums, { letter }]
+                        : datums.slice(0, index);
+                      update(withDatums(next), 'Change frame datums');
+                    }}
+                  >
+                    <option value="" disabled={index === 0 && required}>
+                      None
+                    </option>
+                    {reference && !declared.includes(reference.letter) ? (
+                      <option value={reference.letter}>
+                        {reference.letter} (undeclared)
+                      </option>
+                    ) : null}
+                    {declared
+                      .filter((letter) => !others.includes(letter))
+                      .map((letter) => (
+                        <option key={letter} value={letter}>
+                          {letter}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                {datumModifiers ? (
+                  <label className="drawing-field">
+                    <span>Modifier</span>
+                    <select
+                      value={reference?.material ?? ''}
+                      disabled={!editable || !reference}
+                      onChange={(event) => {
+                        const value = event.target.value as
+                          DrawingMaterialCondition | '';
+                        update(
+                          withDatums(
+                            datums.map((entry, at) =>
+                              at === index
+                                ? value
+                                  ? { letter: entry.letter, material: value }
+                                  : { letter: entry.letter }
+                                : entry
+                            )
+                          ),
+                          'Change frame datums'
+                        );
+                      }}
+                    >
+                      <option value="">RMB</option>
+                      <option value="mmc">MMB (M)</option>
+                      <option value="lmc">LMB (L)</option>
+                    </select>
+                  </label>
+                ) : null}
+              </div>
+            );
+          })}
+          {declared.length === 0 ? (
+            <p className="drawing-hint">
+              Place a datum feature symbol (Q) to declare a datum.
+            </p>
+          ) : null}
+        </fieldset>
+      ) : (
+        <p className="drawing-hint">
+          A form tolerance controls the feature alone and names no datum.
+        </p>
+      )}
+    </>
+  );
+}
+
+/** D07 (v98): a frame's tolerance, positive, in the sheet's printed units. */
+function FrameAmountField(props: {
+  value: number;
+  units: UnitSystem;
+  disabled: boolean;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(props.value));
+  useEffect(() => setDraft(String(props.value)), [props.value]);
+  const commit = () => {
+    const value = Number(draft);
+    if (
+      draft.trim() !== '' &&
+      Number.isFinite(value) &&
+      value > 0 &&
+      value <= MAX_DRAWING_TOLERANCE &&
+      Number(value.toFixed(MAX_DRAWING_DIMENSION_DECIMALS)) === value &&
+      value !== props.value
+    )
+      props.onCommit(value);
+    setDraft(String(props.value));
+  };
+  return (
+    <label className="drawing-field">
+      <span>Tolerance ({props.units === 'inch' ? 'in' : props.units})</span>
+      <input
+        type="number"
+        step="any"
+        min={0}
+        value={draft}
+        disabled={props.disabled}
+        aria-label="Frame tolerance"
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') commit();
+          if (event.key === 'Escape') setDraft(String(props.value));
+        }}
+      />
+    </label>
   );
 }
 
@@ -2396,7 +2790,8 @@ function DrawingToolRail(props: {
     ['radius', 'diameter', 'chamfer'],
     ['angle', 'arc-angle', 'three-point-angle'],
     ['center-mark', 'intersection-mark', 'centerline', 'circle-centerline'],
-    ['note', 'balloon', 'parts-list', 'image']
+    ['note', 'balloon', 'parts-list', 'image'],
+    ['datum-feature', 'feature-control-frame']
   ];
   return (
     <div
@@ -3179,6 +3574,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const bomTable = useMemo(() => sheetBom(document), [document]);
   // D02 v92: the project's pictures, which sheet images show.
   const pictures = useMemo(() => sheetPictures(document), [document]);
+  // D07 v98: datum letters across every sheet, which frames may name.
+  const datumLetters = useMemo(
+    () => drawingDatumLetters(document.drawings?.sheets ?? []),
+    [document.drawings]
+  );
   const liveHoleCallouts = useMemo(
     () => holeCalloutLookup(document),
     [document]
@@ -3344,19 +3744,25 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const resolutions = useMemo(
     () =>
       shownSheet
-        ? markHiddenLeaders(
+        ? // v98: a frame whose leader is hidden leaves what hangs from it
+          // with nowhere to be drawn.
+          markBrokenHosts(
             shownSheet,
-            resolveSheetAnnotations(
+            markHiddenLeaders(
               shownSheet,
-              drawBodies,
+              resolveSheetAnnotations(
+                shownSheet,
+                drawBodies,
+                document.units,
+                holeCallouts,
+                bomTable,
+                pictures,
+                datumLetters
+              ),
+              drawnViews,
               document.units,
-              holeCallouts,
-              bomTable,
-              pictures
-            ),
-            drawnViews,
-            document.units,
-            drawBodies
+              drawBodies
+            )
           )
         : new Map<DrawingAnnotationId, AnnotationResolution>(),
     [
@@ -3366,7 +3772,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       drawnViews,
       holeCallouts,
       bomTable,
-      pictures
+      pictures,
+      datumLetters
     ]
   );
   /** Drawn and usable: matches the model, or keeps its earlier drawing. */
@@ -4419,6 +4826,34 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     return hitFace(faces, point, pickTolerance(pxPerMm), outlines);
   };
   /**
+   * v98: the healthy dimension (or, for a datum symbol, frame) whose box
+   * holds `point`: what a datum symbol or frame may attach to.
+   */
+  const toleranceHostAt = (
+    point: [number, number],
+    kind: AnnotationToolKind
+  ): DrawingAnnotation | null => {
+    if (!composed || composed.ghost || !shownSheet) return null;
+    for (const annotation of shownSheet.annotations ?? []) {
+      if (
+        (kind !== 'datum-feature' && kind !== 'feature-control-frame') ||
+        !drawingToleranceHostAllowed(kind, annotation) ||
+        !resolutions.get(annotation.annotationId)?.ok
+      )
+        continue;
+      const box = composed.boxes.get(annotation.annotationId);
+      if (
+        box &&
+        point[0] >= box.x &&
+        point[0] <= box.x + box.width &&
+        point[1] >= box.y &&
+        point[1] <= box.y + box.height
+      )
+        return annotation;
+    }
+    return null;
+  };
+  /**
    * v73: the centre or intersection mark (or, v75, the straight centreline)
    * whose box holds `point`, if any.
    */
@@ -4520,12 +4955,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       finished.kind === 'image' && !finished.pictureId
         ? { ...finished, pictureId: [...pictures.keys()].at(-1) }
         : finished;
+    // v98: a new datum symbol takes the drawing's next free letter, and a
+    // new frame a tenth of a millimetre in the sheet's printed units.
     const annotation = draftAnnotation(
       placed,
       createDrawingAnnotationId(),
       placementMm,
       undefined,
-      componentId
+      componentId,
+      {
+        letter: nextDatumLetter(datumLetters.keys()),
+        amount:
+          DEFAULT_FRAME_AMOUNT[sheetNumberFormat(sheet, document.units).units]
+      }
     );
     if (!annotation) return;
     const refusal = draftRefusal(
@@ -4551,18 +4993,26 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     ) {
       setSelectedAnnotationId(annotation.annotationId);
       setSelectedViewId(null);
-      if (finished.kind === 'note' || finished.kind === 'image')
+      if (
+        finished.kind === 'note' ||
+        finished.kind === 'image' ||
+        finished.kind === 'feature-control-frame'
+      )
         setPropertiesOpen(true);
       props.onStatus(
         finished.kind === 'note'
           ? 'Note added. Edit its text in Properties.'
           : finished.kind === 'image'
             ? 'Image added. Choose its picture and width in Properties.'
-            : isGeometryTool(finished.kind) ||
-                finished.kind === 'balloon' ||
-                finished.kind === 'parts-list'
-              ? `${ANNOTATION_TOOL_LABELS[finished.kind]} added.`
-              : `${ANNOTATION_TOOL_LABELS[finished.kind]} dimension added.`,
+            : finished.kind === 'feature-control-frame'
+              ? 'Feature control frame added. Choose its characteristic, tolerance and datums in Properties.'
+              : finished.kind === 'datum-feature'
+                ? `Datum ${annotation.kind === 'datum-feature' ? annotation.letter : ''} added.`
+                : isGeometryTool(finished.kind) ||
+                    finished.kind === 'balloon' ||
+                    finished.kind === 'parts-list'
+                  ? `${ANNOTATION_TOOL_LABELS[finished.kind]} added.`
+                  : `${ANNOTATION_TOOL_LABELS[finished.kind]} dimension added.`,
         { immediate: true }
       );
       // A note is placed and then typed; dimensions keep their tool for the
@@ -4570,7 +5020,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       setTool(
         finished.kind === 'note' ||
           finished.kind === 'parts-list' ||
-          finished.kind === 'image'
+          finished.kind === 'image' ||
+          finished.kind === 'feature-control-frame'
           ? null
           : startAnnotationTool(finished.kind)
       );
@@ -4633,6 +5084,36 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     if (pickedEnough(tool)) {
       commitAnnotation(tool, at.point);
       return;
+    }
+    // v98: a datum symbol or frame attaches to a size dimension (a datum
+    // symbol also to a frame) clicked before any edge is picked.
+    if (
+      isToleranceTool(tool.kind) &&
+      tool.edges.length === 0 &&
+      tool.hostId === undefined
+    ) {
+      const host = toleranceHostAt(at.point, tool.kind);
+      if (host) {
+        const next: AnnotationTool = {
+          ...tool,
+          hostId: host.annotationId,
+          viewId: host.viewId
+        };
+        if (next.repairId) {
+          if (tool.viewId && tool.viewId !== host.viewId) {
+            props.onStatus('Re-pick in the view this annotation belongs to.');
+            return;
+          }
+          commitRepair(next);
+          return;
+        }
+        setTool(pinnedTool(next));
+        setHover({ edge: null, face: null, point: at.point });
+        props.onStatus(
+          `${ANNOTATION_TOOL_LABELS[tool.kind]}: click where it goes.`
+        );
+        return;
+      }
     }
     const hit = edgeAt(at.point, at.pxPerMm);
     const result = applyAnnotationPick(
@@ -6244,6 +6725,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             pictures={pictures}
             onTool={chooseTool}
             onDeselect={deselect}
+            datumLetters={datumLetters}
             onUpdate={updateAnnotation}
             onDelete={deleteAnnotation}
           />
