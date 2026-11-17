@@ -596,6 +596,25 @@ export type AnyCommand =
   | CommandDefinition<ReferenceImageUpdateInput>
   | CommandDefinition<ReferenceImageDeleteInput>;
 
+const MESH_FORMAT_NAMES: Readonly<Record<string, string>> = {
+  stl: 'STL',
+  '3mf': '3MF',
+  obj: 'OBJ',
+  ply: 'PLY',
+  glb: 'glTF',
+  gltf: 'glTF'
+};
+
+/**
+ * The undo label of a mesh import, named for the file's format: every mesh
+ * import used to undo as "Import STL mesh", a 3MF included (#1637).
+ */
+export function importMeshLabel(sourceName: string): string {
+  const extension = /\.([a-z0-9]+)$/i.exec(sourceName)?.[1]?.toLowerCase();
+  const format = extension ? MESH_FORMAT_NAMES[extension] : undefined;
+  return format ? `Import ${format} mesh` : 'Import mesh';
+}
+
 function makeCommand<TPayload>(
   kind: CommandKind,
   label: string,
@@ -3314,7 +3333,7 @@ export const commandFactories = {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
     return makeCommand(
       'import.mesh',
-      'Import STL mesh',
+      importMeshLabel(payload.sourceName),
       withIds,
       (document) => importMeshBody(document, withIds).document
     );

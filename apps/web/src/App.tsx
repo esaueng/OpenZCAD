@@ -435,6 +435,10 @@ import {
   pendingDeviceApproval
 } from './lib/e2ee/deviceApprovalLink';
 import { requestContactVerification } from './lib/e2ee/contactFocus';
+import {
+  encryptedImportSourceArtifacts,
+  withEncryptedImportSources
+} from './lib/e2ee/encryptedImportSources';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import {
   commandOutcomeMessage,
@@ -8488,6 +8492,20 @@ export function App() {
       cancelled = true;
     };
   }, [cloudProjectIds, doc?.projectId, session]);
+
+  // An encrypted project's archived STEP sources are content blobs its
+  // document names, never artifact records, so the listing above leaves them
+  // out and an import that said "source archived" showed none (#1649).
+  const storedFiles = useMemo(
+    () =>
+      doc && isEncryptedProject(doc.projectId)
+        ? withEncryptedImportSources(
+            artifacts,
+            encryptedImportSourceArtifacts(doc)
+          )
+        : artifacts,
+    [artifacts, doc]
+  );
 
   // K05 on-demand boolean probe: sticky per open document, cleared on
   // project switch. A face/edge/vertex pick on B — or a command started on
@@ -35215,7 +35233,7 @@ export function App() {
             accountProjectListReached
           }
           localOnlySourceCount={localOnlySources.length}
-          artifacts={artifacts}
+          artifacts={storedFiles}
           meshCleanup={
             session?.userId === doc.ownerUserId && activeProjectIsCloud
               ? {
