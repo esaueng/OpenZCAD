@@ -117,9 +117,14 @@ import {
   uintField,
   type Authorization
 } from './e2eeProjects';
+import {
+  forgetLinkComments,
+  linkCommentGrant,
+  putShareCommentGrant
+} from './e2eeShareComments';
 
 const LINKS_ROUTE =
-  /^\/api\/e2ee\/projects\/([^/]+)\/share-links(?:\/([^/]+)(?:\/(keys|authority|snapshot))?)?$/;
+  /^\/api\/e2ee\/projects\/([^/]+)\/share-links(?:\/([^/]+)(?:\/(keys|authority|snapshot|comment-grant))?)?$/;
 const DELEGATION_ROUTE = '/api/e2ee/share-delegation';
 const SHARED_ROUTE = /^\/api\/e2ee\/share\/([^/]+)$/;
 const SHARED_BLOB_ROUTE = /^\/api\/e2ee\/share\/([^/]+)\/blobs\/([^/]+)$/;
@@ -816,6 +821,7 @@ async function forgetLink(
   if (!changed(results[0])) {
     const after = await linkRow(ctx.db, projectId, shareId);
     if (after?.revoked_at) {
+      await forgetLinkComments(ctx.db, projectId, shareId);
       await reclaimForgottenSnapshots(ctx, projectId, shareId);
       return json({ ok: true });
     }
@@ -826,6 +832,8 @@ async function forgetLink(
     if (epoch !== keyEpoch) stale(epoch);
     sessionRequired();
   }
+  // L08: a forgotten link's comment grant and visitor comments go with it.
+  await forgetLinkComments(ctx.db, projectId, shareId);
   await reclaimForgottenSnapshots(ctx, projectId, shareId);
   return json({ ok: true });
 }
@@ -1551,6 +1559,16 @@ export async function handleE2eeShareLinkRequest(
       await requireEncryptedProjectAccess(db, userId, projectId, 'write');
       return await putSnapshot(ctx, projectId, shareId, request);
     }
+    if (action === 'comment-grant' && method === 'PUT') {
+      // L08 (plan decision 3a): the owner lets this link's visitors comment.
+      return await putShareCommentGrant(
+        request,
+        db,
+        userId,
+        projectId,
+        shareId
+      );
+    }
     refuse(404, 'NOT_FOUND', 'Not found.');
   } catch (error) {
     if (error instanceof RouteError) {
@@ -1737,6 +1755,7 @@ export async function handleEncryptedSharedSnapshot(
   if (!delegation || !identity) return anonymousNotFound();
   const envelope = await servedEnvelope(db, row, bucket);
   if (!envelope) return anonymousNotFound();
+  const commentGrant = await linkCommentGrant(db, row.project_id, row.share_id);
   const metadata: E2eeSharedSnapshotMetadata = {
     shareId: row.share_id,
     mode: row.mode,
@@ -1751,7 +1770,8 @@ export async function handleEncryptedSharedSnapshot(
       statement: delegation.statement,
       signature: delegation.signature
     },
-    ownerIdentityKey: b64(identity.key)
+    ownerIdentityKey: b64(identity.key),
+    ...(commentGrant ? { commentGrant } : {})
   };
   return new Response(encodeE2eeFrame(metadata, envelope), {
     status: 200,

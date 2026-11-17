@@ -1639,6 +1639,16 @@ async function dropStaged(
       .then((row) => row?.ready === 1))
       ? ['e2ee_project_comment_logs']
       : []),
+    // L08 commenter links' grants and visitor comments (migration 0061).
+    ...((await db
+      .prepare(
+        `SELECT 1 AS ready FROM sqlite_master
+         WHERE type = 'table' AND name = 'e2ee_share_comments'`
+      )
+      .first<{ ready: number }>()
+      .then((row) => row?.ready === 1))
+      ? ['e2ee_share_comments', 'e2ee_share_comment_grants']
+      : []),
     'e2ee_key_archives',
     'e2ee_project_keys',
     'e2ee_project_leaves',

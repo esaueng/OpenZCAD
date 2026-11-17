@@ -23,7 +23,11 @@ export function shareCapabilityPathname(
   // L08: a commenter link's visitor also writes, to the comments route only.
   if (
     request.method !== 'GET' &&
-    !(request.method === 'POST' && pathname === '/api/share/comments')
+    !(
+      request.method === 'POST' &&
+      (pathname === '/api/share/comments' ||
+        pathname === '/api/e2ee/share/comments')
+    )
   )
     return pathname;
   const token = request.headers.get(SHARE_LINK_TOKEN_HEADER) ?? '';

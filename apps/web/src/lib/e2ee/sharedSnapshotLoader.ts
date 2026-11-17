@@ -59,6 +59,7 @@ import {
   type E2eeDecoder
 } from './decodeWorker';
 import { openSharedSnapshot } from './sharedSnapshot';
+import { linkTakesComments } from './shareComments';
 import { desktopFetch } from '../desktopBridge';
 
 /** Why a visitor's link did not open. */
@@ -145,6 +146,21 @@ export interface EncryptedSharedProject {
   /** The verified statement's mode. */
   readonly mode: ShareLinkMode;
   readonly document: ProjectDocument;
+  /**
+   * L08 (plan decisions 2 and 3a): how this visitor writes comments, when
+   * the link carries a comment grant one of the delegated owner devices
+   * signed; null otherwise. The server's word alone never opens it.
+   */
+  readonly comments: SharedLinkComments | null;
+}
+
+/** What a commenter link's visitor seals comments with. */
+export interface SharedLinkComments {
+  readonly token: string;
+  readonly shareKey: Uint8Array;
+  readonly keyEpoch: number;
+  readonly epochBindingHash: Uint8Array;
+  readonly schemaVersion: number;
 }
 
 /** What opening a link uses; tests replace the network and the stores. */
@@ -383,12 +399,30 @@ export async function loadEncryptedSharedProject(
       },
       isCurrent
     );
+    const takesComments = await linkTakesComments(
+      served.metadata.commentGrant,
+      {
+        projectId: opened.verified.projectId,
+        shareId: opened.verified.shareId,
+        shareKey: parts.shareKey
+      },
+      opened.verified.delegation.deviceKeys
+    );
     return {
       projectId: opened.verified.projectId,
       shareId: opened.verified.shareId,
       name: opened.document.name,
       mode: opened.verified.mode,
-      document: opened.document
+      document: opened.document,
+      comments: takesComments
+        ? {
+            token: parts.token,
+            shareKey: parts.shareKey,
+            keyEpoch: opened.verified.header.keyEpoch,
+            epochBindingHash: opened.verified.header.epochBindingHash,
+            schemaVersion: opened.verified.header.schemaVersion
+          }
+        : null
     };
   } finally {
     held.decoder?.dispose();
