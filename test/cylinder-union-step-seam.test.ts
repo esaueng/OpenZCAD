@@ -21,45 +21,17 @@
  * one FreeCAD uses), mirroring the report's FreeCAD exports; only their header
  * timestamp is normalized.
  */
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import {
-  booleanBodies,
-  createProjectDocument,
-  importStepBody
-} from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
-import { toUserId, type BodyId, type ProjectDocument } from '@openzcad/shared';
+import type { BodyId, ProjectDocument } from '@openzcad/shared';
 import {
-  RemusKernel,
-  loadRemusTranslators
-} from '../packages/kernel-adapter/src/remus-runtime';
+  SOURCES,
+  UNION_VOLUME,
+  USABLE_UNION_STEP,
+  inspectUnionStep,
+  unionDocument
+} from './support/cad-004-union';
 import { screenStepSeamWindows } from './support/step-cylinder-seam-window';
-
-const fixture = (name: string) =>
-  readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
-
-/** Cylinder A: r 8, h 16, base (0, 0, -8). B: r 6.56, h 13.12, base (6, 1, -6.06). */
-const SOURCES = {
-  A: fixture('cad-004-cylinder-a.step'),
-  B: fixture('cad-004-cylinder-b.step')
-} as const;
-
-/**
- * Exact union volume, mm³. Independently measured by OCCT on its own
- * BRepAlgoAPI_Fuse of the same cylinders (3947.68654); asserted to 1e-3 mm³
- * because the production reader measures with a tessellation deflection.
- */
-const UNION_VOLUME = 3947.68654;
-
-/** Strictly inside B and outside A: the report's two witnesses, mm. */
-const WITNESSES = [
-  [10.23672, -2.992, 0.336],
-  [8.2424, -4.32, 0.16]
-] as const;
-
-/** Weld tolerance from the report, mm. */
-const WELD = 1e-7;
 
 /**
  * The defective layout, reduced: cylinder A's lateral face as Remus
@@ -133,32 +105,6 @@ ENDSEC;
 END-ISO-10303-21;
 `;
 
-type Order = 'AB' | 'BA';
-
-function unionDocument(order: Order): {
-  document: ProjectDocument;
-  union: BodyId;
-} {
-  let document = createProjectDocument(`Union ${order}`, toUserId('user_1243'));
-  const operands: BodyId[] = [];
-  for (const name of order.split('') as ('A' | 'B')[]) {
-    const imported = importStepBody(document, {
-      name: `Cylinder ${name}`,
-      artifactId: `artifact_cad004_${name}`,
-      sourceName: `cylinder-${name}.step`,
-      stepText: SOURCES[name]
-    });
-    document = imported.document;
-    operands.push(imported.bodyId);
-  }
-  const fused = booleanBodies(document, {
-    name: 'Union',
-    operation: 'union',
-    targetBodyIds: operands
-  });
-  return { document: fused.document, union: fused.bodyId };
-}
-
 /** Production export from a fresh adapter: a cold build, as after a reload. */
 async function exportUnion(document: ProjectDocument, union: BodyId) {
   const adapter = await createExactKernelAdapter();
@@ -172,41 +118,6 @@ async function exportUnion(document: ProjectDocument, union: BodyId) {
   } finally {
     adapter.dispose();
   }
-}
-
-/** Edge-use census of a tessellation after welding positions at `WELD`. */
-function weldedEdgeCensus(positions: Float64Array, indices: Uint32Array) {
-  const ids = new Map<string, number>();
-  const welded = Array.from({ length: positions.length / 3 }, (_, vertex) => {
-    const key = [0, 1, 2]
-      .map((axis) => Math.round(positions[vertex * 3 + axis]! / WELD))
-      .join(',');
-    if (!ids.has(key)) ids.set(key, ids.size);
-    return ids.get(key)!;
-  });
-  const uses = new Map<string, number>();
-  let degenerate = 0;
-  for (let triangle = 0; triangle < indices.length; triangle += 3) {
-    const corners = [0, 1, 2].map(
-      (corner) => welded[indices[triangle + corner]!]!
-    );
-    if (new Set(corners).size < 3) {
-      degenerate += 1;
-      continue;
-    }
-    for (let side = 0; side < 3; side += 1) {
-      const a = corners[side]!;
-      const b = corners[(side + 1) % 3]!;
-      const key = a < b ? `${a}:${b}` : `${b}:${a}`;
-      uses.set(key, (uses.get(key) ?? 0) + 1);
-    }
-  }
-  const counts = [...uses.values()];
-  return {
-    degenerate,
-    boundary: counts.filter((count) => count === 1).length,
-    nonManifold: counts.filter((count) => count > 2).length
-  };
 }
 
 describe('overlapping cylinder Union STEP export (#1243)', () => {
@@ -242,40 +153,9 @@ describe('overlapping cylinder Union STEP export (#1243)', () => {
       );
       expect(reloaded).toBe(committed);
 
-      const screen = screenStepSeamWindows(committed);
-      expect(screen.findings).toEqual([]);
-      expect(screen.unscreened).toBe(0);
-      // A's wall keeps its seam and gains B's window: the case is screened.
-      expect(screen.screened).toBe(1);
-
-      const io = await loadRemusTranslators();
-      const kernel = new RemusKernel();
-      try {
-        const solids = kernel.deserializeSolids(
-          io.importStep(new TextEncoder().encode(committed))
-        );
-        expect(solids).toHaveLength(1);
-        const solid = solids[0]!;
-        expect(kernel.validateSolid(solid)).toBe(0);
-        expect(kernel.volume(solid, 0.001)).toBeCloseTo(UNION_VOLUME, 3);
-        for (const [x, y, z] of WITNESSES) {
-          expect(kernel.classifyPointRobust(solid, x, y, z, 1e-7)).toBe(
-            'inside'
-          );
-        }
-        const mesh = kernel.tessellateSolid(solid, 0.01);
-        try {
-          expect(weldedEdgeCensus(mesh.positions, mesh.indices)).toEqual({
-            degenerate: 0,
-            boundary: 0,
-            nonManifold: 0
-          });
-        } finally {
-          mesh.free();
-        }
-      } finally {
-        kernel.free();
-      }
+      const inspection = await inspectUnionStep(committed);
+      expect(inspection).toMatchObject(USABLE_UNION_STEP);
+      expect(inspection.volume).toBeCloseTo(UNION_VOLUME, 3);
     },
     60_000
   );
