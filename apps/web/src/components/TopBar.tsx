@@ -1261,7 +1261,7 @@ export function TopBar({
                     className="topbar-menu-item topbar-menu-item-compact"
                     disabled={!canExport}
                     title={exportTitle('IGES')}
-                    aria-label={`Export IGES, ${exportScope ?? 'all bodies'}`}
+                    aria-label="Export IGES"
                     onClick={exportIgesFromMenu}
                   >
                     <Download size={13} aria-hidden="true" />

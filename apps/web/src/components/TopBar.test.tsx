@@ -654,9 +654,8 @@ describe('TopBar File menu', () => {
   it('offers IGES beside STEP on one row, so the File menu gains no height', () => {
     const { onExportIges, onExportStep } = renderTopBar({ canExport: true });
     fileMenu().open = true;
-    const iges = screen.getByRole('button', {
-      name: 'Export IGES, all bodies'
-    });
+    const iges = screen.getByRole('button', { name: 'Export IGES' });
+    expect(iges).toHaveAttribute('title', 'Export all bodies as IGES');
     const step = screen.getByRole('button', { name: /^Export STEP/ });
     expect(iges.parentElement).toBe(step.parentElement);
     expect(iges.parentElement).toHaveClass('topbar-menu-item-row');
