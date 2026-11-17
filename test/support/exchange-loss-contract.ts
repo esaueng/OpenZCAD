@@ -142,19 +142,21 @@ export const EXCHANGE_LOSS_CONTRACT = {
   obj: {
     kind: 'solid',
     label: 'OBJ',
-    keeps: ['bounds', 'volume', 'watertight'],
+    keeps: ['bounds', 'volume', 'watertight', 'body-names'],
     drops: [
       'body-count',
       'exact-faces',
       'declared-units',
-      'body-names',
       'body-colors',
       'history'
     ],
     units: 'bare-numbers',
     notes: {
       ...MESH_DROPS,
-      'body-count': 'One merged mesh; the reimport is one body.',
+      'body-count':
+        'Each body is its own named object, but the reimport merges them into one body.',
+      'body-colors':
+        'A single OBJ has no colours; the OBJ + MTL package (a ZIP) carries them.',
       'declared-units':
         'OBJ has no unit field: the import asks, and must be told the export unit.'
     }
@@ -182,19 +184,20 @@ export const EXCHANGE_LOSS_CONTRACT = {
   glb: {
     kind: 'solid',
     label: 'glTF (GLB)',
-    keeps: ['bounds', 'volume', 'watertight', 'declared-units'],
-    drops: [
-      'body-count',
-      'exact-faces',
+    keeps: [
+      'bounds',
+      'volume',
+      'watertight',
+      'declared-units',
       'body-names',
-      'body-colors',
-      'history'
+      'body-colors'
     ],
+    drops: ['body-count', 'exact-faces', 'history'],
     units: 'metres',
     notes: {
       ...MESH_DROPS,
       'body-count':
-        'One merged mesh under one root node; the reimport is one body.',
+        'Each body is its own named node and mesh, but the reimport merges them into one body.',
       'declared-units':
         'glTF is metres and +Y up by definition; the export unit does not apply.'
     }

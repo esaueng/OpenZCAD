@@ -563,6 +563,8 @@ import {
   type CadBinaryExportFormat,
   type DesktopMenuCommand
 } from './lib/desktopBridge';
+import type { MeshExportPackage } from './lib/meshExportPackage';
+import { saveFile } from './lib/saveFile';
 import {
   cloudFunctionsAreEnabled,
   setCloudFunctionsEnabled
@@ -20008,7 +20010,7 @@ export function App() {
   function handleExportMesh(
     format: MeshExportDialogFormat,
     deflection: number,
-    tolerances: { angularTolerance?: number } = {}
+    tolerances: { angularTolerance?: number } & MeshExportPackage = {}
   ) {
     if (currentGeometrySnapshot !== null) {
       setStatus(
@@ -20033,6 +20035,69 @@ export function App() {
     }
     const { document: exported, bodyIds, allShownBodies, rowName } = target;
     const info = MESH_EXPORT_FILE_INFO[format];
+    const { perBody, extraFormats, objMaterials, ...meshTolerances } =
+      tolerances;
+    // I04: several files (more formats, a file per body, an OBJ with its
+    // MTL) travel as one ZIP of the same export scope.
+    if (perBody || (extraFormats?.length ?? 0) > 0 || objMaterials) {
+      const stem = exportStemFor(rowName);
+      const zipName = `${stem}.zip`;
+      const bodyNames = new Map(
+        Object.values(exported.nodes).flatMap((node) =>
+          node.kind === 'body' ? [[node.bodyId, node.name] as const] : []
+        )
+      );
+      void runExportJob({
+        fileName: zipName,
+        label: `${[format, ...(extraFormats ?? [])].map((entry) => MESH_EXPORT_FILE_INFO[entry].label).join(', ')} package`,
+        kind: info.kind,
+        contentType: 'application/zip',
+        metadata: {
+          bodyIds: bodyIds.join(','),
+          documentVersion: doc.version,
+          units: doc.units,
+          format: [format, ...(extraFormats ?? [])].join(','),
+          perBody: perBody ? 'yes' : 'no',
+          deflectionMm: deflection,
+          ...(rowName ? { configuration: rowName } : {})
+        },
+        produce: async (options) => {
+          const { packageMeshExport } = await import('./lib/meshExportPackage');
+          const files = await packageMeshExport({
+            formats: [format, ...(extraFormats ?? [])],
+            scopes:
+              perBody && !allShownBodies
+                ? bodyIds.map((bodyId) => ({
+                    bodyIds: [bodyId],
+                    stem: `${stem}-${exportStemFor(bodyNames.get(bodyId) ?? bodyId)}`
+                  }))
+                : [{ bodyIds, stem }],
+            objMaterials: Boolean(objMaterials),
+            write: (entry, ids, extra) =>
+              geometry.exportModel(entry, exported, ids, {
+                deflection,
+                ...meshTolerances,
+                ...(allShownBodies ? { allShownBodies: true } : {}),
+                units: resolveExportUnits(
+                  appSettingsRef.current.files.exportUnits,
+                  doc.units
+                ),
+                ...extra,
+                ...options
+              })
+          });
+          const blob = new Blob([files.zip.slice()], {
+            type: 'application/zip'
+          });
+          return {
+            body: blob,
+            save: async () => (await saveFile(zipName, blob)) !== 'cancelled',
+            warnings: files.warnings
+          };
+        }
+      });
+      return;
+    }
     const fileName = `${exportStemFor(rowName)}.${info.extension}`;
     void runExportJob({
       fileName,
@@ -20055,7 +20120,7 @@ export function App() {
       produce: async (options) => {
         const result = await geometry.exportModel(format, exported, bodyIds, {
           deflection,
-          ...tolerances,
+          ...meshTolerances,
           ...(allShownBodies ? { allShownBodies: true } : {}),
           units: resolveExportUnits(
             appSettingsRef.current.files.exportUnits,

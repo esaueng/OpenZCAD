@@ -46,15 +46,15 @@ disabled. Show a body in the viewport to include it in the file.
 
 ## Solid formats
 
-| Format       | Keeps                                                                                                                                                                    | Drops                                                                        |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| STEP (AP214) | Each body as its own solid named after the body and styled in its display colour, the document as the product, exact analytic faces, bounds, volume, closed shells, unit | History                                                                      |
-| STL (binary) | Bounds and volume within the chord tolerance, a closed surface                                                                                                           | Body separation (one facet stream), exact faces, unit, names, colours        |
-| STL (ASCII)  | Same as binary STL                                                                                                                                                       | Same as binary STL; every body shares one `solid` block                      |
-| 3MF          | Bounds, volume, a closed surface, declared unit, one object per body in the package, named after the body and coloured in its display colour                             | Body separation **on reimport** (the import merges the objects), exact faces |
-| OBJ          | Bounds, volume, a closed surface                                                                                                                                         | Body separation, exact faces, unit, names, colours (no MTL)                  |
-| PLY (binary) | Bounds, volume, a closed surface                                                                                                                                         | Body separation, exact faces, unit, names, colours                           |
-| glTF (GLB)   | Bounds, volume, a closed surface; metres and +Y up through its root node                                                                                                 | Body separation (one merged mesh), exact faces, export unit, names, colours  |
+| Format       | Keeps                                                                                                                                                                    | Drops                                                                                           |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| STEP (AP214) | Each body as its own solid named after the body and styled in its display colour, the document as the product, exact analytic faces, bounds, volume, closed shells, unit | History                                                                                         |
+| STL (binary) | Bounds and volume within the chord tolerance, a closed surface                                                                                                           | Body separation (one facet stream), exact faces, unit, names, colours                           |
+| STL (ASCII)  | Same as binary STL                                                                                                                                                       | Same as binary STL; every body shares one `solid` block                                         |
+| 3MF          | Bounds, volume, a closed surface, declared unit, one object per body in the package, named after the body and coloured in its display colour                             | Body separation **on reimport** (the import merges the objects), exact faces                    |
+| OBJ          | Bounds, volume, a closed surface, one object per body named after it (`o`); with _OBJ colors_, a material per display colour in the MTL beside it                        | Body separation **on reimport**, exact faces, unit, colours in a single OBJ (they need the MTL) |
+| PLY (binary) | Bounds, volume, a closed surface                                                                                                                                         | Body separation, exact faces, unit, names, colours                                              |
+| glTF (GLB)   | Bounds, volume, a closed surface; metres and +Y up through its root node; one node and mesh per body, named after it, in a material of its display colour                | Body separation **on reimport** (the import merges the meshes), exact faces, export unit        |
 
 STEP body names and colours are in the file for other CAD to read; OpenZCAD's
 own STEP import does not yet apply them to the bodies it creates (I02).
@@ -74,6 +74,13 @@ slicers do with it, read from their public 3MF importers (2026-11-15):
 None of this was confirmed in a running slicer; it is what each importer's
 source does with these elements. OpenZCAD's own 3MF import still merges the
 objects into one body and does not read names or colours back.
+
+**Mesh export package (I04).** The mesh export dialog can write _one file
+per body_, _also export_ the same scope in further formats, and add _OBJ
+colors (.mtl)_. Whenever that makes more than one file, they download
+together as one `.zip` (an OBJ with colours is its `.obj` and `.mtl`). Body
+files are named after the project and the body. The dialog remembers its
+format and package choices in this browser for the next export.
 
 **Insert project…** (File menu) copies another project's shown bodies into
 the open one as one undoable step: each keeps its name, chosen colour and

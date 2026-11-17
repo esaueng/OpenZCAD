@@ -288,6 +288,8 @@ export interface GeometryWorkerApi {
       transparent?: boolean;
       /** 'step' only: the name the file is saved under, for its header. */
       fileName?: string;
+      /** I04, 'obj' only: return a ZIP of `<stem>.obj` and `<stem>.mtl`. */
+      objMaterials?: { stem: string };
       /** F06: write every body the document shows, ignoring `bodyIds`. */
       allShownBodies?: boolean;
       signal?: AbortSignal;
@@ -1608,6 +1610,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             : {}),
           ...(options?.fileName !== undefined
             ? { fileName: options.fileName }
+            : {}),
+          ...(options?.objMaterials
+            ? { objMaterials: options.objMaterials }
             : {}),
           ...(options?.allShownBodies ? { allShownBodies: true } : {})
         });
