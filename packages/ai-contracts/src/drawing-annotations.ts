@@ -142,6 +142,8 @@ export interface CadDigestDrawingAnnotation {
     | CadDrawingAnnotationKind
     | 'chamfer'
     | 'distance'
+    | 'bom-table'
+    | 'balloon'
     | 'center-mark'
     | 'intersection-mark'
     | 'centerline';

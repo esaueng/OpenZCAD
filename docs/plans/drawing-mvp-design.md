@@ -526,6 +526,32 @@ notes to D01 sheets:
   "Measure circles to" picks centres, near or far sides.
 - **Schema.** v75, built on v74, with a content gate below it.
 
+## Parts lists and balloons (D02, schema v80)
+
+- **Shape.** Two annotation kinds read from the AS03 BOM table model
+  (`assemblyBomTable`), so a part has the same item number on screen, in
+  the CSV and on paper. `bom-table` sits on the paper (no view), its
+  top-left corner at its placement, and stores only which BOM columns it
+  shows and in what order (absent: item, quantity, part); rows, cells and
+  numbering are the table's, read each time the sheet is drawn. `balloon`
+  belongs to a view, stores the edge its leader points at and the assembly
+  component it was picked on, and shows that component's row's item number.
+- **Repair.** A parts list with no assembly to list is `no-bom`; a balloon
+  whose component has left the assembly is `not-in-bom`; a balloon's lost
+  edge breaks like a note's leader. Nothing renumbers silently: a balloon
+  follows its row's number as the table renumbers. Re-picking a balloon's
+  edge keeps its component.
+- **Page.** The parts list is a ruled table of thin lines, 6 mm rows, a
+  bold header, numeric columns aligned to their end and cells cut at 70 mm
+  with "...". A balloon is a dimension-weight circle (at least 4 mm radius)
+  with its number centred and a leader from its rim to the nearest point of
+  its edge, ending in an arrow. Both go through the one page model to the
+  preview, PDF, SVG and DXF.
+- **Tools.** Parts list (P): one click on the paper places it; the panel
+  picks its columns. Balloon (O): pick an edge of an assembly part, then
+  place the balloon. Both are offered once the assembly has parts.
+- **Schema.** v80, built on v79, with a content gate below it.
+
 ## Finishing-body update repair
 
 When a finishing feature consumes a drawing's body, the sheet offers the

@@ -354,7 +354,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // source view inside a circle, at its own scale. An older client would draw
 // the whole view at the sheet's scale, uncropped, so it must refuse. Builds
 // on v77.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 78 as const;
+// v80 adds D02 parts lists and balloons (`bom-table` and `balloon` drawing
+// annotations): an assembly's BOM table on the paper and a part's item
+// number at a leader, both read from the AS03 table each time the sheet is
+// drawn. An older client would refuse the unknown kinds, so it must refuse
+// the document. Builds on v79 (F06 assembly component configurations).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 80 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

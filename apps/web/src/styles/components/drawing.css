@@ -1005,9 +1005,11 @@
 }
 
 /* A short canvas must never let its rail escape into sheet tabs or export
-   actions. Keep annotation tools in their own scrolling row on compact
-   workspaces, leaving the paper and properties independently scrollable. */
-@media (max-width: 1100px), (max-height: 760px) {
+   actions, nor clip its own last tools. Keep annotation tools in their own
+   scrolling row on compact workspaces, leaving the paper and properties
+   independently scrollable. Below about 860 px the vertical rail cannot
+   show every tool at once. */
+@media (max-width: 1100px), (max-height: 860px) {
   .drawing-canvas-area {
     flex-direction: column;
     padding-left: 0;
