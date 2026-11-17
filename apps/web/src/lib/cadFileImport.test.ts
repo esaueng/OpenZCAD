@@ -86,6 +86,23 @@ describe('runCadFileImport (I06)', () => {
     );
   });
 
+  it('closes the conversion card when the STEP import declines before its own card', async () => {
+    vi.mocked(igesAsStepFile).mockResolvedValueOnce(
+      new File(['ISO-10303-21; too large for this run'], 'bracket.igs')
+    );
+    const file = new File(['S      1'], 'bracket.igs');
+    const run = { ...deps(file), limits: { maxSourceBytes: 4 } };
+    await runCadFileImport(run);
+    const refusal = vi.mocked(run.status.setStatus).mock.calls[0]?.[0];
+    expect(refusal).toMatch(/^STEP import is limited to /);
+    expect(run.store!.ensureLocalProjectStorage).not.toHaveBeenCalled();
+    expect(run.progress.start).toHaveBeenCalledTimes(1);
+    expect(run.progress.finish).toHaveBeenCalledWith({
+      tone: 'error',
+      message: refusal
+    });
+  });
+
   it('never lands in a project the user switched to during conversion', async () => {
     const file = new File(['S      1'], 'cavity.igs');
     const run = deps(file);

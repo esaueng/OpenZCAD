@@ -434,12 +434,45 @@ export async function runCadFileImport(
     deps.progress?.finish({ tone: 'error', message });
     return;
   }
+  // runStepImport opens its own card only once the run is certainly going
+  // ahead. A refusal before that (storage blocked, too large, the commit lock
+  // held) reports through the status bar alone, so the conversion card would
+  // otherwise stay on "preparing" with a Cancel that can no longer end it.
+  const progress = deps.progress;
+  let cardTaken = false;
+  let lastStatus: string | null = null;
   await runStepImport({
     ...deps,
     file,
     contentType: 'model/step',
-    stillCurrent
+    stillCurrent,
+    status: {
+      setStatus: (message, options) => {
+        lastStatus = message;
+        if (options) deps.status.setStatus(message, options);
+        else deps.status.setStatus(message);
+      },
+      setFeatureFormError: (message) => deps.status.setFeatureFormError(message)
+    },
+    ...(progress
+      ? {
+          progress: {
+            start: (run) => {
+              cardTaken = true;
+              progress.start(run);
+            },
+            update: (run) => progress.update(run),
+            finish: (outcome) => progress.finish(outcome)
+          }
+        }
+      : {})
   });
+  if (!cardTaken) {
+    progress?.finish({
+      tone: 'error',
+      message: lastStatus ?? `${original.name} was not imported.`
+    });
+  }
 }
 
 export async function runStepImport(
