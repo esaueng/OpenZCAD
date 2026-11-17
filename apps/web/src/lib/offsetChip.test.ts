@@ -452,4 +452,17 @@ describe('a refused offset that names its limit', () => {
     expect(keptOffsetValue(undefined, -5)).toBe(-5);
     expect(keptOffsetValue(undefined, null)).toBeNull();
   });
+
+  it('never offers to keep the value that was just refused (#1596)', () => {
+    // The live preview built 16.5 but release validation refused it.
+    expect(keptOffsetValue(undefined, 16.5, 16.5)).toBeNull();
+    expect(keptOffsetValue(undefined, 16.5, 16.500000000000004)).toBeNull();
+    // An earlier frame that built is still a way out.
+    expect(keptOffsetValue(undefined, 15, 16.5)).toBe(15);
+    // A limit-derived value that lands on the refused value is no way out.
+    expect(keptOffsetValue(-6.4, null, -6.39)).toBeNull();
+    expect(keptOffsetValue(-6.4, -5, -9)).toBe(-6.39);
+    // Nothing refused yet: unchanged.
+    expect(keptOffsetValue(undefined, 16.5, null)).toBe(16.5);
+  });
 });
