@@ -383,6 +383,7 @@ interface ViewerShellProps {
   /** L08: review comment pins, as `ModelViewer` draws them. */
   commentPins?: readonly CommentPin[];
   onCommentPinClick?(id: string): void;
+  commentPlacing?: boolean;
   /**
    * A drag of the selected datum's handle, as a change to its stored offset
    * (already signed for a reversed datum). The handle arms only when this is
@@ -617,6 +618,7 @@ export function ViewerShell({
   onPlacementClick,
   commentPins,
   onCommentPinClick,
+  commentPlacing = false,
   onDatumOffsetDrag,
   datumOffsetDraft = null,
   onDatumOffsetEntry,
@@ -1063,6 +1065,7 @@ export function ViewerShell({
         {...(onPlacementClick ? { onPlacementClick } : {})}
         {...(commentPins ? { commentPins } : {})}
         {...(onCommentPinClick ? { onCommentPinClick } : {})}
+        commentPlacing={commentPlacing}
         onMeasurePreview={onMeasurePreview}
         regionHandle={regionHandle}
         modelPanelsHidden={modelPanelsHidden}

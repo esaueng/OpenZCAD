@@ -287,6 +287,7 @@ import {
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 import { isBehindCamera } from '../lib/cameraDepth';
+import { commentPlacementTarget } from '../lib/commentPlacement';
 import {
   chipPanelDodge,
   edgeChipCenterX,
@@ -1422,6 +1423,12 @@ export interface ModelViewerProps {
   commentPins?: readonly CommentPin[];
   onCommentPinClick?(id: string): void;
   /**
+   * L08: a comment is being placed. A press reports only the body surface
+   * under it, through `onSelectTopology`; no sketch, region, plane or
+   * placement handler sees it.
+   */
+  commentPlacing?: boolean;
+  /**
    * U09: a primitive placed by a press-drag. A press on a flat face of one of
    * `bodyIds` draws on that face's plane, anywhere else on the ground (or
    * the upright principal plane facing the view, when the ground is
@@ -2506,6 +2513,7 @@ export function ModelViewer({
   onPlacementClick,
   commentPins,
   onCommentPinClick,
+  commentPlacing = false,
   onMeasurePreview,
   regionHandle,
   modelPanelsHidden = false,
@@ -2892,6 +2900,8 @@ export function ModelViewer({
   onPlacementClickRef.current = onPlacementClick;
   const onCommentPinClickRef = useRef(onCommentPinClick);
   onCommentPinClickRef.current = onCommentPinClick;
+  const commentPlacingRef = useRef(commentPlacing);
+  commentPlacingRef.current = commentPlacing;
   const updateCommentPinsRef = useRef<(() => void) | null>(null);
   /** Makes one comment pin on the HUD; set when the viewer mounts. */
   const commentPinFactoryRef = useRef<(() => HTMLDivElement) | null>(null);
@@ -7457,6 +7467,30 @@ export function ModelViewer({
       );
       depthCycle = stepped.cycle;
       const result = stepped.candidate;
+      // L08: placing a comment takes the nearest body surface under the
+      // press and nothing else: no sketch profile, region, ghost plane,
+      // datum or placement plane may act on it.
+      if (commentPlacingRef.current) {
+        const surface = commentPlacementTarget(stack);
+        if (surface)
+          onSelectTopologyRef.current(surface.selection, false, {
+            point: {
+              x: surface.hit.point.x,
+              y: surface.hit.point.y,
+              z: surface.hit.point.z
+            },
+            ...(surface.faceNormal
+              ? {
+                  normal: {
+                    x: surface.faceNormal.x,
+                    y: surface.faceNormal.y,
+                    z: surface.faceNormal.z
+                  }
+                }
+              : {})
+          });
+        return;
+      }
       // A ghost plane starts the sketch instead, even through a face in
       // front of it: it is armed precisely to be clicked, and it sits where
       // a part at the origin usually is (see ghostPlaneTakesPick).

@@ -35905,6 +35905,7 @@ export function App() {
                     inPlace.values
                   ))
             }
+            commentPlacing={commentPlacing}
             {...(commentsOpen && commentPins.length
               ? {
                   commentPins,

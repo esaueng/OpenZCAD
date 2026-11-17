@@ -235,6 +235,16 @@ function seedPlaintextExtras(srv: Server, projectId: string) {
        VALUES (?, ?, 'ws_1', 'owner_laptop', 1, '{"camera":"Secret view"}', ?)`
     )
     .run(OWNER, projectId, now);
+  // L08: a review comment pinned on the plaintext model.
+  srv.db
+    .prepare(
+      `INSERT INTO project_comments
+         (id, project_id, parent_id, author_user_id, author_name, body_text,
+          anchor_json, created_at)
+       VALUES (?, ?, NULL, ?, 'Owner', 'Secret comment',
+         '{"point":[1,2,3],"documentVersion":1}', ?)`
+    )
+    .run(`cmt_${projectId}`, projectId, OWNER, now);
   srv.db
     .prepare(
       `INSERT INTO project_share_links
@@ -2277,7 +2287,8 @@ describe('purging the plaintext', () => {
       'project_storage_assets',
       'artifacts',
       'project_measurements',
-      'project_workspace_sessions'
+      'project_workspace_sessions',
+      'project_comments'
     ]) {
       expect(count(srv, table, plain.projectId), table).toBe(0);
     }
@@ -2297,6 +2308,7 @@ describe('purging the plaintext', () => {
       .join('\n');
     for (const marker of [
       'Secret bracket',
+      'Secret comment',
       'Secret one',
       'Secret two',
       'Secret gauge',
