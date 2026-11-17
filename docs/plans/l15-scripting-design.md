@@ -297,7 +297,7 @@ departs from the design above, it is recorded here:
   library. An instance carries `{ id, version, api, source, digest }`, and
   the command system refuses a second instance of the same id and version
   with other source, so a version stays immutable within a project. This
-  keeps the schema change (v107) to one feature kind, with undo, collaboration
+  keeps the schema change (v110) to one feature kind, with undo, collaboration
   and validation unchanged; the history text prints each instance's source
   as a `"""` block.
 - **Instances are written in the history text**, which is the scripting
