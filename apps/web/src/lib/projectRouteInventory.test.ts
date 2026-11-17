@@ -122,7 +122,7 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
   [String.raw`/^\/api\/e2ee\/assistant-consents\/([^/]+)\/members$/`]: [
     ['/api/e2ee/assistant-consents/proj_inv/members', 'none']
   ],
-  [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(?:document|versions|revisions(?:\/[^/]+)?|info|measurements|view-states(?:\/[^/]+)?|blobs(?:\/.*)?)$/`]:
+  [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(?:document|versions|revisions(?:\/[^/]+)?|info|measurements|view-states(?:\/[^/]+)?|comments|blobs(?:\/.*)?)$/`]:
     [
       `${E}/document`,
       `${E}/versions`,
@@ -130,6 +130,7 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
       `${E}/info`,
       `${E}/measurements`,
       `${E}/view-states/view_1`,
+      `${E}/comments`,
       `${E}/blobs/uploads`
     ].map((path) => [path, 'none'] as const),
   [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(?:share-links(?:\/.*)?|mls\/proposals|invitations(?:\/[^/]+\/acceptance)?|key-packages(?:\/claim)?)$/`]:
