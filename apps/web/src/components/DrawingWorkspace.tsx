@@ -2513,6 +2513,16 @@ const TITLE_FIELDS: { key: keyof DrawingTitleBlock; label: string }[] = [
   { key: 'date', label: 'Date' }
 ];
 
+/** D02 (v94): the fields only the shop title block prints. */
+const SHOP_TITLE_FIELDS: { key: keyof DrawingTitleBlock; label: string }[] = [
+  { key: 'material', label: 'Material' },
+  { key: 'finish', label: 'Finish' },
+  { key: 'checkedBy', label: 'Checked by' },
+  { key: 'approvedBy', label: 'Approved by' },
+  { key: 'company', label: 'Company' },
+  { key: 'tolerances', label: 'General tolerances' }
+];
+
 const NO_SHEETS: readonly DrawingSheet[] = [];
 
 /**
@@ -6804,7 +6814,35 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             />
             <div className="drawing-panel-section">
               <h3>Title block</h3>
-              {TITLE_FIELDS.map(({ key, label }) => (
+              <label className="drawing-field">
+                <span>Layout</span>
+                <select
+                  value={sheet.titleBlockLayout ?? ''}
+                  disabled={!editable}
+                  onChange={(event) =>
+                    updateSheet(
+                      {
+                        titleBlockLayout:
+                          event.target.value === 'shop' ? 'shop' : null
+                      },
+                      'Change title-block layout'
+                    )
+                  }
+                >
+                  <option value="">Compact</option>
+                  <option value="shop">Shop</option>
+                </select>
+              </label>
+              {sheet.titleBlockLayout === 'shop' && (
+                <p className="drawing-hint">
+                  Adds material, finish, checked and approved, the company and a
+                  general-tolerance note.
+                </p>
+              )}
+              {[
+                ...TITLE_FIELDS,
+                ...(sheet.titleBlockLayout === 'shop' ? SHOP_TITLE_FIELDS : [])
+              ].map(({ key, label }) => (
                 <TextField
                   key={key}
                   label={label}

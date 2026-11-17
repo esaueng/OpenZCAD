@@ -39,6 +39,8 @@ export interface DrawingSheetUpdateInput {
   projectionAngle?: DrawingSheet['projectionAngle'];
   /** Fields set to an empty string fall back to their automatic value. */
   titleBlock?: Partial<Record<keyof DrawingTitleBlock, string>>;
+  /** D02 (v94): the title-block layout; null is the compact one. */
+  titleBlockLayout?: DrawingSheet['titleBlockLayout'] | null;
   /** Explicit Update: rebinds the sheet to the current model. */
   source?: DrawingSheet['source'];
   /** Explicit body succession; subshape witnesses are retained and rechecked. */
@@ -253,6 +255,10 @@ export function updateDrawingSheet(
         else delete titleBlock[key];
       }
       sheet.titleBlock = titleBlock;
+    }
+    if (input.titleBlockLayout !== undefined) {
+      if (input.titleBlockLayout === null) delete sheet.titleBlockLayout;
+      else sheet.titleBlockLayout = input.titleBlockLayout;
     }
     if (input.format !== undefined) {
       if (input.format === null || Object.keys(input.format).length === 0)

@@ -579,6 +579,25 @@ notes to D01 sheets:
   place the balloon. Both are offered once the assembly has parts.
 - **Schema.** v80, built on v78 (v79 went unused), with a content gate below it.
 
+## Title-block layouts (D02, schema v94)
+
+- **Shape.** `DrawingSheet.titleBlockLayout`: absent is the compact block
+  (title, drawing number, revision, scale and size, sheet, drawn by, date,
+  units, projection), unchanged byte for byte; `shop` adds the fields a
+  shop print carries — material, finish, checked and approved by, the
+  company and a general-tolerance note — as optional `DrawingTitleBlock`
+  text. They are stored whatever the layout, so switching back and forth
+  loses nothing, and only the shop layout prints them.
+- **Page.** The shop block is 52 mm high: the title, then four rows (the
+  compact block's numbers row; material, finish, units, projection; drawn,
+  checked, approved, date; company and the tolerance note across the rest).
+  The view area above it shrinks to match, so fitting keeps views clear of
+  it. It goes through the one page model to preview, PDF, SVG and DXF.
+- **Editing.** Sheet Properties choose the layout (Compact or Shop) and
+  list the shop fields while it is chosen.
+- **Schema.** v94, built on v93, gated below it (an older client would
+  refuse the unknown title-block fields).
+
 ## Sheet images (D02, schema v92)
 
 - **Shape.** A `kind: 'image'` annotation on the paper (never in a view):

@@ -281,15 +281,44 @@ export interface DrawingTitleBlock {
   revision?: string;
   author?: string;
   date?: string;
+  /**
+   * D02 (schema v94): the shop layout's fields. Stored with any layout, so
+   * switching back and forth loses nothing; only the shop layout prints them.
+   */
+  company?: string;
+  material?: string;
+  finish?: string;
+  checkedBy?: string;
+  approvedBy?: string;
+  /** The general-tolerance note ("UNLESS STATED ±0.1 mm, ±0.5°"). */
+  tolerances?: string;
 }
+
+/** v94: the title-block fields only the shop layout prints. */
+export const DRAWING_TITLE_BLOCK_SHOP_FIELDS = [
+  'company',
+  'material',
+  'finish',
+  'checkedBy',
+  'approvedBy',
+  'tolerances'
+] as const satisfies readonly (keyof DrawingTitleBlock)[];
 
 export const DRAWING_TITLE_BLOCK_FIELDS = [
   'title',
   'drawingNumber',
   'revision',
   'author',
-  'date'
+  'date',
+  ...DRAWING_TITLE_BLOCK_SHOP_FIELDS
 ] as const satisfies readonly (keyof DrawingTitleBlock)[];
+
+/**
+ * D02 (schema v94): a sheet's title-block layout. Absent is the compact
+ * block; `shop` adds material, finish, checked and approved, the company
+ * and a general-tolerance note.
+ */
+export type DrawingTitleBlockLayout = 'shop';
 
 export const MAX_DRAWING_TEXT_LENGTH = 120;
 export const MAX_DRAWING_SHEETS = 50;
@@ -702,6 +731,8 @@ export interface DrawingSheet {
   scale: DrawingScale;
   projectionAngle: DrawingProjectionAngle;
   titleBlock: DrawingTitleBlock;
+  /** D02 (schema v94): absent is the compact title block. */
+  titleBlockLayout?: DrawingTitleBlockLayout;
   source: DrawingSheetSource;
   views: DrawingView[];
   /**
@@ -1046,6 +1077,8 @@ export function drawingSheetError(value: unknown): string | null {
     )
       return `${where} has an invalid title-block field "${key}".`;
   }
+  if (value.titleBlockLayout !== undefined && value.titleBlockLayout !== 'shop')
+    return `${where} has an unknown title-block layout.`;
   if (
     !isRecord(value.source) ||
     typeof value.source.fingerprint !== 'string' ||
