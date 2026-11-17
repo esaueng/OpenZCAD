@@ -10,6 +10,7 @@ import type {
   FeatureKind,
   FeatureNode,
   ParameterKind,
+  PrimitiveKind,
   ProjectDocument,
   SketchNode,
   SketchObjectData,
@@ -66,6 +67,26 @@ export const HISTORY_SKETCH_OBJECT_KINDS = {
   text: true,
   point: true
 } as const satisfies Record<SketchObjectKind, true>;
+
+export const HISTORY_PRIMITIVE_KINDS = {
+  box: true,
+  cylinder: true,
+  sphere: true,
+  cone: true,
+  torus: true
+} as const satisfies Record<PrimitiveKind, true>;
+
+/** The dimensions a primitive may hold (`PrimitiveInput`'s fields). */
+export const HISTORY_PRIMITIVE_DIMENSIONS = [
+  'width',
+  'height',
+  'depth',
+  'radius',
+  'bottomRadius',
+  'topRadius',
+  'majorRadius',
+  'minorRadius'
+] as const;
 
 export const HISTORY_PARAMETER_QUANTITIES = {
   length: true,
@@ -327,13 +348,14 @@ export function hashesOfReferences(
 }
 
 export function sameHashes(left: unknown, right: unknown): boolean {
+  // Object.is: a stored -0 is not implied by a reference's 0.
   if (typeof left === 'number' || typeof right === 'number') {
-    return left === right;
+    return Object.is(left, right);
   }
   return (
     Array.isArray(left) &&
     Array.isArray(right) &&
     left.length === right.length &&
-    left.every((value, index) => value === right[index])
+    left.every((value, index) => Object.is(value, right[index]))
   );
 }

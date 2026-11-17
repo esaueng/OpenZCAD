@@ -274,8 +274,12 @@ export interface HistoryTextTree {
   statements: Statement[];
 }
 
+/** Deeper nesting than any stored document holds is refused, not recursed. */
+export const MAX_HISTORY_TEXT_DEPTH = 64;
+
 class Parser {
   private index = 0;
+  private depth = 0;
 
   constructor(private readonly tokens: Token[]) {}
 
@@ -466,6 +470,21 @@ class Parser {
 
   private parseValue(): ValueNode {
     const token = this.current;
+    if (this.depth >= MAX_HISTORY_TEXT_DEPTH) {
+      this.fail(
+        `Values nest more than ${MAX_HISTORY_TEXT_DEPTH} levels deep.`,
+        token
+      );
+    }
+    this.depth += 1;
+    try {
+      return this.parseValueAt(token);
+    } finally {
+      this.depth -= 1;
+    }
+  }
+
+  private parseValueAt(token: Token): ValueNode {
     switch (token.type) {
       case 'number': {
         this.next();

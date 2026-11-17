@@ -21,6 +21,8 @@ import {
   expressionSitesOf,
   hashesOfReferences,
   HISTORY_TEXT_VERSION,
+  HISTORY_PRIMITIVE_DIMENSIONS,
+  HISTORY_PRIMITIVE_KINDS,
   isHistoryFeatureKind,
   isHistorySketchObjectKind,
   isTopologyReference,
@@ -162,6 +164,53 @@ function convertRecord(
     }
   }
   return record;
+}
+
+type ValueKind = 'number' | 'string' | 'boolean' | 'null' | 'list' | 'record';
+
+function textValueKind(node: ValueNode): ValueKind {
+  switch (node.type) {
+    case 'number':
+      return 'number';
+    case 'string':
+    case 'expression':
+    case 'id':
+      return 'string';
+    case 'boolean':
+      return 'boolean';
+    case 'null':
+      return 'null';
+    case 'list':
+      return 'list';
+    default:
+      return 'record';
+  }
+}
+
+function storedValueKind(value: unknown): ValueKind {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'list';
+  switch (typeof value) {
+    case 'number':
+      return 'number';
+    case 'string':
+      return 'string';
+    case 'boolean':
+      return 'boolean';
+    default:
+      return 'record';
+  }
+}
+
+function article(kind: ValueKind): string {
+  return {
+    number: 'a number',
+    string: 'text',
+    boolean: 'true or false',
+    null: 'null',
+    list: 'a list',
+    record: 'a record'
+  }[kind];
 }
 
 function valueAt(root: unknown, path: Path): unknown {
@@ -499,6 +548,11 @@ class Reader {
       );
     }
     const stored = findFeature(this.document, statement.id as FeatureId);
+    if (stored) {
+      this.checkAgainstStored(statement.body, stored.data, STATEMENT_KEYS);
+    } else {
+      this.checkNewFeature(statement);
+    }
     const conversion = this.newConversion();
     const data = convertRecord(statement.body, [], conversion, STATEMENT_KEYS);
     // The kind leads the record, as every builder writes it.
@@ -579,6 +633,7 @@ class Reader {
       );
       return;
     }
+    if (stored) this.checkAgainstStored(sketchValue, stored, new Set(['name']));
     const conversion = this.newConversion();
     const fields = convertRecord(sketchValue, [], conversion);
     this.resolveReferences(conversion, stored);
@@ -633,6 +688,18 @@ class Reader {
     const storedNode = this.document.nodes[item.id];
     const stored =
       storedNode?.kind === 'sketch-object' ? storedNode.data : undefined;
+    if (stored) {
+      this.checkAgainstStored(
+        item.body,
+        stored,
+        new Set(['@metadata', 'objectKind'])
+      );
+    } else {
+      this.error(
+        `#${item.id} is not an object of this sketch; draw new sketch objects in the app.`,
+        item.span
+      );
+    }
     const conversion = this.newConversion();
     const data = convertRecord(
       item.body,
@@ -670,6 +737,136 @@ class Reader {
       data: ordered as unknown as SketchObjectData,
       ...(metadata ? { metadata } : {})
     };
+  }
+
+  /**
+   * Types an existing statement against what the document stores for it:
+   * every field the text writes must be one the node holds, with a value of
+   * the same kind (a number or an expression where it holds either). The
+   * stored node is the schema for all 28 feature kinds; new optional
+   * settings are set in the app.
+   */
+  private checkAgainstStored(
+    node: ValueNode,
+    stored: unknown,
+    skip: ReadonlySet<string> = new Set(),
+    key = ''
+  ): void {
+    if (stored === null || stored === undefined) return;
+    const textKind = textValueKind(node);
+    const storedKind = storedValueKind(stored);
+    const compatible =
+      textKind === storedKind ||
+      textKind === 'null' ||
+      // A number and an expression stand for each other in a value field;
+      // the expression check below decides whether the field takes one.
+      (storedKind === 'number' && node.type === 'expression') ||
+      (storedKind === 'string' && textKind === 'number');
+    if (!compatible) {
+      this.error(
+        `${key ? `\`${key}\`` : 'This'} holds ${article(storedKind)} here, not ${article(textKind)}.`,
+        node.span
+      );
+      return;
+    }
+    if (node.type === 'record' && storedKind === 'record') {
+      const record = stored as Record<string, unknown>;
+      for (const entry of node.entries) {
+        // `@` keys are statement fields, reported on their own.
+        if (skip.has(entry.key) || entry.key.startsWith('@')) continue;
+        if (
+          !Object.hasOwn(record, entry.key) ||
+          record[entry.key] === undefined
+        ) {
+          this.error(
+            `\`${entry.key}\` is not a field this step stores; set new options in the app, then edit them here.`,
+            entry.keySpan
+          );
+          continue;
+        }
+        this.checkAgainstStored(
+          entry.value,
+          record[entry.key],
+          undefined,
+          entry.key
+        );
+      }
+    } else if (node.type === 'list' && Array.isArray(stored)) {
+      node.items.forEach((item, index) => {
+        if (index < stored.length) {
+          this.checkAgainstStored(item, stored[index], undefined, key);
+        }
+      });
+    }
+  }
+
+  /**
+   * A statement the document does not hold yet. Only a primitive can be
+   * created from text, so only a primitive is accepted, field by field.
+   */
+  private checkNewFeature(statement: FeatureStatement): void {
+    if (statement.kind !== 'primitive') {
+      this.error(
+        `#${statement.id} is not a step of this document. Create a ${statement.kind} step in the app, then edit it here; the text adds primitives.`,
+        statement.idSpan
+      );
+      return;
+    }
+    const kind = entryOf(statement.body, 'primitiveKind');
+    if (
+      !kind ||
+      kind.value.type !== 'string' ||
+      !Object.hasOwn(HISTORY_PRIMITIVE_KINDS, kind.value.value)
+    ) {
+      this.error(
+        `A new primitive needs \`primitiveKind\`: ${Object.keys(
+          HISTORY_PRIMITIVE_KINDS
+        )
+          .map((name) => `"${name}"`)
+          .join(', ')}.`,
+        kind?.value.span ?? statement.idSpan
+      );
+    }
+    const dimensions = entryOf(statement.body, 'dimensions');
+    if (!dimensions || dimensions.value.type !== 'record') {
+      this.error(
+        'A new primitive needs `dimensions: { … }`.',
+        dimensions?.value.span ?? statement.idSpan
+      );
+    } else {
+      for (const entry of dimensions.value.entries) {
+        if (
+          !(HISTORY_PRIMITIVE_DIMENSIONS as readonly string[]).includes(
+            entry.key
+          )
+        ) {
+          this.error(
+            `A primitive has no dimension \`${entry.key}\`.`,
+            entry.keySpan
+          );
+        } else if (
+          entry.value.type !== 'number' &&
+          entry.value.type !== 'expression'
+        ) {
+          this.error(
+            `\`${entry.key}\` takes a number or an expression in backticks.`,
+            entry.value.span
+          );
+        }
+      }
+    }
+    for (const entry of statement.body.entries) {
+      if (
+        entry.key !== 'primitiveKind' &&
+        entry.key !== 'dimensions' &&
+        !STATEMENT_KEYS.has(entry.key)
+      ) {
+        this.error(
+          `A new primitive takes \`primitiveKind\` and \`dimensions\`; set \`${entry.key}\` in the app.`,
+          entry.keySpan
+        );
+      }
+    }
   }
 
   /**

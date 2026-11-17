@@ -325,6 +325,86 @@ describe('history text typing', () => {
     ).toEqual([expect.stringMatching(/`@owner` is not a statement field/)]);
   });
 
+  it('types an existing step against what the document stores (review finding 1)', () => {
+    expect(
+      messages(
+        edited((text) =>
+          text.replace('distance: `width / 4`', 'distance: true, typo: 12')
+        ).diagnostics
+      )
+    ).toEqual([
+      expect.stringMatching(/`distance` holds text here, not true or false\./),
+      expect.stringMatching(/`typo` is not a field this step stores/)
+    ]);
+    // A number may become an expression and back.
+    expect(
+      messages(
+        edited((text) => text.replace('height: 20', 'height: `width / 2`'))
+          .diagnostics
+      )
+    ).toEqual([]);
+  });
+
+  it('accepts only primitives as new steps, field by field', () => {
+    const empty = createProjectDocument('Empty', toUserId('user_text'));
+    const read = (body: string, kind = 'primitive') =>
+      messages(
+        readHistoryText(
+          `openzcad history 1\nunits mm\n${kind} #f "Bad" ${body}`,
+          empty
+        ).diagnostics
+      );
+    expect(read('{ distance: true, typo: 12 }', 'extrude')).toEqual([
+      expect.stringMatching(
+        /#f is not a step of this document\. Create a extrude step in the app/
+      )
+    ]);
+    expect(
+      read(
+        '{ primitiveKind: "box", dimensions: { width: 1, depth: true, size: 2 }, typo: 1 }'
+      )
+    ).toEqual([
+      expect.stringMatching(/`depth` takes a number or an expression/),
+      expect.stringMatching(/A primitive has no dimension `size`/),
+      expect.stringMatching(/set `typo` in the app/)
+    ]);
+    expect(read('{ primitiveKind: "prism", dimensions: {} }')).toEqual([
+      expect.stringMatching(/A new primitive needs `primitiveKind`/)
+    ]);
+    expect(
+      read(
+        '{ primitiveKind: "box", dimensions: { width: 1, height: `2 mm`, depth: 3 } }'
+      )
+    ).toEqual([]);
+  });
+
+  it('refuses nesting deeper than any document holds instead of overflowing (review finding 2)', () => {
+    const depth = 100_000;
+    const text = `openzcad history 1\nunits mm\nextrude #f "Bad" { distance: ${'['.repeat(depth)}0${']'.repeat(depth)} }`;
+    const read = readHistoryText(text, sampleDocument());
+    expect(read.model).toBeNull();
+    expect(messages(read.diagnostics)).toEqual([
+      expect.stringMatching(/Values nest more than 64 levels deep\./)
+    ]);
+  });
+
+  it('keeps a -0 hash its reference does not imply (review finding 3)', () => {
+    const document = sampleDocument();
+    const fillet = Object.values(document.nodes).find(
+      (node) => node.kind === 'feature' && node.featureKind === 'fillet'
+    )!;
+    if (fillet.kind !== 'feature' || fillet.data.featureKind !== 'fillet') {
+      throw new Error('fixture');
+    }
+    fillet.data.edgeHashes = [-0, 222];
+    fillet.data.edgeReferences![0]!.currentHash = 0;
+    const text = printHistory(document);
+    expect(text).toContain('edgeHashes: [-0, 222]');
+    const read = readHistoryText(text, document);
+    expect(messages(read.diagnostics)).toEqual([]);
+    expect(read.model).toEqual(historyModelOf(document));
+  });
+
   it('refuses a parameter cycle and a bad quantity at the parameter', () => {
     const cycle = edited((text) =>
       text.replace('count = `4`', 'count = `count + 1`')
