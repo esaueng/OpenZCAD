@@ -8,6 +8,7 @@ import {
   DEFAULT_APP_SETTINGS,
   deepClone,
   EXPORT_UNITS,
+  STEP_PROTOCOLS,
   holdsOnlyAccountServerSettings,
   MAX_SEALED_SETTINGS_CHARS,
   SETTINGS_SEAL_REQUIRED_CODE,
@@ -483,6 +484,12 @@ export function parseUpdateAppSettingsRequest(
           'exportUnits',
           EXPORT_UNITS,
           DEFAULT_APP_SETTINGS.files.exportUnits
+        ),
+        stepProtocol: optionalMember(
+          files,
+          'stepProtocol',
+          STEP_PROTOCOLS,
+          DEFAULT_APP_SETTINGS.files.stepProtocol
         )
       },
       collaboration: {

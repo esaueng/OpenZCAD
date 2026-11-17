@@ -1,3 +1,7 @@
+import {
+  createEncryptedComments,
+  type EncryptedComments
+} from './encryptedComments';
 /**
  * The page's encrypted-project store (ADR-024 Phase 4, encrypted
  * documents), loaded on demand by `api.ts` the first time a format-2
@@ -132,6 +136,7 @@ interface Opened {
   readonly blobs: Promise<EncryptedContentBlobs>;
   readonly measurements: Promise<EncryptedMeasurements>;
   readonly viewStates: Promise<EncryptedViewStates>;
+  readonly comments: Promise<EncryptedComments>;
   readonly invitations: Promise<InvitationContext>;
   readonly sharing: Promise<PageShareLinks>;
 }
@@ -339,6 +344,7 @@ async function openStore(
   blobs: EncryptedContentBlobs;
   measurements: EncryptedMeasurements;
   viewStates: EncryptedViewStates;
+  comments: EncryptedComments;
   invitations: InvitationContext;
   sharing: PageShareLinks;
 }> {
@@ -617,6 +623,12 @@ async function openStore(
       kit: store.replaced,
       pins
     }),
+    // L08 review comments (held, #1667): one signed log per member.
+    comments: createEncryptedComments({
+      userId,
+      kit: store.replaced,
+      pins
+    }),
     // Invitations (slice 5-3b): verified-contact checks through the same
     // contacts module the co-members' lists come from.
     invitations: {
@@ -766,6 +778,7 @@ async function openedForSession(
       blobs: both.then(({ blobs }) => blobs),
       measurements: both.then(({ measurements }) => measurements),
       viewStates: both.then(({ viewStates }) => viewStates),
+      comments: both.then(({ comments }) => comments),
       invitations: both.then(({ invitations }) => invitations),
       sharing: both.then(({ sharing }) => sharing)
     };
@@ -799,6 +812,7 @@ async function openedForSession(
     current.blobs.catch(() => undefined);
     current.measurements.catch(() => undefined);
     current.viewStates.catch(() => undefined);
+    current.comments.catch(() => undefined);
     current.invitations.catch(() => undefined);
     current.sharing.catch(() => undefined);
   }
@@ -878,6 +892,11 @@ export async function encryptedShareLinks(): Promise<PageShareLinks> {
 /** The page's encrypted measurements client (`measurementCloudSync.ts`). */
 export async function encryptedMeasurements(): Promise<EncryptedMeasurements> {
   return (await openedForSession()).measurements;
+}
+
+/** The page's encrypted comments client (L08, held: #1667). */
+export async function encryptedComments(): Promise<EncryptedComments> {
+  return (await openedForSession()).comments;
 }
 
 /** The page's encrypted view-state client (`workspaceResume.ts`). */

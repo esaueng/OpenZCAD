@@ -528,6 +528,37 @@ const DEPTH_BIASED_LINE_VERTEX_SHADER = (() => {
     );
 })();
 
+const CLIPPING_FRAGMENT_INCLUDE = '#include <clipping_planes_fragment>';
+
+/**
+ * LineMaterial's fragment shader with a hard section-plane clip.
+ *
+ * Fat lines turn on `alphaToCoverage` for their round caps, and three.js then
+ * clips with its antialiased branch: it fades `diffuseColor.a` across the
+ * plane and discards only where that reaches exactly zero. LineMaterial
+ * writes its own `alpha`, never `diffuseColor.a`, so the fade is lost, and a
+ * short segment seen nearly end-on (a thread's coil, a silhouette piece) has
+ * a screen-space gradient wide enough that it is never zero: those pieces
+ * of the removed half drew as dotted outlines over a section (#1626). Edges
+ * need no soft clip boundary, so the plain discard branch is used.
+ */
+const HARD_CLIPPED_LINE_FRAGMENT_SHADER = (() => {
+  const source = new LineMaterial().fragmentShader;
+  if (!source.includes(CLIPPING_FRAGMENT_INCLUDE)) {
+    throw new Error('LineMaterial shader changed: clipping include missing.');
+  }
+  return source.replace(
+    CLIPPING_FRAGMENT_INCLUDE,
+    `#ifdef ALPHA_TO_COVERAGE
+				#undef ALPHA_TO_COVERAGE
+				${CLIPPING_FRAGMENT_INCLUDE}
+				#define ALPHA_TO_COVERAGE
+			#else
+				${CLIPPING_FRAGMENT_INCLUDE}
+			#endif`
+  );
+})();
+
 /**
  * The stencil bit a translucent line uses to draw each pixel once.
  *
@@ -606,6 +637,7 @@ export function createFatLineMaterial(options: FatLineOptions): LineMaterial {
   });
   // Every fat line carries the uniform, so they all share one program.
   material.vertexShader = DEPTH_BIASED_LINE_VERTEX_SHADER;
+  material.fragmentShader = HARD_CLIPPED_LINE_FRAGMENT_SHADER;
   material.uniforms.depthBias = { value: Math.max(options.depthBias ?? 0, 0) };
   material.resolution.set(
     Math.max(options.resolution?.width ?? 1, 1),

@@ -28,6 +28,7 @@ import {
 } from '@openzcad/shared';
 import { unitSymbol } from '../../lib/assembly/assemblyUi';
 import { PlaybackControl } from './PlaybackControl';
+import { useStageFootClaim } from '../../hooks/useStageFootClaim';
 import {
   assemblyRuntime,
   getAssemblyRuntime,
@@ -237,6 +238,13 @@ export function MotionStudyTimeline({
       viewer.style.removeProperty('--motion-timeline-h');
     };
   }, [floating, timelineShown]);
+  // On a narrow stage Assemble's sidebar stands above the timeline, not
+  // beside it, and ends above it rather than over Play (UX-003).
+  useStageFootClaim(
+    timelineRef,
+    '--motion-timeline-claim',
+    floating && timelineShown
+  );
 
   if (!assembly || !saved) {
     poseRef.current = () => false;

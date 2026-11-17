@@ -74,7 +74,11 @@ import {
   shiftBasisAlongNormal,
   subtract
 } from './exact-math';
-import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
+import {
+  connectedRegionGroups,
+  resolveRegionProfiles,
+  resolveRegionProfilesInSketch
+} from './region-profile';
 import { ellipseRegionEdges, splineRegionEdges } from './profile-curve-edges';
 import {
   basisMatchesLiftedFrame,
@@ -1015,6 +1019,157 @@ export function regionSideSources(
   return sources;
 }
 
+/**
+ * Names the edges of a selected-region extrusion that its faces identify.
+ *
+ * The faces are named by what draws them: the two caps, and one side per
+ * sketch entity (`addRegionSideRoles`). An edge that is the only boundary
+ * between two of those faces has a construction role of its own, the pair,
+ * and that role survives any edit that keeps both faces: a driving
+ * dimension that moves the edge leaves it between the same cap and the same
+ * entity's side. Without a name, an edge picked for a fillet or chamfer is
+ * stored as a geometry hash, which stops matching as soon as the sketch is
+ * resized (issue #1663). The single-profile path names its edges
+ * (`buildExtrudeLineage`); this is its counterpart for regions.
+ *
+ * Fail closed, like every semantic role: an edge is named only when it lies
+ * between exactly two faces, both named once and differently, and no other
+ * edge lies between the same two. A seam, an edge on a side that stayed
+ * unnamed, and a boundary a cap shares with one side in several pieces all
+ * stay hash-only.
+ *
+ * Which cell an edge belongs to is part of its name. Two cells of one
+ * sketch can be bounded by the same entities (the two ends of a bar another
+ * rectangle crosses, the two halves of a circle cut by a diameter), and a
+ * pick on one must never resolve on the other when the extrude's selection
+ * changes. `cells` is the boundary provenance of every cell fused into this
+ * solid, and it is null unless each of them is the only cell of the whole
+ * sketch, selected or not, with that boundary (`cellIdentity`): then the
+ * name says exactly which cells the solid is made of, and a different
+ * selection cannot produce it. Otherwise no edge is named.
+ */
+function addRegionBoundaryEdgeRoles(
+  kernel: RemusKernel,
+  solid: number,
+  candidates: ReturnType<typeof topologyCandidatesForSolid>,
+  token: string,
+  cells: string | null,
+  assignments: RemusSemanticAssignment[]
+) {
+  if (cells === null) return;
+  // The publisher keeps a face role only when the name and the face are
+  // one-to-one, so only those faces can vouch for an edge.
+  const nameUses = new Map<string, number>();
+  const handleUses = new Map<number, number>();
+  for (const assignment of assignments) {
+    if (assignment.kind !== 'face') continue;
+    nameUses.set(
+      assignment.lineageName,
+      (nameUses.get(assignment.lineageName) ?? 0) + 1
+    );
+    handleUses.set(
+      assignment.handle,
+      (handleUses.get(assignment.handle) ?? 0) + 1
+    );
+  }
+  const faceRole = new Map<number, string>();
+  const capPrefix = 'sweep.face.cap.';
+  const sidePrefix = `sweep.face.side.region.${token}.`;
+  for (const assignment of assignments) {
+    if (
+      assignment.kind !== 'face' ||
+      nameUses.get(assignment.lineageName) !== 1 ||
+      handleUses.get(assignment.handle) !== 1
+    )
+      continue;
+    const name = assignment.lineageName;
+    // `cap.start`, `cap.end`, or `side.<entity>.<piece>`: what tells this
+    // region's faces apart, without the region token every one repeats.
+    const role = name.startsWith(sidePrefix)
+      ? `side.${name.slice(sidePrefix.length)}`
+      : name.startsWith(`${capPrefix}start.`)
+        ? 'cap.start'
+        : name.startsWith(`${capPrefix}end.`)
+          ? 'cap.end'
+          : null;
+    if (role !== null) faceRole.set(assignment.handle, role);
+  }
+  // The two caps never meet, so with no named side there is no edge to
+  // name: a flattened text outline, whose sides stay unnamed, stops here
+  // without reading its topology.
+  if (![...faceRole.values()].some((role) => role.startsWith('side.'))) return;
+  const facesByEdge = new Map<number, number[]>();
+  for (const face of kernel.getSolidFaces(solid)) {
+    for (const edge of new Set(kernel.getFaceEdges(face))) {
+      const faces = facesByEdge.get(edge);
+      if (faces) faces.push(face);
+      else facesByEdge.set(edge, [face]);
+    }
+  }
+  const byPair = new Map<string, (typeof candidates)[number][]>();
+  for (const candidate of candidates) {
+    if (candidate.kind !== 'edge') continue;
+    const faces = facesByEdge.get(candidate.handle);
+    if (faces?.length !== 2) continue;
+    const first = faceRole.get(faces[0]!);
+    const second = faceRole.get(faces[1]!);
+    if (first === undefined || second === undefined || first === second)
+      continue;
+    const pair = [first, second].sort().join('|');
+    const edges = byPair.get(pair);
+    if (edges) edges.push(candidate);
+    else byPair.set(pair, [candidate]);
+  }
+  for (const [pair, edges] of byPair) {
+    if (edges.length !== 1) continue;
+    assignments.push({
+      ...edges[0]!,
+      lineageName: `sweep.edge.region.${token}[${cells}].${pair}`
+    });
+  }
+}
+
+/**
+ * A cell's boundary as one comparable string: for its outer loop and each
+ * hole, the authored piece every curve was cut from (the sketch entity, and
+ * the edge of it for a composite shape, or the kind of curve), every repeat
+ * kept. It says what bounds the cell and never where the cell is, so it is
+ * unchanged by an edit of the sketch's dimensions.
+ */
+function cellBoundaryKey(cell: SketchRegion): string {
+  const loopKey = (loop: SketchRegion['outer']) =>
+    loop.curves
+      .map((curve) => {
+        const token = parseSketchBoundaryToken(curve.boundaryToken);
+        return token?.kind === 'composite'
+          ? `${token.objectId}:${token.edgeIndex}`
+          : `${token?.objectId ?? curve.sourceObjectId}:${curve.kind}`;
+      })
+      .sort()
+      .join(',');
+  return [loopKey(cell.outer), ...cell.holes.map(loopKey).sort()].join('|');
+}
+
+/**
+ * The cells fused into one solid, as the identity an edge name carries, or
+ * null when any of them shares its boundary with another cell of the sketch
+ * (two halves of a circle cut by a diameter, two glyphs of one text):
+ * then nothing but position distinguishes it from a cell the extrude could
+ * be pointed at instead.
+ */
+function cellIdentity(
+  group: readonly SketchRegion[],
+  cellsByBoundary: ReadonlyMap<string, number>
+): string | null {
+  const keys: string[] = [];
+  for (const cell of group) {
+    const key = cellBoundaryKey(cell);
+    if (cellsByBoundary.get(key) !== 1) return null;
+    keys.push(key);
+  }
+  return keys.sort().join(';');
+}
+
 /** Extrude one or more explicitly selected bounded sketch cells. */
 export function buildRegionExtrude(
   kernel: RemusKernel,
@@ -1026,7 +1181,18 @@ export function buildRegionExtrude(
   basis: PlaneBasis,
   warn: (message: string) => void
 ): ExactShape {
-  const regions = resolveRegionProfiles(document, sketch, data, scope);
+  const { regions, cells } = resolveRegionProfilesInSketch(
+    document,
+    sketch,
+    data,
+    scope
+  );
+  // How many cells of the sketch, selected or not, have each boundary.
+  const cellsByBoundary = new Map<string, number>();
+  for (const cell of cells) {
+    const key = cellBoundaryKey(cell);
+    cellsByBoundary.set(key, (cellsByBoundary.get(key) ?? 0) + 1);
+  }
   const distance = resolveParamValue(
     data.distance,
     scope,
@@ -1053,7 +1219,10 @@ export function buildRegionExtrude(
     warn(flattenedOutlineWarning(flattenedOutlines));
   }
   const groups = connectedRegionGroups(regions);
-  const lineages: RemusLineageState[] = [];
+  const built: {
+    assignments: RemusSemanticAssignment[];
+    diagnostics: RemusLineageState[];
+  }[] = [];
   const objectsById = new Map(
     sketch.objectIds.flatMap((objectId) => {
       const node = document.nodes[objectId];
@@ -1129,18 +1298,48 @@ export function buildRegionExtrude(
         assignments,
         diagnostics
       });
+      addRegionBoundaryEdgeRoles(
+        kernel,
+        solid,
+        candidates,
+        token,
+        cellIdentity(group, cellsByBoundary),
+        assignments
+      );
     }
-    lineages.push(
-      mergeRemusLineageStates([
-        createRemusSemanticLineage(feature.featureId, 'sweep', assignments),
-        ...diagnostics
-      ])
-    );
+    built.push({ assignments, diagnostics });
     return solid;
   });
+  // A name is one edge of the feature, not one edge of each solid: where two
+  // disconnected cells would publish the same edge name, neither does.
+  const edgeNameUses = new Map<string, number>();
+  for (const { assignments } of built) {
+    for (const assignment of assignments) {
+      if (assignment.kind !== 'edge') continue;
+      edgeNameUses.set(
+        assignment.lineageName,
+        (edgeNameUses.get(assignment.lineageName) ?? 0) + 1
+      );
+    }
+  }
   return {
     solids,
-    lineage: mergeRemusLineageStates(lineages)
+    lineage: mergeRemusLineageStates(
+      built.map(({ assignments, diagnostics }) =>
+        mergeRemusLineageStates([
+          createRemusSemanticLineage(
+            feature.featureId,
+            'sweep',
+            assignments.filter(
+              (assignment) =>
+                assignment.kind !== 'edge' ||
+                edgeNameUses.get(assignment.lineageName) === 1
+            )
+          ),
+          ...diagnostics
+        ])
+      )
+    )
   };
 }
 

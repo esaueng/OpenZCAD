@@ -25,6 +25,7 @@ import {
   type StoredSourceBlob
 } from './localProjectStore';
 import type { ValidatedFeatureOutcome } from '../hooks/useValidatedFeatureCommit';
+import { E2EE_LOCAL_ONLY_CODE } from './api';
 import type { UnitSystem } from '@openzcad/shared';
 
 // The workspace reaches the mesh command builders through this lazily loaded
@@ -239,6 +240,10 @@ export async function archiveImportedMesh(deps: {
   onCleanupFailure?(error: unknown): void;
 }): Promise<ImportedMeshArchive> {
   const { signal } = deps;
+  // An end-to-end encrypted project stores the mesh the feature names, but
+  // has no place for the original file (`contentBlobKindFor`): that is a
+  // refusal by design, not an upload that failed and could be retried.
+  let originalLocalOnly = false;
   const attempt = async (
     input: Parameters<typeof deps.archive>[0]
   ): Promise<string | null> => {
@@ -253,6 +258,12 @@ export async function archiveImportedMesh(deps: {
       });
     } catch (error) {
       if (isAbort(error, signal)) throw error;
+      if (
+        input.kind !== 'mesh-payload' &&
+        (error as { code?: unknown } | null)?.code === E2EE_LOCAL_ONLY_CODE
+      ) {
+        originalLocalOnly = true;
+      }
       return null;
     }
   };
@@ -301,7 +312,9 @@ export async function archiveImportedMesh(deps: {
         ? ' (cloud archive unavailable; mesh saved locally).'
         : originalArchived
           ? '.'
-          : ' (original file not archived: upload unavailable).'
+          : originalLocalOnly
+            ? ' (original file not stored: an encrypted project keeps the imported mesh, not the original file).'
+            : ' (original file not archived: upload unavailable).'
   };
 }
 

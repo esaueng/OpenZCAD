@@ -655,11 +655,8 @@ import {
   LiveSessionNotice
 } from './components/LiveSessionNotice';
 import type { CommentPin } from './components/ModelViewer';
-import {
-  ENCRYPTED_COMMENTS_UNAVAILABLE,
-  projectCommentsApi
-} from './lib/projectCommentsApi';
-import { SaveStatePreviewNotice } from './components/SaveStatePreviewNotice';
+import { ENCRYPTED_COMMENTS_UNAVAILABLE } from './lib/commentsAvailability';
+import type { MemberCommentContext } from './lib/memberComments';
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
   ActivityLogButton,
@@ -1501,6 +1498,15 @@ const LazySharedLinkCopyDialog = lazyWithStaleChunkNotice(() =>
     default: module.SharedLinkCopyDialog
   }))
 );
+// The comment client and the save-state preview notice load on the gesture
+// that needs them (opening Comments, previewing a save state), not with the
+// workspace.
+const loadCommentsApi = () => import('./lib/memberComments');
+const LazySaveStatePreviewNotice = lazyWithStaleChunkNotice(() =>
+  import('./components/SaveStatePreviewNotice').then((module) => ({
+    default: module.SaveStatePreviewNotice
+  }))
+);
 const LazyCommentsPanel = lazyWithStaleChunkNotice(() =>
   import('./components/CommentsPanel').then((module) => ({
     default: module.CommentsPanel
@@ -1737,6 +1743,15 @@ const SharedLinkCopyDialog = withSuspense(LazySharedLinkCopyDialog);
 const SaveRevisionDialog = withSuspense(LazySaveRevisionDialog);
 
 const CommentsPanel = withSuspense(LazyCommentsPanel);
+function SaveStatePreviewNotice(
+  props: ComponentProps<typeof LazySaveStatePreviewNotice>
+) {
+  return (
+    <Suspense fallback={null}>
+      <LazySaveStatePreviewNotice {...props} />
+    </Suspense>
+  );
+}
 const SaveStateCompareDialog = withSuspense(LazySaveStateCompareDialog);
 
 const DeleteFeatureDialog = withSuspense(LazyDeleteFeatureDialog);
@@ -1927,6 +1942,7 @@ import {
   inPlaceFaceMode,
   takesFeatureFaces,
   toggledPatternSkip,
+  patternCopyChip,
   requestNewAxis,
   resolveNewAxis,
   valueInRange,
@@ -2854,6 +2870,8 @@ export function App() {
   const [shareSession, setShareSession] = useState<{
     token: string;
     encryptedMode?: 'view' | 'tweak';
+    /** L08: a plaintext commenter link; its visitor may comment. */
+    comments?: boolean;
   } | null>(null);
   const shareSessionRef = useRef(shareSession);
   shareSessionRef.current = shareSession;
@@ -3355,6 +3373,8 @@ export function App() {
     kind: 'restore' | 'branch';
     checkpoint: ProjectCheckpoint;
   } | null>(null);
+  /** L08 commenter link: the name its visitor signs comments with. */
+  const [commentVisitorName, setCommentVisitorName] = useState('');
   const [pendingFeatureDelete, setPendingFeatureDelete] = useState<{
     featureId: FeatureId;
     name: string;
@@ -6829,8 +6849,12 @@ export function App() {
   // D01: drawings read the account's document, which a shared link does not
   // carry as an editable copy; read-only seats may still open and export
   // sheets, with sheet edits refused by the project guard.
+  // L08: a link shows the sheets its project chose for links, read only;
+  // a link that carries none has no Draw workspace to open.
   const drawingModeDisabledReason = shareSession
-    ? 'Drawings are not available on a shared link'
+    ? doc?.drawings?.sheets.length
+      ? null
+      : 'This link shares no drawings'
     : null;
   // AS01: Assemble edits the document's assembly section, so whatever locks
   // Build locks it too; a shared link carries no assembly to edit.
@@ -6838,9 +6862,12 @@ export function App() {
     ? 'Assemblies are not available on a shared link'
     : buildModeDisabledReason;
   const resolvedWorkspaceMode: WorkspaceMode = shareSession
-    ? panelState.workspaceMode === 'view' || shareLinkViewOnly
-      ? 'view'
-      : 'tweak'
+    ? panelState.workspaceMode === 'drawing' &&
+      drawingModeDisabledReason === null
+      ? 'drawing'
+      : panelState.workspaceMode === 'view' || shareLinkViewOnly
+        ? 'view'
+        : 'tweak'
     : buildModeDisabledReason !== null
       ? panelState.workspaceMode === 'drawing'
         ? 'drawing'
@@ -7041,8 +7068,11 @@ export function App() {
   // read-only seat or a second tab refuses them), and to the reading
   // workspaces' locks in View and Tweak, where a drawing-only undo or redo
   // must not edit sheets either.
-  const drawingEditDisabledReason =
-    !projectOpenElsewhere && (viewMode || tweakMode || assembleMode)
+  const drawingEditDisabledReason = shareSession
+    ? // L08: the sheets a link shows are the project's, read only here;
+      // exporting them needs no edit.
+      'Drawings on a shared link are read only — Make a copy to edit them'
+    : !projectOpenElsewhere && (viewMode || tweakMode || assembleMode)
       ? editDisabledReason
       : projectEditDisabledReason;
   // AS01 assembly edits answer to the project's own locks in Assemble and
@@ -7110,6 +7140,8 @@ export function App() {
   drawingEditDisabledReasonRef.current = drawingEditDisabledReason;
   const assemblyEditDisabledReasonRef = useRef(assemblyEditDisabledReason);
   assemblyEditDisabledReasonRef.current = assemblyEditDisabledReason;
+  const projectEditDisabledReasonRef = useRef(projectEditDisabledReason);
+  projectEditDisabledReasonRef.current = projectEditDisabledReason;
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
   // L03: a preview whose geometry something else replaced, or whose project
@@ -8673,6 +8705,42 @@ export function App() {
       cancelled = true;
     };
   }, [cloudProjectIds, doc?.projectId, session]);
+
+  // An encrypted project's archived STEP sources are content blobs its
+  // document names, never artifact records, so the listing above leaves them
+  // out and an import that said "source archived" showed none (#1649).
+  // Loaded only for an encrypted project, off the entry chunk.
+  const [encryptedStoredFiles, setEncryptedStoredFiles] = useState<{
+    artifacts: ArtifactRecord[];
+    merged: ArtifactRecord[];
+  } | null>(null);
+  useEffect(() => {
+    if (!doc || !isEncryptedProject(doc.projectId)) {
+      setEncryptedStoredFiles(null);
+      return;
+    }
+    let cancelled = false;
+    void import('./lib/e2ee/encryptedImportSources').then(
+      ({ encryptedImportSourceArtifacts, withEncryptedImportSources }) => {
+        if (cancelled) return;
+        setEncryptedStoredFiles({
+          artifacts,
+          merged: withEncryptedImportSources(
+            artifacts,
+            encryptedImportSourceArtifacts(doc)
+          )
+        });
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [artifacts, doc]);
+  // Never a list built from an earlier listing of another project.
+  const storedFiles =
+    encryptedStoredFiles?.artifacts === artifacts
+      ? encryptedStoredFiles.merged
+      : artifacts;
 
   // K05 on-demand boolean probe: sticky per open document, cleared on
   // project switch. A face/edge/vertex pick on B — or a command started on
@@ -13745,7 +13813,8 @@ export function App() {
         { immediate: true }
       );
     } else {
-      setSectionPlane('XY');
+      // With no remembered cut, the first one is on Front (XZ).
+      setSectionPlane('XZ');
     }
   }
 
@@ -15794,6 +15863,7 @@ export function App() {
           name: string;
           document: ProjectDocument;
           encryptedMode?: 'view' | 'tweak';
+          comments?: boolean;
         } | null;
         if (isEncryptedShareLink(pendingShareToken)) {
           // End to end encrypted (ADR-024 slice 5-11): verified in the ADR's
@@ -15820,7 +15890,8 @@ export function App() {
           );
           shared = plaintext && {
             name: plaintext.project.name,
-            document: plaintext.document
+            document: plaintext.document,
+            ...(plaintext.project.comments ? { comments: true } : {})
           };
         }
         if (!isCurrent()) return;
@@ -15858,7 +15929,10 @@ export function App() {
         setCloudAvailable(false);
         const opened = shared.encryptedMode
           ? { token: pendingShareToken, encryptedMode: shared.encryptedMode }
-          : { token: pendingShareToken };
+          : {
+              token: pendingShareToken,
+              ...(shared.comments ? { comments: true } : {})
+            };
         setShareSession(opened);
         shareSessionRef.current = opened;
         setSharePage(null);
@@ -17102,6 +17176,27 @@ export function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  /**
+   * L08: chooses the drawing sheets share links show. A forward write (no
+   * undo entry) that syncs like any edit; the next snapshot a link serves
+   * carries the chosen sheets.
+   */
+  function handleShareLinkSheets(sheetIds: string[]) {
+    const manager = managerRef.current;
+    if (!manager || projectEditDisabledReasonRef.current !== null) return;
+    const before = manager.document;
+    const next = manager.setShareLinkSheets(sheetIds);
+    if (next === before) return;
+    geometry.retainReadyGeometry(next);
+    setDoc(next);
+    const count = next.shareLinkSheetIds?.length ?? 0;
+    setStatus(
+      count === 0
+        ? 'Share links show no drawings.'
+        : `Share links show ${count} drawing ${count === 1 ? 'sheet' : 'sheets'}.`
+    );
   }
 
   /** Branches the open project's save state into a project of its own. */
@@ -19987,7 +20082,8 @@ export function App() {
           units: resolveExportUnits(
             appSettingsRef.current.files.exportUnits,
             doc.units
-          )
+          ),
+          stepProtocol: appSettingsRef.current.files.stepProtocol
         });
         if (!('text' in result)) {
           throw new Error('The STEP export returned no text.');
@@ -20681,14 +20777,34 @@ export function App() {
   // encrypted records, so nothing about them is sent in plaintext.
   const commentsUnavailableReason = !doc
     ? null
-    : isEncryptedProject(doc.projectId)
-      ? ENCRYPTED_COMMENTS_UNAVAILABLE
-      : !session || !activeProjectIsCloud
-        ? 'Save this project to your account to comment on it.'
-        : null;
+    : shareSession
+      ? shareSession.comments
+        ? null
+        : 'This link does not take comments.'
+      : isEncryptedProject(doc.projectId)
+        ? // L08 encrypted comments (held, #1667): signed, encrypted logs.
+          session
+          ? null
+          : ENCRYPTED_COMMENTS_UNAVAILABLE
+        : !session || !activeProjectIsCloud
+          ? 'Save this project to your account to comment on it.'
+          : null;
   const commentRole: ProjectAccessRole =
-    collaboration.role ??
-    (session && doc?.ownerUserId === session.userId ? 'owner' : 'viewer');
+    doc && isEncryptedProject(doc.projectId)
+      ? // An encrypted thread is resolved by its author or the owner
+        // (`mergeCommentLogs`), so the panel offers no more.
+        session && doc.ownerUserId === session.userId
+        ? 'owner'
+        : 'viewer'
+      : (collaboration.role ??
+        (session && doc?.ownerUserId === session.userId ? 'owner' : 'viewer'));
+  /** Who a member's comment change acts for (L08 slice 8). */
+  function commentContext(): MemberCommentContext {
+    return {
+      ownerUserId: managerRef.current?.document.ownerUserId ?? '',
+      authorName: sessionRef.current?.displayName || 'A member'
+    };
+  }
   const shownComments =
     doc && projectComments?.projectId === doc.projectId
       ? projectComments.comments
@@ -20715,10 +20831,15 @@ export function App() {
     );
   const loadComments = useCallback(async (projectId: string) => {
     try {
-      const comments = await projectCommentsApi.list(projectId);
+      const link = shareSessionRef.current;
+      const { linkCommentsApi, memberComments } = await loadCommentsApi();
+      const { comments, warning } = link?.comments
+        ? { comments: await linkCommentsApi.list(link.token), warning: null }
+        : await memberComments.list(projectId, commentContext());
       if (managerRef.current?.document.projectId !== projectId) return;
       setProjectComments({ projectId, comments });
-      setCommentsError(null);
+      // An encrypted project's member log left out is said, not hidden.
+      setCommentsError(warning);
     } catch (error) {
       setCommentsError(errorMessage(error, 'Comments could not be loaded.'));
     }
@@ -20738,12 +20859,15 @@ export function App() {
   }
   /** Runs one comment change, then reloads the list; false when it failed. */
   async function runCommentAction(
-    action: (projectId: string) => Promise<void>
+    action: (
+      projectId: string,
+      api: Awaited<ReturnType<typeof loadCommentsApi>>
+    ) => Promise<void>
   ): Promise<boolean> {
     const projectId = managerRef.current?.document.projectId;
     if (!projectId) return false;
     try {
-      await action(projectId);
+      await action(projectId, await loadCommentsApi());
       await loadComments(projectId);
       return true;
     } catch (error) {
@@ -26676,15 +26800,14 @@ export function App() {
       inPlace.handles.map((handle) => {
         if (handle.kind === 'instance') {
           // M02: a copy's skip toggle reads its label, and whether it is in.
-          const { label, skipped } = handle.params;
+          // A Point pattern copy's label is a sketch point's id, kept as the
+          // skip key; it reads and is announced by its name (UX-008).
+          const chip = patternCopyChip(handle.params);
           return {
             ...handle,
-            value: skipped ? 1 : 0,
-            format: () => label,
-            describe: () =>
-              skipped
-                ? `Copy ${label}, skipped · bring it back`
-                : `Copy ${label} · skip it`
+            value: handle.params.skipped ? 1 : 0,
+            format: () => chip.text,
+            describe: () => chip.name
           };
         }
         const valueSpec = inPlaceSpec?.values.find(
@@ -35816,7 +35939,7 @@ export function App() {
             accountProjectListReached
           }
           localOnlySourceCount={localOnlySources.length}
-          artifacts={artifacts}
+          artifacts={storedFiles}
           meshCleanup={
             session?.userId === doc.ownerUserId && activeProjectIsCloud
               ? {
@@ -35888,7 +36011,9 @@ export function App() {
           }
           onGoHome={() => void handleGoHome()}
           onOpenSharing={() => setSharingOpen(true)}
-          {...(shareSession ? {} : { onOpenComments: openComments })}
+          {...(!shareSession || shareSession.comments
+            ? { onOpenComments: openComments }
+            : {})}
           onSignIn={() => openSettingsAt('account')}
           onOpenSettings={openSettings}
           encryption={
@@ -37652,6 +37777,7 @@ export function App() {
           <ErrorBoundary label="Drawings" resetKey={doc.projectId}>
             <Suspense fallback={<WorkspacePending />}>
               <LazyDrawingWorkspace
+                loadReferenceImage={loadReferenceImage}
                 document={doc}
                 bodies={doc.derived.bodyRepresentations}
                 geometryPending={!geometry.isReadyFor(doc)}
@@ -38352,7 +38478,7 @@ export function App() {
               onClose={() => setContextMenu(null)}
             />
           ) : null}
-          {commentsOpen && doc && !shareSession ? (
+          {commentsOpen && doc && (!shareSession || shareSession.comments) ? (
             <CommentsPanel
               comments={
                 projectComments?.projectId === doc.projectId
@@ -38372,36 +38498,69 @@ export function App() {
               }}
               onCancelPlacing={() => setCommentPlacing(false)}
               hasDraft={commentDraft !== null}
+              {...(shareSession
+                ? {
+                    visitor: {
+                      name: commentVisitorName,
+                      onNameChange: setCommentVisitorName
+                    }
+                  }
+                : {})}
               onPostThread={(text) =>
                 commentDraft
-                  ? runCommentAction(async (projectId) => {
-                      const created = await projectCommentsApi.create(
+                  ? runCommentAction(
+                      async (
                         projectId,
-                        { anchor: commentDraft, text }
-                      );
-                      setCommentDraft(null);
-                      setActiveCommentId(created.commentId);
-                    })
+                        { linkCommentsApi, memberComments }
+                      ) => {
+                        const input = { anchor: commentDraft, text };
+                        const created = shareSession
+                          ? await linkCommentsApi.create(
+                              shareSession.token,
+                              commentVisitorName,
+                              input
+                            )
+                          : await memberComments.create(
+                              projectId,
+                              commentContext(),
+                              input
+                            );
+                        setCommentDraft(null);
+                        setActiveCommentId(created?.commentId ?? null);
+                      }
+                    )
                   : Promise.resolve(false)
               }
               onCancelDraft={() => setCommentDraft(null)}
               onReply={(threadId, text) =>
-                runCommentAction((projectId) =>
-                  projectCommentsApi
-                    .create(projectId, { parentId: threadId, text })
-                    .then(() => undefined)
+                runCommentAction(
+                  (projectId, { linkCommentsApi, memberComments }) =>
+                    (shareSession
+                      ? linkCommentsApi.create(
+                          shareSession.token,
+                          commentVisitorName,
+                          { parentId: threadId, text }
+                        )
+                      : memberComments.create(projectId, commentContext(), {
+                          parentId: threadId,
+                          text
+                        })
+                    ).then(() => undefined)
                 )
               }
               onResolve={(threadId, resolved) =>
-                void runCommentAction((projectId) =>
-                  projectCommentsApi
-                    .resolve(projectId, threadId, resolved)
-                    .then(() => undefined)
+                void runCommentAction((projectId, { memberComments }) =>
+                  memberComments.resolve(
+                    projectId,
+                    commentContext(),
+                    threadId,
+                    resolved
+                  )
                 )
               }
               onDelete={(commentId) =>
-                void runCommentAction((projectId) =>
-                  projectCommentsApi.remove(projectId, commentId)
+                void runCommentAction((projectId, { memberComments }) =>
+                  memberComments.remove(projectId, commentContext(), commentId)
                 )
               }
               onClose={() => {
@@ -38419,6 +38578,14 @@ export function App() {
                 projectId={doc.projectId}
                 projectName={doc.name}
                 configurations={doc.configurations?.rows ?? []}
+                drawingSheets={(doc.drawings?.sheets ?? []).map((sheet) => ({
+                  id: sheet.sheetId,
+                  name: sheet.name
+                }))}
+                sharedSheetIds={doc.shareLinkSheetIds ?? []}
+                {...(projectEditDisabledReason === null
+                  ? { onSharedSheetsChange: handleShareLinkSheets }
+                  : {})}
                 localProject={!activeProjectIsCloud}
                 localImportSourceNames={localOnlySources.map(
                   (source) => source.sourceName

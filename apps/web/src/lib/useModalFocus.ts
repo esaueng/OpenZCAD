@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, type RefObject } from 'react';
+import { menuOpenerFor } from './useMenuKeyboard';
 
 const FOCUSABLE = [
   'a[href]',
@@ -346,7 +347,10 @@ export function useModalFocus(
     }
     // Each modal keeps its own opener as well as the stack's: one opened
     // from inside another hands focus back to that control when it closes.
-    const opener = document.activeElement as HTMLElement | null;
+    // A dialog opened from a menu item returns to the menu's opener: the
+    // item unmounts with the menu before the dialog closes.
+    const focused = document.activeElement as HTMLElement | null;
+    const opener = menuOpenerFor(focused) ?? focused;
     if (modalStack.length === 0) {
       stackOpener = opener;
     }

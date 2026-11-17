@@ -6,6 +6,8 @@ import type {
 import { desktopFetch } from './desktopBridge';
 import { projectRequest } from './projectWriteGate';
 import { isEncryptedProject } from './api';
+import { shareTokenHeaders } from './projectShareClient';
+import { ENCRYPTED_COMMENTS_UNAVAILABLE } from './commentsAvailability';
 
 /**
  * L08 review comments for a plaintext project in the account. An encrypted
@@ -13,8 +15,7 @@ import { isEncryptedProject } from './api';
  * offered until they can travel as encrypted records (ADR-024), so nothing
  * about them is sent in plaintext.
  */
-export const ENCRYPTED_COMMENTS_UNAVAILABLE =
-  'Comments are not available on encrypted projects yet.';
+export { ENCRYPTED_COMMENTS_UNAVAILABLE };
 
 export class ProjectCommentsError extends Error {
   constructor(
@@ -88,5 +89,53 @@ export const projectCommentsApi = {
   },
   async remove(projectId: string, commentId: string): Promise<void> {
     await request<void>(projectId, `/${commentId}`, { method: 'DELETE' });
+  }
+};
+
+async function linkRequest<T>(
+  token: string,
+  init: RequestInit = {}
+): Promise<T> {
+  // The token travels in its header, never the URL (share-link-token.ts).
+  const response = await desktopFetch('/api/share/comments', {
+    ...init,
+    credentials: 'omit',
+    headers: { 'content-type': 'application/json', ...shareTokenHeaders(token) }
+  });
+  const body = (await response.json().catch(() => null)) as {
+    error?: string;
+    code?: string;
+  } | null;
+  if (!response.ok)
+    throw new ProjectCommentsError(
+      response.status === 404
+        ? 'This link no longer takes comments.'
+        : (body?.error ?? 'Comments could not be reached.'),
+      response.status,
+      body?.code
+    );
+  return body as T;
+}
+
+/**
+ * L08 commenter links: a plaintext link's visitor, with no account, reads the
+ * project's comments and writes their own, signed with the name they type.
+ * An encrypted link never reaches here (its comments are slice 4).
+ */
+export const linkCommentsApi = {
+  async list(token: string): Promise<ProjectComment[]> {
+    return (await linkRequest<ListProjectCommentsResponse>(token)).comments;
+  },
+  async create(
+    token: string,
+    name: string,
+    input: CreateProjectCommentRequest
+  ): Promise<ProjectComment> {
+    return (
+      await linkRequest<{ comment: ProjectComment }>(token, {
+        method: 'POST',
+        body: JSON.stringify({ ...input, name })
+      })
+    ).comment;
   }
 };

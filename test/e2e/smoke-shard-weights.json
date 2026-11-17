@@ -37,8 +37,10 @@
   "drawing-dimensions.spec.ts": 10,
   "drawing-dxf-export.spec.ts": 10,
   "drawing-distances.spec.ts": 14,
+  "drawing-free-sections.spec.ts": 14,
   "drawing-properties.spec.ts": 12,
   "drawing-sections.spec.ts": 25,
+  "drawing-sheet-images.spec.ts": 16,
   "drawing-tolerances.spec.ts": 14,
   "drawings.spec.ts": 16,
   "edge-form-preview.spec.ts": 9,
@@ -113,6 +115,7 @@
   "sheet-metal-flat-pattern.spec.ts": 8,
   "sheet-metal.spec.ts": 95,
   "shoulder-cap-offset.spec.ts": 668,
+  "share-link-drawings.spec.ts": 20,
   "sketch-guides.spec.ts": 14,
   "sketch-inference.spec.ts": 18,
   "sketch-modify-tools.spec.ts": 12,
@@ -157,5 +160,6 @@
   "workspace-tour.spec.ts": 7,
   "save-state-versions.spec.ts": 12,
   "project-comments.spec.ts": 14,
-  "export-package.spec.ts": 20
+  "export-package.spec.ts": 20,
+  "encrypted-comments.spec.ts": 20
 }

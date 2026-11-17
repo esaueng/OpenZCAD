@@ -2093,10 +2093,10 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
   const sectionButton = page.getByRole('button', { name: /^Section view/ });
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'false');
 
-  // Off → XY, with the offset slider sliding out beside the rail.
+  // Off → Front (XZ), with the offset slider sliding out beside the rail.
   await sectionButton.click();
   await expect(sectionButton).toHaveAttribute('aria-pressed', 'true');
-  await expect(sectionButton).toHaveAttribute('aria-label', /now: XY plane/);
+  await expect(sectionButton).toHaveAttribute('aria-label', /now: XZ plane/);
   const slider = page.getByRole('slider', { name: 'Section plane offset' });
   await expect(slider).toBeVisible();
 
@@ -2110,9 +2110,10 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
     })
     .toBe(1);
   const offset = Number(await slider.inputValue());
+  // A Front (XZ) cut is flat along Y, at the slider's offset.
   const atPlane = (geometry: SectionGeometry) => {
-    expect(geometry.bounds.min[2]).toBeCloseTo(offset);
-    expect(geometry.bounds.max[2]).toBeCloseTo(geometry.bounds.min[2]!);
+    expect(geometry.bounds.min[1]).toBeCloseTo(offset);
+    expect(geometry.bounds.max[1]).toBeCloseTo(geometry.bounds.min[1]!);
   };
   const shown = await sectionState();
   atPlane(shown.sectionCaps[0] ?? shown.exactSections[0]!);
@@ -2139,8 +2140,8 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
     .poll(async () => {
       const state = await sectionState();
       return (
-        state.sectionCaps[0]?.bounds.min[2] ??
-        state.exactSections[0]?.bounds.min[2]
+        state.sectionCaps[0]?.bounds.min[1] ??
+        state.exactSections[0]?.bounds.min[1]
       );
     })
     .toBeCloseTo(movedOffset);
@@ -2148,11 +2149,17 @@ test('section view toggles, picks its plane in the panel, cuts exactly at rest, 
   // The plane is chosen in the panel; the cut is display-only, so the
   // feature tree and the body list never change while switching planes.
   const planes = page.getByRole('group', { name: 'Section plane' });
-  await planes.getByRole('button', { name: 'Front (XZ plane)' }).click();
-  await expect(sectionButton).toHaveAttribute('aria-label', /now: XZ plane/);
   await expect(
     planes.getByRole('button', { name: 'Front (XZ plane)' })
   ).toHaveAttribute('aria-pressed', 'true');
+  await planes.getByRole('button', { name: 'Top (XY plane)' }).click();
+  await expect(sectionButton).toHaveAttribute('aria-label', /now: XY plane/);
+  await expect(
+    planes.getByRole('button', { name: 'Top (XY plane)' })
+  ).toHaveAttribute('aria-pressed', 'true');
+  await expect(
+    planes.getByRole('button', { name: 'Front (XZ plane)' })
+  ).toHaveAttribute('aria-pressed', 'false');
   await planes.getByRole('button', { name: 'Side (YZ plane)' }).click();
   await expect(sectionButton).toHaveAttribute('aria-label', /now: YZ plane/);
 

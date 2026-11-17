@@ -1278,6 +1278,17 @@ export const isProjectStorageFormatReady = cachedSchemaProbe(
  * revoked without naming the column, every label reads null, and only a
  * rename is refused.
  */
+/**
+ * Whether migration 0059's `project_share_links.allow_comments` exists. Until
+ * it does, every link reads as view or tweak only and a commenter link is
+ * refused rather than created without comments.
+ */
+export const isShareLinkCommentsReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('project_share_links')
+   WHERE name = 'allow_comments'`,
+  (row) => row?.ready === 1
+);
+
 export const isShareLinkLabelReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM pragma_table_info('project_share_links')
    WHERE name = 'label'`,
@@ -2388,6 +2399,13 @@ export class D1R2PersistenceService implements PersistenceService {
     const label = (await isShareLinkLabelReady(this.env.DB))
       ? (input.label ?? null)
       : null;
+    // L08: a commenter link needs migration 0059; never quietly without.
+    const comments = input.comments === true;
+    if (comments && !(await isShareLinkCommentsReady(this.env.DB)))
+      throw new ProjectSharingError(
+        'SHARE_LINK_COMMENTS_UNAVAILABLE',
+        'Commenter links are not available on this server yet.'
+      );
     try {
       await (
         label === null
@@ -2430,6 +2448,12 @@ export class D1R2PersistenceService implements PersistenceService {
       }
       throw error;
     }
+    if (comments)
+      await this.env.DB.prepare(
+        'UPDATE project_share_links SET allow_comments = 1 WHERE id = ?'
+      )
+        .bind(input.shareLinkId)
+        .run();
     await this.env.DB.prepare(
       `INSERT INTO project_access_events
          (project_id, actor_user_id, share_link_id, event_type, created_at,
@@ -2441,7 +2465,7 @@ export class D1R2PersistenceService implements PersistenceService {
         ownerUserId,
         input.shareLinkId,
         input.createdAt,
-        JSON.stringify({ mode: input.mode })
+        JSON.stringify({ mode: input.mode, ...(comments ? { comments } : {}) })
       )
       .run();
     return {
@@ -2450,7 +2474,8 @@ export class D1R2PersistenceService implements PersistenceService {
       mode: input.mode,
       createdAt: input.createdAt,
       revokedAt: null,
-      label
+      label,
+      ...(comments ? { comments } : {})
     };
   }
 
@@ -2468,8 +2493,11 @@ export class D1R2PersistenceService implements PersistenceService {
     const label = (await isShareLinkLabelReady(this.env.DB))
       ? 'label'
       : 'NULL AS label';
+    const comments = (await isShareLinkCommentsReady(this.env.DB))
+      ? 'allow_comments'
+      : '0 AS allow_comments';
     const rows = await this.env.DB.prepare(
-      `SELECT id, project_id, mode, created_at, ${label}
+      `SELECT id, project_id, mode, created_at, ${label}, ${comments}
        FROM project_share_links
        WHERE project_id = ? AND revoked_at IS NULL
        ORDER BY created_at DESC`
@@ -2575,8 +2603,11 @@ export class D1R2PersistenceService implements PersistenceService {
     // Both are re-evaluated per read rather than revoking the rows, so
     // re-enabling sharing or restoring from trash brings the links back,
     // exactly as member access already behaves.
+    const comments = (await isShareLinkCommentsReady(this.env.DB))
+      ? 'l.allow_comments'
+      : '0 AS allow_comments';
     const row = await this.env.DB.prepare(
-      `SELECT l.mode, p.id AS project_id, p.name, p.document_json,
+      `SELECT l.mode, ${comments}, p.id AS project_id, p.name, p.document_json,
               p.document_object_id
        FROM project_share_links l
        INNER JOIN projects p ON p.id = l.project_id
@@ -2602,6 +2633,7 @@ export class D1R2PersistenceService implements PersistenceService {
       )
       .first<{
         mode: ProjectShareLinkMode;
+        allow_comments: number;
         project_id: string;
         name: string;
         document_json: string;
@@ -2623,6 +2655,7 @@ export class D1R2PersistenceService implements PersistenceService {
       projectId: row.project_id,
       name: row.name,
       mode: row.mode,
+      ...(row.allow_comments === 1 ? { comments: true } : {}),
       document: sharedProjectSnapshotDocument(
         await this.hydrateCopiedSourceAliases(document, row.project_id)
       )
@@ -9495,6 +9528,7 @@ interface ProjectShareLinkRow {
   mode: ProjectShareLinkMode;
   created_at: number;
   label: string | null;
+  allow_comments?: number;
 }
 
 function shareLinkFromRow(row: ProjectShareLinkRow): ProjectShareLinkSummary {
@@ -9504,7 +9538,8 @@ function shareLinkFromRow(row: ProjectShareLinkRow): ProjectShareLinkSummary {
     mode: row.mode,
     createdAt: row.created_at,
     revokedAt: null,
-    label: row.label ?? null
+    label: row.label ?? null,
+    ...(row.allow_comments === 1 ? { comments: true } : {})
   };
 }
 

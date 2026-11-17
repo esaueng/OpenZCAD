@@ -1304,7 +1304,8 @@ function writeStepBodies(
     productName: document.name,
     fileName: options.fileName ?? `${document.name}.step`,
     timestamp: options.timestamp ?? stepTimestamp(new Date()),
-    solids: exportSolidLabels(document, bodies)
+    solids: exportSolidLabels(document, bodies),
+    ...(options.protocol ? { protocol: options.protocol } : {})
   };
   // Never fuse: a boolean union changes the geometry (overlaps merge,
   // coincident faces weld). Every root of the arena document becomes its

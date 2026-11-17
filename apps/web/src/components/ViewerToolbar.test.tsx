@@ -1181,3 +1181,83 @@ describe("the viewer bar's groups", () => {
     expect(edit.nextElementSibling?.nextElementSibling).toBe(view);
   });
 });
+
+/**
+ * UX-009: a command card holding the right lane (Measure's workbench among
+ * them) hides the section panel by CSS. The button announced the controls
+ * expanded while they were display: none; now it says what is on screen,
+ * and pressing it while measuring puts Measure away for the controls.
+ */
+describe('the section button under a card that holds the lane', () => {
+  function renderInLane({
+    measuring,
+    onMeasure = vi.fn()
+  }: {
+    measuring: boolean;
+    onMeasure?: (next: boolean) => void;
+  }) {
+    const noop = () => undefined;
+    const view = render(
+      <div className="viewer-area has-command">
+        <div className="instrument-rail">
+          <ViewerToolbar
+            settings={settings}
+            projection="perspective"
+            canUndo={false}
+            canRedo={false}
+            sectionRange={{ min: 0, max: 6 }}
+            onUndo={noop}
+            onRedo={noop}
+            onToggleGrid={noop}
+            onFit={noop}
+            onView={noop}
+            onDisplayMode={noop}
+            onToggleXray={noop}
+            onToggleProjection={noop}
+            onToggleSection={noop}
+            onSectionPlane={noop}
+            onSectionOffset={noop}
+            onSectionCommit={noop}
+            onExportSectionDxf={noop}
+            sectionOutline={{ kind: 'clipping' }}
+            measuring={measuring}
+            onMeasure={onMeasure}
+            units="mm"
+          />
+        </div>
+      </div>
+    );
+    const viewer = view.container.querySelector('.viewer-area')!;
+    const section = () => screen.getByRole('button', { name: /^Section view/ });
+    return { ...view, viewer, section, onMeasure };
+  }
+
+  it('is not expanded while the lane hides its controls', () => {
+    const { section } = renderInLane({ measuring: true });
+    expect(section()).toHaveAttribute('aria-expanded', 'false');
+    expect(section()).not.toHaveClass('open');
+  });
+
+  it('expands again when the card gives the lane back', async () => {
+    const { viewer, section } = renderInLane({ measuring: false });
+    expect(section()).toHaveAttribute('aria-expanded', 'false');
+    await act(async () => {
+      viewer.classList.remove('has-command');
+    });
+    expect(section()).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('puts Measure away when pressed for the controls', () => {
+    const { section, onMeasure } = renderInLane({ measuring: true });
+    fireEvent.click(section());
+    expect(onMeasure).toHaveBeenCalledWith(false);
+  });
+
+  it('leaves a command card alone and says the controls wait for it', () => {
+    const onMeasure = vi.fn();
+    const { section } = renderInLane({ measuring: false, onMeasure });
+    fireEvent.click(section());
+    expect(onMeasure).not.toHaveBeenCalled();
+    expect(section()).toHaveAttribute('aria-expanded', 'false');
+  });
+});

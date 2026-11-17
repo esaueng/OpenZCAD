@@ -32,6 +32,12 @@ export function saveFile(
   blob: Blob,
   win: Window = window
 ): Promise<SaveOutcome> {
+  // The native iPad host owns its export picker through WKDownloadDelegate.
+  // Keep file exports on that path instead of WebKit's web share sheet.
+  if (win.location?.protocol === 'zcad-ipad:') {
+    downloadBlob(name, blob);
+    return Promise.resolve('downloaded');
+  }
   const file = shareableFile(name, blob, win);
   if (!file) {
     downloadBlob(name, blob);

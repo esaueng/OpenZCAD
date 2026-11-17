@@ -318,11 +318,19 @@ export function parseShareLinkLabel(value: unknown): string | null {
 export function parseCreateShareLink(value: unknown): {
   mode: ProjectShareLinkMode;
   label: string | null;
+  comments: boolean;
 } {
   const record = asRecord(value);
+  if (record.comments !== undefined && typeof record.comments !== 'boolean')
+    throw new SharingRequestError(
+      400,
+      'SHARE_LINK_COMMENTS_INVALID',
+      'comments must be true or false.'
+    );
   return {
     mode: parseProjectShareLinkMode(record.mode),
-    label: parseShareLinkLabel(record.label)
+    label: parseShareLinkLabel(record.label),
+    comments: record.comments === true
   };
 }
 
@@ -368,7 +376,8 @@ export async function createShareLink(
       mode: request.mode,
       tokenHash: await hashProjectInvitationToken(token),
       createdAt: now,
-      label: request.label
+      label: request.label,
+      ...(request.comments ? { comments: true } : {})
     }
   );
   return { shareLink, token };

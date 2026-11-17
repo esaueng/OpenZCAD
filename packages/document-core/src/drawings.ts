@@ -150,14 +150,17 @@ function alignmentBase(
   sheet: DrawingSheet,
   view: DrawingView
 ): DrawingView | undefined {
-  const id = view.parentViewId ?? view.section?.sourceViewId;
+  // A free section (v91) is placed freely, like an auxiliary view.
+  const id =
+    view.parentViewId ??
+    (view.section?.frame ? undefined : view.section?.sourceViewId);
   return id ? sheet.views.find((entry) => entry.viewId === id) : undefined;
 }
 
 function alignedWith(view: DrawingView, base: DrawingView): boolean {
   return (
     view.parentViewId === base.viewId ||
-    view.section?.sourceViewId === base.viewId
+    (view.section?.sourceViewId === base.viewId && !view.section.frame)
   );
 }
 
@@ -301,9 +304,10 @@ function mirrorProjectedViews(sheet: DrawingSheet): void {
     if (base) mirror(view, base);
   }
   for (const view of sheet.views) {
-    const source = view.section
-      ? byId.get(view.section.sourceViewId)
-      : undefined;
+    const source =
+      view.section && !view.section.frame
+        ? byId.get(view.section.sourceViewId)
+        : undefined;
     if (source) mirror(view, source);
   }
 }

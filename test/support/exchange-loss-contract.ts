@@ -78,6 +78,26 @@ export const EXCHANGE_LOSS_CONTRACT = {
         'The reimport is one imported solid per body; features, sketches and parameters are not transferred.'
     }
   },
+  'step-ap242': {
+    kind: 'solid',
+    label: 'STEP (AP242)',
+    keeps: [
+      'body-count',
+      'bounds',
+      'volume',
+      'watertight',
+      'exact-faces',
+      'declared-units',
+      'body-names',
+      'body-colors'
+    ],
+    drops: ['history'],
+    units: 'declared',
+    notes: {
+      history:
+        'The reimport is one imported solid per body; features, sketches and parameters are not transferred.'
+    }
+  },
   'stl-binary': {
     kind: 'solid',
     label: 'STL (binary)',

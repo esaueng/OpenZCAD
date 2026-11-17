@@ -764,7 +764,13 @@ export type HandleSpec = (
       valueId: string;
       kind: 'instance';
       key: string;
-      params: { anchor: Vector3; label: string; skipped: boolean };
+      /** `label` is the skip key; `display`, when set, is its name. */
+      params: {
+        anchor: Vector3;
+        label: string;
+        display?: string;
+        skipped: boolean;
+      };
     }
 ) & {
   /**
@@ -5287,7 +5293,17 @@ function turnedAbout(
 }
 
 interface PatternCopySpot {
+  /**
+   * The copy's key: what the skip list stores (`skippedInstances`) and the
+   * handle's value id carries. A sketch point's entity id for Point pattern,
+   * so it must not be changed for display.
+   */
   label: string;
+  /**
+   * What the chip reads and is announced by, when the key is no name for a
+   * person: Point pattern's keys are `ent_<uuid>` ids (UX-008).
+   */
+  display?: string;
   point: Vector3;
 }
 
@@ -5315,6 +5331,25 @@ function gridCopies(
   return copies;
 }
 
+/**
+ * What a copy's skip chip reads and is announced by. A copy with a name
+ * (Point pattern's "Point 2") reads that name; one keyed by its position
+ * along the pattern ("3", "1-2") reads the key. The key itself is never
+ * the name of an entity id (UX-008).
+ */
+export function patternCopyChip(params: {
+  label: string;
+  display?: string;
+  skipped: boolean;
+}): { text: string; name: string } {
+  const { label, display, skipped } = params;
+  const copy = display ? `Copy at ${display}` : `Copy ${label}`;
+  return {
+    text: display ?? label,
+    name: skipped ? `${copy}, skipped · bring it back` : `${copy} · skip it`
+  };
+}
+
 /** A skip toggle on every copy, where it stands. */
 function instanceHandles(
   seed: BodyPick,
@@ -5323,14 +5358,20 @@ function instanceHandles(
 ): HandleSpec[] {
   if (copies.length > MAX_INSTANCE_TOGGLES) return [];
   const skipped = new Set(skippedPatternLabels(options));
-  return copies.map(({ label, point }) => {
+  return copies.map(({ label, display, point }) => {
     const off = skipped.has(label);
     return {
       valueId: `instance:${label}`,
       kind: 'instance' as const,
-      // The chip is drawn anew when it is skipped or brought back.
-      key: `${bodyKey(seed)}:instance:${label}:${off ? 'skipped' : 'kept'}`,
-      params: { anchor: point, label, skipped: off }
+      // The chip is drawn anew when it is skipped or brought back, or when
+      // its name moves (an earlier point picked again).
+      key: `${bodyKey(seed)}:instance:${label}:${display ?? ''}:${off ? 'skipped' : 'kept'}`,
+      params: {
+        anchor: point,
+        label,
+        ...(display ? { display } : {}),
+        skipped: off
+      }
     };
   });
 }
@@ -5683,8 +5724,10 @@ function pointPatternPlan(
       pointIds: [reference.id, ...picked.map((spot) => spot.id)],
       referencePointId: reference.id
     },
-    copies: picked.map((spot) => ({
+    // Named in the order they were picked; the id stays the skip key.
+    copies: picked.map((spot, index) => ({
       label: spot.id,
+      display: `Point ${index + 1}`,
       point: offset(
         middle,
         {

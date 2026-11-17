@@ -121,6 +121,38 @@ describe('finishStepExport', () => {
     );
   });
 
+  it('states AP242 edition 1 when asked, changing only the protocol statements', () => {
+    const ap242 = finishStepExport(WRITTEN, {
+      ...METADATA,
+      protocol: 'ap242'
+    });
+    expect(ap242).toContain(
+      "FILE_SCHEMA(('AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF { 1 0 10303 442 1 1 4 }'));"
+    );
+    expect(line(ap242, '#6')).toBe(
+      "#6 = APPLICATION_CONTEXT('managed model based 3d engineering');"
+    );
+    expect(line(ap242, '#8')).toBe(
+      "#8 = APPLICATION_PROTOCOL_DEFINITION('international standard', 'ap242_managed_model_based_3d_engineering', 2014, #6);"
+    );
+    expect(ap242).not.toMatch(/AUTOMOTIVE_DESIGN|automotive/i);
+    // Every other line is the AP214 file's, entity for entity.
+    const differing = (a: string, b: string) => {
+      const left = a.split('\n');
+      const right = b.split('\n');
+      expect(left).toHaveLength(right.length);
+      return left.filter((row, index) => row !== right[index]);
+    };
+    expect(differing(ap242, finished)).toEqual([
+      "FILE_SCHEMA(('AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF { 1 0 10303 442 1 1 4 }'));",
+      "#6 = APPLICATION_CONTEXT('managed model based 3d engineering');",
+      "#8 = APPLICATION_PROTOCOL_DEFINITION('international standard', 'ap242_managed_model_based_3d_engineering', 2014, #6);"
+    ]);
+    expect(finishStepExport(WRITTEN, { ...METADATA, protocol: 'ap214' })).toBe(
+      finished
+    );
+  });
+
   it('names each solid after its body, in writer order, over an imported name', () => {
     expect(line(finished, '#20')).toBe(
       "#20 = MANIFOLD_SOLID_BREP('Owner''s plate', #19);"

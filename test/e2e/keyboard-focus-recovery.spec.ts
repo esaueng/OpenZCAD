@@ -96,9 +96,10 @@ test('a cut turned on from command search in View mode shows there and turns off
     .getByRole('combobox', { name: 'Search commands' })
     .fill('/Section view');
   await page.keyboard.press('Enter');
-  // View has no section controls: the status line says the cut is on.
+  // View has no section controls: the status line says the cut is on, on
+  // its first plane, Front (XZ).
   const line = page.locator('.workspace-toast:not(.hidden)');
-  await expect(line.getByRole('status')).toHaveText('Section · XY plane');
+  await expect(line.getByRole('status')).toHaveText('Section · XZ plane');
   await expect(section).toHaveCount(0);
 
   const turnOff = line.getByRole('button', { name: 'Turn off section view' });

@@ -66,6 +66,7 @@ import {
   textWidthMm,
   viewPageTransform,
   type ComposedView,
+  type SheetImage,
   type SheetStroke,
   type SheetText
 } from './sheetPage';
@@ -196,11 +197,64 @@ export type AnnotationBreak =
   | 'no-bom'
   | 'not-in-bom'
   | 'not-on-part'
-  | 'no-angle';
+  | 'no-angle'
+  | 'image-missing';
 
 type UV = [number, number];
 
+/**
+ * D02 (v92): the project's reference images a sheet image may show, by
+ * id: what printing one needs (the bytes' checksum, its type and aspect).
+ */
+export type SheetPictureLookup = ReadonlyMap<
+  string,
+  {
+    name: string;
+    checksumSha256: string;
+    contentType: 'image/png' | 'image/jpeg';
+    pixelWidth: number;
+    pixelHeight: number;
+  }
+>;
+
+/** The project's reference images as a {@link SheetPictureLookup}. */
+export function sheetPictures(document: {
+  referenceImages?: {
+    images: readonly {
+      imageId: string;
+      name: string;
+      contentType: 'image/png' | 'image/jpeg';
+      source: { checksumSha256: string };
+      pixelWidth: number;
+      pixelHeight: number;
+    }[];
+  };
+}): SheetPictureLookup {
+  return new Map(
+    (document.referenceImages?.images ?? []).map((image) => [
+      image.imageId,
+      {
+        name: image.name,
+        checksumSha256: image.source.checksumSha256,
+        contentType: image.contentType,
+        pixelWidth: image.pixelWidth,
+        pixelHeight: image.pixelHeight
+      }
+    ])
+  );
+}
+
 export type ResolvedAnnotation =
+  | {
+      /** v92: a picture on the paper, its printed size in paper mm. */
+      kind: 'image';
+      label: string;
+      name: string;
+      widthMm: number;
+      heightMm: number;
+      checksumSha256: string;
+      contentType: 'image/png' | 'image/jpeg';
+    }
   | {
       /** v80: a parts list's header and rows, cells as the BOM table wrote them. */
       kind: 'bom-table';
@@ -371,6 +425,8 @@ export function annotationBreakMessage(reason: AnnotationBreak): string {
       return 'The edge this balloon points at is not on the part it names.';
     case 'no-angle':
       return 'The three points now lie on one line (or two coincide), so they make no angle.';
+    case 'image-missing':
+      return 'The picture this image showed has been deleted from the project.';
   }
 }
 
@@ -1538,8 +1594,27 @@ export function resolveDrawingAnnotation(
   /** D02 v73: the sheet's annotations, for points that marks mark. */
   marks?: MarkLookup,
   /** D02 v80: the assembly's BOM, for parts lists and balloons. */
-  bom?: SheetBom
+  bom?: SheetBom,
+  /** D02 v92: the project's pictures, for sheet images. */
+  pictures?: SheetPictureLookup
 ): AnnotationResolution {
+  if (annotation.kind === 'image') {
+    const picture = pictures?.get(annotation.referenceImageId);
+    if (!picture) return failure('image-missing');
+    return {
+      ok: true,
+      resolved: {
+        kind: 'image',
+        label: '',
+        name: picture.name,
+        widthMm: annotation.widthMm,
+        heightMm:
+          (annotation.widthMm * picture.pixelHeight) / picture.pixelWidth,
+        checksumSha256: picture.checksumSha256,
+        contentType: picture.contentType
+      }
+    };
+  }
   if (annotation.kind === 'bom-table') {
     if (!bom || bom.rows.length === 0) return failure('no-bom');
     const columns = (annotation.columns ?? DEFAULT_BOM_COLUMNS).map((key) =>
@@ -2344,6 +2419,7 @@ export function annotationModelReading(
     annotation.kind === 'three-point-angle' ||
     annotation.kind === 'bom-table' ||
     annotation.kind === 'balloon' ||
+    annotation.kind === 'image' ||
     isDrawingGeometryAnnotation(annotation)
   )
     return null;
@@ -2489,6 +2565,8 @@ export interface AnnotationBox {
 export interface AnnotationLayout {
   strokes: SheetStroke[];
   texts: SheetText[];
+  /** D02 (v92): a sheet image's picture. */
+  images?: SheetImage[];
   /** Where the annotation's text sits, for picking and selection. */
   box: AnnotationBox;
 }
@@ -3200,6 +3278,26 @@ export function layoutAnnotation(
 ): AnnotationLayout {
   if (resolved.kind === 'note') return noteLayout(resolved, toPage, anchor);
   if (resolved.kind === 'bom-table') return bomTableLayout(resolved, anchor);
+  if (resolved.kind === 'image') {
+    // Centred on its placement, its picture's own aspect.
+    const x = anchor[0] - resolved.widthMm / 2;
+    const y = anchor[1] - resolved.heightMm / 2;
+    return {
+      strokes: [],
+      texts: [],
+      images: [
+        {
+          x,
+          y,
+          width: resolved.widthMm,
+          height: resolved.heightMm,
+          checksumSha256: resolved.checksumSha256,
+          contentType: resolved.contentType
+        }
+      ],
+      box: { x, y, width: resolved.widthMm, height: resolved.heightMm }
+    };
+  }
   if (!toPage) throw new Error('A dimension needs its view.');
   switch (resolved.kind) {
     case 'linear':
@@ -3587,7 +3685,9 @@ export function resolveSheetAnnotations(
   units: UnitSystem,
   holes?: HoleCalloutLookup,
   /** D02 v80: the assembly's BOM, for parts lists and balloons. */
-  bom?: SheetBom
+  bom?: SheetBom,
+  /** D02 v92: the project's pictures, for sheet images. */
+  pictures?: SheetPictureLookup
 ): Map<DrawingAnnotationId, AnnotationResolution> {
   const views = new Map(sheet.views.map((view) => [view.viewId, view]));
   const marks = sheetMarkLookup(sheet);
@@ -3602,7 +3702,8 @@ export function resolveSheetAnnotations(
         holes,
         sheetNumberFormat(sheet, units),
         marks,
-        bom
+        bom,
+        pictures
       )
     ])
   );
@@ -3891,10 +3992,12 @@ export function composeSheetAnnotations(
 ): {
   strokes: SheetStroke[];
   texts: SheetText[];
+  images: SheetImage[];
   boxes: Map<DrawingAnnotationId, AnnotationBox>;
 } {
   const strokes: SheetStroke[] = [];
   const texts: SheetText[] = [];
+  const images: SheetImage[] = [];
   const boxes = new Map<DrawingAnnotationId, AnnotationBox>();
   const drawn = new Map(views.map((entry) => [entry.view.viewId, entry]));
   for (const annotation of sheet.annotations ?? []) {
@@ -3919,7 +4022,8 @@ export function composeSheetAnnotations(
     );
     strokes.push(...layout.strokes);
     texts.push(...layout.texts);
+    if (layout.images) images.push(...layout.images);
     boxes.set(annotation.annotationId, layout.box);
   }
-  return { strokes, texts, boxes };
+  return { strokes, texts, images, boxes };
 }

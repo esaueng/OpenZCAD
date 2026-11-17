@@ -94,7 +94,11 @@ export interface E2eeProjectEnvelopeUpload {
 
 /** The small project envelopes the account replaces as a whole. */
 export type E2eeReplacedEnvelopeKind =
-  'project-info' | 'measurements' | 'view-state';
+  | 'project-info'
+  | 'measurements'
+  | 'view-state'
+  /** L08: one member's review comments, replaced whole (held, #1667). */
+  | 'comments';
 
 export interface E2eeProjectEnvelopeRecord extends E2eeProjectEnvelopeUpload {
   projectId: string;

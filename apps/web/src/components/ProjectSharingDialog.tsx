@@ -42,6 +42,7 @@ import {
   EncryptedShareLinks,
   type EncryptedShareLinkClient
 } from './EncryptedShareLinks';
+import { ShareLinkDrawings } from './ShareLinkDrawings';
 import type {
   InvitableContact,
   OwnerInvitation
@@ -274,6 +275,12 @@ export interface ProjectSharingDialogProps {
    * on; without a choice it opens on the row the model was saved with.
    */
   configurations?: readonly { id: string; name: string }[];
+  /** L08: the project's drawing sheets, for choosing which links show. */
+  drawingSheets?: readonly { id: string; name: string }[];
+  /** The sheets links show now. */
+  sharedSheetIds?: readonly string[];
+  /** Changes that choice; absent where the project cannot be edited. */
+  onSharedSheetsChange?(sheetIds: string[]): void;
   onClose(): void;
 }
 
@@ -348,7 +355,7 @@ function expiryLabel(expiresAt: number): string {
 function shareLinkName(shareLink: ProjectShareLinkSummary): string {
   return (
     shareLink.label ??
-    `${LINK_MODE_LABELS[shareLink.mode]} link · ${createdLabel(shareLink.createdAt)}`
+    `${shareLink.comments ? 'Commenter' : LINK_MODE_LABELS[shareLink.mode]} link · ${createdLabel(shareLink.createdAt)}`
   );
 }
 
@@ -435,6 +442,9 @@ export function ProjectSharingDialog({
   onLeft,
   projectName,
   configurations = [],
+  drawingSheets,
+  sharedSheetIds,
+  onSharedSheetsChange,
   onClose
 }: ProjectSharingDialogProps) {
   const encryption = useEncryptionStatus(
@@ -1405,15 +1415,23 @@ export function ProjectSharingDialog({
               urlRef={shareLinkUrlRef}
               configurations={configurations}
               onCopy={(url) => void copyShareLink(url)}
-              onCreate={() =>
+              onCreate={(comments) =>
                 void mutate('share-link:create', async () => {
                   await onBeforeCreateShareLink?.();
                   setCreatedShareLink(null);
                   setShareLinkCopied(false);
-                  const created = await shareLinkClient.createProjectShareLink(
-                    projectId,
-                    'tweak'
-                  );
+                  // L08: only a commenter link names comments.
+                  const created = comments
+                    ? await shareLinkClient.createProjectShareLink(
+                        projectId,
+                        'tweak',
+                        null,
+                        true
+                      )
+                    : await shareLinkClient.createProjectShareLink(
+                        projectId,
+                        'tweak'
+                      );
                   setCreatedShareLink({
                     url: buildShareLinkUrl(created.token),
                     shareLinkId: created.shareLink.shareLinkId
@@ -1451,6 +1469,16 @@ export function ProjectSharingDialog({
                   }
                 )
               }
+            />
+          ) : null}
+
+          {isOwner && drawingSheets && drawingSheets.length > 0 ? (
+            <ShareLinkDrawings
+              sheets={drawingSheets}
+              sharedSheetIds={sharedSheetIds ?? []}
+              {...(onSharedSheetsChange
+                ? { onChange: onSharedSheetsChange }
+                : {})}
             />
           ) : null}
 
@@ -1566,7 +1594,8 @@ interface PlaintextShareLinksProps {
   urlRef: RefObject<HTMLInputElement | null>;
   configurations: readonly { id: string; name: string }[];
   onCopy(url: string): void;
-  onCreate(): void;
+  /** `comments`: L08 commenter link, whose visitors may comment. */
+  onCreate(comments: boolean): void;
   onRename(shareLink: ProjectShareLinkSummary, draft: string): Promise<void>;
   onRevoke(shareLink: ProjectShareLinkSummary): void;
 }
@@ -1598,6 +1627,8 @@ function PlaintextShareLinks({
     ? withShareConfiguration(created.url, opensOnRow || null)
     : '';
   const [editingId, setEditingId] = useState<string | null>(null);
+  // L08: whether the next link lets its visitors comment.
+  const [withComments, setWithComments] = useState(false);
   // The link whose Revoke is waiting for a yes (design review I2).
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -1660,11 +1691,20 @@ function PlaintextShareLinks({
           type="button"
           className={shareLinks.length > 0 ? 'secondary' : 'primary'}
           disabled={disabled || localImportSourceNames.length > 0}
-          onClick={onCreate}
+          onClick={() => onCreate(withComments)}
         >
           Create link
         </button>
       </div>
+      <label className="sharing-link-comments">
+        <input
+          type="checkbox"
+          checked={withComments}
+          onChange={(event) => setWithComments(event.target.checked)}
+        />
+        Visitors can comment (they see every comment and sign theirs with a
+        name)
+      </label>
       {localImportSourceNames.length > 0 && (
         <p className="sharing-hint" role="alert">
           Save the source files for {localImportSourceNames.join(', ')} to your

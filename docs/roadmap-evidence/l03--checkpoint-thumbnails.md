@@ -1,5 +1,0 @@
----
-row: L03
----
-
-Slice 3, per-checkpoint thumbnails, kept on the device only (plan: docs/plans/l08-l03-review-and-versions-plan.md). When the model stands complete on its newest save point, the browser draws that save's card from the meshes already on screen (the project-card renderer) and keeps it in a new IndexedDB store, `checkpointThumbnails` (local database version 14), keyed by the save point's random id so an account adoption that changes the project id needs no move. A preview draws the card of a save this device never drew. The versions list shows the card in an opened row. Cards are capped at 600 across all projects (oldest first, never the one just drawn) and are deleted with their project. Nothing is uploaded, so an encrypted project's save points gain no server-side record (ADR-024); another device shows no card until it previews that save. Evidence: `apps/web/src/lib/checkpointThumbnails.test.ts` (replace, notify, cap, deleted with the project), `RevisionsPanel.test.tsx` (card in the details), and the CI smoke case `test/e2e/save-state-versions.spec.ts` (a saved box's card appears as a data image in its row).

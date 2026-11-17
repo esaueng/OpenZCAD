@@ -10,6 +10,7 @@ import {
   PDFJS_ASSET_DIRS
 } from './src/lib/assistant/pdfjsAssets';
 import { resolveSourceCommit } from './build/sourceCommit';
+import { checkAppVersion } from '../../scripts/app-version.mjs';
 import { localRemusPackages } from './build/localRemus';
 import {
   remusArtifactGate,
@@ -130,6 +131,7 @@ function sourceCommit(): string {
 }
 
 function buildMetadata(
+  version: string,
   commit: string,
   remus: {
     version: string;
@@ -151,6 +153,7 @@ function buildMetadata(
           {
             format: 'openzcad-build-metadata',
             formatVersion: 2,
+            version,
             commit,
             remus,
             assets
@@ -286,7 +289,11 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     ...(remusArtifacts && !localRemus ? { artifacts: remusArtifacts } : {})
   };
   const commit = sourceCommit();
+  // Fails the build when a manifest disagrees with package.json.
+  const appVersion = checkAppVersion(repoRoot);
   const isDesktop = mode === 'desktop';
+  const isIPad = mode === 'ipad';
+  const isBundled = isDesktop || isIPad;
   const plugins = [];
   const react = (await import('@vitejs/plugin-react')).default;
   plugins.push(
@@ -295,7 +302,7 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     remusTranslatorRetry(),
     pdfjsAssets(),
     textFontAssets(),
-    buildMetadata(commit, remus),
+    buildMetadata(appVersion, commit, remus),
     lazyChunkPrefetch(),
     // Last: ties the stamp to the written output (emitted module paths and a
     // digest of every file) for scripts/check-release-build.mjs.
@@ -314,7 +321,7 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
   // The bundled desktop app talks to native commands and its configured
   // hosted API, not an embedded Workers runtime. Keeping Miniflare out of this
   // mode also makes the Tauri dev server deterministic and self-contained.
-  const isDevServer = command === 'serve' && !isPreview && !isDesktop;
+  const isDevServer = command === 'serve' && !isPreview && !isBundled;
   if (isDevServer && nodeMajor >= 20) {
     const { cloudflare } = await import('@cloudflare/vite-plugin');
     plugins.push(cloudflare());
@@ -325,14 +332,15 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
   }
 
   return {
-    // Tauri serves the production bundle from its own asset protocol. Relative
+    // Native hosts serve the production bundle from their own asset protocol. Relative
     // URLs keep workers, WASM, fonts, and pdf.js data inside that bundle.
-    base: isDesktop ? './' : '/',
+    base: isBundled ? './' : '/',
     plugins,
     define: {
       'import.meta.env.VITE_E2E': JSON.stringify(process.env.VITE_E2E ?? ''),
       'import.meta.env.OZ_DESKTOP': JSON.stringify(isDesktop),
       'import.meta.env.OZ_PERF': JSON.stringify(process.env.OZ_PERF ?? ''),
+      'import.meta.env.OZ_APP_VERSION': JSON.stringify(appVersion),
       'import.meta.env.OZ_BUILD_COMMIT': JSON.stringify(commit),
       'import.meta.env.OZ_REMUS_VERSION': JSON.stringify(remus.version),
       'import.meta.env.OZ_REMUS_COMMIT': JSON.stringify(remus.commit)
@@ -518,8 +526,8 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
       }
     },
     build: {
-      outDir: isDesktop ? 'dist-desktop' : 'dist',
-      target: isDesktop ? 'safari17' : 'esnext',
+      outDir: isIPad ? 'dist-ipad' : isDesktop ? 'dist-desktop' : 'dist',
+      target: isBundled ? 'safari17' : 'esnext',
       rollupOptions: {
         output: {
           // Rolldown accepts functional chunk routing. three.js dominates the
