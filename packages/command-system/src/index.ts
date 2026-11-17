@@ -4996,7 +4996,10 @@ export function commandsForCadPatch(
       case 'set_parameter':
         return commandFactories.setParameter({
           name: operation.name,
-          expression: operation.expression
+          expression: operation.expression,
+          ...(operation.quantity !== undefined
+            ? { quantity: operation.quantity }
+            : {})
         });
       case 'rename_parameter':
         return commandFactories.renameParameter({
@@ -5063,6 +5066,34 @@ export function commandsForCadPatch(
           name: operation.name
         });
       }
+      case 'update_feature': {
+        if (!findFeature(projectedDocument, operation.featureId)) {
+          throw new Error(`Feature ${operation.featureId} not found.`);
+        }
+        return commandFactories.updateFeature({
+          featureId: operation.featureId,
+          ...(Object.keys(operation.data).length > 0
+            ? { data: deepClone(operation.data) }
+            : {}),
+          ...(operation.clearData.length > 0
+            ? { clearData: [...operation.clearData] }
+            : {})
+        });
+      }
+      case 'reorder_feature':
+        if (!findFeature(projectedDocument, operation.featureId)) {
+          throw new Error(`Feature ${operation.featureId} not found.`);
+        }
+        return commandFactories.moveFeature({
+          featureId: operation.featureId,
+          toIndex: operation.toIndex
+        });
+      case 'update_sketch_object':
+        return commandFactories.updateSketchObject({
+          sketchId: operation.sketchId,
+          objectId: operation.objectId as EntityId,
+          data: deepClone(operation.data)
+        });
       case 'add_sketch': {
         const ids = createSketchFeatureIds(operation.objects.length);
         const analysis = computeSketchProfileAnalysis(

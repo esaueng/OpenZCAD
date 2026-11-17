@@ -1,3 +1,4 @@
+import type { CadPatchProposal } from '@openzcad/ai-contracts';
 import type { LocalHistoryAppend } from '../../lib/localHistoryAppend';
 import type { ReactNode } from 'react';
 import type {
@@ -64,6 +65,20 @@ export interface ModelPanelSource {
    * Absent, Items lists no planes.
    */
   document?: ProjectDocument;
+  /**
+   * L15: why the history text cannot be applied right now (View mode, a
+   * viewer's seat, …), or null when it can. Absent reads as editable.
+   */
+  historyTextEditBlocked?: string | null;
+  /**
+   * L15: checks an edited history text's proposal on the exact kernel and
+   * commits it as one undo step, refusing a text printed from another
+   * version. Absent, the history text is read only.
+   */
+  onApplyHistoryText?(
+    proposal: CadPatchProposal,
+    baseVersion: number
+  ): Promise<boolean>;
   /** Datum planes hidden by their eye toggle: view state, as sketches' is. */
   hiddenDatumIds?: ReadonlySet<string>;
   onHiddenDatumIdsChange?(hidden: ReadonlySet<string>): void;

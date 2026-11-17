@@ -18415,13 +18415,28 @@ export function App() {
     }
   }
 
-  async function applyPatch(proposal: CadPatchProposal): Promise<boolean> {
+  async function applyPatch(
+    proposal: CadPatchProposal,
+    /**
+     * L15 history text: the undo label, and the document version the text
+     * was printed from. A text written against an older version is refused
+     * before preflight, as the assistant's version fence refuses a stale
+     * proposal.
+     */
+    source?: { label: string; baseVersion: number; action: string }
+  ): Promise<boolean> {
     if (isDrawingProposal(proposal)) return applyDrawingPatch(proposal);
-    if (!ensureCanEdit('apply this AI proposal')) {
+    if (!ensureCanEdit(source?.action ?? 'apply this AI proposal')) {
       return false;
     }
     const current = managerRef.current?.document;
     if (!current) {
+      return false;
+    }
+    if (source && current.version !== source.baseVersion) {
+      setStatus(
+        'The model changed since this text was printed. Reload the text and make the edit again.'
+      );
       return false;
     }
     setBusy(true);
@@ -18434,7 +18449,11 @@ export function App() {
       typeof window !== 'undefined';
     if (e2eApplyGate) window.__openzcadE2EApplyCheckInFlight = true;
     try {
-      setStatus('Checking the AI change against exact geometry…');
+      setStatus(
+        source
+          ? 'Checking the history text against exact geometry…'
+          : 'Checking the AI change against exact geometry…'
+      );
       let preflight: Awaited<ReturnType<typeof preflightCadPatch>>;
       if (e2eApplyGate) {
         const pending = preflightCadPatch(
@@ -18457,10 +18476,15 @@ export function App() {
         live.version !== current.version
       ) {
         throw new Error(
-          'The document changed during exact AI preflight. Review the refreshed proposal before applying it.'
+          source
+            ? 'The model changed while the history text was checked. Reload the text and make the edit again.'
+            : 'The document changed during exact AI preflight. Review the refreshed proposal before applying it.'
         );
       }
-      const applied = executeTransaction('Apply AI patch', preflight.commands);
+      const applied = executeTransaction(
+        source?.label ?? 'Apply AI patch',
+        preflight.commands
+      );
       if (applied) {
         // Topology ids belong to the pre-patch body. A fillet, boolean, or
         // pattern may consume that body and rebuild different edges/faces, so
@@ -35579,6 +35603,14 @@ export function App() {
       hiddenBodyIds={hiddenBodyIds}
       hiddenSketchIds={hiddenSketchIds}
       document={doc}
+      historyTextEditBlocked={editDisabledReason}
+      onApplyHistoryText={(proposal, baseVersion) =>
+        applyPatch(proposal, {
+          label: 'Edit history text',
+          baseVersion,
+          action: 'edit the history text'
+        })
+      }
       hiddenDatumIds={hiddenDatumIds}
       onHiddenDatumIdsChange={setHiddenDatumIds}
       hiddenReferenceImageIds={hiddenReferenceImageIds}

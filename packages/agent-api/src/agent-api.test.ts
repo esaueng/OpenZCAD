@@ -8,6 +8,7 @@ import {
 import { parseCadPatchProposal } from '@openzcad/ai-contracts';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
+  AGENT_HISTORY_TEXT_UNDO_LABEL,
   AGENT_PATCH_UNDO_LABEL,
   AgentToolError,
   JSON_RPC_INVALID_PARAMS,
@@ -140,10 +141,29 @@ describe('agent API scope', () => {
       'list_projects',
       'get_document',
       'get_digest',
-      'get_patch_schema'
+      'get_patch_schema',
+      'get_history_text'
     ]);
-    expect(names('preflight')).toEqual([...names('read'), 'preflight_patch']);
-    expect(names('edit')).toEqual([...names('preflight'), 'apply_patch']);
+    expect(names('preflight')).toEqual([
+      'list_projects',
+      'get_document',
+      'get_digest',
+      'get_patch_schema',
+      'preflight_patch',
+      'get_history_text',
+      'preflight_history_text'
+    ]);
+    expect(names('edit')).toEqual([
+      'list_projects',
+      'get_document',
+      'get_digest',
+      'get_patch_schema',
+      'preflight_patch',
+      'apply_patch',
+      'get_history_text',
+      'preflight_history_text',
+      'apply_history_text'
+    ]);
   });
 
   it('refuses a tool outside the scope and writes nothing', async () => {
@@ -159,15 +179,15 @@ describe('agent API scope', () => {
     expect(workspace.derives).toBe(0);
   });
 
-  it('marks only apply_patch as writing', () => {
+  it('marks only the two apply tools as writing', () => {
     const tools = api().api.tools();
     expect(
       tools.filter((tool) => !tool.annotations.readOnlyHint).map((t) => t.name)
-    ).toEqual(['apply_patch']);
-    expect(
-      tools.find((tool) => tool.name === 'apply_patch')!.annotations
-        .destructiveHint
-    ).toBe(true);
+    ).toEqual(['apply_patch', 'apply_history_text']);
+    for (const name of ['apply_patch', 'apply_history_text'])
+      expect(
+        tools.find((tool) => tool.name === name)!.annotations.destructiveHint
+      ).toBe(true);
   });
 
   it('constrains the patch tools by the assistant patch schema', () => {
@@ -458,6 +478,118 @@ describe('agent API patch contract', () => {
     workspace.revision += 1;
     await edit.call('get_digest', { project: 'block' });
     expect(workspace.derives).toBe(2);
+  });
+});
+
+describe('agent API history text (L15)', () => {
+  it('reads the history as text and applies an edit as one undo step', async () => {
+    const { api: edit, workspace } = api();
+    const before = workspace.document;
+    const read = parsed(
+      await edit.call('get_history_text', { project: 'block' })
+    );
+    expect(read.version).toBe(before.version);
+    const text = read.text as string;
+    expect(text).toMatch(/^openzcad history 1\nunits mm\n/);
+    expect(text).toContain('dimensions: { width: 40, height: 30, depth: 20 }');
+    const edited = text.replace('width: 40', 'width: 60');
+
+    const checked = parsed(
+      await edit.call('preflight_history_text', {
+        project: 'block',
+        expectedVersion: before.version,
+        text: edited
+      })
+    );
+    expect(checked).toMatchObject({
+      ok: true,
+      applied: false,
+      changes: ['Edit Block: dimensions']
+    });
+    expect(workspace.commits).toHaveLength(0);
+
+    const applied = parsed(
+      await edit.call('apply_history_text', {
+        project: 'block',
+        expectedVersion: before.version,
+        text: edited
+      })
+    );
+    expect(applied).toMatchObject({
+      ok: true,
+      applied: true,
+      undoLabel: AGENT_HISTORY_TEXT_UNDO_LABEL,
+      changes: ['Edit Block: dimensions']
+    });
+    expect(workspace.commits).toHaveLength(1);
+    const after = workspace.document;
+    const width = (doc: ProjectDocument) =>
+      (
+        listFeaturesInOrder(doc)[0]!.data as unknown as {
+          dimensions: { width: number };
+        }
+      ).dimensions.width;
+    expect(width(after)).toBe(60);
+    expect(after.editHistory!.entries.at(-1)!.label).toBe(
+      AGENT_HISTORY_TEXT_UNDO_LABEL
+    );
+    expect(width(new CommandManager(after).undo())).toBe(40);
+    // The applied document prints back as exactly the text that was sent.
+    expect(
+      parsed(await edit.call('get_history_text', { project: 'block' })).text
+    ).toBe(edited);
+  });
+
+  it('refuses a text with problems by line and column, an unchanged text and a stale one', async () => {
+    const { api: edit, workspace } = api();
+    const version = workspace.document.version;
+    const text = parsed(
+      await edit.call('get_history_text', { project: 'block' })
+    ).text as string;
+    const bad = parsed(
+      await edit.call('apply_history_text', {
+        project: 'block',
+        expectedVersion: version,
+        text: text.replace('width: 40', 'width: `40 deg`')
+      })
+    );
+    expect(bad).toMatchObject({ ok: false, error: 'invalid' });
+    expect(bad.message).toMatch(/1 problem: \d+:\d+ /);
+    expect(
+      parsed(
+        await edit.call('apply_history_text', {
+          project: 'block',
+          expectedVersion: version,
+          text
+        })
+      )
+    ).toMatchObject({ ok: false, error: 'refused' });
+    expect(
+      parsed(
+        await edit.call('preflight_history_text', {
+          project: 'block',
+          expectedVersion: version + 1,
+          text
+        })
+      )
+    ).toMatchObject({ ok: false, error: 'conflict' });
+    expect(workspace.commits).toHaveLength(0);
+  });
+
+  it('keeps apply_history_text behind the edit scope', async () => {
+    const { api: preflightOnly, workspace } = api({ scope: 'preflight' });
+    const text = parsed(
+      await preflightOnly.call('get_history_text', { project: 'block' })
+    ).text as string;
+    const result = parsed(
+      await preflightOnly.call('apply_history_text', {
+        project: 'block',
+        expectedVersion: workspace.document.version,
+        text: text.replace('width: 40', 'width: 60')
+      })
+    );
+    expect(result).toMatchObject({ ok: false, error: 'scope' });
+    expect(workspace.commits).toHaveLength(0);
   });
 });
 
