@@ -700,6 +700,7 @@ test(
   'Section controls open below the workspace mode toolbar',
   { tag: '@ci-smoke' },
   async ({ page }) => {
+    test.setTimeout(120_000);
     // #1629: `--stage-top` is CSS math, which parseFloat read as NaN; the
     // controls fell back to 8 px and opened under Build / Assemble.
     await openWorkspace(
@@ -708,6 +709,9 @@ test(
       { right: [['bodies', 'parameters']] },
       { width: 1280, height: 800 }
     );
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    await page.keyboard.press('Escape');
     await page.getByRole('button', { name: /^Section view/ }).click();
     const section = page.locator('.rail-section-panel');
     await expect(section).toBeVisible();
