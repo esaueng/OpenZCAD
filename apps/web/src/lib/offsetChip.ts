@@ -215,7 +215,15 @@ export function keptOffsetValue(
   lastValid: number | null,
   refused: number | null = null
 ): number | null {
-  const kept = keptOffsetCandidate(limit, lastValid);
+  // The refused value is no candidate at all, so a limit the refusal named
+  // still offers its way out when the last built frame was that value.
+  const built =
+    lastValid !== null &&
+    refused !== null &&
+    sameOffsetValue(lastValid, refused)
+      ? null
+      : lastValid;
+  const kept = keptOffsetCandidate(limit, built);
   return kept !== null && refused !== null && sameOffsetValue(kept, refused)
     ? null
     : kept;

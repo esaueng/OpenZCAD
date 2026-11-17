@@ -16833,6 +16833,10 @@ export function App() {
   function discardHeldRefusal(step: 'undo' | 'redo'): boolean {
     const title = refusalDiscardedByHistoryStep(interactionRef.current);
     if (title === null) return false;
+    // A drag that retook a validating release would land that release when
+    // the drag is cancelled; Undo leaves history alone, so it goes too.
+    retakenRelease.drop('offset-face');
+    retakenRelease.drop('resize-cylinder-radius');
     cancelPanel();
     setStatus(discardedRefusalMessage(step, title));
     return true;
