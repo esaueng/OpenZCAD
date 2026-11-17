@@ -5,6 +5,8 @@ import {
   handleEncryptedSharedSnapshot
 } from '../../apps/web/worker/e2eeShareLinks';
 import { SHARE_LINK_TOKEN_HEADER, shareLinkTokenPath } from '@openzcad/shared';
+import { handleEncryptedLinkComments } from '../../apps/web/worker/e2eeShareComments';
+import { shareLinkTokenHash } from '../../apps/web/worker/e2eeShareLinks';
 import { d1Database } from '../d1-sqlite';
 import {
   createPrimitiveInPlace,
@@ -67,6 +69,28 @@ export async function installAnonymousShareRoutes(
         route.request().headers()[SHARE_LINK_TOKEN_HEADER] ?? '!'
       ) ?? requested;
     const db = d1Database(server.db);
+    // L08: an encrypted commenter link's comments (plan decision 2).
+    if (pathname.endsWith('/comments')) {
+      const request = route.request();
+      const body = request.postDataBuffer();
+      const response = await handleEncryptedLinkComments(
+        new Request(`https://zcad.test${pathname}`, {
+          method: request.method(),
+          headers: { 'content-type': 'application/json' },
+          ...(body ? { body: new Uint8Array(body) } : {})
+        }),
+        pathname,
+        db,
+        true,
+        shareLinkTokenHash
+      );
+      await route.fulfill({
+        status: response.status,
+        contentType: 'application/json',
+        body: Buffer.from(await response.arrayBuffer())
+      });
+      return;
+    }
     const response = pathname.includes('/blobs/')
       ? await handleEncryptedSharedBlob(
           pathname,
@@ -112,11 +136,14 @@ export async function ownerWithShareLink(
   {
     content = 'box',
     viewport,
-    hasTouch = false
+    hasTouch = false,
+    comments = false
   }: {
     content?: 'box' | 'step';
     viewport?: { width: number; height: number };
     hasTouch?: boolean;
+    /** L08: tick "Visitors can comment" before creating the link. */
+    comments?: boolean;
   } = {}
 ): Promise<OwnerWithLink> {
   const server = createE2eeServer({ projectsEnabled: true });
@@ -187,6 +214,10 @@ export async function ownerWithShareLink(
   await expect(
     links.getByRole('button', { name: 'Confirm sharing…' })
   ).toHaveCount(0);
+  if (comments)
+    await links
+      .getByRole('checkbox', { name: /^Visitors can comment/ })
+      .check();
   await create.click();
   const confirm = links.getByRole('group', { name: 'Confirm sharing' });
   await confirm.getByLabel('Recovery key').fill(seeded.recoveryKey);

@@ -64,7 +64,12 @@ export interface EncryptedShareLinkClient {
   list(projectId: string): Promise<EncryptedShareLinksState>;
   create(
     projectId: string,
-    mode: EncryptedShareLinkMode
+    mode: EncryptedShareLinkMode,
+    /**
+     * L08 (plan decisions 2 and 3a): sign a comment grant for the new link,
+     * so its visitors can comment.
+     */
+    options?: { readonly comments?: boolean }
   ): Promise<{ url: string }>;
   revoke(projectId: string, shareId: string): Promise<void>;
   /** Confirms sharing with the identity key, then states every link. */
@@ -130,18 +135,24 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
         snapshotProblem(upkeep)
     };
   },
-  async create(projectId, mode) {
-    const [{ encryptedShareLinks }, { createShareLink }] = await Promise.all([
+  async create(projectId, mode, options) {
+    const [
+      { encryptedShareLinks },
+      { allowShareLinkComments, createShareLink }
+    ] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
-    const created = await createShareLink(
-      (await encryptedShareLinks()).ctx,
-      projectId,
-      mode
-    );
+    const ctx = (await encryptedShareLinks()).ctx;
+    const created = await createShareLink(ctx, projectId, mode);
     const problem = shareLinkCreationProblem(created);
     if (problem) throw new Error(problem);
+    if (options?.comments) {
+      await allowShareLinkComments(ctx, projectId, {
+        shareId: created.shareId,
+        shareKey: created.fragment.shareKey
+      });
+    }
     return { url: created.url };
   },
   async revoke(projectId, shareId) {
@@ -279,6 +290,8 @@ export function EncryptedShareLinks({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<string | null>(null);
+  // L08: whether the next link's visitors may comment (plan decision 3a).
+  const [withComments, setWithComments] = useState(false);
   // The link whose Revoke is waiting for a yes (design review I2).
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
@@ -350,7 +363,15 @@ export function EncryptedShareLinks({
   const createLink = async () => {
     setCreated(null);
     setCopied(null);
-    setCreated((await client.create(projectId, 'view')).url);
+    setCreated(
+      (
+        await client.create(
+          projectId,
+          'view',
+          withComments ? { comments: true } : undefined
+        )
+      ).url
+    );
   };
   // Inside the confirmation's own run: a refused confirmation creates nothing.
   const finishConfirm = async () => {
@@ -441,6 +462,16 @@ export function EncryptedShareLinks({
           Create link
         </button>
       </div>
+      <label className="sharing-link-comments">
+        <input
+          type="checkbox"
+          checked={withComments}
+          disabled={disabled || confirming}
+          onChange={(event) => setWithComments(event.target.checked)}
+        />
+        Visitors can comment (their comments are encrypted with the link’s key,
+        and they see only this link’s comments)
+      </label>
 
       {error ? (
         <p className="sharing-share-hint" role="alert">

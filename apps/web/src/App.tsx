@@ -657,6 +657,7 @@ import {
 import type { CommentPin } from './components/ModelViewer';
 import { ENCRYPTED_COMMENTS_UNAVAILABLE } from './lib/commentsAvailability';
 import type { MemberCommentContext } from './lib/memberComments';
+import type { LinkCommentsAccess } from './lib/e2ee/shareComments';
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
   ActivityLogButton,
@@ -2872,6 +2873,11 @@ export function App() {
     encryptedMode?: 'view' | 'tweak';
     /** L08: a plaintext commenter link; its visitor may comment. */
     comments?: boolean;
+    /**
+     * L08 (plan decisions 2 and 3a): an encrypted commenter link, whose
+     * owner-signed comment grant this browser verified.
+     */
+    encryptedComments?: LinkCommentsAccess;
   } | null>(null);
   const shareSessionRef = useRef(shareSession);
   shareSessionRef.current = shareSession;
@@ -15870,6 +15876,7 @@ export function App() {
           document: ProjectDocument;
           encryptedMode?: 'view' | 'tweak';
           comments?: boolean;
+          encryptedComments?: LinkCommentsAccess;
         } | null;
         if (isEncryptedShareLink(pendingShareToken)) {
           // End to end encrypted (ADR-024 slice 5-11): verified in the ADR's
@@ -15884,7 +15891,16 @@ export function App() {
           shared = opened && {
             name: opened.name,
             document: opened.document,
-            encryptedMode: opened.mode
+            encryptedMode: opened.mode,
+            ...(opened.comments
+              ? {
+                  encryptedComments: {
+                    projectId: opened.projectId,
+                    shareId: opened.shareId,
+                    ...opened.comments
+                  }
+                }
+              : {})
           };
         } else {
           const { loadSharedProject } =
@@ -15934,7 +15950,16 @@ export function App() {
         // whatever this browser knew about the account before.
         setCloudAvailable(false);
         const opened = shared.encryptedMode
-          ? { token: pendingShareToken, encryptedMode: shared.encryptedMode }
+          ? {
+              token: pendingShareToken,
+              encryptedMode: shared.encryptedMode,
+              ...(shared.encryptedComments
+                ? {
+                    comments: true,
+                    encryptedComments: shared.encryptedComments
+                  }
+                : {})
+            }
           : {
               token: pendingShareToken,
               ...(shared.comments ? { comments: true } : {})
@@ -20786,10 +20811,16 @@ export function App() {
   const loadComments = useCallback(async (projectId: string) => {
     try {
       const link = shareSessionRef.current;
-      const { linkCommentsApi, memberComments } = await loadCommentsApi();
-      const { comments, warning } = link?.comments
-        ? { comments: await linkCommentsApi.list(link.token), warning: null }
-        : await memberComments.list(projectId, commentContext());
+      const { linkCommentsApi, memberComments, encryptedLinkComments } =
+        await loadCommentsApi();
+      const { comments, warning } = link?.encryptedComments
+        ? {
+            comments: await encryptedLinkComments.list(link.encryptedComments),
+            warning: null
+          }
+        : link?.comments
+          ? { comments: await linkCommentsApi.list(link.token), warning: null }
+          : await memberComments.list(projectId, commentContext());
       if (managerRef.current?.document.projectId !== projectId) return;
       setProjectComments({ projectId, comments });
       // An encrypted project's member log left out is said, not hidden.
@@ -38466,20 +38497,30 @@ export function App() {
                   ? runCommentAction(
                       async (
                         projectId,
-                        { linkCommentsApi, memberComments }
+                        {
+                          linkCommentsApi,
+                          memberComments,
+                          encryptedLinkComments
+                        }
                       ) => {
                         const input = { anchor: commentDraft, text };
-                        const created = shareSession
-                          ? await linkCommentsApi.create(
-                              shareSession.token,
+                        const created = shareSession?.encryptedComments
+                          ? await encryptedLinkComments.create(
+                              shareSession.encryptedComments,
                               commentVisitorName,
                               input
                             )
-                          : await memberComments.create(
-                              projectId,
-                              commentContext(),
-                              input
-                            );
+                          : shareSession
+                            ? await linkCommentsApi.create(
+                                shareSession.token,
+                                commentVisitorName,
+                                input
+                              )
+                            : await memberComments.create(
+                                projectId,
+                                commentContext(),
+                                input
+                              );
                         setCommentDraft(null);
                         setActiveCommentId(created?.commentId ?? null);
                       }
@@ -38489,17 +38530,26 @@ export function App() {
               onCancelDraft={() => setCommentDraft(null)}
               onReply={(threadId, text) =>
                 runCommentAction(
-                  (projectId, { linkCommentsApi, memberComments }) =>
-                    (shareSession
-                      ? linkCommentsApi.create(
-                          shareSession.token,
+                  (
+                    projectId,
+                    { linkCommentsApi, memberComments, encryptedLinkComments }
+                  ) =>
+                    (shareSession?.encryptedComments
+                      ? encryptedLinkComments.create(
+                          shareSession.encryptedComments,
                           commentVisitorName,
                           { parentId: threadId, text }
                         )
-                      : memberComments.create(projectId, commentContext(), {
-                          parentId: threadId,
-                          text
-                        })
+                      : shareSession
+                        ? linkCommentsApi.create(
+                            shareSession.token,
+                            commentVisitorName,
+                            { parentId: threadId, text }
+                          )
+                        : memberComments.create(projectId, commentContext(), {
+                            parentId: threadId,
+                            text
+                          })
                     ).then(() => undefined)
                 )
               }
