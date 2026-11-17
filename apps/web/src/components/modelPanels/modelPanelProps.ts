@@ -170,6 +170,12 @@ export interface ModelPanelSource {
   reorderBusy?: boolean;
   onRestoreCheckpoint(checkpoint: ProjectCheckpoint): void;
   onBranchCheckpoint(checkpoint: ProjectCheckpoint): void;
+  /** L03: opens a save point read only in the viewport. */
+  onPreviewCheckpoint?(checkpoint: ProjectCheckpoint): void;
+  /** L03: compares a save point with the project now or another save. */
+  onCompareCheckpoint?(checkpoint: ProjectCheckpoint): void;
+  /** The save point the viewport is previewing, if any. */
+  previewingCheckpointId?: string | null;
   /** L03: renames a save point; absent where the project cannot be edited. */
   onRenameCheckpoint?(checkpoint: ProjectCheckpoint, name: string): void;
 }

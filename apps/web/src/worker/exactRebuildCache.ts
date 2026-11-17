@@ -227,6 +227,48 @@ function defaultSizeOf(value: unknown): number {
 }
 
 /**
+ * Retained mesh/topology is immutable in the sharing adapter. Count each of
+ * those graphs once across edits instead of walking every unchanged face on
+ * each cache insertion. Weak keys follow geometry lifetime; metadata is always
+ * recounted. Aliases outside these geometry roots may be counted twice, which
+ * is conservative for the cache's byte limit.
+ */
+export function derivedSizeOfSharingBodyGeometry(): (
+  derived: ProjectDocument['derived']
+) => number {
+  const geometrySizes = new WeakMap<object, number>();
+  return (derived) => {
+    const { bodyRepresentations, ...metadata } = derived;
+    let bytes = defaultSizeOf(metadata) + 'bodyRepresentations'.length * 2 + 16;
+    const seen = new Set<object>();
+    for (const [id, body] of Object.entries(bodyRepresentations)) {
+      const { mesh, topology, ...rest } = body;
+      bytes += id.length * 2 + defaultSizeOf(rest);
+      for (const [key, geometry] of [
+        ['mesh', mesh],
+        ['topology', topology]
+      ] as const) {
+        if (!Object.hasOwn(body, key)) continue;
+        bytes += key.length * 2;
+        if (!geometry) {
+          bytes += 4;
+          continue;
+        }
+        if (seen.has(geometry)) continue;
+        seen.add(geometry);
+        let size = geometrySizes.get(geometry);
+        if (size === undefined) {
+          size = defaultSizeOf(geometry);
+          geometrySizes.set(geometry, size);
+        }
+        bytes += size;
+      }
+    }
+    return bytes;
+  };
+}
+
+/**
  * Bounded LRU results plus bounded promise deduplication. Stored values never
  * escape directly: each caller receives a structured clone.
  */

@@ -266,4 +266,97 @@ describe('RevisionsPanel', () => {
     );
     expect(screen.queryByRole('button', { name: /^Rename/ })).toBeNull();
   });
+  it('previews a stored save that is not the current one, and marks it', async () => {
+    const user = userEvent.setup();
+    const older = checkpoint('a', 1);
+    const current = checkpoint('b', 2);
+    const unstored = checkpoint('c', 3);
+    const onPreviewCheckpoint = vi.fn();
+    const revisions = {
+      visible: [older, current, unstored],
+      canonicalIds: new Set(['a', 'b', 'c']),
+      local: []
+    };
+    const { container, rerender } = render(
+      <RevisionsPanel
+        documentVersion={2}
+        restorableCheckpointIds={new Set(['a', 'b'])}
+        onRestoreCheckpoint={vi.fn()}
+        onBranchCheckpoint={vi.fn()}
+        onPreviewCheckpoint={onPreviewCheckpoint}
+        revisions={revisions}
+      />
+    );
+    // Only the stored save that is not what the project already shows.
+    expect(screen.getAllByRole('button', { name: /^Preview/ })).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: 'Preview Save a' }));
+    expect(onPreviewCheckpoint).toHaveBeenCalledWith(older);
+    rerender(
+      <RevisionsPanel
+        documentVersion={2}
+        restorableCheckpointIds={new Set(['a', 'b'])}
+        onRestoreCheckpoint={vi.fn()}
+        onBranchCheckpoint={vi.fn()}
+        onPreviewCheckpoint={onPreviewCheckpoint}
+        previewingCheckpointId="a"
+        revisions={revisions}
+      />
+    );
+    expect(
+      container.querySelector('.revision-row.is-previewing')
+    ).toHaveTextContent('Save a');
+    expect(screen.queryByRole('button', { name: 'Preview Save a' })).toBeNull();
+  });
+  it('shows this device’s card for a save point in its details', async () => {
+    const user = userEvent.setup();
+    const saved = checkpoint('a', 1);
+    const plain = checkpoint('b', 2);
+    render(
+      <RevisionsPanel
+        documentVersion={9}
+        restorableCheckpointIds={new Set(['a', 'b'])}
+        onRestoreCheckpoint={vi.fn()}
+        onBranchCheckpoint={vi.fn()}
+        revisions={{
+          visible: [saved, plain],
+          canonicalIds: new Set(['a', 'b']),
+          local: [],
+          thumbnails: new Map([['a', 'data:image/webp;base64,AAAA']])
+        }}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Save a' }));
+    expect(
+      screen.getByRole('img', { name: 'The model at Save a' })
+    ).toHaveAttribute('src', 'data:image/webp;base64,AAAA');
+    await user.click(screen.getByRole('button', { name: 'Save b' }));
+    expect(
+      screen.queryByRole('img', { name: 'The model at Save b' })
+    ).toBeNull();
+  });
+  it('offers Compare for a stored save in the document', async () => {
+    const user = userEvent.setup();
+    const stored = checkpoint('a', 1);
+    const unstored = checkpoint('b', 2);
+    const onCompareCheckpoint = vi.fn();
+    render(
+      <RevisionsPanel
+        documentVersion={9}
+        restorableCheckpointIds={new Set(['a'])}
+        onRestoreCheckpoint={vi.fn()}
+        onBranchCheckpoint={vi.fn()}
+        onCompareCheckpoint={onCompareCheckpoint}
+        revisions={{
+          visible: [stored, unstored],
+          canonicalIds: new Set(['a', 'b']),
+          local: []
+        }}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Save b' }));
+    expect(screen.queryByRole('button', { name: 'Compare Save b' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Save a' }));
+    await user.click(screen.getByRole('button', { name: 'Compare Save a' }));
+    expect(onCompareCheckpoint).toHaveBeenCalledWith(stored);
+  });
 });

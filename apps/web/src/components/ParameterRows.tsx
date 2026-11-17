@@ -654,14 +654,11 @@ export function ParameterRow({
         </p>
       )}
       {parameter.toggle && onConfigureToggle && (
-        <details className="param-bindings">
-          <summary>Bodies ({parameter.toggle.bodyIds.length})</summary>
-          <ToggleBodyChoices
-            bodies={bodies}
-            selected={parameter.toggle.bodyIds}
-            onChange={(bodyIds) => onConfigureToggle(parameter.name, bodyIds)}
-          />
-        </details>
+        <ToggleBodyBindings
+          bodies={bodies}
+          selected={parameter.toggle.bodyIds}
+          onChange={(bodyIds) => onConfigureToggle(parameter.name, bodyIds)}
+        />
       )}
       {describable && (
         <ParameterDescriptionField
@@ -748,6 +745,26 @@ function ParameterDescriptionField({
         }
       }}
     />
+  );
+}
+
+function ToggleBodyBindings(props: {
+  bodies: ToggleBody[];
+  selected: BodyId[];
+  onChange(bodyIds: BodyId[]): void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details
+      className="param-bindings"
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>Bodies ({props.selected.length})</summary>
+      {/* Closed details still create layout objects for their descendants.
+          Large bindings must not rebuild hundreds of hidden native inputs
+          whenever edit readiness changes. Selection lives in the parameter. */}
+      {open && <ToggleBodyChoices {...props} />}
+    </details>
   );
 }
 

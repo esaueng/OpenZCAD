@@ -56,6 +56,9 @@ import type { DrawingViewId } from './drawings';
  * Schema v75 (D02) adds the distance dimension: point to line, line to
  * line, and to a circle's centre or its near or far side (min/max), where a
  * line may be a straight edge or a centreline.
+ *
+ * Schema v82 (D02) adds the arc angle (an arc's included angle at its
+ * centre) and the three-point angle (at a vertex point between two others).
  */
 
 export type DrawingAnnotationId = Brand<string, 'DrawingAnnotationId'>;
@@ -380,6 +383,26 @@ export interface DrawingDistanceDimension extends DrawingDimensionBase {
   extent?: 'min' | 'max';
 }
 
+/**
+ * v82: an arc's included angle, at its centre between its two ends. The
+ * edge is a circular arc the view sees face-on; the angle may pass 180°.
+ */
+export interface DrawingArcAngleDimension extends DrawingDimensionBase {
+  kind: 'arc-angle';
+  edge: DrawingEdgeRef;
+}
+
+/**
+ * v82: the angle at `vertex` between the lines to `from` and to `to` (at
+ * most 180°). Each point is an edge end, a circle's centre or a mark.
+ */
+export interface DrawingThreePointAngleDimension extends DrawingDimensionBase {
+  kind: 'three-point-angle';
+  vertex: DrawingPointRef;
+  from: DrawingPointRef;
+  to: DrawingPointRef;
+}
+
 /** v80: the BOM columns a parts list may show, by their CSV key. */
 export const DRAWING_BOM_COLUMN_KEYS = [
   'item',
@@ -452,6 +475,8 @@ export type DrawingDimension =
   | DrawingRadialDimension
   | DrawingBlendRadiusDimension
   | DrawingAngleDimension
+  | DrawingArcAngleDimension
+  | DrawingThreePointAngleDimension
   | DrawingChamferDimension;
 
 export type DrawingAnnotation =
@@ -1091,6 +1116,14 @@ export function drawingAnnotationError(
       )
         return `${where} turns outward an edge it does not name.`;
       return fail(edgeRefError(value.edges[0]) ?? edgeRefError(value.edges[1]));
+    case 'arc-angle':
+      return fail(edgeRefError(value.edge));
+    case 'three-point-angle':
+      return fail(
+        centerlinePointError(value.vertex) ??
+          centerlinePointError(value.from) ??
+          centerlinePointError(value.to)
+      );
     case 'chamfer':
       return fail(topologyRefError(value.face, 'face'));
     default:
@@ -1171,6 +1204,12 @@ export function drawingAnnotationReferences(
           ];
     case 'angle':
       return [...annotation.edges];
+    case 'arc-angle':
+      return [annotation.edge];
+    case 'three-point-angle':
+      return [annotation.vertex, annotation.from, annotation.to].flatMap(
+        pointReferences
+      );
     case 'chamfer':
       return [annotation.face];
     case 'note':
@@ -1230,7 +1269,9 @@ export function drawingAnnotationMarks(
           ? [annotation.from, annotation.to].flatMap((target) =>
               'point' in target ? [target.point] : []
             )
-          : [];
+          : annotation.kind === 'three-point-angle'
+            ? [annotation.vertex, annotation.from, annotation.to]
+            : [];
   return points.flatMap((point) =>
     point.anchor === 'mark' ? [point.annotationId] : []
   );

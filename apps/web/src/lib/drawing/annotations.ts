@@ -195,7 +195,8 @@ export type AnnotationBreak =
   | 'collinear'
   | 'no-bom'
   | 'not-in-bom'
-  | 'not-on-part';
+  | 'not-on-part'
+  | 'no-angle';
 
 type UV = [number, number];
 
@@ -293,6 +294,11 @@ export type ResolvedAnnotation =
        * starts.
        */
       outside?: { index: 0 | 1; from: UV };
+      /**
+       * v82: a point the dimension's arc sweeps across: an arc angle's own
+       * middle, so an arc of more than 180° is dimensioned the long way.
+       */
+      through?: UV;
     }
   | {
       kind: 'note';
@@ -363,6 +369,8 @@ export function annotationBreakMessage(reason: AnnotationBreak): string {
       return 'The part this balloon named is no longer in the assembly.';
     case 'not-on-part':
       return 'The edge this balloon points at is not on the part it names.';
+    case 'no-angle':
+      return 'The three points now lie on one line (or two coincide), so they make no angle.';
   }
 }
 
@@ -1599,12 +1607,15 @@ export function resolveDrawingAnnotation(
     view.orientation === 'iso' &&
     (annotation.kind === 'linear' ||
       annotation.kind === 'angle' ||
+      annotation.kind === 'three-point-angle' ||
       annotation.kind === 'distance')
   )
     return failure('foreshortened');
   const decimals =
     annotation.decimals ??
-    (annotation.kind === 'angle'
+    (annotation.kind === 'angle' ||
+    annotation.kind === 'arc-angle' ||
+    annotation.kind === 'three-point-angle'
       ? format.angleDecimals
       : format.lengthDecimals);
   /** A length in document units, printed. */
@@ -1619,6 +1630,98 @@ export function resolveDrawingAnnotation(
     kind: 'length'
   });
   switch (annotation.kind) {
+    case 'arc-angle': {
+      // An arc seen face-on: its included angle at its centre, between its
+      // two ends, the way the arc runs (past 180° when it does).
+      const found = lookupEdge(annotation.edge, view, bodies);
+      if (!found.ok) return failure(found.reason);
+      const circle = faceOnCircle(view, found.edge);
+      if (!circle.ok) return failure(circle.reason);
+      const ends = edgeEndsWithDepth(view, found.edge);
+      if (!ends) return failure('closed-edge');
+      const polyline = projectedPolyline(view, found.edge);
+      const middle = Math.floor(polyline.length / 4) * 2;
+      const through: UV = [polyline[middle]!, polyline[middle + 1]!];
+      const c = circle.center;
+      const at = (p: UV) => Math.atan2(p[1] - c[1], p[0] - c[0]);
+      const turn = (from: number, to: number) => {
+        let delta = to - from;
+        while (delta <= 0) delta += 2 * Math.PI;
+        return delta;
+      };
+      const a1 = at(ends[0].uv);
+      const ccw = turn(a1, at(ends[1].uv));
+      // The arc runs counter-clockwise from its first end when its middle
+      // lies within that turn, else clockwise.
+      const sweep = turn(a1, at(through)) < ccw ? ccw : 2 * Math.PI - ccw;
+      const value = (sweep * 180) / Math.PI;
+      return {
+        ok: true,
+        resolved: {
+          kind: 'angle',
+          vertex: c,
+          rays: [
+            [c, ends[0].uv],
+            [c, ends[1].uv]
+          ],
+          value,
+          through,
+          ...formatDimension(
+            annotation,
+            { symbol: '', value, decimals, kind: 'angle' },
+            format
+          )
+        }
+      };
+    }
+    case 'three-point-angle': {
+      // The angle at the vertex between the lines to the other two points,
+      // true only when all three lie in one plane parallel to the view.
+      const found: ViewPoint[] = [];
+      for (const ref of [annotation.vertex, annotation.from, annotation.to]) {
+        const point = pointOf(view, ref, bodies, null, null, marks);
+        if (!point.ok) return failure(point.reason);
+        found.push(point.point);
+      }
+      const [v, a, b] = found as [ViewPoint, ViewPoint, ViewPoint];
+      const da: UV = [a.uv[0] - v.uv[0], a.uv[1] - v.uv[1]];
+      const db: UV = [b.uv[0] - v.uv[0], b.uv[1] - v.uv[1]];
+      const la = Math.hypot(...da);
+      const lb = Math.hypot(...db);
+      const span = Math.max(la, lb);
+      // Depth first: points the view sees on one line may still make an
+      // angle in the model, just not one this view shows true.
+      if (!parallelToView(v, a, span) || !parallelToView(v, b, span))
+        return failure('foreshortened');
+      if (
+        la <= 1e-9 * Math.max(1, span) ||
+        lb <= 1e-9 * Math.max(1, span) ||
+        Math.abs(da[0] * db[1] - da[1] * db[0]) <= 1e-9 * la * lb
+      )
+        return failure('no-angle');
+      const cos = Math.min(
+        1,
+        Math.max(-1, (da[0] * db[0] + da[1] * db[1]) / (la * lb))
+      );
+      const value = (Math.acos(cos) * 180) / Math.PI;
+      return {
+        ok: true,
+        resolved: {
+          kind: 'angle',
+          vertex: v.uv,
+          rays: [
+            [v.uv, a.uv],
+            [v.uv, b.uv]
+          ],
+          value,
+          ...formatDimension(
+            annotation,
+            { symbol: '', value, decimals, kind: 'angle' },
+            format
+          )
+        }
+      };
+    }
     case 'distance': {
       const ends: Extract<DistanceEnd, { ok: true }>[] = [];
       for (const target of [annotation.from, annotation.to]) {
@@ -2237,6 +2340,8 @@ export function annotationModelReading(
     !view ||
     annotation.kind === 'note' ||
     annotation.kind === 'distance' ||
+    annotation.kind === 'arc-angle' ||
+    annotation.kind === 'three-point-angle' ||
     annotation.kind === 'bom-table' ||
     annotation.kind === 'balloon' ||
     isDrawingGeometryAnnotation(annotation)
@@ -2807,6 +2912,18 @@ function angleLayout(
   let sweep = Math.atan2(dirs[1][1], dirs[1][0]) - a1;
   while (sweep > Math.PI) sweep -= 2 * Math.PI;
   while (sweep < -Math.PI) sweep += 2 * Math.PI;
+  if (resolved.through) {
+    // v82: an arc angle sweeps the way its arc runs, past 180° if need be.
+    const t = toPage(...resolved.through);
+    let toward = Math.atan2(t[1] - v[1], t[0] - v[0]) - a1;
+    while (toward > Math.PI) toward -= 2 * Math.PI;
+    while (toward < -Math.PI) toward += 2 * Math.PI;
+    const within =
+      sweep >= 0
+        ? toward >= 0 && toward <= sweep
+        : toward <= 0 && toward >= sweep;
+    if (!within) sweep -= Math.sign(sweep || 1) * 2 * Math.PI;
+  }
   const steps = Math.max(2, Math.ceil(Math.abs(sweep) / (Math.PI / 60)));
   const points: number[] = [];
   for (let i = 0; i <= steps; i += 1) {

@@ -628,6 +628,69 @@
 
 /* ── Name this save (checkpoint naming at save time) ── */
 
+/* L03: comparing a save point with the project now or another save. */
+.save-compare-dialog {
+  width: min(480px, 100%);
+  max-height: min(80vh, 640px);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+}
+
+.save-compare-dialog h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  font-size: var(--fs-lg);
+  overflow-wrap: anywhere;
+}
+
+.save-compare-against {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+
+.save-compare-result {
+  min-height: 0;
+  overflow-y: auto;
+  font-size: var(--fs-sm);
+}
+
+.save-compare-result p {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.save-compare-section h3 {
+  margin: var(--sp-2) 0 var(--sp-1);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+}
+
+.save-compare-section ul {
+  margin: 0;
+  padding-left: var(--sp-4);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.save-compare-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .save-revision-dialog {
   width: min(420px, 100%);
   display: grid;
