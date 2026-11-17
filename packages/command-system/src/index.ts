@@ -327,6 +327,8 @@ import {
   type ShellInput,
   ribBody,
   type RibInput,
+  wrapBody,
+  type WrapInput,
   type ShaprGuidedImportInput,
   type SketchConstraintAddInput,
   type SketchConstraintDeleteInput,
@@ -427,6 +429,7 @@ export type CommandKind =
   | 'feature.thread'
   | 'feature.shell'
   | 'feature.rib'
+  | 'feature.wrap'
   | 'feature.solid-offset'
   | 'feature.draft'
   | 'feature.thicken'
@@ -2335,6 +2338,18 @@ function validateRibInput(document: ProjectDocument, input: RibInput): void {
   }
 }
 
+/** M12: a wrap's body, face and regions exist, and its depth is positive. */
+function validateWrapInput(document: ProjectDocument, input: WrapInput): void {
+  validateBodyTarget(document, input.targetBodyId);
+  validatePositiveModelingValue(document, 'Wrap depth', input.depth);
+  if (!findSketch(document, input.sketchId))
+    throw new Error('The wrap sketch no longer exists.');
+  if (input.profiles.length === 0)
+    throw new Error('A wrap needs at least one sketch region.');
+  if (input.faceReference?.kind !== 'face')
+    throw new Error('A wrap needs its cylindrical face by lineage.');
+}
+
 function validateModelingFeatureUpdate(
   document: ProjectDocument,
   input: FeatureUpdateInput
@@ -2573,6 +2588,11 @@ function validateModelingFeatureUpdate(
     case 'rib': {
       const { featureKind: _kind, ...rib } = feature.data;
       validateRibInput(preview, { name: feature.name, ...rib });
+      break;
+    }
+    case 'wrap': {
+      const { featureKind: _kind, ...wrap } = feature.data;
+      validateWrapInput(preview, { name: feature.name, ...wrap });
       break;
     }
     case 'solid-offset':
@@ -3246,6 +3266,16 @@ export const commandFactories = {
       withIds,
       (document) => ribBody(document, withIds).document,
       (document) => validateRibInput(document, withIds)
+    );
+  },
+  wrapBody(payload: WrapInput): CommandDefinition<WrapInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.wrap',
+      payload.mode === 'emboss' ? 'Emboss onto cylinder' : 'Engrave into cylinder',
+      withIds,
+      (document) => wrapBody(document, withIds).document,
+      (document) => validateWrapInput(document, withIds)
     );
   },
   shellBody(payload: ShellInput): CommandDefinition<ShellInput> {
@@ -4544,6 +4574,7 @@ class LocalBodyScope {
         case 'shell':
         case 'solid-offset':
         case 'rib':
+        case 'wrap':
         case 'draft':
         case 'fillet':
         case 'chamfer':
@@ -6798,6 +6829,9 @@ export function replayCommands(
         break;
       case 'feature.rib':
         next = ribBody(next, command.payload as RibInput).document;
+        break;
+      case 'feature.wrap':
+        next = wrapBody(next, command.payload as WrapInput).document;
         break;
       case 'feature.solid-offset':
         next = offsetSolidBody(

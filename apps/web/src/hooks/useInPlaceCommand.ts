@@ -456,7 +456,9 @@ function faceFilterAccepts(
 ): boolean {
   if (filter === undefined || face.surfaceType === undefined) return true;
   const surface = face.surfaceType.toLowerCase();
-  return filter === 'planar' ? surface === 'plane' : surface === 'cylinder';
+  if (filter === 'planar') return surface === 'plane';
+  if (filter === 'revolution') return surface === 'cylinder' || surface === 'cone';
+  return surface === 'cylinder';
 }
 
 export function useInPlaceCommand(

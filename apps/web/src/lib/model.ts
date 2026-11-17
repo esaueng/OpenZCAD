@@ -204,6 +204,7 @@ export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   shell: 'Shell',
   'solid-offset': 'Solid offset',
   rib: 'Rib',
+  wrap: 'Wrap',
   draft: 'Draft',
   thicken: 'Thicken',
   fillet: 'Fillet',

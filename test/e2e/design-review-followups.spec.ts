@@ -72,9 +72,9 @@ async function openPart(
  * tile each, and its All filter counts them. 37 since M16 added Sheet metal
  * and Bend; 38 since M02 added Point pattern; 39 since M17 added Standard
  * part; 41 since R01 added Point and Coordinate system; 42 since M06 added
- * Rib.
+ * Rib; 43 since M12 added Wrap.
  */
-const TOOL_TILES = 42;
+const TOOL_TILES = 43;
 
 async function capture(page: Page, testInfo: TestInfo, name: string) {
   const path = testInfo.outputPath(`${name}.png`);

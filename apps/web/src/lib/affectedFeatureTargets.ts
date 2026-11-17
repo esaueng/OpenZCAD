@@ -54,6 +54,7 @@ const HANDLED_FEATURE_KINDS: ReadonlySet<FeatureKind> = new Set<FeatureKind>([
   'shell',
   'solid-offset',
   'rib',
+  'wrap',
   'draft',
   'thicken',
   'fillet',
@@ -300,6 +301,11 @@ export function affectedFeatureTargets(
         affected =
           affectedBodies.has(data.targetBodyId) ||
           affectedSketches.has(data.profile.sketchId);
+        break;
+      case 'wrap':
+        affected =
+          affectedBodies.has(data.targetBodyId) ||
+          affectedSketches.has(data.sketchId);
         break;
       case 'hole':
       case 'transform':

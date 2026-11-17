@@ -603,6 +603,21 @@ export function resolveDatumAxisNormalFace(
   return lineageCandidate(input.reference, input.candidates, fail, 'face');
 }
 
+/**
+ * M12 (schema v111): the face a wrap names, re-found solely through verified
+ * lineage at the wrap's history position. The caller reads its exact
+ * revolution data and handle; a deleted or ambiguous face refuses by name.
+ */
+export function resolveRevolutionFace(
+  input: ResolveDatumAxisFaceInput
+): FaceAttachmentCandidate {
+  const fail = (detail: string) =>
+    new Error(
+      `Wrap "${named(input.datumName, '<unnamed wrap>')}" cannot use a face of source feature "${named(input.sourceFeatureName, '<unnamed source feature>')}": ${detail}`
+    );
+  return lineageCandidate(input.reference, input.candidates, fail, 'face');
+}
+
 export interface ResolveDatumAxisFaceInput {
   readonly reference: FaceTopologyReferenceV5;
   readonly candidates: readonly FaceAttachmentCandidate[];

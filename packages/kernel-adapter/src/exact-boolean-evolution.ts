@@ -394,6 +394,7 @@ const KNOWN_FEATURE_KINDS: ReadonlySet<string> = new Set([
   'shell',
   'solid-offset',
   'rib',
+  'wrap',
   'draft',
   'thicken',
   'fillet',
@@ -510,6 +511,7 @@ function consumedBodyIds(feature: FeatureNode): BodyId[] {
     data.featureKind === 'shell' ||
     data.featureKind === 'solid-offset' ||
     data.featureKind === 'rib' ||
+    data.featureKind === 'wrap' ||
     data.featureKind === 'draft' ||
     data.featureKind === 'thicken' ||
     data.featureKind === 'fillet' ||

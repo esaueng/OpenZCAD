@@ -160,6 +160,10 @@ export function featureHistory(document: ProjectDocument) {
         sketch(data.profile.sketchId);
         body(data.targetBodyId);
         break;
+      case 'wrap':
+        sketch(data.sketchId);
+        body(data.targetBodyId);
+        break;
       case 'hole':
       case 'transform':
       case 'shell':

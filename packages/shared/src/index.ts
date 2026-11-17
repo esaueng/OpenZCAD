@@ -442,7 +442,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // client cannot build it, so it must refuse the document. Builds on v108
 // (v109 is claimed by #1741; v104 and v107 were L15's earlier claims, left
 // unused when other lanes landed first).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 110 as const;
+// v111 adds M12 wraps (`wrap` features: sketch regions embossed onto or
+// engraved into a cylinder or cone): an older client cannot build one, so
+// it must refuse. Builds on v110 (v109 was left unused when L15 landed
+// first).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 111 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -502,6 +506,7 @@ export type FeatureKind =
   | 'shell'
   | 'solid-offset'
   | 'rib'
+  | 'wrap'
   | 'draft'
   | 'thicken'
   | 'fillet'
@@ -2963,6 +2968,26 @@ export type FeatureData =
        * along the normal when both do. True: the other one.
        */
       flip?: boolean;
+    }
+  | {
+      /**
+       * M12 (schema v111): sketch regions wrapped onto a cylindrical face,
+       * preserving arc length, and embossed out of it or engraved into it,
+       * leaving one body. The sketch lies in a plane parallel to the face's
+       * axis; a region lands on the cylinder under where it is drawn, turned
+       * about the axis by `rotationDeg` and moved along it by `axialOffset`.
+       */
+      featureKind: 'wrap';
+      targetBodyId: BodyId;
+      /** The cylindrical face, by its schema-v5 lineage. */
+      faceReference: FaceTopologyReferenceV5;
+      sketchId: SketchId;
+      profiles: SketchProfileReference[];
+      /** Radial depth: how far an emboss stands out or an engrave cuts in. */
+      depth: ParamValue;
+      mode: 'emboss' | 'engrave';
+      rotationDeg?: ParamValue;
+      axialOffset?: ParamValue;
     }
   | {
       featureKind: 'draft';
@@ -6665,6 +6690,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   shell: '#14b8a6',
   'solid-offset': '#06b6d4',
   rib: '#0e7490',
+  wrap: '#0f766e',
   draft: '#0d9488',
   thicken: '#0891b2',
   fillet: '#f59e0b',

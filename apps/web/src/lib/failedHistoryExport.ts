@@ -45,6 +45,7 @@ function inputBodyIds(feature: FeatureNode): BodyId[] {
     case 'shell':
     case 'solid-offset':
     case 'rib':
+    case 'wrap':
     case 'draft':
     case 'thicken':
     case 'fillet':

@@ -20,7 +20,8 @@ import {
   SquaresIntersect,
   SquaresSubtract,
   SquaresUnite,
-  Torus
+  Torus,
+  WrapText
 } from 'lucide-react';
 import {
   chamferGlyph,
@@ -75,6 +76,7 @@ export type ToolId =
   | 'split'
   | 'shell'
   | 'rib'
+  | 'wrap'
   | 'solid-offset'
   | 'draft'
   | 'thicken'
@@ -305,6 +307,12 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     group: 'edges-faces',
     hint: 'A rib or web from an open sketch profile'
   },
+  wrap: {
+    label: 'Wrap',
+    icon: icon(<WrapText size={16} aria-hidden="true" />),
+    group: 'edges-faces',
+    hint: 'Emboss or engrave sketch regions onto a cylinder'
+  },
   draft: {
     label: 'Draft',
     icon: draftGlyph,
@@ -448,6 +456,7 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
         'bend',
         'shell',
         'rib',
+        'wrap',
         'draft',
         'thicken',
         'solid-offset'
@@ -609,6 +618,7 @@ export function toolDisabledReason(
       tool === 'shell' ||
       tool === 'solid-offset' ||
       tool === 'rib' ||
+      tool === 'wrap' ||
       tool === 'draft' ||
       tool === 'thicken' ||
       tool === 'hole' ||
@@ -656,6 +666,7 @@ export function toolDisabledReason(
       tool === 'shell' ||
       tool === 'solid-offset' ||
       tool === 'rib' ||
+      tool === 'wrap' ||
       tool === 'draft' ||
       tool === 'thicken' ||
       tool === 'hole' ||

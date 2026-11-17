@@ -239,6 +239,7 @@ function suppressedScopeSource(feature: FeatureNode): BodyId | null {
     case 'thread':
     case 'rib':
     case 'custom-feature':
+    case 'wrap':
       source = data.targetBodyId;
       break;
     case 'gear':
@@ -373,6 +374,10 @@ function featureScopeForBodies(
         break;
       case 'rib':
         neededSketches.add(data.profile.sketchId);
+        neededBodies.add(data.targetBodyId);
+        break;
+      case 'wrap':
+        neededSketches.add(data.sketchId);
         neededBodies.add(data.targetBodyId);
         break;
       case 'gear':
@@ -675,6 +680,7 @@ function nativeCandidates(
       case 'standard-part':
       case 'rib':
       case 'custom-feature':
+      case 'wrap':
         // In scope so the walk reaches the bodies they consume, but their
         // own dimensions are not proposed yet, like the group above.
         break;

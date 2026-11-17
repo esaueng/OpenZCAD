@@ -50,6 +50,7 @@ import {
   SquaresUnite,
   Torus,
   Trash2,
+  WrapText,
   X
 } from 'lucide-react';
 import {
@@ -127,6 +128,7 @@ const KIND_ICONS: Partial<Record<FeatureNode['featureKind'], ReactNode>> = {
   shell: shellGlyph,
   'solid-offset': solidOffsetGlyph,
   rib: <Grip size={14} aria-hidden="true" />,
+  wrap: <WrapText size={14} aria-hidden="true" />,
   draft: draftGlyph,
   thicken: thickenGlyph,
   fillet: FILLET_ICON,

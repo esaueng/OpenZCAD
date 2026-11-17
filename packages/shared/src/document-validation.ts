@@ -369,6 +369,12 @@ const FEATURE_ENUM_FIELDS = {
       normal: true
     })
   },
+  wrap: {
+    mode: valuesOf<FeatureDataOf<'wrap'>['mode']>({
+      emboss: true,
+      engrave: true
+    })
+  },
   'helical-sweep': {
     construction: valuesOf<
       NonNullable<FeatureDataOf<'helical-sweep'>['construction']>
@@ -545,6 +551,7 @@ const FEATURE_KINDS = valuesOf<FeatureKind>({
   shell: true,
   'solid-offset': true,
   rib: true,
+  wrap: true,
   draft: true,
   thicken: true,
   fillet: true,
@@ -599,6 +606,7 @@ export const COMMAND_FEATURE_KINDS = {
   'feature.shell': 'shell',
   'feature.solid-offset': 'solid-offset',
   'feature.rib': 'rib',
+  'feature.wrap': 'wrap',
   'feature.draft': 'draft',
   'feature.thicken': 'thicken',
   'feature.direct-edit': 'direct-edit',
