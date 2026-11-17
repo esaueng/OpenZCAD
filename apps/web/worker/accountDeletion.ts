@@ -117,49 +117,60 @@ function parseDeletionRequest(value: unknown): DeleteAccountDataRequest {
 }
 
 /**
- * Owned end-to-end encrypted projects, trashed ones included. A profile
- * deletion keeps them while erasing every key of this account that opens
- * them (its identity, account keys, project-key wraps, leaf
+ * Owned end-to-end encrypted projects, trashed ones included, as SQL. A
+ * profile deletion keeps them while erasing every key of this account that
+ * opens them (its identity, account keys, project-key wraps, leaf
  * certifications and authority records). User ids are stable per email, so
  * signing in again returns to the same account and these projects, and a
  * fresh encryption setup there is a new identity that continues none of
  * the erased keys: the cloud copies stay unreadable to the account, and
  * its other browsers, which still pin the erased identity, refuse them
- * (issue #1704). Zero before migration 0031.
+ * (issue #1704).
  */
+const OWNED_ENCRYPTED_PROJECTS = `(SELECT COUNT(*) FROM projects
+  WHERE user_id = ? AND storage_format = 2)`;
+
+/** Zero before migration 0031. */
 async function ownedEncryptedProjectCount(
   db: D1Database,
   userId: UserId
 ): Promise<number> {
   if (!(await isProjectStorageFormatReady(db))) return 0;
   const row = await db
-    .prepare(
-      'SELECT COUNT(*) AS n FROM projects WHERE user_id = ? AND storage_format = 2'
-    )
+    .prepare(`SELECT ${OWNED_ENCRYPTED_PROJECTS} AS n`)
     .bind(userId)
     .first<{ n: number }>();
   return row?.n ?? 0;
 }
 
 /**
- * Refuses a profile deletion that would strand more encrypted projects
- * than the person was told about, before any fence or deletion. Deleting
- * the projects too (`all`) strands none, and projects-only keeps the keys.
+ * What a profile deletion's fence must also hold: the account owns no more
+ * encrypted projects than the request acknowledges. `beginErasure` checks
+ * it in the very statement that installs the fence, and the fence refuses
+ * every encrypted write (`e2eeWriteAuthorization`), so a project encrypted
+ * concurrently either commits first and is counted, refusing the deletion,
+ * or is refused itself. Deleting the projects too (`all`) strands none, and
+ * projects-only keeps the keys; neither has the condition.
  */
-async function assertEncryptedProjectsAcknowledged(
+async function strandingGuard(
   db: D1Database,
   userId: UserId,
   input: DeleteAccountDataRequest
-): Promise<void> {
-  if (input.scope !== 'profile') return;
-  const owned = await ownedEncryptedProjectCount(db, userId);
-  if (owned > (input.acknowledgedEncryptedProjectCount ?? 0)) {
-    throw new AccountDeletionError(
-      409,
-      'ACCOUNT_DELETION_ENCRYPTED_PROJECTS',
-      `You own ${owned === 1 ? 'an end-to-end encrypted cloud project' : `${owned} end-to-end encrypted cloud projects`} that deleting your profile would leave unreadable to your account. Review the deletion again before continuing. No cloud data was deleted.`
-    );
-  }
+): Promise<{ sql: string; binds: (string | number)[] } | null> {
+  if (input.scope !== 'profile' || !(await isProjectStorageFormatReady(db)))
+    return null;
+  return {
+    sql: `${OWNED_ENCRYPTED_PROJECTS} <= ?`,
+    binds: [userId, input.acknowledgedEncryptedProjectCount ?? 0]
+  };
+}
+
+function encryptedProjectsRefusal(owned: number): AccountDeletionError {
+  return new AccountDeletionError(
+    409,
+    'ACCOUNT_DELETION_ENCRYPTED_PROJECTS',
+    `You own ${owned === 1 ? 'an end-to-end encrypted cloud project' : `${owned} end-to-end encrypted cloud projects`} that deleting your profile would leave unreadable to your account. Review the deletion again before continuing. No cloud data was deleted.`
+  );
 }
 
 function confirmationFor(
@@ -288,16 +299,20 @@ function requestOpen(request: ErasureRequest): string {
 async function beginErasure(
   db: D1Database,
   userId: UserId,
-  scope: AccountDeletionScope
+  scope: AccountDeletionScope,
+  /** Must hold as the fence is installed or joined (`strandingGuard`). */
+  guard: { sql: string; binds: (string | number)[] } | null = null
 ): Promise<ErasureRequest> {
   const timestamp = Math.floor(Date.now() / 1_000);
   const tokens = await isErasureRequestTokenReady(db);
   const column = tokens ? 'request_token' : 'started_at';
+  // INSERT ... SELECT, so the guard decides in the same statement: no row,
+  // no insert and no update of an open request either.
   const row = await db
     .prepare(
       `INSERT INTO account_erasure_requests
          (user_id, scope, started_at, updated_at${tokens ? ', request_token' : ''})
-       VALUES (?, ?, ?, ?${tokens ? ', ?' : ''})
+       SELECT ?, ?, ?, ?${tokens ? ', ?' : ''} WHERE ${guard?.sql ?? '1 = 1'}
        ON CONFLICT(user_id) DO UPDATE SET updated_at = excluded.updated_at${
          tokens
            ? `, request_token = COALESCE(account_erasure_requests.request_token,
@@ -312,11 +327,24 @@ async function beginErasure(
       scope,
       timestamp,
       timestamp,
-      ...(tokens ? [crypto.randomUUID()] : [])
+      ...(tokens ? [crypto.randomUUID()] : []),
+      ...(guard?.binds ?? [])
     )
     .first<{ identity: string | number | null }>();
   if (row && row.identity !== null && row.identity !== undefined) {
     return { column, value: row.identity };
+  }
+  if (guard) {
+    // Refused by the guard rather than by another scope's request. Either
+    // way nothing was installed or changed.
+    const owned = await ownedEncryptedProjectCount(db, userId);
+    if (
+      !(await db
+        .prepare(`SELECT 1 AS ok WHERE ${guard.sql}`)
+        .bind(...guard.binds)
+        .first())
+    )
+      throw encryptedProjectsRefusal(owned);
   }
   const existing = await db
     .prepare(`SELECT scope FROM account_erasure_requests WHERE user_id = ?`)
@@ -633,10 +661,14 @@ export async function deleteAccountData(
   }
 
   const db = env.DB!;
-  await assertEncryptedProjectsAcknowledged(db, session.userId, input);
   // This attempt's request: an overlapping retry that completes it removes
   // it, and this attempt then stops before its next destructive step.
-  const request = await beginErasure(db, session.userId, input.scope);
+  const request = await beginErasure(
+    db,
+    session.userId,
+    input.scope,
+    await strandingGuard(db, session.userId, input)
+  );
   const stillCurrent = () => erasureStillCurrent(db, session.userId, request);
   const completedElsewhere = (projectIds: ProjectId[]) =>
     ({

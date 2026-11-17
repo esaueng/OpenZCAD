@@ -1413,7 +1413,11 @@ describe('solo MLS groups', () => {
 
     // A profile erasure takes the wraps and leaves, and keeps the project.
     const profile = await srv.call('POST', '/api/account/delete-data', {
-      body: { scope: 'profile', confirmation: 'DELETE CLOUD PROFILE' }
+      body: {
+        scope: 'profile',
+        confirmation: 'DELETE CLOUD PROFILE',
+        acknowledgedEncryptedProjectCount: 1
+      }
     });
     expect(profile.status).toBe(200);
     expect(count(srv, 'e2ee_project_keys', kept)).toBe(0);
@@ -1748,7 +1752,11 @@ describe('without migration 0032', () => {
     ).toEqual({ n: 0 });
     seedProject(srv);
     const profile = await srv.call('POST', '/api/account/delete-data', {
-      body: { scope: 'profile', confirmation: 'DELETE CLOUD PROFILE' }
+      body: {
+        scope: 'profile',
+        confirmation: 'DELETE CLOUD PROFILE',
+        acknowledgedEncryptedProjectCount: 1
+      }
     });
     expect(profile.status).toBe(200);
     const all = await srv.call('POST', '/api/account/delete-data', {

@@ -982,7 +982,11 @@ describe('the "encrypt new projects" record routes', () => {
       ).status
     ).toBe(200);
     const deleted = await call('POST', '/api/account/delete-data', {
-      body: { scope: 'profile', confirmation: 'DELETE CLOUD PROFILE' }
+      body: {
+        scope: 'profile',
+        confirmation: 'DELETE CLOUD PROFILE',
+        acknowledgedEncryptedProjectCount: 1
+      }
     });
     expect(deleted.status).toBe(200);
     expect(

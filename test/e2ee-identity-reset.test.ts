@@ -230,3 +230,125 @@ it('keeps the generic withdrawal refusal when the identity is unchanged or was r
   expect(refusal).toMatchObject({ code: 'invalid' });
   expect((refusal as Error).message).toMatch(/withdrew/);
 });
+
+/**
+ * Runs `hook` once, as a concurrent request would, immediately before or
+ * after the statement that installs the erasure fence: the statement the
+ * acknowledgement must be decided in. The rest of the erasure, and the
+ * hook's own requests, go to the real database unchanged.
+ */
+function aroundFence(
+  srv: Server,
+  when: 'before' | 'after',
+  hook: () => Promise<void>
+): D1Database {
+  const db = srv.env.DB as D1Database;
+  let pending = true;
+  const fenced = (sql: string) =>
+    pending && /INSERT INTO account_erasure_requests\b/.test(sql);
+  return new Proxy(db, {
+    get(target, key, receiver) {
+      if (key !== 'prepare')
+        return Reflect.get(target, key, receiver) as unknown;
+      return (sql: string) => {
+        const statement = target.prepare(sql);
+        if (!fenced(sql)) return statement;
+        const run =
+          (bound: D1PreparedStatement) =>
+          async <T>(): Promise<T | null> => {
+            pending = false;
+            if (when === 'before') await hook();
+            const result = await bound.first<T>();
+            if (when === 'after') await hook();
+            return result;
+          };
+        return {
+          bind: (...values: unknown[]) => {
+            const bound = statement.bind(...values);
+            return { ...bound, bind: bound.bind, first: run(bound) };
+          }
+        };
+      };
+    }
+  });
+}
+const ownedEncrypted = (srv: Server) =>
+  rows<{ n: number }>(
+    srv,
+    'SELECT COUNT(*) AS n FROM projects WHERE user_id = ? AND storage_format = 2',
+    OWNER
+  )[0]!.n;
+
+it('refuses, with nothing deleted, when a project is encrypted just before the fence lands', async () => {
+  const srv = newServer([before]);
+  const desktop = device(srv, before, 'owner_desktop');
+  // The preview said none; the old pre-check saw none too, then the
+  // concurrent create committed before the fence and was stranded.
+  const db = aroundFence(srv, 'before', async () => {
+    await createEncrypted(desktop, 'Concurrent');
+  });
+  await expect(
+    deleteAccountData(
+      session,
+      {
+        scope: 'profile',
+        confirmation: 'DELETE CLOUD PROFILE',
+        acknowledgedEncryptedProjectCount: 0
+      },
+      { ...srv.env, DB: db },
+      { deleteOwnedProjects: async () => [] } as never
+    )
+  ).rejects.toMatchObject({
+    status: 409,
+    code: 'ACCOUNT_DELETION_ENCRYPTED_PROJECTS'
+  });
+  expect(ownedEncrypted(srv)).toBe(1);
+  // No fence left behind, and every key still opens the project.
+  expect(
+    rows(srv, 'SELECT 1 FROM account_erasure_requests WHERE user_id = ?', OWNER)
+  ).toHaveLength(0);
+  expect(
+    rows(srv, 'SELECT 1 FROM e2ee_identities WHERE user_id = ?', OWNER)
+  ).toHaveLength(1);
+  expect(
+    rows(srv, 'SELECT 1 FROM e2ee_project_authority WHERE user_id = ?', OWNER)
+  ).toHaveLength(1);
+  // A retry acknowledging it is the supported explicit deletion.
+  expect((await eraseProfile(srv, 1)).scope).toBe('profile');
+});
+
+it('refuses the concurrent encryption instead once the fence has landed', async () => {
+  const srv = newServer([before]);
+  const desktop = device(srv, before, 'owner_desktop');
+  let refused: unknown = null;
+  const db = aroundFence(srv, 'after', async () => {
+    refused = await createEncrypted(desktop, 'Concurrent').then(
+      () => null,
+      (error: unknown) => error
+    );
+  });
+  expect(
+    (
+      await deleteAccountData(
+        session,
+        {
+          scope: 'profile',
+          confirmation: 'DELETE CLOUD PROFILE',
+          acknowledgedEncryptedProjectCount: 0
+        },
+        { ...srv.env, DB: db },
+        { deleteOwnedProjects: async () => [] } as never
+      )
+    ).scope
+  ).toBe('profile');
+  expect(refused).not.toBeNull();
+  // Nothing encrypted was left behind for the erased keys.
+  expect(ownedEncrypted(srv)).toBe(0);
+  expect(
+    rows(
+      srv,
+      'SELECT 1 FROM e2ee_project_groups WHERE project_id IN (SELECT id FROM projects WHERE user_id = ?)',
+      OWNER
+    )
+  ).toHaveLength(0);
+});
