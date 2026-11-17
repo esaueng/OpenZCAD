@@ -443,6 +443,7 @@ import { requestContactVerification } from './lib/e2ee/contactFocus';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import {
   commandOutcomeMessage,
+  discardedRefusalMessage,
   historyStepMessage
 } from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
@@ -939,6 +940,7 @@ import {
   interactionReducer,
   commandSessionFor,
   holdsRefusal,
+  refusalDiscardedByHistoryStep,
   isOperationState,
   isStaleSelectionError,
   editedFeatureIdFor,
@@ -12882,6 +12884,10 @@ export function App() {
   }
 
   function cancelPanel() {
+    // Dismissing a failed edit dismisses its "Edit not applied" notice too
+    // (#1596); the Activity log keeps the full refusal. A refusal left behind
+    // by a plain deselection keeps the notice as its link to that entry.
+    if (holdsRefusal(interactionRef.current)) setLastDirectEditFailure(null);
     cancelPendingRegionExtrusion();
     cancelDirectManipulationRef.current?.();
     clearDirectEditPreviews();
@@ -17096,10 +17102,28 @@ export function App() {
       : null;
   }
 
+  /**
+   * Undo or Redo over a failed edit discards the failure and leaves history
+   * alone. The failed edit was never committed, so stepping history would
+   * revert older, unrelated work while the failure's card hides it (#1597).
+   */
+  function discardHeldRefusal(step: 'undo' | 'redo'): boolean {
+    const title = refusalDiscardedByHistoryStep(interactionRef.current);
+    if (title === null) return false;
+    // A drag that retook a validating release would land that release when
+    // the drag is cancelled; Undo leaves history alone, so it goes too.
+    retakenRelease.drop('offset-face');
+    retakenRelease.drop('resize-cylinder-radius');
+    cancelPanel();
+    setStatus(discardedRefusalMessage(step, title));
+    return true;
+  }
+
   function handleUndo() {
     if (!managerRef.current) {
       return;
     }
+    if (discardHeldRefusal('undo')) return;
     // A spent history shortcut must leave an armed hole alone.
     if (!managerRef.current.canUndo && captureHoleHistorySelection()) return;
     // Tweak mode locks modeling, not parameters: an undo entry that touched
@@ -17183,6 +17207,7 @@ export function App() {
     if (!managerRef.current) {
       return;
     }
+    if (discardHeldRefusal('redo')) return;
     // A spent history shortcut must leave an armed hole alone.
     if (!managerRef.current.canRedo && captureHoleHistorySelection()) return;
     // Same split as undo: redoing a parameter-only step is a parameter edit,
@@ -30224,13 +30249,17 @@ export function App() {
    */
   // A face offset refused at a limit the kernel named offers the value just
   // inside that limit, which is nearer the hand than the last frame that
-  // happened to build; validation still judges it on the way in.
+  // happened to build; validation still judges it on the way in. No refusal
+  // offers to keep the value it just refused (#1596).
   const keepValue =
-    isOperationState(interaction) &&
-    interaction.phase === 'failed' &&
-    interaction.mode === 'face' &&
-    interaction.op === 'offset-face'
-      ? keptOffsetValue(interaction.error?.limit, lastValidPreview)
+    isOperationState(interaction) && interaction.phase === 'failed'
+      ? keptOffsetValue(
+          interaction.mode === 'face' && interaction.op === 'offset-face'
+            ? interaction.error?.limit
+            : undefined,
+          lastValidPreview,
+          interaction.lastValue
+        )
       : lastValidPreview;
   const keepLastValid =
     isOperationState(interaction) &&

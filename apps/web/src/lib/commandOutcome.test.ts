@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { commandOutcomeMessage, historyStepMessage } from './commandOutcome';
+import {
+  commandOutcomeMessage,
+  discardedRefusalMessage,
+  historyStepMessage
+} from './commandOutcome';
 
 describe('command outcome messages', () => {
   it('turns an imperative command label into the sentence that happened', () => {
@@ -68,5 +72,14 @@ describe('history step messages', () => {
     );
     expect(historyStepMessage('undo', null)).toBe('Undid the last change.');
     expect(historyStepMessage('redo', ' ')).toBe('Redid the last change.');
+  });
+
+  it('says a failed edit was discarded and history left alone (#1597)', () => {
+    expect(discardedRefusalMessage('undo', 'Offset Face')).toBe(
+      'Discarded the failed Offset Face · nothing was undone.'
+    );
+    expect(discardedRefusalMessage('redo', 'Fillet')).toBe(
+      'Discarded the failed Fillet · nothing was redone.'
+    );
   });
 });
