@@ -49,6 +49,7 @@ disabled. Show a body in the viewport to include it in the file.
 | Format       | Keeps                                                                                                                                                                    | Drops                                                                        |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
 | STEP (AP214) | Each body as its own solid named after the body and styled in its display colour, the document as the product, exact analytic faces, bounds, volume, closed shells, unit | History                                                                      |
+| STEP (AP242) | Same as AP214: the protocol changes only the file's schema and application-context statements                                                                            | History                                                                      |
 | STL (binary) | Bounds and volume within the chord tolerance, a closed surface                                                                                                           | Body separation (one facet stream), exact faces, unit, names, colours        |
 | STL (ASCII)  | Same as binary STL                                                                                                                                                       | Same as binary STL; every body shares one `solid` block                      |
 | 3MF          | Bounds, volume, a closed surface, declared unit, one object per body in the package, named after the body and coloured in its display colour                             | Body separation **on reimport** (the import merges the objects), exact faces |
@@ -58,6 +59,12 @@ disabled. Show a body in the viewport to include it in the file.
 
 STEP body names and colours are in the file for other CAD to read; OpenZCAD's
 own STEP import does not yet apply them to the bodies it creates (I02).
+
+**STEP protocol:** Settings → General → _STEP protocol_ picks what File ›
+STEP states: AP214 (automotive design, the default and what every STEP export
+wrote before the choice existed) or AP242 edition 1 (managed model-based 3D
+engineering). Both files hold the same entities after the header; Insert
+project always travels as AP214.
 
 3MF names and colours use only the 3MF core format: each `<object>` carries
 its body's `name`, and one core `<basematerials>` group holds a `<base>` per

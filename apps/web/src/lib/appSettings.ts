@@ -2,6 +2,7 @@ import {
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
   DEFAULT_APP_SETTINGS,
   EXPORT_UNITS,
+  STEP_PROTOCOLS,
   normalizeHiddenRelationGlyphs,
   PANEL_WIDTH_LIMITS,
   SETTINGS_ORBIT_MODES,
@@ -335,6 +336,11 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         files.exportUnits,
         EXPORT_UNITS,
         defaults.files.exportUnits
+      ),
+      stepProtocol: member(
+        files.stepProtocol,
+        STEP_PROTOCOLS,
+        defaults.files.stepProtocol
       )
     },
     collaboration: {

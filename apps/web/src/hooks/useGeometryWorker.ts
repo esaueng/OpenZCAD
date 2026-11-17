@@ -35,6 +35,7 @@ import type {
   FeatureId,
   ProjectDocument,
   SketchId,
+  StepProtocol,
   UnitSystem
 } from '@openzcad/shared';
 import type { CommandManager } from '@openzcad/command-system';
@@ -288,6 +289,8 @@ export interface GeometryWorkerApi {
       transparent?: boolean;
       /** 'step' only: the name the file is saved under, for its header. */
       fileName?: string;
+      /** 'step' only: the application protocol to state; AP214 when unset. */
+      stepProtocol?: StepProtocol;
       /** F06: write every body the document shows, ignoring `bodyIds`. */
       allShownBodies?: boolean;
       signal?: AbortSignal;
@@ -1608,6 +1611,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             : {}),
           ...(options?.fileName !== undefined
             ? { fileName: options.fileName }
+            : {}),
+          ...(options?.stepProtocol !== undefined
+            ? { stepProtocol: options.stepProtocol }
             : {}),
           ...(options?.allShownBodies ? { allShownBodies: true } : {})
         });

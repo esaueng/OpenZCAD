@@ -2781,3 +2781,15 @@ describe('settings page pattern', () => {
     }
   });
 });
+
+describe('STEP protocol setting', () => {
+  it('saves the protocol File › STEP writes, AP214 until changed', async () => {
+    const user = userEvent.setup();
+    const { latest } = renderStatefulSettings({ initialSection: 'general' });
+    const protocol = screen.getByLabelText('STEP protocol');
+    expect(protocol).toHaveValue('ap214');
+    await user.selectOptions(protocol, 'ap242');
+    expect(latest().files.stepProtocol).toBe('ap242');
+    expect(protocol).toHaveValue('ap242');
+  });
+});
