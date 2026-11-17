@@ -48,6 +48,7 @@ import {
 import type { RefusalCapture } from './lib/refusalHarvest';
 import { useRefusalHarvest } from './hooks/useRefusalHarvest';
 import {
+  checkpointLabel,
   ownEntry,
   PROJECT_MIGRATING_CODE,
   type DrawingAnnotation,
@@ -16539,18 +16540,6 @@ export function App() {
   }
 
   /**
-   * Rewinds the open project to one of its save states.
-   *
-   * Two invariants shape the order of the steps. The pre-restore document is
-   * checkpointed and written *first*, so the state being left is reachable
-   * afterwards even past the undo depth — a restore the user cannot escape is
-   * a data-loss feature. And the restore itself goes through the command
-   * manager as one document edit, which makes it a single Undo and leaves the
-   * durable timeline running forward (see `restoreFromSaveState`) instead of
-   * rewinding a clock that collaboration and every fenced cloud write compare
-   * against.
-   */
-  /**
    * L03: renames a save point in the document. A forward write like the save
    * point itself (undo never rewinds the list), so it syncs as an ordinary
    * change and needs edit rights.
@@ -16578,6 +16567,18 @@ export function App() {
     }
   }
 
+  /**
+   * Rewinds the open project to one of its save states.
+   *
+   * Two invariants shape the order of the steps. The pre-restore document is
+   * checkpointed and written *first*, so the state being left is reachable
+   * afterwards even past the undo depth — a restore the user cannot escape is
+   * a data-loss feature. And the restore itself goes through the command
+   * manager as one document edit, which makes it a single Undo and leaves the
+   * durable timeline running forward (see `restoreFromSaveState`) instead of
+   * rewinding a clock that collaboration and every fenced cloud write compare
+   * against.
+   */
   async function handleRestoreSaveState(checkpoint: ProjectCheckpoint) {
     const manager = managerRef.current;
     const current = manager?.document;
@@ -16606,7 +16607,7 @@ export function App() {
         );
         return;
       }
-      const reason = `Restored “${checkpoint.reason}”`;
+      const reason = `Restored “${checkpointLabel(checkpoint)}”`;
       const restoreIsCurrent = () =>
         managerRef.current === manager &&
         sameLocalProjectContent(manager.document, current) &&
