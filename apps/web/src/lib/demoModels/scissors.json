@@ -2957,7 +2957,7 @@
               "origin": {
                 "x": 0,
                 "y": 0,
-                "z": 0
+                "z": 2.45
               },
               "zAxis": {
                 "x": 0,
@@ -2971,8 +2971,8 @@
               }
             },
             "source": {
-              "kind": "circle",
-              "label": "Circular edge · centre"
+              "kind": "cylinder",
+              "label": "Pivot bore · axis"
             }
           },
           "child": {
@@ -2981,7 +2981,7 @@
               "origin": {
                 "x": 0,
                 "y": 0,
-                "z": 4.85
+                "z": 2.45
               },
               "zAxis": {
                 "x": 0,
@@ -3104,7 +3104,7 @@
             "origin": {
               "x": 0,
               "y": 0,
-              "z": 0
+              "z": 2.45
             },
             "zAxis": {
               "x": 0,
@@ -3118,8 +3118,8 @@
             }
           },
           "source": {
-            "kind": "circle",
-            "label": "Circular edge · centre"
+            "kind": "cylinder",
+            "label": "Pivot bore · axis"
           }
         },
         "child": {
@@ -3128,7 +3128,7 @@
             "origin": {
               "x": 0,
               "y": 0,
-              "z": 4.85
+              "z": 2.45
             },
             "zAxis": {
               "x": 0,
