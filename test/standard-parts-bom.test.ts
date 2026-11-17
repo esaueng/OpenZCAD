@@ -11,8 +11,7 @@ import {
   findSketch,
   holeBody,
   listFeaturesInOrder,
-  standardPartBody,
-  type StandardPartInput
+  standardPartBody
 } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
@@ -124,7 +123,7 @@ describe('M17 standard parts in the bill of materials', () => {
           ...input,
           origin: ORIGIN,
           axis: DOWN
-        } as StandardPartInput)
+        })
       );
     const bom = deriveAssemblyBom(assemble(manager), allLive);
     expect(bom.rows.map((row) => row.name)).toEqual([

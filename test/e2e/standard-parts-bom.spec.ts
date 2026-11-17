@@ -13,7 +13,6 @@ import {
   expectBodyCount,
   finishInPlaceCommand,
   MODEL_ONLY,
-  revealModelPanel,
   waitForStillViewport
 } from './openzcad-fixtures';
 
@@ -102,18 +101,6 @@ async function pickTop(canvas: Locator): Promise<boolean> {
       ),
     ENTRY
   );
-}
-
-/** Choose an Options choice, shown as segments or, when crowded, a menu. */
-async function choose(bar: Locator, label: string, choice: string) {
-  const segments = bar.getByRole('radiogroup', { name: label });
-  if ((await segments.count()) > 0) {
-    await segments.getByRole('radio', { name: choice, exact: true }).click();
-    return;
-  }
-  await bar
-    .getByRole('combobox', { name: label })
-    .selectOption({ label: choice });
 }
 
 async function exportedDocument(page: Page): Promise<ProjectDocument> {
