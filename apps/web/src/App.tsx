@@ -14592,17 +14592,13 @@ export function App() {
         projectController?.closeProject();
         await projectController?.whenIdle();
       }
-      await cloudSettingsAutosaveRef.current?.flushPending();
-
       if (sessionRef.current !== departingSession)
         throw new Error('The signed-in account changed. Try deleting again.');
       const erase = () => api.deleteAccountData(scope, confirmation);
-      const deleted =
-        scope === 'projects'
-          ? await erase()
-          : await (
-              await import('./lib/e2ee/accountErasure')
-            ).eraseAccountWithKeyCleanup({
+      const eraseProfile = () =>
+        import('./lib/e2ee/accountErasure').then(
+          ({ eraseAccountWithKeyCleanup }) =>
+            eraseAccountWithKeyCleanup({
               userId: departingSession?.userId ?? null,
               isCurrentSession: () => sessionRef.current === departingSession,
               erase,
@@ -14610,7 +14606,22 @@ export function App() {
                 endCloudSettingsSession();
                 projectController?.closeProject();
               }
-            });
+            })
+        );
+      const settingsController = cloudSettingsAutosaveRef.current;
+      const deleted =
+        scope === 'projects'
+          ? await (async () => {
+              await settingsController?.flushPending();
+              if (sessionRef.current !== departingSession)
+                throw new Error(
+                  'The signed-in account changed. Try deleting again.'
+                );
+              return erase();
+            })()
+          : settingsController
+            ? await settingsController.withProfileErasure(eraseProfile)
+            : await eraseProfile();
       if (scope === 'projects' && departingSession)
         forgetShelfProjectNames(
           departingSession.userId,

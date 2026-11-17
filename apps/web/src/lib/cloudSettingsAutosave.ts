@@ -280,6 +280,28 @@ export class CloudSettingsAutosave {
     await this.#queue;
   }
 
+  /**
+   * Profile erasure removes cloud preferences, so uploading them is neither
+   * necessary nor always possible on a locked device. Keep the device copy
+   * dirty, invalidate outstanding responses and drain writes before erasing.
+   * The action ends the session on success. Otherwise restore only this same
+   * session, never one that signed out or switched accounts during the action.
+   */
+  async withProfileErasure<T>(erase: () => Promise<T>): Promise<T> {
+    this.#assertUsable();
+    const session = this.#session;
+    this.endSession();
+    const epoch = this.#sessionEpoch;
+    try {
+      await this.whenIdle();
+      return await erase();
+    } finally {
+      if (session && this.#sessionEpoch === epoch && this.#session === null) {
+        this.connectSession(session.userId, session.account);
+      }
+    }
+  }
+
   dispose(): void {
     if (this.#disposed) {
       return;
