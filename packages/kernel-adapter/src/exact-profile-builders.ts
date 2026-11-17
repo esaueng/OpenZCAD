@@ -493,7 +493,7 @@ export function resolveDatumAxisSourceAtHistory(
 }
 
 /**
- * R01 (schema v97): the coordinate system a reference resolved to earlier in
+ * R01 (schema v99): the coordinate system a reference resolved to earlier in
  * this build. One that failed, is suppressed or comes later is refused by
  * name; nothing stands in for it.
  */
@@ -516,7 +516,7 @@ export function resolveDatumCsysRefAtHistory(
 }
 
 /**
- * R01 (schema v97): a datum point's edge source at the point's history
+ * R01 (schema v99): a datum point's edge source at the point's history
  * position, read exactly: the midpoint of a straight edge, or the centre of
  * a circular one (the circumcentre of three of its points, checked against
  * a fourth). Re-found through verified lineage; refused by name otherwise.

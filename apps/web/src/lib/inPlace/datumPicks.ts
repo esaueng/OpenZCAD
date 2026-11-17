@@ -146,7 +146,7 @@ export function edgeRef(
   const straight = Boolean(
     witness && !witness.closed && /^line$/i.test(witness.curveType)
   );
-  // R01 (schema v97): a circle or arc clicked away from its ends is its
+  // R01 (schema v99): a circle or arc clicked away from its ends is its
   // centre, for a datum point.
   if (
     kinds.includes('circle') &&

@@ -1469,7 +1469,7 @@ export interface ModelViewerProps {
    */
   datumAxes?: readonly DatumAxisDisplay[];
   /**
-   * Committed R01 (schema v97) datum points and coordinate systems, at the
+   * Committed R01 (schema v99) datum points and coordinate systems, at the
    * positions and frames the exact build resolved.
    */
   datumMarkers?: {

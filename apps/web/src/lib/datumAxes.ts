@@ -53,7 +53,7 @@ export interface DatumAxisFormState {
   /** Planes A and B of an axis where two planes meet. */
   sourceA: DatumPlaneSource | null;
   sourceB: DatumPlaneSource | null;
-  /** R01 (schema v97): the coordinate system and axis it runs along. */
+  /** R01 (schema v99): the coordinate system and axis it runs along. */
   csys: FeatureId | null;
   csysAxis: 'X' | 'Y' | 'Z';
   reverseDirection: boolean;

@@ -69,7 +69,7 @@ export interface DatumAxisFormProps {
   initial: DatumAxisFormState;
   /** Principal planes, earlier datum planes and any offered face. */
   planes: readonly DatumSourceOption[];
-  /** R01 (schema v97): earlier coordinate systems, for a System axis. */
+  /** R01 (schema v99): earlier coordinate systems, for a System axis. */
   systems?: readonly { featureId: FeatureId; name: string }[];
   scope: Record<string, number>;
   units?: UnitSystem;

@@ -8,7 +8,7 @@ import type { DatumCsysFrame, Vector3 } from '@openzcad/shared';
 import { DATUM_IDLE_COLOR, DATUM_SELECTED_COLOR } from './datumStyle';
 
 /**
- * Scene-side rig for committed R01 (schema v97) datum points and coordinate
+ * Scene-side rig for committed R01 (schema v99) datum points and coordinate
  * systems. A point is a small three-axis cross; a system is a triad of its X,
  * Y and Z axes from its origin, drawn in the conventional red, green and
  * blue (the selection hue when selected). Like datum planes and axes it is

@@ -72,7 +72,7 @@ export function featureHistory(document: ProjectDocument) {
         datum(source.datumFeatureId);
       else if (source.type === 'face') body(source.bodyId);
     };
-    // R01 (schema v97): datum points and coordinate systems read by
+    // R01 (schema v99): datum points and coordinate systems read by
     // reference, whatever feature holds them.
     for (const id of [
       ...featureDatumPointRefs(feature.data),
