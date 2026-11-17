@@ -1789,8 +1789,12 @@
   list-style: none;
 }
 
+/* A row wraps its buttons onto a second line rather than squeeze its text to
+   nothing: an encrypted share link's Allow comments, Copy and Revoke leave no
+   room for the name and expiry in a 390px dialog. */
 .sharing-list > li {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   min-height: 32px;
@@ -1849,7 +1853,7 @@
 }
 
 .sharing-row-text {
-  flex: 1;
+  flex: 1 1 8rem;
   min-width: 0;
   display: grid;
 }
