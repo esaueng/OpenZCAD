@@ -67,6 +67,7 @@ async fn open_cad_file() -> Result<Option<NativeCadFile>, String> {
 fn export_path(path: &Path, format: &str) -> Result<PathBuf, String> {
     let expected = match format {
         "step" => &["step", "stp"][..],
+        "igs" => &["igs", "iges"][..],
         "dxf" => &["dxf"][..],
         "3mf" => &["3mf"][..],
         "obj" => &["obj"][..],
@@ -100,7 +101,7 @@ async fn save_cad_file(
     format: String,
     contents: String,
 ) -> Result<bool, String> {
-    if !matches!(format.as_str(), "step" | "stl" | "dxf" | "svg") {
+    if !matches!(format.as_str(), "step" | "igs" | "stl" | "dxf" | "svg") {
         return Err("Unsupported export format.".to_string());
     }
     if suggested_name.is_empty()
@@ -115,6 +116,7 @@ async fn save_cad_file(
     let handle = rfd::AsyncFileDialog::new()
         .set_title(match format.as_str() {
             "step" => "Export STEP",
+            "igs" => "Export IGES",
             "dxf" => "Export DXF",
             "svg" => "Export SVG",
             _ => "Export STL",

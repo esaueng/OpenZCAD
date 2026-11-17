@@ -36,7 +36,7 @@ export function fileAccept(
 
 /** Every CAD format the import picker offers. */
 export const CAD_IMPORT_ACCEPT =
-  '.shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply,.dxf';
+  '.shapr,.stl,.step,.stp,.igs,.iges,.3mf,.obj,.glb,.ply,.dxf';
 
 /** Running as an installed app (Home Screen, or a desktop PWA window). */
 export function isStandaloneApp(win: Window = window): boolean {

@@ -25,7 +25,7 @@ test(
     for (const input of await pickers.all()) {
       await expect(input).toHaveAttribute(
         'accept',
-        '.shapr,.stl,.step,.stp,.3mf,.obj,.glb,.ply,.dxf'
+        '.shapr,.stl,.step,.stp,.igs,.iges,.3mf,.obj,.glb,.ply,.dxf'
       );
     }
     await picker.setInputFiles({

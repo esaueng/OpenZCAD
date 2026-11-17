@@ -224,6 +224,7 @@ import {
   projectRemusLineageDiagnostic
 } from './exact-shape-utils';
 import {
+  EXACT_IMPORT_BUDGETS,
   importedStepCacheKey,
   importStepStructureWithOwnBudget,
   importStepWithOwnBudget,
@@ -835,6 +836,22 @@ export interface ExactKernelAdapter {
     bodyIds: BodyId[],
     options?: StepExportOptions
   ): Promise<string>;
+  /**
+   * I06: the bodies' solids as exact IGES 5.3 manifold solid B-rep objects
+   * (type 186), in `options.units` (millimetres when unset), which the
+   * file's global section states. Names and colours are not written.
+   */
+  exportIges(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    options?: ExportUnitOptions & { fileName?: string }
+  ): Promise<string>;
+  /**
+   * I06: an IGES file's 186 solids restated as ISO 10303-21 text in
+   * millimetres, the exact source the STEP import path then reads. Refuses
+   * surface models and entities outside the qualified IGES subset by name.
+   */
+  igesAsStep(data: ArrayBuffer): Promise<Uint8Array>;
   /**
    * The same STEP as {@link exportStep}, of every body the document shows
    * that has an exact solid, with how many solids each body wrote — in file
@@ -5221,6 +5238,52 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         mesh.free();
       }
     });
+  }
+
+  async exportIges(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    options: ExportUnitOptions & { fileName?: string } = {}
+  ): Promise<string> {
+    const units = options.units ?? 'mm';
+    const io = await loadRemusTranslators();
+    return this.withExportBuild(document, (kernel, build) => {
+      const bodies = this.exportBodySolidsFor(
+        kernel,
+        build,
+        document,
+        bodyIds,
+        units
+      );
+      const unit = { mm: 'MM', cm: 'CM', m: 'M', inch: 'IN' }[units];
+      const stamp = new Date()
+        .toISOString()
+        .replace(/[-:]/g, '')
+        .replace('T', '.')
+        .slice(0, 15);
+      return decodeText(
+        io.exportIgesBrep(
+          kernel.serializeSolids(
+            new Uint32Array(bodies.flatMap(({ solids }) => solids))
+          ),
+          JSON.stringify({
+            fileName: options.fileName ?? `${document.name}.igs`,
+            productName: document.name,
+            timestamp: stamp,
+            unit
+          })
+        )
+      );
+    });
+  }
+
+  async igesAsStep(data: ArrayBuffer): Promise<Uint8Array> {
+    const io = await loadRemusTranslators();
+    return io.igesBrepAsStep(
+      new Uint8Array(data),
+      EXACT_IMPORT_BUDGETS.maxInputBytes,
+      EXACT_IMPORT_BUDGETS.maxEntities
+    );
   }
 
   async exportStep(

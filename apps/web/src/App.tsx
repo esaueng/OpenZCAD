@@ -18621,7 +18621,7 @@ export function App() {
       }
       return;
     }
-    if (!/\.(?:stl|step|stp|3mf|obj|glb|ply)$/i.test(file.name)) {
+    if (!/\.(?:stl|step|stp|igs|iges|3mf|obj|glb|ply)$/i.test(file.name)) {
       refuseImportOnCard(file.name, unsupportedImportMessage(file.name));
       return;
     }
@@ -18865,7 +18865,7 @@ export function App() {
       return;
     }
 
-    if (!/\.(?:step|stp)$/i.test(file.name)) {
+    if (!/\.(?:step|stp|igs|iges)$/i.test(file.name)) {
       // 3MF, OBJ, glTF binary and PLY. The kernel's own translators read them
       // into the same triangles an STL import produces, in a worker that is
       // terminated with the import, and the result becomes the same
@@ -18925,11 +18925,13 @@ export function App() {
       return;
     }
 
-    const { runStepImport } = await stepImportRun();
+    const { runCadFileImport } = await stepImportRun();
     const abort = startImportAbort();
-    await runStepImport({
+    // I06: an IGES B-rep is imported as the exact STEP it restates to.
+    await runCadFileImport({
       file,
       contentType,
+      refuse: (message) => refuseImportOnCard(file.name, message),
       archive: archiveArtifact,
       validatedFeature,
       signal: abort.signal,
@@ -19490,13 +19492,7 @@ export function App() {
     bodyId: string;
     topologyId: string;
   }) {
-    if (currentGeometrySnapshot !== null) {
-      setStatus(
-        'The model is still updating. Try exporting again when it finishes.'
-      );
-      return;
-    }
-    if (!doc) {
+    if (exportBlockedByUpdate() || !doc) {
       return;
     }
     const face = representations[target.bodyId as BodyId]?.topology?.faces.find(
@@ -19514,10 +19510,7 @@ export function App() {
         doc,
         [target.bodyId as BodyId],
         {
-          units: resolveExportUnits(
-            appSettingsRef.current.files.exportUnits,
-            doc.units
-          ),
+          units: exportUnitsFor(doc.units),
           face: {
             bodyId: target.bodyId as BodyId,
             faceHash: face.hash,
@@ -20061,19 +20054,38 @@ export function App() {
     );
   }
 
-  async function handleExportStep(rowId: string | null = null) {
-    if (currentGeometrySnapshot !== null) {
-      setStatus(
-        'The model is still updating. Try exporting again when it finishes.'
-      );
-      return;
+  /** Whether an export must wait for the model to finish updating, said in the status. */
+  function exportBlockedByUpdate() {
+    if (currentGeometrySnapshot === null) return false;
+    setStatus(
+      'The model is still updating. Try exporting again when it finishes.'
+    );
+    return true;
+  }
+
+  /** The unit an export writes: the setting, or the document's own. */
+  function exportUnitsFor(documentUnits: UnitSystem) {
+    return resolveExportUnits(
+      appSettingsRef.current.files.exportUnits,
+      documentUnits
+    );
+  }
+
+  /**
+   * The export scope for `rowId` when an export can start now, or null
+   * once the status says why not: the model is still updating, the
+   * configuration cannot be exported, or there is nothing to export.
+   */
+  function readyExportTarget(rowId: string | null) {
+    if (exportBlockedByUpdate()) {
+      return null;
     }
     let target: ReturnType<typeof exportTarget>;
     try {
       target = exportTarget(rowId);
     } catch (error) {
       setStatus(errorMessage(error, 'That configuration cannot be exported.'));
-      return;
+      return null;
     }
     if (
       !doc ||
@@ -20081,6 +20093,33 @@ export function App() {
       (!target.allShownBodies && target.bodyIds.length === 0)
     ) {
       setStatus(emptyExportReason);
+      return null;
+    }
+    return target;
+  }
+
+  /** I06: File › Export IGES, run from its lazy module. */
+  function handleExportIges() {
+    const target = readyExportTarget(null);
+    if (!target || !doc) return;
+    const { version, units } = doc;
+    const fileName = `${exportStemFor(null)}.igs`;
+    void import('./lib/igesImport').then((lazy) =>
+      lazy.exportIges({
+        target,
+        fileName,
+        version,
+        documentUnits: units,
+        units: exportUnitsFor(units),
+        runExportJob,
+        exportModel: geometry.exportModel
+      })
+    );
+  }
+
+  async function handleExportStep(rowId: string | null = null) {
+    const target = readyExportTarget(rowId);
+    if (!target || !doc) {
       return;
     }
     const { document: exported, bodyIds, allShownBodies, rowName } = target;
@@ -20107,10 +20146,7 @@ export function App() {
           ...options,
           ...(allShownBodies ? { allShownBodies: true } : {}),
           fileName,
-          units: resolveExportUnits(
-            appSettingsRef.current.files.exportUnits,
-            doc.units
-          ),
+          units: exportUnitsFor(doc.units),
           stepProtocol: appSettingsRef.current.files.stepProtocol
         });
         if (!('text' in result)) {
@@ -20135,25 +20171,8 @@ export function App() {
     deflection: number,
     tolerances: { angularTolerance?: number } & MeshExportPackage = {}
   ) {
-    if (currentGeometrySnapshot !== null) {
-      setStatus(
-        'The model is still updating. Try exporting again when it finishes.'
-      );
-      return;
-    }
-    let target: ReturnType<typeof exportTarget>;
-    try {
-      target = exportTarget(exportRowId);
-    } catch (error) {
-      setStatus(errorMessage(error, 'That configuration cannot be exported.'));
-      return;
-    }
-    if (
-      !doc ||
-      !target ||
-      (!target.allShownBodies && target.bodyIds.length === 0)
-    ) {
-      setStatus(emptyExportReason);
+    const target = readyExportTarget(exportRowId);
+    if (!target || !doc) {
       return;
     }
     const { version, units } = doc;
@@ -20166,10 +20185,7 @@ export function App() {
         info: MESH_EXPORT_FILE_INFO[format],
         version,
         documentUnits: units,
-        units: resolveExportUnits(
-          appSettingsRef.current.files.exportUnits,
-          units
-        ),
+        units: exportUnitsFor(units),
         stemOf: exportStemFor,
         setStatus,
         runExportJob,
@@ -20189,23 +20205,8 @@ export function App() {
     deflection: number,
     tolerances: { angularTolerance?: number } = {}
   ) {
-    if (currentGeometrySnapshot !== null) {
-      setStatus('The model is still updating. Try again when it finishes.');
-      return;
-    }
-    let written: ReturnType<typeof exportTarget>;
-    try {
-      written = exportTarget(exportRowId);
-    } catch (error) {
-      setStatus(errorMessage(error, 'That configuration cannot be exported.'));
-      return;
-    }
-    if (
-      !doc ||
-      !written ||
-      (!written.allShownBodies && written.bodyIds.length === 0)
-    ) {
-      setStatus(emptyExportReason);
+    const written = readyExportTarget(exportRowId);
+    if (!written || !doc) {
       return;
     }
     const { document: exported, bodyIds, allShownBodies, rowName } = written;
@@ -20236,10 +20237,7 @@ export function App() {
           deflection,
           ...tolerances,
           ...(allShownBodies ? { allShownBodies: true } : {}),
-          units: resolveExportUnits(
-            appSettingsRef.current.files.exportUnits,
-            doc.units
-          ),
+          units: exportUnitsFor(doc.units),
           ...options
         });
         if (!('data' in result)) {
@@ -35973,6 +35971,7 @@ export function App() {
           onSaveAs={openSaveNameDialog}
           onImportFiles={(files) => void handleImportFiles(files)}
           onExportStep={() => void handleExportStep()}
+          onExportIges={() => void handleExportIges()}
           onOpenMeshExport={() => setMeshExportOpen(true)}
           onOpenImageExport={() => openImageExport()}
           {...(hasSheetMetal

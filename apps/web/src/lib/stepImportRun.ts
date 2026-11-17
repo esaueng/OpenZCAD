@@ -387,6 +387,94 @@ function declined(): StepImportResult {
   };
 }
 
+/**
+ * I06: Import CAD files' exact path for STEP and IGES. An IGES B-rep is
+ * restated as the exact STEP the Remus translator reads it as, and that STEP
+ * is imported under the IGES file's name; a file the translator refuses (a
+ * surface model, an entity outside the qualified subset) goes to `refuse`
+ * before anything is stored.
+ */
+export async function runCadFileImport(
+  deps: StepImportRunDeps & { refuse(message: string): void }
+): Promise<void> {
+  const original = deps.file;
+  if (!/\.(?:igs|iges)$/i.test(original.name)) {
+    await runStepImport(deps);
+    return;
+  }
+  // The STEP import binds its commit to the open project only once it starts,
+  // after the conversion: an import started in one project must not land in
+  // another the user switched to meanwhile.
+  const startedIn = deps.currentDocument()?.projectId ?? null;
+  const stillCurrent = () =>
+    (deps.currentDocument()?.projectId ?? null) === startedIn &&
+    (deps.stillCurrent?.() ?? true);
+  // The conversion can take a while on a large file: the card shows it, and
+  // its Cancel aborts the conversion worker through the same signal.
+  deps.progress?.start({ fileName: original.name, phases: ['preparing'] });
+  let file: File;
+  try {
+    const { igesAsStepFile } = await import('./igesImport');
+    file = await igesAsStepFile(original, deps.signal);
+  } catch (error) {
+    if (deps.signal?.aborted) {
+      deps.status.setStatus(
+        `${original.name} was not imported: you cancelled it.`
+      );
+      deps.progress?.finish({ tone: 'cancelled', message: 'cancelled' });
+    } else {
+      // Replaces the conversion's card with the refusal.
+      deps.refuse(errorMessage(error, `Could not import ${original.name}.`));
+    }
+    return;
+  }
+  if (!stillCurrent()) {
+    const message = `${original.name} was not imported: the project changed before it could land.`;
+    deps.status.setStatus(message);
+    deps.progress?.finish({ tone: 'error', message });
+    return;
+  }
+  // runStepImport opens its own card only once the run is certainly going
+  // ahead. A refusal before that (storage blocked, too large, the commit lock
+  // held) reports through the status bar alone, so the conversion card would
+  // otherwise stay on "preparing" with a Cancel that can no longer end it.
+  const progress = deps.progress;
+  let cardTaken = false;
+  let lastStatus: string | null = null;
+  await runStepImport({
+    ...deps,
+    file,
+    contentType: 'model/step',
+    stillCurrent,
+    status: {
+      setStatus: (message, options) => {
+        lastStatus = message;
+        if (options) deps.status.setStatus(message, options);
+        else deps.status.setStatus(message);
+      },
+      setFeatureFormError: (message) => deps.status.setFeatureFormError(message)
+    },
+    ...(progress
+      ? {
+          progress: {
+            start: (run) => {
+              cardTaken = true;
+              progress.start(run);
+            },
+            update: (run) => progress.update(run),
+            finish: (outcome) => progress.finish(outcome)
+          }
+        }
+      : {})
+  });
+  if (!cardTaken) {
+    progress?.finish({
+      tone: 'error',
+      message: lastStatus ?? `${original.name} was not imported.`
+    });
+  }
+}
+
 export async function runStepImport(
   deps: StepImportRunDeps
 ): Promise<StepImportResult> {
@@ -561,7 +649,8 @@ export async function runStepImport(
     // Last boundary before the disposable exact-rebuild worker is created.
     stopIfCancelled();
     const productName = metadata.products[0]?.trim();
-    const importName = productName || file.name.replace(/\.(step|stp)$/i, '');
+    const importName =
+      productName || file.name.replace(/\.(step|stp|igs|iges)$/i, '');
     // Numbered like every other new feature: importing the same file twice
     // listed two bodies and two History rows with one name ("root", the
     // product a CAD exporter wrote), which could not be told apart. The name

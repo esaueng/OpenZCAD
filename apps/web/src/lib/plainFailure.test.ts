@@ -187,7 +187,7 @@ describe('describeShareOpenFailure', () => {
 describe('unsupportedImportMessage', () => {
   it('lists what imports and gives FreeCAD its way out', () => {
     expect(unsupportedImportMessage('model.FCStd')).toBe(
-      'OpenZCAD can’t import .FCStd files. It imports STEP, STL, 3MF, OBJ, GLB, PLY, DXF, or a .shapr + STEP pair. In FreeCAD, use File › Export to save it as STEP first.'
+      'OpenZCAD can’t import .FCStd files. It imports STEP, IGES (B-rep solids), STL, 3MF, OBJ, GLB, PLY, DXF, or a .shapr + STEP pair. In FreeCAD, use File › Export to save it as STEP first.'
     );
     expect(unsupportedImportMessage('notes.txt')).toMatch(
       /^OpenZCAD can’t import \.txt files\. It imports STEP,.*pair\.$/

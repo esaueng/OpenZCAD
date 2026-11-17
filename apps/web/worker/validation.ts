@@ -80,6 +80,7 @@ const ARTIFACT_KINDS: readonly ArtifactKind[] = [
   'mesh-payload',
   'reference-image',
   'step-export',
+  'iges-export',
   'stl-export',
   '3mf-export',
   'obj-export',
