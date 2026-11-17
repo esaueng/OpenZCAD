@@ -170,6 +170,17 @@ export type WrapContext =
     }
   | {
       /**
+       * A link visitor's comment's version key under the link's share key
+       * (L08, plan decision 2). Members open it with the share key too.
+       */
+      readonly purpose: 'share-comment-key';
+      readonly projectId: string;
+      readonly shareId: string;
+      /** The comment's id, which its envelope header names. */
+      readonly versionId: string;
+    }
+  | {
+      /**
        * An MLS epoch's rejoin PSK, `MLS-Exporter("openzcad rejoin psk",
        * project id, 32)`, under the user's current account key, so a device
        * that lost its MLS state can rejoin by external Commit.
@@ -285,6 +296,11 @@ const CONTEXT_FIELDS: Record<WrapPurpose, Record<string, FieldRule>> = {
   'share-version-key': {
     projectId: 'string',
     keyEpoch: 'uint',
+    shareId: 'string',
+    versionId: 'string'
+  },
+  'share-comment-key': {
+    projectId: 'string',
     shareId: 'string',
     versionId: 'string'
   },

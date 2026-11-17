@@ -578,6 +578,7 @@ export type StatementKind =
   | 'share key wrap'
   | 'share link forget'
   | 'share link registration'
+  | 'share comment grant'
   | 'project invitation'
   | 'invitation acceptance'
   | 'MLS authority manifest'

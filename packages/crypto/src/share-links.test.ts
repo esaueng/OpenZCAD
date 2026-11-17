@@ -45,6 +45,12 @@ import {
   signShareLinkForget,
   signShareLinkRegistration,
   signShareLinkGrant,
+  MAX_SHARE_COMMENT_GRANT_BYTES,
+  decodeShareCommentGrant,
+  encodeShareCommentGrant,
+  signShareCommentGrant,
+  verifyShareCommentGrant,
+  type ShareCommentGrant,
   signShareLinkTombstone,
   verifyShareAuthority,
   verifyShareDelegation,
@@ -1221,5 +1227,136 @@ describe('link registrations', () => {
     ]) {
       throwsCode(() => encodeShareLinkRegistration(bad), 'invalid-argument');
     }
+  });
+});
+
+describe('comment grants (L08, plan decision 3a)', () => {
+  async function granted(w: World, by: Signer = w.ownerDevice) {
+    const value: ShareCommentGrant = {
+      projectId: 'proj_1',
+      shareId: 'share_1',
+      shareKeyHash: w.shareKeyHash,
+      issuedAt: T0,
+      signerKeyHash: by.hash
+    };
+    return {
+      value,
+      signed: await signShareCommentGrant(by.pair.privateKey, value)
+    };
+  }
+  const link = (w: World) => ({
+    projectId: 'proj_1',
+    shareId: 'share_1',
+    shareKeyHash: w.shareKeyHash
+  });
+
+  it('round-trips canonical bytes and verifies against the owner devices', async () => {
+    const w = await world();
+    const { value, signed } = await granted(w);
+    expect(decodeShareCommentGrant(signed.statement)).toEqual(value);
+    expect(signed.statement.byteLength).toBeLessThanOrEqual(
+      MAX_SHARE_COMMENT_GRANT_BYTES
+    );
+    await expect(
+      verifyShareCommentGrant(signed, link(w), w.delegation.deviceKeys)
+    ).resolves.toEqual(value);
+  });
+
+  it('refuses a grant for another link, by another key, or forged', async () => {
+    const w = await world();
+    const { signed } = await granted(w);
+    for (const other of [
+      { ...link(w), projectId: 'proj_2' },
+      { ...link(w), shareId: 'share_2' },
+      { ...link(w), shareKeyHash: patternBytes(32) }
+    ]) {
+      await refusedWith(
+        verifyShareCommentGrant(signed, other, w.delegation.deviceKeys),
+        'grant-mismatch'
+      );
+    }
+    // Signed by a device the owner never delegated.
+    const stranger = await granted(w, w.stranger);
+    await refusedWith(
+      verifyShareCommentGrant(
+        stranger.signed,
+        link(w),
+        w.delegation.deviceKeys
+      ),
+      'unknown-signer'
+    );
+    // Naming an owner device it was not signed by.
+    const forged = {
+      statement: encodeShareCommentGrant({
+        projectId: 'proj_1',
+        shareId: 'share_1',
+        shareKeyHash: w.shareKeyHash,
+        issuedAt: T0,
+        signerKeyHash: w.ownerDevice.hash
+      }),
+      signature: stranger.signed.signature
+    };
+    await refusedWith(
+      verifyShareCommentGrant(forged, link(w), w.delegation.deviceKeys),
+      'grant-signature'
+    );
+  });
+
+  it('keeps it apart from a link grant over the same key', async () => {
+    const w = await world();
+    const { signed } = await granted(w);
+    // A link-grant signature never passes as a comment grant's.
+    const asLinkGrant = await signShareLinkGrant(
+      w.ownerDevice.pair.privateKey,
+      {
+        projectId: 'proj_1',
+        shareId: 'share_1',
+        shareKeyHash: w.shareKeyHash,
+        mode: 'view',
+        keyEpoch: 0,
+        issuedAt: T0,
+        signerKeyHash: w.ownerDevice.hash
+      }
+    );
+    await refusedWith(
+      verifyShareCommentGrant(
+        { statement: signed.statement, signature: asLinkGrant.signature },
+        link(w),
+        w.delegation.deviceKeys
+      ),
+      'grant-signature'
+    );
+    // Nor do a link grant's bytes decode as a comment grant.
+    throwsCode(
+      () => decodeShareCommentGrant(asLinkGrant.statement),
+      'malformed'
+    );
+  });
+
+  it('refuses non-canonical or malformed bytes', async () => {
+    const w = await world();
+    const { signed } = await granted(w);
+    throwsCode(
+      () =>
+        decodeShareCommentGrant(
+          concatBytes(signed.statement, Uint8Array.of(0))
+        ),
+      'malformed'
+    );
+    throwsCode(
+      () => decodeShareCommentGrant(signed.statement.subarray(0, 20)),
+      'malformed'
+    );
+    throwsCode(
+      () =>
+        encodeShareCommentGrant({
+          projectId: 'proj_1',
+          shareId: 'share_1',
+          shareKeyHash: patternBytes(31),
+          issuedAt: T0,
+          signerKeyHash: w.ownerDevice.hash
+        }),
+      'invalid-argument'
+    );
   });
 });

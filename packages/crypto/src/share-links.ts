@@ -63,6 +63,7 @@ export const SHARE_LINK_TOMBSTONE_VERSION_1 = 1;
 export const SHARE_KEY_WRAP_VERSION_1 = 1;
 export const SHARE_LINK_FORGET_VERSION_1 = 1;
 export const SHARE_LINK_REGISTRATION_VERSION_1 = 1;
+export const SHARE_COMMENT_GRANT_VERSION_1 = 1;
 
 const DELEGATION_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x53); // "OZS"
 const AUTHORITY_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x41); // "OZA"
@@ -71,6 +72,7 @@ const TOMBSTONE_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x59); // "OZY"
 const KEY_WRAP_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x57); // "OZW"
 const FORGET_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x46); // "OZF"
 const REGISTRATION_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x4e); // "OZN"
+const COMMENT_GRANT_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x4d); // "OZM"
 
 const MAX_U32 = 0xffffffff;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -1185,6 +1187,164 @@ export async function signShareLinkTombstone(
       statement
     )
   };
+}
+
+// --- Comment grants (L08, plan decision 3a) --------------------------------
+
+/**
+ * An owner device's permission for one link's visitors to comment (plan
+ * decision 3a). It is deliberately not a link-grant mode: the grant set
+ * travels inside the encrypted document, which an older build refuses
+ * whole on a mode it does not know. This separate, optional record is kept
+ * by the server beside the link and checked only by builds that know it, so
+ * older members still open the project and only the visitor's comment box
+ * needs an updated build. It binds the link (project, id and share-key
+ * hash), so it cannot be moved to another link; revoking the link (its
+ * tombstone) ends it.
+ */
+export interface ShareCommentGrant {
+  readonly projectId: string;
+  readonly shareId: string;
+  readonly shareKeyHash: Uint8Array;
+  readonly issuedAt: number;
+  /** `publicKeyHash` of the owner device key that signs the grant. */
+  readonly signerKeyHash: Uint8Array;
+}
+
+/** Largest canonical comment grant. */
+export const MAX_SHARE_COMMENT_GRANT_BYTES =
+  3 + 1 + 2 * (1 + MAX_ID_BYTES) + HASH_BYTES + 8 + HASH_BYTES;
+
+function checkCommentGrant(
+  value: ShareCommentGrant,
+  code: E2eeErrorCode
+): void {
+  const fail: (message: string) => never = (message) => {
+    throw new E2eeError(code, message);
+  };
+  if (value === null || typeof value !== 'object') {
+    fail('Expected a comment grant');
+  }
+  if (!isEnvelopeId(value.projectId)) fail('projectId is not an id');
+  if (!isEnvelopeId(value.shareId)) fail('shareId is not an id');
+  if (!isHash(value.shareKeyHash)) fail('shareKeyHash must be 32 bytes');
+  if (!isUint(value.issuedAt, Number.MAX_SAFE_INTEGER)) {
+    fail('issuedAt must be Unix milliseconds');
+  }
+  if (!isHash(value.signerKeyHash)) fail('signerKeyHash must be 32 bytes');
+}
+
+/**
+ * Canonical bytes: `"OZM" | u8 1 | u8 length + project id | u8 length +
+ * link id | 32-byte share key hash | u64 issuedAt | 32-byte signer key
+ * hash`.
+ */
+export function encodeShareCommentGrant(value: ShareCommentGrant): Bytes {
+  checkCommentGrant(value, 'invalid-argument');
+  const writer = new ByteWriter()
+    .bytes(COMMENT_GRANT_MAGIC)
+    .u8(SHARE_COMMENT_GRANT_VERSION_1);
+  writeId(writer, value.projectId);
+  writeId(writer, value.shareId);
+  return writer
+    .bytes(value.shareKeyHash)
+    .u64(value.issuedAt)
+    .bytes(value.signerKeyHash)
+    .finish();
+}
+
+/** Decodes canonical comment-grant bytes; anything else is `malformed`. */
+export function decodeShareCommentGrant(bytes: Uint8Array): ShareCommentGrant {
+  checkInput(bytes, MAX_SHARE_COMMENT_GRANT_BYTES, 'Comment grant');
+  const reader = new ByteReader(bytes, 'Comment grant');
+  readMagic(
+    reader,
+    COMMENT_GRANT_MAGIC,
+    SHARE_COMMENT_GRANT_VERSION_1,
+    'comment grant'
+  );
+  const projectId = readId(reader);
+  const shareId = readId(reader);
+  const shareKeyHash = copyBytes(reader.bytes(HASH_BYTES));
+  const issuedAt = reader.u64();
+  const signerKeyHash = copyBytes(reader.bytes(HASH_BYTES));
+  reader.end();
+  const value: ShareCommentGrant = {
+    projectId,
+    shareId,
+    shareKeyHash,
+    issuedAt,
+    signerKeyHash
+  };
+  checkCommentGrant(value, 'malformed');
+  if (!equalBytes(encodeShareCommentGrant(value), bytes)) {
+    throw new E2eeError('malformed', 'Comment grant is not canonical');
+  }
+  return value;
+}
+
+/** An owner device lets one link's visitors comment. */
+export async function signShareCommentGrant(
+  ownerDeviceKey: SigningPrivateKey,
+  value: ShareCommentGrant
+): Promise<SignedStatement> {
+  const statement = encodeShareCommentGrant(value);
+  return {
+    statement,
+    signature: await signStatement(
+      ownerDeviceKey,
+      'share comment grant',
+      statement
+    )
+  };
+}
+
+/**
+ * Checks a comment grant for the link it should belong to: its fields name
+ * that project, link id and share-key hash, and it is signed by the owner
+ * device key it names, which must be one of `ownerDeviceKeys`. A visitor
+ * passes the devices its verified share delegation names; a member, the
+ * owner's devices its own pinned device list certifies. Refusals are
+ * `ShareLinkError`s (`grant-mismatch`, `unknown-signer`,
+ * `grant-signature`), or `E2eeError`s for bytes that are not a grant.
+ */
+export async function verifyShareCommentGrant(
+  signed: SignedStatement,
+  link: {
+    readonly projectId: string;
+    readonly shareId: string;
+    readonly shareKeyHash: Uint8Array;
+  },
+  ownerDeviceKeys: readonly Uint8Array[]
+): Promise<ShareCommentGrant> {
+  const { statement, signature } = copySigned(signed, 'comment grant');
+  const value = decodeShareCommentGrant(statement);
+  if (
+    value.projectId !== link.projectId ||
+    value.shareId !== link.shareId ||
+    !isHash(link.shareKeyHash) ||
+    !equalBytes(value.shareKeyHash, link.shareKeyHash)
+  ) {
+    refuse('grant-mismatch', 'The comment grant is for another link');
+  }
+  let signer: Uint8Array | null = null;
+  for (const key of ownerDeviceKeys) {
+    if (!isRawPublicKey(key)) continue;
+    if (equalBytes(await publicKeyHash(key), value.signerKeyHash)) {
+      signer = key;
+      break;
+    }
+  }
+  if (!signer) {
+    refuse('unknown-signer', 'The comment grant is not signed by the owner');
+  }
+  const { key } = await verifyingKey(signer);
+  if (
+    !(await statementValid(key, 'share comment grant', statement, signature))
+  ) {
+    refuse('grant-signature', 'The comment grant signature is not valid');
+  }
+  return value;
 }
 
 // --- Share-key wraps ---------------------------------------------------------
