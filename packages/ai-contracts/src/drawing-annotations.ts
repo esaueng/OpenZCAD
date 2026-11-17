@@ -151,6 +151,7 @@ export interface CadDigestDrawingAnnotation {
     | 'image'
     | 'datum-feature'
     | 'feature-control-frame'
+    | 'general-tolerance'
     | 'center-mark'
     | 'intersection-mark'
     | 'centerline';
