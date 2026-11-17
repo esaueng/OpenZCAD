@@ -5836,12 +5836,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           // Without its library a material names nothing: names only.
           return encoder.encode(
             merged.obj.replace(/^(mtllib|usemtl) .*\n/gm, '')
-          ) as Uint8Array<ArrayBuffer>;
+          );
         }
         return zipSync({
           [`${stem}.obj`]: encoder.encode(merged.obj),
           [`${stem}.mtl`]: encoder.encode(merged.mtl)
-        }) as Uint8Array<ArrayBuffer>;
+        });
       }
       const exportSolids = grouped.flatMap(({ solids }) => solids);
       const bodies = kernel.serializeSolids(new Uint32Array(exportSolids));
