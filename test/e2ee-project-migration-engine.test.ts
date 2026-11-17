@@ -822,6 +822,53 @@ describe('encrypting an existing project', () => {
     expect(count(srv, 'project_comments', projectId)).toBe(0);
   });
 
+  it('counts again before the cutover, catching a comment posted before the staging locked it', async () => {
+    const srv = roomServer();
+    const plain = await plaintextProject(srv, { revisions: 1 });
+    const projectId = plain.head.projectId;
+    const comment = (text: string) =>
+      srv.call('POST', `/api/projects/${projectId}/comments`, {
+        body: { text, anchor: { point: [0, 0, 0], documentVersion: 1 } }
+      });
+    expect((await comment('First')).status).toBe(201);
+    expect((await comment('Second')).status).toBe(201);
+    let counts = 0;
+    const laptop: ReturnType<typeof engineOn> = engineOn(
+      srv,
+      owner,
+      'owner_laptop',
+      {
+        commentCount: async (id) => {
+          const counted = await plaintextCommentCount(laptop.d.fetcher, id);
+          // Another member comments right after the first count, before
+          // the staging locks the plaintext.
+          if (++counts === 1) expect((await comment('Late')).status).toBe(201);
+          return counted;
+        }
+      }
+    );
+    const stopped = await laptop.engine
+      .migrate(await laptop.summary(projectId), undefined, {
+        approvedCommentDeletion: 2
+      })
+      .catch((error: unknown) => error);
+    expect(stopped).toBeInstanceOf(MigrationCommentsConfirmationError);
+    expect(laptop.progress.at(-1)).toMatchObject({
+      phase: 'comments',
+      commentCount: 3
+    });
+    // Staged, but not cut over: all three comments are still there.
+    expect(formatOf(srv, projectId)).toBe(1);
+    expect(count(srv, 'project_comments', projectId)).toBe(3);
+
+    // The same browser resumes its staging once the owner confirms three.
+    await laptop.engine.migrate(await laptop.summary(projectId), undefined, {
+      approvedCommentDeletion: 3
+    });
+    expect(formatOf(srv, projectId)).toBe(2);
+    expect(count(srv, 'project_comments', projectId)).toBe(0);
+  });
+
   it('does not cut over when this device could not then save that the project is encrypted', async () => {
     const srv = roomServer();
     const plain = await plaintextProject(srv, { revisions: 1 });

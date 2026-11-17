@@ -978,6 +978,13 @@ export function createProjectMigrationEngine(
         );
       }
       await check('cutover');
+      // The staging refuses new comments (PROJECT_MIGRATING), so this count
+      // is the one the cutover deletes: one posted between the first count
+      // and the staging is caught here, and the owner is asked again.
+      const staged = (await deps.commentCount?.(projectId)) ?? 0;
+      if (staged > approvedCommentDeletion) {
+        throw new MigrationCommentsConfirmationError(staged);
+      }
       if (invitations && sharing) {
         // Just before the cutover, the staged group holds exactly the
         // roster the owner approved, read from the group itself.
