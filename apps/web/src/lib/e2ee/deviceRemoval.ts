@@ -63,6 +63,7 @@ import {
   type RevocationStatements
 } from './projectGroups';
 import type { VersionPinStore } from './versionPins';
+import { realmStorageName } from '../deploymentRealm';
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -93,8 +94,8 @@ export interface PendingCutoffStore {
   forget(userId: string, request: E2eeRevocationCutoffRequest): void;
 }
 
-const PENDING_KEY = (userId: string) =>
-  `openzcad:e2ee-pending-cutoffs:v1:${userId}`;
+const PENDING_PREFIX = realmStorageName('openzcad:e2ee-pending-cutoffs:v1');
+const PENDING_KEY = (userId: string) => `${PENDING_PREFIX}:${userId}`;
 
 const sameEntry = (
   a: E2eeRevocationCutoffRequest,

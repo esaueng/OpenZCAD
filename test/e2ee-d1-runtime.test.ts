@@ -219,3 +219,55 @@ it('uploads and finalizes a staged asset with trigger-inclusive reservation acco
       .first()
   ).toEqual({ ciphertext_bytes: sealed.envelope.byteLength });
 });
+
+it('counts the attempt trigger’s write in a restart’s meta.changes, so a start decides by its RETURNING row (#1465 review)', async () => {
+  const db = proxy.env.DB;
+  const at = '2026-11-14T00:00:00.000Z';
+  await db
+    .prepare(
+      `INSERT INTO e2ee_project_migrations
+         (project_id, direction, state, owner_user_id, source_version,
+          started_at, updated_at, finished_at)
+       VALUES (?, 'encrypt', 'abandoned', ?, 1, ?, ?, ?)`
+    )
+    .bind(projectId, owner, at, at, at)
+    .run();
+  const restart = (returning: string) =>
+    db.batch([
+      db
+        .prepare(
+          `UPDATE e2ee_project_migrations SET state = 'staging'
+           WHERE project_id = ? AND state = 'abandoned'${returning}`
+        )
+        .bind(projectId),
+      db
+        .prepare(
+          'SELECT attempt FROM e2ee_project_migrations WHERE project_id = ?'
+        )
+        .bind(projectId)
+    ]);
+  const abandon = () =>
+    db
+      .prepare(
+        `UPDATE e2ee_project_migrations SET state = 'abandoned'
+         WHERE project_id = ?`
+      )
+      .bind(projectId)
+      .run();
+  try {
+    // One row started, and the trigger moved its counter on: D1 counts both.
+    const [counted, first] = await restart('');
+    expect(counted!.meta?.changes).toBe(2);
+    expect(first!.results).toEqual([{ attempt: 2 }]);
+    await abandon();
+    // The row a start's RETURNING hands back is what tells it started.
+    const [returned, second] = await restart(' RETURNING project_id');
+    expect(returned!.results).toEqual([{ project_id: projectId }]);
+    expect(second!.results).toEqual([{ attempt: 3 }]);
+  } finally {
+    await db
+      .prepare('DELETE FROM e2ee_project_migrations WHERE project_id = ?')
+      .bind(projectId)
+      .run();
+  }
+});

@@ -19,6 +19,12 @@ export interface ToastModel {
   message: string;
   action?: ToastAction;
   /**
+   * `warning` for a failure: the library has no status bar in view, so a
+   * failed import or move there is a toast, and it must not read as a
+   * success.
+   */
+  tone?: 'warning';
+  /**
    * The status entry (its `at` stamp) this toast restates, captured when that
    * outcome status was set (a delete, a duplicate). Only that status steps
    * aside for it, for good; any other status, set before or after, is left

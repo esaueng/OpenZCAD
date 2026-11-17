@@ -242,4 +242,35 @@ describe('carry edit gate', () => {
       'sk_upper'
     ]);
   });
+
+  it.each(['__proto__', 'constructor', 'toString', 'valueOf'])(
+    'reads no inherited member for a forged kind "%s"',
+    (name) => {
+      const forge = (width: number) => {
+        const part = structuredClone(turnedPart({ width }));
+        const box = named(part, 'Box');
+        const turn = named(part, 'Turn');
+        (box.data as unknown as Record<string, unknown>).primitiveKind = name;
+        (turn.data as unknown as Record<string, unknown>).featureKind = name;
+        return part;
+      };
+      const before = forge(30);
+      const after = forge(40);
+      const snapshot = (part: ProjectDocument) =>
+        upstreamSnapshot(
+          part,
+          named(part, 'Break').featureId,
+          nothingResolved()
+        )!;
+      expect(() => snapshot(before)).not.toThrow();
+      const box = named(before, 'Box').featureId;
+      expect(
+        [...snapshot(before).sizes.keys()].filter((key) =>
+          key.startsWith(`${box}:`)
+        )
+      ).toEqual([]);
+      // An unknown kind allows no dimension to change.
+      expect(onlyDimensionEdits(snapshot(before), snapshot(after))).toBe(false);
+    }
+  );
 });

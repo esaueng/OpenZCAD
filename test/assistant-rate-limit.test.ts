@@ -95,6 +95,10 @@ function assistantGuardD1(
             cost_units: current.costUnits
           } as T;
         }
+        // The per-account read limiter, which these tests never exhaust.
+        if (query.includes('INSERT INTO auth_rate_limits')) {
+          return { request_count: 1 } as T;
+        }
         return null;
       },
       async run() {
@@ -647,7 +651,7 @@ describe('premium assistant enforcement', () => {
     );
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      entitlements: { tier: 'premium', artifactLimitBytes: 25 * 1024 ** 3 }
+      entitlements: { tier: 'premium', artifactLimitBytes: 1024 ** 3 }
     });
   });
 });

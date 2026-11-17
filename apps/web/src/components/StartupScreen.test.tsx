@@ -14,6 +14,17 @@ describe('startup screen', () => {
     );
   }
 
+  // 13 November design review I17: plain grey text was the only way out of
+  // a slow open.
+  it('offers the way back as a secondary button', () => {
+    const onBack = vi.fn();
+    render(<StartupScreen projectName="Lid" stage="opening" onBack={onBack} />);
+    const back = screen.getByRole('button', { name: 'Back to projects' });
+    expect(back).toHaveClass('secondary');
+    back.click();
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
   it('announces creation without claiming to check saved copies', () => {
     const { container } = render(
       <StartupScreen projectName="New bracket" stage="creating" />

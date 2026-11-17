@@ -27,10 +27,12 @@ import {
   type AssemblyPlacement,
   type AssemblySet,
   type BodyId,
-  type ProjectDocument
+  type ProjectDocument,
+  type Vector3
 } from '@openzcad/shared';
 import {
   assertAssemblyCouplingSchema,
+  assertAssemblyExplodeSchema,
   assertAssemblySchema
 } from './document-content-schema';
 import { bodySourceMap } from './object-folders';
@@ -146,6 +148,17 @@ export interface AssemblyCouplingDeleteInput {
 /** Adds the study, or replaces the one with the same id. */
 export interface AssemblyStudySetInput {
   study: AssemblyMotionStudy;
+}
+
+/**
+ * AS03 exploded view (schema v61). `offsets` writes each named component's
+ * offset (world, the placements' length unit); null or a zero vector puts the part back. `reset`
+ * first clears every offset, so `{ reset: true, offsets: {} }` collapses the
+ * view. One command is one undo step: a drag commits the part it moved.
+ */
+export interface AssemblyExplodeSetInput {
+  offsets: Record<string, Vector3 | null>;
+  reset?: boolean;
 }
 
 export interface AssemblyStudyDeleteInput {
@@ -343,6 +356,11 @@ export function deleteAssemblyComponent(
     component(set, input.componentId);
     freezePlacements(set);
     set.components = set.components.filter((c) => c.id !== input.componentId);
+    if (set.explode && Object.hasOwn(set.explode.offsets, input.componentId)) {
+      const { [input.componentId]: _removed, ...offsets } = set.explode.offsets;
+      if (Object.keys(offsets).length > 0) set.explode = { offsets };
+      else delete set.explode;
+    }
     set.joints = set.joints.filter(
       (j) =>
         j.parent.componentId !== input.componentId &&
@@ -617,6 +635,38 @@ export function deleteAssemblyStudy(
     if (!set.studies.some((s) => s.id === input.studyId))
       throw new Error(`Motion study ${input.studyId} not found.`);
     set.studies = set.studies.filter((s) => s.id !== input.studyId);
+    return set;
+  });
+}
+
+export function setAssemblyExplode(
+  document: ProjectDocument,
+  input: AssemblyExplodeSetInput
+): ProjectDocument {
+  assertAssemblyExplodeSchema(document.schemaVersion);
+  return withAssembly(document, (set) => {
+    const offsets: Record<string, Vector3> = input.reset
+      ? {}
+      : { ...(set.explode?.offsets ?? {}) };
+    for (const [componentId, offset] of Object.entries(input.offsets)) {
+      component(set, componentId);
+      if (
+        offset === null ||
+        (offset.x === 0 && offset.y === 0 && offset.z === 0)
+      )
+        delete offsets[componentId];
+      else {
+        if (![offset.x, offset.y, offset.z].every(Number.isFinite))
+          throw new Error('An exploded-view offset must be a finite length.');
+        offsets[componentId] = { x: offset.x, y: offset.y, z: offset.z };
+      }
+    }
+    // Display order, so the stored record does not depend on edit order.
+    const ordered: Record<string, Vector3> = {};
+    for (const c of set.components)
+      if (Object.hasOwn(offsets, c.id)) ordered[c.id] = offsets[c.id]!;
+    if (Object.keys(ordered).length > 0) set.explode = { offsets: ordered };
+    else delete set.explode;
     return set;
   });
 }

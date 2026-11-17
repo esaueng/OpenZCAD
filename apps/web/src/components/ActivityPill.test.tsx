@@ -230,6 +230,23 @@ describe('ActivityPill', () => {
     expect(onArchiveNow).toHaveBeenCalledTimes(1);
   });
 
+  it('offers no Archive now while the upload can only fail (signed out, I8)', () => {
+    render(
+      <ActivityPill
+        run={settled({
+          tone: 'warning',
+          message: 'saved on this device only',
+          landed: true,
+          action: 'archive'
+        })}
+        onDismiss={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByText('saved on this device only')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Archive now' })).toBeNull();
+  });
+
   it('offers no action for a refusal, which leaves nothing to retry', () => {
     renderPill(settled({ tone: 'error', message: 'refused' }));
     expect(screen.queryByRole('button', { name: 'Archive now' })).toBeNull();

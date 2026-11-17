@@ -1,4 +1,5 @@
 import { useCallback, useSyncExternalStore } from 'react';
+import { realmStorageName } from './deploymentRealm';
 
 /**
  * Folders on the parts library: a way to group parts on this device's shelf.
@@ -33,8 +34,13 @@ export const MAX_FOLDER_NAME_LENGTH = 80;
 const STORAGE_PREFIX = 'openzcad.library.folders.v1';
 const EMPTY: LibraryFolders = { folders: [] };
 
+/** An account's folders are its deployment's (deploymentRealm.ts). */
+const ACCOUNT_STORAGE_PREFIX = realmStorageName(STORAGE_PREFIX);
+
 export function folderStorageKey(accountId: string | null | undefined) {
-  return `${STORAGE_PREFIX}:${accountId ?? 'device'}`;
+  return accountId == null
+    ? `${STORAGE_PREFIX}:device`
+    : `${ACCOUNT_STORAGE_PREFIX}:${accountId}`;
 }
 
 /** Anything malformed is dropped rather than trusted. */

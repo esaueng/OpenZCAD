@@ -1,4 +1,9 @@
-import { isChunkLoadError, STALE_CHUNK_MESSAGE } from './staleChunk';
+import {
+  isChunkLoadError,
+  isOffline,
+  OFFLINE_CHUNK_MESSAGE,
+  STALE_CHUNK_MESSAGE
+} from './staleChunk';
 
 /**
  * Unwraps a thrown value into something worth showing a user.
@@ -9,11 +14,12 @@ import { isChunkLoadError, STALE_CHUNK_MESSAGE } from './staleChunk';
  *
  * A chunk that vanished in a deploy reads as what it is — a newer version is
  * out, reload — rather than "Failed to fetch dynamically imported module:"
- * and a hashed URL in the status line.
+ * and a hashed URL in the status line. Offline it says so instead, and
+ * never suggests the reload that could lose the app shell.
  */
 export function errorMessage(error: unknown, fallback: string): string {
   if (isChunkLoadError(error)) {
-    return STALE_CHUNK_MESSAGE;
+    return isOffline() ? OFFLINE_CHUNK_MESSAGE : STALE_CHUNK_MESSAGE;
   }
   return error instanceof Error ? error.message : fallback;
 }

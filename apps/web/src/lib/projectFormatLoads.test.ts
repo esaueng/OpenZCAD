@@ -10,6 +10,8 @@ import {
   api,
   ApiError,
   E2EE_LOCAL_ONLY_CODE,
+  encryptsAccountLibrary,
+  encryptsNewProjects,
   isEncryptedProject,
   isProjectFormatUnsupportedError
 } from './api';
@@ -258,6 +260,36 @@ describe('dispatch on the storage format', () => {
     expect(listing.projects[0]).toMatchObject({ name: 'Encrypted project' });
   });
 
+  // Regression: a listing stopped by the account's read limit came back
+  // looking like any other, so a background refresh replaced the shelf and
+  // kept polling at full rate.
+  it('marks a listing whose names stopped at a rate limit, keeping its rows', async () => {
+    encryptedModule.encryptedProjectShelf.mockRejectedValue(
+      new ApiError(
+        429,
+        'API request limit reached.',
+        undefined,
+        undefined,
+        30_000
+      )
+    );
+    const listing = await listEncrypted('proj_limited', {
+      projectId: 'proj_limited'
+    });
+    expect(listing.projects[0]).toMatchObject({ projectId: 'proj_limited' });
+    expect(listing).toMatchObject({ rateLimited: { retryAfterMs: 30_000 } });
+  });
+
+  it('does not call any other refusal a rate limit', async () => {
+    encryptedModule.encryptedProjectShelf.mockRejectedValue(
+      new ApiError(403, 'locked', 'E2EE_KEYS_LOCKED')
+    );
+    const listing = await listEncrypted('proj_locked_too', {
+      projectId: 'proj_locked_too'
+    });
+    expect(listing).not.toHaveProperty('rateLimited');
+  });
+
   it('keeps an encrypted project’s files off the plaintext routes', async () => {
     const projectId = 'proj_local_only';
     await listEncrypted(projectId);
@@ -426,6 +458,170 @@ describe('dispatch on the storage format', () => {
     );
     await api.adoptProject(device, 'user_1' as never);
     expect(encryptedModule.createEncryptedProject).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('an account that holds encrypted projects without the opt-in', () => {
+  /** Not opted in; the Worker reports whether the library is encrypted. */
+  function holds(libraryEncrypted: boolean | undefined) {
+    vi.mocked(desktopFetch).mockImplementation(async (input) => {
+      if (input === '/api/session') return json({ userId: 'user_1' });
+      if (input === '/api/e2ee/config') {
+        return json({ enabled: true, projectsEnabled: true });
+      }
+      if (input === '/api/e2ee/project-preferences') {
+        return json({
+          preference: { encryptNewProjects: false },
+          ...(libraryEncrypted === undefined ? {} : { libraryEncrypted })
+        });
+      }
+      return json(
+        {
+          project: {
+            projectId: 'proj_plain',
+            name: 'Device',
+            revisionCount: 0,
+            updatedAt: 'now'
+          },
+          document: documentOf('proj_plain')
+        },
+        201
+      );
+    });
+  }
+  const created = {
+    project: {
+      projectId: 'proj_sealed',
+      name: 'Device',
+      revisionCount: 0,
+      updatedAt: 'now',
+      storageFormat: 2
+    },
+    document: documentOf('proj_sealed')
+  };
+
+  it('saves a device project encrypted: it may be a copy of an encrypted one', async () => {
+    holds(true);
+    encryptedModule.createEncryptedProject.mockResolvedValue(created);
+    const device = createProjectDocument('Device', 'user_1' as never);
+    await expect(api.adoptProject(device, 'user_1' as never)).resolves.toBe(
+      created
+    );
+    expect(sentPlaintextTo('/api/projects')).toBe(false);
+    await expect(encryptsAccountLibrary()).resolves.toBe(true);
+    // New blank projects still follow the opt-in.
+    await expect(encryptsNewProjects()).resolves.toBe(false);
+  });
+
+  it.each([false, undefined])(
+    'adopts as before when the Worker answers %s',
+    async (libraryEncrypted) => {
+      holds(libraryEncrypted);
+      const device = createProjectDocument('Device', 'user_1' as never);
+      await api.adoptProject(device, 'user_1' as never);
+      expect(sentPlaintextTo('/api/projects')).toBe(true);
+      expect(encryptedModule.createEncryptedProject).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ['503s', () => json({ error: 'down' }, 503)],
+    ['network failures', () => Promise.reject(new TypeError('offline'))]
+  ] as const)(
+    'sends no device project when the encryption routes answer %s',
+    async (_, failure) => {
+      // A device with no pinned opt-in, whose encryption routes fail while
+      // the project route still answers: never read as "not encrypted".
+      vi.mocked(desktopFetch).mockImplementation(async (input) => {
+        if (input === '/api/session') return json({ userId: 'user_1' });
+        if (
+          input === '/api/e2ee/config' ||
+          input === '/api/e2ee/project-preferences'
+        ) {
+          return failure();
+        }
+        return json({ project: { projectId: 'proj_plain' } }, 201);
+      });
+      await expect(
+        api.adoptProject(
+          createProjectDocument('Device', 'user_1' as never),
+          'user_1' as never
+        )
+      ).rejects.toMatchObject({ code: 'E2EE_PREFERENCE_UNVERIFIED' });
+      expect(sentPlaintextTo('/api/projects')).toBe(false);
+    }
+  );
+
+  it.each([
+    ['404s', () => json({ error: 'Not found' }, 404)],
+    [
+      'a static host’s HTML page',
+      () =>
+        new Response('<!doctype html>', {
+          headers: { 'content-type': 'text/html' }
+        })
+    ]
+  ] as const)(
+    'reads as not encrypted only where nothing serves the encryption routes: %s',
+    async (_, answer) => {
+      vi.mocked(desktopFetch).mockImplementation(async (input) =>
+        input === '/api/session' ? json({ userId: 'user_1' }) : answer()
+      );
+      await expect(encryptsAccountLibrary()).resolves.toBe(false);
+    }
+  );
+
+  it('refuses rather than guessing when the answer cannot be read', async () => {
+    vi.mocked(desktopFetch).mockImplementation(async (input) => {
+      if (input === '/api/session') return json({ userId: 'user_1' });
+      if (input === '/api/e2ee/config') {
+        return json({ enabled: true, projectsEnabled: true });
+      }
+      return json({ error: 'down' }, 503);
+    });
+    await expect(encryptsAccountLibrary()).rejects.toMatchObject({
+      code: 'E2EE_PREFERENCE_UNVERIFIED'
+    });
+  });
+
+  it.each([
+    ['encryption is closed', { enabled: false, projectsEnabled: false }],
+    [
+      'encrypted projects are closed',
+      { enabled: true, projectsEnabled: false }
+    ],
+    ['config is empty', {}]
+  ] as const)(
+    'keeps the library encrypted when the preferences route says so and %s',
+    async (_, config) => {
+      // #1524 review: the general config never overrides a yes from the
+      // preferences route.
+      vi.mocked(desktopFetch).mockImplementation(async (input) => {
+        if (input === '/api/session') return json({ userId: 'user_1' });
+        if (input === '/api/e2ee/config') return json(config);
+        if (input === '/api/e2ee/project-preferences') {
+          return json({ preference: null, libraryEncrypted: true });
+        }
+        return json({}, 404);
+      });
+      await expect(encryptsAccountLibrary()).resolves.toBe(true);
+    }
+  );
+
+  it('reads as not encrypted from the preferences route while projects are closed', async () => {
+    // The Worker answers it with the library rule rather than 501, so no
+    // failed request is logged.
+    vi.mocked(desktopFetch).mockImplementation(async (input) => {
+      if (input === '/api/session') return json({ userId: 'user_1' });
+      if (input === '/api/e2ee/config') {
+        return json({ enabled: true, projectsEnabled: false });
+      }
+      if (input === '/api/e2ee/project-preferences') {
+        return json({ preference: null, libraryEncrypted: false });
+      }
+      return json({}, 404);
+    });
+    await expect(encryptsAccountLibrary()).resolves.toBe(false);
   });
 });
 

@@ -121,11 +121,6 @@
   box-shadow: 0 0 0 2px var(--color-accent-dim);
 }
 
-.settings-search-clear {
-  /* The wide layout shows the field itself; see the narrow rule below. */
-  display: none;
-}
-
 .settings-search input {
   min-width: 0;
   flex: 1;
@@ -248,9 +243,10 @@
 }
 
 /* Every page starts at the same left edge, beside the sections, whichever
-   page is open. A page's groups keep a reading width inside it; the
-   controls reference alone runs the full frame. Centring each page at its
-   own width put the reference's left edge 140px left of the others. */
+   page is open. A page's groups keep a reading width inside it; the activity
+   log's table alone runs the full frame. Controls ran it too, so its cards
+   stood out 1040px wide against every other page's 760 (13 November review);
+   its key list fits the reading width. */
 .settings-section {
   width: min(1040px, 100%);
   margin: 0;
@@ -350,7 +346,13 @@
 }
 
 .data-download-feedback[role='alert'] {
+  display: grid;
+  gap: var(--sp-1);
   color: var(--color-error-text);
+}
+
+.data-download-feedback p {
+  margin: 0;
 }
 
 .data-download-omissions {
@@ -500,6 +502,28 @@
   line-height: var(--lh-normal);
 }
 
+/* The analytics disclosure: three short lists under plain headings, so
+   what is sent, what never is, and how to stop each read at a glance. */
+.analytics-disclosure {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.analytics-disclosure p,
+.analytics-disclosure ul {
+  margin: 0;
+}
+
+.analytics-disclosure ul {
+  padding-left: 1.2em;
+}
+
+.analytics-disclosure strong {
+  margin-top: var(--sp-1);
+  color: var(--color-text);
+  font-weight: var(--fw-medium);
+}
+
 .setting-control {
   min-width: 0;
   display: flex;
@@ -552,6 +576,32 @@
    the fields' right edges line up down a card. */
 .settings-unit-input > span {
   min-width: 2ch;
+}
+
+/* A number field with its range under it, and, after a value was pulled to
+   a bound, the line that says so. Both sit at the field's right edge. */
+.settings-number-setting {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.settings-number-range {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-number-clamped {
+  max-width: 28ch;
+  color: var(--color-warning);
+  font-size: var(--fs-mini);
+  text-align: right;
+}
+
+.settings-number-clamped:empty {
+  margin-top: -2px;
 }
 
 /* ── Switch ──
@@ -820,31 +870,14 @@
 /* All provider policies share a reserved envelope, including the optional
    free-model line. It wraps with the card rather than guessing pixel heights. */
 .settings-assistant-data {
-  display: grid;
-}
-
-.settings-assistant-data-reserve,
-.settings-assistant-data-content {
-  grid-area: 1 / 1;
-  min-width: 0;
-}
-
-.settings-assistant-data-content {
   position: relative;
 }
 
-.settings-assistant-data-reserve {
-  visibility: hidden;
-  pointer-events: none;
-}
-
-.settings-assistant-data-reserve > div::before {
-  content: attr(data-copy);
-}
-
+/* Stands in for the notice while the status loads: roughly its height, so
+   the page shifts by at most a line when the copy arrives. */
 .settings-assistant-data-loading {
-  position: absolute;
-  inset: 10px var(--sp-4);
+  min-height: 4.5em;
+  margin: 10px var(--sp-4);
   background: repeating-linear-gradient(
     to bottom,
     var(--color-surface-2) 0 0.65em,
@@ -950,6 +983,53 @@
 
 .settings-auth-controls .settings-button-row {
   justify-content: flex-start;
+}
+
+/* The code step's way back and resend: links, so Sign in is the one button. */
+.settings-auth-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.settings-auth-link {
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  color: var(--color-accent-hi);
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.settings-auth-link:hover:not(:disabled) {
+  color: var(--color-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.settings-auth-link:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Resend under the code: its own security check, then a new code (I81). */
+.settings-auth-resend {
+  display: grid;
+  gap: var(--sp-2);
+  justify-items: start;
+  padding-top: var(--sp-2);
+  border-top: var(--border-thin);
+}
+
+/* The check takes the column's width, not its content's: shrunk to its
+   empty slot it measured under 300px and Turnstile drew the 150px square
+   compact widget beside the full-width code field. */
+.settings-auth-resend > .settings-turnstile-shell {
+  justify-self: stretch;
 }
 
 .settings-auth-controls label {
@@ -1195,11 +1275,17 @@
 
 .keymap-editor-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-3);
   padding: 10px var(--sp-4);
   border-bottom: var(--border-thin);
+}
+
+.keymap-editor-bar > button {
+  flex: none;
+  white-space: nowrap;
 }
 
 .keymap-editor-bar p {
@@ -1271,6 +1357,16 @@
 @media (max-width: 760px) {
   .keymap-editor .settings-control-group dl {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* A long binding (Ctrl/Cmd+Shift+Z) and its Add key overran the card at
+     phone width; the button drops under the keys instead. */
+  .keymap-editor .settings-control-row dd {
+    flex-wrap: wrap;
+  }
+
+  .keymap-editor .keymap-actions {
+    margin-left: auto;
   }
 }
 
@@ -1361,12 +1457,30 @@
 }
 
 @media (max-width: 580px) {
-  .settings-page .settings-head .settings-save-message {
-    flex: 1 0 100%;
+  /* One row of options however narrow: wrapped, a choice's last option sat
+     alone on a second line ("Auto Mouse" over "Trackpad", "Shaded + edges
+     Shaded" over "Wireframe") and read as a separate control. Options
+     narrow to their longest word and wrap their names inside instead. */
+  .settings-segmented {
+    display: inline-grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(min-content, max-content);
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .settings-segmented label,
+  .settings-segmented span {
+    min-width: 0;
+  }
+
+  .settings-segmented span {
+    width: 100%;
+    box-sizing: border-box;
+    padding-inline: 6px;
+    line-height: 1.15;
+    text-align: center;
     white-space: normal;
-    overflow: visible;
-    order: 2;
-    padding-bottom: 6px;
   }
 
   .settings-segmented[aria-label='Library card size'] {
@@ -1387,39 +1501,54 @@
     box-sizing: border-box;
   }
 
+  /* A rail of sections, each named under its icon: eleven bare icons left
+     a phone reader guessing which was Saving and which Account. */
   .settings-layout {
     --settings-inline: var(--sp-3);
-    grid-template-columns: calc(var(--island-gap) + 56px) minmax(0, 1fr);
+    /* At 64px the names broke mid-word ("Appeara" over "nce"). 70px, less
+       the 8px of padding and borders below, holds every name but one whole
+       at 12px (Encryption, 61px); Appearance (69px) hyphenates. Wider would
+       cost the rows: a setting's text keeps over 200px at 390px. */
+    grid-template-columns: calc(var(--island-gap) + 70px) minmax(0, 1fr);
   }
 
   .settings-nav {
-    padding: var(--sp-2);
+    padding: var(--sp-1) 2px;
   }
 
-  .settings-search,
-  .settings-nav nav button span,
   .settings-nav-group {
     display: none;
-  }
-
-  /* The rail's way out of a filter it cannot show: the sections it is
-     hiding come back on one press. */
-  .settings-search-clear {
-    display: grid;
-    place-items: center;
-    width: 100%;
-    min-height: 40px;
-    margin-bottom: var(--sp-2);
-    color: var(--color-accent);
-    background: var(--color-accent-dim);
-    border: 1px solid var(--color-accent-border);
-    border-radius: var(--radius-md);
   }
 
   .settings-nav nav button {
     grid-template-columns: 1fr;
     place-items: center;
-    min-height: 40px;
+    gap: 2px;
+    min-height: 48px;
+    padding: 5px 0;
+    text-align: center;
+  }
+
+  .settings-nav nav button span {
+    max-width: 100%;
+    font-size: var(--fs-mini);
+    line-height: 1.15;
+    white-space: normal;
+    /* At a syllable: the soft hyphen SettingsPage puts in Appearance, or a
+       dictionary's where the browser has one (the page is lang="en"). The
+       anywhere break is left only for a name with neither. */
+    hyphens: auto;
+    overflow-wrap: anywhere;
+  }
+
+  /* The search stays, on a row of its own under the title: the phone used
+     to have no way to find a setting at all. */
+  .settings-head .settings-search {
+    flex: 1 0 100%;
+    order: 3;
+    width: auto;
+    min-height: 36px;
+    margin-bottom: var(--sp-2);
   }
 
   .settings-content {
@@ -1481,8 +1610,17 @@
     min-width: 0;
   }
 
-  .settings-unit-input {
+  .settings-unit-input,
+  .settings-number-setting {
     width: 100%;
+  }
+
+  .settings-number-setting {
+    justify-items: start;
+  }
+
+  .settings-number-clamped {
+    text-align: left;
   }
 
   .settings-unit-input input {
@@ -1502,6 +1640,15 @@
 
 .settings-nav-head .brand {
   margin: 0;
+  /* The workspace's narrow-window rule (responsive.css) cuts the brand to
+     its mark to make room for the project name; this column has no project
+     name beside it and room for the wordmark down to the phone's rail. */
+  gap: 7px;
+  font-size: var(--fs-md);
+}
+
+.settings-nav-head .brand .beta-tag {
+  display: inline-flex;
 }
 
 /* The page's head: its name, the save note and the search, on one ruled
@@ -1523,6 +1670,11 @@
 }
 
 .settings-head-title {
+  /* The head's first line is as tall as a lone head, so a head that wraps
+     still centres the title on the way back's line (corner-slot.css). */
+  min-height: 40px;
+  display: flex;
+  align-items: center;
   margin: 0;
   color: var(--color-text);
   font-size: 18px;
@@ -1530,9 +1682,40 @@
   letter-spacing: -0.01em;
 }
 
+/* Settings focuses its heading (tabindex="-1") on open and on restore, so
+   Enter does not land on the brand button that closes the page. A reload by
+   keyboard (Cmd+R) leaves the browser in keyboard modality, so that
+   programmatic focus matched :focus-visible and boxed the title. The heading
+   is never a control or a tab stop: Tab moves on from it to the first one,
+   which draws its own ring. */
+.settings-head-title:focus {
+  outline: none;
+}
+
 .settings-head .settings-save-message {
   flex: 1;
   text-align: left;
+  /* The head's news (an error, a sign-in step) wraps to a second line
+     before it is cut: on one line it said "Cloud profile connecte…" in a
+     1000px window. Two lines of it fit the head's 40px, so the rule under
+     the head never moves when a message arrives. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+/* A phone gives the message a line of its own under the title, read whole. */
+@media (max-width: 580px) {
+  .settings-page .settings-head .settings-save-message {
+    flex: 1 0 100%;
+    order: 2;
+    display: block;
+    -webkit-line-clamp: none;
+    overflow: visible;
+    padding-bottom: 6px;
+  }
 }
 
 .settings-head .settings-search {
@@ -1576,6 +1759,15 @@
   }
 }
 
+/* Under the common phone width a three-way choice of long names (Shaded +
+   edges, Shaded, Wireframe) is wider than the row even word by word; it
+   wraps there rather than running off the card. */
+@media (max-width: 359px) {
+  .settings-segmented:not([aria-label='Library card size']) {
+    display: inline-flex;
+  }
+}
+
 /* ── Activity log ──
    Settings › Activity log: filters over a live list of the session's
    entries. The list scrolls inside its card so the filters stay in reach. */
@@ -1583,6 +1775,9 @@
 .activity-log {
   min-width: 0;
   display: grid;
+  /* The card's width, never the filter field's: the field's input has an
+     intrinsic width and overran a 340px phone with it. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-3);
 }
 
@@ -1595,6 +1790,7 @@
 
 .activity-log-search {
   flex: 1 1 220px;
+  min-width: 0;
   min-height: 30px;
   display: flex;
   align-items: center;
@@ -1819,4 +2015,51 @@
   .activity-log-copy {
     grid-column: 2;
   }
+}
+
+/* An error said at the field it is about (a refused sign-in code, a wrong
+   recovery key), rather than in the page's status line. */
+.settings-field-error {
+  color: var(--color-error-text);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+/* The 3D mouse's Reverse row: one chip per cap direction, pressed is
+   reversed. Drawn like the relation-glyph filter's chips, with words. */
+.space-mouse-axis-filter {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+/* A row stacked under its label starts at the label's edge, as every other
+   stacked control does. */
+@media (max-width: 860px) {
+  .space-mouse-axis-filter {
+    justify-content: flex-start;
+  }
+}
+
+.space-mouse-axis-toggle {
+  min-height: 24px;
+  padding: 0 8px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+
+.space-mouse-axis-toggle:not([aria-pressed='true']):is(:hover, :focus-visible) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+.space-mouse-axis-toggle[aria-pressed='true'] {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border-color: var(--color-border-strong);
 }

@@ -2,7 +2,14 @@ import { observeWorker } from './diagnosticSignal';
 import type { UserId } from '@openzcad/shared';
 import { MAX_PROJECT_BACKUP_BYTES, type ProjectBackup } from './projectBackup';
 import type { ProjectBackupWorkerResult } from '../worker/projectBackupWorker';
-/** Restore parsing and cloning run away from the UI, with a hard termination deadline. */
+import { carryEncryptionRequirement } from './api';
+/**
+ * Restore parsing and cloning run away from the UI, with a hard termination
+ * deadline. The copy comes back under a new project id: when this device
+ * keeps the backup's own project encrypted, the copy keeps that requirement,
+ * recorded durably before it resolves (so before the page saves it), or the
+ * restore is refused (PR #1418).
+ */
 export function restoreProjectInWorker(
   file: File,
   ownerUserId: UserId
@@ -42,8 +49,30 @@ export function restoreProjectInWorker(
       );
     worker.onmessage = (event: MessageEvent<ProjectBackupWorkerResult>) =>
       finish(() => {
-        if (event.data.ok) resolve(event.data.backup);
-        else reject(new Error(event.data.error));
+        const result = event.data;
+        if (!result.ok) {
+          reject(new Error(result.error));
+          return;
+        }
+        if (typeof result.sourceProjectId !== 'string') {
+          reject(new Error('Project restore returned unreadable data.'));
+          return;
+        }
+        try {
+          carryEncryptionRequirement(
+            result.sourceProjectId,
+            result.backup.document.projectId,
+            { account: false }
+          );
+        } catch (error) {
+          reject(
+            error instanceof Error
+              ? error
+              : new Error('Project restore could not be saved.')
+          );
+          return;
+        }
+        resolve(result.backup);
       });
     try {
       worker.postMessage({ file, ownerUserId });

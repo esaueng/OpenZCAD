@@ -339,6 +339,9 @@ describe('measurement picks', () => {
       components: { x: 4, y: 2, z: 3 }
     });
     expect(result.current.measurements[0]!.sourceRevision).toBe(doc.version);
+    // Recorded and drawn, it is not previewed again beside its own chip
+    // (I54: two identical "80.00 mm" chips).
+    expect(result.current.previewMeasurement(selection)).toBeNull();
   });
 
   it('leaves a pick alone when no measuring session is running', async () => {

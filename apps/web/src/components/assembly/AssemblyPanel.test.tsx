@@ -8,6 +8,7 @@ import {
   registerAssemblyCommitHandlers
 } from '../../lib/assembly/assemblyRuntime';
 import { setAnimatePrefs } from '../../lib/assembly/assemblyUi';
+import { createDefaultStudy } from '../../lib/assembly/motionStudy';
 import { AssemblyPanel } from './AssemblyPanel';
 
 afterEach(() => {
@@ -21,7 +22,10 @@ afterEach(() => {
 
 function renderPanel(
   manager: ReturnType<typeof scissorsManager>,
-  extra: { saveBomCsv?: (fileName: string, csv: string) => void } = {}
+  extra: {
+    saveBomCsv?: (fileName: string, csv: string) => void;
+    onAnnounce?: (message: string, options?: { undo?: boolean }) => void;
+  } = {}
 ) {
   const recorder = recordingExecute(manager.manager);
   registerAssemblyCommitHandlers({
@@ -63,7 +67,9 @@ describe('AssemblyPanel (one left sidebar)', () => {
     const joints = screen.getByRole('region', { name: 'Joints' });
     expect(within(joints).getByText('Pivot')).toBeInTheDocument();
     expect(within(joints).getByText('12.0°')).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Motion' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('region', { name: 'Animations' })
+    ).toBeInTheDocument();
   });
 
   it('lists the bill of materials and downloads it as CSV (AS03)', () => {
@@ -71,13 +77,13 @@ describe('AssemblyPanel (one left sidebar)', () => {
     const saveBomCsv = vi.fn();
     const { onStatus } = renderPanel(fixture, { saveBomCsv });
     const section = screen.getByRole('region', { name: 'Bill of materials' });
-    expect(within(section).getByText('2')).toHaveClass('assembly-count');
+    expect(section.querySelector('.assembly-count')).toHaveTextContent('2');
     const rows = within(
       within(section).getByRole('list', { name: 'Bill of materials' })
     ).getAllByRole('listitem');
     expect(rows.map((row) => row.textContent)).toEqual([
-      'Blade A Body×1',
-      'Blade B Body×1'
+      '1Blade A Body×1',
+      '2Blade B Body×1'
     ]);
     // A body outside the assembly is not a part of it.
     expect(within(section).queryByText(/Pivot screw/)).toBeNull();
@@ -100,6 +106,77 @@ describe('AssemblyPanel (one left sidebar)', () => {
     );
   });
 
+  it('toggles the exploded view and resets every offset in one step (AS03)', () => {
+    const fixture = scissorsManager({ joint: true });
+    const { commands, rerender, onStatus } = renderPanel(fixture);
+    const section = screen.getByRole('region', { name: 'Exploded view' });
+    const assembled = within(section).getByRole('button', {
+      name: 'Assembled'
+    });
+    const exploded = within(section).getByRole('button', { name: 'Exploded' });
+    expect(assembled).toHaveAttribute('aria-pressed', 'true');
+    expect(section).toHaveTextContent('No part is pulled out yet.');
+    expect(within(section).queryByRole('button', { name: 'Reset' })).toBeNull();
+    fireEvent.click(exploded);
+    expect(getAssemblyRuntime().exploded).toBe(true);
+    expect(exploded).toHaveAttribute('aria-pressed', 'true');
+    expect(section).toHaveTextContent(
+      'Drag a part to pull it out along X, Y or Z.'
+    );
+    expect(onStatus).toHaveBeenLastCalledWith(
+      'Exploded view · drag a part to pull it out along X, Y or Z.'
+    );
+
+    // A drag on the model commits through the runtime.
+    fixture.manager.execute(
+      commandFactories.setAssemblyExplode({
+        offsets: { comp_b: { x: 0, y: 0, z: 20 } }
+      })
+    );
+    rerender();
+    expect(section.querySelector('.assembly-count')).toHaveTextContent('1');
+    expect(section).toHaveTextContent('1 part pulled out; drag to move.');
+    fireEvent.click(within(section).getByRole('button', { name: 'Reset' }));
+    expect(commands.at(-1)).toEqual({
+      kind: 'assembly.explode.set',
+      payload: { reset: true, offsets: {} }
+    });
+    rerender();
+    expect(fixture.live().assembly?.explode).toBeUndefined();
+    expect(onStatus).toHaveBeenLastCalledWith('Every part is back in place.');
+    fixture.manager.undo();
+    rerender();
+    expect(fixture.live().assembly?.explode?.offsets).toEqual({
+      comp_b: { x: 0, y: 0, z: 20 }
+    });
+    fireEvent.click(within(section).getByRole('button', { name: 'Assembled' }));
+    expect(getAssemblyRuntime().exploded).toBe(false);
+  });
+
+  it('picks a BOM row’s parts and lights the row of a part picked elsewhere (AS03)', () => {
+    const fixture = scissorsManager({ joint: true });
+    const { rerender } = renderPanel(fixture);
+    const section = screen.getByRole('region', { name: 'Bill of materials' });
+    const rowButton = (name: RegExp) =>
+      within(section).getByRole('button', { name });
+    const bladeB = rowButton(/^Item 2: Blade B Body, quantity 1$/);
+    expect(bladeB).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(bladeB);
+    rerender();
+    expect(getAssemblyRuntime().selectedComponentIds).toEqual(['comp_b']);
+    expect(rowButton(/^Item 2:/)).toHaveAttribute('aria-pressed', 'true');
+    expect(rowButton(/^Item 2:/).closest('li')).toHaveClass('is-selected');
+    // A second click on the picked row clears the pick.
+    fireEvent.click(rowButton(/^Item 2:/));
+    rerender();
+    expect(getAssemblyRuntime().selectedComponentIds).toEqual([]);
+    // A part picked on the model (or in Parts) lights up its BOM row.
+    select(() => assemblyRuntime.selectComponent('comp_a'));
+    rerender();
+    expect(rowButton(/^Item 1:/).closest('li')).toHaveClass('is-selected');
+    expect(rowButton(/^Item 2:/).closest('li')).not.toHaveClass('is-selected');
+  });
+
   it('keeps a missing part in the BOM and warns that the exported CSV includes it', () => {
     const fixture = scissorsManager({ components: true });
     const document = fixture.live();
@@ -119,7 +196,7 @@ describe('AssemblyPanel (one left sidebar)', () => {
     expect(within(section).getByText('Missing')).toBeInTheDocument();
     const rows = within(section).getAllByRole('listitem');
     expect(rows).toHaveLength(2);
-    expect(rows[1]).toHaveTextContent('Blade B BodyMissing×1');
+    expect(rows[1]).toHaveTextContent('2Blade B BodyMissing×1');
     fireEvent.click(
       within(section).getByRole('button', {
         name: 'Download bill of materials as CSV'
@@ -203,7 +280,7 @@ describe('AssemblyPanel (one left sidebar)', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Playback' }), {
       target: { value: 'loop' }
     });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Sweep time' }), {
+    fireEvent.change(screen.getByRole('combobox', { name: 'Speed' }), {
       target: { value: '0.4' }
     });
     fireEvent.click(screen.getByRole('button', { name: 'Play' }));
@@ -217,11 +294,16 @@ describe('AssemblyPanel (one left sidebar)', () => {
     expect(getAssemblyRuntime().playback).toBeNull();
   });
 
-  it('saves a position as a chip, applies it and deletes it', () => {
+  it('saves a position from its own section, applies, renames and deletes it (I58)', () => {
     const fixture = scissorsManager({ joint: true });
-    select(() => assemblyRuntime.selectJoint('joint_pin'));
     const { commands, rerender } = renderPanel(fixture);
-    fireEvent.click(screen.getByRole('button', { name: 'Save position' }));
+    // Positions save every joint, so they live beside the joints, not
+    // inside one joint's details: no joint needs to be open.
+    expect(screen.queryByLabelText('Pivot details')).toBeNull();
+    const positions = () => screen.getByRole('region', { name: 'Positions' });
+    fireEvent.click(
+      within(positions()).getByRole('button', { name: 'Save position' })
+    );
     const field = screen.getByRole('textbox', { name: 'Position name' });
     fireEvent.change(field, { target: { value: 'Open' } });
     fireEvent.keyDown(field, { key: 'Enter' });
@@ -230,13 +312,50 @@ describe('AssemblyPanel (one left sidebar)', () => {
       payload: { name: 'Open', values: { joint_pin: [12] } }
     });
     rerender();
-    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    fireEvent.click(within(positions()).getByRole('button', { name: 'Open' }));
     expect(commands.at(-1)).toEqual({
       kind: 'assembly.pose.set',
       payload: { values: { joint_pin: [12] } }
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Delete Open' }));
+
+    fireEvent.doubleClick(
+      within(positions()).getByRole('button', { name: 'Open' })
+    );
+    const rename = screen.getByRole('textbox', { name: 'Rename Open' });
+    fireEvent.change(rename, { target: { value: 'Wide open' } });
+    fireEvent.keyDown(rename, { key: 'Enter' });
+    const saved = fixture.manager.document.assembly?.positions ?? [];
+    expect(saved.map((p) => [p.name, p.values])).toEqual([
+      ['Wide open', { joint_pin: [12] }]
+    ]);
+    rerender();
+    fireEvent.click(
+      within(positions()).getByRole('button', { name: 'Delete Wide open' })
+    );
     expect(commands.at(-1)?.kind).toBe('assembly.position.delete');
+  });
+
+  it('says a joint value is keyed into the open study, not saved as the rest pose (I59)', () => {
+    const fixture = scissorsManager({ joint: true });
+    fixture.manager.execute(
+      commandFactories.setAssemblyStudy({
+        study: createDefaultStudy(fixture.manager.document.assembly, 'study_1')
+      })
+    );
+    const { rerender } = renderPanel(fixture);
+    fireEvent.click(screen.getByRole('button', { name: /^Pivot/ }));
+    rerender();
+    expect(screen.getByLabelText('Pivot details')).not.toHaveTextContent(
+      'Recording into'
+    );
+    select(() => {
+      assemblyRuntime.selectStudy('study_1');
+      assemblyRuntime.setStudyTime(2);
+    });
+    rerender();
+    expect(screen.getByRole('note')).toHaveTextContent(
+      'Recording into Animation 1: a value set here is keyed at 2.00 s.'
+    );
   });
 
   it('opens a part under its row: how it moves, fix in place, remove', () => {
@@ -328,6 +447,46 @@ describe('AssemblyPanel (one left sidebar)', () => {
       kind: 'assembly.component.delete',
       payload: { componentId: 'comp_b' }
     });
+  });
+
+  it('says why Make it move has nothing to set up when every part is fixed or joined (I55)', () => {
+    const fixture = scissorsManager({ joint: true });
+    const { onStatus } = renderPanel(fixture);
+    const reason =
+      'Every part is fixed or already moves on a joint. Open a joint to change its motion.';
+    const motion = screen.getByRole('button', { name: 'Make it move' });
+    expect(motion).toHaveAttribute('aria-disabled', 'true');
+    expect(motion).toHaveAttribute('title', reason);
+    fireEvent.click(motion);
+    expect(onStatus).toHaveBeenCalledWith(reason);
+    // It never opens a card that starts in an error.
+    expect(getAssemblyRuntime().motionSetup).toBeNull();
+  });
+
+  it('deletes a joint from its details or the Delete key, with Undo (I2)', () => {
+    const fixture = scissorsManager({ joint: true });
+    const onAnnounce = vi.fn();
+    const { commands, rerender } = renderPanel(fixture, { onAnnounce });
+    fireEvent.click(screen.getByRole('button', { name: /^Pivot/ }));
+    rerender();
+    const details = screen.getByLabelText('Pivot details');
+    fireEvent.click(
+      within(details).getByRole('button', { name: 'Delete joint' })
+    );
+    expect(commands.at(-1)).toEqual({
+      kind: 'assembly.joint.delete',
+      payload: { jointId: 'joint_pin' }
+    });
+    expect(getAssemblyRuntime().selectedJointId).toBeNull();
+    expect(onAnnounce).toHaveBeenCalledWith('Deleted Pivot.', { undo: true });
+
+    fixture.manager.undo();
+    rerender();
+    fireEvent.keyDown(screen.getByRole('button', { name: /^Pivot/ }), {
+      key: 'Delete'
+    });
+    expect(fixture.manager.document.assembly?.joints).toEqual([]);
+    expect(onAnnounce).toHaveBeenCalledTimes(2);
   });
 
   it('opens the joint tool in the sidebar, and starts empty assemblies from the first run', () => {

@@ -33,12 +33,12 @@ describe('unit suite selection', () => {
     const root = unitTestInclude('root', { CI: 'true' })!;
     for (const name of [
       'unit-suites',
-      'unit-global-setup',
       'security-workflow',
-      'trusted-pr-policy',
-      'fleet-checkout-fixtures',
+      'ci-checks',
       'bundle-size-policy',
       'css-class-coverage',
+      'glyph-coverage',
+      'motion-contract',
       'deployment-config-validator',
       'desktop-release-privacy',
       'pin-remus',

@@ -46,6 +46,7 @@ export type {
 import { recognizePlanarEmboss } from './planar-emboss';
 import {
   rebuildReporter,
+  type RebuildProgress,
   type RebuildProgressListener
 } from './rebuild-progress';
 export type {
@@ -88,6 +89,29 @@ import {
   type StlExportMesh
 } from '@openzcad/io-stl';
 import { faceDxfEntities } from './exact-dxf';
+import { pairwiseBodyClash, rowMajorMatrix } from './exact-body-clash';
+import { analyzeBodySurfaces } from './exact-surface-analysis';
+import type {
+  AssemblyInterferenceOperand,
+  AssemblyInterferenceReport,
+  SurfaceAnalysisBody,
+  SurfaceAnalysisReport,
+  SurfaceAnalysisRequest,
+  SurfaceAnalysisUnsupported
+} from '@openzcad/shared';
+import {
+  foldSheetMetalAt,
+  sheetMetalFlatPattern,
+  type SheetMetalFlatPattern,
+  type SheetMetalFoldPreview
+} from './exact-sheet-metal';
+
+export type {
+  SheetMetalFlatPattern,
+  SheetMetalFlatPatternBend,
+  SheetMetalFoldPreview,
+  SheetMetalRefusalCode
+} from './exact-sheet-metal';
 import { sketchDxfEntities, SketchDxfExportError } from './exact-sketch-dxf';
 import { assertSketchProjectionsValid } from './exact-sketch-projection-failures';
 export { SketchDxfExportError } from './exact-sketch-dxf';
@@ -119,7 +143,7 @@ export type {
 import {
   BODY_OPACITY_METADATA_KEY,
   MAX_MESH_SOLID_CONVERSION_TRIANGLES,
-  UNIT_TO_MM,
+  millimetresPerUnit,
   bodyDisplayColor,
   importedSourceReferenceOf,
   isFeatureSuppressed,
@@ -127,6 +151,7 @@ import {
   nowIso,
   type ArtifactId,
   type BodyId,
+  type FeatureId,
   type BodyMassProperties,
   type BodyRepresentation,
   type GeometryBodyRepresentation,
@@ -172,10 +197,12 @@ import {
 } from './preview-face-geometry-cache';
 import {
   hasRefusingFeatureWarning,
+  crossedFaceLoopsAdvisory,
   displayMeshGapsAdvisory,
   raiseFeatureWarning
 } from './exact-feature-warnings';
 import { adapterRefusalRecord } from './adapter-refusal';
+import { crossingFaceLoops } from './face-loop-crossing';
 import {
   collectRecognizedImportedFeatures,
   importedProofDisplayDimensions,
@@ -201,6 +228,7 @@ import {
 } from './kernel-step-import';
 import {
   buildDocumentHistoryCooperatively,
+  withSketchObjectOverrides,
   type StrictUnionVerdict,
   type StrictUnionVerdicts
 } from './exact-build-loop';
@@ -253,6 +281,7 @@ import {
   sanitizeThreeMfModel
 } from './mesh-export-sanitize';
 import { orientGlbForGltf } from './glb-scene';
+import { labelThreeMfObjects } from './three-mf-labels';
 import {
   declareStepLengthUnit,
   declareThreeMfUnit,
@@ -266,10 +295,15 @@ import {
   finishStepExport,
   stepTimestamp,
   stepWriterOptions,
+  type StepBodiesExport,
   type StepExportMetadata,
   type StepExportOptions
 } from './step-export-metadata';
-export { type StepExportOptions } from './step-export-metadata';
+export {
+  type StepBodiesExport,
+  type StepBodySkipReason,
+  type StepExportOptions
+} from './step-export-metadata';
 export {
   DEFAULT_MESH_ANGULAR_TOLERANCE,
   type ExportUnitOptions,
@@ -794,6 +828,30 @@ export interface ExactKernelAdapter {
     options?: StepExportOptions
   ): Promise<string>;
   /**
+   * The same STEP as {@link exportStep}, of every body the document shows
+   * that has an exact solid, with how many solids each body wrote — in file
+   * order, so a reader can tell which declared solids came from which body.
+   * Bodies with nothing to write (a mesh reference, a failed step, a body a
+   * parameter hides or a boolean consumed) are left out and listed, rather
+   * than refusing the whole file.
+   */
+  exportStepBodies(
+    document: ProjectDocument,
+    options?: StepExportOptions
+  ): Promise<StepBodiesExport>;
+  /**
+   * F06: the bodies the document itself shows once built (as
+   * {@link exportStepBodies} chooses them, mesh references included), for
+   * exporting a configuration that was never displayed.
+   */
+  documentExportBodyIds(document: ProjectDocument): Promise<BodyId[]>;
+  /**
+   * F06: the same bodies, each with its name and whether it is a mesh
+   * reference (exported as its original facets, STL only), so an export
+   * dialog for a configuration that is not shown can describe it exactly.
+   */
+  documentExportBodies(document: ProjectDocument): Promise<ExportBodySummary[]>;
+  /**
    * DXF R12 outline of one PLANAR face, in millimetres (or `options.units`)
    * — the laser-cutting export. Fails closed on non-planar faces and stale
    * face references.
@@ -803,6 +861,27 @@ export interface ExactKernelAdapter {
     face: DxfFaceSelector,
     options?: ExportUnitOptions
   ): Promise<string>;
+  /**
+   * M16: the flat pattern of a sheet-metal feature — the flat sheet's
+   * outline loops and its bend centre lines in the blank's sketch
+   * coordinates (document units), with the features that changed the folded
+   * body since. Rebuilt from the document; refuses as the feature does.
+   */
+  sheetMetalFlatPattern(
+    document: ProjectDocument,
+    featureId: FeatureId
+  ): Promise<SheetMetalFlatPattern>;
+  /**
+   * M16: a view-only mesh of a sheet-metal feature folded to `fraction` of
+   * every bend's angle (0 is the flat sheet, 1 the stored part). Nothing is
+   * stored and the build's bodies are untouched; later features are not
+   * applied to it.
+   */
+  sheetMetalFoldPreview(
+    document: ProjectDocument,
+    featureId: FeatureId,
+    fraction: number
+  ): Promise<SheetMetalFoldPreview>;
   exportStl(
     document: ProjectDocument,
     bodyIds: BodyId[],
@@ -863,6 +942,31 @@ export interface ExactKernelAdapter {
     bodyIds: BodyId[],
     plane: DrawingSectionPlane
   ): Promise<Record<BodyId, DrawingSectionBody>>;
+  /**
+   * AS04: exact pairwise interference between assembly components, each
+   * component's body posed by its matrix (the M09 clash query of
+   * `exact-body-clash.ts`, run on every unordered pair). Read-only: the posed
+   * copies are released and the model is untouched. A component whose body
+   * has no exact geometry (unknown, consumed or parameter-hidden) is listed
+   * in `missing` and joins no pair.
+   */
+  assemblyInterference(
+    document: ProjectDocument,
+    operands: AssemblyInterferenceOperand[]
+  ): Promise<AssemblyInterferenceReport>;
+  /**
+   * M09 analysis overlays: the exact kernel's per-face analysis of each
+   * named body (`exact-surface-analysis.ts`), sampled for the viewport to
+   * colour. Read-only, on the same build the clash query uses. A body with
+   * no exact geometry (unknown, consumed or parameter-hidden) is listed in
+   * `missing`; a face or body the kernel refuses is listed in `unsupported`
+   * and never given a value.
+   */
+  surfaceAnalysis(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    request: SurfaceAnalysisRequest
+  ): Promise<SurfaceAnalysisReport>;
   /**
    * Solves one sketch's persisted constraints with the kernel's GCS and
    * returns the solved geometry plus classification, DOF, and per-constraint
@@ -1146,6 +1250,73 @@ function carryProposalSalt(
     feature.data.edgeReferences === undefined
     ? '|carry-proposal'
     : '';
+}
+
+/**
+ * Each export solid's body name and display colour, in writer order: every
+ * solid of a body carries that body's label.
+ */
+function exportSolidLabels(
+  document: ProjectDocument,
+  bodies: readonly { bodyId: BodyId; solids: number[] }[]
+): { name: string; color: string }[] {
+  const bodyNodes = new Map(
+    listNodesByKind(document, 'body').map((body) => [body.bodyId, body])
+  );
+  const featureKinds = new Map(
+    listNodesByKind(document, 'feature').map((feature) => [
+      feature.featureId,
+      feature.featureKind
+    ])
+  );
+  return bodies.flatMap(({ bodyId, solids }) => {
+    const body = bodyNodes.get(bodyId);
+    const label = {
+      name: body?.name ?? '',
+      color: bodyDisplayColor(
+        body?.metadata,
+        body ? featureKinds.get(body.featureId) : undefined
+      )
+    };
+    return solids.map(() => label);
+  });
+}
+
+/**
+ * One STEP of the given bodies' solids, each named after its body and styled
+ * in its display colour.
+ */
+function writeStepBodies(
+  kernel: RemusKernel,
+  io: RemusIo,
+  document: ProjectDocument,
+  bodies: readonly { bodyId: BodyId; solids: number[] }[],
+  options: StepExportOptions
+): string {
+  const metadata: StepExportMetadata = {
+    productName: document.name,
+    fileName: options.fileName ?? `${document.name}.step`,
+    timestamp: options.timestamp ?? stepTimestamp(new Date()),
+    solids: exportSolidLabels(document, bodies)
+  };
+  // Never fuse: a boolean union changes the geometry (overlaps merge,
+  // coincident faces weld). Every root of the arena document becomes its
+  // own MANIFOLD_SOLID_BREP inside one shape representation, so the
+  // bodies stay distinct through a round trip.
+  return finishStepExport(
+    declareStepLengthUnit(
+      decodeText(
+        io.exportStepWithOptions(
+          kernel.serializeSolids(
+            new Uint32Array(bodies.flatMap(({ solids }) => solids))
+          ),
+          stepWriterOptions(metadata)
+        )
+      ),
+      options.units ?? 'mm'
+    ),
+    metadata
+  );
 }
 
 export class RemusKernelAdapter implements ExactKernelAdapter {
@@ -2430,7 +2601,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     );
 
     const report = rebuildReporter(onProgress);
-    let featureDone: (() => void) | undefined;
+    let featureDone:
+      ((outcome?: RebuildProgress['outcome']) => void) | undefined;
     let executedFeatures = 0;
     // The feature the next build step runs: each step builds one.
     let nextBuildIndex = startIndex;
@@ -2448,7 +2620,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       result: ExactBuildResult,
       idleView?: IdleLineageView
     ) => {
-      featureDone?.();
+      const featureId = features[index]?.featureId;
+      featureDone?.(
+        result.featureWarnings.some(
+          (warning) =>
+            warning.featureId === featureId &&
+            (warning.kind === 'build-failed' || warning.kind === 'refusal')
+        )
+          ? 'failed'
+          : 'built'
+      );
       nextBuildIndex = index + 1;
       if (index <= checkpointIndices.at(-1)!)
         axialExtent.observe(index, result);
@@ -4435,7 +4616,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                   document.bodyOrder.length
                 ),
               analysisHashes,
-              1 / UNIT_TO_MM[document.units],
+              1 / millimetresPerUnit(document.units),
               strictVerdicts,
               measureOpening,
               this.heldDisplayDeflections.get(bodyId),
@@ -4551,10 +4732,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               (face) => surfaceTypeOf(kernel, face) === 'bspline'
             )
           );
+          // The validator passes a face whose loops cross, and its holes are
+          // in the model, so the sentence above must not call it valid.
+          const loopsCross = crossingFaceLoops(kernel, shape.solids) !== null;
           raiseFeatureWarning(
             build,
             feature,
-            displayMeshGapsAdvisory(hasNurbsFace),
+            loopsCross
+              ? crossedFaceLoopsAdvisory()
+              : displayMeshGapsAdvisory(hasNurbsFace),
             'advisory'
           );
         }
@@ -4757,6 +4943,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         updatedAt: nowIso(),
         ...(build.datumFrames.size > 0
           ? { datumFrames: Object.fromEntries(build.datumFrames) }
+          : {}),
+        ...(build.standardParts?.size
+          ? { standardParts: Object.fromEntries(build.standardParts) }
           : {}),
         ...(build.datumAxes.size > 0
           ? { datumAxes: Object.fromEntries(build.datumAxes) }
@@ -4968,57 +5157,153 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   ): Promise<string> {
     const units = options.units ?? 'mm';
     const io = await loadRemusTranslators();
+    return this.withExportBuild(document, (kernel, build) =>
+      writeStepBodies(
+        kernel,
+        io,
+        document,
+        this.exportBodySolidsFor(kernel, build, document, bodyIds, units),
+        options
+      )
+    );
+  }
+
+  /**
+   * F06: the bodies `document` itself shows once built, in body order: not
+   * hidden by a parameter or the active configuration, not consumed, not
+   * suppressed, with geometry to write (a mesh reference included). Lets a
+   * caller export a configuration it has not displayed, whose body list it
+   * cannot know without building it.
+   */
+  async documentExportBodyIds(document: ProjectDocument): Promise<BodyId[]> {
+    return (await this.documentExportBodies(document)).map(
+      (body) => body.bodyId
+    );
+  }
+
+  async documentExportBodies(
+    document: ProjectDocument
+  ): Promise<ExportBodySummary[]> {
+    return this.withExportBuild(document, (_kernel, build) => {
+      const { written, skipped } = shownExportBodies(document, build);
+      const meshes = new Set(
+        skipped
+          .filter((entry) => entry.reason === 'mesh-reference')
+          .map((entry) => entry.bodyId)
+      );
+      const names = new Map(
+        listNodesByKind(document, 'body').map((body) => [
+          body.bodyId,
+          body.name
+        ])
+      );
+      return document.bodyOrder
+        .filter((bodyId) => written.includes(bodyId) || meshes.has(bodyId))
+        .map((bodyId) => ({
+          bodyId,
+          name: names.get(bodyId) ?? bodyId,
+          ...(meshes.has(bodyId) ? { meshReference: true as const } : {})
+        }));
+    });
+  }
+
+  async exportStepBodies(
+    document: ProjectDocument,
+    options: StepExportOptions = {}
+  ): Promise<StepBodiesExport> {
+    const units = options.units ?? 'mm';
+    const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
+      const { written, skipped } = shownExportBodies(document, build);
+      if (written.length === 0) {
+        throw new Error('The project has no solid body to write.');
+      }
       const bodies = this.exportBodySolidsFor(
         kernel,
         build,
         document,
-        bodyIds,
+        written,
         units
       );
-      const bodyNodes = new Map(
-        listNodesByKind(document, 'body').map((body) => [body.bodyId, body])
-      );
-      const featureKinds = new Map(
-        listNodesByKind(document, 'feature').map((feature) => [
-          feature.featureId,
-          feature.featureKind
-        ])
-      );
-      const metadata: StepExportMetadata = {
-        productName: document.name,
-        fileName: options.fileName ?? `${document.name}.step`,
-        timestamp: options.timestamp ?? stepTimestamp(new Date()),
-        solids: bodies.flatMap(({ bodyId, solids }) => {
-          const body = bodyNodes.get(bodyId);
-          const label = {
-            name: body?.name ?? '',
-            color: bodyDisplayColor(
-              body?.metadata,
-              body ? featureKinds.get(body.featureId) : undefined
-            )
-          };
-          return solids.map(() => label);
-        })
+      return {
+        text: writeStepBodies(kernel, io, document, bodies, options),
+        bodies: bodies.map(({ bodyId, solids }) => ({
+          bodyId,
+          solidCount: solids.length
+        })),
+        skipped
       };
-      // Never fuse: a boolean union changes the geometry (overlaps merge,
-      // coincident faces weld). Every root of the arena document becomes its
-      // own MANIFOLD_SOLID_BREP inside one shape representation, so the
-      // bodies stay distinct through a round trip.
-      return finishStepExport(
-        declareStepLengthUnit(
-          decodeText(
-            io.exportStepWithOptions(
-              kernel.serializeSolids(
-                new Uint32Array(bodies.flatMap(({ solids }) => solids))
-              ),
-              stepWriterOptions(metadata)
-            )
-          ),
-          units
-        ),
-        metadata
+    });
+  }
+
+  async sheetMetalFlatPattern(
+    document: ProjectDocument,
+    featureId: FeatureId
+  ): Promise<SheetMetalFlatPattern> {
+    return this.withExportBuild(document, (kernel, build) => {
+      // The pattern is planned on its own, without the fold, so a refusal
+      // only the fold raises (folded-overlap, fold-failed) would never reach
+      // it. A part the build refused is not a part to cut: refuse with the
+      // build's own message.
+      const refusal = build.featureWarnings.find(
+        (entry) =>
+          entry.featureId === featureId &&
+          (entry.kind === 'build-failed' ||
+            entry.kind === 'refusal' ||
+            entry.kind === 'suppressed')
       );
+      if (refusal) {
+        throw new Error(
+          `${refusal.message.split('\n')[0]} The flat pattern is not exported until the part builds.`
+        );
+      }
+      return sheetMetalFlatPattern(
+        kernel,
+        // The sketches as the build read them: a linked projection that
+        // moved is re-projected there, not in the stored document.
+        withSketchObjectOverrides(document, build.sketchObjectOverrides),
+        getParameterScope(document).scope,
+        build,
+        featureId,
+        millimetresPerUnit(document.units)
+      );
+    });
+  }
+
+  async sheetMetalFoldPreview(
+    document: ProjectDocument,
+    featureId: FeatureId,
+    fraction: number
+  ): Promise<SheetMetalFoldPreview> {
+    return this.withExportBuild(document, (kernel, build) => {
+      const solid = foldSheetMetalAt(
+        kernel,
+        withSketchObjectOverrides(document, build.sketchObjectOverrides),
+        getParameterScope(document).scope,
+        build,
+        featureId,
+        fraction
+      );
+      const box = kernel.boundingBox(solid);
+      const size = Math.hypot(
+        box[3]! - box[0]!,
+        box[4]! - box[1]!,
+        box[5]! - box[2]!
+      );
+      const mesh = kernel.tessellateSolid(solid, Math.max(size, 1e-6) * 5e-4);
+      try {
+        return {
+          featureId,
+          fraction,
+          positions: Float64Array.from(mesh.positions),
+          normals: Float64Array.from(mesh.normals),
+          indices: Uint32Array.from(mesh.indices),
+          volume: kernel.volume(solid, MEASUREMENT_DEFLECTION),
+          boundingBox: [box[0]!, box[1]!, box[2]!, box[3]!, box[4]!, box[5]!]
+        };
+      } finally {
+        mesh.free();
+      }
     });
   }
 
@@ -5047,7 +5332,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         kernel,
         faceHandle,
         exportLengthScale(document.units, units),
-        UNIT_TO_MM[document.units]
+        millimetresPerUnit(document.units)
       );
       return writeDxf(entities, { units });
     });
@@ -5199,7 +5484,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           faces,
           plane,
           exportLengthScale(document.units, units),
-          UNIT_TO_MM[document.units]
+          millimetresPerUnit(document.units)
         ),
         { units }
       );
@@ -5390,7 +5675,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const units = options.units ?? 'mm';
     const angular = explicitAngularTolerance(options.angularTolerance);
     // The deflection is physical millimetres; the solids are in `units`.
-    const unitDeflection = deflection / UNIT_TO_MM[units];
+    const unitDeflection = deflection / millimetresPerUnit(units);
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
       const referenceMeshes = this.referenceExportMeshes(
@@ -5473,7 +5758,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         })
       );
     }
-    const unitDeflection = deflection / UNIT_TO_MM[units];
+    const unitDeflection = deflection / millimetresPerUnit(units);
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
       const meshes =
@@ -5489,23 +5774,28 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             )
           : null;
       if (meshes && format === 'stl-binary') return writeBinaryStl(meshes);
-      const scaled = this.exportSolidsFor(
+      const scaled = this.exportBodySolidsFor(
         kernel,
         build,
         document,
         bodyIds,
         units
       );
-      const exportSolids =
+      // Re-meshed per body, so each solid still knows the body it labels.
+      const grouped =
         angular === null
           ? scaled
-          : this.angularExportSolids(
-              kernel,
-              io,
-              scaled,
-              unitDeflection,
-              angular
-            );
+          : scaled.map(({ bodyId, solids }) => ({
+              bodyId,
+              solids: this.angularExportSolids(
+                kernel,
+                io,
+                solids,
+                unitDeflection,
+                angular
+              )
+            }));
+      const exportSolids = grouped.flatMap(({ solids }) => solids);
       const bodies = kernel.serializeSolids(new Uint32Array(exportSolids));
       // Every writer takes the whole arena document: bodies stay distinct
       // objects in the 3MF package and merge into one facet stream for the
@@ -5524,9 +5814,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 : io.exportStl(bodies, unitDeflection);
       // glTF is metres and +Y up; the tessellation is model millimetres,
       // +Z up, which the GLB states through its root node (glb-scene.ts).
+      // 3MF objects carry their body's name and display colour.
       return format === '3mf'
         ? sanitizeThreeMf(bytes, (model) =>
-            declareThreeMfUnit(sanitizeThreeMfModel(model), units)
+            labelThreeMfObjects(
+              declareThreeMfUnit(sanitizeThreeMfModel(model), units),
+              exportSolidLabels(document, grouped)
+            )
           )
         : format === 'stl-binary'
           ? sanitizeBinaryStl(bytes)
@@ -5559,6 +5853,94 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           result[bodyId] = drawingTessellationOfShape(kernel, shape, budget);
         }
         return result;
+      },
+      []
+    );
+  }
+
+  surfaceAnalysis(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    request: SurfaceAnalysisRequest
+  ): Promise<SurfaceAnalysisReport> {
+    return this.withExportBuild(
+      document,
+      (kernel, build) => {
+        const hidden = getParameterHiddenBodyIds(document);
+        const missing: string[] = [];
+        const bodies: SurfaceAnalysisBody[] = [];
+        const unsupported: SurfaceAnalysisUnsupported[] = [];
+        for (const bodyId of bodyIds) {
+          const shape = build.shapes.get(bodyId);
+          if (
+            !shape ||
+            shape.solids.length === 0 ||
+            hidden.has(bodyId) ||
+            build.consumed.has(bodyId)
+          ) {
+            missing.push(bodyId);
+            continue;
+          }
+          const body = analyzeBodySurfaces(
+            kernel,
+            bodyId,
+            shape.solids,
+            request,
+            unsupported
+          );
+          if (body) bodies.push(body);
+        }
+        return { request, bodies, unsupported, missing };
+      },
+      []
+    );
+  }
+
+  assemblyInterference(
+    document: ProjectDocument,
+    operands: AssemblyInterferenceOperand[]
+  ): Promise<AssemblyInterferenceReport> {
+    const matrices = operands.map((operand) => rowMajorMatrix(operand.matrix));
+    return this.withExportBuild(
+      document,
+      (kernel, build) => {
+        const hidden = getParameterHiddenBodyIds(document);
+        const missing: string[] = [];
+        const posed: { id: string; solids: number[] }[] = [];
+        const copies: number[] = [];
+        try {
+          operands.forEach((operand, index) => {
+            const bodyId = operand.bodyId as BodyId;
+            const shape = build.shapes.get(bodyId);
+            if (
+              !shape ||
+              shape.solids.length === 0 ||
+              hidden.has(bodyId) ||
+              build.consumed.has(bodyId)
+            ) {
+              missing.push(operand.componentId);
+              return;
+            }
+            const solids = shape.solids.map((solid) => {
+              const copy = kernel.copyAndTransformSolid(
+                solid,
+                matrices[index]!
+              );
+              copies.push(copy);
+              return copy;
+            });
+            posed.push({ id: operand.componentId, solids });
+          });
+          return { pairs: pairwiseBodyClash(kernel, posed), missing };
+        } finally {
+          for (const copy of copies) {
+            try {
+              kernel.deleteSolid(copy);
+            } catch {
+              // The checkpoint restore after this job releases it anyway.
+            }
+          }
+        }
       },
       []
     );
@@ -5624,7 +6006,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const units = tolerances.units ?? 'mm';
     // The writers' space: the export unit, at the deflection that is
     // `deflection` millimetres there.
-    const unitMm = UNIT_TO_MM[units];
+    const unitMm = millimetresPerUnit(units);
     const unitDeflection = deflection / unitMm;
     return this.withExportBuild(document, (kernel, build) => {
       const exportScale = exportLengthScale(document.units, units);
@@ -6045,4 +6427,58 @@ function draftDisplayCandidate(
     source: document.featureOrder.slice(0, -1).join(','),
     bodyId: data.targetBodyId
   };
+}
+
+/**
+ * What a document shows of a build, for writing: each body not hidden (by a
+ * parameter or the active configuration), not replaced by a later boolean and
+ * not switched off by suppression, split into those with solids to write and
+ * those skipped with the reason.
+ */
+/** F06: one body an export writes, as an export dialog lists it. */
+export interface ExportBodySummary {
+  bodyId: BodyId;
+  name: string;
+  meshReference?: true;
+}
+
+function shownExportBodies(
+  document: ProjectDocument,
+  build: ExactBuildResult
+): { written: BodyId[]; skipped: StepBodiesExport['skipped'] } {
+  const hidden = getParameterHiddenBodyIds(document);
+  const features = new Map(
+    listNodesByKind(document, 'feature').map((feature) => [
+      feature.featureId,
+      feature
+    ])
+  );
+  const bodyNodes = new Map(
+    listNodesByKind(document, 'body').map((body) => [body.bodyId, body])
+  );
+  const written: BodyId[] = [];
+  const skipped: StepBodiesExport['skipped'] = [];
+  for (const bodyId of document.bodyOrder) {
+    const body = bodyNodes.get(bodyId);
+    const feature = body ? features.get(body.featureId) : undefined;
+    if (
+      !body ||
+      hidden.has(bodyId) ||
+      build.consumed.has(bodyId) ||
+      (feature && isFeatureSuppressed(feature) && !build.shapes.has(bodyId))
+    ) {
+      continue;
+    }
+    const shape = build.shapes.get(bodyId);
+    const reason = !shape
+      ? 'failed'
+      : shape.referenceMesh
+        ? 'mesh-reference'
+        : shape.solids.length === 0
+          ? 'empty'
+          : null;
+    if (reason) skipped.push({ bodyId, reason });
+    else written.push(bodyId);
+  }
+  return { written, skipped };
 }

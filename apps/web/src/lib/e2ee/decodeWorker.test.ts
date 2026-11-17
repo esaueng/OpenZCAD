@@ -66,6 +66,12 @@ const blobJob = {
   output: 'chunks' as const
 };
 
+const thumbnailJob = {
+  reference: { kind: 'thumbnail' } as ContentBlobReference,
+  envelope: new Uint8Array(8),
+  output: 'chunks' as const
+};
+
 let workers: FakeWorker[];
 const createWorker = () => {
   const worker = new FakeWorker();
@@ -255,6 +261,39 @@ describe('decode worker client', () => {
     workers[0]!.resolveLast();
     await expect(next).resolves.toEqual(documentResult);
     decoder.dispose();
+  });
+
+  it('decodes a thumbnail on its own lane, not behind bulk work', async () => {
+    // Regression: one queue made a shelf's encrypted cards wait for every
+    // document and imported source queued before them.
+    const decoder = createE2eeDecoder({ createWorker });
+    expect(workers).toHaveLength(0);
+    const document = decoder.decodeProjectEnvelope(projectJob);
+    const source = decoder.decodeContentBlob(blobJob);
+    expect(workers).toHaveLength(1);
+
+    const thumbnailResult: DecodeResult = {
+      type: 'content-blob',
+      chunks: [new Uint8Array(4)],
+      byteLength: 4
+    };
+    const card = decoder.decodeContentBlob(thumbnailJob);
+    const nextCard = decoder.decodeContentBlob(thumbnailJob);
+    expect(workers).toHaveLength(2);
+    expect(workers[1]!.posted).toHaveLength(1);
+    workers[1]!.resolveLast(thumbnailResult);
+    await expect(card).resolves.toEqual(thumbnailResult);
+    // Thumbnails still run one at a time on their lane.
+    expect(workers[1]!.posted).toHaveLength(2);
+    workers[1]!.resolveLast(thumbnailResult);
+    await expect(nextCard).resolves.toEqual(thumbnailResult);
+    // The bulk lane never saw them and is still on its first job.
+    expect(workers[0]!.posted).toHaveLength(1);
+
+    decoder.dispose();
+    await expect(document).rejects.toMatchObject({ code: 'disposed' });
+    await expect(source).rejects.toMatchObject({ code: 'disposed' });
+    expect(workers.every((worker) => worker.terminated)).toBe(true);
   });
 
   it('disposes the worker and every pending job', async () => {

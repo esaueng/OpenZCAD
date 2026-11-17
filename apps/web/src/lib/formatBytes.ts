@@ -5,7 +5,9 @@
  */
 export function formatBytes(
   bytes: number,
-  unitStyle: 'short' | 'iec' = 'short'
+  unitStyle: 'short' | 'iec' = 'short',
+  /** Decimal places above bytes; one unless a figure needs telling apart. */
+  fractionDigits = 1
 ): string {
   // A field an older or partial storage report leaves out must not take
   // the Account page down with it.
@@ -21,9 +23,10 @@ export function formatBytes(
     index += 1;
   }
   // Rounding near a boundary must not leave a label such as "1,024 MB".
-  if (Math.round(value * 10) / 10 >= 1024 && index < units.length - 1) {
+  const step = 10 ** fractionDigits;
+  if (Math.round(value * step) / step >= 1024 && index < units.length - 1) {
     value /= 1024;
     index += 1;
   }
-  return `${value.toLocaleString(undefined, { maximumFractionDigits: index === 0 ? 0 : 1 })} ${units[index]}`;
+  return `${value.toLocaleString(undefined, { maximumFractionDigits: index === 0 ? 0 : fractionDigits })} ${units[index]}`;
 }

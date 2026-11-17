@@ -380,8 +380,10 @@ export async function isProjectObjectStorageReady(
     return false;
   }
 
-  try {
-    const schema = await db
+  // One retry: a single failed D1 read here otherwise answered the project
+  // route with a 503, which the client shows as "Account unavailable".
+  const readSchema = () =>
+    db
       .prepare(
         `SELECT
           ${CLEANUP_CLAIMS_READINESS_SQL},
@@ -445,6 +447,8 @@ export async function isProjectObjectStorageReady(
           ) AS revision_owner_trigger`
       )
       .first<ProjectObjectStorageSchema>();
+  try {
+    const schema = await readSchema().catch(() => readSchema());
 
     return (
       schema?.cleanup_claims_ready === 1 &&

@@ -6,6 +6,12 @@ import { GeometryWorkerError } from '../lib/workerRefusal';
 import { beginEditTrace, recordEditPhase } from '../lib/editTrace';
 import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
+import type {
+  AssemblyInterferenceOperand,
+  AssemblyInterferenceReport,
+  SurfaceAnalysisReport,
+  SurfaceAnalysisRequest
+} from '@openzcad/shared';
 import { hasDraftDisplay as hasDraftBodies } from '@openzcad/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { documentForWorker, documentForRebuild } from '../lib/meshTransport';
@@ -25,6 +31,7 @@ import { prefersSavingData } from '../lib/saveData';
 import type {
   BodyId,
   FaceRecognitionSummary,
+  FeatureId,
   ProjectDocument,
   SketchId,
   UnitSystem
@@ -39,12 +46,15 @@ import type {
   ExactSectionPlane,
   MeshQualityReport,
   MassPropertiesRead,
+  ExportBodySummary,
   SectionOutlineReport,
+  SheetMetalFlatPattern,
   SketchPlanarOperation,
   SketchPlanarResult,
   SketchSolveAnchor,
   SketchSolveOutcome,
-  DxfFaceSelector
+  DxfFaceSelector,
+  SheetMetalFoldPreview
 } from '@openzcad/kernel-adapter/exact';
 import type {
   GeometryExportFormat,
@@ -232,8 +242,13 @@ export interface GeometryWorkerApi {
      * fillet/chamfer the edit stranded may be carried and reported in
      * `edgeHashRepairs`, for the commit to store in the same revision. Every
      * other rebuild leaves it unset and depends on the document alone.
+     *
+     * `signal`: aborting rejects with an `AbortError`-named error and asks
+     * the worker to drop the job. A queued job is skipped; a running one
+     * stops at its next feature boundary (a wasm call already under way
+     * completes), and its result is discarded either way.
      */
-    options?: { proposeCarry?: boolean }
+    options?: { proposeCarry?: boolean; signal?: AbortSignal }
   ): Promise<DerivedState>;
   /** Exact display/validation only; cannot be used as an authoritative commit. */
   previewGeometry(
@@ -272,6 +287,8 @@ export interface GeometryWorkerApi {
       transparent?: boolean;
       /** 'step' only: the name the file is saved under, for its header. */
       fileName?: string;
+      /** F06: write every body the document shows, ignoring `bodyIds`. */
+      allShownBodies?: boolean;
       signal?: AbortSignal;
       onState?(state: GeometryWorkerState): void;
     }
@@ -289,6 +306,8 @@ export interface GeometryWorkerApi {
     options?: {
       angularTolerance?: number;
       units?: UnitSystem;
+      /** F06: check every body the document shows, ignoring `bodyIds`. */
+      allShownBodies?: boolean;
       onState?(state: GeometryWorkerState): void;
     }
   ): Promise<MeshQualityReport>;
@@ -320,6 +339,20 @@ export interface GeometryWorkerApi {
     options?: { signal?: AbortSignal }
   ): Promise<MassPropertiesRead>;
   /**
+   * F06: the bodies an export of `document` writes, named and marked when
+   * they are mesh references, for a configuration that is not shown.
+   */
+  exportBodies(document: ProjectDocument): Promise<ExportBodySummary[]>;
+  /**
+   * M16: a sheet-metal feature folded to `fraction` of every bend (0 flat,
+   * 1 as stored), as a view-only mesh; later features are not applied.
+   */
+  sheetMetalFoldPreview(
+    document: ProjectDocument,
+    featureId: FeatureId,
+    fraction: number
+  ): Promise<SheetMetalFoldPreview>;
+  /**
    * The exact, kernel-computed section at one plane — section curves, not the
    * viewport's clipped preview. Asked for when the plane comes to rest.
    *
@@ -342,6 +375,23 @@ export interface GeometryWorkerApi {
     options?: { anchor?: SketchSolveAnchor }
   ): Promise<SketchSolveOutcome>;
   /**
+   * AS04: exact pairwise interference between assembly components posed by
+   * their matrices; the M09 clash query run on every unordered pair.
+   */
+  assemblyInterference(
+    document: ProjectDocument,
+    operands: AssemblyInterferenceOperand[]
+  ): Promise<AssemblyInterferenceReport>;
+  /**
+   * M09 analysis overlays: the exact per-face analysis of the named bodies,
+   * sampled for the viewport (read-only).
+   */
+  surfaceAnalysis(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    analysis: SurfaceAnalysisRequest
+  ): Promise<SurfaceAnalysisReport>;
+  /**
    * Runs one planar sketch edit — corner fillet, corner chamfer, or closed
    * loop offset — on the kernel's 2D operations. Geometry only: the caller
    * decides which entities the answer replaces.
@@ -361,6 +411,14 @@ export interface GeometryWorkerApi {
     faceHash: number;
     topologyId?: string;
   }): Promise<FaceRecognitionSummary>;
+  /**
+   * M16: a sheet-metal feature's flat pattern, rebuilt from `document` —
+   * display and export only, never a document edit.
+   */
+  sheetMetalFlatPattern(
+    document: ProjectDocument,
+    featureId: FeatureId
+  ): Promise<SheetMetalFlatPattern>;
   /** Forces the next `sync` to post even if the version has not changed. */
   invalidate(): void;
   /** Retains a completed exact result across a bookkeeping-only adoption. */
@@ -421,8 +479,20 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const massPropertiesRequests = useRef(
     new Map<string, PendingRequest<MassPropertiesRead>>()
   );
+  const exportBodiesRequests = useRef(
+    new Map<string, PendingRequest<ExportBodySummary[]>>()
+  );
+  const sheetMetalFoldRequests = useRef(
+    new Map<string, PendingRequest<SheetMetalFoldPreview>>()
+  );
   const solveSketchRequests = useRef(
     new Map<string, PendingRequest<SketchSolveOutcome>>()
+  );
+  const interferenceRequests = useRef(
+    new Map<string, PendingRequest<AssemblyInterferenceReport>>()
+  );
+  const surfaceAnalysisRequests = useRef(
+    new Map<string, PendingRequest<SurfaceAnalysisReport>>()
   );
   const sectionRequests = useRef(
     new Map<string, PendingRequest<SectionOutlineReport>>()
@@ -432,6 +502,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   );
   const recognizeImportedFaceRequests = useRef(
     new Map<string, PendingRequest<FaceRecognitionSummary>>()
+  );
+  const flatPatternRequests = useRef(
+    new Map<string, PendingRequest<SheetMetalFlatPattern>>()
   );
   const syncRequests = useRef(new Map<string, PendingRequest<DerivedState>>());
   const geometryPreviewRequests = useRef(
@@ -504,10 +577,15 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       meshQualityRequests.current,
       drawingTessellationRequests.current,
       massPropertiesRequests.current,
+      exportBodiesRequests.current,
+      sheetMetalFoldRequests.current,
       solveSketchRequests.current,
+      interferenceRequests.current,
+      surfaceAnalysisRequests.current,
       sectionRequests.current,
       sketchPlanarRequests.current,
       recognizeImportedFaceRequests.current,
+      flatPatternRequests.current,
       syncRequests.current,
       geometryPreviewRequests.current
     ],
@@ -558,6 +636,35 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       return null;
     };
 
+    let waitingForConnection = false;
+    const respawnAndResync = () => {
+      setState({ type: 'state', phase: 'starting', stale: true });
+      spawn();
+      // The replacement worker owes the visible document a rebuild: a
+      // respawn used to sit idle at "starting" until the next edit
+      // happened to post a sync again.
+      const manager = hostRef.current.manager();
+      const replacement = workerRef.current;
+      if (manager && replacement) {
+        broadcastDocument.current = manager.document;
+        postSync(
+          replacement,
+          manager.document,
+          lastSyncedKey,
+          armedRef,
+          lastDemandRef.current ?? undefined,
+          persistSessionFor(persistSessionRef, manager.document)
+        );
+      }
+    };
+    const respawnOnline = () => {
+      if (navigator.onLine === false) return;
+      window.removeEventListener('online', respawnOnline);
+      waitingForConnection = false;
+      if (disposed || workerRef.current) return;
+      respawnAndResync();
+    };
+
     const failAndMaybeRespawn = (
       failed: Worker | null,
       message: string,
@@ -573,29 +680,25 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       broadcastDocument.current = null;
       failed?.terminate();
       workerRef.current = null;
+      if (!disposed && !reloadRequired && navigator.onLine === false) {
+        // 13 November review I5: offline, the worker's script or kernel
+        // cannot download, so three immediate respawns all failed and the
+        // startup screen sat at "Building the model" after the connection
+        // returned, with a reload as the only way out. Offline failures
+        // cost no attempts: wait for the connection, then start again.
+        setState({ type: 'state', phase: 'starting', stale: true });
+        if (!waitingForConnection) {
+          waitingForConnection = true;
+          window.addEventListener('online', respawnOnline);
+        }
+        return;
+      }
       if (!disposed && !reloadRequired && respawnsSinceReady < RESPAWN_LIMIT) {
         respawnsSinceReady += 1;
         hostRef.current.onError(
           `${message} Restarting the geometry worker (attempt ${respawnsSinceReady} of ${RESPAWN_LIMIT}).`
         );
-        setState({ type: 'state', phase: 'starting', stale: true });
-        spawn();
-        // The replacement worker owes the visible document a rebuild: a
-        // respawn used to sit idle at "starting" until the next edit
-        // happened to post a sync again.
-        const manager = hostRef.current.manager();
-        const replacement = workerRef.current;
-        if (manager && replacement) {
-          broadcastDocument.current = manager.document;
-          postSync(
-            replacement,
-            manager.document,
-            lastSyncedKey,
-            armedRef,
-            lastDemandRef.current ?? undefined,
-            persistSessionFor(persistSessionRef, manager.document)
-          );
-        }
+        respawnAndResync();
       } else {
         armedRef.current = false;
         setState({
@@ -926,11 +1029,27 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           else pending.reject(new Error(message.error));
           return;
         }
+        if (message.type === 'export-bodies') {
+          const pending = exportBodiesRequests.current.get(message.requestId);
+          if (!pending) return;
+          exportBodiesRequests.current.delete(message.requestId);
+          if (message.ok) pending.resolve(message.bodies);
+          else pending.reject(new Error(message.error));
+          return;
+        }
         if (message.type === 'mass-properties') {
           const pending = massPropertiesRequests.current.get(message.requestId);
           if (!pending) return;
           massPropertiesRequests.current.delete(message.requestId);
           if (message.ok) pending.resolve(message.result);
+          else pending.reject(new Error(message.error));
+          return;
+        }
+        if (message.type === 'sheet-metal-fold') {
+          const pending = sheetMetalFoldRequests.current.get(message.requestId);
+          if (!pending) return;
+          sheetMetalFoldRequests.current.delete(message.requestId);
+          if (message.ok) pending.resolve(message.preview);
           else pending.reject(new Error(message.error));
           return;
         }
@@ -940,6 +1059,34 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             return;
           }
           sectionRequests.current.delete(message.requestId);
+          if (message.ok) {
+            pending.resolve(message.report);
+          } else {
+            pending.reject(new Error(message.error));
+          }
+          return;
+        }
+        if (message.type === 'surface-analysis') {
+          const pending = surfaceAnalysisRequests.current.get(
+            message.requestId
+          );
+          if (!pending) {
+            return;
+          }
+          surfaceAnalysisRequests.current.delete(message.requestId);
+          if (message.ok) {
+            pending.resolve(message.report);
+          } else {
+            pending.reject(new Error(message.error));
+          }
+          return;
+        }
+        if (message.type === 'assembly-interference') {
+          const pending = interferenceRequests.current.get(message.requestId);
+          if (!pending) {
+            return;
+          }
+          interferenceRequests.current.delete(message.requestId);
           if (message.ok) {
             pending.resolve(message.report);
           } else {
@@ -983,6 +1130,19 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           recognizeImportedFaceRequests.current.delete(message.requestId);
           if (message.ok) {
             pending.resolve(message.summary);
+          } else {
+            pending.reject(new Error(message.error));
+          }
+          return;
+        }
+        if (message.type === 'sheet-metal-flat-pattern') {
+          const pending = flatPatternRequests.current.get(message.requestId);
+          if (!pending) {
+            return;
+          }
+          flatPatternRequests.current.delete(message.requestId);
+          if (message.ok) {
+            pending.resolve(message.pattern);
           } else {
             pending.reject(new Error(message.error));
           }
@@ -1112,6 +1272,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
 
     return () => {
       disposed = true;
+      window.removeEventListener('online', respawnOnline);
       clearInterval(watchdog);
       const closed = new Error('Geometry worker closed.');
       rejectOutstanding(closed);
@@ -1268,6 +1429,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         } satisfies GeometryWorkerRequest);
     },
     syncOnce(document, analysis, lineageDemand, options) {
+      const signal = options?.signal;
+      if (signal?.aborted)
+        return Promise.reject(abortError('Rebuild cancelled.'));
       // One-off rebuilds (previews, preflights, demo seeding, AI proposals)
       // read lineage straight from the result, so they get full lineage by
       // default. Only an explicit demand opts one into the idle skip.
@@ -1278,16 +1442,33 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         ...(lineageDemand ? { lineageDemand: [...lineageDemand] } : {}),
         ...(options?.proposeCarry ? { proposeCarry: true } : {})
       });
-      return posted.ok
-        ? posted.promise.then((derived) => {
-            syncOrigins.current.set(derived, {
-              document,
-              lineageDemand,
-              analysis: analysis !== undefined
-            });
-            return derived;
-          })
-        : Promise.reject(new Error('Geometry worker unavailable.'));
+      if (!posted.ok)
+        return Promise.reject(new Error('Geometry worker unavailable.'));
+      // A preview its command closed (Cancel, another tool) no longer holds
+      // the worker: without this a large pattern's preview kept building for
+      // a minute after its card was gone, and everything queued behind it.
+      const onAbort = () => {
+        const pending = syncRequests.current.get(posted.requestId);
+        if (!pending) return;
+        syncRequests.current.delete(posted.requestId);
+        armedRef.current = true;
+        workerRef.current?.postMessage({
+          type: 'cancel',
+          requestId: posted.requestId
+        });
+        pending.reject(abortError('Rebuild cancelled.'));
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      return posted.promise
+        .finally(() => signal?.removeEventListener('abort', onAbort))
+        .then((derived) => {
+          syncOrigins.current.set(derived, {
+            document,
+            lineageDemand,
+            analysis: analysis !== undefined
+          });
+          return derived;
+        });
     },
     releaseEditPreview(document) {
       workerRef.current?.postMessage({
@@ -1400,7 +1581,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             : {}),
           ...(options?.fileName !== undefined
             ? { fileName: options.fileName }
-            : {})
+            : {}),
+          ...(options?.allShownBodies ? { allShownBodies: true } : {})
         });
       });
     },
@@ -1413,7 +1595,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         ...(options?.angularTolerance !== undefined
           ? { angularTolerance: options.angularTolerance }
           : {}),
-        ...(options?.units !== undefined ? { units: options.units } : {})
+        ...(options?.units !== undefined ? { units: options.units } : {}),
+        ...(options?.allShownBodies ? { allShownBodies: true } : {})
       });
       if (!posted.ok) {
         return Promise.reject(new Error('Geometry worker is unavailable.'));
@@ -1433,6 +1616,15 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         plane,
         options?.signal
       ) as Promise<Record<BodyId, DrawingSectionBody>>;
+    },
+    exportBodies(document) {
+      const posted = postRequest(exportBodiesRequests.current, {
+        type: 'export-bodies',
+        document: documentForWorker(document)
+      });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker is unavailable.'));
     },
     massProperties(document, bodyId, options) {
       if (options?.signal?.aborted) {
@@ -1464,6 +1656,18 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         signal.removeEventListener('abort', onAbort);
       });
     },
+    sheetMetalFoldPreview(document, featureId, fraction) {
+      const posted = postRequest(sheetMetalFoldRequests.current, {
+        type: 'sheet-metal-fold',
+        document: documentForWorker(document),
+        featureId,
+        fraction
+      });
+      if (!posted.ok) {
+        return Promise.reject(new Error('Geometry worker is unavailable.'));
+      }
+      return posted.promise;
+    },
     sectionOutline(document, plane, bodyIds) {
       const worker = workerRef.current;
       if (!worker) {
@@ -1493,6 +1697,27 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         ? posted.promise
         : Promise.reject(new Error('Geometry worker is unavailable.'));
     },
+    assemblyInterference(document, operands) {
+      const posted = postRequest(interferenceRequests.current, {
+        type: 'assembly-interference',
+        document: documentForWorker(document),
+        operands
+      });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker is unavailable.'));
+    },
+    surfaceAnalysis(document, bodyIds, analysis) {
+      const posted = postRequest(surfaceAnalysisRequests.current, {
+        type: 'surface-analysis',
+        document: documentForWorker(document),
+        bodyIds,
+        analysis
+      });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker is unavailable.'));
+    },
     recognizeImportedFace(input) {
       const posted = postRequest(recognizeImportedFaceRequests.current, {
         type: 'recognize-imported-face',
@@ -1502,6 +1727,16 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         ...(input.topologyId !== undefined
           ? { topologyId: input.topologyId }
           : {})
+      });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker is unavailable.'));
+    },
+    sheetMetalFlatPattern(document, featureId) {
+      const posted = postRequest(flatPatternRequests.current, {
+        type: 'sheet-metal-flat-pattern',
+        document: documentForWorker(document),
+        featureId
       });
       return posted.ok
         ? posted.promise

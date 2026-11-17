@@ -440,7 +440,7 @@ describe('archiving a mesh import', () => {
           artifactId: toArtifactId(`artifact_${input.kind}`),
           projectId: input.projectId,
           objectKey: `objects/${input.kind}`,
-          uploadUrl: 'https://upload.test/put',
+          uploadUrl: `/api/uploads/upload_${input.kind}/content`,
           expiresAt: '2026-01-01T00:00:00.000Z',
           fileName: input.fileName,
           contentType: input.contentType,
@@ -480,7 +480,8 @@ describe('archiving a mesh import', () => {
     expect(transport.uploadArtifactPart).toHaveBeenCalledOnce();
     expect(transport.abortMultipartUpload).toHaveBeenCalledWith(
       'upload_mesh-payload',
-      'multipart_mesh'
+      'multipart_mesh',
+      { projectId: 'proj_mesh_upload', payload: 'plaintext' }
     );
     expect(transport.completeMultipartUpload).not.toHaveBeenCalled();
     expect(transport.finalizeArtifact).not.toHaveBeenCalled();

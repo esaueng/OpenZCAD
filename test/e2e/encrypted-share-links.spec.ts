@@ -100,12 +100,12 @@ test(
       path.startsWith('/api/e2ee/')
     );
     expect(e2ee.length).toBeGreaterThanOrEqual(2);
-    expect(e2ee.every((path) => path.startsWith('/api/e2ee/share/'))).toBe(
+    expect(e2ee.every((path) => /^\/api\/e2ee\/share(\/|$)/.test(path))).toBe(
       true
     );
     expect(e2ee.filter((path) => path.includes('/blobs/'))).toHaveLength(1);
     expect(
-      visitor.requests.some((path) => path.startsWith('/api/share/'))
+      visitor.requests.some((path) => /^\/api\/share(\/|$)/.test(path))
     ).toBe(false);
 
     // Make a copy: a signed-out visitor's copy is a project on this device.
@@ -142,6 +142,7 @@ test(
     await owner.links
       .getByRole('button', { name: 'Revoke View only link' })
       .click();
+    await owner.links.getByRole('button', { name: 'Revoke link' }).click();
     await expect(owner.links.getByText('Only invited people')).toBeVisible({
       timeout: COMMIT_BUDGET_MS
     });

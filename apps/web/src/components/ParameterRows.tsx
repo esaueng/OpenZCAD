@@ -419,8 +419,11 @@ export function ParameterRow({
           </button>
         ) : (
           <input
-            className="mono"
+            className="param-expression mono"
             value={expression}
+            // Where the cell is still too narrow, the whole expression is
+            // one hover away.
+            title={expression}
             spellCheck={false}
             aria-label={`Expression for ${parameter.name}`}
             aria-invalid={
@@ -787,11 +790,17 @@ function ToggleBodyChoices({
 
 export function AddParameterRow({
   onSet,
+  onRefused,
   onConfigureToggle,
   bodies = [],
   existingNames = []
 }: ToggleBindingProps & {
   onSet(name: string, expression: string): void | Promise<string | null>;
+  /**
+   * An add refused here, before it reached `onSet`: the workspace's status
+   * says so too, rather than still reporting the add before it.
+   */
+  onRefused?(name: string, message: string): void;
   /**
    * Names already in the table. Setting a parameter is set-by-name, so an
    * add under a taken name silently replaced that parameter — and every
@@ -821,7 +830,9 @@ export function AddParameterRow({
     const toggle = type === 'toggle' && onConfigureToggle;
     if (!toggle && !trimmedExpression) return;
     if (existingNames.includes(trimmedName)) {
-      setError(`${trimmedName} already exists. Change it in its own row.`);
+      const message = `${trimmedName} already exists. Change it in its own row.`;
+      setError(message);
+      onRefused?.(trimmedName, message);
       return;
     }
     const submitted = edits.current;

@@ -100,6 +100,9 @@ export function useOffsetFaceHandle(
       ...(profile ? { profilePreview: profile } : {}),
       bodyId: target.bodyId,
       topologyId: target.topologyId,
+      ...(target.movedFrom === undefined
+        ? {}
+        : { movedFrom: target.movedFrom }),
       point: {
         x: target.point[0],
         y: target.point[1],

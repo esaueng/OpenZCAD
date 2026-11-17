@@ -1,4 +1,7 @@
-import { FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY } from '@openzcad/shared';
+import {
+  ownEntry,
+  FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY
+} from '@openzcad/shared';
 import { commandFactories } from '@openzcad/command-system';
 import {
   findSketch,
@@ -42,9 +45,10 @@ export function extrudeToFaceTargetFromPick(
   if (selection.kind !== 'face') {
     throw new Error('Click a planar face for the extrusion to reach.');
   }
-  const face = document.derived.bodyRepresentations[
+  const face = ownEntry(
+    document.derived.bodyRepresentations,
     selection.bodyId
-  ]?.topology?.faces.find((candidate) => candidate.hash === selection.hash);
+  )?.topology?.faces.find((candidate) => candidate.hash === selection.hash);
   if (editing) {
     const earlier = faceAtHistoryPosition(
       document,
@@ -119,7 +123,10 @@ function faceAtHistoryPosition(
           ? data.targetBodyId
           : undefined;
     const original = input
-      ? document.derived.bodyRepresentations[input]?.topology?.faces.find(
+      ? ownEntry(
+          document.derived.bodyRepresentations,
+          input
+        )?.topology?.faces.find(
           (candidate) => candidate.reference?.lineageName === inner
         )
       : undefined;
@@ -230,7 +237,10 @@ export function toFaceTargetLabel(
   document: ProjectDocument,
   target: ExtrudeToFaceTarget
 ): string {
-  const body = document.derived.bodyRepresentations[target.bodyId]?.name;
+  const body = ownEntry(
+    document.derived.bodyRepresentations,
+    target.bodyId
+  )?.name;
   return `${body ?? 'Deleted body'} · face`;
 }
 

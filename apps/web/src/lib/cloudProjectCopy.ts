@@ -15,6 +15,7 @@ import {
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import { archiveAccountImportSources } from './accountImportSources';
+import { copyBaseName } from './demoDefinitions';
 import { isEncryptedProject } from './api';
 import type { ArchiveArtifactInput } from './archiveArtifact';
 import {
@@ -88,7 +89,10 @@ export async function buildCloudProjectCopy(
   // from: "Bracket (copy)" is what the user is looking for on the shelf.
   const built = duplicateProjectDocument(
     document,
-    duplicateProjectName(source.projectName, existingNames),
+    duplicateProjectName(
+      copyBaseName(document.projectId, source.projectName),
+      existingNames
+    ),
     ownerUserId,
     saveState
       ? projectBranchPoint(

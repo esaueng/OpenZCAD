@@ -628,7 +628,12 @@ export const IMPORT_MODELING_SCENARIOS: ImportModelingScenario[] = [
           targetBodyId: imported.bodyId,
           openingFaceHashes: [topFaceHash(faces, 'shell-on-import')],
           thickness: 2,
-          ids: createBodyFeatureIds()
+          // The shell names its rim, inner walls and their edges after
+          // itself, so the baseline's name digest needs a stable id.
+          ids: {
+            ...createBodyFeatureIds(),
+            featureId: toFeatureId('feat_parity_shell')
+          }
         })
       ]);
       return manager.document;

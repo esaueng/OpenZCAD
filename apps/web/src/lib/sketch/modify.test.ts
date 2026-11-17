@@ -21,6 +21,7 @@ import {
 import {
   curveCrossings,
   planSketchCircularPattern,
+  planSketchExtend,
   planSketchLinearPattern,
   planSketchMirror,
   planSketchTrim,
@@ -1023,6 +1024,254 @@ describe('Trim', () => {
       'point-on-object',
       'point-on-object'
     ]);
+  });
+});
+
+describe('Extend', () => {
+  it('runs a line on from the clicked end to the first curve in its way', () => {
+    const f = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 },
+      { objectKind: 'line', x1: 7, y1: -5, x2: 7, y2: 5 },
+      { objectKind: 'line', x1: 12, y1: -5, x2: 12, y2: 5 }
+    ]);
+    const [line, near] = f.ids as [string, string, string];
+    const plan = f.commit(
+      planSketchExtend(
+        f.manager.document,
+        f.sketch(),
+        f.sketchId,
+        line,
+        { x: 3.5, y: 0.1 },
+        resolve
+      )
+    );
+    expect(plan).toMatchObject({
+      label: 'Extend',
+      message: 'Extend lengthened the line to the nearest boundary.'
+    });
+    // Same object, same start; the end reaches x = 7 and is held there.
+    expectClose(f.object(line), { x1: 0, y1: 0, x2: 7, y2: 0 });
+    expect(f.sketch().objectIds.map(String)).toEqual(f.ids);
+    expect(f.sketch().constraints!.map((c) => c.data)).toEqual([
+      {
+        constraintKind: 'point-on-object',
+        point: { objectId: line, point: 'end' },
+        objectId: near
+      }
+    ]);
+    // One undo step restores the line.
+    f.manager.undo();
+    expectClose(f.object(line), { x2: 4 });
+    expect(f.sketch().constraints ?? []).toEqual([]);
+  });
+
+  it('reaches a nearby boundary however far away an unrelated guide sits (review #1559)', () => {
+    const f = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 },
+      { objectKind: 'line', x1: 7, y1: -5, x2: 7, y2: 5 },
+      {
+        objectKind: 'line',
+        x1: 1e9,
+        y1: 100,
+        x2: 1e9,
+        y2: 101,
+        construction: true
+      }
+    ]);
+    const [line] = f.ids as [string, string, string];
+    f.commit(
+      planSketchExtend(
+        f.manager.document,
+        f.sketch(),
+        f.sketchId,
+        line,
+        { x: 3.9, y: 0 },
+        resolve
+      )
+    );
+    expect(Number((f.object(line) as { x2: number }).x2)).toBeCloseTo(7, 6);
+  });
+
+  it('extends the start backwards when the click is nearer it', () => {
+    const f = sketchWith([
+      { objectKind: 'line', x1: 2, y1: 2, x2: 6, y2: 6 },
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 }
+    ]);
+    const [line, circle] = f.ids as [string, string];
+    f.commit(
+      planSketchExtend(
+        f.manager.document,
+        f.sketch(),
+        f.sketchId,
+        line,
+        { x: 2.2, y: 2.2 },
+        resolve
+      )
+    );
+    const r = Math.SQRT1_2;
+    expectClose(f.object(line), { x1: r, y1: r, x2: 6, y2: 6 });
+    expect(f.sketch().constraints!.map((c) => c.data)).toEqual([
+      {
+        constraintKind: 'point-on-object',
+        point: { objectId: line, point: 'start' },
+        objectId: circle
+      }
+    ]);
+  });
+
+  it('runs an arc round its circle to the first crossing', () => {
+    const f = sketchWith([
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 5,
+        startAngleDeg: 0,
+        endAngleDeg: 45
+      },
+      { objectKind: 'line', x1: -10, y1: 3, x2: 10, y2: 3 },
+      { objectKind: 'line', x1: -1, y1: -10, x2: -1, y2: 10 }
+    ]);
+    const [arc] = f.ids as [string];
+    const endPoint = {
+      x: 5 * Math.cos(Math.PI / 4),
+      y: 5 * Math.sin(Math.PI / 4)
+    };
+    // The end at 45° is past y = 3 already; the next crossing round the
+    // circle is the vertical x = -1 above the axis.
+    f.commit(
+      planSketchExtend(
+        f.manager.document,
+        f.sketch(),
+        f.sketchId,
+        arc,
+        endPoint,
+        resolve
+      )
+    );
+    const expectedEnd = (Math.acos(-1 / 5) * 180) / Math.PI;
+    expectClose(f.object(arc), {
+      startAngleDeg: 0,
+      endAngleDeg: expectedEnd
+    });
+    // Clockwise from the start, x = -1 at -101.5° comes before y = 3 at
+    // 143.1° (-216.9°).
+    f.commit(
+      planSketchExtend(
+        f.manager.document,
+        f.sketch(),
+        f.sketchId,
+        arc,
+        { x: 5, y: -0.1 },
+        resolve
+      )
+    );
+    expectClose(f.object(arc), {
+      startAngleDeg: -expectedEnd,
+      endAngleDeg: expectedEnd
+    });
+  });
+
+  it("drops the moved end's relations and says so", () => {
+    const f = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 },
+      { objectKind: 'line', x1: 4, y1: 0, x2: 4, y2: 3 },
+      { objectKind: 'line', x1: 9, y1: -5, x2: 9, y2: 5 }
+    ]);
+    const [line, joined] = f.ids as [string, string, string];
+    f.constrain({
+      constraintKind: 'coincident',
+      a: { objectId: line as EntityId, point: 'end' },
+      b: { objectId: joined as EntityId, point: 'start' }
+    });
+    f.constrain({ constraintKind: 'horizontal', objectId: line as EntityId });
+    const plan = f.commit(
+      planSketchExtend(
+        f.manager.document,
+        f.sketch(),
+        f.sketchId,
+        line,
+        { x: 3.9, y: 0 },
+        resolve
+      )
+    );
+    expect(plan.message).toBe(
+      'Extend lengthened the line to the nearest boundary. Dropped 1 relation on the moved end.'
+    );
+    expect(kinds(f.sketch().constraints!)).toEqual([
+      'horizontal',
+      'point-on-object'
+    ]);
+  });
+
+  it('refuses what it cannot extend, changing nothing', () => {
+    const f = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 },
+      { objectKind: 'circle', centerX: 20, centerY: 20, radius: 1 },
+      {
+        objectKind: 'rectangle',
+        width: 2,
+        height: 2,
+        centerX: -20,
+        centerY: -20
+      }
+    ]);
+    const [line, circle, rectangle] = f.ids as [string, string, string];
+    const refuse = (objectId: string, at: { x: number; y: number }) =>
+      planSketchExtend(
+        f.manager.document,
+        f.sketch(),
+        f.sketchId,
+        objectId,
+        at,
+        resolve
+      );
+    expect(refuse(line, { x: 4, y: 0 })).toEqual({
+      status: 'refuse',
+      reason:
+        'Nothing lies beyond that end to extend to. Draw a boundary curve for it to reach first.'
+    });
+    const reason = (plan: SketchModifyPlan) =>
+      plan.status === 'refuse' ? plan.reason : '';
+    expect(reason(refuse(circle, { x: 21, y: 20 }))).toContain(
+      'A circle is closed'
+    );
+    expect(reason(refuse(rectangle, { x: -19, y: -20 }))).toContain(
+      'to extend part of it'
+    );
+  });
+
+  it('refuses to move an end a reference dimension measures', () => {
+    const f = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 },
+      { objectKind: 'line', x1: 7, y1: -5, x2: 7, y2: 5 }
+    ]);
+    const [line] = f.ids as [string, string];
+    const measured = {
+      ...f.sketch(),
+      referenceDimensions: [
+        {
+          dimensionId: 'ref1',
+          data: {
+            dimensionKind: 'distance',
+            a: { objectId: line, point: 'start' },
+            b: { objectId: line, point: 'end' }
+          }
+        }
+      ]
+    } as never;
+    const plan = planSketchExtend(
+      f.manager.document,
+      measured,
+      f.sketchId,
+      line,
+      { x: 4, y: 0 },
+      resolve
+    );
+    expect(plan.status).toBe('refuse');
+    expect(plan.status === 'refuse' ? plan.reason : '').toContain(
+      'reference dimension'
+    );
   });
 });
 

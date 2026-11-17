@@ -1187,7 +1187,10 @@ export function deriveRemusMoveFacesDirectEditLineage(input: {
  * predicted one. Faces and edges whose exact witness survives unchanged and
  * unique keep the plain unchanged carry alongside; a result face the two
  * routes name differently, or one identity landing on two faces, publishes
- * nothing. Non-analytic surfaces have no carrier and cross only unchanged.
+ * nothing. A curved analytic face the witness does not encode (a cone, torus
+ * or sphere) can be given its exact carrier in `curvedCarriers`; the same
+ * three rules then apply, so a chamfer cone a blend removal re-trims keeps its
+ * name. Other non-analytic surfaces have no carrier and cross only unchanged.
  * Nothing is matched by proximity or traversal order.
  */
 export function deriveRemusPredictedCarrierDirectEditLineage(input: {
@@ -1195,6 +1198,16 @@ export function deriveRemusPredictedCarrierDirectEditLineage(input: {
   readonly sourceCandidates: readonly RemusTopologyCandidate[];
   readonly resultCandidates: readonly RemusTopologyCandidate[];
   readonly predicted: ReadonlyMap<number, FaceWitnessV1['analytic'] | null>;
+  /**
+   * Exact carrier keys, by handle, of the source and result faces whose
+   * witness has no analytic term (`analytic.kind === 'none'`) but whose
+   * surface is an exact cone, torus or sphere. A source face listed in
+   * `predicted` ignores this: the command decides its carrier.
+   */
+  readonly curvedCarriers?: {
+    readonly source: ReadonlyMap<number, string>;
+    readonly result: ReadonlyMap<number, string>;
+  };
   /**
    * For an inferred journal: where the retired positional reader placed each
    * source face's name. A name is withheld from a face unless that reading
@@ -1217,10 +1230,15 @@ export function deriveRemusPredictedCarrierDirectEditLineage(input: {
       continue;
     }
     sourceFaces.set(candidate.handle, candidate);
-    const analytic = input.predicted.has(candidate.handle)
+    const predicted = input.predicted.has(candidate.handle);
+    const analytic = predicted
       ? input.predicted.get(candidate.handle)
       : (candidate.witness as FaceWitnessV1).analytic;
-    const key = analytic ? carrierKeyOf(analytic) : null;
+    const key =
+      (analytic ? carrierKeyOf(analytic) : null) ??
+      (predicted
+        ? null
+        : (input.curvedCarriers?.source.get(candidate.handle) ?? null));
     if (key === null) {
       continue;
     }
@@ -1236,7 +1254,10 @@ export function deriveRemusPredictedCarrierDirectEditLineage(input: {
       continue;
     }
     resultFaces.set(candidate.handle, candidate);
-    const key = analyticCarrierKey(candidate.witness as FaceWitnessV1);
+    const key =
+      analyticCarrierKey(candidate.witness as FaceWitnessV1) ??
+      input.curvedCarriers?.result.get(candidate.handle) ??
+      null;
     if (key !== null) {
       resultsOnKey.set(key, [
         ...(resultsOnKey.get(key) ?? []),
@@ -1557,7 +1578,18 @@ export function createRemusModifierEvolutionLineage(input: {
   readonly resultCandidates: readonly RemusTopologyCandidate[];
   readonly sourceLineage: RemusLineageState | undefined;
   readonly generatedBlendFaces: ReadonlySet<number>;
+  /**
+   * Re-trimmed supports (see below): carried with the rest (`include`, a
+   * direct edit's default), left out (`exclude`, a fillet's or chamfer's
+   * default) or returned alone (`only`). A fillet or chamfer builder merges
+   * them `only`, beneath every other name it derives, so a primitive's own
+   * modifier roles still win where both name a face.
+   */
+  readonly trimmedSupports?: 'include' | 'exclude' | 'only';
 }): RemusLineageState {
+  const trimmedMode =
+    input.trimmedSupports ??
+    (input.operation === 'direct-edit' ? 'include' : 'exclude');
   const sourceFaces = new Map(
     input.sourceCandidates
       .filter((candidate) => candidate.kind === 'face')
@@ -1646,43 +1678,53 @@ export function createRemusModifierEvolutionLineage(input: {
     sourceIdentityCounts.set(key, (sourceIdentityCounts.get(key) ?? 0) + 1);
   }
 
-  // A resize-to-zero changes the support trims even though each support face
-  // remains a one-to-one construction result. Preserve that reference only
-  // when the kernel's evolution names exactly one result and the stored source
-  // witness still verifies; split, merge, stale, and ambiguous claims remain
-  // hash-only.
-  const directEditModified = new Map<
+  // A blend or chamfer re-trims each support it rolls against, and a
+  // resize-to-zero re-trims them back, yet every support stays a one-to-one
+  // construction result. Carry its identity, re-witnessed, only when the
+  // kernel's evolution names exactly one result and the stored source witness
+  // still verifies; split, merge, stale and ambiguous claims stay hash-only.
+  // Without this a chamfer band trimmed by a later fillet loses the name that
+  // ties it to its Chamfer, so it can no longer be picked, edited or deleted.
+  const trimmedSupports = new Map<
     number,
     { reference: FaceTopologyReferenceV5; candidate: RemusTopologyCandidate }
   >();
-  const directEditConflicted = new Set<number>();
-  if (input.operation === 'direct-edit') {
-    for (const relation of input.payload.evolution.modified) {
-      if (relation.results.length !== 1) continue;
-      const reference = input.sourceLineage?.faceReferences.get(
-        relation.source
-      );
-      const source = sourceFaces.get(relation.source);
-      const candidate = resultFaces.get(relation.results[0]!);
-      if (
-        !reference ||
-        !source ||
-        !candidate ||
-        !referenceMatchesCandidate(reference, source) ||
-        sourceIdentityCounts.get(identityKey(reference)) !== 1 ||
-        inspectTopologyWitness('face', candidate.witness as FaceWitnessV1)
-          .status !== 'supported' ||
-        directEditModified.has(candidate.handle) ||
-        directEditConflicted.has(candidate.handle)
-      ) {
-        if (candidate && directEditModified.has(candidate.handle)) {
-          directEditModified.delete(candidate.handle);
-          directEditConflicted.add(candidate.handle);
-        }
-        continue;
+  const trimmedConflicted = new Set<number>();
+  for (const relation of trimmedMode === 'exclude'
+    ? []
+    : input.payload.evolution.modified) {
+    if (relation.results.length !== 1) continue;
+    const reference = input.sourceLineage?.faceReferences.get(relation.source);
+    const source = sourceFaces.get(relation.source);
+    const candidate = resultFaces.get(relation.results[0]!);
+    if (
+      !reference ||
+      !source ||
+      !candidate ||
+      !referenceMatchesCandidate(reference, source) ||
+      sourceIdentityCounts.get(identityKey(reference)) !== 1 ||
+      inspectTopologyWitness('face', candidate.witness as FaceWitnessV1)
+        .status !== 'supported' ||
+      trimmedSupports.has(candidate.handle) ||
+      trimmedConflicted.has(candidate.handle)
+    ) {
+      if (candidate && trimmedSupports.has(candidate.handle)) {
+        trimmedSupports.delete(candidate.handle);
+        trimmedConflicted.add(candidate.handle);
       }
-      directEditModified.set(candidate.handle, { reference, candidate });
+      continue;
     }
+    trimmedSupports.set(candidate.handle, { reference, candidate });
+  }
+  if (trimmedMode === 'only') {
+    const trimmed = emptyLineageState();
+    for (const { reference, candidate } of trimmedSupports.values()) {
+      trimmed.faceReferences.set(
+        candidate.handle,
+        transformedFaceReference(reference, candidate.witness as FaceWitnessV1)
+      );
+    }
+    return trimmed;
   }
 
   const state = createRemusSemanticLineage(
@@ -1690,7 +1732,7 @@ export function createRemusModifierEvolutionLineage(input: {
     input.operation,
     assignments
   );
-  for (const { reference, candidate } of directEditModified.values()) {
+  for (const { reference, candidate } of trimmedSupports.values()) {
     state.faceReferences.set(
       candidate.handle,
       transformedFaceReference(reference, candidate.witness as FaceWitnessV1)

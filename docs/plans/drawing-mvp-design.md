@@ -384,6 +384,174 @@ notes to D01 sheets:
   hole callouts, per-drawing unit and precision properties, and annotations
   on section and detail views (D03).
 
+## Dimension tolerances, prefixes and suffixes (D02, schema v68)
+
+- **Shape.** A dimension gains an optional `tolerance` — `symmetric`
+  (`value > 0`), `deviation` or `limits` (`upper > lower`, both signed) or
+  `basic` — stated to at most six decimals (what a label prints, so a
+  stored tolerance never reads as zero), and an optional `prefix` and
+  `suffix` (one trimmed line of at most
+  40 characters, printed with a space between). Tolerances are stored as
+  deviations from the measured value in the units the dimension prints in
+  (the document's until v70's sheet units; degrees on an angle), never as a
+  value, so `limits` prints the measured value plus each
+  deviation and follows the model through the sheet's explicit Update. A
+  reference dimension, a chamfer's `size × angle` and a counterbore or
+  countersink callout take no tolerance (refused by the validator); marking a
+  dimension Reference drops its tolerance. A toleranced diameter on an M01
+  hole's rim states its diameter, not the hole's callout.
+- **Text.** Symmetric reads `20 ±0.05`; deviation `20` then `+0.10` over
+  `-0.05`; limits `20.10` over `19.95`; basic frames the value. A tolerance
+  keeps its own decimals when finer than the dimension's, and a stacked pair
+  keeps trailing zeros so its lines agree; no deviation prints as an
+  unsigned `0`. The flat label (`20 +0.10/-0.05`, `[20]`) names the
+  annotation in lists and the properties panel.
+- **Page.** The stacked pair is set at 0.7 × the dimension text, centred on
+  the value's mid-height, after the lead and before the suffix, each part a
+  start-aligned text on the label's (possibly rotated) baseline; a basic
+  frame is a closed `dimension` stroke. A dimension without these fields
+  lays out exactly as before, so older sheets export byte-identical.
+- **Schema.** v68, built on v67. A content gate refuses the fields in a
+  document, its edit history or a drawing command that declares v67 or
+  older. Drawing-level units, precision and decimal separator remain the
+  next D02 slice.
+## Drawing DXF export (D04)
+
+- **What.** Export DXF writes the composed sheet — the same `SheetPage` the
+  preview, PDF and SVG draw — as a DXF R12 drawing, one-to-one in paper
+  millimetres (`$INSUNITS` 4), so it lands as printed: views at the sheet's
+  scale, sections and their hatching, dimensions, notes and the title
+  block. Exports are refused under the same conditions as PDF and SVG.
+- **Layers.** One layer per stroke kind, since R12 has no line weights:
+  `VISIBLE` (7), `HIDDEN` (8, line type `HIDDEN` 3/1.5 mm), `BORDER`,
+  `THIN`, `DIMENSION` (3), `HATCH`, `CENTER` (4, `CENTER` 12/1.5/0.5/1.5
+  mm, ISO 128 type 04) and `CUTTING` (1), plus `TEXT`; only the layers the
+  page uses are declared.
+- **Entities.** A two-point stroke is a LINE, a longer one a POLYLINE
+  (closed when the stroke is), a filled arrowhead a SOLID, and each text a
+  TEXT at its cap height, centred or right-aligned and turned as drawn.
+  Characters outside ASCII use the writer's `\U+XXXX` escapes (Ø is
+  `\U+00D8`). Curves are the page's polylines — exact edges sampled to the
+  display tolerance — as the PDF draws them; an exact-arc view export is not
+  this slice.
+- **Writer.** `@openzcad/io-dxf` gains SOLID and the `HIDDEN`/`CENTER`
+  line types; a file naming only `DASHED` (flat patterns) writes the same
+  bytes as before. The export is deterministic.
+- **Sketch DXF.** The export dialog's DXF option writes one saved sketch
+  through the existing exact sketch exporter (`exportSketchDxf`): the sketch
+  menu entry the D04 row left open.
+
+## Drawing properties and title-block fields (D02, schema v70)
+
+- **Shape.** `DrawingSheet.format`, absent when every property is its
+  default: `units` (dimensions are measured in document units and printed
+  in these), `decimals` and `angleDecimals` (the defaults when an annotation
+  sets none), `angleFormat` (`decimal` or `dms`, degrees, minutes and
+  seconds with the decimals on the seconds), `decimalSeparator` (`comma`;
+  absent is a point) and `lineWidthsMm`, a print weight per line class
+  (visible, hidden, thin, border, dimension, hatch, chain, cutting) within
+  0.05–2 mm. `drawing.sheet.update` replaces it whole; null clears it.
+- **Numbers.** One sheet number format writes every dimension, callout and
+  tolerance: a value converts from document to printed units, a tolerance's
+  deviations are amounts in the printed units (degrees on an angle), and a
+  D°M'S" angle is rounded once in seconds so no 60" carries into a label.
+  Values the sheet measures stay in model units; only text changes.
+- **Weights.** The page carries the sheet's weights only when it sets any,
+  and the SVG and PDF writers read a kind's weight from the page before the
+  ISO 128 default, so a sheet without them exports byte-identical. The
+  on-screen preview keeps its screen weights.
+- **Title block.** The SCALE cell reads `SCALE · SIZE` (`1:1 · A3`), UNITS
+  names the printed units, and DATE shows the date of the project's latest
+  saved revision until one is typed. Title, scale, size, units and
+  projection were already read from the sheet; they cannot disagree with it.
+- **Schema.** v70, built on v69 (M17 standard parts). A content gate refuses `format` on a sheet
+  or in a sheet update in a document, its history or its commands that
+  declares v69 or older.
+
+## Centre marks, intersection marks and centrelines (D02, schema v73)
+
+- **Shape.** Three annotation kinds that mark geometry and state no value:
+  `center-mark` (a circle or arc seen face-on), `intersection-mark` (two
+  straight edges whose lines cross in the view: a rounded or chamfered
+  corner's virtual sharp) and `centerline` in three modes — `points`
+  through two points, `lines` midway between two parallel straight edges
+  (spanning both along their direction), and `circle` through three points
+  (a bolt circle through three hole centres). They store edges and points
+  like dimensions, never positions, and take no decimals, tolerance or
+  affixes. A dimension or centreline point may be `{ anchor: 'mark' }`, a
+  centre or intersection mark of the same view, read through it each time
+  the sheet is drawn.
+- **Repair.** A mark that is deleted, or no longer marks a point, leaves
+  what measured to it broken (`mark-missing`) until re-picked; the
+  validator refuses only a mark point naming a non-mark or another view,
+  so deleting a mark never makes a sheet unstorable. Parallel edges make no
+  intersection, crossing edges no midline (`not-parallel`), and three
+  collinear points no circle (`collinear`).
+- **Page.** Centre lines are the `chain` stroke (ISO 128 type 04) run
+  2.5 mm past what they mark; one shorter than 12 mm, whose dash would not
+  show, is drawn thin and solid. A centre mark adds a 1.5 mm solid cross at
+  the centre; an intersection mark draws each edge's thin extension from
+  1 mm off its near end to 2 mm past the crossing. Marks have no text;
+  their 5 mm pick box sits on the point they mark, where a linear or
+  centreline tool picks them as a point.
+- **Tools.** Centre mark (M), Intersection mark (X), Centreline (L: two
+  points, or two straight edges each picked away from their ends) and
+  Circular centreline (B: three points). Each is made as soon as its picks
+  are in, with no placement click.
+- **Schema.** v73, built on v72. A content gate refuses the kinds and mark
+  points below v73. Point-to-line and min/max distances measured to marks
+  and centrelines are the next D02 slice.
+
+## Distance dimensions (D02, schema v75)
+
+- **Shape.** `kind: 'distance'` measures between two targets in its view: a
+  point (an edge end, a face-on circle's centre or a v73 mark), a straight
+  edge seen true length, a `points` or `lines` centreline of the same view
+  (by id), or a face-on circle. `extent: 'min' | 'max'` measures to each
+  circle's near or far side instead of its centre (a wall between two
+  holes, their overall span); it needs a circle. Takes decimals, tolerance,
+  prefix and suffix like any dimension.
+- **Reading.** With a line, the span is square to it (from a line's
+  midpoint to the other when both are lines, which must be parallel:
+  `not-parallel`); otherwise it runs between the two centres, which must lie
+  in one plane parallel to the view like an aligned dimension's
+  (`foreshortened`). A span of zero, or a near-side extent where circles
+  overlap, is `degenerate`; a deleted centreline is `mark-missing`. The
+  result lays out as an aligned linear dimension along the span, so it
+  draws and exports through the same page model. The isometric view refuses
+  it.
+- **Tool.** Distance (T): two picks — a straight edge picked away from its
+  ends is a line, a face-on circle a circle, an end a point, a mark a
+  point, a straight centreline a line — then a placement click. The panel's
+  "Measure circles to" picks centres, near or far sides.
+- **Schema.** v75, built on v74, with a content gate below it.
+
+## Parts lists and balloons (D02, schema v80)
+
+- **Shape.** Two annotation kinds read from the AS03 BOM table model
+  (`assemblyBomTable`), so a part has the same item number on screen, in
+  the CSV and on paper. `bom-table` sits on the paper (no view), its
+  top-left corner at its placement, and stores only which BOM columns it
+  shows and in what order (absent: item, quantity, part); rows, cells and
+  numbering are the table's, read each time the sheet is drawn. `balloon`
+  belongs to a view, stores the edge its leader points at and the assembly
+  component it was picked on, and shows that component's row's item number.
+- **Repair.** A parts list with no assembly to list is `no-bom`; a balloon
+  whose component has left the assembly is `not-in-bom`; a balloon's lost
+  edge breaks like a note's leader. Nothing renumbers silently: a balloon
+  follows its row's number as the table renumbers. Re-picking a balloon's
+  edge keeps its component.
+- **Page.** The parts list is a ruled table of thin lines, 6 mm rows, a
+  bold header, numeric columns aligned to their end and cells cut at 70 mm
+  with "...". A balloon is a dimension-weight circle (at least 4 mm radius)
+  with its number centred and a leader from its rim to the nearest point of
+  its edge, ending in an arrow. Both go through the one page model to the
+  preview, PDF, SVG and DXF.
+- **Tools.** Parts list (P): one click on the paper places it; the panel
+  picks its columns. Balloon (O): pick an edge of an assembly part, then
+  place the balloon. Both are offered once the assembly has parts.
+- **Schema.** v80, built on v79, with a content gate below it.
+
 ## Finishing-body update repair
 
 When a finishing feature consumes a drawing's body, the sheet offers the
@@ -485,6 +653,54 @@ principal view. Detail views remain open.
   aligned (stepped) sections; per-body hatch angles; lineage for cut edges so
   a dimension survives an edit that moves them; exact cuts the pinned kernel
   refuses (a Remus robustness ask).
+
+## Detail views (D03, schema v78)
+
+- **Shape.** `DrawingView.detail`: `sourceViewId`, a label from the shared
+  section/detail sequence, the circle's `center` in the source's model
+  (u, v) and `radius` in model units, and the detail's own `scale`. The view
+  keeps the source's orientation and bodies (the validator refuses any
+  other; a body change on the source carries to its details, and a detail's
+  own bodies cannot be edited) and its own hidden-line setting. A detail is
+  not the source of a section, a projected view or another detail, and goes
+  with its source when that is deleted.
+- **Page.** The detail's transform centres the circle's centre on the view
+  at its own scale; its footprint is the circle's square. Every stroke it
+  draws, every line it offers to pick and every leader target is cut to the
+  circle on the paper. The source shows the circle as a thin line with the
+  bold letter outside it at 45°; the detail shows its own boundary circle
+  and the caption `DETAIL A (4:1)` beneath it. Dimensions on a detail
+  measure the model (true values, whatever the detail's scale).
+- **Tool.** Detail view (K): press at the centre of the region on a view,
+  drag to its rim (at least 2 mm), then the detail follows the pointer at
+  the smallest preset at least twice the sheet's scale until a click places
+  it. The panel edits the detail's scale and radius.
+- **Schema.** v78, built on v77, gated below it.
+
+## Auxiliary views (D03, schema v81)
+
+- **Shape.** `DrawingView.auxiliary`: `sourceViewId`, a label from the
+  shared section/detail sequence, and the view's frame: a unit `direction`
+  of sight square to the source's own, and page-right `x` square to it.
+  Page-up is `x × direction`, which the tool makes the source's direction of
+  sight, as a view folded from it. The frame is stored, not derived from an
+  edge, so neither view moving nor an edit turns it. It keeps its source's
+  orientation and bodies, is placed freely, and is not the source of a
+  section, detail, projected or auxiliary view.
+- **Frames.** One helper, `drawingViewFrame(view)`, returns a named
+  orientation's frame or an auxiliary view's stored one; every projection,
+  measurement, pick and leader reads it, and the projection worker takes the
+  frame with the view. Auto-dimension and the dimension check consider only
+  principal views.
+- **Page.** The source shows an arrow along the direction of sight from
+  outside its footprint, with the letter at its tail; the view is captioned
+  `VIEW A` beneath. Dimensions on it read true lengths where an edge lies in
+  its plane.
+- **Tool.** Auxiliary view (U): pick a straight edge a front, top or side
+  view draws true length and inclined (a horizontal or vertical one is
+  refused: a principal view already sees it), then click on the side to see
+  it from (third angle; the opposite side in first angle) to place it.
+- **Schema.** v81, built on v80, gated below it.
 
 ### Drawing entry and visibility (2026-11-01)
 

@@ -86,10 +86,12 @@ describe('controls reference', () => {
     expect(keyboardItem('measure')?.keys).toEqual(['M']);
     expect(keyboardItem('measure')?.detail).toContain('View mode');
     // One keycap, written as every other chord here is; the handler takes
-    // ⌘ as well as Ctrl, and the key now cycles three modes, not two.
+    // ⌘ as well as Ctrl. It steps through all five modes, which the
+    // reference used to undercount as three (design review I21).
     expect(keyboardItem('workspace-mode')?.keys).toEqual(['Ctrl/Cmd+Shift+M']);
-    expect(keyboardItem('workspace-mode')?.action).toBe(
-      'Cycle View, Tweak and Build'
+    expect(keyboardItem('workspace-mode')?.action).toBe('Next workspace mode');
+    expect(keyboardItem('workspace-mode')?.detail).toContain(
+      'View, Tweak, Build, Assemble and Draw'
     );
     // And Move now says which mode it belongs to, so the shared key reads as
     // deliberate rather than as a contradiction.

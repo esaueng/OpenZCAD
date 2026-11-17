@@ -58,6 +58,12 @@ export interface FaceTarget extends FaceCapabilityTarget {
   resizeBodyFeatureId?: string;
   /** Explicit local extrusion instead of the default source-body resize. */
   localFaceOffset?: boolean;
+  /**
+   * The face this one is, moved: set only when a committed face offset
+   * re-selects the face it moved (which renumbers it), so what the chip was
+   * switched to on that face carries over to it, and to no other face.
+   */
+  movedFrom?: string;
   blendSurfaceClass?: 'torus' | 'cylinder';
   blendCenter?: [number, number, number];
   blendAxis?: [number, number, number];
@@ -89,7 +95,11 @@ export type SketchToolId =
   | 'spline'
   | 'text'
   /** I01: pick model edges or faces to project into the sketch. */
-  | 'project';
+  | 'project'
+  /** I01: a straight slot from its two end centres and a radius. */
+  | 'slot'
+  /** I01: a sketch point. */
+  | 'point';
 
 /**
  * The curve slot's types (I01): the Ellipse tool draws a full ellipse or an
@@ -205,6 +215,7 @@ export type SketchEditToolKind =
   | 'chamfer'
   | 'offset'
   | 'trim'
+  | 'extend'
   | 'mirror'
   | 'linear-pattern'
   | 'circular-pattern';
@@ -965,7 +976,10 @@ function reduceInteraction(
         session: {
           sketchId: event.sketchId ?? null,
           plane: event.plane,
-          tool: 'line',
+          // A new sketch arms Line to draw; a re-opened one starts in Select,
+          // so the first drag on its geometry selects rather than adding a
+          // stray line.
+          tool: event.sketchId ? 'select' : 'line',
           circleMode: 'center-radius',
           drawing: false,
           selectedObjectId: null,
@@ -1826,16 +1840,20 @@ export function toolCardFor(
                       : 'Place two opposite corners. Tab switches width and height.'
                   : state.session.tool === 'polygon'
                     ? 'Place the center, then a vertex: its distance is the circumradius.'
-                    : state.session.tool === 'ellipse'
-                      ? sketchCurveModeFor(
-                          'ellipse',
-                          state.session.curveMode
-                        ) === 'elliptical-arc'
-                        ? 'Place the center, an axis end, the other radius, then the arc’s start and end.'
-                        : 'Place the center, an axis end, then the other radius.'
-                      : state.session.tool === 'spline'
-                        ? 'Click the spline’s points. Enter finishes; clicking the first point closes it.'
-                        : 'Draw with exact geometry snaps. Esc ends a chain.'
+                    : state.session.tool === 'slot'
+                      ? 'Place the two end centres, then a point for the radius.'
+                      : state.session.tool === 'point'
+                        ? 'Click to place a point; it snaps to sketch geometry.'
+                        : state.session.tool === 'ellipse'
+                          ? sketchCurveModeFor(
+                              'ellipse',
+                              state.session.curveMode
+                            ) === 'elliptical-arc'
+                            ? 'Place the center, an axis end, the other radius, then the arc’s start and end.'
+                            : 'Place the center, an axis end, then the other radius.'
+                          : state.session.tool === 'spline'
+                            ? 'Click the spline’s points. Enter finishes; clicking the first point closes it.'
+                            : 'Draw with exact geometry snaps. Esc ends a chain.'
       };
     case 'idle':
       return null;

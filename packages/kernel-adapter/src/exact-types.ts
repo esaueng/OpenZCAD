@@ -16,7 +16,8 @@ import type {
   FeatureWarning,
   SketchId,
   SketchObjectData,
-  SketchProjectionState
+  SketchProjectionState,
+  StandardPartBuild
 } from '@openzcad/shared';
 import type { TriangleMeshClosure } from './boolean-result-validation';
 import type { RemusLineageState } from './remus-lineage';
@@ -65,6 +66,13 @@ export interface ExactBuildResult {
    * absent, and its consumers refuse by name rather than guess a plane.
    */
   datumFrames: Map<FeatureId, PlaneBasis>;
+  /**
+   * M17: each standard part as built, by its feature: the length of every
+   * part it placed (one per bore of a hole it is in), in millimetres, a
+   * hole-matched length included. Read by the AS03 bill of materials.
+   * Absent on builds resumed from before it existed.
+   */
+  standardParts?: Map<FeatureId, StandardPartBuild>;
   /**
    * R01 datum axes, each resolved once at its own history position for the
    * revolves, circular patterns and Moves that turn about it. A datum axis

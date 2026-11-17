@@ -1,5 +1,5 @@
 import { listFeaturesInOrder } from '@openzcad/document-core';
-import { toBodyId } from '@openzcad/shared';
+import { ownEntry, toBodyId } from '@openzcad/shared';
 import type {
   DerivedState,
   EdgeTopology,
@@ -215,8 +215,10 @@ export function buildDirectEditFixture(
   input: BuildDirectEditFixtureInput
 ): DirectEditFixture {
   const capturedAt = input.capturedAt ?? new Date().toISOString();
-  const representation =
-    input.derived.bodyRepresentations[toBodyId(input.targetBodyId)];
+  const representation = ownEntry(
+    input.derived.bodyRepresentations,
+    toBodyId(input.targetBodyId)
+  );
   const topology = representation?.topology;
 
   const face = input.face

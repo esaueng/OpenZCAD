@@ -175,7 +175,11 @@ export function axisDirection(axis: 'x' | 'y' | 'z'): Vec3 {
   };
 }
 
-export function pointOnPlane(basis: PlaneBasis, point: Vec2, offset: number): Vec3 {
+export function pointOnPlane(
+  basis: PlaneBasis,
+  point: Vec2,
+  offset: number
+): Vec3 {
   return {
     x:
       basis.origin.x +
@@ -236,6 +240,8 @@ export function profilePoints(
       throw new Error(
         `An ${data.objectKind} builds only through its detected sketch regions; select its region to extrude it.`
       );
+    case 'point':
+      throw new Error('A sketch point bounds no profile.');
     case 'text':
       // This legacy path sweeps a single polygonal profile. Text is many
       // regions with holes and exact beziers; approximating it here would

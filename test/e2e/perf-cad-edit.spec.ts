@@ -19,7 +19,9 @@ import {
   setParameter,
   transformBody
 } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import { toUserId, type StandardPartThread } from '@openzcad/shared';
+import { hostSnapshot, perfBrowserArgs } from '../../scripts/perf-host.mjs';
+import { addFastenerGrid } from '../support/fastener-grid';
 
 type EditSample = {
   inputToWorkerRequestMs: number;
@@ -39,6 +41,8 @@ test.skip(
   process.env.OZ_PERF !== '1',
   'CAD edit performance probe; set OZ_PERF=1 to run it.'
 );
+// OZ_PERF_ANGLE=vulkan (or gl) renders on the GPU; unset keeps SwiftShader.
+test.use({ launchOptions: { args: perfBrowserArgs() } });
 
 test.afterEach(async ({ page }) => {
   if (!['failed', 'timedOut'].includes(test.info().status ?? '')) return;
@@ -84,7 +88,14 @@ test('measures an applied edit through worker response and viewport frame', asyn
   page,
   browser
 }) => {
-  test.setTimeout(300_000);
+  // A fastener project takes longer to set up, and reloads once more.
+  test.setTimeout(
+    process.env.CAD_PERF_BROWSER_FASTENERS ||
+      process.env.CAD_PERF_BROWSER_RELOAD
+      ? 900_000
+      : 300_000
+  );
+  const hostBefore = hostSnapshot();
   const provenance = kernelProvenance();
   const runtimeErrors: string[] = [];
   page.on('pageerror', (error) => runtimeErrors.push(error.message));
@@ -99,7 +110,18 @@ test('measures an applied edit through worker response and viewport frame', asyn
   );
   const isolateSource = process.env.CAD_PERF_BROWSER_ISOLATE === '1';
   const editMode = process.env.CAD_PERF_BROWSER_EDIT_MODE ?? 'unique';
-  if (history > 1) {
+  // M17: a project of a box and then N M6 socket screws
+  // (`test/support/fastener-grid.ts`), drawn with simplified (the tool's
+  // default) or modeled threads; the box is the one edited.
+  const fasteners = Math.max(
+    0,
+    Number(process.env.CAD_PERF_BROWSER_FASTENERS ?? 0)
+  );
+  const threads: StandardPartThread =
+    process.env.CAD_PERF_BROWSER_THREADS === 'modeled'
+      ? 'modeled'
+      : 'simplified';
+  if (history > 1 || fasteners > 0) {
     await page.route('**/api/projects', (route) => {
       if (route.request().method() !== 'POST') return route.fallback();
       const input = route.request().postDataJSON() as { name: string };
@@ -111,11 +133,25 @@ test('measures an applied edit through worker response and viewport frame', asyn
           dimensions: { width: 30, height: 18, depth: 24 }
         });
       }
-      document = transformBody(document, {
-        name: 'Dependent move',
-        targetBodyId: document.bodyOrder[0]!,
-        translation: { x: 1, y: 0, z: 0 }
-      }).document;
+      if (history > 1) {
+        document = transformBody(document, {
+          name: 'Dependent move',
+          targetBodyId: document.bodyOrder[0]!,
+          translation: { x: 1, y: 0, z: 0 }
+        }).document;
+      }
+      if (fasteners > 0) {
+        // The edited box first, as in the history case, then the fasteners
+        // standing after it in History.
+        if (history === 1) {
+          document = addPrimitiveFeature(document, {
+            name: 'Box 0',
+            primitiveKind: 'box',
+            dimensions: { width: 30, height: 18, depth: 24 }
+          });
+        }
+        document = addFastenerGrid(document, fasteners, threads);
+      }
       if (isolateSource) {
         // A normal isolated-part view: all independent history bodies still
         // rebuild and measure exactly; their visibility is an explicit input.
@@ -364,6 +400,7 @@ test('measures an applied edit through worker response and viewport frame', asyn
     await profiler.send('Profiler.setSamplingInterval', { interval: 200 });
     await profiler.send('Profiler.start');
   }
+  let lastWidth = 0;
   for (let sample = 0; sample < sampleCount; sample += 1) {
     const expectedWidth =
       editMode === 'unique'
@@ -372,6 +409,7 @@ test('measures an applied edit through worker response and viewport frame', asyn
     // An applied edit closes its card (F19), so each sample reopens it.
     await row.click();
     await width.fill(String(expectedWidth));
+    lastWidth = expectedWidth;
     const applyButton = inspector.getByRole('button', {
       name: 'Apply',
       exact: true
@@ -385,11 +423,92 @@ test('measures an applied edit through worker response and viewport frame', asyn
       JSON.stringify({
         sample,
         history,
+        fasteners,
         version: edit.version,
         inputToFrameMs: edit.inputToFrameMs,
         requestToWorkerResponseMs: edit.requestToWorkerResponseMs
       })
     );
+  }
+  // M17 (H02): with fasteners (or CAD_PERF_BROWSER_RELOAD=1), reload once
+  // the last edit is saved on this device, then time the reload to the
+  // exact model and the first edit after it.
+  async function reloadAndEdit() {
+    await expect
+      .poll(() => storedBoxWidths(page), { timeout: 30_000 })
+      .toContain(lastWidth);
+    const reloadStart = Date.now();
+    await page.reload();
+    const canvas = page.locator('.viewer-host canvas');
+    await expect
+      .poll(
+        async () =>
+          Number(
+            (await canvas.getAttribute('data-e2e-rendered-bodies')) ?? '0'
+          ),
+        { timeout: 180_000 }
+      )
+      .toBeGreaterThan(0);
+    // Ready: the worker has answered the reload's model sync and says so.
+    const readyAt = () =>
+      page.evaluate(() => {
+        const probe = (
+          window as typeof window & {
+            __cadPerfProbe: {
+              records: Array<{ featureCount: number; responseAt?: number }>;
+              states: Array<{ at: number; phase: unknown; requestId: unknown }>;
+            };
+          }
+        ).__cadPerfProbe;
+        const answered = probe.records.some(
+          (record) => record.featureCount > 0 && record.responseAt
+        );
+        const live = probe.states.filter((state) => !state.requestId).at(-1);
+        return answered && live?.phase === 'ready'
+          ? performance.timeOrigin + live.at
+          : null;
+      });
+    await expect.poll(readyAt, { timeout: 180_000 }).not.toBeNull();
+    const reloadToReadyMs = (await readyAt())! - reloadStart;
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    const reloadSettledMs = Date.now() - reloadStart;
+    // The reload's model sync, answered, on the wall clock.
+    const reloadResponseMs = await page.evaluate(
+      (start) =>
+        Math.max(
+          ...(
+            window as typeof window & {
+              __cadPerfProbe: {
+                records: Array<{ featureCount: number; responseAt?: number }>;
+              };
+            }
+          ).__cadPerfProbe.records
+            .filter((record) => record.featureCount > 0 && record.responseAt)
+            .map((record) => performance.timeOrigin + record.responseAt!)
+        ) - start,
+      reloadStart
+    );
+    // A width no sample used.
+    const expectedWidth = 9.5;
+    await row.click();
+    await width.fill(String(expectedWidth));
+    const applyButton = inspector.getByRole('button', {
+      name: 'Apply',
+      exact: true
+    });
+    const before = await armAction(applyButton, 'Apply');
+    await applyButton.click();
+    const firstEdit = await completedSample(page, before, expectedWidth);
+    console.log(
+      '[cad edit after reload]',
+      JSON.stringify({
+        reloadToReadyMs,
+        reloadResponseMs,
+        reloadSettledMs,
+        inputToFrameMs: firstEdit.inputToFrameMs
+      })
+    );
+    return { reloadToReadyMs, reloadResponseMs, reloadSettledMs, firstEdit };
   }
   if (profiler) {
     const { profile } = await profiler.send('Profiler.stop');
@@ -397,7 +516,15 @@ test('measures an applied edit through worker response and viewport frame', asyn
       body: JSON.stringify(profile),
       contentType: 'application/json'
     });
+    // A path names a file to keep the profile in as well.
+    const profilePath = process.env.CAD_PERF_BROWSER_PROFILE!;
+    if (profilePath.endsWith('.cpuprofile'))
+      writeFileSync(resolve(profilePath), JSON.stringify(profile));
   }
+  const afterReload =
+    fasteners > 0 || process.env.CAD_PERF_BROWSER_RELOAD === '1'
+      ? await reloadAndEdit()
+      : null;
 
   const report = await page.evaluate(
     ({ initial, edits }) => ({
@@ -463,6 +590,7 @@ test('measures an applied edit through worker response and viewport frame', asyn
   );
   const environment = {
     history,
+    ...(fasteners > 0 ? { fasteners, threads } : {}),
     isolateSource,
     editMode,
     node: process.version,
@@ -471,9 +599,17 @@ test('measures an applied edit through worker response and viewport frame', asyn
     osRelease: release(),
     cpuModel: cpus()[0]?.model,
     browserVersion: browser.version(),
+    angle: process.env.OZ_PERF_ANGLE ?? null,
+    host: { before: hostBefore, after: hostSnapshot() },
     ...provenance
   };
-  const artifact = { environment, report, summaries, runtimeErrors };
+  const artifact = {
+    environment,
+    report,
+    summaries,
+    ...(afterReload ? { afterReload } : {}),
+    runtimeErrors
+  };
   const serializedArtifact = `${JSON.stringify(artifact, null, 2)}\n`;
   await test.info().attach('cad-edit-performance.json', {
     body: serializedArtifact,
@@ -483,7 +619,21 @@ test('measures an applied edit through worker response and viewport frame', asyn
   if (artifactPath) writeFileSync(resolve(artifactPath), serializedArtifact);
   console.log(
     '[cad edit performance summary]',
-    JSON.stringify({ environment, summaries, runtimeErrors })
+    JSON.stringify({
+      environment,
+      summaries,
+      ...(afterReload
+        ? {
+            afterReload: {
+              reloadToReadyMs: afterReload.reloadToReadyMs,
+              reloadResponseMs: afterReload.reloadResponseMs,
+              reloadSettledMs: afterReload.reloadSettledMs,
+              firstEditInputToFrameMs: afterReload.firstEdit.inputToFrameMs
+            }
+          }
+        : {}),
+      runtimeErrors
+    })
   );
 
   expect(initial.ok).toBe(true);
@@ -493,6 +643,46 @@ test('measures an applied edit through worker response and viewport frame', asyn
   expect(edits.every((sample) => sample.warningCount === 0)).toBe(true);
   expect(runtimeErrors).toEqual([]);
 });
+
+/** The widths of every box stored on this device (IndexedDB). */
+async function storedBoxWidths(page: Page): Promise<number[]> {
+  return page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('openzcad-v2');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () =>
+        reject(request.error ?? new Error('Could not read projects.'));
+    });
+    try {
+      const stored = await new Promise<unknown[]>((resolve, reject) => {
+        const request = db
+          .transaction('projects', 'readonly')
+          .objectStore('projects')
+          .getAll();
+        request.onsuccess = () => resolve(request.result as unknown[]);
+        request.onerror = () =>
+          reject(request.error ?? new Error('Could not read projects.'));
+      });
+      return (
+        stored as {
+          nodes?: Record<
+            string,
+            { kind: string; data?: { dimensions?: { width?: unknown } } }
+          >;
+        }[]
+      ).flatMap((project) =>
+        Object.values(project.nodes ?? {}).flatMap((node) =>
+          node.kind === 'feature' &&
+          typeof node.data?.dimensions?.width === 'number'
+            ? [node.data.dimensions.width]
+            : []
+        )
+      );
+    } finally {
+      db.close();
+    }
+  });
+}
 
 async function completedSample(
   page: Page,
@@ -556,6 +746,26 @@ async function completedSample(
               );
               return;
             }
+            // A validated commit now adopts its own validation sync as the
+            // live result, so no broadcast follows it. With none 2 s after
+            // that sync answered, it is the edit's geometry; the
+            // revision-matched marks below still prove it was presented.
+            const adopted = probe.records
+              .filter(
+                (candidate) =>
+                  candidate.actionIndex === index &&
+                  candidate.featureCount > 0 &&
+                  candidate.requestId !== undefined &&
+                  candidate.ok === true &&
+                  candidate.responseAt !== undefined &&
+                  (expectedWidth === undefined ||
+                    candidate.canonicalInput.includes(
+                      `"width":${expectedWidth}`
+                    ))
+              )
+              .at(-1);
+            if (adopted && performance.now() - adopted.responseAt! > 2_000)
+              return resolve(adopted);
             if (performance.now() >= deadline)
               return reject(
                 new Error('No non-empty geometry sync followed the edit.')
@@ -599,6 +809,45 @@ async function completedSample(
           `Worker input did not contain the applied width ${expectedWidth}.`
         );
       }
+      // A broadcast is published under its own version. An adopted
+      // validation sync ran as the candidate and is published as the
+      // committed revision after it: the lowest framed version at or above
+      // the candidate's (versions only grow). Wait for that frame, which can
+      // land well after the sync answered, before fixing the revision.
+      const revision =
+        record.requestId === undefined
+          ? record.version
+          : await new Promise<number>((resolve, reject) => {
+              const deadline = performance.now() + 60_000;
+              const check = () => {
+                const framed = performance
+                  .getEntriesByName('oz:edit.frame', 'measure')
+                  .map(
+                    (entry) =>
+                      (entry as PerformanceMeasure).detail as {
+                        projectId?: string;
+                        version?: number;
+                      } | null
+                  )
+                  .filter(
+                    (detail) =>
+                      detail?.projectId === record.projectId &&
+                      typeof detail.version === 'number' &&
+                      detail.version >= record.version
+                  )
+                  .map((detail) => detail!.version!)
+                  .sort((a, b) => a - b)[0];
+                if (framed !== undefined) return resolve(framed);
+                if (performance.now() >= deadline)
+                  return reject(
+                    new Error(
+                      `No frame followed adopted sync ${record.version}.`
+                    )
+                  );
+                setTimeout(check, 10);
+              };
+              check();
+            });
       const bodyMeasure = await waitForRevisionMeasure('oz:edit.installed');
       const bodyDoneAt = bodyMeasure.startTime + bodyMeasure.duration;
       const frameMeasure = await waitForRevisionMeasure('oz:edit.frame');
@@ -613,7 +862,7 @@ async function completedSample(
           } | null;
           return (
             detail?.projectId === record.projectId &&
-            detail.version === record.version
+            detail.version === revision
           );
         });
       const acceptance = geometry ?? analysis;
@@ -624,10 +873,13 @@ async function completedSample(
         );
       return {
         projectId: record.projectId,
-        version: record.version,
+        version: revision,
+        syncVersion: record.version,
         featureCount: record.featureCount,
         canonicalInput: record.canonicalInput,
         actionLabel: action.label,
+        syncKind:
+          record.requestId === undefined ? 'broadcast' : 'adopted-validation',
         ok: record.ok === true,
         warningCount: record.warningCount ?? null,
         bodyWidth: record.bodyWidth ?? null,
@@ -659,14 +911,14 @@ async function completedSample(
                 } | null;
                 return (
                   detail?.projectId === record.projectId &&
-                  detail.version === record.version
+                  detail.version === revision
                 );
               }) as PerformanceMeasure | undefined;
             if (match) return resolve(match);
             if (performance.now() >= deadline)
               return reject(
                 new Error(
-                  `${name} did not match geometry revision ${record.version}. ` +
+                  `${name} did not match geometry revision ${revision}. ` +
                     JSON.stringify(
                       Object.fromEntries(
                         [

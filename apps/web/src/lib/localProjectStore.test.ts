@@ -5,11 +5,14 @@ import {
   appendRevision,
   createCheckpoint,
   createProjectDocument,
-  importStepBody
+  importStepBody,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
   compareProjectSummaries,
   MAX_LOCAL_CHECKPOINT_DOCUMENTS,
+  persistedDocumentBytes,
+  toArtifactId,
   toBodyId,
   toProjectId,
   toUserId,
@@ -28,7 +31,12 @@ import {
   onLocalSaveStatesChanged,
   loadLocalSaveState,
   loadProjectMeasurements,
+  loadProjectThumbnail,
+  localDeletionFence,
+  saveAccountThumbnail,
   saveProjectMeasurements,
+  saveProjectThumbnail,
+  ThumbnailWriteCancelledError,
   loadLocalProject,
   putSourceBlobIfAbsent,
   releaseSourceBlobClaim,
@@ -650,7 +658,9 @@ describe('listLocalProjects', () => {
       lastRevisionId: document.revisions.at(-1)?.revisionId,
       updatedAt: document.derived.updatedAt,
       revisionCount: document.checkpoints.length,
-      documentVersion: document.version
+      documentVersion: document.version,
+      // Measured as the account measures it: without the derived meshes.
+      documentBytes: persistedDocumentBytes(withoutDerivedProjection(document))
     });
   });
 
@@ -1376,5 +1386,110 @@ describe('save states on the device', () => {
     expect(await listLocalSaveStateIds('proj-a')).toEqual(
       new Set([saved.checkpoints.at(-1)!.checkpointId])
     );
+  });
+});
+
+describe('project thumbnails', () => {
+  const card = {
+    source: 'data:image/webp;base64,CARD',
+    version: 3,
+    updatedAt: '2026-11-14T12:00:00.000Z'
+  };
+
+  it('writes nothing when its caller stops while the store opens', async () => {
+    // Review of Settings' Regenerate project thumbnails: a key lock during
+    // the store's open and alias lookup still let the card commit.
+    let live = true;
+    const pending = saveProjectThumbnail('project_card', card, {
+      shouldWrite: () => live
+    });
+    live = false;
+
+    await expect(pending).rejects.toBeInstanceOf(ThumbnailWriteCancelledError);
+    expect(await loadProjectThumbnail('project_card')).toBeNull();
+  });
+
+  it('writes as before when the caller is still current', async () => {
+    await saveProjectThumbnail('project_card', card, {
+      shouldWrite: () => true
+    });
+    expect(await loadProjectThumbnail('project_card')).toEqual({
+      projectId: 'project_card',
+      ...card
+    });
+  });
+  describe('an image downloaded from the account', () => {
+    const account = {
+      source: 'data:image/webp;base64,ACCOUNT',
+      artifactId: toArtifactId('artifact_account'),
+      version: -1,
+      updatedAt: '2026-11-15T09:00:00.000Z'
+    };
+
+    it('is kept when the device had no card', async () => {
+      await expect(
+        saveAccountThumbnail('project_card', account, {
+          replaces: null,
+          deletionFence: 0
+        })
+      ).resolves.toBe(true);
+      expect(await loadProjectThumbnail('project_card')).toEqual({
+        projectId: 'project_card',
+        ...account
+      });
+    });
+
+    it('replaces the record the download was decided on', async () => {
+      await saveProjectThumbnail('project_card', card);
+      const replaces = await loadProjectThumbnail('project_card');
+      await expect(
+        saveAccountThumbnail('project_card', account, {
+          replaces,
+          deletionFence: 0
+        })
+      ).resolves.toBe(true);
+      expect(await loadProjectThumbnail('project_card')).toMatchObject(account);
+    });
+
+    it('never overwrites a card written while it downloaded', async () => {
+      // The workspace captured a newer card between the shelf's read and
+      // the download landing: the older account image must not replace it.
+      await saveProjectThumbnail('project_card', card);
+      await expect(
+        saveAccountThumbnail('project_card', account, {
+          replaces: null,
+          deletionFence: 0
+        })
+      ).resolves.toBe(false);
+      expect(await loadProjectThumbnail('project_card')).toEqual({
+        projectId: 'project_card',
+        ...card
+      });
+    });
+
+    it('does not bring back the card of a project deleted while it downloaded', async () => {
+      // Review: deletion removes the card, so "replaces nothing" still held
+      // and a late download wrote a deleted project's image back to disk.
+      const fence = localDeletionFence('project_card');
+      await deleteLocalProject('project_card');
+      await expect(
+        saveAccountThumbnail('project_card', account, {
+          replaces: null,
+          deletionFence: fence
+        })
+      ).resolves.toBe(false);
+      expect(await loadProjectThumbnail('project_card')).toBeNull();
+    });
+
+    it('writes nothing once its caller stops', async () => {
+      await expect(
+        saveAccountThumbnail('project_card', account, {
+          replaces: null,
+          deletionFence: 0,
+          shouldWrite: () => false
+        })
+      ).resolves.toBe(false);
+      expect(await loadProjectThumbnail('project_card')).toBeNull();
+    });
   });
 });

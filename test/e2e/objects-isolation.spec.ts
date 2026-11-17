@@ -8,6 +8,7 @@ import {
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import {
+  createPrimitiveInPlace,
   createProject,
   enableFullRender,
   expect,
@@ -245,3 +246,88 @@ for (const viewport of [
     expect(errors).toEqual([]);
   });
 }
+
+// QA 2026-11-14 #17: isolating and then creating a feature ended isolation
+// silently and left every other body hidden, through a reload. A new body
+// now joins the isolated view, Exit puts back the earlier visibility, a
+// model change that removes the isolated body ends it with a notice, and a
+// reload never keeps isolation's own hiding.
+test('isolation survives a new body, restores earlier visibility and is never saved', async ({
+  page
+}) => {
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await openModel(page);
+  const objects = page.getByRole('list', { name: 'Objects' });
+  const status = page.getByRole('contentinfo');
+  await expect(objects.getByRole('listitem')).toHaveCount(4);
+  await objects.getByRole('button', { name: 'Hide body Spare' }).click();
+  // Disabled is off in its parameter, Spare is the user's own choice.
+  await expect(objects.locator('.hidden-body')).toHaveCount(2);
+
+  // A reload while isolated keeps the user's own hidden set, not isolation's.
+  await objects.getByRole('button', { name: 'Isolate body Plate' }).click();
+  await expect(objects.locator('.hidden-body')).toHaveCount(3);
+  await expect(page.locator('.save-state')).toHaveClass(/is-(synced|local)\b/);
+  await page.reload();
+  await revealModelPanel(page, 'Objects');
+  await expect(objects.getByRole('listitem')).toHaveCount(4, {
+    timeout: 30_000
+  });
+  await expect(
+    objects.getByRole('button', { name: 'Hide body Upper' })
+  ).toBeAttached();
+  await expect(
+    objects.getByRole('button', { name: 'Show body Spare' })
+  ).toBeAttached();
+  await expect(objects.locator('.hidden-body')).toHaveCount(2);
+
+  // A body made while isolated joins the isolated view.
+  await objects.getByRole('button', { name: 'Isolate body Plate' }).click();
+  const exitPlate = objects.getByRole('button', {
+    name: 'Exit isolation of Plate'
+  });
+  await expect(exitPlate).toBeAttached();
+  await createPrimitiveInPlace(page, 'box', { at: { x: 200 } });
+  await revealModelPanel(page, 'Objects');
+  await expect(objects.getByRole('listitem')).toHaveCount(5);
+  await expect(exitPlate).toBeAttached();
+  await expect(objects.locator('.hidden-body')).toHaveCount(3);
+  await expect(
+    objects.getByRole('button', { name: 'Show body Upper' })
+  ).toBeAttached();
+  await exitPlate.click();
+  await expect(exitPlate).toHaveCount(0);
+  await expect(
+    objects.getByRole('button', { name: 'Hide body Upper' })
+  ).toBeAttached();
+  await expect(
+    objects.getByRole('button', { name: 'Show body Spare' })
+  ).toBeAttached();
+  await expect(objects.locator('.hidden-body')).toHaveCount(2);
+
+  // Undoing the isolated body away ends isolation, says so, and restores.
+  await objects.getByRole('button', { name: /^Isolate body Box/ }).click();
+  await expect(objects.locator('.hidden-body')).toHaveCount(4);
+  await page.keyboard.press('Control+z');
+  await expect(objects.getByRole('listitem')).toHaveCount(4);
+  await expect(status).toContainText('Left isolation');
+  await expect(
+    objects.getByRole('button', { name: /^Exit isolation of / })
+  ).toHaveCount(0);
+  await expect(
+    objects.getByRole('button', { name: 'Hide body Upper' })
+  ).toBeAttached();
+  await expect(objects.locator('.hidden-body')).toHaveCount(2);
+
+  await expect(page.locator('.save-state')).toHaveClass(/is-(synced|local)\b/);
+  await page.reload();
+  await revealModelPanel(page, 'Objects');
+  await expect(objects.getByRole('listitem')).toHaveCount(4, {
+    timeout: 30_000
+  });
+  await expect(
+    objects.getByRole('button', { name: 'Hide body Upper' })
+  ).toBeAttached();
+  await expect(objects.locator('.hidden-body')).toHaveCount(2);
+});

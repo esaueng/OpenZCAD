@@ -1,6 +1,18 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor
+} from '@testing-library/react';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { InPlaceCommandBar } from './InPlaceCommandBar';
+import { previewExpression } from '../lib/model';
+import {
+  ParameterDefinitionProvider,
+  type ParameterDefinition
+} from './forms/parameterDefinition';
 
 describe('InPlaceCommandBar', () => {
   it('confirms from the focused instructions only when ready and leaves child controls their Enter key', () => {
@@ -55,6 +67,66 @@ describe('InPlaceCommandBar', () => {
     screen.getByRole('button', { name: /Cancel/ }).focus();
     rerender(workspace(false));
     expect(screen.getByRole('region', { name: '3D viewport' })).toHaveFocus();
+  });
+
+  // QA 2026-11-14 finding #18: the bar's status line showed the rebuild's
+  // warning as written, kernel ids and all.
+  it.each([
+    [
+      'Draft',
+      'Remus draft refused: the draft moves a corner of curved face 139; re-trimming a curved neighbour against the taper is not implemented',
+      "A face next to this one is curved, and re-trimming a curved face to fit isn't supported yet. Try faces that only meet flat faces."
+    ],
+    [
+      'Split',
+      'the cutting plane crosses curved edge 36; trimming a curve to the plane is not implemented here, and a chord across it would not be the same edge',
+      "The cutting plane crosses a curved edge, which splitting can't trim yet. Move the plane so it misses fillets and curved edges."
+    ],
+    [
+      'Solid offset',
+      'Remus solid offset refused: assembly failed: wire loop walk: no unvisited edge from vertex 2685',
+      'Solid offset could not rebuild this body. It currently works on bodies with flat faces and sharp edges; fillets, shells and curved faces are not supported yet.'
+    ]
+  ])(
+    'leads a %s refusal with plain words and keeps the kernel text behind details',
+    (title, diagnostic, sentence) => {
+      render(
+        <InPlaceCommandBar
+          title={title}
+          hint="Pick faces"
+          refusal={diagnostic}
+          canFinish={false}
+          onDone={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      );
+      expect(screen.getByRole('status').textContent).toBe(sentence);
+      const disclosure = screen
+        .getByText('Technical details')
+        .closest('details');
+      expect(disclosure).toHaveProperty('open', false);
+      expect(disclosure?.textContent).toContain(diagnostic);
+    }
+  );
+
+  it('shows an adapter sentence as it is, with nothing to disclose', () => {
+    const sentence =
+      'Fillet could not be created on 1 selected edge with radius 30. Try a smaller radius: radius 15 builds here.';
+    render(
+      <InPlaceCommandBar
+        title="Fillet"
+        hint="Pick edges"
+        refusal={sentence}
+        canFinish={false}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+        unitLabel="mm"
+      />
+    );
+    expect(screen.getByRole('status').textContent).toBe(
+      'Fillet could not be created on 1 selected edge with radius 30 mm. Try a smaller radius: radius 15 mm builds here.'
+    );
+    expect(screen.queryByText('Technical details')).toBeNull();
   });
 
   it('explains a body-removing cut and preserves its diagnostic behind details', () => {
@@ -115,7 +187,10 @@ describe('InPlaceCommandBar', () => {
         />
       );
       const status = screen.getByRole('status');
-      expect(status.textContent).toBe(refusal);
+      // The bar's title already names the feature.
+      expect(status.textContent).toBe(
+        refusal.replace('Feature "Fillet": ', '')
+      );
       const more = screen.getByRole('button', { name: 'More' });
       expect(more).toHaveAttribute('aria-expanded', 'false');
       expect(more).toHaveAttribute('aria-controls', status.id);
@@ -670,5 +745,365 @@ describe('InPlaceCommandBar', () => {
         .getByRole('button', { name: 'Cancel' })
         .getAttribute('aria-keyshortcuts')
     ).toBe('Escape');
+  });
+});
+
+describe('Enter while the preview is still being checked', () => {
+  it('is held and applies once the preview is valid, saying Applying…', () => {
+    // 13 November review: "100 Tab 60 Tab 6 Enter" then Enter again lost
+    // the second Enter while the last value's preview was checked.
+    const onDone = vi.fn();
+    const props = {
+      title: 'Box',
+      hint: 'Drag a footprint',
+      onDone,
+      onCancel: vi.fn()
+    };
+    const { rerender } = render(
+      <InPlaceCommandBar {...props} canFinish={false} previewPending />
+    );
+    const command = screen.getByRole('group', { name: 'Box command' });
+    fireEvent.keyDown(command, { key: 'Enter' });
+    expect(onDone).not.toHaveBeenCalled();
+    expect(command).toHaveTextContent('Applying…');
+    rerender(<InPlaceCommandBar {...props} canFinish previewPending />);
+    expect(onDone).toHaveBeenCalledOnce();
+  });
+
+  it('is not held when nothing is waiting to preview, or a refusal stands', () => {
+    // An Enter before the edges are picked must not finish the command at
+    // the first pick.
+    const onDone = vi.fn();
+    const props = {
+      title: 'Fillet',
+      hint: 'Click the edges',
+      onDone,
+      onCancel: vi.fn()
+    };
+    const { rerender } = render(
+      <InPlaceCommandBar {...props} canFinish={false} />
+    );
+    const command = screen.getByRole('group', { name: 'Fillet command' });
+    fireEvent.keyDown(command, { key: 'Enter' });
+    rerender(<InPlaceCommandBar {...props} canFinish previewPending />);
+    expect(onDone).not.toHaveBeenCalled();
+
+    rerender(
+      <InPlaceCommandBar
+        {...props}
+        canFinish={false}
+        previewPending
+        refusal="Fillet could not be created."
+      />
+    );
+    fireEvent.keyDown(command, { key: 'Enter' });
+    rerender(<InPlaceCommandBar {...props} canFinish previewPending />);
+    expect(onDone).not.toHaveBeenCalled();
+  });
+});
+
+describe('Done with a number still being typed in Options', () => {
+  // QA 2026-11-14 #16 (P3): a Grid pattern's Count typed in Options and then
+  // Done left the old count's pattern open: leaving the field applied 10 as
+  // the press went on, which disabled Done for that value's preview and
+  // swallowed the click. Enter first worked.
+  function GridPattern({ onDone }: { onDone(count: number): void }) {
+    const [count, setCount] = useState(3);
+    const [previewed, setPreviewed] = useState(true);
+    // As the app holds a refused entry: Done waits until it is taken or the
+    // field gives it up (`inPlace.refuseValue` / `dropRefusal`).
+    const [refused, setRefused] = useState(false);
+    return (
+      <>
+        <InPlaceCommandBar
+          title="Grid pattern"
+          hint="Drag the spacings · tap the counts"
+          canFinish={previewed && !refused}
+          previewPending
+          values={[
+            {
+              id: 'count',
+              label: 'Count',
+              text: String(count),
+              value: count,
+              step: 1,
+              min: 2,
+              max: 100,
+              integer: true
+            }
+          ]}
+          onValueCommit={(_id, text) => {
+            const next = Number(text);
+            if (!Number.isInteger(next)) {
+              setRefused(true);
+              return false;
+            }
+            setRefused(false);
+            setCount(next);
+            // A new request: Done waits for its own preview.
+            setPreviewed(false);
+            return true;
+          }}
+          onValueRestore={() => setRefused(false)}
+          onDone={() => onDone(count)}
+          onCancel={vi.fn()}
+        />
+        <button type="button" onClick={() => setPreviewed(true)}>
+          preview built
+        </button>
+      </>
+    );
+  }
+
+  /** A press as a browser delivers it: the field loses focus on mousedown. */
+  function pressDone(field: HTMLElement) {
+    const done = screen.getByRole('button', { name: /Done/ });
+    fireEvent.pointerDown(done, { button: 0 });
+    fireEvent.mouseDown(done, { button: 0 });
+    fireEvent.blur(field);
+    fireEvent.pointerUp(done, { button: 0 });
+    fireEvent.mouseUp(done, { button: 0 });
+    fireEvent.click(done);
+  }
+
+  it('applies the typed count and finishes once its preview is checked', () => {
+    const onDone = vi.fn();
+    render(<GridPattern onDone={onDone} />);
+    const field = screen.getByRole('textbox', { name: 'Count' });
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: '10' } });
+    pressDone(field);
+    // Not with the old count while the new one is still being previewed.
+    expect(onDone).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole('group', { name: 'Grid pattern command' })
+    ).toHaveTextContent('Applying…');
+    fireEvent.click(screen.getByRole('button', { name: 'preview built' }));
+    expect(onDone).toHaveBeenCalledOnce();
+    expect(onDone).toHaveBeenCalledWith(10);
+  });
+
+  it('finishes at once when the field holds its value unchanged', () => {
+    const onDone = vi.fn();
+    render(<GridPattern onDone={onDone} />);
+    const field = screen.getByRole('textbox', { name: 'Count' });
+    fireEvent.focus(field);
+    pressDone(field);
+    expect(onDone).toHaveBeenCalledOnce();
+    expect(onDone).toHaveBeenCalledWith(3);
+  });
+
+  it('does not finish over a refused entry, even once leaving the field gives it up', () => {
+    // Review of #1501: 3 held, 2.5 typed, Done pressed. The refusal held
+    // Done at pointerdown, but leaving the field on mousedown gave the entry
+    // up and cleared it, and the click then finished with 3.
+    const onDone = vi.fn();
+    render(<GridPattern onDone={onDone} />);
+    const field = screen.getByRole('textbox', { name: 'Count' });
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: '2.5' } });
+    const done = screen.getByRole('button', { name: /Done/ });
+    fireEvent.pointerDown(done, { button: 0 });
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.mouseDown(done, { button: 0 });
+    // Leaving the field gives the entry up and restores 3, enabling Done
+    // again; the press that was refused still finishes nothing.
+    fireEvent.blur(field);
+    expect(done).toBeEnabled();
+    fireEvent.pointerUp(done, { button: 0 });
+    fireEvent.mouseUp(done, { button: 0 });
+    fireEvent.click(done);
+    expect(onDone).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'preview built' }));
+    expect(onDone).not.toHaveBeenCalled();
+    // A press refused with no click to follow does not swallow the keyboard.
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: '2.5' } });
+    fireEvent.pointerDown(done, { button: 0 });
+    fireEvent.blur(field);
+    fireEvent.keyDown(done, { key: 'Enter' });
+    fireEvent.click(done);
+    expect(onDone).toHaveBeenCalledWith(3);
+  });
+});
+
+describe('the state pill', () => {
+  it('counts the seconds of a preview that takes a while', () => {
+    // QA 2026-11-14 #16: a 10 x 10 grid's preview built for 72 s behind a
+    // still "Preview".
+    vi.useFakeTimers();
+    try {
+      const props = {
+        title: 'Grid pattern',
+        hint: 'Drag the spacings · tap the counts',
+        onDone: vi.fn(),
+        onCancel: vi.fn()
+      };
+      const { container, rerender } = render(
+        <InPlaceCommandBar {...props} canFinish={false} previewPending />
+      );
+      const pill = container.querySelector('.in-place-command-state');
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      expect(pill).toHaveTextContent(/^Preview$/);
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(pill).toHaveTextContent('Preview · 3 s');
+      // Built: the count goes.
+      rerender(<InPlaceCommandBar {...props} canFinish previewPending />);
+      expect(pill).toHaveTextContent(/^Preview$/);
+      // The next value's preview counts from nothing again.
+      rerender(
+        <InPlaceCommandBar {...props} canFinish={false} previewPending />
+      );
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(pill).toHaveTextContent('Preview · 2 s');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stays empty until there is something to preview', () => {
+    const props = {
+      title: 'Fillet',
+      hint: 'Click the edges',
+      onDone: vi.fn(),
+      onCancel: vi.fn()
+    };
+    const { container, rerender } = render(
+      <InPlaceCommandBar {...props} canFinish={false} />
+    );
+    const pill = container.querySelector('.in-place-command-state');
+    expect(pill).toBeEmptyDOMElement();
+    rerender(<InPlaceCommandBar {...props} canFinish={false} previewPending />);
+    expect(pill).toHaveTextContent('Preview');
+  });
+});
+
+describe('a blend refused at a size another builds at', () => {
+  it('quotes both sizes in the document unit and offers the one that builds', () => {
+    // 13 November review: 'Feature "Fillet": … with radius 50. Try a smaller
+    // radius: radius 6.25 builds here.' — no units, and retyped by hand.
+    const onTrySize = vi.fn();
+    render(
+      <InPlaceCommandBar
+        title="Edit Fillet"
+        hint="Drag the radius"
+        refusal={
+          'Feature "Fillet": Fillet could not be created on 12 selected edges with radius 50. Try a smaller radius: radius 6.25 builds here.'
+        }
+        unitLabel="mm"
+        onTrySize={onTrySize}
+        canFinish={false}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /^Fillet could not be created on 12 selected edges with radius 50 mm\. Try a smaller radius: radius 6\.25 mm builds here\.$/
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Use 6.25 mm' }));
+    expect(onTrySize).toHaveBeenCalledWith('radius', 6.25);
+  });
+});
+
+describe('a typed Options value that does not evaluate', () => {
+  /** A Box's Width typed in Options, against a parameter table. */
+  function Harness({
+    onValueCommit
+  }: {
+    onValueCommit: (id: string, text: string, accepted: boolean) => void;
+  }) {
+    const [scope, setScope] = useState<Record<string, number>>({});
+    const [text, setText] = useState('30');
+    const definition: ParameterDefinition = {
+      has: (name) => name in scope,
+      define: async (name, expression) => {
+        setScope((current) => ({ ...current, [name]: Number(expression) }));
+        return null;
+      }
+    };
+    return (
+      <ParameterDefinitionProvider value={definition}>
+        <InPlaceCommandBar
+          title="Box"
+          hint="Drag a footprint"
+          canFinish
+          values={[
+            {
+              id: 'width',
+              label: 'Width',
+              text,
+              suffix: 'mm',
+              value: 30,
+              step: 1,
+              min: 0.001
+            }
+          ]}
+          scope={scope}
+          onValueCommit={(id, typed) => {
+            const accepted = previewExpression(typed, scope).ok;
+            onValueCommit(id, typed, accepted);
+            if (accepted) setText(typed);
+            return accepted;
+          }}
+          onDone={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      </ParameterDefinitionProvider>
+    );
+  }
+
+  it('offers to define a missing name, then applies the entry', async () => {
+    // "Width was not applied" never named `depthx`, and offered no Define.
+    const onValueCommit = vi.fn();
+    render(<Harness onValueCommit={onValueCommit} />);
+    const field = screen.getByRole('textbox', { name: 'Width' });
+    act(() => field.focus());
+    fireEvent.change(field, { target: { value: 'depthx * 2' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    const value = await screen.findByRole('textbox', {
+      name: 'Value for new parameter depthx'
+    });
+    expect(value).toHaveValue('30');
+    expect(field).toHaveAccessibleDescription('depthx is not defined yet');
+    expect(screen.getByText(/Esc restores 30 mm/)).toBeInTheDocument();
+    // Into the offer, the entry waits for its name rather than being dropped.
+    act(() => value.focus());
+    fireEvent.blur(field, { relatedTarget: value });
+    expect(field).toHaveValue('depthx * 2');
+    fireEvent.change(value, { target: { value: '9' } });
+    await act(async () => {
+      fireEvent.keyDown(value, { key: 'Enter' });
+    });
+    await waitFor(() =>
+      expect(onValueCommit).toHaveBeenLastCalledWith(
+        'width',
+        'depthx * 2',
+        true
+      )
+    );
+    expect(field).not.toHaveAttribute('aria-invalid');
+    expect(field).toHaveValue('depthx * 2');
+  });
+
+  it('says why any other entry was not applied', () => {
+    const onValueCommit = vi.fn();
+    render(<Harness onValueCommit={onValueCommit} />);
+    const field = screen.getByRole('textbox', { name: 'Width' });
+    act(() => field.focus());
+    fireEvent.change(field, { target: { value: '2 *' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /^Width was not applied: .+\. Correct it or press Esc to restore 30 mm\.$/
+    );
+    expect(
+      screen.queryByRole('textbox', { name: /Value for new parameter/ })
+    ).toBeNull();
   });
 });

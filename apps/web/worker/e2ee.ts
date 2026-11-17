@@ -55,6 +55,7 @@ import {
   type E2eeWriteAuthorization
 } from './e2eeWriteAuthorization';
 import {
+  accountRequiresEncryptedLibrary,
   PROJECT_PREFERENCES_ROUTE,
   handleProjectPreferenceRequest,
   isE2eeProjectPreferenceStorageReady
@@ -73,7 +74,11 @@ import {
   handleE2eeShareLinkRequest,
   isE2eeShareLinkPath
 } from './e2eeShareLinks';
-import { handleE2eeContactsRequest, isE2eeContactsPath } from './e2eeContacts';
+import {
+  handleE2eeContactsRequest,
+  isE2eeContactsPath,
+  MAX_CONTACTS_RESEAL_BODY_BYTES
+} from './e2eeContacts';
 import {
   handleE2eeInvitationRequest,
   isE2eeInvitationPath,
@@ -134,7 +139,7 @@ const ENCRYPTED_CONTENT_WRITE_ROUTE =
  * staging from being undone by a write it cannot see.
  */
 const ENCRYPTED_SHARING_WRITE_ROUTE =
-  /^\/api\/e2ee\/projects\/([^/]+)\/(?:share-links(?:\/.*)?|mls\/proposals|invitations|key-packages(?:\/claim)?)$/;
+  /^\/api\/e2ee\/projects\/([^/]+)\/(?:share-links(?:\/.*)?|mls\/proposals|invitations(?:\/[^/]+\/acceptance)?|key-packages(?:\/claim)?)$/;
 
 interface WriteDatabase extends D1Database {
   authorization: E2eeWriteAuthorization;
@@ -728,6 +733,8 @@ async function writeGeneration(
     history: E2eeAccountKeyHistoryInput | null;
     /** For a replacement: what must still hold when the identity lands. */
     fence?: { sql: string; binds: string[] };
+    /** A replacement that drops devices ends the other sessions. */
+    endSessions?: boolean;
   }
 ): Promise<boolean> {
   const now = new Date().toISOString();
@@ -827,7 +834,8 @@ async function writeGeneration(
         `DELETE FROM e2ee_identities
          WHERE user_id = ? AND generation < ? AND ${guard.sql}`
       )
-      .bind(userId, input.generation - PREVIOUS_GENERATIONS, ...guard.binds)
+      .bind(userId, input.generation - PREVIOUS_GENERATIONS, ...guard.binds),
+    ...(input.endSessions ? endOtherSessions(db, userId, guard) : [])
   ];
   const results = await db.batch(statements);
   return (results[0]?.meta?.changes ?? 0) === 1;
@@ -974,8 +982,9 @@ async function handleReplaceIdentity(
     }
     throw error;
   }
+  const dropped = removedDevices(oldList.devices, list.head.devices);
   const signerFence = await projectSignerFence(db, userId, [
-    ...removedDevices(oldList.devices, list.head.devices),
+    ...dropped,
     // Devices already revoked in this generation: their cutoffs name this
     // generation's list, which the new genesis no longer carries.
     ...oldList.revoked
@@ -998,7 +1007,8 @@ async function handleReplaceIdentity(
       entryHash: toHex(oldList.headHash)
     },
     history,
-    fence: signerFence
+    fence: signerFence,
+    endSessions: dropped.length > 0
   });
   if (!written) {
     await refuseIfSigned(db, signerFence);
@@ -1218,6 +1228,49 @@ async function refuseIfSigned(
   }
 }
 
+/**
+ * Ends every other session of the account once a device-list write that
+ * removes a device lands (guarded like that write's other statements):
+ * browser sessions are deleted and desktop sessions revoked, except the
+ * one making the write. Sessions are not tied to devices, so the removed
+ * device's own session cannot be told apart; signing the others out is
+ * what keeps a removed device from acting through a session it still
+ * holds. The account's remaining devices sign in again and keep their
+ * device keys.
+ */
+function endOtherSessions(
+  db: WriteDatabase,
+  userId: string,
+  guard: { sql: string; binds: readonly unknown[] }
+): D1PreparedStatement[] {
+  const credential = db.authorization.credential;
+  const browserHash =
+    credential?.table === 'auth_sessions' ? credential.tokenHash : '';
+  const desktopHash =
+    credential?.table === 'desktop_access_tokens' ? credential.tokenHash : '';
+  const timestamp = Math.floor(Date.now() / 1000);
+  const keptDesktop = `session_id NOT IN (SELECT session_id FROM desktop_access_tokens
+                                          WHERE token_hash = ? AND user_id = ?)`;
+  return [
+    db
+      .prepare(
+        `DELETE FROM auth_sessions
+         WHERE user_id = ? AND token_hash <> ? AND ${guard.sql}`
+      )
+      .bind(userId, browserHash, ...guard.binds),
+    ...(['desktop_access_tokens', 'desktop_refresh_tokens'] as const).map(
+      (table) =>
+        db
+          .prepare(
+            `UPDATE ${table} SET revoked_at = COALESCE(revoked_at, ?)
+             WHERE user_id = ? AND revoked_at IS NULL AND ${keptDesktop}
+               AND ${guard.sql}`
+          )
+          .bind(timestamp, userId, desktopHash, userId, ...guard.binds)
+    )
+  ];
+}
+
 async function handleAppend(
   db: WriteDatabase,
   userId: string,
@@ -1431,7 +1484,11 @@ async function handleAppend(
       )
     ),
     ...(history ? [insertHistory(db, userId, history, now, guard)] : []),
-    ...(cutoffs ? [cutoffs.insert(guard, now)] : [])
+    ...(cutoffs ? [cutoffs.insert(guard, now)] : []),
+    // A removed device keeps no session to act through.
+    ...(list.head.revoked.some((revocation) => revocation.kind === 'device')
+      ? endOtherSessions(db, userId, guard)
+      : [])
   ];
   const results = await db.batch(statements);
   if ((results[0]?.meta?.changes ?? 0) !== 1) {
@@ -2129,6 +2186,24 @@ export async function handleE2eeRequest(
       }
     };
     if (pathname === PROJECT_PREFERENCES_ROUTE) {
+      if (!projectsEnabled && request.method === 'GET') {
+        // Closed to this account: no opt-in to read, but the library rule
+        // still answers, so a browser never has to guess from the general
+        // config, and asking logs no failed request.
+        const libraryEncrypted =
+          (await isE2eeProjectPreferenceStorageReady(rawDb)) &&
+          (await accountRequiresEncryptedLibrary(rawDb, userId));
+        return new Response(
+          JSON.stringify({ preference: null, libraryEncrypted }),
+          {
+            status: 200,
+            headers: {
+              'content-type': 'application/json',
+              'cache-control': 'no-store'
+            }
+          }
+        );
+      }
       if (!projectsEnabled) {
         refuse(
           501,
@@ -2206,7 +2281,14 @@ export async function handleE2eeRequest(
         rawDb,
         userId,
         db.authorization,
-        () => readBody(request)
+        // A reseal carries the whole list at once.
+        () =>
+          readBody(
+            request,
+            request.method === 'PUT'
+              ? MAX_CONTACTS_RESEAL_BODY_BYTES
+              : MAX_BODY_BYTES
+          )
       );
     }
     if (isAssistantConsentPath(pathname)) {

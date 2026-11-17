@@ -1,5 +1,6 @@
 import { findSketch, listFeaturesInOrder } from '@openzcad/document-core';
 import {
+  ownEntry,
   datumAxisPlaneSources,
   datumAxisPointSources,
   datumPlaneSources,
@@ -38,6 +39,8 @@ const HANDLED_FEATURE_KINDS: ReadonlySet<FeatureKind> = new Set<FeatureKind>([
   'hole',
   'gear',
   'thread',
+  'sheet-metal',
+  'standard-part',
   'transform',
   'mirror',
   'shell',
@@ -203,6 +206,12 @@ export function affectedFeatureTargets(
           affectedDatums.add(feature.featureId);
         continue;
       }
+      case 'sheet-metal':
+        // The blank's sketch, and each bend line's (it may be another's).
+        affected =
+          affectedSketches.has(data.sketchId) ||
+          data.bends.some((bend) => affectedSketches.has(bend.line.sketchId));
+        break;
       case 'extrude':
         affected =
           affectedSketches.has(data.sketchId) ||
@@ -258,7 +267,12 @@ export function affectedFeatureTargets(
           affectedBodies.has(data.targetBodyId) ||
           featureDatumAxisRefs(data).some((ref) =>
             affectedDatums.has(ref.datumFeatureId)
-          );
+          ) ||
+          // M02: a pattern on sketch points moves with its sketch, and so
+          // does an M01 hole drilled at them.
+          ((data.featureKind === 'pattern' || data.featureKind === 'hole') &&
+            data.points !== undefined &&
+            affectedSketches.has(data.points.sketchId));
         break;
       case 'gear':
         affected =
@@ -268,6 +282,20 @@ export function affectedFeatureTargets(
       case 'thread':
         affected = affectedBodies.has(data.targetBodyId);
         break;
+      case 'standard-part': {
+        // M17 (schema v71): a part in a hole moves with the hole, whose
+        // result body is affected when the hole is.
+        const hole = data.hole
+          ? features.find(
+              (candidate) => candidate.featureId === data.hole!.featureId
+            )
+          : undefined;
+        affected =
+          hole !== undefined &&
+          (hole.featureId === source.featureId ||
+            (hole.bodyId !== undefined && affectedBodies.has(hole.bodyId)));
+        break;
+      }
       case 'primitive':
       case 'imported-mesh':
       case 'imported-step':
@@ -463,7 +491,7 @@ export function reorderRefusal(
         ? { featureWarnings: derived.featureWarnings }
         : {}),
       bodyPresent: (bodies.get(feature.featureId) ?? []).every((bodyId) =>
-        Boolean(derived.bodyRepresentations[bodyId])
+        Boolean(ownEntry(derived.bodyRepresentations, bodyId))
       ),
       documentMoved: false
     });

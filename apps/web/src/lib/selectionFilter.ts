@@ -27,6 +27,7 @@ const FILTER_BY_TOOL: Partial<Record<ToolId, SelectionFilter>> = {
   'linear-pattern': 'body',
   'circular-pattern': 'body',
   'grid-pattern': 'body',
+  'point-pattern': 'body',
   sketch: 'face',
   extrude: 'sketch',
   revolve: 'sketch',
@@ -34,7 +35,10 @@ const FILTER_BY_TOOL: Partial<Record<ToolId, SelectionFilter>> = {
   sweep: 'sketch',
   'helical-sweep': 'sketch',
   'gear-teeth': 'face',
-  thread: 'face'
+  thread: 'face',
+  'sheet-metal': 'sketch',
+  bend: 'body',
+  'standard-part': 'face'
 };
 
 export function inferredSelectionFilter(tool: ToolId | null): SelectionFilter {

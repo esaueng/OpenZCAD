@@ -37,7 +37,14 @@ import {
   type E2eeAdoption,
   type E2eeCopyFrom
 } from '@openzcad/shared';
-import { encryptedBlobObjectKey } from '@openzcad/cloudflare-adapters';
+import {
+  claimObjectKeysForDelete,
+  encryptedBlobObjectKey,
+  forgetPendingObjects,
+  isPendingObjectStorageReady,
+  recordPendingObject,
+  type PendingObjectAdmission
+} from '@openzcad/cloudflare-adapters';
 import { idField, invalid, record, refuse } from './e2eeProjects';
 
 /** What a copy reads of the source's blob rows. */
@@ -63,6 +70,7 @@ export interface E2eeBlobCopyBucket {
   ): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>;
   put(key: string, body: ArrayBuffer | Uint8Array): Promise<unknown>;
   delete(key: string): Promise<void>;
+  head?(key: string): Promise<unknown>;
   createMultipartUpload?(key: string): Promise<{
     uploadPart(
       partNumber: number,
@@ -326,20 +334,41 @@ export function insertCopiedBlobs(
 
 // --- Objects -----------------------------------------------------------------
 
+/** A copy's pending record (migration 0055) was refused, and why. */
+export class PendingObjectRefusedError extends Error {
+  constructor(readonly admission: Exclude<PendingObjectAdmission, 'recorded'>) {
+    super(`Pending object refused: ${admission}`);
+    this.name = 'PendingObjectRefusedError';
+  }
+}
+
 /**
  * Copies each blob's object byte for byte to the new project's key, one
  * part at a time (a multipart upload above one part), so no more than a
  * part is held. Every key it starts writing is added to `written`, which
  * the caller hands to `discardCopiedObjects` when the copy fails: a
  * concurrent retry of the same create may already name those objects.
+ * With `pending`, each key is first recorded as this attempt's write
+ * (migration 0055): while the record stands, no other attempt's rollback
+ * can claim and delete the key, so the copy's rows never land on bytes a
+ * rollback removed before them.
  */
 export async function copyBlobObjects(
   bucket: E2eeBlobCopyBucket,
   projectId: string,
   rows: readonly CopiedBlobRow[],
   written: string[],
-  partBytes = ARTIFACT_UPLOAD_PART_BYTES
+  partBytes = ARTIFACT_UPLOAD_PART_BYTES,
+  pending?: {
+    db: D1Database;
+    attempt: string;
+    ownerUserId: string;
+    /** The request's session/erasure fence, held in the pending INSERT. */
+    authority?: { sql: string; binds: readonly unknown[] };
+  }
 ): Promise<void> {
+  const record =
+    pending && (await isPendingObjectStorageReady(pending.db)) ? pending : null;
   function unavailable(): never {
     refuse(
       503,
@@ -360,6 +389,23 @@ export async function copyBlobObjects(
   for (const row of rows) {
     const target = encryptedBlobObjectKey(projectId, row.blob_id);
     const size = row.ciphertext_bytes;
+    if (record) {
+      // Refused (before anything is put under the key) while a rollback
+      // holds a claim on it, or once the account's pending objects reach
+      // their budget: the caller rolls back and answers why.
+      const admission = await recordPendingObject(record.db, {
+        key: target,
+        attempt: record.attempt,
+        projectId,
+        ownerUserId: record.ownerUserId,
+        bytes: size,
+        bucket: 'artifacts',
+        ...(record.authority ? { authority: record.authority } : {})
+      });
+      if (admission !== 'recorded') {
+        throw new PendingObjectRefusedError(admission);
+      }
+    }
     written.push(target);
     if (size <= partBytes || !bucket.createMultipartUpload) {
       await bucket.put(target, await read(row.object_key, 0, size));
@@ -386,13 +432,42 @@ export async function copyBlobObjects(
 }
 
 /**
+ * Before a copy's rows commit: every object it wrote is in R2. A lost write
+ * fails the copy retryably here, never leaving a committed blob row on
+ * missing bytes.
+ */
+export async function verifyCopiedObjects(
+  bucket: E2eeBlobCopyBucket,
+  keys: readonly string[]
+): Promise<void> {
+  for (const key of keys) {
+    const present = bucket.head
+      ? await bucket.head(key)
+      : await bucket.get(key, { range: { offset: 0, length: 1 } });
+    if (!present) {
+      refuse(
+        503,
+        'E2EE_COPY_SOURCE_UNAVAILABLE',
+        'A file of the project being copied could not be stored right now. Try again.'
+      );
+    }
+  }
+}
+
+/**
  * The rollback: removes copied objects no committed row names (a winning
- * request with the same id may name them; those stay).
+ * request with the same id may name them; those stay). A retry of the same
+ * copy writes the same keys, so each is deleted only under a migration
+ * 0050 claim taken while no row and no other attempt's pending record
+ * (migration 0055) names it: an attempt still writing the key keeps it.
+ * `attempt` is this copy's own pending record, dropped for every key it
+ * no longer has to remove.
  */
 export async function discardCopiedObjects(
   db: D1Database,
   bucket: E2eeBlobCopyBucket | null,
-  keys: readonly string[]
+  keys: readonly string[],
+  attempt?: string
 ): Promise<void> {
   if (!bucket || keys.length === 0) return;
   try {
@@ -404,13 +479,26 @@ export async function discardCopiedObjects(
       .bind(JSON.stringify(keys))
       .all<{ object_key: string }>();
     const named = new Set((results ?? []).map((row) => row.object_key));
-    await Promise.all(
-      keys
-        .filter((key) => !named.has(key))
-        .map((key) => bucket.delete(key).catch(() => undefined))
+    const claim = await claimObjectKeysForDelete(
+      db,
+      keys.filter((key) => !named.has(key)),
+      attempt ? { pending: [attempt] } : {}
     );
+    try {
+      const outcome = await claim.deleteObjects(bucket);
+      if (attempt) {
+        // Only records whose objects this rollback deleted: a key it could
+        // not claim (another attempt's record, another deleter, a row)
+        // keeps its record, so the object stays tracked until a later
+        // sweep removes it. A key a committed row names lost its records
+        // with that commit already.
+        await forgetPendingObjects(db, attempt, [...outcome.deleted]);
+      }
+    } finally {
+      await claim.release();
+    }
   } catch {
-    // Housekeeping; an orphan costs storage, never correctness.
+    // Left pending: the sweep or the project's deletion removes it.
   }
 }
 

@@ -7,7 +7,7 @@ export interface LibraryLayout {
   /** Tile positions needing a recovery-copy footer, in grouped order. */
   footers: number[];
   /** Physical tiles after folder grouping and filtering, rather than project counts. */
-  groups?: Array<{ label: 'Pinned' | 'Projects' | null; count: number }>;
+  groups?: Array<{ label: 'Pinned' | 'Others' | null; count: number }>;
 }
 
 const STORAGE_KEY = 'openzcad.library.layout.v1';
@@ -17,14 +17,17 @@ const isCount = (value: unknown): value is number =>
   value >= 0 &&
   value <= 5000;
 
-function isGroup(
-  value: unknown
-): value is NonNullable<LibraryLayout['groups']>[number] {
+function isGroup(value: unknown): value is {
+  label: 'Pinned' | 'Others' | 'Projects' | null;
+  count: number;
+} {
   if (!value || typeof value !== 'object') return false;
   const group = value as Record<string, unknown>;
   return (
     (group.label === null ||
       group.label === 'Pinned' ||
+      group.label === 'Others' ||
+      // The unpinned group's label before Nov 2026, from a tab opened then.
       group.label === 'Projects') &&
     isCount(group.count)
   );
@@ -65,7 +68,14 @@ export function readLibraryLayout(): LibraryLayout | null {
       attention,
       local,
       footers: footers as number[],
-      ...(validGroups ? { groups } : {})
+      ...(validGroups
+        ? {
+            groups: groups.map((group) => ({
+              label: group.label === 'Projects' ? 'Others' : group.label,
+              count: group.count
+            }))
+          }
+        : {})
     };
   } catch {
     return null;

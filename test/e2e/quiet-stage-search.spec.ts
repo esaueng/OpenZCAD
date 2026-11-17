@@ -32,7 +32,7 @@ test('a question typed into the prompt goes to the stream standing on it', async
   await expect(search).toBeVisible({ timeout: 30_000 });
   await expect(search).toHaveAttribute(
     'placeholder',
-    'Search commands or ask about the model'
+    'Search commands or ask'
   );
   await expect(page.locator('.assistant-panel')).toHaveCount(0);
   const viewerBefore = await page.locator('.viewer-area').boundingBox();
@@ -273,11 +273,12 @@ test('a slash lists commands with ghost completion, and Tab accepts it', async (
 
   const search = promptField(page);
   await expect(search).toBeVisible({ timeout: 30_000 });
-  // ⌘K focuses the bar in place rather than opening a dialog over the model.
+  // ⌘K focuses the bar in place rather than opening a dialog over the model,
+  // and lists the commands that run here (#1445, I20).
   await page.locator('.viewer-area').hover();
   await page.keyboard.press('Control+k');
   await expect(search).toBeFocused();
-  await expect(page.getByRole('listbox', { name: 'Commands' })).toHaveCount(0);
+  await expect(page.getByRole('listbox', { name: 'Commands' })).toBeVisible();
 
   // "/bo" is the start of Box: the rest shows as a ghost, Tab takes it.
   await search.pressSequentially('/bo');

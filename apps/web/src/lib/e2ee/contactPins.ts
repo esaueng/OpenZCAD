@@ -23,6 +23,8 @@
  * tab still holding it at version 1.
  */
 
+import { realmStorageName } from '../deploymentRealm';
+
 const HASH = /^[0-9a-f]{64}$/;
 const MAX_U32 = 0xffffffff;
 
@@ -417,7 +419,7 @@ export function memoryContactPins(): ContactPinStore {
   };
 }
 
-export const CONTACT_PIN_DATABASE = 'openzcad-e2ee-contacts';
+export const CONTACT_PIN_DATABASE = realmStorageName('openzcad-e2ee-contacts');
 const LISTS = 'lists';
 const CONTACTS = 'contacts';
 

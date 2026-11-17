@@ -16,6 +16,7 @@ import {
   sectionClippingPlane
 } from './objects';
 import { isViewerMesh } from '../pick/meshes';
+import { SECTION_HATCH } from './sectionHatch';
 import { updateBodyMaterialOpacity } from '../render/scene';
 
 const xy = (offset = 0) => sectionClippingPlane({ plane: 'XY', offset });
@@ -355,6 +356,45 @@ describe('display-only solid section caps', () => {
     expect(cap.material.opacity).toBe(0.4);
     expect(cap.material.depthWrite).toBe(false);
     expect(cap.material.clippingPlanes).toBeNull();
+  });
+  it('draws the cut hatched and shaded down, never in the body colour', () => {
+    // I49: a cap filled in the body's own colour read as more of its
+    // outside, so cut fins looked like shorter fins.
+    const mesh = new THREE.Mesh(
+      box(),
+      new THREE.MeshPhongMaterial({ color: '#e1a948' })
+    );
+    const root = new THREE.Group().add(mesh);
+    applySectionPlane(root, xy());
+    const cap = capOf(mesh)!;
+    expect(cap.material.userData[SECTION_HATCH]).toBe(true);
+    const lightness = (color: THREE.Color) =>
+      color.getHSL({ h: 0, s: 0, l: 0 }).l;
+    expect(lightness(cap.material.color)).toBeLessThan(
+      lightness(mesh.material.color) - 0.1
+    );
+    // Still shaded down after a hover or appearance change re-reads it.
+    cap.onBeforeRender(
+      ...([] as unknown as Parameters<typeof cap.onBeforeRender>)
+    );
+    expect(cap.material.color.getHex()).not.toBe(mesh.material.color.getHex());
+    const source = THREE.ShaderLib.phong;
+    const shader = {
+      uniforms: THREE.UniformsUtils.clone(source.uniforms),
+      vertexShader: source.vertexShader,
+      fragmentShader: source.fragmentShader
+    } as unknown as THREE.WebGLProgramParametersWithUniforms;
+    cap.material.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
+    expect(shader.fragmentShader).toContain('sectionHatchPhase');
+    expect(shader.uniforms.sectionHatchPitch).toBeDefined();
+    // Its own program: the body's shader is never hatched.
+    expect(cap.material.customProgramCacheKey()).not.toBe(
+      mesh.material.customProgramCacheKey()
+    );
+    // A re-applied plane keeps the hatch though `copy` takes the body's
+    // userData.
+    applySectionPlane(root, xy(2));
+    expect(capOf(mesh)!.material.userData[SECTION_HATCH]).toBe(true);
   });
   it('follows blending changes made after the cap was built', () => {
     const mesh = new THREE.Mesh(box(), new THREE.MeshPhongMaterial());

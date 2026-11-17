@@ -10,6 +10,7 @@ import * as mlsStores from './mls/sessionStore';
 import { shareWorkStore } from './shareWorkStore';
 import { signOutAfterSaving } from './signOut';
 import { SHELF_NAMES_PREFIX } from '../projectShelfNames';
+import { accountRowsKey, shelfEditsKey } from '../sealedShelfState';
 import {
   keyOperationGuard,
   lockAccountsExcept,
@@ -65,6 +66,16 @@ describe('saving before device-key sign-out', () => {
     localStorage.setItem(key, JSON.stringify([['proj_title', 'Verified name', '2026-10-28']]));
     await signOutAfterSaving({ userId, keepDevice, isCurrentSession: () => true, savePending: async () => {}, revokeSession: async () => {} });
     expect(localStorage.getItem(key)).toBeNull();
+  });
+  it.each([undefined, false, true])('forgets listed shelf rows but keeps unsynced shelf edits when signing out with keepDevice %s', async (keepDevice) => {
+    const { userId } = await fixture();
+    const edits = JSON.stringify({ proj_a: { before: { pinned: false, sortOrder: 0, archived: false }, after: { pinned: true, sortOrder: 0, archived: false } } });
+    localStorage.setItem(accountRowsKey(userId), JSON.stringify({ proj_a: { s: 'a', o: 7 } }));
+    localStorage.setItem(shelfEditsKey(userId), edits);
+    await signOutAfterSaving({ userId, keepDevice, isCurrentSession: () => true, savePending: async () => {}, revokeSession: async () => {} });
+    expect(localStorage.getItem(accountRowsKey(userId))).toBeNull();
+    expect(localStorage.getItem(shelfEditsKey(userId))).toBe(edits);
+    localStorage.removeItem(shelfEditsKey(userId));
   });
   it('keeps device keys available for retry if the share journal cannot be erased', async () => {
     const { userId, store } = await fixture();

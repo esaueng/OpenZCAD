@@ -185,17 +185,17 @@ The exact adapter and Remus WASM load lazily inside the geometry worker on the f
 
 Email sign-in uses Cloudflare Email Service and Turnstile. Before enabling a real beta login:
 
-- onboard the `zcad.esau.app` sending domain and keep the `EMAIL` binding restricted to `noreply@zcad.esau.app` for sign-in and project invitations;
-- create a managed Turnstile widget allowlisting `zcad.app`, `zcad.esau.app`, `localhost`, and `127.0.0.1`, then bind its site key as `TURNSTILE_SITE_KEY`;
+- onboard the `beta.zcad.app` and `zcad.app` sending domains and keep each channel's `EMAIL` binding restricted to its own sender (`noreply@beta.zcad.app` for beta, `noreply@zcad.app` for stable) for sign-in and project invitations;
+- create a managed Turnstile widget allowlisting `zcad.app`, `zcad.esau.app`, `dev.zcad.app` (Worker Previews), `localhost`, and `127.0.0.1`, then bind its site key as `TURNSTILE_SITE_KEY`;
 - review the pending remote D1 migrations before deploying with `pnpm deploy:beta`; that guarded command applies them before publishing the Worker and then verifies the live commit and every required readiness gate;
 - follow the [project cloud-sync release runbook](docs/runbooks/project-cloud-sync-release.md) for the migration gate and authenticated two-device canary;
-- set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, `AUTH_EMAIL_FROM=noreply@zcad.esau.app`, `PROJECT_INVITATION_EMAIL_FROM=noreply@zcad.esau.app`, and the canonical `PUBLIC_APP_ORIGIN=https://zcad.app` used for invitation links (the checked-in beta config also sets `PRODUCTION_GUARD`, which makes the worker refuse development auth outright);
+- set `AUTH_MODE=email-code`, `ENVIRONMENT=beta`, `AUTH_EMAIL_FROM` and `PROJECT_INVITATION_EMAIL_FROM` to that channel's sender, and the canonical `PUBLIC_APP_ORIGIN=https://zcad.app` used for invitation links (the checked-in beta config also sets `PRODUCTION_GUARD`, which makes the worker refuse development auth outright);
 - provide secrets, generated with `openssl rand -base64 32` where appropriate and set via `wrangler secret put`, never committed: `AUTH_OTP_PEPPER`, `TURNSTILE_SECRET_KEY`, `SETTINGS_ENCRYPTION_KEY` (must stay stable across deploys), and `AI_IDENTITY_PEPPER`. The deployment preflight lists these required secret names without reading their values; verify the remote Worker secret list before deploying;
 - funding AI from the deployment's own provider key needs the provider secret. The built-in free OpenRouter model admits every verified account with `AI_DEPLOYMENT_FREE_ENABLED`; paid or private models require Premium membership or `AI_DEPLOYMENT_ALLOWED_EMAILS`. Without the provider key, users supply their own tokens instead.
 
 Login codes are single-use and expire after ten minutes. Requests are rate limited per IP, per email and IP, and per email; a throttled request sends no email and answers with the requester's own pending challenge, and a new code never voids an earlier one (a successful sign-in voids them all). Profile or account deletion clears that email's requester limits as well as its pending codes, while preserving the shared IP limit and other emails' limits. After 20 wrong codes for an email in 24 hours, each of its codes allows one try instead of five. Failure counts conservatively remain active until 24 hours after each code expires (at most ten extra minutes), so guesses near expiry cannot age out early. Sessions use a `Secure`, `HttpOnly`, `SameSite=Lax` host cookie; only a SHA-256 hash of the opaque token is stored. Turnstile responses must carry the `email-code` action, and every non-development verification pins the response hostname to the request hostname. `AUTH_LEGACY_OWNER_EMAIL` maps historical `user_beta_dev` projects to their owner's verified email without rewriting documents.
 
-Project invitations are delivered from `noreply@zcad.esau.app` as seven-day,
+Project invitations are delivered from the channel's sender (`noreply@beta.zcad.app` or `noreply@zcad.app`) as seven-day,
 single-use links. The opaque token is carried in the URL fragment, scrubbed
 from the address bar on arrival, and kept only in tab-scoped session storage
 while email-code sign-in completes. A failed email send revokes the invitation
@@ -304,7 +304,8 @@ DELETE /api/projects/:id/invitations/:invitationId
 PATCH|DELETE /api/projects/:id/members/:userId
 GET|POST /api/projects/:id/share-links
 DELETE /api/projects/:id/share-links/:shareLinkId
-GET  /api/share/:token                GET  /api/share/:token/assets/:assetId
+GET  /api/share                      GET  /api/share/assets/:assetId
+GET  /api/share/sources/:artifactId
 POST /api/project-invitations/accept
 POST /api/uploads                     PUT  /api/uploads/:id/content
 POST|DELETE /api/uploads/:id/multipart
@@ -314,7 +315,7 @@ GET  /api/projects/:id/artifacts      GET  /api/artifacts/:id
 GET  /api/artifacts/:id/download
 ```
 
-Cloud settings, personal credentials, projects, artifacts, and collaboration require an email-code session; the assistant also serves local-only users, and share-link reads under `/api/share` need no session at all. The native app exchanges its fixed-origin bearer request for a short-lived, one-use collaboration ticket before opening a WebSocket, so bearer credentials never enter browser code. Artifacts require an uploaded R2 object before finalization; large uploads go through the multipart routes.
+Cloud settings, personal credentials, projects, artifacts, and collaboration require an email-code session; the assistant also serves local-only users, and share-link reads under `/api/share` need no session at all; they carry the link's token in the `x-openzcad-share-token` header rather than the URL (the older `/api/share/:token…` paths are still served for macOS builds and open tabs from before the header). The native app exchanges its fixed-origin bearer request for a short-lived, one-use collaboration ticket before opening a WebSocket, so bearer credentials never enter browser code. Artifacts require an uploaded R2 object before finalization; large uploads go through the multipart routes.
 
 ## AI assistant (experimental)
 
@@ -322,7 +323,7 @@ An optional console assistant turns plain-language requests into reviewable docu
 
 Enable the assistant in **Settings → AI**. Its conversation opens above the bottom prompt, leaving the model at full width; `Ctrl/Cmd+J` toggles it. Plain-language input asks the assistant, while `/` lists commands. Click outside the conversation to tuck it away; the prompt indicates work in progress and unread replies. Each project's thread — what was asked, what the assistant asked back, and which proposals were applied or rejected — is kept on the device and read back when the project reopens, so the scrollback is a record rather than a session.
 
-The built-in MiniMax assistant uses OpenRouter Chat Completions in JSON mode. Providers with native schema enforcement use the Responses API. It sees compact feature history, live exact-topology summaries, and the active selection, so "fillet all edges" resolves stable edge fingerprints without manual picking. Output is constrained to a strict CAD patch schema; you preview, apply, or reject, and apply is one normal undoable transaction. PDF and image drawings can be attached as references. The AI can only propose an allowlisted command patch — it cannot directly mutate a document, viewport, or kernel.
+The built-in assistant (NVIDIA Nemotron 3.5 Super VL, free, through OpenRouter) uses the Responses API with native schema enforcement; a model without it, such as MiniMax, uses Chat Completions in JSON mode. It sees compact feature history, live exact-topology summaries, and the active selection, so "fillet all edges" resolves stable edge fingerprints without manual picking. Output is constrained to a strict CAD patch schema; you preview, apply, or reject, and apply is one normal undoable transaction. PDF and image drawings can be attached as references. The AI can only propose an allowlisted command patch — it cannot directly mutate a document, viewport, or kernel.
 
 **Fillet all edges** is also available without a provider key. Ask "add a fillet on all edges" or "fillet all edges by 1 mm", or choose the matching assistant action. It uses the complete local edge inventory of the named, selected, or sole part, excludes periodic seams, and previews one fillet feature before Apply. Without a radius it uses the manual tool's default of 2 document units. Explicit radius units are converted to document units. Unsupported corner combinations refuse the entire proposal and preserve the original part; joined box corners are covered, while concave bracket corners remain a kernel limitation. The viewport fillet/chamfer card also offers **Select all edges**.
 
@@ -333,7 +334,7 @@ OpenRouter is the default provider. For local development, export the key in the
 ```dotenv
 AI_PROVIDER=openrouter
 OPENROUTER_API_KEY=your_key_here
-AI_MODEL=minimax/minimax-m3.1-flash:free
+AI_MODEL=nvidia/nemotron-3.5-super-vl:free
 AI_DEPLOYMENT_FREE_ENABLED=true
 ```
 
@@ -342,7 +343,7 @@ Runtime bindings are configured as Wrangler vars or secrets:
 - `AI_PROVIDER` — `openrouter`, `openai`, or `responses-compatible`.
 - `OPENROUTER_API_KEY` / `OPENAI_API_KEY` / `AI_API_KEY` — the server-side secret for the configured provider; `AI_API_KEY` is never sent to OpenRouter (see below). Never shipped to the browser or committed.
 - `AI_BASE_URL` — optional endpoint override; required for `responses-compatible`.
-- `AI_MODEL` — defaults to `minimax/minimax-m3.1-flash:free` on OpenRouter or `gpt-6-luna` on direct OpenAI. Personal model settings remain independent; users can choose another exact provider model identifier with their own key.
+- `AI_MODEL` — defaults to `nvidia/nemotron-3.5-super-vl:free` on OpenRouter or `gpt-6-luna` on direct OpenAI. Personal model settings remain independent; users can choose another exact provider model identifier with their own key.
 - `AI_REASONING_EFFORT` — `low`/`medium`/`high`/`xhigh`, default `high`.
 - `AI_MAX_OUTPUT_TOKENS` — default `32000`; reasoning shares the budget, and too low a ceiling truncates patches mid-stream as a normal incomplete response.
 - `AI_SITE_URL` / `AI_APP_NAME` — optional OpenRouter attribution.
@@ -353,9 +354,9 @@ Runtime bindings are configured as Wrangler vars or secrets:
 
 Signed-in users can instead store a personal provider token (Settings → AI). Tokens are encrypted with AES-GCM by the Worker (`SETTINGS_ENCRYPTION_KEY`) and never enter project documents or browser storage. `GET /api/assistant/status` never exposes provider secrets or deployment availability to a signed-out or ineligible request. Public request identities use HMAC-SHA-256 values keyed by `AI_IDENTITY_PEPPER`.
 
-The built-in assistant uses **MiniMax M3.1 Flash (free)** through OpenRouter. It has no personal-key requirement or model usage charge, but account quotas, shared OpenRouter free-tier limits and provider availability apply; free access is not unlimited or guaranteed. Free-model requests keep the exact `:free` model identifier and cap prompt, completion and per-request provider prices at zero. They never substitute a paid model.
+The built-in assistant uses **NVIDIA Nemotron 3.5 Super VL (free)** through OpenRouter: it reads attached drawings and images, reasons, and enforces the CAD reply's JSON schema natively. (It replaced MiniMax M3.1 Flash (free), which OpenRouter withdrew on 2026-11-14.) It has no personal-key requirement or model usage charge, but account quotas, shared OpenRouter free-tier limits and provider availability apply; free access is not unlimited or guaranteed. Free-model requests keep the exact `:free` model identifier and cap prompt, completion and per-request provider prices at zero. They never substitute a paid model.
 
-MiniMax supports JSON output, [without native JSON-schema enforcement](https://openrouter.ai/minimax/minimax-m3.1-flash:free). Its requests therefore include the exact capability-filtered CAD reply schema in the system prompt and use JSON mode on the Chat Completions endpoint. The Worker buffers the bounded response and checks every required field, value type, enum, numeric/array/pattern constraint and extra key against that schema, then runs the existing semantic CAD reply parser with the current digest. Only valid output is returned to the client. Invalid output becomes a sanitized failure event; the existing client retry makes at most one new request, with corrective schema instructions, a fresh account quota permit and the same free model/price caps. A second invalid reply fails closed. Connection tests use the same validation. Native-schema providers retain strict structured output.
+A model chosen in `AI_MODEL` or personal settings may lack native schema enforcement. MiniMax M3.1 Flash, for one, supports JSON output [without native JSON-schema enforcement](https://openrouter.ai/minimax/minimax-m3.1-flash:free). Its requests therefore include the exact capability-filtered CAD reply schema in the system prompt and use JSON mode on the Chat Completions endpoint. The Worker buffers the bounded response and checks every required field, value type, enum, numeric/array/pattern constraint and extra key against that schema, then runs the existing semantic CAD reply parser with the current digest. Only valid output is returned to the client. Invalid output becomes a sanitized failure event; the existing client retry makes at most one new request, with corrective schema instructions, a fresh account quota permit and the same free model/price caps. A second invalid reply fails closed. Connection tests use the same validation. Native-schema providers retain strict structured output.
 
 Settings → AI Assistant explains that prompts, conversation, compact model context and user-selected attachments go to the AI service. OpenRouter and its model providers may retain data or use it for training and service improvement according to their [data policies](https://openrouter.ai/docs/guides/privacy/provider-logging). The notice does not claim zero retention or that a personal key prevents training; the selected provider’s policies and charges apply. Raw STEP files and meshes are not sent.
 

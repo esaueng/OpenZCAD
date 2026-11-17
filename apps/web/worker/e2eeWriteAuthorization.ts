@@ -1,8 +1,21 @@
+import {
+  MAX_ACCOUNT_PROJECTS,
+  MAX_ACCOUNT_STORAGE_BYTES
+} from '@openzcad/shared';
 import { sessionWriteCredential } from './sessionCredentials';
 
 export interface E2eeWriteAuthorization {
   readonly sql: string;
   readonly binds: readonly unknown[];
+  /**
+   * The session or desktop token the write is admitted under, so a write
+   * that ends the account's other sessions can keep this one. Never sent
+   * to a browser.
+   */
+  readonly credential?: {
+    readonly table: 'auth_sessions' | 'desktop_access_tokens';
+    readonly tokenHash: string;
+  };
   dispose(): Promise<void>;
 }
 
@@ -26,12 +39,23 @@ export async function admitDevelopmentE2eeWrite(
   const fence =
     'NOT EXISTS (SELECT 1 FROM account_erasure_requests WHERE user_id = ?)';
   await db.batch([
+    // A row without an email is Free; write its limits rather than leave
+    // the 2 GiB column defaults for the quota triggers to read.
     db
       .prepare(
-        `INSERT INTO users (id, email, created_at)
-        SELECT ?, NULL, ? WHERE ${fence} ON CONFLICT(id) DO NOTHING`
+        `INSERT INTO users
+          (id, email, created_at, artifact_limit_bytes, project_limit,
+           project_storage_limit_bytes)
+        SELECT ?, NULL, ?, ?, ?, ? WHERE ${fence} ON CONFLICT(id) DO NOTHING`
       )
-      .bind(userId, new Date().toISOString(), userId),
+      .bind(
+        userId,
+        new Date().toISOString(),
+        MAX_ACCOUNT_STORAGE_BYTES,
+        MAX_ACCOUNT_PROJECTS,
+        MAX_ACCOUNT_STORAGE_BYTES,
+        userId
+      ),
     db
       .prepare(
         `INSERT INTO auth_sessions (token_hash, user_id, created_at, expires_at)
@@ -89,6 +113,7 @@ function writeAuthorization(
   // still use live rows inside the transaction, so they revoke every write.
   const admittedAt = Math.floor(Date.now() / 1000);
   return {
+    credential: { table, tokenHash },
     sql: `NOT EXISTS (SELECT 1 FROM account_erasure_requests WHERE user_id = ?)
       AND EXISTS (SELECT 1 FROM ${table}
         WHERE token_hash = ? AND user_id = ? AND expires_at >= ?

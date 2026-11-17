@@ -2,8 +2,21 @@ import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AccountDeletionPreview } from '@openzcad/shared';
-import { api } from '../lib/api';
-import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
+import { api, ApiError } from '../lib/api';
+import {
+  CloudDataDeletionDialog,
+  deletionFailureMessage
+} from './CloudDataDeletionDialog';
+import { setPersonalInfoVisible, usePersonalInfoVisible } from './PersonalInfo';
+
+/** What the rest of the app reads from the shared switch. */
+function ElsewhereInTheApp() {
+  return (
+    <output aria-label="Personal info elsewhere">
+      {usePersonalInfoVisible() ? 'shown' : 'hidden'}
+    </output>
+  );
+}
 
 const preview: AccountDeletionPreview = {
   confirmationKind: 'phrase',
@@ -47,6 +60,32 @@ describe('CloudDataDeletionDialog', () => {
       screen.getByText(/at least 3 KiB of document and revision data/)
     ).toBeVisible();
   });
+
+  // Design review I84: nothing said what deleting the profile does to
+  // encryption keys.
+  it.each([
+    ['profile', true],
+    ['all', true],
+    ['projects', false]
+  ] as const)(
+    'for %s, says whether the encryption keys go too',
+    async (scope, shown) => {
+      vi.spyOn(api, 'accountDeletionPreview').mockResolvedValue(preview);
+      render(
+        <CloudDataDeletionDialog
+          scope={scope}
+          onConfirm={vi.fn()}
+          onClose={vi.fn()}
+        />
+      );
+      await screen.findByLabelText('Deletion confirmation');
+      const sentence = screen.queryByText(
+        /Your recovery key will no longer unlock anything\./
+      );
+      if (shown) expect(sentence).toBeVisible();
+      else expect(sentence).toBeNull();
+    }
+  );
 
   it('keeps focus on the delete button while it runs and after it fails', async () => {
     const user = userEvent.setup();
@@ -95,7 +134,8 @@ describe('CloudDataDeletionDialog', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it('describes a masked email instead of styling it as text to type', async () => {
+  it('blurs a stand-in for the email until it is clicked', async () => {
+    const user = userEvent.setup();
     vi.spyOn(api, 'accountDeletionPreview').mockResolvedValue({
       ...preview,
       confirmationKind: 'email',
@@ -109,10 +149,137 @@ describe('CloudDataDeletionDialog', () => {
       />
     );
 
-    const prompt = await screen.findByText(
-      'Type your email address to confirm'
-    );
-    expect(prompt.querySelector('strong')).toBeNull();
+    const show = await screen.findByRole('button', {
+      name: 'Show personal info'
+    });
+    expect(show.closest('span')).toHaveTextContent(/^Type .+ to confirm$/);
     expect(document.body.innerHTML).not.toContain('person@example.com');
+    const field = screen.getByLabelText('Deletion confirmation');
+    act(() => field.blur());
+    expect(field).toHaveAttribute('type', 'password');
+    // Not inside a label: a label with no target takes its first labelable
+    // descendant, which would make the reveal button the label's control.
+    expect(show.closest('label')).toBeNull();
+    await user.click(show);
+    expect(
+      screen.getByRole('button', { name: 'person@example.com' })
+    ).toBeVisible();
+    // Clicking the text inside the label reveals it without moving focus to
+    // the field, which would also unmask it for another reason.
+    expect(field).not.toHaveFocus();
+    expect(field).toHaveAttribute('type', 'text');
+  });
+
+  // One switch for the whole app: the dialog used to keep its own, so an
+  // email shown in Settings was hidden again here, and showing it here did
+  // not reach Settings or project sharing.
+  it('follows the shared personal info switch both ways', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'accountDeletionPreview').mockResolvedValue({
+      ...preview,
+      confirmationKind: 'email',
+      confirmationText: 'person@example.com'
+    });
+    act(() => setPersonalInfoVisible(true));
+    render(
+      <>
+        <ElsewhereInTheApp />
+        <CloudDataDeletionDialog
+          scope="profile"
+          onConfirm={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </>
+    );
+
+    // Shown elsewhere, it opens shown.
+    const shown = await screen.findByRole('button', {
+      name: 'person@example.com'
+    });
+    const field = screen.getByLabelText('Deletion confirmation');
+    act(() => field.blur());
+    expect(field).toHaveAttribute('type', 'text');
+
+    // Hidden here, it is hidden everywhere.
+    await user.click(shown);
+    expect(document.body.innerHTML).not.toContain('person@example.com');
+    expect(field).toHaveAttribute('type', 'password');
+    expect(screen.getByLabelText('Personal info elsewhere')).toHaveTextContent(
+      'hidden'
+    );
+
+    // And shown here, everywhere.
+    await user.click(
+      screen.getByRole('button', { name: 'Show personal info' })
+    );
+    expect(screen.getByLabelText('Personal info elsewhere')).toHaveTextContent(
+      'shown'
+    );
+  });
+
+  // Design review I78: the masked email field hid typos, and a mismatch only
+  // left the button disabled.
+  it('unmasks the email while typing and says when it does not match', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'accountDeletionPreview').mockResolvedValue({
+      ...preview,
+      confirmationKind: 'email',
+      confirmationText: 'person@example.com'
+    });
+    render(
+      <CloudDataDeletionDialog
+        scope="profile"
+        onConfirm={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    const field = await screen.findByLabelText('Deletion confirmation');
+    expect(field).toHaveFocus();
+    expect(field).toHaveAttribute('type', 'text');
+    // A prefix of the address is not yet a mismatch.
+    await user.type(field, 'person@');
+    expect(screen.queryByText(/doesn’t match/)).toBeNull();
+    await user.type(field, 'exmaple.com');
+    expect(
+      screen.getByText('That doesn’t match your account’s email address.')
+    ).toBeVisible();
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    await user.tab();
+    expect(field).toHaveAttribute('type', 'password');
+    expect(
+      screen.getByText('That doesn’t match your account’s email address.')
+    ).toBeVisible();
+  });
+
+  // Design review I84.
+  it('offers to download the data first', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'accountDeletionPreview').mockResolvedValue(preview);
+    const onDownloadFirst = vi.fn();
+    render(
+      <CloudDataDeletionDialog
+        scope="projects"
+        onConfirm={vi.fn()}
+        onClose={vi.fn()}
+        onDownloadFirst={onDownloadFirst}
+      />
+    );
+    await user.click(
+      await screen.findByRole('button', { name: 'Download your data first' })
+    );
+    expect(onDownloadFirst).toHaveBeenCalledOnce();
+  });
+
+  it('says a server failure may have stopped partway, and a refusal did nothing', () => {
+    expect(
+      deletionFailureMessage(new ApiError(500, 'Internal error.'))
+    ).toMatch(
+      /Internal error\. Deletion may have stopped partway.*Nothing on this device was deleted\. Try again to finish\./
+    );
+    expect(
+      deletionFailureMessage(
+        new ApiError(400, 'Type your email address exactly to continue.')
+      )
+    ).toBe('Type your email address exactly to continue.');
   });
 });

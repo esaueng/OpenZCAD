@@ -109,7 +109,7 @@ describe('motion study helpers', () => {
     );
     expect(created).toMatchObject({
       id: 'study_new',
-      name: 'Motion 1',
+      name: 'Animation 1',
       durationS: 2,
       playback: 'loop'
     });
@@ -132,9 +132,17 @@ describe('motion study helpers', () => {
 
   it('names new studies after the first unused number', () => {
     const set = assembly();
-    expect(nextStudyName(undefined)).toBe('Motion 1');
-    set.studies = [study(), { ...study(), id: 'study_3', name: 'Motion 3' }];
-    expect(nextStudyName(set)).toBe('Motion 2');
+    expect(nextStudyName(undefined)).toBe('Animation 1');
+    set.studies = [
+      { ...study(), name: 'Animation 1' },
+      { ...study(), id: 'study_3', name: 'Animation 3' }
+    ];
+    expect(nextStudyName(set)).toBe('Animation 2');
+    // A study an older version named "Motion 1" keeps its name and does not
+    // hold up the new numbering (review I57).
+    set.studies = [study()];
+    expect(set.studies[0]!.name).toBe('Motion 1');
+    expect(nextStudyName(set)).toBe('Animation 1');
   });
 
   it('inserts keys in order and replaces one within 1 ms', () => {

@@ -126,7 +126,7 @@ describe('critical and affected CI selection', () => {
       e2e: 'full'
     });
     expect(
-      selectCI(['.github/workflows/fleet-ci-v6.yml'], { deleted: true })
+      selectCI(['.github/workflows/checks.yml'], { deleted: true })
     ).toEqual({ unit: 'full', e2e: 'smoke' });
   });
 

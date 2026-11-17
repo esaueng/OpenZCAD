@@ -385,7 +385,7 @@ describe('composite option budgets', () => {
         screen.queryAllByRole('option', { name: /· Corner/ })
       ).toHaveLength(0);
       expect(
-        screen.getAllByRole('option', { name: 'Line 1.start' })
+        screen.getAllByRole('option', { name: 'Start of Line 1' })
       ).toHaveLength(2);
       const row = screen.getByRole('listitem');
       expect(row.textContent).toContain('Unresolved · Reference');

@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { RefreshCcw, X } from 'lucide-react';
 import type { KeymapOverrides } from '@openzcad/shared';
 import {
@@ -33,6 +33,32 @@ export function KeymapEditor({ overrides, onChange }: KeymapEditorProps) {
     message: string;
   } | null>(null);
   const customized = Object.keys(overrides).length;
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  // A removed key's button goes with its chip, and focus fell to <body>
+  // (13 November review I9). It moves to the chip that took its place, the
+  // one before it when it was last, or the row's Add key once none is left.
+  const pendingFocusRef = useRef<{ commandId: string; index: number } | null>(
+    null
+  );
+  useEffect(() => {
+    const pending = pendingFocusRef.current;
+    if (!pending) return;
+    pendingFocusRef.current = null;
+    const row = Array.from(
+      editorRef.current?.querySelectorAll<HTMLElement>(
+        '[data-keymap-command]'
+      ) ?? []
+    ).find((element) => element.dataset.keymapCommand === pending.commandId);
+    if (!row) return;
+    const removes = row.querySelectorAll<HTMLButtonElement>(
+      '.keymap-chip button'
+    );
+    const target =
+      removes.length > 0
+        ? removes[Math.min(pending.index, removes.length - 1)]
+        : row.querySelector<HTMLButtonElement>('.keymap-actions button');
+    target?.focus();
+  }, [overrides]);
 
   const capture = (command: KeymapCommand, event: KeyboardEvent) => {
     if (event.key === 'Tab') {
@@ -68,7 +94,7 @@ export function KeymapEditor({ overrides, onChange }: KeymapEditorProps) {
   };
 
   return (
-    <div className="keymap-editor">
+    <div className="keymap-editor" ref={editorRef}>
       <div className="keymap-editor-bar">
         <p role="status">
           {customized === 0
@@ -127,7 +153,7 @@ export function KeymapEditor({ overrides, onChange }: KeymapEditorProps) {
                           {bindings.length === 0 ? (
                             <span className="keymap-unbound">Unassigned</span>
                           ) : (
-                            bindings.map((chord) => (
+                            bindings.map((chord, index) => (
                               <span className="keymap-chip" key={chord}>
                                 <kbd>{referenceKeyLabel(chord)}</kbd>
                                 <button
@@ -136,6 +162,10 @@ export function KeymapEditor({ overrides, onChange }: KeymapEditorProps) {
                                   aria-label={`Remove ${referenceKeyLabel(chord)} from ${command.label}`}
                                   onClick={() => {
                                     setRefusal(null);
+                                    pendingFocusRef.current = {
+                                      commandId: command.id,
+                                      index
+                                    };
                                     onChange(
                                       withBindings(
                                         overrides,

@@ -5,7 +5,8 @@ import {
   MODEL_ONLY,
   railPanelButton,
   revealModelPanel,
-  stubApi
+  stubApi,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 test('round-trips diameter entry and edits a cylinder cap by total height', async ({
@@ -101,6 +102,10 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
     .toBeCloseTo(17.4, 5);
 
   await selectCylinderSurface('top-cap');
+  // A face starts on Offset (QA 2026-11-14 finding #9); this edits the
+  // cap by its Total height.
+  await expect(valueChip).toHaveText('+0 mm');
+  await switchFaceOffsetToTotal(page);
   await expect(valueChip).toHaveText('28 mm');
   await valueChip.click();
   const totalKeypad = page.getByRole('dialog', { name: 'Total value' });
@@ -172,8 +177,9 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
     page.getByRole('region', { name: 'Offset Face operation' })
   ).toBeVisible();
   await awaitArmedHandle();
+  // Typing straight onto a picked face enters an Offset, the signed move.
   await page.keyboard.type('-.5');
-  const offsetKeypad = page.getByRole('dialog', { name: 'Total value' });
+  const offsetKeypad = page.getByRole('dialog', { name: 'Offset value' });
   await expect(offsetKeypad).toBeVisible();
   await expect(offsetKeypad.getByRole('textbox')).toHaveValue('-.5');
   await page.keyboard.press('Escape');

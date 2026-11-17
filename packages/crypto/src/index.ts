@@ -171,7 +171,9 @@ export {
 export {
   DEVICE_LIST_VERSION_1,
   DEVICE_LIST_VERSION_2,
+  DEVICE_LIST_VERSION_3,
   MAX_DEVICE_LABEL_BYTES,
+  MAX_DEVICE_LIST_REALM_BYTES,
   MAX_DEVICE_LIST_ENTRIES,
   MAX_DEVICE_LIST_ENTRY_BYTES,
   MAX_LISTED_DEVICES,
@@ -198,6 +200,7 @@ export {
   encodeDeviceListEntry,
   encodeGroupReset,
   encodeRevocationCutoffs,
+  isDeviceListRealm,
   nextDeviceListEntry,
   publicKeyOfPrivateKey,
   recoveryTarget,
@@ -236,15 +239,28 @@ export {
 export {
   CONTACT_ACTIONS,
   CONTACTS_ENTRY_VERSION_1,
+  CONTACTS_LIST_KEY_INFO,
   MAX_CONTACTS_ENTRIES,
   MAX_CONTACTS_ENTRY_BYTES,
+  SEALED_CONTACTS_PLAINTEXT_BYTES,
+  SEALED_CONTACTS_RECORD_BYTES,
+  SEALED_CONTACTS_RECORD_VERSION_1,
   contactDeviceListPin,
   contactsEntryHash,
   decodeContactsEntry,
   encodeContactsEntry,
+  isSealedContactsRecord,
   nextContactsEntry,
+  openSealedContactsRecord,
+  readSealedContactsHeader,
+  sealContactsEntries,
+  sealContactsEntry,
+  sealedContactsRecordHash,
   signContactsEntry,
+  signSealedContactsRecord,
   verifyContactsList,
+  verifySealedContactsChain,
+  verifySealedContactsList,
   type ContactAction,
   type ContactDeviceListHead,
   type ContactRecord,
@@ -252,9 +268,14 @@ export {
   type ContactsChange,
   type ContactsEntry,
   type ContactsListPin,
+  type SealContactsEntryInput,
+  type SealedContactsHead,
+  type SealedContactsHeader,
   type SignedContactsEntry,
   type VerifiedContactsList,
-  type VerifyContactsListOptions
+  type VerifiedSealedContactsChain,
+  type VerifyContactsListOptions,
+  type VerifySealedContactsListOptions
 } from './contacts';
 export {
   ASSISTANT_CONSENT_MAC_BYTES,
@@ -342,6 +363,15 @@ export {
   type LibraryFoldersHeader
 } from './library-folders';
 export {
+  ACCOUNT_SETTINGS_RECORD,
+  openRecord,
+  readSealedRecordHeader,
+  sealRecord,
+  SEALED_RECORD_VERSION_1,
+  type SealedRecordHeader,
+  type SealedRecordKind
+} from './sealed-records';
+export {
   MAX_DELEGATED_DEVICES,
   MAX_SHARE_AUTHORITY_BYTES,
   MAX_SHARE_AUTHORITY_LIFETIME_MS,
@@ -376,6 +406,7 @@ export {
   openShareKey,
   sameShareLinkSet,
   shareKeyHash,
+  shareSnapshotPredatesAuthority,
   signShareAuthority,
   signShareDelegation,
   signShareKeyWrap,
@@ -409,17 +440,29 @@ export {
   type VerifyShareLinkSetOptions
 } from './share-links';
 export {
+  INVITATION_ACCEPTANCE_VERSION_1,
   INVITATION_CLOCK_SKEW_MS,
   INVITATION_ROLES,
+  MAX_INVITATION_ACCEPTANCE_BYTES,
   MAX_PROJECT_INVITATION_BYTES,
   MAX_PROJECT_INVITATION_LIFETIME_MS,
   PROJECT_INVITATION_VERSION_1,
+  PROJECT_INVITATION_VERSION_2,
+  PROJECT_INVITATION_VERSION_3,
   ProjectInvitationError,
+  decodeInvitationAcceptance,
   decodeProjectInvitation,
+  encodeInvitationAcceptance,
   encodeProjectInvitation,
   invitationEmailHash,
+  invitationLinkTokenHash,
+  invitationStatementHash,
+  signInvitationAcceptance,
   signProjectInvitation,
+  verifyInvitationAcceptance,
   verifyProjectInvitation,
+  type AcceptanceExpectations,
+  type InvitationAcceptance,
   type InvitationExpectations,
   type InvitationFailure,
   type InvitationRole,
@@ -445,3 +488,10 @@ export {
   type MlsAuthorityTrust,
   type SignedMlsAuthorityTrust
 } from './mls-authority';
+export {
+  MLS_COMMIT_SIGNATURE_BYTES,
+  signMlsCommitSubmission,
+  verifyMlsCommitSubmission,
+  type MlsCommitSubmission,
+  type MlsCommitSubmissionKind
+} from './mls-commit';

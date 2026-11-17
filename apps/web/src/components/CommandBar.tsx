@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Paperclip } from 'lucide-react';
+import { Check, CircleHelp, Paperclip, X } from 'lucide-react';
 import {
   platformShortcutLabel,
   type PlatformShortcutCopy
@@ -16,6 +16,7 @@ import {
   recordRecentCommand
 } from '../lib/commandSearch';
 import { ShortcutKeys } from './ShortcutKeys';
+import { TOUCH_ONLY_QUERY, useMediaQuery } from '../hooks/useMediaQuery';
 
 const LIST_ID = 'command-palette-list';
 const ASK_HINT_ID = 'command-bar-ask-hint';
@@ -29,6 +30,13 @@ export const COMMAND_PREFIX = '/';
 
 const KEYS_RUN = '↑↓ move · Tab completes · Enter runs · Esc clears';
 const KEYS_ASK = '↑ picks a command · Enter asks the assistant · Esc clears';
+/**
+ * The same lane on a touch-only device, which has no arrows, Tab or Esc to
+ * press: at 390px the key list was cut to "Enter runs · Es…" (I23).
+ */
+const TOUCH_RUN = 'Tap a command to run it';
+const TOUCH_ASK = 'Tap a command, or Ask to send your words to the assistant';
+const TOUCH_ASK_HINT = 'Return asks the assistant · type / for commands';
 
 export interface PaletteCommand {
   id: string;
@@ -101,7 +109,26 @@ interface CommandBarProps {
    * holds only the commands that act on it.
    */
   pick?: string | null;
+  /**
+   * The newest reply in a few words, shown in the closed bar while it is
+   * unread so a failure or a change waiting is seen without opening the
+   * conversation. Pressing it opens the conversation.
+   */
+  result?: CommandBarResult | null;
+  onResult?(): void;
 }
+
+export interface CommandBarResult {
+  tone: 'error' | 'proposal' | 'questions' | 'reply';
+  text: string;
+}
+
+const RESULT_ICON = {
+  error: X,
+  proposal: Check,
+  questions: CircleHelp,
+  reply: Check
+} as const;
 
 /**
  * The rest of the highlighted command's name, when what is typed is its
@@ -115,6 +142,15 @@ function completionOf(typed: string, command: PaletteCommand | undefined) {
   return label.toLowerCase().startsWith(typed.toLowerCase())
     ? label.slice(typed.length)
     : '';
+}
+
+/**
+ * What a search that found nothing says: where to look instead, rather than
+ * a dead end (I20).
+ */
+export function noMatchMessage(typed: string): string {
+  const words = typed.trim();
+  return `No command matches “${words}”. Clear the field and press ↓ to list every command, or search “help” for the keyboard shortcuts.`;
 }
 
 /**
@@ -144,12 +180,20 @@ export function CommandBar({
   unread = false,
   context = null,
   draft = null,
-  pick = null
+  pick = null,
+  result = null,
+  onResult
 }: CommandBarProps) {
   const [query, setQuery] = useState('');
+  // The empty field's list of commands, asked for with ArrowDown or by the
+  // host's Ctrl+K (an empty draft). Empty, the field otherwise lists
+  // nothing, so neither key looked like it did anything (I20).
+  const [browseEmpty, setBrowseEmpty] = useState(false);
   // Null is the default row: the ask row when there is one, else the best
   // match.
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const touchOnly = useMediaQuery(TOUCH_ONLY_QUERY);
+  const keysRun = touchOnly ? TOUCH_RUN : KEYS_RUN;
   // Most recent first; read once, then kept in step with what runs here.
   const [recentIds, setRecentIds] = useState(loadRecentCommands);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -165,8 +209,12 @@ export function CommandBar({
   // Plain words search as the slash does. Without an assistant they are
   // only a search, so the bar reads as one (the glyph turns, the stream
   // steps aside) exactly as it does for "/".
-  const searching = slashMode || question.length > 0;
-  const commandMode = slashMode || (question.length > 0 && !canAsk);
+  const searching =
+    slashMode || question.length > 0 || (browseEmpty && query.length === 0);
+  const commandMode =
+    slashMode ||
+    (question.length > 0 && !canAsk) ||
+    (browseEmpty && query.length === 0);
   const prefix = slashMode ? COMMAND_PREFIX : '';
   const typed = query.slice(prefix.length);
   // The host rebuilds the command list every render; only rank it while
@@ -194,8 +242,12 @@ export function CommandBar({
   const askRow = canAsk && question.length > 0 && hasMatches;
   const rowCount = matches.length + (askRow ? 1 : 0);
   const askIndex = askRow ? matches.length : -1;
+  // The default row is one that can run: a disabled best match stays
+  // listed with its reason but is not the row Enter or Tab would take
+  // (I24: a disabled Extrude was highlighted and ghost-completed).
+  const firstEnabled = matches.findIndex((command) => !command.disabledReason);
   const clampedIndex = Math.min(
-    activeIndex ?? (askRow ? askIndex : 0),
+    activeIndex ?? (askRow ? askIndex : Math.max(firstEnabled, 0)),
     Math.max(rowCount - 1, 0)
   );
   const activeCommand =
@@ -206,7 +258,10 @@ export function CommandBar({
   // that found nothing. Say what Enter will do with them, and where the
   // commands are.
   const askHintShown = open && canAsk && question.length > 0 && !askRow;
-  const completion = listShown ? completionOf(typed, activeCommand) : '';
+  const completion =
+    listShown && !activeCommand?.disabledReason
+      ? completionOf(typed, activeCommand)
+      : '';
 
   useEffect(() => {
     const input = inputRef.current;
@@ -228,6 +283,7 @@ export function CommandBar({
     handledDraftId.current = draft.id;
     setQuery(draft.text);
     setActiveIndex(null);
+    setBrowseEmpty(draft.text === '');
     onOpenChange(true);
     const input = inputRef.current;
     if (input) {
@@ -254,6 +310,7 @@ export function CommandBar({
   function reset() {
     setQuery('');
     setActiveIndex(null);
+    setBrowseEmpty(false);
   }
 
   function dismiss() {
@@ -282,7 +339,11 @@ export function CommandBar({
     if (!onAsk || !question) {
       return;
     }
-    dismiss();
+    // The prompt keeps focus once the question is sent: closing the bar
+    // left it on <body>, so when the answer landed the next key went to the
+    // workspace's single-key shortcuts (13 November review I9). The follow-up
+    // is typed here, and Escape still hands focus back as before.
+    reset();
     onAsk(question);
   }
 
@@ -293,10 +354,14 @@ export function CommandBar({
     if (context) {
       return `Ask about ${context}…`;
     }
-    return 'Search commands or ask about the model';
+    return 'Search commands or ask';
   }
 
   const empty = query.length === 0;
+  // Only while the bar is closed and the reply unread: open, the bar is the
+  // field, and a read reply needs no second telling.
+  const resultShown = Boolean(result && unread && !open && onResult);
+  const ResultIcon = result ? RESULT_ICON[result.tone] : null;
 
   return (
     // Marked for the stream's click-off check (ASSISTANT_PROMPT_SELECTOR).
@@ -306,7 +371,7 @@ export function CommandBar({
           commandMode ? ' command' : ''
         }${listShown ? ' listing' : ''}${busy ? ' busy' : ''}${
           unread ? ' unread' : ''
-        }`}
+        }${resultShown ? ' has-result' : ''}`}
         onMouseDown={(event) => {
           // The glyph and the key badge are part of the field: a press on
           // them focuses it rather than whatever lies behind.
@@ -334,7 +399,7 @@ export function CommandBar({
                 ? ''
                 : browsing
                   ? 'Nothing runs here now. Type to search every command.'
-                  : 'No matching command.'}
+                  : noMatchMessage(typed)}
             </p>
             {hasRows && (
               <div
@@ -419,10 +484,12 @@ export function CommandBar({
             {hasRows && (
               <p className="command-bar-keys" aria-hidden="true">
                 {clampedIndex === askIndex
-                  ? KEYS_ASK
+                  ? touchOnly
+                    ? TOUCH_ASK
+                    : KEYS_ASK
                   : browsing && pick
-                    ? `For ${pick} · type to search all · ${KEYS_RUN}`
-                    : KEYS_RUN}
+                    ? `For ${pick} · type to search all · ${keysRun}`
+                    : keysRun}
               </p>
             )}
           </div>
@@ -433,7 +500,9 @@ export function CommandBar({
             onMouseDown={(event) => event.preventDefault()}
           >
             <p className="command-bar-keys" id={ASK_HINT_ID}>
-              Enter asks the assistant · type / for commands
+              {touchOnly
+                ? TOUCH_ASK_HINT
+                : 'Enter asks the assistant · type / for commands'}
             </p>
           </div>
         )}
@@ -553,8 +622,10 @@ export function CommandBar({
                 // One press leaves. Clearing the text but keeping the focus
                 // made the next "?" type into the field rather than open the
                 // shortcuts. Only an empty field offers the press to the
-                // stream first, whose proposal it rejects and nothing else.
-                if (!empty || !sendAssistantPromptKey('reject')) {
+                // stream first, which takes it to hide a proposal's preview
+                // and for nothing else: it once rejected the proposal, for
+                // good, on a press meant to leave the field.
+                if (!empty || !sendAssistantPromptKey('escape')) {
                   dismiss();
                 }
               } else if (meta && event.key === 'ArrowUp') {
@@ -574,6 +645,17 @@ export function CommandBar({
                     recentIds
                   ).findIndex((command) => command.id === completed.id)
                 );
+              } else if (
+                empty &&
+                !listShown &&
+                event.key === 'ArrowDown' &&
+                !event.altKey &&
+                !meta
+              ) {
+                // An empty field lists the commands that run here.
+                event.preventDefault();
+                setBrowseEmpty(true);
+                setActiveIndex(null);
               } else if (listShown && hasRows && event.key === 'ArrowDown') {
                 event.preventDefault();
                 setActiveIndex(Math.min(clampedIndex + 1, rowCount - 1));
@@ -636,6 +718,24 @@ export function CommandBar({
               }}
             />
           </span>
+        )}
+        {resultShown && result && ResultIcon && (
+          <button
+            type="button"
+            className={`command-bar-result ${result.tone}`}
+            title={result.text}
+            aria-label={`${result.text}. Open the assistant`}
+            onClick={() => {
+              onResult?.();
+              // The button goes with the unread reply it names: focus the
+              // field, which is the open conversation's composer, rather
+              // than leave it on <body> where the next key is a shortcut.
+              inputRef.current?.focus();
+            }}
+          >
+            <ResultIcon size={12} aria-hidden="true" />
+            <span className="command-bar-result-text">{result.text}</span>
+          </button>
         )}
         {searchKey && (
           <kbd>

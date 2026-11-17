@@ -5,20 +5,36 @@ import {
 import { edgeSelectionKey } from './exact-edge-selection-transport';
 import { upstreamSnapshot } from './exact-carry-edit-gate';
 import { buildGearFeature } from './exact-gear';
-import { buildThreadFeature } from './exact-thread';
+import { buildSheetMetalFeature } from './exact-sheet-metal';
+import { buildStandardPartFeature } from './exact-standard-part';
+import {
+  buildThreadFeature,
+  cutResolvedThread,
+  resolveThread,
+  threadPrintAdvisories
+} from './exact-thread';
 import { requireValidSolid } from './kernel-validation';
 import {
+  cutKeptToolMaterialMeshRefusal,
   cutKeptToolMaterialRefusal,
-  cutRetainedToolMaterialWitness
+  cutRetainedToolMaterialMeshWitness,
+  cutRetainedToolMaterialWitness,
+  intersectKeptOutsideMaterialRefusal,
+  intersectKeptOutsideMaterialWitness
 } from './result-acceptance';
 import {
   carryAnalyticFaces,
+  draftLineage,
+  SHELL_DRAFT_LINEAGE_FACE_LIMIT,
+  shellLineage,
   holeLineage,
   withBoundaryEdgeLineage
 } from './exact-operation-lineage';
 import { type FaceEvolutionPayloadV1, type RemusKernel } from './remus-runtime';
 import {
   booleanConsumedBodyIds,
+  documentPrintClearance,
+  featureReadsPrintClearance,
   findSketch,
   listFeaturesInOrder,
   resolveParamValue,
@@ -41,10 +57,15 @@ import {
   type PlaneBasis,
   type Vec3
 } from '@openzcad/geometry';
+import { buildFeaturePattern } from './exact-feature-pattern';
 import {
   FULL_REVOLVE_ANGLE_DEG,
   MAX_MESH_SOLID_CONVERSION_TRIANGLES,
-  UNIT_TO_MM,
+  MAX_PATTERN_INSTANCES,
+  holeStandardDiameterMm,
+  holeStandardThread,
+  ownEntry,
+  millimetresPerUnit,
   isDatumPlaneRef,
   type BodyId,
   type DatumPlaneSource,
@@ -54,7 +75,11 @@ import {
   type ModelingPlaneReference,
   type ParamValue
 } from '@openzcad/shared';
-import type { ExactShape, ImportedStepDiagnostics } from './exact-types';
+import type {
+  ExactBuildResult,
+  ExactShape,
+  ImportedStepDiagnostics
+} from './exact-types';
 import {
   diagnoseImportedSolid,
   faceCandidatesForSolid,
@@ -85,7 +110,7 @@ import {
 } from './exact-edge-modifiers';
 import {
   assertQualifiedVariableFillet,
-  variableBlendFailureMessage,
+  variableBlendRefusal,
   type VariableFilletSpec
 } from './exact-variable-blends';
 import {
@@ -189,6 +214,7 @@ import {
   probeBooleanEntityEvolution,
   type BooleanEvolutionOperation
 } from './exact-boolean-evolution';
+import { modelingOperationRefusal } from './remus-operation-refusal';
 import {
   remusHashOnlyLineage,
   createRemusImportedStepLineage,
@@ -564,7 +590,7 @@ function buildImportedStepFeature(
     // witnesses match the coordinates every later feature sees. The
     // checksum cache above stays in millimetre form, which keeps a
     // cached import correct across a document units change.
-    const documentScale = 1 / UNIT_TO_MM[document.units];
+    const documentScale = 1 / millimetresPerUnit(document.units);
     if (documentScale !== 1) {
       solids = solids.map((solid) =>
         kernel.copyAndTransformSolid(solid, uniformScaleMatrix(documentScale))
@@ -919,6 +945,23 @@ function buildExtrudeFeature(
       }
     }
     const { operandLineage, extrusionSolid, coaxial, solid } = combined;
+    // The Boolean feature's intersect gate (#1244), for the same operation
+    // reached through an extrusion: material the result holds outside the
+    // target or the extrusion is a wrong body, whatever route rebuilt it.
+    if (operation === 'intersect') {
+      const witness = intersectKeptOutsideMaterialWitness(
+        kernel,
+        targetSolid,
+        extrusionSolid,
+        solid
+      );
+      if (witness) {
+        throw intersectKeptOutsideMaterialRefusal(witness, [
+          operandNames[0]!,
+          operandNames[1]!
+        ]);
+      }
+    }
     if (combined.union) {
       ctx.strictVerdicts?.set(solid, combined.union.verdict);
     }
@@ -1448,10 +1491,273 @@ function buildHoleFeature(
   feature: FeatureNode,
   data: FeatureDataOf<'hole'>
 ): void {
-  const { kernel, scope, result } = ctx;
+  const { kernel, result } = ctx;
   if (!feature.bodyId) {
     throw new Error('Hole has no result body.');
   }
+  const { bores, shape, targetSolid } = holeToolSpecFor(ctx, data);
+  // One bore at a time, each proven as a single hole is: a bore that misses
+  // the body or cuts nothing refuses by its point, never silently dropped.
+  let drilled = targetSolid;
+  for (const { spec, pointId } of bores) {
+    try {
+      drilled = drillHole(kernel, drilled, spec);
+    } catch (error) {
+      if (pointId === null || !(error instanceof Error)) throw error;
+      throw new Error(`At sketch point ${pointId}: ${error.message}`, {
+        cause: error
+      });
+    }
+  }
+  // M01 (schema v66): each bore tapped with the standard's thread; a
+  // cosmetic one (schema v67) is described, not cut.
+  if (data.tapped && !data.tapped.cosmetic) {
+    drilled = tapHoleBores(ctx, feature, data, drilled, bores);
+  }
+  result.consumed.add(data.targetBodyId);
+  result.shapes.set(feature.bodyId, {
+    solids: [drilled],
+    lineage: holeLineage(
+      kernel,
+      targetSolid,
+      drilled,
+      shape.lineage,
+      feature.featureId,
+      bores
+    )
+  });
+  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+}
+
+/** Below this a face lies on a bore's axis at its radius. */
+const BORE_FACE_TOLERANCE = 1e-6;
+
+/**
+ * The cylindrical face `spec`'s bore left in `solid`: on its axis, at its
+ * radius. A bore cut into pieces (or missing) has no single face to tap.
+ */
+export function boreFaceOf(
+  kernel: RemusKernel,
+  solid: number,
+  spec: HoleToolSpec
+): {
+  face: number;
+  geometry: NonNullable<ReturnType<typeof measureFaceGeometry>>;
+} {
+  const tolerance = BORE_FACE_TOLERANCE * Math.max(1, spec.radius);
+  const matches = Array.from(kernel.getSolidFaces(solid)).flatMap((face) => {
+    const geometry = measureFaceGeometry(kernel, face);
+    if (
+      geometry?.surfaceType !== 'cylinder' ||
+      geometry.radius === undefined ||
+      geometry.axisStart === undefined ||
+      geometry.axisEnd === undefined ||
+      Math.abs(geometry.radius - spec.radius) > tolerance
+    ) {
+      return [];
+    }
+    const direction = normalized(
+      subtract(geometry.axisEnd, geometry.axisStart)
+    );
+    if (!direction || 1 - Math.abs(dot(direction, spec.axis)) > 1e-9) return [];
+    // The face's axis passes through the bore's entry point.
+    const offset = subtract(geometry.axisStart, spec.surfacePoint);
+    const along = dot(offset, spec.axis);
+    const off = Math.hypot(
+      offset.x - spec.axis.x * along,
+      offset.y - spec.axis.y * along,
+      offset.z - spec.axis.z * along
+    );
+    return off <= tolerance ? [{ face, geometry }] : [];
+  });
+  if (matches.length !== 1) {
+    throw new Error(
+      matches.length === 0
+        ? 'The tapped bore did not come back as one cylinder to thread.'
+        : 'The tapped bore is split into pieces, so it cannot be threaded as one.'
+    );
+  }
+  return matches[0]!;
+}
+
+/**
+ * M01 (schema v66): cuts the hole's standard thread into each bore with the
+ * M15 thread generator, from the bore's end nearer the entry face, the
+ * whole bore unless `tapped.length` stops it short. The thread is the
+ * standard's size and pitch with the ISO 68-1 internal form (the Unified
+ * basic profile is the same), its crest truncated by the tap-drill bore as
+ * a Thread's is; a hole that sets no clearance reads the document print
+ * clearance (L09), exactly as a Thread does.
+ */
+function tapHoleBores(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'hole'>,
+  solid: number,
+  bores: readonly HoleBore[]
+): number {
+  const { kernel, document, scope, result } = ctx;
+  const tapped = data.tapped!;
+  if (data.standard?.kind !== 'tap-drill') {
+    throw new Error('Only a hole sized as a standard tap drill can be tapped.');
+  }
+  const mm = millimetresPerUnit(document.units);
+  const { majorDiameterMm, pitchMm } = holeStandardThread(data.standard);
+  const values = {
+    optional: (value: ParamValue | undefined, label: string) =>
+      value === undefined
+        ? undefined
+        : resolveParamValue(value, scope, `tapped ${label}`, document.units)
+  };
+  const printClearance = featureReadsPrintClearance(data)
+    ? documentPrintClearance(document, scope)
+    : undefined;
+  let advised = false;
+  let tappedSolid = solid;
+  for (const { spec, pointId } of bores) {
+    try {
+      const { face, geometry } = boreFaceOf(kernel, tappedSolid, spec);
+      // The thread starts at the bore's end nearer the entry face.
+      const anchor =
+        dot(subtract(geometry.axisStart!, spec.surfacePoint), spec.axis) <=
+        dot(subtract(geometry.axisEnd!, spec.surfacePoint), spec.axis)
+          ? 'start'
+          : 'end';
+      const thread = resolveThread(
+        {
+          featureKind: 'thread',
+          targetBodyId: data.targetBodyId,
+          faceHash: 0,
+          profile: 'iso-metric',
+          majorDiameter: majorDiameterMm / mm,
+          pitch: pitchMm / mm,
+          anchor,
+          ...(tapped.length !== undefined ? { length: tapped.length } : {}),
+          ...(tapped.clearance !== undefined
+            ? { clearance: tapped.clearance }
+            : {}),
+          ...(tapped.hand !== undefined ? { hand: tapped.hand } : {})
+        },
+        values,
+        {
+          kind: 'internal',
+          radius: geometry.radius!,
+          faceLength: geometry.axialLength!
+        },
+        mm,
+        printClearance
+      );
+      tappedSolid = cutResolvedThread(kernel, tappedSolid, face, thread).solid;
+      // The same thread in every bore: its print advice is said once.
+      if (!advised) {
+        advised = true;
+        for (const advisory of threadPrintAdvisories(
+          thread,
+          mm,
+          document.units
+        )) {
+          raiseFeatureWarning(result, feature, advisory, 'advisory');
+        }
+      }
+    } catch (error) {
+      if (pointId === null || !(error instanceof Error)) throw error;
+      throw new Error(`At sketch point ${pointId}: ${error.message}`, {
+        cause: error
+      });
+    }
+  }
+  return tappedSolid;
+}
+
+/** One bore a hole drills: where, and the sketch point it stands on. */
+export interface HoleBore {
+  spec: HoleToolSpec;
+  /** M01 (schema v64): the point entity, or null for the stored position. */
+  pointId: string | null;
+}
+
+/** Below this the sketch plane is parallel to the entry face. */
+const HOLE_POINTS_PARALLEL_TOLERANCE = 1e-9;
+
+/**
+ * M01 (schema v64): where each of a hole's sketch points meets its entry
+ * face. A point is read on its sketch plane, which must be parallel to the
+ * face, and dropped onto the face along its normal, so a sketch drawn on the
+ * face, or on a plane offset from it, places its bores the same way.
+ */
+function holePointEntries(
+  ctx: FeatureBuildContext,
+  points: NonNullable<FeatureDataOf<'hole'>['points']>,
+  planePoint: Vec3,
+  normal: Vec3
+): { pointId: string; at: Vec3 }[] {
+  const sketch = findSketch(ctx.document, points.sketchId);
+  const basis = ctx.result.sketchBases.get(points.sketchId);
+  if (!sketch || !basis) {
+    throw new Error(
+      `The sketch this hole is drilled at${sketch ? ` (${sketch.name})` : ''} did not resolve.`
+    );
+  }
+  const sketchNormal = normalized(cross(basis.u, basis.v));
+  if (
+    !sketchNormal ||
+    1 - Math.abs(dot(sketchNormal, normal)) > HOLE_POINTS_PARALLEL_TOLERANCE
+  ) {
+    throw new Error(
+      `${sketch.name} is not parallel to the hole's entry face, so its points cannot place the hole.`
+    );
+  }
+  return points.pointIds.map((pointId) => {
+    const node = ownEntry(ctx.document.nodes, pointId);
+    if (
+      !(sketch.objectIds as readonly string[]).includes(pointId) ||
+      node?.kind !== 'sketch-object' ||
+      node.data.objectKind !== 'point'
+    ) {
+      throw new Error(
+        `A point this hole is drilled at is no longer a point of ${sketch.name}.`
+      );
+    }
+    const x = resolveParamValue(
+      node.data.x,
+      ctx.scope,
+      'point x',
+      ctx.document.units
+    );
+    const y = resolveParamValue(
+      node.data.y,
+      ctx.scope,
+      'point y',
+      ctx.document.units
+    );
+    const world = {
+      x: basis.origin.x + basis.u.x * x + basis.v.x * y,
+      y: basis.origin.y + basis.u.y * x + basis.v.y * y,
+      z: basis.origin.z + basis.u.z * x + basis.v.z * y
+    };
+    const height = dot(subtract(world, planePoint), normal);
+    return {
+      pointId,
+      at: {
+        x: world.x - normal.x * height,
+        y: world.y - normal.y * height,
+        z: world.z - normal.z * height
+      }
+    };
+  });
+}
+
+/**
+ * Where a hole drills and what it cuts, resolved on its target body as this
+ * build holds it: the hole's own build, and an M02 feature pattern that
+ * repeats it, read the same entry face and the same stored position (or, on
+ * sketch points, the same points), one bore each.
+ */
+export function holeToolSpecFor(
+  ctx: FeatureBuildContext,
+  data: FeatureDataOf<'hole'>
+): { bores: HoleBore[]; shape: ExactShape; targetSolid: number } {
+  const { kernel, scope, result } = ctx;
   const target = result.shapes.get(data.targetBodyId);
   if (!target) {
     throw new Error('Hole target is unavailable.');
@@ -1483,95 +1789,94 @@ function buildHoleFeature(
   if (!zAxis) {
     throw new Error('Hole entry face normal is degenerate.');
   }
-  const reference =
-    Math.abs(zAxis.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
-  const xAxis = normalized(cross(reference, zAxis))!;
-  const yAxis = cross(zAxis, xAxis);
-  const u = resolveParamValue(
-    data.position.u,
-    scope,
-    'hole position U',
-    ctx.document.units
-  );
-  const v = resolveParamValue(
-    data.position.v,
-    scope,
-    'hole position V',
-    ctx.document.units
-  );
-  // Which point (u, v) is measured from is versioned by the marker's
-  // presence, never by what this build can compute: `center` is the mean of
-  // the face's VERTICES, so on a face bounded by one closed circular edge it
-  // sits on the rim, a whole radius from the centroid. Re-anchoring a hole
-  // that was drilled against the rim would silently relocate it.
-  if (data.positionAnchor === 'centroid' && !geometry.centroid) {
-    throw new Error(
-      'The hole entry face no longer reports an area centroid, and this hole is positioned from one.'
-    );
-  }
-  const anchor =
-    data.positionAnchor === 'centroid' ? geometry.centroid! : geometry.center;
-  const surfacePoint = {
-    x: anchor.x + xAxis.x * u + yAxis.x * v,
-    y: anchor.y + xAxis.y * u + yAxis.y * v,
-    z: anchor.z + xAxis.z * u + yAxis.z * v
-  };
   const axis = {
     x: -zAxis.x,
     y: -zAxis.y,
     z: -zAxis.z
   };
-  const diameter = resolveParamValue(
-    data.diameter,
-    scope,
-    'hole diameter',
-    ctx.document.units
-  );
+  let entries: { pointId: string | null; at: Vec3 }[];
+  if (data.points) {
+    // M01 (schema v64): the stored position is not read.
+    entries = holePointEntries(ctx, data.points, geometry.center, zAxis);
+  } else {
+    const reference =
+      Math.abs(zAxis.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+    const xAxis = normalized(cross(reference, zAxis))!;
+    const yAxis = cross(zAxis, xAxis);
+    const u = resolveParamValue(
+      data.position.u,
+      scope,
+      'hole position U',
+      ctx.document.units
+    );
+    const v = resolveParamValue(
+      data.position.v,
+      scope,
+      'hole position V',
+      ctx.document.units
+    );
+    // Which point (u, v) is measured from is versioned by the marker's
+    // presence, never by what this build can compute: `center` is the mean
+    // of the face's VERTICES, so on a face bounded by one closed circular
+    // edge it sits on the rim, a whole radius from the centroid.
+    // Re-anchoring a hole that was drilled against the rim would silently
+    // relocate it.
+    if (data.positionAnchor === 'centroid' && !geometry.centroid) {
+      throw new Error(
+        'The hole entry face no longer reports an area centroid, and this hole is positioned from one.'
+      );
+    }
+    const anchor =
+      data.positionAnchor === 'centroid' ? geometry.centroid! : geometry.center;
+    entries = [
+      {
+        pointId: null,
+        at: {
+          x: anchor.x + xAxis.x * u + yAxis.x * v,
+          y: anchor.y + xAxis.y * u + yAxis.y * v,
+          z: anchor.z + xAxis.z * u + yAxis.z * v
+        }
+      }
+    ];
+  }
+  // M01 (schema v65): a standard hole's table gives its diameter, in the
+  // document's units; its stored diameter is not read.
+  const diameter = data.standard
+    ? holeStandardDiameterMm(data.standard) /
+      millimetresPerUnit(ctx.document.units)
+    : resolveParamValue(
+        data.diameter,
+        scope,
+        'hole diameter',
+        ctx.document.units
+      );
   if (!(diameter > 0)) {
     throw new Error('Hole diameter must be greater than zero.');
   }
-  let depth: number;
-  if (data.depthMode === 'through') {
-    // Far enough to clear the body from this entry point, however
-    // the body sits relative to the face.
-    const bounds = kernel.boundingBox(targetSolid);
-    const corners = [0, 1].flatMap((cx) =>
-      [0, 1].flatMap((cy) =>
-        [0, 1].map((cz) => ({
-          x: bounds[cx * 3]!,
-          y: bounds[cy * 3 + 1]!,
-          z: bounds[cz * 3 + 2]!
-        }))
-      )
-    );
-    depth = corners.reduce(
-      (maximum, corner) =>
-        Math.max(maximum, dot(subtract(corner, surfacePoint), axis)),
-      0
-    );
-    if (!(depth > 0)) {
-      throw new Error('The hole points away from the body.');
-    }
-  } else {
+  let blindDepth: number | null = null;
+  if (data.depthMode !== 'through') {
     if (data.depth === undefined) {
       throw new Error('A blind hole needs a depth.');
     }
-    depth = resolveParamValue(
+    blindDepth = resolveParamValue(
       data.depth,
       scope,
       'hole depth',
       ctx.document.units
     );
-    if (!(depth > 0)) {
+    if (!(blindDepth > 0)) {
       throw new Error('Hole depth must be greater than zero.');
     }
   }
-  // The overshoot heuristic resizeThroughHole already uses, so a
-  // bore through a slanted opening trims identically.
-  const extension = Math.max(
-    DIRECT_EDIT_TOLERANCE * 10,
-    depth * 0.02,
-    diameter * 0.01
+  const bounds = kernel.boundingBox(targetSolid);
+  const corners = [0, 1].flatMap((cx) =>
+    [0, 1].flatMap((cy) =>
+      [0, 1].map((cz) => ({
+        x: bounds[cx * 3]!,
+        y: bounds[cy * 3 + 1]!,
+        z: bounds[cz * 3 + 2]!
+      }))
+    )
   );
   const style = data.style;
   const resolveOptional = (
@@ -1589,46 +1894,61 @@ function buildHoleFeature(
     data.counterboreDiameter,
     'counterbore diameter'
   );
-  const holeSpec: HoleToolSpec = {
-    surfacePoint,
-    axis,
-    radius: diameter / 2,
-    depth,
-    style,
-    counterboreRadius:
-      counterboreDiameter === undefined ? undefined : counterboreDiameter / 2,
-    counterboreDepth: resolveOptional(
-      data.counterboreDepth,
-      'counterbore depth'
-    ),
-    countersinkRadius: (() => {
-      const value = resolveOptional(
-        data.countersinkDiameter,
-        'countersink diameter'
+  const counterboreDepth = resolveOptional(
+    data.counterboreDepth,
+    'counterbore depth'
+  );
+  const countersinkDiameter = resolveOptional(
+    data.countersinkDiameter,
+    'countersink diameter'
+  );
+  const bores = entries.map(({ pointId, at: surfacePoint }): HoleBore => {
+    // A through hole drills far enough to clear the body from this entry
+    // point, however the body sits relative to the face.
+    const depth =
+      blindDepth ??
+      corners.reduce(
+        (maximum, corner) =>
+          Math.max(maximum, dot(subtract(corner, surfacePoint), axis)),
+        0
       );
-      return value === undefined ? undefined : value / 2;
-    })(),
-    countersinkAngle:
-      countersinkAngleDeg === undefined
-        ? undefined
-        : (countersinkAngleDeg * Math.PI) / 180,
-    entryExtension: extension,
-    exitExtension: data.depthMode === 'through' ? extension : 0
-  };
-  const drilled = drillHole(kernel, targetSolid, holeSpec);
-  result.consumed.add(data.targetBodyId);
-  result.shapes.set(feature.bodyId, {
-    solids: [drilled],
-    lineage: holeLineage(
-      kernel,
-      targetSolid,
-      drilled,
-      shape.lineage,
-      feature.featureId,
-      holeSpec
-    )
+    if (!(depth > 0)) {
+      throw new Error('The hole points away from the body.');
+    }
+    // The overshoot heuristic resizeThroughHole already uses, so a
+    // bore through a slanted opening trims identically.
+    const extension = Math.max(
+      DIRECT_EDIT_TOLERANCE * 10,
+      depth * 0.02,
+      diameter * 0.01
+    );
+    return {
+      pointId,
+      spec: {
+        surfacePoint,
+        axis,
+        radius: diameter / 2,
+        depth,
+        style,
+        counterboreRadius:
+          counterboreDiameter === undefined
+            ? undefined
+            : counterboreDiameter / 2,
+        counterboreDepth,
+        countersinkRadius:
+          countersinkDiameter === undefined
+            ? undefined
+            : countersinkDiameter / 2,
+        countersinkAngle:
+          countersinkAngleDeg === undefined
+            ? undefined
+            : (countersinkAngleDeg * Math.PI) / 180,
+        entryExtension: extension,
+        exitExtension: data.depthMode === 'through' ? extension : 0
+      }
+    };
   });
-  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+  return { bores, shape, targetSolid };
 }
 
 function buildSplitFeature(
@@ -1659,15 +1979,24 @@ function buildSplitFeature(
   // The kernel refuses rather than approximates — a plane through
   // an edge, across a curved face, or missing the solid entirely
   // is a typed error that lands in the feature's warnings.
-  const halves = kernel.split(
-    targetSolid,
-    planePoint.x,
-    planePoint.y,
-    planePoint.z,
-    planeNormal.x,
-    planeNormal.y,
-    planeNormal.z
-  );
+  let halves: ArrayLike<number>;
+  try {
+    halves = kernel.split(
+      targetSolid,
+      planePoint.x,
+      planePoint.y,
+      planePoint.z,
+      planeNormal.x,
+      planeNormal.y,
+      planeNormal.z
+    );
+  } catch (error) {
+    throw modelingOperationRefusal(
+      'split',
+      error,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
   const positive = halves[0];
   const negative = halves[1];
   if (positive === undefined || negative === undefined) {
@@ -1687,6 +2016,16 @@ function buildSplitFeature(
   if (data.keepOriginal !== true) result.consumed.add(data.targetBodyId);
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
   inheritMeshOrigin(result, data.targetBodyId, data.secondBodyId);
+}
+
+/** A lineage worth publishing: it names at least one face or edge. */
+function hasVerifiedLineage(
+  lineage: RemusLineageState | null
+): lineage is RemusLineageState {
+  return (
+    !!lineage &&
+    (lineage.faceReferences.size > 0 || lineage.edgeReferences.size > 0)
+  );
 }
 
 function buildShellFeature(
@@ -1720,13 +2059,24 @@ function buildShellFeature(
     thickness,
     openingFaces
   });
+  const lineage = shellLineage(
+    kernel,
+    target.solids[0]!,
+    solid,
+    target.lineage,
+    feature.featureId,
+    openingFaces,
+    thickness
+  );
   result.consumed.add(data.targetBodyId);
   result.shapes.set(feature.bodyId, {
     solids: [solid],
-    lineage: remusHashOnlyLineage(
-      'shell',
-      'The pinned bridge does not expose removed, offset, and generated face relations.'
-    )
+    lineage: hasVerifiedLineage(lineage)
+      ? lineage
+      : remusHashOnlyLineage(
+          'shell',
+          `No kept, rim or inner face passed the exact carrier and uniqueness checks, or a body has more than ${SHELL_DRAFT_LINEAGE_FACE_LIMIT} faces.`
+        )
   });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
@@ -1808,13 +2158,26 @@ function buildDraftFeature(
     neutralPoint,
     angleDegrees
   });
+  const lineage = draftLineage(
+    kernel,
+    target.solids[0]!,
+    solid,
+    target.lineage,
+    feature.featureId,
+    faces,
+    pullDirection,
+    neutralPoint,
+    angleDegrees
+  );
   result.consumed.add(data.targetBodyId);
   result.shapes.set(feature.bodyId, {
     solids: [solid],
-    lineage: remusHashOnlyLineage(
-      'draft',
-      'Draft topology has no verified output evolution relation.'
-    )
+    lineage: hasVerifiedLineage(lineage)
+      ? lineage
+      : remusHashOnlyLineage(
+          'draft',
+          `No kept or drafted face passed the exact carrier and uniqueness checks, or a body has more than ${SHELL_DRAFT_LINEAGE_FACE_LIMIT} faces.`
+        )
   });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
@@ -2159,6 +2522,7 @@ function combineBooleanOperands(
         bodyName(document, data.targetBodyIds[index]!)
       ];
       let overlapMeasured = false;
+      let sharedWithTool = 0;
       if (subtracting) {
         try {
           // An intersect that refuses says nothing either way, and a
@@ -2172,10 +2536,11 @@ function combineBooleanOperands(
           );
           if (common.status === 'ok') {
             overlapMeasured = true;
-            sharedWithTools += kernel.volume(
+            sharedWithTool = kernel.volume(
               common.solid,
               MEASUREMENT_DEFLECTION
             );
+            sharedWithTools += sharedWithTool;
           }
         } catch {
           // Neither does a kernel that throws instead of answering.
@@ -2207,13 +2572,23 @@ function combineBooleanOperands(
               ctx.cancellation,
               operandNames
             ));
-      // Where the overlap could not be measured the removed-volume gate
-      // below has nothing to compare against. Measured on the pin: a box
-      // minus a torus half-embedded in its top face refuses the exact
-      // intersect, yet `cutDetailed` reports `ok` and returns the box
-      // untouched. A point the kernel classifies inside the target, the
-      // tool and the cut settles that the cut did not take.
-      if (subtracting && !overlapMeasured && coaxial === null) {
+      // Where the overlap could not be measured, or measured as nothing,
+      // the removed-volume gate below has nothing to compare against.
+      // Measured on the pin: a box minus a torus half-embedded in its top
+      // face refuses the exact intersect, yet `cutDetailed` reports `ok`
+      // and returns the box untouched. A point the kernel classifies inside
+      // the target, the tool and the cut settles that the cut did not take.
+      //
+      // The classifier is not the only witness. Issue #1242 filed curved
+      // operands whose cut returned the target unchanged while that same
+      // classifier misplaced their overlap, so it found nothing to refuse.
+      // The tessellated search encloses a point by the three meshes instead,
+      // without asking the classifier.
+      if (
+        subtracting &&
+        coaxial === null &&
+        !(overlapMeasured && sharedWithTool > GEOMETRY_EPSILON)
+      ) {
         const witness = cutRetainedToolMaterialWitness(
           kernel,
           target,
@@ -2221,6 +2596,35 @@ function combineBooleanOperands(
           solid
         );
         if (witness) throw cutKeptToolMaterialRefusal('subtract', witness);
+        const meshWitness = cutRetainedToolMaterialMeshWitness(
+          kernel,
+          target,
+          tool,
+          solid
+        );
+        if (meshWitness) {
+          throw cutKeptToolMaterialMeshRefusal('subtract', meshWitness);
+        }
+      }
+      // An intersection is defined to hold only material inside both
+      // operands. Measured on Remus 2026.1.122 (#1244): a torus and a holed
+      // block intersected `ok` in both orders and kept the block's hole. A
+      // point the kernel classifies inside the result and outside either
+      // operand settles that the result is wrong, on every route that
+      // rebuilds this feature: preview, commit, reload and upstream edits.
+      if (!subtracting) {
+        const witness = intersectKeptOutsideMaterialWitness(
+          kernel,
+          target,
+          tool,
+          solid
+        );
+        if (witness) {
+          throw intersectKeptOutsideMaterialRefusal(witness, [
+            operandNames[0]!,
+            operandNames[1]!
+          ]);
+        }
       }
       if (!pairwiseOperands) {
         probeDeclined = `The ${data.operation} reduced ${operands.length} operands in sequence; the entity-evolution entry points are pairwise.`;
@@ -2530,12 +2934,10 @@ function buildEdgeModifierFeature(
   );
   if (modified === null) {
     if (variableRadius || chamferSecondDistance !== undefined) {
-      throw new Error(
-        variableBlendFailureMessage(
-          data.featureKind,
-          selected.length,
-          reportedRefusal
-        )
+      throw variableBlendRefusal(
+        data.featureKind,
+        selected.length,
+        reportedRefusal
       );
     }
     const refusal = edgeModifierRefusal(
@@ -2570,8 +2972,8 @@ function buildEdgeModifierFeature(
       : rootPrimitive === 'box'
         ? rederiveBoxModifierLineage(kernel, modified, feature)
         : null;
-  const evolutionLineage = evolution
-    ? createRemusModifierEvolutionLineage({
+  const evolutionInput = evolution
+    ? {
         producingFeatureId: feature.featureId,
         operation: data.featureKind,
         payload: evolution,
@@ -2590,9 +2992,26 @@ function buildEdgeModifierFeature(
               isBlendFace(kernel, modified, face)
           )
         )
-      })
+      }
+    : null;
+  const evolutionLineage = evolutionInput
+    ? createRemusModifierEvolutionLineage(evolutionInput)
+    : null;
+  // The supports this blend re-trimmed keep their names (a chamfer band a
+  // later fillet trims stays its Chamfer's), beneath every name derived
+  // below: a primitive's modifier roles and exact carriers win a face both
+  // name. Its diagnostics duplicate `evolutionLineage`'s, so they are dropped.
+  const trimmedSupportLineage = evolutionInput
+    ? {
+        ...createRemusModifierEvolutionLineage({
+          ...evolutionInput,
+          trimmedSupports: 'only'
+        }),
+        diagnostics: []
+      }
     : null;
   const verifiedLineages = [
+    trimmedSupportLineage,
     carryAnalyticFaces(kernel, target, modified, storedTarget.lineage),
     primitiveFallbackLineage,
     evolutionLineage
@@ -3176,6 +3595,78 @@ function datumAxisCircularPatternArm(
   };
 }
 
+/**
+ * M02 (schema v63): the arm on sketch points. Instance 0 is the reference
+ * point, where the original stands; each other point takes a copy moved from
+ * there to it, labelled by the point's id. The kernel has no pattern entry
+ * point for an arbitrary set of translations, so every copy is the rigid
+ * copy-and-transform build, fused where copies overlap as any pattern's are.
+ */
+function pointsPatternArm(
+  ctx: FeatureBuildContext,
+  data: FeatureDataOf<'pattern'>
+): PatternArm {
+  const points = data.points;
+  if (!points) {
+    throw new Error('A pattern on sketch points needs its sketch and points.');
+  }
+  const sketch = findSketch(ctx.document, points.sketchId);
+  const basis = ctx.result.sketchBases.get(points.sketchId);
+  if (!sketch || !basis) {
+    throw new Error(
+      `The sketch this pattern stands on${sketch ? ` (${sketch.name})` : ''} did not resolve.`
+    );
+  }
+  const order = [
+    points.referencePointId,
+    ...points.pointIds.filter((id) => id !== points.referencePointId)
+  ];
+  const world = order.map((pointId) => {
+    const node = ownEntry(ctx.document.nodes, pointId);
+    if (
+      !(sketch.objectIds as readonly string[]).includes(pointId) ||
+      node?.kind !== 'sketch-object' ||
+      node.data.objectKind !== 'point'
+    ) {
+      throw new Error(
+        `A point this pattern stands on is no longer a point of ${sketch.name}.`
+      );
+    }
+    const x = resolveParamValue(
+      node.data.x,
+      ctx.scope,
+      'point x',
+      ctx.document.units
+    );
+    const y = resolveParamValue(
+      node.data.y,
+      ctx.scope,
+      'point y',
+      ctx.document.units
+    );
+    return {
+      x: basis.origin.x + basis.u.x * x + basis.v.x * y,
+      y: basis.origin.y + basis.u.y * x + basis.v.y * y,
+      z: basis.origin.z + basis.u.z * x + basis.v.z * y
+    };
+  });
+  const from = world[0]!;
+  return {
+    total: order.length,
+    label: (index) => order[index]!,
+    matrix: (index) =>
+      transformMatrix(
+        {
+          x: world[index]!.x - from.x,
+          y: world[index]!.y - from.y,
+          z: world[index]!.z - from.z
+        },
+        PATTERN_ORIGIN
+      ),
+    kernelCopies: null
+  };
+}
+
 /** Records a kernel refusal alongside whatever lineage the build published. */
 function withPatternDiagnostic(
   state: RemusLineageState,
@@ -3227,7 +3718,12 @@ function buildPatternFeature(
     }
     return rounded;
   };
-  const count = wholeCount(data.count, 'count');
+  // A points pattern makes one instance per point; its stored count is not
+  // read (see FeatureData).
+  const count =
+    data.patternKind === 'points'
+      ? (data.points?.pointIds.length ?? 0)
+      : wholeCount(data.count, 'count');
   if (count < 2 || count > 100) {
     throw new Error('Pattern count must be between 2 and 100.');
   }
@@ -3243,7 +3739,13 @@ function buildPatternFeature(
     throw new Error('Pattern count must be between 2 and 100.');
   }
   const totalInstances = count * count2;
-  if (target.solids.length * totalInstances > 100) {
+  // A feature pattern's copies are cut into one body, so only the copies
+  // count; a whole-body pattern makes every solid of the body again.
+  const featurePattern = data.sourceFeatureIds !== undefined;
+  if (
+    (featurePattern ? 1 : target.solids.length) * totalInstances >
+    MAX_PATTERN_INSTANCES
+  ) {
     throw new Error('A pattern may produce at most 100 solids.');
   }
   const direction =
@@ -3295,6 +3797,8 @@ function buildPatternFeature(
       { direction: direction2, spacing: spacing2, count: count2 },
       target.solids.length === 1
     );
+  } else if (data.patternKind === 'points') {
+    arm = pointsPatternArm(ctx, data);
   } else {
     const angle = resolveParamValue(
       data.angleDeg,
@@ -3322,6 +3826,116 @@ function buildPatternFeature(
   const matrices = Array.from({ length: arm.total }, (_unused, index) =>
     arm.matrix(index)
   );
+  // M02: the copies left out keep their labels' places, so skipping one
+  // renames no other copy and every reference to the rest still resolves.
+  const skipped = skippedPatternInstances(result, feature, data, arm);
+  const kept = matrices
+    .map((_matrix, index) => index)
+    .filter((index) => !skipped.has(index));
+  if (kept.length < 2) {
+    throw new Error(
+      'A pattern must keep at least one copy besides the original.'
+    );
+  }
+  if (featurePattern) {
+    const copyIndices = kept.filter((index) => index !== 0);
+    buildFeaturePattern(
+      ctx,
+      feature,
+      data,
+      target,
+      copyIndices.map((index) => ({
+        label: arm.label(index),
+        matrix: matrices[index]!
+      })),
+      (seed) => {
+        const { perSource, declined } = patternCopies(
+          kernel,
+          arm,
+          seed,
+          matrices
+        );
+        return {
+          solids: copyIndices.map((index) =>
+            perSource.map((copies) => copies.solids[index]!)
+          ),
+          declined
+        };
+      },
+      (hole) => holeToolSpecFor(ctx, hole),
+      // M01 (schema v66): a tapped hole's copies are tapped as it is.
+      (hole, solid, bores) => tapHoleBores(ctx, feature, hole, solid, bores)
+    );
+    return;
+  }
+  const {
+    perSource: built,
+    declined,
+    usedKernel
+  } = patternCopies(kernel, arm, target.solids, matrices);
+  let perSource = built;
+  if (data.patternKind === 'linear' && usedKernel && !declined) {
+    perSource = linearPatternBoundaryCopies(kernel, target.solids, perSource);
+  }
+  const instances = patternInstances(arm, perSource).filter(
+    (_instance, index) => !skipped.has(index)
+  );
+  buildPatternBody(ctx, feature, data, target, arm, instances, kept, declined);
+}
+
+/**
+ * M02: the instance indices a pattern's skip list names. The original is
+ * never one; a label the counts no longer reach (a count lowered since) is
+ * ignored with an advisory rather than refusing the pattern.
+ */
+function skippedPatternInstances(
+  result: ExactBuildResult,
+  feature: FeatureNode,
+  data: FeatureDataOf<'pattern'>,
+  arm: PatternArm
+): Set<number> {
+  const skipped = new Set<number>();
+  if (!data.skippedInstances?.length) return skipped;
+  const indexOf = new Map(
+    Array.from({ length: arm.total }, (_unused, index) => [
+      arm.label(index),
+      index
+    ])
+  );
+  const missing: string[] = [];
+  for (const label of data.skippedInstances) {
+    const index = indexOf.get(label);
+    if (index === 0) throw new Error('A pattern cannot skip its original.');
+    if (index === undefined) missing.push(label);
+    else skipped.add(index);
+  }
+  if (missing.length > 0) {
+    raiseFeatureWarning(
+      result,
+      feature,
+      `Skipped ${missing.length === 1 ? 'copy' : 'copies'} ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not in this pattern any more, so ${missing.length === 1 ? 'it was' : 'they were'} ignored.`,
+      'advisory'
+    );
+  }
+  return skipped;
+}
+
+/**
+ * Every instance of each source solid, original first, through the kernel's
+ * pattern entry point where the instances cannot overlap, else as rigid
+ * copies; see `patternInstancesMayOverlap`.
+ */
+function patternCopies(
+  kernel: RemusKernel,
+  arm: PatternArm,
+  sourceSolids: readonly number[],
+  matrices: readonly Float64Array[]
+): {
+  perSource: KernelPatternCopies[];
+  declined: RemusLineageDiagnostic | null;
+  /** The kernel entry point was asked for the copies. */
+  usedKernel: boolean;
+} {
   // The kernel's pattern operations refuse an arrangement whose instances
   // interpenetrate, which this feature supports by fusing the copies itself,
   // so an overlapping pattern keeps the copy-and-fuse build. See
@@ -3337,7 +3951,7 @@ function buildPatternFeature(
   // transformed witnesses, and only the journal cross-check is lost. That loss
   // is recorded as a diagnostic rather than absorbed silently.
   const copyInstances = (): KernelPatternCopies[] =>
-    target.solids.map((solid) => ({
+    sourceSolids.map((solid) => ({
       solids: matrices.map((matrix, instance) =>
         instance === 0 ? solid : kernel.copyAndTransformSolid(solid, matrix)
       ),
@@ -3345,14 +3959,14 @@ function buildPatternFeature(
     }));
   const kernelCopies =
     arm.kernelCopies &&
-    !patternInstancesMayOverlap(kernel, target.solids, matrices)
+    !patternInstancesMayOverlap(kernel, sourceSolids, matrices)
       ? arm.kernelCopies
       : null;
   let declined: RemusLineageDiagnostic | null = null;
   let perSource: KernelPatternCopies[];
   if (kernelCopies) {
     try {
-      perSource = target.solids.map(kernelCopies);
+      perSource = sourceSolids.map(kernelCopies);
     } catch (error) {
       declined = {
         code: 'pattern-kernel-declined',
@@ -3364,10 +3978,25 @@ function buildPatternFeature(
   } else {
     perSource = copyInstances();
   }
-  if (data.patternKind === 'linear' && kernelCopies && !declined) {
-    perSource = linearPatternBoundaryCopies(kernel, target.solids, perSource);
-  }
-  const instances = patternInstances(arm, perSource);
+  return { perSource, declined, usedKernel: kernelCopies !== null };
+}
+
+/** A whole-body pattern's body: its kept instances, fused where they overlap. */
+function buildPatternBody(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'pattern'>,
+  target: ExactShape,
+  arm: PatternArm,
+  instances: readonly PatternInstanceBuild[],
+  /** Each instance's index in the whole pattern, parallel to `instances`. */
+  kept: readonly number[],
+  declined: RemusLineageDiagnostic | null
+): void {
+  const { kernel, scope, result } = ctx;
+  if (!feature.bodyId) throw new Error('Pattern has no result body.');
+  // The whole ring's count: a skipped copy leaves its place in the ring.
+  const count = arm.total;
   const solids = instances.flatMap((instance) => instance.solids);
   // Instances that interpenetrate have to become ONE solid before
   // anything measures them. Every consumer downstream — the volume
@@ -3405,7 +4034,8 @@ function buildPatternFeature(
     fullTurn
       ? (left, right) => {
           const width = target.solids.length;
-          const delta = Math.floor(right / width) - Math.floor(left / width);
+          const delta =
+            kept[Math.floor(right / width)]! - kept[Math.floor(left / width)]!;
           const direct = `${left % width}:${right % width}:${delta}`;
           const reversed = `${right % width}:${left % width}:${count - delta}`;
           return direct < reversed ? direct : reversed;
@@ -3429,7 +4059,7 @@ function buildPatternFeature(
       solids.map((_solid, index) =>
         index < solidsPerInstance
           ? 'the original'
-          : `instance ${Math.floor(index / solidsPerInstance) + 1}`
+          : `instance ${kept[Math.floor(index / solidsPerInstance)]! + 1}`
       )
     );
     const removed = summed - kernel.volume(fused, MEASUREMENT_DEFLECTION);
@@ -3645,6 +4275,15 @@ function buildFeatureByKind(
       break;
     case 'thread':
       buildThreadFeature(ctx, feature, feature.data);
+      break;
+    case 'sheet-metal':
+      buildSheetMetalFeature(ctx, feature, feature.data);
+      break;
+    case 'standard-part':
+      buildStandardPartFeature(ctx, feature, feature.data, {
+        holeToolSpecFor,
+        boreFaceOf
+      });
       break;
     case 'split':
       buildSplitFeature(ctx, feature, feature.data);

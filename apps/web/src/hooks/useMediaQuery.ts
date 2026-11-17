@@ -1,6 +1,13 @@
 import { useCallback, useSyncExternalStore } from 'react';
 
 /**
+ * A device that only takes touch: no hover and a coarse pointer. Hints that
+ * name keys or hover give way to touch wording there. A tablet with a
+ * keyboard and trackpad reports hover, so it keeps its key hints.
+ */
+export const TOUCH_ONLY_QUERY = '(hover: none) and (pointer: coarse)';
+
+/**
  * Whether a CSS media query matches, kept current as the window changes.
  * False where `matchMedia` is unavailable (a test environment without it).
  */

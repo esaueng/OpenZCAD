@@ -4,7 +4,8 @@ import {
   booleanBodies,
   createProjectDocument,
   filletEdges,
-  listFeaturesInOrder
+  listFeaturesInOrder,
+  reservedDocumentIdentifierError
 } from '@openzcad/document-core';
 import {
   toUserId,
@@ -200,6 +201,50 @@ describe('historyFeatureFocus', () => {
       bodyIds: [bracketBodyId]
     });
   });
+});
+
+describe('historyFeatureFocus on a forged lineage name', () => {
+  it.each(['constructor', '__proto__', 'toString', 'hasOwnProperty'])(
+    'treats the head "%s" as unknown instead of an inherited member',
+    (head) => {
+      const {
+        doc,
+        boss,
+        bracket: feature,
+        visible,
+        bracketBodyId: bodyId
+      } = bracket(true);
+      const forged = body(bodyId, false, [
+        faceFrom(
+          feature.featureId,
+          'forged',
+          9,
+          `boolean.face.operand.1.${head}.face`
+        )
+      ]);
+      const document = {
+        ...doc,
+        derived: {
+          ...doc.derived,
+          bodyRepresentations: {
+            ...doc.derived.bodyRepresentations,
+            [bodyId]: forged
+          }
+        }
+      };
+      // Lineage names are text, so the admission guard lets this through.
+      expect(
+        reservedDocumentIdentifierError(
+          JSON.parse(JSON.stringify(document)) as object
+        )
+      ).toBeNull();
+      const focus = historyFeatureFocus(document, boss, visible);
+      // An unknown head stops at the feature reached: the Boss made it.
+      expect(focus).toMatchObject({ kind: 'focus' });
+      if (focus.kind !== 'focus') return;
+      expect(focus.faces.map((face) => face.topologyId)).toEqual(['forged']);
+    }
+  );
 });
 
 /** A plate and the fillet on two of its edges, with hand-made projections. */

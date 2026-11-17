@@ -26,7 +26,10 @@ export function geometryProgress(
     if (progress.stage === 'feature' && progress.status === 'completed') {
       completedFeature = progress;
     }
-    if (stage !== lastStage || at - lastAt >= intervalMs) {
+    // A failed feature is never sampled away: it is the line someone reading
+    // the debug log is looking for.
+    const failed = progress.outcome === 'failed';
+    if (stage !== lastStage || failed || at - lastAt >= intervalMs) {
       lastStage = stage;
       lastAt = at;
       publish(progress);

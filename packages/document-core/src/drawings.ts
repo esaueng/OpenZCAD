@@ -9,6 +9,8 @@ import {
   projectedViewSide,
   type BodyId,
   type DrawingSheet,
+  type DrawingDetail,
+  type DrawingSheetFormat,
   type DrawingSheetId,
   type DrawingTitleBlock,
   type DrawingView,
@@ -39,6 +41,11 @@ export interface DrawingSheetUpdateInput {
   source?: DrawingSheet['source'];
   /** Explicit body succession; subshape witnesses are retained and rechecked. */
   bodyReplacements?: { from: BodyId; to: BodyId }[];
+  /**
+   * D02 (schema v70): replaces the sheet's drawing properties whole; null
+   * or an empty record clears them back to every default.
+   */
+  format?: DrawingSheetFormat | null;
 }
 
 export interface DrawingSheetDeleteInput {
@@ -59,6 +66,8 @@ export interface DrawingViewUpdateInput {
   bodyIds?: BodyId[];
   /** D03: moves a section view's cutting plane, in model units. */
   sectionDepth?: number;
+  /** D03 (v78): a detail view's circle and scale; omitted fields are kept. */
+  detail?: Partial<Pick<DrawingDetail, 'center' | 'radius' | 'scale'>>;
 }
 
 export interface DrawingViewDeleteInput {
@@ -233,6 +242,11 @@ export function updateDrawingSheet(
       }
       sheet.titleBlock = titleBlock;
     }
+    if (input.format !== undefined) {
+      if (input.format === null || Object.keys(input.format).length === 0)
+        delete sheet.format;
+      else sheet.format = deepClone(input.format);
+    }
     return sheets;
   });
 }
@@ -372,6 +386,23 @@ export function updateDrawingView(
         input.bodyIds.filter((id) => !view.bodyIds.includes(id))
       );
     if (input.hiddenLines !== undefined) view.hiddenLines = input.hiddenLines;
+    if (input.detail !== undefined) {
+      if (!view.detail)
+        throw new Error(`Drawing view ${input.viewId} is not a detail.`);
+      view.detail = deepClone({ ...view.detail, ...input.detail });
+    }
+    // A detail looks as its source does: its bodies follow the source's.
+    if (input.bodyIds && (view.detail || view.auxiliary))
+      throw new Error(
+        `A ${view.detail ? 'detail' : 'auxiliary'} view draws the bodies of its source view.`
+      );
+    if (input.bodyIds)
+      for (const follower of sheet.views)
+        if (
+          follower.detail?.sourceViewId === view.viewId ||
+          follower.auxiliary?.sourceViewId === view.viewId
+        )
+          follower.bodyIds = [...input.bodyIds];
     if (input.sectionDepth !== undefined) {
       if (!view.section)
         throw new Error(`Drawing view ${input.viewId} is not a section.`);
@@ -441,7 +472,12 @@ export function deleteDrawingView(
     // measure and sit in them.
     const removed = new Set<DrawingViewId>([input.viewId]);
     for (const view of sheet.views)
-      if (view.section?.sourceViewId === input.viewId) removed.add(view.viewId);
+      if (
+        view.section?.sourceViewId === input.viewId ||
+        view.detail?.sourceViewId === input.viewId ||
+        view.auxiliary?.sourceViewId === input.viewId
+      )
+        removed.add(view.viewId);
     if (sheet.annotations) {
       const kept = sheet.annotations.filter(
         (annotation) =>

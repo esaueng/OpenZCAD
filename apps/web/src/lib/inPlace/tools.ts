@@ -6,7 +6,12 @@ import {
   type PlaneBasis
 } from '@openzcad/geometry';
 import {
+  ANSI_HOLE_SIZES,
+  ISO_HOLE_SIZES,
   MAX_HELICAL_SWEEP_TURNS,
+  holeStandardDiameter,
+  holeStandardFromChoices,
+  holeStandardLabel,
   type BodyId,
   type BooleanKeepOriginals,
   type BooleanOperation,
@@ -20,6 +25,9 @@ import {
   type FeatureId,
   type ParamValue,
   type ParametricVector3,
+  type PatternPoints,
+  type HolePoints,
+  type HoleTapped,
   type PrimitiveKind,
   type ReferenceImage,
   type ReferenceImagePlane,
@@ -30,6 +38,7 @@ import {
   type UnitSystem,
   type VariableFilletLaw,
   UNIT_TO_MM,
+  millimetresPerUnit,
   type Vector3
 } from '@openzcad/shared';
 import {
@@ -58,10 +67,14 @@ import {
 import { datumAxis, datumPlane, type RefKind, type RefPick } from './datums';
 import { faceSpan, threadSpec, type ThreadRequest } from './thread';
 import { referenceImage, type ImageSlot } from './image';
+import { bendSpec, sheetMetalSpec, type SheetMetalRequest } from './sheetMetal';
+import { standardPartSpec, type StandardPartRequest } from './standardPart';
 
 export type { RefPick } from './datums';
 export type { ThreadRequest } from './thread';
 export type { ImagePlacement, ImageSlot } from './image';
+export type { SheetMetalRequest } from './sheetMetal';
+export type { StandardPartRequest } from './standardPart';
 
 /**
  * The in-place commands (U09), as data.
@@ -82,6 +95,9 @@ export type InPlaceToolId =
   | 'gear'
   | 'gear-teeth'
   | 'thread'
+  | 'sheet-metal'
+  | 'bend'
+  | 'standard-part'
   | 'shell'
   | 'thicken'
   | 'solid-offset'
@@ -96,6 +112,7 @@ export type InPlaceToolId =
   | 'linear-pattern'
   | 'circular-pattern'
   | 'grid-pattern'
+  | 'point-pattern'
   | 'fillet'
   | 'chamfer'
   | PrimitiveKind
@@ -112,6 +129,9 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'gear',
   'gear-teeth',
   'thread',
+  'sheet-metal',
+  'bend',
+  'standard-part',
   'shell',
   'thicken',
   'solid-offset',
@@ -126,6 +146,7 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'linear-pattern',
   'circular-pattern',
   'grid-pattern',
+  'point-pattern',
   'fillet',
   'chamfer',
   'box',
@@ -140,6 +161,16 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
 
 export function isInPlaceTool(tool: string): tool is InPlaceToolId {
   return (IN_PLACE_TOOLS as readonly string[]).includes(tool);
+}
+
+/** The commands whose Done runs through the cancellable pattern rebuild. */
+export function isInPlacePatternTool(tool: InPlaceToolId | null): boolean {
+  return (
+    tool === 'linear-pattern' ||
+    tool === 'circular-pattern' ||
+    tool === 'grid-pattern' ||
+    tool === 'point-pattern'
+  );
 }
 
 /** A picked region: its sketch, its stored reference, and which cell. */
@@ -176,12 +207,33 @@ export interface FacePick {
    * where a thread on it starts, how long it may run, and what it is sized
    * from. `axisStart` is the face's start (its lower end along the axis).
    */
-  cylinder?: { axisStart: Vector3; axisEnd: Vector3; radius: number };
+  cylinder?: {
+    axisStart: Vector3;
+    axisEnd: Vector3;
+    radius: number;
+    /**
+     * Schema v57 pipe threads: whether the body's material lies inside the
+     * face (a boss) or outside it (a bore), read from the body's mesh; absent
+     * where the mesh cannot say. A thread's build reads the solid itself.
+     */
+    boss?: boolean;
+    /**
+     * The face's length along its axis as the kernel measured it, which the
+     * thread build reads: a thread's ends are settled from this, not from
+     * the axis ends, which a transformed face can carry a few bits apart.
+     */
+    axialLength?: number;
+  };
   /**
    * `point` is where an edited hole already stands, not a click: its stored
    * position is kept, expressions and all, until the face is clicked again.
    */
   savedPosition?: true;
+  /**
+   * M02: the hole, boss or cut that made the face, for a feature pattern's
+   * pick, which repeats that feature rather than the face.
+   */
+  feature?: { featureId: FeatureId; name: string };
   /**
    * The lineage reference an edit found a stored face by, so a later
    * re-check finds it the same way when its hash moves.
@@ -306,6 +358,10 @@ export interface InPlaceValueContext {
   raws?: Readonly<Record<string, string>>;
   /** The edited feature's stored data; absent when creating. */
   saved?: FeatureData;
+  /** Each option's value, for a check that reads one (a thread's profile). */
+  options?: Readonly<Record<string, string>>;
+  /** The document's length unit. */
+  units?: UnitSystem;
 }
 
 export type ValueUnit = 'angle' | 'length' | 'count';
@@ -373,6 +429,8 @@ export interface InPlaceContext {
   linearSnap?: number | null;
   /** A body's bounding box, for references measured on it (a draft's base). */
   bodyBounds?(bodyId: BodyId): { min: Vector3; max: Vector3 } | null;
+  /** The bodies already in the model (live, not hidden). */
+  liveBodyIds?(): readonly BodyId[];
   /**
    * The stored data of the feature being edited, for whatever the command
    * keeps as stored rather than showing (a hole's position until it is
@@ -387,6 +445,27 @@ export interface InPlaceContext {
   imagePlaneBasis?(plane: ReferenceImagePlane): PlaneBasis | null;
   /** The document's length unit, which a diametral pitch converts from. */
   units?: UnitSystem;
+  /**
+   * M02: a sketch's point entities and where each stands in the world, for
+   * a pattern on sketch points; empty when the sketch has none.
+   */
+  sketchPoints?(sketchId: SketchId): readonly SketchPointSpot[];
+  /**
+   * M17 (schema v71): an M01 hole feature's stored data and its entry
+   * face's outward normal, for a part inserted into it; null when the
+   * feature is not a hole.
+   */
+  holeFeature?(featureId: FeatureId): {
+    name: string;
+    data: Extract<FeatureData, { featureKind: 'hole' }>;
+    entryNormal: Vector3 | null;
+  } | null;
+}
+
+/** M02: a point entity of a sketch, where it stands. */
+export interface SketchPointSpot {
+  id: string;
+  at: Vector3;
 }
 
 /** A titled group of an Options panel's rows; `collapsed` folds it shut. */
@@ -505,7 +584,7 @@ export type InPlaceRequest =
   | {
       tool: 'pattern';
       targetBodyId: BodyId;
-      patternKind: 'linear' | 'circular' | 'grid';
+      patternKind: 'linear' | 'circular' | 'grid' | 'points';
       count: ParamValue;
       axis: 'x' | 'y' | 'z';
       spacing?: ParamValue;
@@ -516,6 +595,12 @@ export type InPlaceRequest =
       axisRef?: InPlaceAxisRef;
       /** A linear pattern's own repeat vector, replacing `axis`. */
       direction?: ParametricVector3;
+      /** M02: the holes, bosses and cuts repeated, in place of the body. */
+      sourceFeatureIds?: FeatureId[];
+      /** M02: the copies left out, by instance label. */
+      skippedInstances?: string[];
+      /** M02 (schema v63): the sketch points a points pattern stands on. */
+      points?: PatternPoints;
     }
   | {
       /** An M14 gear, as the feature stores it. */
@@ -526,6 +611,19 @@ export type InPlaceRequest =
       /** A schema v53 thread, as the feature stores it. */
       tool: 'thread';
       thread: ThreadRequest;
+    }
+  | {
+      /**
+       * An M16 sheet-metal feature, as it stores it: new from Sheet metal
+       * (no bends), or the whole feature as Bend edits it.
+       */
+      tool: 'sheet-metal';
+      sheet: SheetMetalRequest;
+    }
+  | {
+      /** An M17 standard part (schema v69), as the feature stores it. */
+      tool: 'standard-part';
+      part: StandardPartRequest;
     }
   | {
       /** A primitive and its placement, as the card's Create built them. */
@@ -658,6 +756,16 @@ export type HandleSpec = (
       key: string;
       params: { anchor: Vector3 };
     }
+  | {
+      /**
+       * M02: one copy of a pattern, where it stands; a click skips it or
+       * brings it back. Its value is 1 while skipped.
+       */
+      valueId: string;
+      kind: 'instance';
+      key: string;
+      params: { anchor: Vector3; label: string; skipped: boolean };
+    }
 ) & {
   /**
    * The value's name on its chip and keypad when the picks decide it (a
@@ -687,6 +795,11 @@ export interface InPlaceToolSpec {
   edgeMode?: 'many';
   /** Takes a plane: a ghost principal plane, a datum plane or a flat face. */
   wantsPlane?: boolean;
+  /**
+   * A flat face's plane stands where it was clicked (a standard part), not
+   * on the face's centroid (a new gear).
+   */
+  planeAtClick?: boolean;
   /** The datum sources its picks may be, and how a pick joins the others. */
   refKinds?: readonly RefKind[];
   takeRef?(refs: readonly RefPick[], ref: RefPick): RefPick[];
@@ -747,6 +860,12 @@ export interface InPlaceToolSpec {
   /** `planar` refuses curved faces; `cylindrical` takes cylinders only. */
   faceFilter?: 'planar' | 'cylindrical';
   /**
+   * While this option has this value (a pattern's Repeat: Features), the
+   * command takes faces, many on one body, each naming the feature that made
+   * it, instead of the bodies `bodyMode` takes.
+   */
+  featureFaces?: { optionId: string; value: string };
+  /**
    * While this option has this value, a click places a point (a draft's
    * clicked hinge): a picked face clicked again keeps its place in the set
    * and takes the point, rather than coming back out, and only the latest
@@ -785,6 +904,17 @@ export interface InPlaceToolSpec {
   ): Record<string, { value: number; from: string }> | null;
   wantsAxis: boolean;
   wantsPath: boolean;
+  /**
+   * Its path may hold curves of several sketches (a bend line in another
+   * sketch on the blank's plane): a curve of another sketch joins the path
+   * rather than starting it over.
+   */
+  pathAcrossSketches?: boolean;
+  /**
+   * Entries the command keeps beyond its handles and Options values (a bend
+   * table's fields): a refused one holds Done while this says it applies.
+   */
+  holdsEntry?(valueId: string, slots: InPlaceSlots): boolean;
   values: readonly ValueSpec[];
   /**
    * Values the picks (or other values) suggest, applied to any the user has
@@ -793,7 +923,9 @@ export interface InPlaceToolSpec {
   defaults?(
     slots: InPlaceSlots,
     ctx: InPlaceContext,
-    numbers: Record<string, number>
+    numbers: Record<string, number>,
+    /** Each option's value (a thread's profile sets its length). */
+    options?: Readonly<Record<string, string>>
   ): Record<string, number>;
   /**
    * Other values a value's change carries with it (a box hung under a face
@@ -2227,7 +2359,7 @@ export function gearModuleOf(
   const pitch = numbers[id] ?? GEAR_PITCH_INITIALS[id];
   if (id === 'circularPitch') return pitch / Math.PI;
   if (id === 'diametralPitch') {
-    return UNIT_TO_MM.inch / UNIT_TO_MM[units] / pitch;
+    return UNIT_TO_MM.inch / millimetresPerUnit(units) / pitch;
   }
   return pitch;
 }
@@ -2240,7 +2372,7 @@ function gearPitchFor(
 ): number {
   if (id === 'circularPitch') return module * Math.PI;
   if (id === 'diametralPitch') {
-    return UNIT_TO_MM.inch / UNIT_TO_MM[units] / module;
+    return UNIT_TO_MM.inch / millimetresPerUnit(units) / module;
   }
   return module;
 }
@@ -2782,7 +2914,10 @@ const gear: InPlaceToolSpec = {
     return { rimDiameter: module * (teeth + 10.5) };
   },
   hint(slots) {
-    if (!slots.plane) return 'Pick a plane or flat face';
+    // Module and teeth are chips on the placed gear: the summary names them
+    // before there is a field to change them, so the hint says where it is.
+    if (!slots.plane)
+      return 'Pick a plane or flat face · then set module and teeth on the gear';
     if (slots.plane.kind === 'datum') {
       return 'Pick a ghost plane or flat face instead';
     }
@@ -3043,7 +3178,12 @@ const gearTeeth: InPlaceToolSpec = {
         'diametralPitch'
       ]
     },
-    { label: 'Length', boxed: true, compact: true, items: ['faceWidth', 'offset'] },
+    {
+      label: 'Length',
+      boxed: true,
+      compact: true,
+      items: ['faceWidth', 'offset']
+    },
     ...GEAR_FORM_SECTIONS
   ],
   summary: gearSummary,
@@ -3127,7 +3267,9 @@ const hole: InPlaceToolSpec = {
   faceMode: 'one',
   faceFilter: 'planar',
   wantsAxis: false,
-  wantsPath: false,
+  // M01: its path is the sketch points it is drilled at, clicked one by one
+  // under Position → Sketch points.
+  wantsPath: true,
   values: [
     {
       id: 'diameter',
@@ -3186,7 +3328,17 @@ const hole: InPlaceToolSpec = {
     },
     // A typed position, measured on the face from its anchor.
     { id: 'positionU', label: 'U', unit: 'length', initial: 0 },
-    { id: 'positionV', label: 'V', unit: 'length', initial: 0 }
+    { id: 'positionV', label: 'V', unit: 'length', initial: 0 },
+    // M01 (schema v66): how far a tapped hole's thread runs from the entry;
+    // the whole bore until it is dragged short.
+    {
+      id: 'tapLength',
+      label: 'Thread',
+      unit: 'length',
+      initial: 10,
+      min: 0,
+      exclusive: true
+    }
   ],
   options: [
     {
@@ -3194,7 +3346,12 @@ const hole: InPlaceToolSpec = {
       label: 'Position',
       choices: [
         { value: 'clicked', label: 'Clicked' },
-        { value: 'typed', label: 'Typed' }
+        { value: 'typed', label: 'Typed' },
+        {
+          value: 'points',
+          label: 'Sketch points',
+          tip: "One hole at each clicked point of a sketch on the face's plane"
+        }
       ],
       initial: 'clicked'
     },
@@ -3216,6 +3373,124 @@ const hole: InPlaceToolSpec = {
         { value: 'countersink', label: 'Countersink' }
       ],
       initial: 'simple'
+    },
+    // M01 (schema v65): a standard size, whose table gives the diameter.
+    {
+      id: 'standard',
+      label: 'Standard',
+      choices: [
+        {
+          value: 'none',
+          label: 'Any',
+          tip: 'The diameter as dragged or typed'
+        },
+        { value: 'iso', label: 'ISO metric' },
+        { value: 'ansi', label: 'ANSI inch' }
+      ],
+      initial: 'none'
+    },
+    {
+      id: 'isoSize',
+      label: 'Screw',
+      choices: ISO_HOLE_SIZES.map((size) => ({ value: size, label: size })),
+      initial: 'M6',
+      when: (state) => state.options.standard === 'iso'
+    },
+    {
+      id: 'ansiSize',
+      label: 'Screw',
+      choices: ANSI_HOLE_SIZES.map((size) => ({ value: size, label: size })),
+      initial: '1/4',
+      when: (state) => state.options.standard === 'ansi'
+    },
+    {
+      id: 'holeFor',
+      label: 'For',
+      choices: [
+        {
+          value: 'clearance',
+          label: 'Clearance',
+          tip: 'The screw passes through'
+        },
+        {
+          value: 'tap-drill',
+          label: 'Tap drill',
+          tip: 'Drilled to be tapped for the screw'
+        }
+      ],
+      initial: 'clearance',
+      when: (state) => holeStandardOn(state.options)
+    },
+    {
+      id: 'fit',
+      label: 'Fit',
+      choices: [
+        { value: 'close', label: 'Close' },
+        { value: 'normal', label: 'Normal' },
+        { value: 'loose', label: 'Loose' }
+      ],
+      initial: 'normal',
+      when: (state) =>
+        state.options.standard === 'iso' &&
+        state.options.holeFor !== 'tap-drill'
+    },
+    {
+      id: 'ansiFit',
+      label: 'Fit',
+      choices: [
+        { value: 'close', label: 'Close' },
+        { value: 'normal', label: 'Free' }
+      ],
+      initial: 'normal',
+      when: (state) =>
+        state.options.standard === 'ansi' &&
+        state.options.holeFor !== 'tap-drill'
+    },
+    // M01 (schema v66): a tap drill tapped with its standard's thread.
+    {
+      id: 'tap',
+      label: 'Thread',
+      choices: [
+        { value: 'none', label: 'Drill only' },
+        {
+          value: 'tapped',
+          label: 'Tapped',
+          tip: "Cuts the screw's thread into the bore"
+        }
+      ],
+      initial: 'none',
+      when: (state) =>
+        holeStandardOn(state.options) && state.options.holeFor === 'tap-drill'
+    },
+    {
+      id: 'tapFit',
+      label: 'Thread fit',
+      choices: [
+        {
+          value: 'document',
+          label: 'Document',
+          tip: "The document's print clearance, or none"
+        },
+        { value: 'exact', label: 'Exact', tip: 'No clearance' }
+      ],
+      initial: 'document',
+      when: (state) =>
+        holeTappedChosen(state.options) && state.options.tapForm !== 'cosmetic'
+    },
+    // M01 (schema v67): a thread cut, or described for drawings only.
+    {
+      id: 'tapForm',
+      label: 'Thread form',
+      choices: [
+        { value: 'modeled', label: 'Modeled', tip: 'Cuts the thread' },
+        {
+          value: 'cosmetic',
+          label: 'Cosmetic',
+          tip: 'Keeps the tap-drill bore; drawings call the thread out'
+        }
+      ],
+      initial: 'modeled',
+      when: (state) => holeTappedChosen(state.options)
     }
   ],
   layout: [
@@ -3226,6 +3501,15 @@ const hole: InPlaceToolSpec = {
         'style',
         'depthMode',
         'place',
+        'standard',
+        'isoSize',
+        'ansiSize',
+        'holeFor',
+        'fit',
+        'ansiFit',
+        'tap',
+        'tapForm',
+        'tapFit',
         'diameter',
         'depth',
         'counterboreDiameter',
@@ -3233,22 +3517,49 @@ const hole: InPlaceToolSpec = {
         'countersinkDiameter',
         'countersinkAngleDeg',
         'positionU',
-        'positionV'
+        'positionV',
+        'tapLength'
       ]
     }
   ],
-  defaults: (_slots, _ctx, numbers) => holeStepSizes(numbers.diameter ?? 6),
-  hint(slots, options) {
+  defaults: (_slots, ctx, numbers, options) => ({
+    ...((options && holeStandardStepSizes(options, ctx.units)) ??
+      holeStepSizes(numbers.diameter ?? 6)),
+    // A thread stands at the bore's depth until it is dragged short.
+    ...(options && holeTappedChosen(options)
+      ? { tapLength: numbers.depth ?? 10 }
+      : {})
+  }),
+  hint(slots, options, ctx) {
     if (slots.faces.length === 0) return 'Click a flat face';
-    if (options?.place === 'typed') {
-      return 'Tap U and V to place it · drag the diameter';
+    // A standard size sets the diameter: there is none to drag.
+    const drag =
+      options && holeStandardOn(options)
+        ? ` · ${holeStandardLabel(holeStandardFromChoices(options)!)}${
+            ctx?.units
+              ? ` ⌀ ${formatHoleDiameter(holeStandardChosenDiameter(options, ctx.units)!)}`
+              : ''
+          }`
+        : ' · drag the diameter';
+    if (options?.place === 'points') {
+      return slots.path.length === 0
+        ? 'Click the sketch points to drill at'
+        : `Click more points${drag}`;
     }
-    return 'Click to move it · drag the diameter';
+    if (options?.place === 'typed') {
+      return `Tap U and V to place it${drag}`;
+    }
+    return `Click to move it${drag}`;
   },
-  ready: (slots) => slots.faces.length > 0,
+  ready: (slots, options) =>
+    slots.faces.length > 0 &&
+    (options?.place !== 'points' || holePointsPicked(slots) !== null),
   request(slots, values, options, ctx, numbers) {
     const face = slots.faces[0];
     if (!face || !face.normal) return null;
+    // M01 (schema v64): the sketch points it is drilled at, if so placed.
+    const points = options.place === 'points' ? holePointsPicked(slots) : null;
+    if (options.place === 'points' && !points) return null;
     const saved = ctx.saved?.featureKind === 'hole' ? ctx.saved : null;
     // A new hole measures from the face's centroid; an edited one keeps the
     // anchor it was drilled against, which no edit may change.
@@ -3261,8 +3572,10 @@ const hole: InPlaceToolSpec = {
         : 'center';
     // Rounded to the sketch snap, exactly as the card placed a clicked hole;
     // a typed one as typed, expressions and all.
+    // On sketch points the position is stored as it was, but not read.
     const position =
-      options.place === 'typed'
+      options.place === 'typed' ||
+      (options.place === 'points' && !(face.savedPosition && saved))
         ? { u: text(values.positionU, 0), v: text(values.positionV, 0) }
         : face.savedPosition && saved
           ? {
@@ -3279,10 +3592,15 @@ const hole: InPlaceToolSpec = {
             : null;
     // Unset step sizes derive from the bore's value, a typed expression's
     // too; a chip's value, typed or derived, is stored as it stands.
-    const derived = holeStepSizes(
-      numbers?.diameter ??
-        (typeof values.diameter === 'number' ? values.diameter : 6)
-    );
+    // M01 (schema v65): a standard's table gives the diameter, stored too.
+    const standard = holeStandardFromChoices(options);
+    const standardDiameter = holeStandardChosenDiameter(options, ctx.units);
+    const derived =
+      holeStandardStepSizes(options, ctx.units) ??
+      holeStepSizes(
+        numbers?.diameter ??
+          (typeof values.diameter === 'number' ? values.diameter : 6)
+      );
     const step = (id: keyof typeof derived) => text(values[id], derived[id]);
     return {
       tool: 'modeling',
@@ -3294,14 +3612,22 @@ const hole: InPlaceToolSpec = {
           faceHash: face.hash,
           style: (options.style ?? 'simple') as
             'simple' | 'counterbore' | 'countersink',
-          diameter: text(values.diameter, 6),
+          diameter:
+            standardDiameter === null
+              ? text(values.diameter, 6)
+              : formatHoleDiameter(standardDiameter),
           depthMode: (options.depthMode ?? 'through') as 'blind' | 'through',
           depth: text(values.depth, 10),
           counterboreDiameter: step('counterboreDiameter'),
           counterboreDepth: step('counterboreDepth'),
           countersinkDiameter: step('countersinkDiameter'),
           countersinkAngleDeg: text(values.countersinkAngleDeg, 90),
-          position: position ?? { u: '0', v: '0' }
+          position: position ?? { u: '0', v: '0' },
+          ...(points ? { points } : {}),
+          ...(standard ? { standard } : {}),
+          ...(standard && holeTappedChosen(options)
+            ? { tapped: holeTappedRequest(values, options, ctx, saved) }
+            : {})
         }
       }
     };
@@ -3313,25 +3639,52 @@ const hole: InPlaceToolSpec = {
     const axes = holePositionAxes(face.normal);
     if (!axes) return [];
     const typed = options.place === 'typed';
-    // A typed hole's handles stand where its U and V put it.
-    const entry = typed ? typedHoleEntry(face, axes, values, ctx) : clicked;
+    // A typed hole's handles stand where its U and V put it; one on sketch
+    // points, on its first point.
+    const entry =
+      options.place === 'points'
+        ? holePointsEntry(slots, face, ctx)
+        : typed
+          ? typedHoleEntry(face, axes, values, ctx)
+          : clicked;
     if (!entry) return [];
     const key = `${faceKey(face)}:${entry.x}:${entry.y}:${entry.z}`;
-    const handles: HandleSpec[] = [
-      {
-        valueId: 'diameter',
-        kind: 'linear',
-        key: `${key}:diameter`,
-        // A diameter's handle sits on the circle, at its radius.
-        params: { origin: entry, direction: axes.u, scale: 0.5 }
-      }
-    ];
+    // A standard size's table sets the diameter, so it has no handle.
+    const handles: HandleSpec[] = holeStandardOn(options)
+      ? []
+      : [
+          {
+            valueId: 'diameter',
+            kind: 'linear',
+            key: `${key}:diameter`,
+            // A diameter's handle sits on the circle, at its radius.
+            params: { origin: entry, direction: axes.u, scale: 0.5 }
+          }
+        ];
     if (options.depthMode === 'blind') {
       handles.push({
         valueId: 'depth',
         kind: 'linear',
         key: `${key}:depth`,
         params: { origin: entry, direction: scaled(unit(face.normal), -1) }
+      });
+    }
+    // M01: a tapped hole's thread length, down beside the bore, a diameter
+    // and a half off the depth's arrow so neither's chip covers the other.
+    if (holeTappedChosen(options)) {
+      const reach = -Math.max((values.diameter ?? 6) * 1.5, 1e-3);
+      handles.push({
+        valueId: 'tapLength',
+        kind: 'linear',
+        key: `${key}:tapLength`,
+        params: {
+          origin: {
+            x: entry.x + axes.v.x * reach,
+            y: entry.y + axes.v.y * reach,
+            z: entry.z + axes.v.z * reach
+          },
+          direction: scaled(unit(face.normal), -1)
+        }
       });
     }
     const style = options.style;
@@ -3393,6 +3746,129 @@ const hole: InPlaceToolSpec = {
     return handles;
   }
 };
+
+/**
+ * M01 (schema v64): the sketch points a hole is drilled at, the ones picked
+ * on the first picked point's sketch, in order; null with none.
+ */
+function holePointsPicked(slots: InPlaceSlots): HolePoints | null {
+  const sketchId = slots.path[0]?.sketchId;
+  if (!sketchId) return null;
+  const pointIds = [
+    ...new Set(
+      slots.path
+        .filter((pick) => pick.sketchId === sketchId)
+        .map((pick) => pick.entityId)
+    )
+  ];
+  return pointIds.length > 0 ? { sketchId, pointIds } : null;
+}
+
+/**
+ * Where a hole on sketch points enters its face at its first point: the
+ * point dropped onto the face along its normal. Null until it resolves.
+ */
+function holePointsEntry(
+  slots: InPlaceSlots,
+  face: FacePick,
+  ctx: InPlaceContext
+): Vector3 | null {
+  const first = slots.path[0];
+  const planePoint = face.centroid ?? face.center ?? face.point;
+  if (!first || !face.normal || !planePoint) return null;
+  const spot = ctx
+    .sketchPoints?.(first.sketchId)
+    .find((candidate) => candidate.id === first.entityId);
+  if (!spot) return null;
+  const normal = unit(face.normal);
+  const height =
+    (spot.at.x - planePoint.x) * normal.x +
+    (spot.at.y - planePoint.y) * normal.y +
+    (spot.at.z - planePoint.z) * normal.z;
+  return offset(spot.at, normal, -height);
+}
+
+/** M01: whether the Hole's options size it by a standard. */
+function holeStandardOn(options: Readonly<Record<string, string>>): boolean {
+  return options.standard === 'iso' || options.standard === 'ansi';
+}
+
+/** M01 (schema v65): the diameter the chosen standard gives, or null. */
+function holeStandardChosenDiameter(
+  options: Readonly<Record<string, string>>,
+  units: UnitSystem | undefined
+): number | null {
+  const standard = holeStandardFromChoices(options);
+  return standard ? holeStandardDiameter(standard, units ?? 'mm') : null;
+}
+
+/**
+ * M01: the step sizes a standard's bore suggests, worked out and rounded in
+ * millimetres as the card rounds them, then given in the document's units,
+ * so a metre document's small screw does not round its steps to nothing.
+ * Null for any size.
+ */
+function holeStandardStepSizes(
+  options: Readonly<Record<string, string>>,
+  units: UnitSystem | undefined
+): ReturnType<typeof holeStepSizes> | null {
+  const standard = holeStandardFromChoices(options);
+  if (!standard) return null;
+  const mm = millimetresPerUnit(units ?? 'mm');
+  const steps = holeStepSizes(holeStandardDiameter(standard, 'mm'));
+  const inUnits = (value: number) => Number((value / mm).toPrecision(12));
+  return {
+    counterboreDiameter: inUnits(steps.counterboreDiameter),
+    counterboreDepth: inUnits(steps.counterboreDepth),
+    countersinkDiameter: inUnits(steps.countersinkDiameter)
+  };
+}
+
+/** A table diameter as stored: to a micrometre's worth of digits. */
+function formatHoleDiameter(value: number): string {
+  return String(Math.round(value * 1e6) / 1e6);
+}
+
+/** M01: whether the Hole's options tap its tap drill. */
+function holeTappedChosen(options: Readonly<Record<string, string>>): boolean {
+  return (
+    holeStandardOn(options) &&
+    options.holeFor === 'tap-drill' &&
+    options.tap === 'tapped'
+  );
+}
+
+/**
+ * M01 (schema v66): the thread a tapped hole stores. Its length only once
+ * dragged or typed (else the whole bore); its clearance none to read the
+ * document's, 0 for an exact fit, or as an edit stored it; its hand as
+ * stored.
+ */
+function holeTappedRequest(
+  values: Readonly<Record<string, number | string>>,
+  options: Readonly<Record<string, string>>,
+  ctx: InPlaceContext,
+  saved: Extract<FeatureData, { featureKind: 'hole' }> | null
+): HoleTapped {
+  const stored = saved?.tapped;
+  // A cosmetic thread is not cut, so it keeps no clearance.
+  const cosmetic = options.tapForm === 'cosmetic';
+  const clearance = cosmetic
+    ? undefined
+    : options.tapFit === 'exact'
+      ? 0
+      : options.tapFit === 'document'
+        ? undefined
+        : stored?.clearance;
+  return {
+    ...(ctx.touched?.includes('tapLength') && values.tapLength !== undefined
+      ? { length: text(values.tapLength, 10) }
+      : {}),
+    ...(clearance !== undefined ? { clearance } : {}),
+    ...(stored?.hand ? { hand: stored.hand } : {}),
+    ...(cosmetic ? { cosmetic: true as const } : {})
+  };
+}
 
 /** Where a typed U and V put a hole on its face; null with no anchor. */
 function typedHoleEntry(
@@ -4292,7 +4768,7 @@ const scale: InPlaceToolSpec = {
       id: 'pivot',
       label: 'About',
       choices: [
-        { value: 'centre', label: 'Body centre' },
+        { value: 'centre', label: 'Body center' },
         { value: 'origin', label: 'Origin' },
         { value: 'typed', label: 'Point' }
       ],
@@ -4542,11 +5018,313 @@ function axisOf(value: string | undefined): 'x' | 'y' | 'z' {
 /** Float noise a picked direction drops, so an edge along X reads as X. */
 const DIRECTION_QUANTUM = 1e-9;
 
+/**
+ * The faces a command takes as its options now stand: its own face list, or
+ * a feature pattern's picks while Repeat is Features (M02).
+ */
+export function inPlaceFaceMode(
+  spec: InPlaceToolSpec | null | undefined,
+  options: Readonly<Record<string, string>> | undefined
+): 'one' | 'many' | undefined {
+  if (!spec) return undefined;
+  if (takesFeatureFaces(spec, options)) return 'many';
+  return spec.faceMode;
+}
+
+/** The bodies a command takes as its options now stand. */
+export function inPlaceBodyMode(
+  spec: InPlaceToolSpec | null | undefined,
+  options: Readonly<Record<string, string>> | undefined
+): 'one' | 'many' | undefined {
+  if (!spec || takesFeatureFaces(spec, options)) return undefined;
+  return spec.bodyMode;
+}
+
+/** Whether a face click names the feature that made it (M02). */
+export function takesFeatureFaces(
+  spec: InPlaceToolSpec | null | undefined,
+  options: Readonly<Record<string, string>> | undefined
+): boolean {
+  const rule = spec?.featureFaces;
+  return rule !== undefined && options?.[rule.optionId] === rule.value;
+}
+
+/** M02: what a pattern repeats, the whole body or features on it. */
+const REPEAT_OPTION: OptionSpec = {
+  id: 'repeat',
+  label: 'Repeat',
+  choices: [
+    { value: 'body', label: 'Body', tip: 'Copies the whole body' },
+    {
+      value: 'features',
+      label: 'Features',
+      tip: 'Copies holes, bosses and cuts on the body'
+    }
+  ],
+  initial: 'body'
+};
+
+const REPEAT_FEATURES = { optionId: 'repeat', value: 'features' } as const;
+
+function repeatsFeatures(options?: Readonly<Record<string, string>>): boolean {
+  return options?.repeat === 'features';
+}
+
+/** The features a pattern repeats, once each, in pick order. */
+function patternFeatureIds(slots: InPlaceSlots): FeatureId[] {
+  const ids: FeatureId[] = [];
+  for (const face of slots.faces) {
+    const id = face.feature?.featureId;
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * Where a pattern's handles stand: its body's box, or a box about the
+ * features it repeats, on their body. Null while nothing is picked.
+ */
+function patternSeed(
+  slots: InPlaceSlots,
+  options?: Readonly<Record<string, string>>,
+  ctx?: InPlaceContext
+): BodyPick | null {
+  if (!repeatsFeatures(options)) return slots.bodies[0] ?? null;
+  const faces = slots.faces.filter((face) => face.feature);
+  const points = faces.flatMap((face) => {
+    const point = face.centroid ?? face.center ?? face.point;
+    return point ? [point] : [];
+  });
+  if (points.length === 0) {
+    // An edit whose repeated features show no face stands on their body.
+    const source = patternSource(slots, options, ctx);
+    const box = source && ctx?.bodyBounds?.(source.targetBodyId);
+    return source && box ? { bodyId: source.targetBodyId, ...box } : null;
+  }
+  const reach = Math.max(2, ...faces.map((face) => face.cylinder?.radius ?? 0));
+  const bound = (
+    part: 'x' | 'y' | 'z',
+    pick: (...values: number[]) => number
+  ) => pick(...points.map((point) => point[part]));
+  return {
+    bodyId: faces[0]!.bodyId,
+    min: {
+      x: bound('x', Math.min) - reach,
+      y: bound('y', Math.min) - reach,
+      z: bound('z', Math.min) - reach
+    },
+    max: {
+      x: bound('x', Math.max) + reach,
+      y: bound('y', Math.max) + reach,
+      z: bound('z', Math.max) + reach
+    }
+  };
+}
+
+/**
+ * The repeated features an edit keeps although the model shows none of
+ * their faces to pick (a boss a later cut removed): they cannot be clicked
+ * out, so they are written back as stored rather than silently dropped.
+ */
+function keptPatternSources(
+  options?: Readonly<Record<string, string>>
+): FeatureId[] {
+  return (options?.keepSources ?? '')
+    .split(',')
+    .filter((id) => id !== '') as FeatureId[];
+}
+
+/** The pattern's target and repeated features, as the request stores them. */
+function patternSource(
+  slots: InPlaceSlots,
+  options?: Readonly<Record<string, string>>,
+  ctx?: InPlaceContext
+): { targetBodyId: BodyId; sourceFeatureIds?: FeatureId[] } | null {
+  if (!repeatsFeatures(options)) {
+    const body = slots.bodies[0];
+    return body ? { targetBodyId: body.bodyId } : null;
+  }
+  const picked = patternFeatureIds(slots);
+  const face = slots.faces.find((candidate) => candidate.feature);
+  const savedTarget =
+    ctx?.saved?.featureKind === 'pattern' ? ctx.saved.targetBodyId : null;
+  // Kept only while the pattern stays on the body they were made on: a
+  // feature picked on another body starts the set over there.
+  const kept =
+    savedTarget !== null && (!face || face.bodyId === savedTarget)
+      ? keptPatternSources(options).filter((id) => !picked.includes(id))
+      : [];
+  const sourceFeatureIds = [...picked, ...kept];
+  const targetBodyId =
+    face?.bodyId ?? (kept.length > 0 ? (savedTarget ?? undefined) : undefined);
+  return targetBodyId && sourceFeatureIds.length > 0
+    ? { targetBodyId, sourceFeatureIds }
+    : null;
+}
+
+function patternHint(
+  slots: InPlaceSlots,
+  options: Readonly<Record<string, string>> | undefined
+): string | null {
+  if (repeatsFeatures(options)) {
+    return patternFeatureIds(slots).length === 0 &&
+      keptPatternSources(options).length === 0
+      ? 'Click a hole, boss or cut to repeat'
+      : null;
+  }
+  return slots.bodies.length === 0 ? 'Click the body to repeat' : null;
+}
+
+/** The skip list as the command holds it: labels, comma-separated. */
+export function skippedPatternLabels(
+  options?: Readonly<Record<string, string>>
+): string[] {
+  return (options?.skip ?? '').split(',').filter((label) => label !== '');
+}
+
+/** The skip list with `label` skipped, or brought back if it was. */
+export function toggledPatternSkip(
+  skip: string | undefined,
+  label: string
+): string {
+  const labels = (skip ?? '').split(',').filter((entry) => entry !== '');
+  return (
+    labels.includes(label)
+      ? labels.filter((entry) => entry !== label)
+      : [...labels, label]
+  ).join(',');
+}
+
+/**
+ * The skip list a request stores: only copies the counts now reach, so a
+ * lowered count leaves no stale label behind.
+ */
+function skipRequest(
+  options: Readonly<Record<string, string>> | undefined,
+  /** Null while a count is an expression that does not resolve: all kept. */
+  copies: readonly { label: string }[] | null
+): { skippedInstances?: string[] } {
+  const live = copies && new Set(copies.map((copy) => copy.label));
+  const skipped = skippedPatternLabels(options).filter(
+    (label) => !live || live.has(label)
+  );
+  return skipped.length > 0 ? { skippedInstances: skipped } : {};
+}
+
+/** A copy's label needs no position: where the request lists labels. */
+const ORIGIN: Vector3 = { x: 0, y: 0, z: 0 };
+
+/** Most copies a pattern draws a skip toggle for. */
+const MAX_INSTANCE_TOGGLES = 100;
+
+function wholeCount(value: number | undefined, fallback: number): number {
+  const count = Math.round(value ?? fallback);
+  return Number.isFinite(count) ? Math.min(Math.max(count, 1), 100) : 1;
+}
+
+function offset(point: Vector3, by: Vector3, times: number): Vector3 {
+  return {
+    x: point.x + by.x * times,
+    y: point.y + by.y * times,
+    z: point.z + by.z * times
+  };
+}
+
+/** `point` turned `angleDeg` about the line, right-handed (Rodrigues). */
+function turnedAbout(
+  point: Vector3,
+  origin: Vector3,
+  direction: Vector3,
+  angleDeg: number
+): Vector3 {
+  const k = unit(direction);
+  const v = {
+    x: point.x - origin.x,
+    y: point.y - origin.y,
+    z: point.z - origin.z
+  };
+  const angle = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const along = dot(k, v) * (1 - cos);
+  const cross = {
+    x: k.y * v.z - k.z * v.y,
+    y: k.z * v.x - k.x * v.z,
+    z: k.x * v.y - k.y * v.x
+  };
+  return {
+    x: origin.x + v.x * cos + cross.x * sin + k.x * along,
+    y: origin.y + v.y * cos + cross.y * sin + k.y * along,
+    z: origin.z + v.z * cos + cross.z * sin + k.z * along
+  };
+}
+
+interface PatternCopySpot {
+  label: string;
+  point: Vector3;
+}
+
+/** Each copy's label along a row, the original's left out. */
+function rowCopies(count: number, at: (index: number) => Vector3) {
+  return Array.from({ length: Math.max(count - 1, 0) }, (_unused, index) => ({
+    label: String(index + 1),
+    point: at(index + 1)
+  }));
+}
+
+/** Each copy of a grid, column-major as the build labels them. */
+function gridCopies(
+  columns: number,
+  rows: number,
+  at: (column: number, row: number) => Vector3
+): PatternCopySpot[] {
+  const copies: PatternCopySpot[] = [];
+  for (let column = 0; column < columns; column += 1) {
+    for (let row = 0; row < rows; row += 1) {
+      if (column === 0 && row === 0) continue;
+      copies.push({ label: `${column}-${row}`, point: at(column, row) });
+    }
+  }
+  return copies;
+}
+
+/** A skip toggle on every copy, where it stands. */
+function instanceHandles(
+  seed: BodyPick,
+  copies: readonly PatternCopySpot[],
+  options: Readonly<Record<string, string>>
+): HandleSpec[] {
+  if (copies.length > MAX_INSTANCE_TOGGLES) return [];
+  const skipped = new Set(skippedPatternLabels(options));
+  return copies.map(({ label, point }) => {
+    const off = skipped.has(label);
+    return {
+      valueId: `instance:${label}`,
+      kind: 'instance' as const,
+      // The chip is drawn anew when it is skipped or brought back.
+      key: `${bodyKey(seed)}:instance:${label}:${off ? 'skipped' : 'kept'}`,
+      params: { anchor: point, label, skipped: off }
+    };
+  });
+}
+
+/** Where a linear pattern's copies stand. */
+function linearCopies(
+  seed: BodyPick,
+  vector: Vector3,
+  spacing: number,
+  count: number
+): PatternCopySpot[] {
+  const origin = centre(seed);
+  return rowCopies(count, (index) => offset(origin, vector, spacing * index));
+}
+
 const linearPattern: InPlaceToolSpec = {
   id: 'linear-pattern',
   title: 'Linear pattern',
   profileMode: 'none',
   bodyMode: 'one',
+  featureFaces: REPEAT_FEATURES,
   // Datum axes are drawn to pick as a direction, as an edge or a flat face
   // is; none is an axis slot the pattern needs.
   wantsAxis: true,
@@ -4593,6 +5371,7 @@ const linearPattern: InPlaceToolSpec = {
     { id: 'dirZ', label: 'Z', unit: 'count', initial: 0, vector: 'Direction' }
   ],
   options: [
+    REPEAT_OPTION,
     {
       ...AXIS_OPTION('x'),
       choices: [
@@ -4601,14 +5380,12 @@ const linearPattern: InPlaceToolSpec = {
       ]
     }
   ],
-  hint: (slots) =>
-    slots.bodies.length === 0
-      ? 'Click the body to repeat'
-      : 'Drag the spacing · pick an edge or face to aim it',
-  ready: (slots) => slots.bodies.length > 0,
-  request(slots, values, options, ctx) {
-    const body = slots.bodies[0];
-    if (!body) return null;
+  hint: (slots, options) =>
+    patternHint(slots, options) ?? 'Drag the spacing · tap a copy to skip it',
+  ready: (slots, options, ctx) => patternSource(slots, options, ctx) !== null,
+  request(slots, values, options, ctx, numbers) {
+    const source = patternSource(slots, options, ctx);
+    if (!source) return null;
     // A custom vector is stored as given, expressions and all; a picked
     // direction is one too, as its numbers.
     const direction =
@@ -4619,9 +5396,10 @@ const linearPattern: InPlaceToolSpec = {
             z: values.dirZ ?? 0
           }
         : null;
+    const count = numbers?.count;
     return {
       tool: 'pattern',
-      targetBodyId: body.bodyId,
+      ...source,
       patternKind: 'linear',
       count: values.count ?? 3,
       axis:
@@ -4629,11 +5407,17 @@ const linearPattern: InPlaceToolSpec = {
           ? ctx.saved.axis
           : axisOf(options.axis),
       spacing: values.spacing ?? 20,
-      ...(direction ? { direction } : {})
+      ...(direction ? { direction } : {}),
+      ...skipRequest(
+        options,
+        count === undefined
+          ? null
+          : rowCopies(wholeCount(count, 3), () => ORIGIN)
+      )
     };
   },
-  handles(slots, values, _ctx, options) {
-    const body = slots.bodies[0];
+  handles(slots, values, ctx, options) {
+    const body = patternSeed(slots, options, ctx);
     if (!body) return [];
     const custom = options.axis === 'custom';
     const typed = {
@@ -4674,7 +5458,17 @@ const linearPattern: InPlaceToolSpec = {
               }
             }
           }))
-        : [])
+        : []),
+      ...instanceHandles(
+        body,
+        linearCopies(
+          body,
+          vector,
+          values.spacing ?? 20,
+          wholeCount(values.count, 3)
+        ),
+        options
+      )
     ];
   }
 };
@@ -4684,6 +5478,7 @@ const circularPattern: InPlaceToolSpec = {
   title: 'Circular pattern',
   profileMode: 'none',
   bodyMode: 'one',
+  featureFaces: REPEAT_FEATURES,
   wantsAxis: true,
   axisSource: 'world',
   axisPicks: true,
@@ -4711,6 +5506,7 @@ const circularPattern: InPlaceToolSpec = {
     }
   ],
   options: [
+    REPEAT_OPTION,
     {
       id: 'spacing',
       label: 'Spacing',
@@ -4730,17 +5526,19 @@ const circularPattern: InPlaceToolSpec = {
     }
   ],
   hint(slots, options) {
-    if (slots.bodies.length === 0) return 'Click the body to repeat';
+    const pick = patternHint(slots, options);
+    if (pick) return pick;
     if (!slots.axis) return 'Pick an axis: edge, cylinder, X/Y/Z or datum';
     return options?.spacing === 'step'
       ? 'Drag the step · tap the count'
       : 'Drag the angle · tap the count';
   },
-  ready: (slots) => slots.bodies.length > 0 && slots.axis !== null,
-  request(slots, values, options) {
-    const body = slots.bodies[0];
+  ready: (slots, options, ctx) =>
+    patternSource(slots, options, ctx) !== null && slots.axis !== null,
+  request(slots, values, options, ctx, numbers) {
+    const source = patternSource(slots, options, ctx);
     const choice = slots.axis?.choice;
-    if (!body || !choice) return null;
+    if (!source || !choice) return null;
     // A datum axis, or a picked line Done adds as one, replaces the world
     // axis the card stores beside it.
     const axisRef = 'world' in choice ? null : turnAxisRef(choice);
@@ -4748,7 +5546,7 @@ const circularPattern: InPlaceToolSpec = {
     const count = values.count ?? 6;
     return {
       tool: 'pattern',
-      targetBodyId: body.bodyId,
+      ...source,
       patternKind: 'circular',
       count,
       axis: 'world' in choice ? choice.world : 'z',
@@ -4756,15 +5554,38 @@ const circularPattern: InPlaceToolSpec = {
       angleDeg:
         options.spacing === 'step'
           ? stepTotal(values.step ?? 60, count)
-          : (values.angle ?? 360)
+          : (values.angle ?? 360),
+      ...skipRequest(
+        options,
+        numbers?.count === undefined
+          ? null
+          : rowCopies(wholeCount(numbers.count, 6), () => ORIGIN)
+      )
     };
   },
-  handles(slots, _values, _ctx, options) {
-    const body = slots.bodies[0];
+  handles(slots, values, ctx, options) {
+    const body = patternSeed(slots, options, ctx);
     if (!body || !slots.axis) return [];
     const placement = bodyTurnRig(body, slots.axis);
     const valueId = options.spacing === 'step' ? 'step' : 'angle';
     const key = `${bodyKey(body)}:${valueId}:${slots.axis.id}`;
+    const count = wholeCount(values.count, 6);
+    const total =
+      options.spacing === 'step'
+        ? (values.step ?? 60) * count
+        : (values.angle ?? 360);
+    // The build's step: a closed ring shares the turn among all copies,
+    // any other sweep among the gaps between them.
+    const step =
+      options.spacing === 'step'
+        ? (values.step ?? 60)
+        : Math.abs(Math.abs(total) - 360) <= 1e-9
+          ? total / count
+          : total / Math.max(count - 1, 1);
+    const axis = slots.axis;
+    const copies = rowCopies(count, (index) =>
+      turnedAbout(centre(body), axis.origin, axis.direction, step * index)
+    );
     return [
       // A body with no extent to turn a rig around types its angle.
       placement
@@ -4780,8 +5601,115 @@ const circularPattern: InPlaceToolSpec = {
         kind: 'chip',
         key: `${bodyKey(body)}:count`,
         params: { anchor: centre(body) }
-      }
+      },
+      ...instanceHandles(body, copies, options)
     ];
+  }
+};
+
+/**
+ * M02 (schema v63): a pattern on sketch points. The original stands on one
+ * point of the sketch, the one nearest it (an edit keeps the one stored),
+ * and each picked point takes a copy moved there from it. Picks are the
+ * body, or features under Repeat Features, then the points; each copy wears
+ * a chip that skips it.
+ */
+function pointPatternPlan(
+  slots: InPlaceSlots,
+  options: Readonly<Record<string, string>>,
+  ctx: InPlaceContext | undefined
+): {
+  seed: BodyPick;
+  points: PatternPoints;
+  copies: PatternCopySpot[];
+} | null {
+  const seed = patternSeed(slots, options, ctx);
+  const sketchId = slots.path[0]?.sketchId;
+  if (!seed || !sketchId) return null;
+  const all = ctx?.sketchPoints?.(sketchId) ?? [];
+  if (all.length === 0) return null;
+  const saved =
+    ctx?.saved?.featureKind === 'pattern' &&
+    ctx.saved.points?.sketchId === sketchId
+      ? ctx.saved.points.referencePointId
+      : undefined;
+  const middle = centre(seed);
+  const distance = (spot: SketchPointSpot) =>
+    Math.hypot(
+      spot.at.x - middle.x,
+      spot.at.y - middle.y,
+      spot.at.z - middle.z
+    );
+  const reference =
+    all.find((spot) => spot.id === saved) ??
+    all.reduce((best, spot) => (distance(spot) < distance(best) ? spot : best));
+  const picked = slots.path.flatMap((pick) => {
+    if (pick.entityId === reference.id) return [];
+    const spot = all.find((candidate) => candidate.id === pick.entityId);
+    return spot ? [spot] : [];
+  });
+  if (picked.length === 0) return null;
+  return {
+    seed,
+    points: {
+      sketchId,
+      pointIds: [reference.id, ...picked.map((spot) => spot.id)],
+      referencePointId: reference.id
+    },
+    copies: picked.map((spot) => ({
+      label: spot.id,
+      point: offset(
+        middle,
+        {
+          x: spot.at.x - reference.at.x,
+          y: spot.at.y - reference.at.y,
+          z: spot.at.z - reference.at.z
+        },
+        1
+      )
+    }))
+  };
+}
+
+const pointPattern: InPlaceToolSpec = {
+  id: 'point-pattern',
+  title: 'Point pattern',
+  profileMode: 'none',
+  bodyMode: 'one',
+  featureFaces: REPEAT_FEATURES,
+  wantsAxis: false,
+  // Its path is the sketch points it repeats at, clicked one by one.
+  wantsPath: true,
+  values: [],
+  options: [REPEAT_OPTION],
+  hint(slots, options, ctx) {
+    const pick = patternHint(slots, options ?? {});
+    if (pick) return pick;
+    if (slots.path.length === 0) return 'Click the sketch points to repeat at';
+    return pointPatternPlan(slots, options ?? {}, ctx)
+      ? 'Click more points · tap a copy to skip it'
+      : 'Click a point besides the one the original stands on';
+  },
+  ready: (slots, options, ctx) =>
+    patternSource(slots, options, ctx) !== null &&
+    pointPatternPlan(slots, options ?? {}, ctx) !== null,
+  request(slots, _values, options, ctx) {
+    const source = patternSource(slots, options, ctx);
+    const plan = pointPatternPlan(slots, options, ctx);
+    if (!source || !plan) return null;
+    return {
+      tool: 'pattern',
+      ...source,
+      patternKind: 'points',
+      count: plan.points.pointIds.length,
+      axis: 'x',
+      points: plan.points,
+      ...skipRequest(options, plan.copies)
+    };
+  },
+  handles(slots, _values, ctx, options) {
+    const plan = pointPatternPlan(slots, options, ctx);
+    return plan ? instanceHandles(plan.seed, plan.copies, options) : [];
   }
 };
 
@@ -4807,6 +5735,7 @@ const gridPattern: InPlaceToolSpec = {
   title: 'Grid pattern',
   profileMode: 'none',
   bodyMode: 'one',
+  featureFaces: REPEAT_FEATURES,
   wantsAxis: false,
   wantsPath: false,
   values: [
@@ -4837,10 +5766,12 @@ const gridPattern: InPlaceToolSpec = {
     }
   ],
   options: [
+    REPEAT_OPTION,
     { ...AXIS_OPTION('x'), distinctFrom: 'axis2' },
     { ...AXIS_OPTION('y', 'axis2', 'Then along'), distinctFrom: 'axis' }
   ],
   layout: [
+    { items: ['repeat'] },
     {
       label: 'First',
       boxed: true,
@@ -4854,10 +5785,8 @@ const gridPattern: InPlaceToolSpec = {
       items: ['axis2', 'spacing2', 'count2']
     }
   ],
-  hint: (slots) =>
-    slots.bodies.length === 0
-      ? 'Click the body to repeat'
-      : 'Drag the spacings · tap the counts',
+  hint: (slots, options) =>
+    patternHint(slots, options) ?? 'Drag the spacings · tap a copy to skip it',
   // An edited grid whose second spacing or count is absent took the first's:
   // until the user sets it, it still follows the first.
   defaults(_slots, ctx, numbers) {
@@ -4874,10 +5803,10 @@ const gridPattern: InPlaceToolSpec = {
         : {})
     };
   },
-  ready: (slots) => slots.bodies.length > 0,
+  ready: (slots, options, ctx) => patternSource(slots, options, ctx) !== null,
   request(slots, values, options, ctx, numbers) {
-    const body = slots.bodies[0];
-    if (!body) return null;
+    const source = patternSource(slots, options, ctx);
+    if (!source) return null;
     // A second value still following the first (an edit's absent one, not
     // set since) is left out, so the edit keeps it absent.
     const saved = ctx.saved?.featureKind === 'pattern' ? ctx.saved : undefined;
@@ -4889,7 +5818,7 @@ const gridPattern: InPlaceToolSpec = {
       numbers[second] === numbers[first];
     return {
       tool: 'pattern',
-      targetBodyId: body.bodyId,
+      ...source,
       patternKind: 'grid',
       count: values.count ?? 3,
       axis: axisOf(options.axis),
@@ -4898,11 +5827,21 @@ const gridPattern: InPlaceToolSpec = {
       ...(follows('spacing2', 'spacing')
         ? {}
         : { spacing2: values.spacing2 ?? 20 }),
-      ...(follows('count2', 'count') ? {} : { count2: values.count2 ?? 3 })
+      ...(follows('count2', 'count') ? {} : { count2: values.count2 ?? 3 }),
+      ...skipRequest(
+        options,
+        numbers?.count === undefined
+          ? null
+          : gridCopies(
+              wholeCount(numbers.count, 3),
+              wholeCount(numbers.count2 ?? numbers.count, 3),
+              () => ORIGIN
+            )
+      )
     };
   },
-  handles(slots, _values, _ctx, options) {
-    const body = slots.bodies[0];
+  handles(slots, values, ctx, options) {
+    const body = patternSeed(slots, options, ctx);
     if (!body) return [];
     const first = axisOf(options.axis);
     const second = axisOf(options.axis2 ?? 'y');
@@ -4939,7 +5878,25 @@ const gridPattern: InPlaceToolSpec = {
         key: `${bodyKey(body)}:count2`,
         label: along(second, 'count'),
         params: { anchor: body.min }
-      }
+      },
+      ...instanceHandles(
+        body,
+        gridCopies(
+          wholeCount(values.count, 3),
+          wholeCount(values.count2, 3),
+          (column, row) =>
+            offset(
+              offset(
+                origin,
+                AXIS_VECTORS[first]!,
+                (values.spacing ?? 20) * column
+              ),
+              AXIS_VECTORS[second]!,
+              (values.spacing2 ?? values.spacing ?? 20) * row
+            )
+        ),
+        options
+      )
     ];
   }
 };
@@ -4955,8 +5912,11 @@ function edgeReferences(
 
 function edgeHint(slots: InPlaceSlots, what: string, drag: string): string {
   const count = slots.edges.length;
+  // The size has no field until an edge is picked: its handle stands on the
+  // first edge, and Options lists it from then on. The hint said "Options
+  // sets the radius" over an Options panel with no radius in it.
   if (count === 0)
-    return `Click the edges to ${what} · Options sets the ${what === 'fillet' ? 'radius' : 'distance'}`;
+    return `Click the edges to ${what} · then drag or type the ${what === 'fillet' ? 'radius' : 'distance'}`;
   return `${count} ${count === 1 ? 'edge' : 'edges'} · drag the ${drag}`;
 }
 
@@ -5235,9 +6195,12 @@ function primitiveSpec(kind: PrimitiveKind): InPlaceToolSpec {
       },
       { label: 'Position', boxed: true, compact: true, items: ['x', 'y', 'z'] }
     ],
-    hint(slots) {
-      return slots.placement
-        ? 'Drag the arrows, or tap a size to type'
+    hint(slots, _options, ctx) {
+      if (slots.placement) return 'Drag the arrows, or tap a size to type';
+      // It previews at the origin, inside whatever stands there already:
+      // nothing said Done would make a separate body where it shows.
+      return (ctx?.liveBodyIds?.().length ?? 0) > 0
+        ? 'Drag a footprint on the ground or a face · Done adds it as a separate body where it shows'
         : 'Drag a footprint on the ground or a face';
     },
     // It stands on the ground at the origin until a drag places it, so
@@ -5376,6 +6339,9 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   gear,
   'gear-teeth': gearTeeth,
   thread: threadSpec,
+  'sheet-metal': sheetMetalSpec,
+  bend: bendSpec,
+  'standard-part': standardPartSpec,
   shell,
   thicken,
   'solid-offset': solidOffset,
@@ -5390,6 +6356,7 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   'linear-pattern': linearPattern,
   'circular-pattern': circularPattern,
   'grid-pattern': gridPattern,
+  'point-pattern': pointPattern,
   fillet,
   chamfer,
   box: primitiveSpec('box'),
@@ -5415,6 +6382,29 @@ export function valueInRange(spec: ValueSpec, value: number): boolean {
     min === undefined || (spec.exclusive ? value > min : value >= min);
   const belowMax = max === undefined || (openMax ? value < max : value <= max);
   return aboveMin && belowMax;
+}
+
+/**
+ * The range a typed value fell outside, as one sentence for the keypad that
+ * stays open on it: "Width must be more than 0 mm." The status lane's own
+ * refusal ("Box width takes at least 0.001.") gave no unit, and closed the
+ * keypad, so the typed value was shown nowhere (13 November review I4).
+ * `unit` is what follows a number: "mm", "°", or "" for a count.
+ */
+export function valueRangeSentence(spec: ValueSpec, unit: string): string {
+  const amount = (value: number) =>
+    unit === '' ? `${value}` : unit === '°' ? `${value}°` : `${value} ${unit}`;
+  const min = spec.min ?? 0;
+  const openMin = spec.exclusive === true || spec.exclusive === 'min';
+  const openMax = spec.exclusive === true;
+  const whole = spec.integer ? 'a whole number ' : '';
+  if (spec.max === undefined) {
+    return `${spec.label} must be ${whole}${openMin ? 'more than' : 'at least'} ${amount(min)}.`;
+  }
+  if (!openMin && !openMax) {
+    return `${spec.label} must be ${whole}from ${amount(min)} to ${amount(spec.max)}.`;
+  }
+  return `${spec.label} must be ${whole}${openMin ? 'more than' : 'at least'} ${amount(min)} and ${openMax ? 'less than' : 'at most'} ${amount(spec.max)}.`;
 }
 
 /**

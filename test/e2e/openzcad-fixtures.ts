@@ -17,6 +17,20 @@ import { WORKSPACE_SESSION_STORAGE_KEY } from '../../apps/web/src/lib/workspaceS
 export { test, expect, WORKSPACE_SESSION_STORAGE_KEY };
 
 /**
+ * The next plaintext share-link load. The client sends `GET /api/share` with
+ * the token in a header, never in the path, so match the path exactly and,
+ * when given, the token the request carried.
+ */
+export function shareLoadResponse(page: Page, token?: string) {
+  return page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/share' &&
+      (token === undefined ||
+        response.request().headers()['x-openzcad-share-token'] === token)
+  );
+}
+
+/**
  * A write body with its document whole again. The browser splits embedded
  * import payloads into `storageAssets` (ADR-024 Phase 1), and the worker
  * hydrates the projection from them before storing it, so a fixture that
@@ -411,10 +425,13 @@ export async function stubApi(
     route.fulfill({
       json: {
         projectCount: 0,
+        trashedProjectCount: 0,
         documentBytes: 0,
         revisionBytes: 0,
         revisionCount: 0,
         projectStorageBytes: 0,
+        storageBytes: 0,
+        storageLimitBytes: 1024 ** 3,
         documentLimitBytes: 1_500_000,
         maxRevisionsPerProject: 50,
         artifactBytes: 0,
@@ -1416,6 +1433,32 @@ export async function openAssistant(page: Page) {
   await expect(panel).toBeVisible();
 }
 
+/**
+ * A verified recipe in the assistant, ready to click: a chip in the empty
+ * state, or, once a thread exists, a button under the folded "Verified
+ * recipes" line, which this opens first.
+ */
+export async function verifiedRecipe(
+  page: Page,
+  label: string,
+  timeout = 60_000
+) {
+  const chip = page
+    .locator('.assistant-suggestion, .assistant-verified-action', {
+      hasText: label
+    })
+    .first();
+  await expect(chip).toBeAttached({ timeout });
+  const folded = page.locator('details.assistant-edit-catalog:not([open])', {
+    has: page.locator('.assistant-verified-action', { hasText: label })
+  });
+  if ((await folded.count()) > 0) {
+    await folded.first().locator('summary').click();
+  }
+  await expect(chip).toBeVisible();
+  return chip;
+}
+
 /** Types a question into the prompt line and sends it with Enter. */
 export async function askAssistant(page: Page, text: string) {
   const field = promptField(page);
@@ -1443,6 +1486,29 @@ export async function pickPlanarFace(
       }),
     normal
   );
+}
+
+/**
+ * Switches an armed face offset's chip to Total, the size the face sets.
+ * A face starts on Offset, the signed move (owner decision after QA
+ * 2026-11-14 finding #9); a spec about the Total reading or a typed Total
+ * takes the tag's switch first, as a user does. A no-op once on Total.
+ */
+export async function switchFaceOffsetToTotal(page: Page) {
+  const tag = page.getByTestId('direct-manipulation-mode');
+  await expect(tag).toHaveText(/^(Total|Offset)/);
+  // The switch is offered once the face's span is read; a pick whose body
+  // analysis is still landing takes the click a moment later.
+  await expect(async () => {
+    if (/^Offset/.test(await tag.innerText())) await tag.click();
+    await expect(tag).toHaveText(/^Total/, { timeout: 1000 });
+    // A Total reads the span itself; "+0 mm" is the change, shown while
+    // there is no span to read yet.
+    await expect(page.getByTestId('direct-manipulation-value')).not.toHaveText(
+      /^\+/,
+      { timeout: 1000 }
+    );
+  }).toPass({ timeout: 15_000 });
 }
 
 /**

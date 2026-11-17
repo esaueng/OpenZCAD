@@ -6,6 +6,7 @@ import {
   IMPORT_UNIT_CHOICES,
   IMPORT_UNIT_LABELS
 } from '../lib/importUnits';
+import { submitOnEnter } from '../lib/submitOnEnter';
 import { useModalFocus } from '../lib/useModalFocus';
 
 export interface ImportUnitsDialogProps {
@@ -37,14 +38,16 @@ export function ImportUnitsDialog({
   initialUnit,
   onChoose
 }: ImportUnitsDialogProps) {
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLFormElement>(null);
   useModalFocus(dialogRef, { autoFocus: true });
   const [units, setUnits] = useState<UnitSystem>(initialUnit);
   const [remember, setRemember] = useState(false);
 
   return (
     <div className="modal-backdrop">
-      <div
+      {/* A form, so Enter on a choice imports with it; the primary button
+          is its submit. */}
+      <form
         ref={dialogRef}
         className="export-dialog import-units-dialog"
         role="dialog"
@@ -52,11 +55,18 @@ export function ImportUnitsDialog({
         aria-labelledby="import-units-title"
         aria-describedby="import-units-scope"
         tabIndex={-1}
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          onChoose({ units, remember });
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
             onChoose(null);
+            return;
           }
+          submitOnEnter(event);
         }}
       >
         <h2 id="import-units-title">
@@ -107,15 +117,11 @@ export function ImportUnitsDialog({
           >
             Cancel
           </button>
-          <button
-            type="button"
-            className="primary"
-            onClick={() => onChoose({ units, remember })}
-          >
+          <button type="submit" className="primary">
             Import in {IMPORT_UNIT_LABELS[units].toLowerCase()}
           </button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

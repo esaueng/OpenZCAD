@@ -3,11 +3,103 @@ import {
   test,
   expect,
   createProject,
+  MODEL_ONLY,
   modelPanel,
   stubApi
 } from './openzcad-fixtures';
 
-test('first-model tour rides the real workflow and never returns', async ({
+test(
+  'first-model tour rides the real workflow and never returns',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page, {
+      workspaceTour: true,
+      panelLayout: null,
+      commandFoldClosed: true
+    });
+    await createProject(page, 'Tour Part');
+
+    const tour = page.locator('.workspace-tour');
+    await expect(tour).toBeVisible();
+    await expect(tour).toContainText('Create your first feature');
+    // The step outlines the chrome it talks about.
+    await expect(page.locator('.tool-palette')).toHaveClass(/tour-target/);
+    await expect(modelPanel(page, 'History')).toBeVisible();
+
+    // Creating the first feature advances the tour by itself.
+    await createPrimitiveInPlace(page, 'box');
+    await expect(tour).toContainText('Select to edit');
+
+    // So does selecting geometry once the exact build is ready.
+    await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+    const canvas = page.locator('.viewer-host canvas');
+    const bounds = await canvas.boundingBox();
+    expect(bounds).not.toBeNull();
+    await canvas.click({
+      position: { x: bounds!.width / 2, y: bounds!.height / 2 }
+    });
+    await expect(tour).toContainText('The history is the model');
+    // History is pinned on a fresh device. Teach its contents directly
+    // without asking the user to toggle it closed from the rail.
+    const history = page.getByRole('button', {
+      name: 'History panel',
+      exact: true
+    });
+    await expect(history).toHaveAttribute('aria-pressed', 'true');
+    await expect(
+      modelPanel(page, 'History').getByRole('heading', { name: 'History 1' })
+    ).toBeVisible();
+    await expect(page.locator('.feature-row')).toHaveCount(1);
+    await expect(page.getByText(/^Loading feature history/)).toBeHidden();
+    await test.info().attach('history-tour-opened-panel', {
+      body: await page.screenshot(),
+      contentType: 'image/png'
+    });
+
+    // The lesson remains visible until Next even though History was open
+    // before the tour reached this step (I16).
+    await expect(tour).toContainText('The history is the model');
+    await expect(tour).toContainText(
+      'History on the right lists every feature'
+    );
+    await expect(tour).toContainText('Drag the grip to reorder');
+    await expect(page.locator('.model-panel-history')).toHaveClass(
+      /tour-target/
+    );
+    await expect(history).not.toHaveClass(/tour-target/);
+    await tour.getByRole('button', { name: 'Next' }).click();
+    // The last step shows where Export lives; Finish on it is the same
+    // dismissal as skipping.
+    await expect(tour).toContainText('Take it with you');
+    await expect(tour).toContainText('File › Export');
+    await expect(page.locator('.file-menu > summary')).toHaveClass(
+      /tour-target/
+    );
+    await expect(page.locator('.model-panel-history')).not.toHaveClass(
+      /tour-target/
+    );
+    await tour.getByRole('button', { name: 'Finish' }).click();
+    await expect(tour).toHaveCount(0);
+
+    // The dismissal is a device habit: the restored workspace stays clean.
+    await page.reload();
+    await expect(
+      page.getByRole('button', { name: /^Box \(B\)/ })
+    ).toBeVisible();
+    await expect(tour).toHaveCount(0);
+    // A restored model is independently ineligible, so a second EMPTY project
+    // proves Finish was persisted as a device habit rather than merely hidden.
+    await page.getByTitle('Back to projects').click();
+    await page.getByLabel('Project name').fill('Another Tour Part');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await expect(
+      page.getByRole('button', { name: /^Box \(B\)/ })
+    ).toBeVisible();
+    await expect(tour).toHaveCount(0);
+  }
+);
+
+test('a second empty project picks the tour up where the first left it', async ({
   page
 }) => {
   await stubApi(page, {
@@ -15,117 +107,76 @@ test('first-model tour rides the real workflow and never returns', async ({
     panelLayout: null,
     commandFoldClosed: true
   });
-  await createProject(page, 'Tour Part');
-
+  await createProject(page, 'Tour First Part');
   const tour = page.locator('.workspace-tour');
-  await expect(tour).toBeVisible();
   await expect(tour).toContainText('Create your first feature');
-  // The step outlines the chrome it talks about.
-  await expect(page.locator('.tool-palette')).toHaveClass(/tour-target/);
-  await expect(modelPanel(page, 'History')).toHaveCount(0);
-
-  // Creating the first feature advances the tour by itself.
+  // The rail's foot is named and outlined, not an unlabelled ⋯ (I16).
+  await expect(tour).toContainText('More tools (⋯) at its foot');
+  await expect(page.locator('.command-more-toggle')).toHaveClass(/tour-target/);
   await createPrimitiveInPlace(page, 'box');
   await expect(tour).toContainText('Select to edit');
+  await expect(tour.locator('.workspace-tour-count')).toHaveText('2/4');
 
-  // So does selecting geometry once the exact build is ready.
-  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
-  const canvas = page.locator('.viewer-host canvas');
-  const bounds = await canvas.boundingBox();
-  expect(bounds).not.toBeNull();
-  await canvas.click({
-    position: { x: bounds!.width / 2, y: bounds!.height / 2 }
-  });
-  await expect(tour).toContainText('The history is the model');
-  // A fresh device starts with History closed. Point to the control that
-  // can reveal it, rather than waiting for a panel that does not exist.
-  const history = page.getByRole('button', {
-    name: 'History panel',
-    exact: true
-  });
-  await expect(history).toHaveClass(/tour-target/);
-  await expect(history).toHaveAttribute('aria-pressed', 'false');
-  await test.info().attach('history-tour-visible-control', {
-    body: await page.screenshot(),
-    contentType: 'image/png'
-  });
-  await history.click();
-  await expect(
-    modelPanel(page, 'History').getByRole('heading', { name: 'History 1' })
-  ).toBeVisible();
-  await expect(page.locator('.feature-row')).toHaveCount(1);
-  await expect(page.getByText(/^Loading feature history/)).toBeHidden();
-  await test.info().attach('history-tour-opened-panel', {
-    body: await page.screenshot(),
-    contentType: 'image/png'
-  });
-
-  // Opening History is what the step asks for, so it moved the tour on as
-  // the first two steps do; Finish on the last step is the same dismissal
-  // as skipping.
-  await expect(tour).toContainText('Take it with you');
-  await expect(history).not.toHaveClass(/tour-target/);
-  await tour.getByRole('button', { name: 'Finish' }).click();
-  await expect(tour).toHaveCount(0);
-
-  // The dismissal is a device habit: the restored workspace stays clean.
-  await page.reload();
-  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
-  await expect(tour).toHaveCount(0);
-  // A restored model is independently ineligible, so a second EMPTY project
-  // proves Finish was persisted as a device habit rather than merely hidden.
+  // It began again at 1/4 in every new empty project (I16).
   await page.getByTitle('Back to projects').click();
-  await page.getByLabel('Project name').fill('Another Tour Part');
+  await page.getByLabel('Project name').fill('Tour Second Part');
   await page.getByRole('button', { name: 'New project' }).click();
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
-  await expect(tour).toHaveCount(0);
-});
-
-test('manual tour advance reveals the History control without moving keyboard focus', async ({
-  page
-}) => {
-  await stubApi(page, {
-    workspaceTour: true,
-    panelLayout: null,
-    commandFoldClosed: true
-  });
-  await createProject(page, 'Tour Keyboard Part');
-
-  await createPrimitiveInPlace(page, 'box');
-
-  const tour = page.locator('.workspace-tour');
   await expect(tour).toContainText('Select to edit');
-  const next = tour.getByRole('button', { name: 'Next' });
-  await next.focus();
-  await page.keyboard.press('Enter');
-  await expect(tour).toContainText('The history is the model');
-  await expect(next).toBeFocused();
-  await expect(modelPanel(page, 'History')).toHaveCount(0);
-  const history = page.getByRole('button', {
-    name: 'History panel',
-    exact: true
-  });
-  await expect(history).toBeVisible();
-  await expect(history).toHaveClass(/tour-target/);
-  await history.click();
-  await expect(modelPanel(page, 'History')).toBeVisible();
-  await expect(page.locator('.feature-row')).toHaveCount(1);
-  await tour.getByRole('button', { name: 'Skip the tour' }).click();
-  await expect(tour).toHaveCount(0);
-  await expect(history).not.toHaveClass(/tour-target/);
-  // Opening the temporary History panel moves the keyboard into it; leaving
-  // the guide returns there rather than back to its rail opener.
-  await expect(modelPanel(page, 'History')).toBeFocused();
-
-  await page.reload();
-  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
-  await expect(tour).toHaveCount(0);
-  await page.getByTitle('Back to projects').click();
-  await page.getByLabel('Project name').fill('Another Keyboard Tour Part');
-  await page.getByRole('button', { name: 'New project' }).click();
-  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
-  await expect(tour).toHaveCount(0);
+  await expect(tour.locator('.workspace-tour-count')).toHaveText('2/4');
 });
+
+test(
+  'manual tour advance reveals a closed History control without moving keyboard focus',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page, {
+      workspaceTour: true,
+      panelLayout: MODEL_ONLY,
+      commandFoldClosed: true
+    });
+    await createProject(page, 'Tour Keyboard Part');
+
+    await createPrimitiveInPlace(page, 'box');
+
+    const tour = page.locator('.workspace-tour');
+    await expect(tour).toContainText('Select to edit');
+    const next = tour.getByRole('button', { name: 'Next' });
+    await next.focus();
+    await page.keyboard.press('Enter');
+    await expect(tour).toContainText('The history is the model');
+    await expect(next).toBeFocused();
+    await expect(modelPanel(page, 'History')).toHaveCount(0);
+    const history = page.getByRole('button', {
+      name: 'History panel',
+      exact: true
+    });
+    await expect(history).toBeVisible();
+    await expect(history).toHaveClass(/tour-target/);
+    await history.click();
+    await expect(modelPanel(page, 'History')).toBeVisible();
+    await expect(page.locator('.feature-row')).toHaveCount(1);
+    await tour.getByRole('button', { name: 'Skip the tour' }).click();
+    await expect(tour).toHaveCount(0);
+    await expect(history).not.toHaveClass(/tour-target/);
+    // Opening the temporary History panel moves the keyboard into it; leaving
+    // the guide returns there rather than back to its rail opener.
+    await expect(modelPanel(page, 'History')).toBeFocused();
+
+    await page.reload();
+    await expect(
+      page.getByRole('button', { name: /^Box \(B\)/ })
+    ).toBeVisible();
+    await expect(tour).toHaveCount(0);
+    await page.getByTitle('Back to projects').click();
+    await page.getByLabel('Project name').fill('Another Keyboard Tour Part');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await expect(
+      page.getByRole('button', { name: /^Box \(B\)/ })
+    ).toBeVisible();
+    await expect(tour).toHaveCount(0);
+  }
+);
 
 test('a project that opens with history never shows the tour', async ({
   page

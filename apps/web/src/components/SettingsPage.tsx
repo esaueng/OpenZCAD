@@ -28,6 +28,7 @@ import {
   EyeOff,
   ExternalLink,
   HardDrive,
+  ImageUp,
   LockKeyhole,
   LogIn,
   LogOut,
@@ -39,7 +40,6 @@ import {
   RefreshCcw,
   ScrollText,
   Search,
-  SearchX,
   Settings2,
   ShieldCheck,
   Trash2,
@@ -50,16 +50,19 @@ import {
   CLOUD_AUTOSAVE_DELAY_BOUNDS,
   VIEWPORT_FIELD_OF_VIEW_BOUNDS,
   XRAY_OPACITY_BOUNDS,
+  displayLengthName,
   type AccountDeletionScope,
   type AccountStorageUsage,
   type AppSettings,
   type AppSettingsResponse,
   type AuthConfigResponse,
   type AuthSession,
-  type HealthResponse
+  type HealthResponse,
+  type UnitSystem
 } from '@openzcad/shared';
 import { countLabel } from '../lib/toasts';
 import { formatBytes } from '../lib/formatBytes';
+import { storageLimitOf, storageParts, storedBytes } from '../lib/storageUsage';
 import { fetchEncryptionAvailability } from '../lib/e2ee/availability';
 import {
   loadAccountShapeHint,
@@ -108,37 +111,47 @@ import {
   Toggle,
   type SegmentOption
 } from './settingsControls';
+import {
+  SpaceMousePreferenceRows,
+  SpaceMouseSettings
+} from './SpaceMouseSettings';
+import { SPACE_MOUSE_KEY_REFERENCE } from '../lib/spaceMouseActions';
 import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
+import { describeFailure } from '../lib/plainFailure';
 import { DataDownload } from './DataDownload';
 import { ActivityLogSettings } from './ActivityLogSettings';
 import {
-  PersonalInfoToggle,
-  PrivateEmailInput,
+  PrivateText,
   setPersonalInfoVisible,
   usePersonalInfoVisible
-} from './PersonalInfoToggle';
+} from './PersonalInfo';
 
-/**
- * Names the ceiling even before anyone is near it. A limit discovered only at
- * the moment a save is refused reads as a bug; a limit stated up front reads as
- * a limit.
- */
+/** What the one storage allowance is made of, and what it holds. */
 function storageHint(usage: AccountStorageUsage | null): string {
   if (!usage) {
-    return 'Projects and revisions saved to your account.';
+    return 'Projects, save states, imports and exports saved to your account.';
   }
-  return `${countLabel(usage.projectCount, 'project', 'projects')} · ${countLabel(usage.revisionCount, 'revision', 'revisions')}. Up to ${formatBytes(usage.documentLimitBytes)} and ${usage.maxRevisionsPerProject.toLocaleString()} revisions per project.`;
+  const { projects, files: finalized, uploading } = storageParts(usage);
+  // Uploads in flight hold their room, so they read as files.
+  const files = finalized + uploading;
+  const trashed = usage.trashedProjectCount ?? 0;
+  const counts = [
+    countLabel(usage.projectCount, 'project', 'projects'),
+    ...(trashed > 0 ? [`${trashed.toLocaleString()} in trash`] : []),
+    countLabel(usage.revisionCount, 'save state', 'save states')
+  ].join(' · ');
+  return `Projects ${formatBytes(projects)} · Imports and exports ${formatBytes(files)}. ${counts}.`;
 }
 
-/** Usage against an allowance, naming an overage outright. */
+/**
+ * Usage against an allowance, naming an overage outright. The meter names the
+ * ceiling even before anyone is near it: a limit discovered only at the
+ * moment a save is refused reads as a bug; one stated up front reads as a
+ * limit.
+ */
 function allowanceFigure(usedBytes: number, limitBytes: number): string {
   const figure = `${formatBytes(usedBytes)} of ${formatBytes(limitBytes)}`;
   return usedBytes > limitBytes ? `${figure} · over allowance` : figure;
-}
-
-/** Cloud file usage against the allowance, naming an overage outright. */
-function fileStorageFigure(usage: AccountStorageUsage): string {
-  return allowanceFigure(usage.artifactBytes, usage.artifactLimitBytes);
 }
 
 type SectionId = SettingsSectionId;
@@ -170,6 +183,11 @@ interface SettingsPageProps {
    * there is no view to apply defaults to and no workspace to go back to.
    */
   workspaceOpen?: boolean;
+  /**
+   * The open project's units, which the linear snap is measured in; absent
+   * from the start screen, where each project's own units apply.
+   */
+  documentUnits?: UnitSystem;
   onChange(settings: AppSettings): void;
   onCloudFunctionsEnabledChange(enabled: boolean): void;
   onSaveCredential(token: string): void;
@@ -197,9 +215,21 @@ interface SettingsPageProps {
    */
   onExportDiagnostics(): void;
   onExportInteractionLog(): void;
+  /**
+   * Redraws every project's card from its model, one at a time. Absent where
+   * the host offers no library (tests, a shared link).
+   */
+  onRegenerateThumbnails?(): void;
+  /** Progress while cards are being redrawn; null when idle. */
+  thumbnailRegeneration?: { done: number; total: number } | null;
+  /** What the last redraw did, shown under the button until the next. */
+  thumbnailRegenerationNote?: string;
   onDismissProjectInvitation(): void;
   onClose(): void;
 }
+
+/** How long after a sign-in code is sent a new one can be asked for. */
+const LOGIN_CODE_RESEND_DELAY_MS = 30_000;
 
 export type AuthConfigStatus = 'loading' | 'ready' | 'unavailable';
 
@@ -212,6 +242,18 @@ const EncryptionSettings = lazyWithStaleChunkNotice(() =>
     default: module.EncryptionSettings
   }))
 );
+
+/**
+ * Where a section's name may break in the phone rail, which is narrower
+ * than "Appearance" at 12px. A soft hyphen shows only when the name breaks,
+ * and every engine honours it; `hyphens: auto` needs a dictionary that
+ * Chromium on Linux and Windows may not have, which broke the name as
+ * "Appearanc" over "e". Display only: search and the button's accessible
+ * name use the plain label.
+ */
+const SECTION_NAV_LABELS: Partial<Record<SectionId, string>> = {
+  appearance: 'Appear\u00adance'
+};
 
 const SECTION_ICONS: Record<SectionId, ReactNode> = {
   general: <Settings2 size={15} aria-hidden="true" />,
@@ -723,6 +765,7 @@ export function SettingsPage({
   desktopAuthorizationApproved = false,
   desktopAuthorizationCode = '',
   workspaceOpen = true,
+  documentUnits,
   onChange,
   onCloudFunctionsEnabledChange,
   onSaveCredential,
@@ -740,6 +783,9 @@ export function SettingsPage({
   onApplyViewportDefaults,
   onExportDiagnostics,
   onExportInteractionLog,
+  onRegenerateThumbnails,
+  thumbnailRegeneration = null,
+  thumbnailRegenerationNote = '',
   onDismissProjectInvitation,
   onClose
 }: SettingsPageProps) {
@@ -761,9 +807,40 @@ export function SettingsPage({
   const [loginEmail, setLoginEmail] = useState('');
   const personalInfoVisible = usePersonalInfoVisible();
   const [loginCode, setLoginCode] = useState('');
+  // A refused code is said at the field, not only in the page's status
+  // line beside the title (13 November review I4).
+  const [loginCodeError, setLoginCodeError] = useState<string | null>(null);
   const [loginChallengeId, setLoginChallengeId] = useState<string | null>(null);
+  const loginCodeRef = useRef<HTMLInputElement>(null);
+  // A new code can be asked for a short while after the last one was sent,
+  // so a slow email is not answered with a flood of codes (I81).
+  const [resendReady, setResendReady] = useState(false);
+  // The resend security check stays folded until asked for: shown under
+  // Sign in, an unanswered "Verify you are human" read as a step the
+  // sign-in itself still needed.
+  const [resendOpen, setResendOpen] = useState(false);
+  useEffect(() => {
+    setResendReady(false);
+    setResendOpen(false);
+    if (!loginChallengeId) return;
+    // A new code moves the caret to its field, so the code can be typed or
+    // filled without a click.
+    loginCodeRef.current?.focus();
+    const timer = window.setTimeout(
+      () => setResendReady(true),
+      LOGIN_CODE_RESEND_DELAY_MS
+    );
+    return () => window.clearTimeout(timer);
+  }, [loginChallengeId]);
   const [turnstileToken, setTurnstileToken] = useState('');
   const [turnstileReset, setTurnstileReset] = useState(0);
+  const [qaBypassRefused, setQaBypassRefused] = useState(false);
+  const qaTurnstileBypass = Boolean(
+    !qaBypassRefused &&
+    authConfig?.qaTurnstileBypassEmail &&
+    loginEmail.trim().toLowerCase() === authConfig.qaTurnstileBypassEmail
+  );
+  const loginSecurityToken = qaTurnstileBypass ? 'qa-cookie' : turnstileToken;
   const [storageUsage, setStorageUsage] = useState<AccountStorageUsage | null>(
     null
   );
@@ -835,10 +912,8 @@ export function SettingsPage({
     };
   }, [active, cloudFunctionsEnabled, session]);
 
-  /** The owner's project-storage allowance; older servers omit it. */
-  const projectStorageLimit = (
-    storageUsage?.entitlements ?? session?.entitlements
-  )?.projectStorageLimitBytes;
+  /** The owner's one storage allowance; older servers name it otherwise. */
+  const storageLimit = storageLimitOf(storageUsage, session?.entitlements);
 
   // The Encryption section exists only for an account the server opened the
   // beta to; asked once per signed-in account while Settings is open.
@@ -1084,21 +1159,6 @@ export function SettingsPage({
               OpenZCAD <span className="beta-tag">Beta</span>
             </button>
           </div>
-          {/* The narrow layout has no room for the field, so while a filter
-              is narrowing the sections it shows this way out of it instead;
-              without it a filter typed in a wider window stranded the rail on
-              its matches. */}
-          {query.trim() !== '' && (
-            <button
-              type="button"
-              className="settings-search-clear"
-              aria-label={`Clear the filter “${query.trim()}”`}
-              title={`Clear the filter “${query.trim()}”`}
-              onClick={() => changeQuery('')}
-            >
-              <SearchX size={16} aria-hidden="true" />
-            </button>
-          )}
           <nav>
             {visibleSections.map((section, index) => (
               <Fragment key={section.id}>
@@ -1111,15 +1171,15 @@ export function SettingsPage({
                 <button
                   type="button"
                   className={active === section.id ? 'active' : ''}
-                  // Below 580px the label text is hidden and the icon is
-                  // decorative, which would otherwise leave the button unnamed.
+                  // Named outright: the label is a span beside a decorative
+                  // icon, and a narrow rail once hid it entirely.
                   aria-label={section.label}
                   aria-current={active === section.id ? 'page' : undefined}
                   title={section.detail}
                   onClick={() => setActive(section.id)}
                 >
                   {SECTION_ICONS[section.id]}
-                  <span>{section.label}</span>
+                  <span>{SECTION_NAV_LABELS[section.id] ?? section.label}</span>
                 </button>
               </Fragment>
             ))}
@@ -1148,7 +1208,7 @@ export function SettingsPage({
                 {!cloudFunctionsEnabled
                   ? 'Offline mode'
                   : authConfigStatus === 'unavailable'
-                    ? 'Cloud unreachable'
+                    ? 'Cloud unavailable'
                     : accountResolving && !accountState
                       ? 'Checking account…'
                       : session
@@ -1168,7 +1228,13 @@ export function SettingsPage({
           <h1 ref={headingRef} className="settings-head-title" tabIndex={-1}>
             Settings
           </h1>
-          <span className="settings-save-message" aria-live="polite">
+          <span
+            className="settings-save-message"
+            aria-live="polite"
+            // Two lines of the head hold most messages; a longer one (an
+            // outage, offline mode) is cut there, and reads whole on hover.
+            title={message || undefined}
+          >
             {message}
           </span>
           <label className="settings-search">
@@ -1499,11 +1565,7 @@ export function SettingsPage({
           )}
 
           {active === 'controls' && anyMatch && (
-            <Section
-              title="Controls"
-              intro="Mouse, trackpad, and keyboard."
-              wide
-            >
+            <Section title="Controls" intro="Mouse, trackpad, and keyboard.">
               <Group title="Navigation">
                 <SettingRow
                   title="Scroll wheel"
@@ -1593,6 +1655,22 @@ export function SettingsPage({
                   />
                 </SettingRow>
               </Group>
+              {/* A 3D mouse is navigation too, so its settings sit right
+                  under it rather than past the keyboard reference. */}
+              <Group title="3D mouse" note="Chrome and Edge">
+                <SpaceMouseSettings />
+                <SpaceMousePreferenceRows
+                  value={settings.viewport.spaceMouse}
+                  onChange={(spaceMouse) =>
+                    patch({
+                      viewport: { ...settings.viewport, spaceMouse }
+                    })
+                  }
+                />
+              </Group>
+              <Group title="SpaceMouse keys">
+                <ControlReferenceGroups groups={[SPACE_MOUSE_KEY_REFERENCE]} />
+              </Group>
               {/* Every remappable command with its live keys. A key can mean
                   one thing per context (C is Cylinder in the workspace and
                   Circle in a sketch); the editor's groups are those contexts.
@@ -1645,10 +1723,20 @@ export function SettingsPage({
                     }
                   />
                 </SettingRow>
-                <SettingRow title="Linear snap" hint="In the document’s units.">
+                {/* Named in the open project's unit: a bare number left the
+                    reader to guess whether 0.5 was millimetres or inches. */}
+                <SettingRow
+                  title="Linear snap"
+                  hint={
+                    documentUnits
+                      ? 'In this project’s units.'
+                      : 'In each project’s own units.'
+                  }
+                >
                   <NumberSetting
                     {...APP_SETTINGS_NUMBER_BOUNDS.linearSnap}
                     step={0.1}
+                    unit={documentUnits ? displayLengthName(documentUnits) : ''}
                     value={settings.sketching.linearSnap}
                     label="Linear snap increment"
                     onCommit={(linearSnap) =>
@@ -1704,6 +1792,34 @@ export function SettingsPage({
                     }
                   />
                 </SettingRow>
+                <SettingRow
+                  title="Auto-constrain"
+                  hint="Keep the relations a drawn entity lands on. Off keeps only joined ends and midpoints."
+                >
+                  <Toggle
+                    checked={settings.sketching.autoConstrain}
+                    label="Auto-constrain"
+                    onChange={(autoConstrain) =>
+                      patch({
+                        sketching: { ...settings.sketching, autoConstrain }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Snap hints"
+                  hint="Name the snap in text beside its marker."
+                >
+                  <Toggle
+                    checked={settings.sketching.snapHints}
+                    label="Snap hints"
+                    onChange={(snapHints) =>
+                      patch({
+                        sketching: { ...settings.sketching, snapHints }
+                      })
+                    }
+                  />
+                </SettingRow>
               </Group>
               <Group title="Relations">
                 <SettingRow
@@ -1755,9 +1871,17 @@ export function SettingsPage({
               {/* Until the account is known these hold their saved values
                   but stay disabled: a live switch beside a footer that
                   still says "Device only" claimed a sync nothing runs. */}
+              {/* Signed out, these are settings for later: they say so
+                  rather than read as running (I8). */}
               <Group
                 title="Cloud"
-                note={cloudPending ? 'Checking account…' : undefined}
+                note={
+                  cloudPending
+                    ? 'Checking account…'
+                    : cloudFunctionsEnabled && !session
+                      ? 'Applies after sign-in. Until then everything saves on this device only.'
+                      : undefined
+                }
               >
                 <SettingRow
                   title="Cloud autosave"
@@ -1931,7 +2055,26 @@ export function SettingsPage({
                   </Group>
 
                   <Group title="Token">
-                    {!session ? (
+                    {!session && authConfigStatus === 'unavailable' ? (
+                      // The same words and action Account shows: its Sign in
+                      // led to a page that offered only Retry (I86).
+                      <Notice
+                        action={
+                          <button
+                            className="secondary"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void onRefreshAuthConfig()}
+                          >
+                            <RefreshCcw size={13} aria-hidden="true" />
+                            Retry
+                          </button>
+                        }
+                      >
+                        Sign-in could not be reached, so a personal token can’t
+                        be stored right now.
+                      </Notice>
+                    ) : !session ? (
                       <Notice
                         action={
                           <button
@@ -2165,14 +2308,18 @@ export function SettingsPage({
                       <>
                         <SettingRow
                           title={
-                            personalInfoVisible
-                              ? session.displayName
-                              : 'Name hidden'
+                            <PrivateText
+                              value={session.displayName}
+                              visible={personalInfoVisible}
+                              onChange={setPersonalInfoVisible}
+                            />
                           }
                           hint={
-                            personalInfoVisible
-                              ? (session.email ?? session.userId)
-                              : 'Email hidden'
+                            <PrivateText
+                              value={session.email ?? session.userId}
+                              visible={personalInfoVisible}
+                              onChange={setPersonalInfoVisible}
+                            />
                           }
                         >
                           <button
@@ -2236,7 +2383,7 @@ export function SettingsPage({
                           title="Membership"
                           hint={
                             session.entitlements
-                              ? `${countLabel(session.entitlements.projectLimit, 'cloud project', 'cloud projects')} · ${formatBytes(session.entitlements.projectStorageLimitBytes)} project storage · ${formatBytes(session.entitlements.artifactLimitBytes)} cloud file storage · ${session.entitlements.ai.requestLimit.toLocaleString()} hosted AI requests per ${(session.entitlements.ai.windowSeconds / 60).toLocaleString()} minutes`
+                              ? `${countLabel(session.entitlements.projectLimit, 'cloud project', 'cloud projects')} · ${formatBytes(session.entitlements.storageLimitBytes ?? session.entitlements.projectStorageLimitBytes)} storage · ${session.entitlements.ai.requestLimit.toLocaleString()} hosted AI requests per ${(session.entitlements.ai.windowSeconds / 60).toLocaleString()} minutes`
                               : 'Limits appear after your account reconnects.'
                           }
                           details={
@@ -2333,8 +2480,8 @@ export function SettingsPage({
                           </button>
                         }
                       >
-                        Sign-in could not be reached. Local projects are
-                        unaffected.
+                        Cloud unavailable: sign-in could not be reached.
+                        Projects keep saving on this device.
                       </Notice>
                     ) : desktopApp ? (
                       authConfig?.desktopAuthEnabled ? (
@@ -2375,19 +2522,33 @@ export function SettingsPage({
                           className="settings-auth-form"
                           onSubmit={(event) => {
                             event.preventDefault();
+                            setLoginCodeError(null);
                             void onVerifyLoginCode(
                               loginChallengeId,
                               loginCode.trim()
-                            ).catch(() => undefined);
+                            ).catch((error: unknown) => {
+                              setLoginCodeError(
+                                describeFailure(error, {
+                                  fallback:
+                                    'That code did not work. Check it and try again.'
+                                }).message
+                              );
+                              // A wrong code is cleared for the next try
+                              // rather than left to be edited (I81).
+                              setLoginCode('');
+                              loginCodeRef.current?.focus();
+                            });
                           }}
                         >
                           <span>
                             <strong>Enter the email code</strong>
                             <small>
                               Sent to{' '}
-                              {personalInfoVisible
-                                ? loginEmail
-                                : 'your email address'}
+                              <PrivateText
+                                value={loginEmail}
+                                visible={personalInfoVisible}
+                                onChange={setPersonalInfoVisible}
+                              />
                               . It expires in 10 minutes.
                             </small>
                           </span>
@@ -2399,38 +2560,122 @@ export function SettingsPage({
                               autoComplete="one-time-code"
                               pattern="[0-9]{6}"
                               aria-label="Email sign-in code"
-                              placeholder="000000"
+                              ref={loginCodeRef}
+                              aria-invalid={loginCodeError ? true : undefined}
+                              aria-describedby={
+                                loginCodeError
+                                  ? 'settings-login-code-error'
+                                  : undefined
+                              }
+                              // Digits looked already typed (design review I81).
+                              placeholder="6-digit code"
                               // No maxLength: it cuts a pasted " 730418" before
                               // the digit filter runs and drops the last digit.
-                              onChange={(event) =>
+                              onChange={(event) => {
+                                setLoginCodeError(null);
                                 setLoginCode(
                                   event.target.value
                                     .replace(/\D/g, '')
                                     .slice(0, 6)
-                                )
-                              }
+                                );
+                              }}
                             />
-                            <span className="settings-button-row">
-                              <button
-                                className="primary"
-                                type="submit"
-                                disabled={busy || loginCode.length !== 6}
+                            {loginCodeError ? (
+                              <small
+                                id="settings-login-code-error"
+                                className="settings-field-error"
+                                role="alert"
                               >
-                                <LogIn size={14} aria-hidden="true" />
-                                Sign in
-                              </button>
+                                {loginCodeError}
+                              </small>
+                            ) : null}
+                            {/* Sign in is the step's one action, drawn as
+                              wide as the field like Email me a code; the
+                              way back and the resend are quiet links. */}
+                            <button
+                              className="primary"
+                              type="submit"
+                              disabled={busy || loginCode.length !== 6}
+                            >
+                              <LogIn size={14} aria-hidden="true" />
+                              Sign in
+                            </button>
+                            <span className="settings-auth-links">
                               <button
-                                className="secondary"
+                                className="settings-auth-link"
                                 type="button"
                                 disabled={busy}
                                 onClick={() => {
                                   setLoginChallengeId(null);
                                   setLoginCode('');
+                                  setLoginCodeError(null);
                                 }}
                               >
                                 Use another email
                               </button>
+                              <button
+                                className="settings-auth-link"
+                                type="button"
+                                aria-expanded={resendOpen}
+                                aria-controls="settings-auth-resend"
+                                onClick={() => setResendOpen((open) => !open)}
+                              >
+                                Didn’t get the code?
+                              </button>
                             </span>
+                            {/* Resend (design review I81): the email form's
+                              security check, then a new code to the same
+                              address, after a short wait. */}
+                            {resendOpen ? (
+                              <div
+                                className="settings-auth-resend"
+                                id="settings-auth-resend"
+                              >
+                                {qaTurnstileBypass ? (
+                                  <small role="status">
+                                    QA security check enabled for this browser.
+                                  </small>
+                                ) : (
+                                  <TurnstileWidget
+                                    siteKey={authConfig.turnstileSiteKey}
+                                    resetSignal={turnstileReset}
+                                    onToken={setTurnstileToken}
+                                  />
+                                )}
+                                <button
+                                  className="secondary"
+                                  type="button"
+                                  disabled={
+                                    busy || !resendReady || !loginSecurityToken
+                                  }
+                                  onClick={() => {
+                                    void onRequestLoginCode(
+                                      loginEmail.trim(),
+                                      loginSecurityToken
+                                    )
+                                      .then((response) => {
+                                        setLoginCode('');
+                                        setLoginChallengeId(
+                                          response.challengeId
+                                        );
+                                      })
+                                      .catch(() => {
+                                        if (qaTurnstileBypass)
+                                          setQaBypassRefused(true);
+                                      })
+                                      .finally(() => {
+                                        setTurnstileToken('');
+                                        setTurnstileReset((value) => value + 1);
+                                      });
+                                  }}
+                                >
+                                  <Mail size={14} aria-hidden="true" />
+                                  {resendReady
+                                    ? 'Send a new code'
+                                    : 'Send a new code (in a moment)'}
+                                </button>
+                              </div>
+                            ) : null}
                           </div>
                         </form>
                       ) : (
@@ -2440,12 +2685,14 @@ export function SettingsPage({
                             event.preventDefault();
                             void onRequestLoginCode(
                               loginEmail.trim(),
-                              turnstileToken
+                              loginSecurityToken
                             )
                               .then((response) =>
                                 setLoginChallengeId(response.challengeId)
                               )
-                              .catch(() => undefined)
+                              .catch(() => {
+                                if (qaTurnstileBypass) setQaBypassRefused(true);
+                              })
                               .finally(() => {
                                 setTurnstileToken('');
                                 setTurnstileReset((value) => value + 1);
@@ -2464,10 +2711,18 @@ export function SettingsPage({
                           <div className="settings-auth-controls">
                             <label>
                               <span>Email</span>
-                              <PrivateEmailInput
-                                visible={personalInfoVisible}
+                              {/* Never masked: the screenshot mask turned this
+                                into a password field, which hid the address
+                                being typed and kept password managers from
+                                filling it. "username" is the token they fill
+                                a saved login's address into. */}
+                              <input
+                                type="email"
+                                name="email"
                                 value={loginEmail}
-                                autoComplete="email"
+                                autoComplete="username"
+                                autoCapitalize="none"
+                                spellCheck={false}
                                 aria-label="Email address"
                                 placeholder="you@example.com"
                                 onChange={(event) =>
@@ -2475,16 +2730,24 @@ export function SettingsPage({
                                 }
                               />
                             </label>
-                            <TurnstileWidget
-                              siteKey={authConfig.turnstileSiteKey}
-                              resetSignal={turnstileReset}
-                              onToken={setTurnstileToken}
-                            />
+                            {qaTurnstileBypass ? (
+                              <small role="status">
+                                QA security check enabled for this browser.
+                              </small>
+                            ) : (
+                              <TurnstileWidget
+                                siteKey={authConfig.turnstileSiteKey}
+                                resetSignal={turnstileReset}
+                                onToken={setTurnstileToken}
+                              />
+                            )}
                             <button
                               className="primary"
                               type="submit"
                               disabled={
-                                busy || !loginEmail.trim() || !turnstileToken
+                                busy ||
+                                !loginEmail.trim() ||
+                                !loginSecurityToken
                               }
                             >
                               <Mail size={14} aria-hidden="true" />
@@ -2499,17 +2762,12 @@ export function SettingsPage({
                       </Notice>
                     )}
                     <SettingRow
-                      title="Personal information"
-                      hint="Names and emails stay hidden for screenshots until you reload."
-                    >
-                      <PersonalInfoToggle
-                        visible={personalInfoVisible}
-                        onChange={setPersonalInfoVisible}
-                      />
-                    </SettingRow>
-                    <SettingRow
                       title="Preference synchronization"
-                      hint="Preferences follow your account."
+                      hint={
+                        session
+                          ? 'Preferences follow your account.'
+                          : 'After sign-in, preferences follow your account. Until then they stay on this device.'
+                      }
                     >
                       {cloudPending ? (
                         <Status>Checking…</Status>
@@ -2543,51 +2801,41 @@ export function SettingsPage({
                   {session || restoringSignedIn ? (
                     <Group title="Storage">
                       <SettingRow
-                        title="Account storage"
+                        title="Storage"
                         hint={storageHint(storageUsage)}
+                        details={
+                          (storageUsage?.trashedProjectCount ?? 0) > 0
+                            ? {
+                                summary: 'Trash counts toward storage',
+                                body: 'Projects in the trash are still stored, so they count until they are deleted.'
+                              }
+                            : undefined
+                        }
                       >
-                        {storageUsage && projectStorageLimit ? (
+                        {storageUsage && storageLimit ? (
                           <span className="settings-meter-figure">
                             <Meter
-                              used={storageUsage.projectStorageBytes}
-                              limit={projectStorageLimit}
-                              label="Account storage used"
+                              used={storedBytes(storageUsage)}
+                              limit={storageLimit}
+                              label="Storage used"
                               valueText={allowanceFigure(
-                                storageUsage.projectStorageBytes,
-                                projectStorageLimit
+                                storedBytes(storageUsage),
+                                storageLimit
                               )}
                             />
                             <span>
                               {allowanceFigure(
-                                storageUsage.projectStorageBytes,
-                                projectStorageLimit
+                                storedBytes(storageUsage),
+                                storageLimit
                               )}
                             </span>
                           </span>
                         ) : (
                           <Status>
                             {storageUsage
-                              ? formatBytes(storageUsage.projectStorageBytes)
+                              ? formatBytes(storedBytes(storageUsage))
                               : '—'}
                           </Status>
-                        )}
-                      </SettingRow>
-                      <SettingRow
-                        title="Cloud file storage"
-                        hint="Imports and exports. Existing files stay if you go over."
-                      >
-                        {storageUsage ? (
-                          <span className="settings-meter-figure">
-                            <Meter
-                              used={storageUsage.artifactBytes}
-                              limit={storageUsage.artifactLimitBytes}
-                              label="Cloud file storage used"
-                              valueText={fileStorageFigure(storageUsage)}
-                            />
-                            <span>{fileStorageFigure(storageUsage)}</span>
-                          </span>
-                        ) : (
-                          <Status>—</Status>
                         )}
                       </SettingRow>
                     </Group>
@@ -2693,12 +2941,16 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'activity' && anyMatch && <ActivityLogSettings />}
+          {active === 'activity' && anyMatch && (
+            <ActivityLogSettings
+              confirmDestructive={settings.general.confirmDestructiveActions}
+            />
+          )}
 
           {active === 'advanced' && anyMatch && (
             <Section
               title="Advanced"
-              intro="Editing fallback, diagnostics, build details, and reset."
+              intro="Editing fallback, project thumbnails, diagnostics, build details, and reset."
             >
               <Group title="Editing">
                 <SettingRow
@@ -2719,6 +2971,35 @@ export function SettingsPage({
                   />
                 </SettingRow>
               </Group>
+              {onRegenerateThumbnails && (
+                <Group title="Library">
+                  <SettingRow
+                    title="Regenerate project thumbnails"
+                    hint={
+                      // Announced as it changes: progress, then the result.
+                      <span role="status">
+                        {thumbnailRegeneration
+                          ? `Redrawing ${thumbnailRegeneration.done} of ${thumbnailRegeneration.total}…`
+                          : workspaceOpen
+                            ? 'Go back to your projects to redraw every project card.'
+                            : thumbnailRegenerationNote ||
+                              'Redraws every project card from its model, one at a time. Large projects can take a while.'}
+                      </span>
+                    }
+                  >
+                    <button
+                      className="secondary"
+                      type="button"
+                      disabled={workspaceOpen || thumbnailRegeneration !== null}
+                      aria-busy={thumbnailRegeneration !== null}
+                      onClick={onRegenerateThumbnails}
+                    >
+                      <ImageUp size={14} aria-hidden="true" />
+                      {thumbnailRegeneration ? 'Redrawing…' : 'Regenerate'}
+                    </button>
+                  </SettingRow>
+                </Group>
+              )}
               <Group title="Diagnostics">
                 <SettingRow
                   title="Frame rate overlay"
@@ -2832,6 +3113,17 @@ export function SettingsPage({
             setDeletionScope(null);
           }}
           onClose={() => setDeletionScope(null)}
+          onDownloadFirst={() => {
+            setDeletionScope(null);
+            // To the control that keeps a copy (design review I84).
+            requestAnimationFrame(() => {
+              const download = document.querySelector<HTMLElement>(
+                '[data-download-all-data]'
+              );
+              download?.scrollIntoView({ block: 'center' });
+              download?.focus();
+            });
+          }}
         />
       ) : null}
     </div>

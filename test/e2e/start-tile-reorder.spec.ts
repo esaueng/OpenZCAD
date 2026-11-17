@@ -111,6 +111,16 @@ test(
     // A pass over the middle does nothing; the hold arms it.
     await expect(card(page, names[2]!)).toHaveClass(/is-drop-pending/);
     await expect(card(page, names[2]!)).toHaveClass(/is-drop-target/);
+    // The hint rides above the dragged card, which would cover it on the
+    // target, and clear of the pointer.
+    const hint = card(page, names[0]!).locator('.start-tile-merge-hint');
+    await expect(hint).toHaveText('Release to make a folder');
+    await expect(
+      card(page, names[2]!).locator('.start-tile-merge-hint')
+    ).toHaveCount(0);
+    const hintBox = (await hint.boundingBox())!;
+    const draggedBox = (await card(page, names[0]!).boundingBox())!;
+    expect(hintBox.y + hintBox.height).toBeLessThanOrEqual(draggedBox.y);
     await page.mouse.up();
 
     const field = page.getByRole('textbox', { name: 'Folder name' });
@@ -143,6 +153,29 @@ test(
   }
 );
 
+test('the folder hint stays inside the shelf over the first row', async ({
+  page
+}) => {
+  // Held by its top edge, a first-row card sits level with its row, where a
+  // hint above it would be cut off by the top of the shelf.
+  const source = (await card(page, names[0]!).boundingBox())!;
+  const target = (await card(page, names[2]!).boundingBox())!;
+  await page.mouse.move(source.x + source.width / 2, source.y + 4);
+  await page.mouse.down();
+  await page.mouse.move(target.x + target.width / 2, target.y + 4, {
+    steps: 12
+  });
+  const hint = card(page, names[0]!).locator('.start-tile-merge-hint');
+  await expect(hint).toHaveText('Release to make a folder');
+  const shelf = (await page.locator('.start-body').boundingBox())!;
+  const hintBox = (await hint.boundingBox())!;
+  expect(hintBox.y).toBeGreaterThanOrEqual(shelf.y);
+  // Out of room above, it hangs under the dragged card instead.
+  const draggedBox = (await card(page, names[0]!).boundingBox())!;
+  expect(hintBox.y).toBeGreaterThanOrEqual(draggedBox.y + draggedBox.height);
+  await page.keyboard.press('Escape');
+});
+
 test('selects several cards and trashes them together', async ({ page }) => {
   await page.getByRole('checkbox', { name: `Select ${names[0]}` }).click();
   await page
@@ -155,6 +188,115 @@ test('selects several cards and trashes them together', async ({ page }) => {
   await page.getByRole('tab', { name: /Trash/ }).click();
   await expect.poll(() => cardOrder(page)).toHaveLength(3);
 });
+
+test('Move to trash offers Undo, and Empty trash asks in-page', async ({
+  page
+}) => {
+  // Every destructive confirm is in-page: a native one fails this test.
+  const native: string[] = [];
+  page.on('dialog', (dialog) => {
+    native.push(dialog.message());
+    void dialog.dismiss();
+  });
+  await card(page, names[1]!).hover();
+  await page
+    .getByRole('button', { name: `Actions for ${names[1]}` })
+    .first()
+    .click();
+  await page.getByRole('menuitem', { name: 'Move to trash' }).click();
+  await expect(card(page, names[1]!)).toHaveCount(0);
+  const toast = page.locator('.toast');
+  await expect(toast).toContainText(`Moved ${names[1]} to the trash.`);
+  await toast.getByRole('button', { name: 'Undo' }).click();
+  await expect(card(page, names[1]!)).toHaveCount(1);
+  await expect.poll(() => cardOrder(page)).toEqual(names);
+
+  await page.getByRole('checkbox', { name: `Select ${names[0]}` }).click();
+  await page
+    .getByRole('toolbar', { name: '1 project selected' })
+    .getByRole('button', { name: 'Move to trash' })
+    .click();
+  await page.getByRole('tab', { name: /Trash/ }).click();
+  await page.getByRole('button', { name: 'Empty trash' }).click();
+  const confirm = page.getByRole('alertdialog', { name: 'Empty the trash?' });
+  await expect(confirm).toContainText('1 project is deleted forever.');
+  await expect(confirm.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(confirm).toHaveCount(0);
+  await expect.poll(() => cardOrder(page)).toEqual([names[0]]);
+  expect(native).toEqual([]);
+});
+
+test(
+  'Empty trash asks over the library and takes a pointer answer',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    // The confirm used to paint under the start screen while its backdrop
+    // inerted the page: the dialog was in the DOM and focused but hidden, so
+    // the library looked frozen. Neither a keyboard answer nor a click sees
+    // that, because hit testing skips an inert element and reaches the dialog
+    // beneath it; only a hit test with the page's inert lifted shows what is
+    // actually drawn on top.
+    const destroyed: string[] = [];
+    await page.route('**/api/projects/*', (route) => {
+      if (route.request().method() !== 'DELETE') return route.fallback();
+      destroyed.push(
+        decodeURIComponent(
+          new URL(route.request().url()).pathname.split('/').at(-1)!
+        )
+      );
+      return route.fulfill({ status: 204 });
+    });
+    await page.route('**/api/projects', (route) =>
+      route.fulfill({
+        json: {
+          projects: projects.filter(
+            (project) => !destroyed.includes(project.projectId)
+          )
+        }
+      })
+    );
+    await page.getByRole('checkbox', { name: `Select ${names[2]}` }).click();
+    await page
+      .getByRole('toolbar', { name: '1 project selected' })
+      .getByRole('button', { name: 'Move to trash' })
+      .click();
+    await page.getByRole('tab', { name: /Trash/ }).click();
+    await expect.poll(() => cardOrder(page)).toEqual([names[2]]);
+    await page.getByRole('button', { name: 'Empty trash' }).click();
+
+    const confirm = page.getByRole('alertdialog', { name: 'Empty the trash?' });
+    const answer = confirm.getByRole('button', { name: 'Empty trash' });
+    await expect(answer).toBeVisible();
+    // Whatever is painted at the answer's centre must be the answer itself.
+    await expect
+      .poll(() =>
+        answer.evaluate((button) => {
+          const inert = [...document.querySelectorAll('[inert]')];
+          inert.forEach((element) => element.removeAttribute('inert'));
+          try {
+            const box = button.getBoundingClientRect();
+            const hit = document.elementFromPoint(
+              box.left + box.width / 2,
+              box.top + box.height / 2
+            );
+            return hit !== null && button.contains(hit);
+          } finally {
+            inert.forEach((element) => element.setAttribute('inert', ''));
+          }
+        })
+      )
+      .toBe(true);
+    await answer.click();
+
+    await expect(confirm).toHaveCount(0);
+    await expect.poll(() => cardOrder(page)).toEqual([]);
+    expect(destroyed).toEqual(['reorder-2']);
+    await expect(page.locator('.start-screen')).not.toHaveAttribute('inert');
+    await page.getByRole('tab', { name: /Projects/ }).click();
+    await expect.poll(() => cardOrder(page)).toEqual([names[0], names[1]]);
+  }
+);
 
 test('drops a dragged card on Trash', async ({ page }) => {
   const trash = page.getByRole('tab', { name: /Trash/ });
@@ -182,7 +324,9 @@ test('drops a dragged card on Trash', async ({ page }) => {
   await page.mouse.up();
 
   await expect.poll(() => cardOrder(page)).toEqual([names[0], names[2]]);
-  await expect(page.getByText(`Moved ${names[1]} to the trash.`)).toBeVisible();
+  await expect(page.locator('.toast')).toContainText(
+    `Moved ${names[1]} to the trash.`
+  );
   await trash.click();
   await expect.poll(() => cardOrder(page)).toEqual([names[1]]);
 });

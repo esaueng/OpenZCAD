@@ -1,8 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import { toArtifactId, type ProjectSummary } from '@openzcad/shared';
 import {
+  createProjectDocument,
+  withoutDerivedProjection
+} from '@openzcad/document-core';
+import { persistedDocumentBytes, toUserId } from '@openzcad/shared';
+import {
+  ACCOUNT_THUMBNAIL_VERSION,
   cachedThumbnailSource,
   mergeProjectSummaries,
+  summarizeLocalDocument,
+  withSavedVersion,
   retainPendingShelfOrder,
   prioritizeShelfEntries,
   withVerifiedShelfMetadata,
@@ -24,6 +32,69 @@ it('verifies pinned and visible cards first without dropping or mutating records
     )
   ).toEqual(['pinned', 'visible', 'offscreen', 'other']);
   expect(records[0]?.projectId).toBe('offscreen');
+});
+
+describe('sizes on rows the app adds or moves itself', () => {
+  const document = createProjectDocument('Bracket', toUserId('user_size'));
+  const measured = (doc: typeof document) =>
+    persistedDocumentBytes(withoutDerivedProjection(doc));
+
+  // Review of #1512: a created or duplicated project read "Not measured yet"
+  // until the next listing.
+  it('measures a document the device just stored', () => {
+    expect(summarizeLocalDocument(document).documentBytes).toBe(
+      measured(document)
+    );
+  });
+
+  // Review of #1512: a rename moved the row's version but kept the size of
+  // the version before.
+  it('moves the size with the version', () => {
+    const before = summarizeLocalDocument(document);
+    const renamed = {
+      ...document,
+      name: 'Bracket with a much longer name than before',
+      version: document.version + 1
+    };
+    const after = withSavedVersion(before, renamed);
+    expect(after.documentVersion).toBe(renamed.version);
+    expect(after.documentBytes).toBe(measured(renamed));
+    expect(after.documentBytes).toBeGreaterThan(before.documentBytes!);
+  });
+});
+
+describe('merged project sizes', () => {
+  const local = {
+    projectId: 'proj_sized',
+    name: 'Bracket',
+    updatedAt: LISTED,
+    revisionCount: 1,
+    documentVersion: 4
+  } as ProjectSummary;
+
+  it('keeps the newer record’s own size', () => {
+    const [merged] = mergeProjectSummaries(
+      [{ ...local, documentBytes: 900 }],
+      [{ ...local, updatedAt: EARLIER, documentVersion: 3, documentBytes: 700 }]
+    );
+    expect(merged?.documentBytes).toBe(900);
+  });
+
+  it('fills an unmeasured device projection from the account at the same version', () => {
+    const [merged] = mergeProjectSummaries(
+      [local],
+      [{ ...local, documentBytes: 1200 }]
+    );
+    expect(merged?.documentBytes).toBe(1200);
+  });
+
+  it('does not pass off another version’s size as the newer one’s', () => {
+    const [merged] = mergeProjectSummaries(
+      [local],
+      [{ ...local, updatedAt: EARLIER, documentVersion: 3, documentBytes: 700 }]
+    );
+    expect(merged).not.toHaveProperty('documentBytes');
+  });
 });
 
 describe('provisional encrypted shelf refresh', () => {
@@ -221,6 +292,28 @@ describe('cachedThumbnailSource', () => {
   });
 });
 
+describe('cachedThumbnailSource across devices', () => {
+  it("fetches another device's card at the same version number", () => {
+    // Two devices can each turn version 8 into their own version 9. Equal
+    // versions say nothing about which card is current, so a listing naming
+    // an artifact this record does not carry is fetched.
+    expect(
+      cachedThumbnailSource(
+        {
+          ...record('data:image/webp;base64,MINE', LISTED),
+          version: 9,
+          artifactId: toArtifactId('artifact_mine')
+        },
+        {
+          ...summary(LISTED),
+          documentVersion: 9,
+          thumbnailArtifactId: toArtifactId('artifact_other_device')
+        }
+      )
+    ).toBeUndefined();
+  });
+});
+
 describe('mergeProjectSummaries', () => {
   it('keeps the account thumbnail when the device document is newer', () => {
     const [merged] = mergeProjectSummaries(
@@ -305,6 +398,89 @@ describe('resolveShelfThumbnail', () => {
       }
     );
     expect(source).toBeUndefined();
+  });
+
+  it('keeps a downloaded account image so the next load does not download it again', async () => {
+    // Regression: the shelf downloaded every card from the account on every
+    // load in a browser that had not drawn the cards itself, because nothing
+    // ever wrote the download back to the device cache.
+    const project = {
+      ...summary(LISTED),
+      documentVersion: 4,
+      thumbnailArtifactId: artifactId
+    };
+    const store = new Map<string, ProjectThumbnailRecord>();
+    const download = vi.fn(async () => 'data:image/webp;base64,CLOUD');
+    const remember = vi.fn(
+      async (
+        projectId: string,
+        thumbnail: Omit<ProjectThumbnailRecord, 'projectId'>,
+        replaces: ProjectThumbnailRecord | null
+      ) => {
+        expect(replaces).toBe(store.get(projectId) ?? null);
+        store.set(projectId, { projectId, ...thumbnail });
+      }
+    );
+    const host = {
+      loadCached: async (projectId: string) => store.get(projectId) ?? null,
+      download,
+      remember
+    };
+
+    await expect(resolveShelfThumbnail(project, host)).resolves.toBe(
+      'data:image/webp;base64,CLOUD'
+    );
+    await vi.waitFor(() => expect(remember).toHaveBeenCalledTimes(1));
+    const kept = store.get(project.projectId)!;
+    expect(kept).toEqual({
+      projectId: project.projectId,
+      source: 'data:image/webp;base64,CLOUD',
+      artifactId,
+      version: ACCOUNT_THUMBNAIL_VERSION,
+      updatedAt: LISTED
+    });
+
+    await expect(resolveShelfThumbnail(project, host)).resolves.toBe(
+      'data:image/webp;base64,CLOUD'
+    );
+    expect(download).toHaveBeenCalledTimes(1);
+    // Not a render of the listed version: the workspace still draws its own
+    // card, and the publisher does not send this one back as current.
+    expect(thumbnailRecordDescribes(kept, project)).toBe(false);
+  });
+
+  it('downloads again once the account names a newer image', async () => {
+    const kept = {
+      ...record('data:image/webp;base64,OLD', LISTED),
+      artifactId,
+      version: ACCOUNT_THUMBNAIL_VERSION
+    };
+    const download = vi.fn(async () => 'data:image/webp;base64,NEW');
+    const source = await resolveShelfThumbnail(
+      {
+        ...summary(LISTED),
+        thumbnailArtifactId: toArtifactId('artifact_newer')
+      },
+      { loadCached: async () => kept, download }
+    );
+    expect(source).toBe('data:image/webp;base64,NEW');
+    expect(download).toHaveBeenCalledWith('artifact_newer');
+  });
+
+  it('keeps nothing when the account image cannot be fetched', async () => {
+    const remember = vi.fn(async () => undefined);
+    await resolveShelfThumbnail(
+      { ...summary(LISTED), thumbnailArtifactId: artifactId },
+      {
+        loadCached: async () => null,
+        download: async () => {
+          throw new Error('offline');
+        },
+        remember
+      }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(remember).not.toHaveBeenCalled();
   });
 
   it('does not touch the network for a device-only project', async () => {

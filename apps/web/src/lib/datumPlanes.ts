@@ -9,6 +9,7 @@ import {
   newCanonicalPlaneRef
 } from '@openzcad/geometry';
 import {
+  ownEntry,
   datumAxisPlaneSources,
   datumAxisSourceBodyIds,
   datumPlaneSources,
@@ -139,9 +140,10 @@ export function datumVertexFromEdgePick(
   selection: { kind: string; bodyId: BodyId; hash?: number },
   clickPoint: { x: number; y: number; z: number } | null
 ): EdgeVertexPointSource | { reason: string } {
-  const edge = document.derived.bodyRepresentations[
+  const edge = ownEntry(
+    document.derived.bodyRepresentations,
     selection.bodyId
-  ]?.topology?.edges.find((candidate) => candidate.hash === selection.hash);
+  )?.topology?.edges.find((candidate) => candidate.hash === selection.hash);
   const reference = edge?.reference;
   if (!reference) {
     return {
@@ -178,7 +180,10 @@ export function datumVertexOption(
   label = 'Vertex'
 ): DatumPointOption {
   const end = edgeEnds(source.edgeReference.witness)?.[source.end];
-  const body = document.derived.bodyRepresentations[source.bodyId]?.name;
+  const body = ownEntry(
+    document.derived.bodyRepresentations,
+    source.bodyId
+  )?.name;
   return {
     key: datumVertexKey(source),
     label: `${label}${end ? ` ${formatPoint(end)}` : ''}${body ? ` of ${body}` : ''}`,
@@ -220,7 +225,7 @@ export function datumPointLabel(
   units: UnitSystem = document.units
 ): string {
   if (source.type === 'edge-vertex') {
-    const body = document.derived.bodyRepresentations[source.bodyId];
+    const body = ownEntry(document.derived.bodyRepresentations, source.bodyId);
     return `a vertex of ${body?.name ?? 'a missing body'}`;
   }
   const axis = (value: string | number) => {
@@ -277,7 +282,10 @@ export function datumSourceLabel(
         datumFeature(document, source.datumFeatureId)?.name ?? 'a missing datum'
       );
     case 'face': {
-      const body = document.derived.bodyRepresentations[source.bodyId];
+      const body = ownEntry(
+        document.derived.bodyRepresentations,
+        source.bodyId
+      );
       return `a face of ${body?.name ?? 'a missing body'}`;
     }
   }
@@ -803,9 +811,10 @@ export function datumFaceSourceFromPick(
   const attachment = faceSketchAttachment({
     bodyId: selection.bodyId,
     pickedHash: selection.hash,
-    face: document.derived.bodyRepresentations[
+    face: ownEntry(
+      document.derived.bodyRepresentations,
       selection.bodyId
-    ]?.topology?.faces.find((face) => face.hash === selection.hash)
+    )?.topology?.faces.find((face) => face.hash === selection.hash)
   });
   if (!attachment.ok) throw new Error(attachment.reason);
   const ref = attachment.planeRef;

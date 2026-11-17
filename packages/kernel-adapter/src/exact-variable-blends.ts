@@ -19,6 +19,7 @@ import {
   type VariableFilletLaw
 } from '@openzcad/shared';
 import type { RemusKernel } from './remus-runtime';
+import { KernelRefusal, type KernelRefusalCategory } from './kernel-refusal';
 import { GEOMETRY_EPSILON } from './exact-math';
 
 /**
@@ -179,6 +180,59 @@ export function variableBlendRefusalMessage(
 }
 
 /**
+ * The category this adapter files each blend failure code under: a
+ * configuration the kernel cannot build yet is `unsupported`; a request the
+ * geometry cannot hold (a radius too large, mismatched setbacks, an input
+ * the kernel rejects) is `invalid_input`.
+ */
+const BLEND_FAILURE_CATEGORIES: Readonly<
+  Record<string, KernelRefusalCategory>
+> = {
+  'blend-failed': 'unsupported',
+  'edges-not-blended': 'unsupported',
+  'fillet-failed': 'unsupported',
+  'invalid-input': 'invalid_input',
+  'partial-result': 'unsupported',
+  'radius-too-large': 'invalid_input',
+  'resize-blend-failed': 'unsupported',
+  'setback-mismatch': 'invalid_input',
+  'unsupported-face-face-blend': 'unsupported',
+  'unsupported-setback-corner': 'unsupported',
+  'unsupported-support-pair': 'unsupported',
+  'unsupported-surface': 'unsupported',
+  'unsupported-vertex-blend': 'unsupported'
+};
+
+/**
+ * The typed refusal for a variable-radius fillet or asymmetric chamfer the
+ * kernel did not build, carrying {@link variableBlendFailureMessage} as its
+ * sentence. The code is the kernel's `blend_failure_code` prefix; a report
+ * without one (or none at all) is filed as `blend-failed`, so the refusal is
+ * always typed.
+ */
+export function variableBlendRefusal(
+  featureKind: 'fillet' | 'chamfer',
+  edgeCount: number,
+  reported: string | null
+): KernelRefusal {
+  const message = variableBlendFailureMessage(featureKind, edgeCount, reported);
+  const kernelReason = variableBlendRefusalMessage(reported);
+  const code =
+    kernelReason === null
+      ? 'blend-failed'
+      : kernelReason.slice(0, kernelReason.indexOf(':'));
+  return new KernelRefusal({
+    family: 'blend',
+    category: BLEND_FAILURE_CATEGORIES[code] ?? 'unsupported',
+    kernelCode: code,
+    kernelMessage:
+      reported?.trim() || 'the exact modeling engine gave no further detail',
+    message,
+    reason: message
+  });
+}
+
+/**
  * Failure message for a variable-radius fillet or asymmetric chamfer.
  *
  * Deliberately NOT the constant blend's cause-aware message. That one answers
@@ -195,9 +249,7 @@ export function variableBlendFailureMessage(
   reported: string | null
 ): string {
   const label =
-    featureKind === 'fillet'
-      ? 'Variable-radius fillet'
-      : 'Asymmetric chamfer';
+    featureKind === 'fillet' ? 'Variable-radius fillet' : 'Asymmetric chamfer';
   const prefix = `${label} could not be created on ${edgeCount} selected edge${edgeCount === 1 ? '' : 's'}.`;
   const kernelReason = variableBlendRefusalMessage(reported);
   if (kernelReason) {

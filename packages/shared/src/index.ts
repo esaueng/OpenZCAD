@@ -14,12 +14,21 @@ export * from './mass-density';
 export * from './keymap-settings';
 export * from './drawings';
 export * from './object-folders';
+export * from './print-clearance';
+export * from './configurations';
 export * from './assembly';
 export * from './assembly-coupling';
 export * from './assembly-kinematics';
+export * from './body-clash';
+export * from './surface-analysis';
 export * from './gear-mesh-types';
 export * from './gear-mesh';
+export * from './hole-points';
+export * from './hole-standards';
+export * from './standard-parts';
+export * from './standard-part-placement';
 import type { DocumentHistory } from './document-history';
+import { ownEntry } from './document-validation';
 import type { KeymapOverrides } from './keymap-settings';
 import type { DrawingSet } from './drawings';
 import type {
@@ -27,9 +36,25 @@ import type {
   SketchCompositeSideTarget
 } from './sketch-composite-targets';
 import type { BoundaryProvenance } from './sketch-boundary-provenance';
+import type { SheetMetalFeatureFields } from './sheet-metal';
 import type { SketchPromotion } from './sketch-promotions';
 import type { ObjectFolderSet } from './object-folders';
 import type { AssemblySet } from './assembly';
+import type { ConfigurationSet } from './configurations';
+import type { PipeThreadSize } from './pipe-threads';
+import type {
+  StandardPartBuild,
+  StandardPartKind,
+  StandardPartThread,
+  StandardPartSize,
+  StandardPartSystem,
+  StandardScrewHead
+} from './standard-parts';
+import type {
+  HoleClearanceFit,
+  HoleStandardKind,
+  HoleStandardSystem
+} from './hole-standards';
 export * from './drawing-annotations';
 export * from './topology-reference';
 export * from './reference-images';
@@ -43,6 +68,7 @@ export * from './e2ee-contacts';
 export * from './e2ee-assistant-consents';
 export * from './e2ee-invitations';
 export * from './e2ee-share-links';
+export * from './share-link-token';
 export * from './e2ee-project-migrations';
 import type { ReferenceImageSet } from './reference-images';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
@@ -231,7 +257,118 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // older client would refuse the unknown commands, or, past that, drop the
 // list on its next save and let the gears turn out of mesh, so it must
 // refuse the document.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 56 as const;
+// v57 adds M15 thread runouts and tapered pipe threads: `runoutStart` and
+// `runoutEnd` finish a thread end with the kernel's runout cone, and the
+// `'npt'` and `'bspt'` profiles with their `pipeSize` cut a 1:16 taper.
+// Every field is optional and absent keeps the v53 thread, so older
+// documents load unchanged. An older client would build a plain end or a
+// cylindrical thread in their place, so it must refuse.
+// v58 adds M16 sheet-metal features (`featureKind: 'sheet-metal'`): a flat
+// blank folded by a table of bends. An older client has no builder for the
+// kind and would drop the body on rebuild, so it must refuse.
+// v59 adds the I01 point and slot sketch entities: the `point` sketch object
+// (a position held by relations, bounding no profile) and the `slot`
+// composite (two lines and two half-circle arcs held tangent, named as one
+// shape with a construction centre line). An older client would refuse the
+// unknown object, or drop the composite record on its next save and leave
+// four unrelated curves, so it must refuse the document. Builds on v58.
+// v60 adds the L09 document print clearance (`printClearance`): one radial
+// allowance for printed fits that threads and gears read where they leave
+// their own clearance or backlash unset. Absent means none, so every older
+// document builds unchanged and is never rewritten. An older client would
+// build those threads and gears without it, so it must refuse. Builds on
+// v59.
+// v61 adds the AS03 exploded view (`assembly.explode`): one stored world
+// offset per component, shown on top of its pose when the view is exploded
+// and edited by dragging. Absent means none, so every older assembly loads
+// unchanged. An older client would drop the offsets on its next save, so it
+// must refuse. Builds on v60.
+// v62 adds M02 feature patterns and skipped pattern copies on the `pattern`
+// feature: `sourceFeatureIds` repeats those holes and add/cut extrudes on the
+// target body instead of the whole body, and `skippedInstances` leaves the
+// named copies out. Both are optional and absent keeps the whole-body
+// pattern, so every older document builds unchanged. An older client would
+// copy the whole body, or build every copy, so it must refuse. Builds on v61.
+// v63 adds M02 patterns driven by sketch points (`patternKind: 'points'` and
+// `points`): one copy at each picked I01 point entity, moved there from the
+// point the original stands on. An older client has no such arrangement and
+// would build a linear pattern in its place, so it must refuse. Builds on
+// v62.
+// v64 adds M01 holes on sketch points (`points` on the `hole` feature): one
+// bore at each picked I01 point entity, each read on its sketch plane and
+// dropped onto the hole's entry face. Absent keeps the one stored position,
+// so every older document builds unchanged. An older client would drill a
+// single hole at the stored position, so it must refuse. Builds on v63.
+// v65 adds M01 standard hole sizes (`standard` on the `hole` feature): an
+// ISO metric or ANSI inch size, as a clearance hole with its fit or as a tap
+// drill, whose table gives the bore's diameter. Absent keeps the stored
+// diameter, so every older document builds unchanged. An older client would
+// drill the stored diameter and drop the size on its next save, so it must
+// refuse. Builds on v64.
+// v66 adds M01 tapped holes (`tapped` on a `hole` sized as a tap drill): the
+// standard's thread is cut into every bore by the M15 thread generator, with
+// the document print clearance where the hole sets none. Absent leaves the
+// plain tap-drill bore, so every older document builds unchanged. An older
+// client would drill the bore without its thread, so it must refuse. Builds
+// on v65.
+// v67 adds M01 cosmetic threads (`tapped.cosmetic`): a tapped hole whose
+// thread is described for drawings and callouts but not cut, so the bore
+// stays its tap drill. An older client would cut the thread, so it must
+// refuse. Builds on v66.
+// v68 adds D02 dimension tolerances, prefixes and suffixes (`tolerance`,
+// `prefix` and `suffix` on a drawing dimension): symmetric, deviation, limits
+// and basic tolerances read against the measured value each time the sheet is
+// drawn. Absent keeps the bare value, so every older sheet draws unchanged.
+// An older client would print the bare value and drop them on its next save,
+// so it must refuse. Builds on v67.
+// v69 adds M17 standard parts (`featureKind: 'standard-part'`): a screw,
+// nut, washer, threaded insert, dowel pin or ball bearing generated from its
+// standard's table as a new body. An older client has no builder for the
+// kind and would drop the body on rebuild, so it must refuse. Builds on v68.
+// v70 adds D02 drawing properties (`format` on a drawing sheet): the units,
+// precision, angle format and decimal separator its dimensions print in and
+// per-class line weights. Absent keeps every default, so every older sheet
+// draws unchanged. An older client would print in the document's units and
+// drop them on its next save, so it must refuse. Builds on v69.
+// v72 adds F06 configurations (`configurations`): a variant table whose rows
+// are named configurations and whose columns are parameters, feature
+// suppression, body visibility and material, with one active row. Absent
+// means no table, so every older document builds unchanged. An older client
+// would show and export bodies the active row hides and drop the table on
+// its next save, so it must refuse. Builds on v70 (v71 is claimed by M17).
+// v73 adds D02 geometry annotations: centre marks, intersection marks and
+// centrelines (`center-mark`, `intersection-mark`, `centerline` annotation
+// kinds) and a mark as a dimension point (`anchor: 'mark'`). An older client
+// would refuse the unknown kinds, so it must refuse the document. Builds on
+// v72.
+// v75 adds the D02 distance dimension (`kind: 'distance'`): point to line,
+// line to line, and to a circle's centre or its near or far side, where a
+// line may be a straight edge or a centreline. An older client would refuse
+// the unknown kind, so it must refuse the document. Builds on v74
+// (M17 standard parts in holes, #1644).
+// v77 adds M17 parts inserted into M01 holes (`hole` on a standard part):
+// the part stands in each of the hole's bores and takes its matched length
+// where it stores none. An older client would build one part at the stored
+// origin, or none without a length, so it must refuse. (M17 first claimed
+// v71 and then v74, but clients up to v75 have no `hole`.) Builds on v75.
+// v78 adds D03 detail views (`detail` on a drawing view): the region of a
+// source view inside a circle, at its own scale. An older client would draw
+// the whole view at the sheet's scale, uncropped, so it must refuse. Builds
+// on v77.
+// v80 adds D02 parts lists and balloons (`bom-table` and `balloon` drawing
+// annotations): an assembly's BOM table on the paper and a part's item
+// number at a leader, both read from the AS03 table each time the sheet is
+// drawn. An older client would refuse the unknown kinds, so it must refuse
+// the document. Builds on v79 (F06 assembly component configurations).
+// v81 adds D03 auxiliary views (`auxiliary` on a drawing view): seen square
+// to an edge its source draws true length, so an inclined face is drawn
+// true size. An older client would draw the source's view instead, so it
+// must refuse. Builds on v80.
+// v82 is claimed by D02 arc angles (#1662).
+// v83 adds M17 simplified threads (`thread: 'simplified'` on a standard
+// part): the part is drawn as its plain envelope, with no thread cut. An
+// older client would cut it, so it must refuse. Builds on v81.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 83 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -264,9 +401,12 @@ export type GearHand = 'right' | 'left';
 /**
  * A thread's form: the ISO 68-1 metric profile (60°), a printable profile
  * whose flanks stand 45° so neither overhangs more than 45° printed upright,
- * or a custom trapezoid.
+ * a custom trapezoid, or (schema v57) a tapered pipe thread: NPT (ASME
+ * B1.20.1, 60°) or BSPT R/Rc (ISO 7-1, 55°, its rounded crests and roots
+ * approximated by flats).
  */
-export type ThreadProfile = 'iso-metric' | 'printable' | 'custom';
+export type ThreadProfile =
+  'iso-metric' | 'printable' | 'custom' | 'npt' | 'bspt';
 /** Which way a thread winds: a right hand advances turning counter-clockwise. */
 export type ThreadHand = 'right' | 'left';
 /**
@@ -296,6 +436,8 @@ export type FeatureKind =
   | 'hole'
   | 'gear'
   | 'thread'
+  | 'sheet-metal'
+  | 'standard-part'
   | 'direct-edit'
   | 'imported-step'
   | 'imported-mesh'
@@ -309,7 +451,8 @@ export type SketchObjectKind =
   | 'arc'
   | 'ellipse'
   | 'spline'
-  | 'text';
+  | 'text'
+  | 'point';
 /**
  * How a spline is defined (I01, schema v27): `fit` interpolates its points,
  * `control` treats them as the control polygon of a clamped B-spline.
@@ -334,7 +477,60 @@ export type BooleanOperation = 'union' | 'subtract' | 'intersect';
  * none, the consume-everything Boolean every document before v24 stores.
  */
 export type BooleanKeepOriginals = 'all' | 'target' | 'tools';
-export type PatternKind = 'linear' | 'circular' | 'grid';
+export type PatternKind = 'linear' | 'circular' | 'grid' | 'points';
+
+/** M02 (schema v63): the sketch points a `points` pattern repeats at. */
+export interface PatternPoints {
+  sketchId: SketchId;
+  /** Point entity ids, the reference among them, each once. */
+  pointIds: string[];
+  /** Where the original stands; it makes no copy and cannot be skipped. */
+  referencePointId: string;
+}
+
+/**
+ * M01 (schema v64): the sketch points a hole is drilled at, one bore each.
+ */
+export interface HolePoints {
+  sketchId: SketchId;
+  /** Point entity ids of that sketch, each once, in the order picked. */
+  pointIds: string[];
+}
+
+/**
+ * M01 (schema v65): the standard size a hole is drilled to, for a screw to
+ * pass (`clearance`) or for a thread to be tapped (`tap-drill`).
+ */
+export interface HoleStandard {
+  system: HoleStandardSystem;
+  /** `M6` for ISO, `#10` or `1/4` for ANSI. */
+  size: string;
+  kind: HoleStandardKind;
+  /** A clearance hole's fit; absent is `'normal'`. ANSI has no `'loose'`. */
+  fit?: HoleClearanceFit;
+}
+
+/**
+ * M01 (schema v66): the thread a tap-drill hole is tapped with, the M15
+ * thread of its standard's size (ISO 261 coarse or UNC, both the ISO 68-1
+ * basic profile), cut into each bore from the end nearer the entry face.
+ */
+export interface HoleTapped {
+  /** Thread length from the bore's entry end; absent threads the whole bore. */
+  length?: ParamValue;
+  /**
+   * Radial allowance for a printed fit, as a Thread's; absent reads the
+   * document print clearance (L09), or none.
+   */
+  clearance?: ParamValue;
+  /** Absent is `'right'`. */
+  hand?: ThreadHand;
+  /**
+   * M01 (schema v67): a cosmetic thread, described (for drawings and
+   * callouts) but not cut: the bore stays its tap drill. Absent cuts it.
+   */
+  cosmetic?: true;
+}
 export type AxisId = 'x' | 'y' | 'z';
 
 /**
@@ -611,6 +807,23 @@ export type DirectEditOperation =
       sourceAxisEnd?: Vector3;
     }
   | {
+      /**
+       * Delete several faces of one body together and heal the gap the way
+       * Remus's `defeature` does: the faces around them extend until they
+       * close again. Selecting every wall of an opening closes the opening.
+       * The face fields name the first face, as every direct edit names one;
+       * `additionalFaces` are the rest, each pinned the same way.
+       */
+      kind: 'remove-faces';
+      faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
+      sourceSurfaceType: string;
+      sourceArea: number;
+      sourceCenter: Vector3;
+      /** The other faces removed with the first; at least one. */
+      additionalFaces: RemovedFaceSnapshot[];
+    }
+  | {
       kind: 'offset-face';
       faceHash: number;
       faceReference?: FaceTopologyReferenceV5;
@@ -682,6 +895,15 @@ export type DirectEditOperation =
       /** Every band to remove, the seed's carrier included. */
       blends: RecordedBlendCarrier[];
     };
+
+/** One face a `remove-faces` edit deletes, pinned as it was when picked. */
+export interface RemovedFaceSnapshot {
+  faceHash: number;
+  faceReference?: FaceTopologyReferenceV5;
+  sourceSurfaceType: string;
+  sourceArea: number;
+  sourceCenter: Vector3;
+}
 
 /** Exact analytic carrier of one blend band, as `resize-blend` records it. */
 export interface RecordedBlendCarrier {
@@ -1305,6 +1527,17 @@ export type SketchCompositeData =
       compositeKind: 'polygon';
       /** Vertices lie on the construction circle: its radius is the circumradius. */
       method: 'inscribed';
+    }
+  | {
+      /**
+       * I01 (schema v59): a straight slot, side 0 a line, side 1 the
+       * half-circle arc about the second centre, side 2 the opposite line
+       * and side 3 the arc about the first centre, counter-clockwise. Its
+       * one helper is the construction line from the first centre to the
+       * second: its length is the slot's centre distance.
+       */
+      compositeKind: 'slot';
+      method: 'center-to-center';
     };
 
 export type SketchCompositeKind = SketchCompositeData['compositeKind'];
@@ -1433,6 +1666,16 @@ export type SketchObjectData = (
       rotation?: ParamValue;
       /** Horizontal alignment of each line about `x`. Defaults to `'left'`. */
       align?: TextAlign;
+    }
+  | {
+      /**
+       * I01 (schema v59). A sketch point: a position relations can hold
+       * (its one solver point is named `center`) and other geometry can
+       * snap to. It bounds no profile and splits no curve.
+       */
+      objectKind: 'point';
+      x: ParamValue;
+      y: ParamValue;
     }
 ) & {
   /**
@@ -1871,6 +2114,25 @@ export type FeatureData =
        * that is never read back would be exactly that stale world point.
        */
       positionAnchor?: 'centroid';
+      /**
+       * M01 (schema v64): drill one bore, of this same size and depth, at
+       * each of these point entities of an earlier sketch whose plane is
+       * parallel to the entry face, each point dropped onto the face along
+       * its normal. A point moved in its sketch carries its bore with it.
+       * Present, `position` and `positionAnchor` are stored but not read.
+       */
+      points?: HolePoints;
+      /**
+       * M01 (schema v65): the standard size the bore is drilled to. Its
+       * table gives the diameter, converted to the document's units, so
+       * `diameter` is then stored (as that value) but not read.
+       */
+      standard?: HoleStandard;
+      /**
+       * M01 (schema v66): tapped with its standard's thread; only on a hole
+       * whose `standard` is a tap drill.
+       */
+      tapped?: HoleTapped;
     }
   | {
       /**
@@ -2100,9 +2362,92 @@ export type FeatureData =
        */
       chamferStart?: boolean;
       chamferEnd?: boolean;
-      /** The chamfer cone's angle from the axis, degrees; absent is 45. */
+      /**
+       * The end cone's angle from the axis, degrees, for a chamfer or a
+       * runout; absent is 45.
+       */
       chamferAngleDeg?: ParamValue;
+      /**
+       * Schema v57: run the thread out at its start or end: a cone from the
+       * crest at that end plane down to the root, so the groove fades out
+       * against the collar a thread stopping short of the face leaves (or a
+       * shoulder the face ends on) with no undercut. An end takes a chamfer
+       * or a runout, not both. Absent is plain.
+       */
+      runoutStart?: boolean;
+      runoutEnd?: boolean;
+      /**
+       * Schema v57, `'npt'` and `'bspt'` profiles only: the nominal pipe
+       * size, which sets the pitch, the gauge-plane diameter and the thread
+       * length taken when `length` is absent. Absent takes the size the
+       * face is nearest: a boss its pipe, a bore its minor diameter. A pipe
+       * thread's fitting end is the end it starts at (`anchor`): a boss
+       * tapers small toward it, a bore opens large at it.
+       */
+      pipeSize?: PipeThreadSize;
     }
+  | {
+      /**
+       * M17 (schema v69): a standard part, generated as a new body from its
+       * standard's table (`standard-parts.ts`): a screw, nut, washer,
+       * threaded insert, dowel pin or deep groove ball bearing. Threads are
+       * modeled by the M15 thread generator and an insert's knurl by the M14
+       * gear generator. Nothing is consumed.
+       *
+       * Placement: `origin` is the part's seat and `axis` points the way it
+       * goes in. A screw's head stands behind the origin and its shank runs
+       * along `axis` (a countersunk head sinks along it from the origin, its
+       * top on the origin); a nut, washer, insert, dowel pin or bearing runs
+       * from the origin along `axis` for its height. `xDirection` turns a
+       * hex about the axis; absent is a deterministic perpendicular.
+       */
+      featureKind: 'standard-part';
+      partKind: StandardPartKind;
+      system: StandardPartSystem;
+      size: StandardPartSize;
+      /** Screws only; absent is `'socket'`. */
+      head?: StandardScrewHead;
+      /**
+       * Screws and dowel pins: the nominal length (under the head, or
+       * overall on a countersunk screw). Required on them, refused on the
+       * others, whose table fixes their height.
+       */
+      length?: ParamValue;
+      origin: ParametricVector3;
+      axis: ParametricVector3;
+      xDirection?: ParametricVector3;
+      /**
+       * M17 slice 2 (schema v71): the M01 hole the part is inserted into.
+       * The part then stands in every bore that hole drills (one solid
+       * each), on the bore's seat (a counterbore's floor, the entry face,
+       * or a countersunk head's top on the entry face) along the bore, and
+       * follows the hole when it moves. `origin` and `axis` keep where it
+       * stood when inserted. Without `length`, a screw or dowel pin takes
+       * the preferred length matched to the hole
+       * (`matchedStandardLengthMm`). The hole must be earlier in history,
+       * and must take the part's size (`standardPartForHole`).
+       */
+      hole?: { featureId: FeatureId };
+      /**
+       * M17 (schema v72), screws, nuts and threaded inserts: how the thread
+       * is built. `'simplified'` leaves it uncut, the shank or bore the plain
+       * cylinder a drawing shows (and an insert without its knurl), so many
+       * fasteners stay light to build and draw; the designation still names
+       * the thread. Absent is `'modeled'`, the M15 thread.
+       */
+      thread?: StandardPartThread;
+    }
+  /**
+   * M16 (schema v58): a sheet-metal part. The sketch cells in `profiles`
+   * are the flat blank, `thickness` thick; every bend in `bends` folds it
+   * about a line drawn on that blank. The feature owns one new body. See
+   * {@link SheetMetalFeatureFields} and `docs/plans/sheet-metal-plan.md`.
+   */
+  | ({ featureKind: 'sheet-metal' } & {
+      // Mapped, not the interface itself, so the member stays assignable to
+      // `Record<string, unknown>` like every other feature's data.
+      [K in keyof SheetMetalFeatureFields]: SheetMetalFeatureFields[K];
+    })
   | {
       featureKind: 'split';
       /** Consumed: the two halves replace the input body. */
@@ -2228,6 +2573,30 @@ export type FeatureData =
        * through the origin. Absent is the world axis every older pattern uses.
        */
       axisRef?: DatumAxisRef;
+      /**
+       * M02 (schema v62): repeat these features instead of the whole body.
+       * Each is a hole or an add/cut extrude made earlier in history on the
+       * body chain `targetBodyId` ends; its copies are cut into (or added
+       * onto) `targetBodyId`, whose original already holds the features
+       * themselves. Absent is the whole-body pattern.
+       */
+      sourceFeatureIds?: FeatureId[];
+      /**
+       * M02 (schema v62): the copies left out, by instance label: `"3"` for
+       * a linear or circular pattern's fourth, `"1-2"` for a grid's column 1,
+       * row 2. The original (`"0"`, `"0-0"`) is never one. Labels stay with
+       * their place, so skipping one never renames the others.
+       */
+      skippedInstances?: string[];
+      /**
+       * M02 (schema v63), `patternKind: 'points'` only, and required there:
+       * one copy at each of these point entities of an earlier sketch,
+       * translated from `referencePointId`, the point the original stands
+       * on, which makes no copy. A copy's instance label is its point's id,
+       * so adding or removing another point renames no copy. `count`,
+       * `axis`, `spacing` and `angleDeg` are stored but not read.
+       */
+      points?: PatternPoints;
     }
   | {
       featureKind: 'direct-edit';
@@ -3121,13 +3490,48 @@ export interface RevisionRecord {
   commandCount: number;
 }
 
+/**
+ * Who made a save point and where (L03), as the saving browser recorded it.
+ * Every field is optional: older save points carry none, and a save made
+ * signed out has no account. On an encrypted project it travels inside the
+ * signed, encrypted document like every other field an editor writes.
+ */
+export interface ProjectCheckpointAuthor {
+  /** The account that saved, when one was signed in. */
+  userId?: string;
+  /** That account's display name at the time. */
+  name?: string;
+  /** A short name for the device, such as "Chrome on macOS". */
+  device?: string;
+}
+
 /** Durable user-visible save point. Command history and undo state remain separate. */
 export interface ProjectCheckpoint {
   checkpointId: string;
   revisionId: RevisionId;
   documentVersion: number;
   createdAt: string;
+  /** The automatic reason, or the name typed when saving. */
   reason: string;
+  /**
+   * A name given after the save (L03 rename). Shown in place of `reason`;
+   * absent until someone renames the save point.
+   */
+  name?: string;
+  author?: ProjectCheckpointAuthor;
+}
+
+/** Longest name a save point may be renamed to. */
+export const MAX_CHECKPOINT_NAME_LENGTH = 120;
+/** Bounds of the author fields a save point records. */
+export const MAX_CHECKPOINT_AUTHOR_NAME_LENGTH = 120;
+export const MAX_CHECKPOINT_AUTHOR_DEVICE_LENGTH = 64;
+
+/** What the versions list calls a save point: its new name, else its reason. */
+export function checkpointLabel(
+  checkpoint: Pick<ProjectCheckpoint, 'name' | 'reason'>
+): string {
+  return checkpoint.name ?? checkpoint.reason;
 }
 
 /**
@@ -3225,7 +3629,30 @@ export function isProjectCheckpoint(
     isBoundedString(checkpoint.revisionId, 200, 1) &&
     isNonnegativeSafeInteger(checkpoint.documentVersion) &&
     isBoundedString(checkpoint.createdAt, 100, 1) &&
-    isBoundedString(checkpoint.reason, 500)
+    isBoundedString(checkpoint.reason, 500) &&
+    (checkpoint.name === undefined ||
+      isBoundedString(checkpoint.name, MAX_CHECKPOINT_NAME_LENGTH, 1)) &&
+    (checkpoint.author === undefined ||
+      isProjectCheckpointAuthor(checkpoint.author))
+  );
+}
+
+export function isProjectCheckpointAuthor(
+  value: unknown
+): value is ProjectCheckpointAuthor {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const author = value as Record<string, unknown>;
+  return (
+    Object.keys(author).every((key) =>
+      ['userId', 'name', 'device'].includes(key)
+    ) &&
+    (author.userId === undefined || isBoundedString(author.userId, 200, 1)) &&
+    (author.name === undefined ||
+      isBoundedString(author.name, MAX_CHECKPOINT_AUTHOR_NAME_LENGTH, 1)) &&
+    (author.device === undefined ||
+      isBoundedString(author.device, MAX_CHECKPOINT_AUTHOR_DEVICE_LENGTH, 1))
   );
 }
 
@@ -3462,7 +3889,9 @@ export interface FeatureWarning {
       | 'blend'
       | 'gear'
       | 'thread'
+      | 'sheet-metal'
       | 'direct-edit'
+      | 'modeling'
       | 'reference';
     operation?: string;
     category: string;
@@ -3471,7 +3900,9 @@ export interface FeatureWarning {
      * The kernel's cause code, for a refusal whose `code` covers several
      * causes. A refused cylindrical-face resize (`unsupported_move_face`)
      * says `unsupported_neighbor`, `partial_reversed_wall` or `unclassified`
-     * here. A string for the same reason `category` is one.
+     * here; a refused diameter (`cylinder-diameter-unbuildable`) says
+     * `wall_meets_face` or `group_reblend_failed` on a kernel that sends it.
+     * A string for the same reason `category` is one.
      */
     reason?: string;
     /** The surface type of the neighbour that blocked the edit, if named. */
@@ -3563,6 +3994,11 @@ export interface DerivedState {
    */
   datumFrames?: Record<FeatureId, DatumFrame>;
   /**
+   * M17: each standard part as the exact build placed it, by its feature
+   * (see {@link StandardPartBuild}). Absent before a rebuild.
+   */
+  standardParts?: Record<FeatureId, StandardPartBuild>;
+  /**
    * R01 (schema v28): each datum axis as the exact build resolved it at its
    * own history position. A datum axis that failed or is suppressed is absent.
    */
@@ -3653,6 +4089,21 @@ export interface ProjectDocument {
    * project has no assembly.
    */
   assembly?: AssemblySet;
+  /**
+   * L09 print clearance (schema v60): the radial gap a printed part leaves
+   * to its mate, a length in document units (a number, or an expression that
+   * may use units and parameters). Read by every thread that leaves its own
+   * `clearance` unset (pipe threads excepted: they mate standard fittings)
+   * and every gear that leaves its `backlash` unset, as each flank offset by
+   * this much. Absent means none: those threads and gears build exactly as
+   * before. See `documentPrintClearance` in document-core.
+   */
+  printClearance?: ParamValue;
+  /**
+   * F06 (schema v72): the variant table, its rows and the active row. See
+   * `configurations.ts`. Absent means the document has no configurations.
+   */
+  configurations?: ConfigurationSet;
 }
 
 export interface SerializedCommand<TPayload = unknown> {
@@ -3767,6 +4218,16 @@ export interface ProjectSummary {
    */
   documentVersion?: number;
   /**
+   * Bytes of the saved document at `documentVersion`, measured as
+   * {@link persistedDocumentBytes} of the canonical document (without its
+   * derived projection) — the size Project properties calls "Document size"
+   * and the account's per-project limit measures. Imported sources stored
+   * beside the document are not included. Absent when the store has not
+   * measured this version: a device projection written before sizes were
+   * recorded, or an encrypted project the account holds only as ciphertext.
+   */
+  documentBytes?: number;
+  /**
    * Absent when the store holding this summary has no shelf state for the
    * project — an older row, or a device that has never organised it. Read it
    * through {@link projectOrganization} so a missing record reads as defaults
@@ -3824,6 +4285,13 @@ export const ENCRYPTED_PROJECTS_REQUIRED_CODE = 'ENCRYPTED_PROJECTS_REQUIRED';
  */
 export const E2EE_DEFAULT_ON_CODE = 'E2EE_DEFAULT_ON';
 export const E2EE_PLAINTEXT_FROZEN_CODE = 'E2EE_PLAINTEXT_FROZEN';
+/**
+ * An account whose library is encrypted (ADR-024 amendment 2026-11-14) keeps
+ * its pins, manual order and archive in its sealed library record. The
+ * Worker stores the defaults for it and refuses any other value with 409 and
+ * this code; trash and restore stay readable.
+ */
+export const PROJECT_SHELF_STATE_SEALED_CODE = 'PROJECT_SHELF_STATE_SEALED';
 /** The assistant is off on encrypted projects until per-project consent (D7). */
 export const ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE =
   'ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE';
@@ -4174,14 +4642,21 @@ export const MAX_ARTIFACT_UPLOAD_BYTES =
 /** Unfinished upload sessions one account may hold at once. */
 export const MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS = 16;
 /**
- * Ceiling on finalized artifact bytes per account, attributed to the project
- * owner. Uploads are otherwise unmetered R2 writes on an open-signup beta —
- * without an account ceiling, a scripted client can park unbounded storage on
- * the operator's bucket (32 MiB × 64 parts per artifact, no artifact count
- * limit). The Free allowance, 1 GiB, covers real use (the largest supported
- * STEP import is 128 MB) while bounding abuse; Premium raises it.
+ * The Free account's one storage allowance: everything the account stores,
+ * attributed to the project owner — documents, revisions and source assets
+ * (plaintext or encrypted) together with imports, exports and encrypted
+ * content blobs, in one bucket (migration 0049). Uploads and saves are
+ * otherwise unmetered writes on an open-signup beta; 100 MiB bounds abuse
+ * while covering typical projects. It is smaller than the largest supported
+ * STEP import (128 MiB), so a Free account cannot store an import that big.
+ * Premium raises it.
  */
-export const MAX_ACCOUNT_ARTIFACT_BYTES = 1024 * 1024 * 1024;
+export const MAX_ACCOUNT_STORAGE_BYTES = 100 * 1024 * 1024;
+/**
+ * @deprecated One allowance covers artifacts and projects alike; use
+ * {@link MAX_ACCOUNT_STORAGE_BYTES}. Kept equal to it.
+ */
+export const MAX_ACCOUNT_ARTIFACT_BYTES = MAX_ACCOUNT_STORAGE_BYTES;
 /**
  * Explicit ceiling on the unfinished portion of account artifact usage. It
  * matches the 2 GiB that migration 0017's reservation triggers hard-code, so
@@ -4264,7 +4739,21 @@ export type AccountTier = 'free' | 'premium';
 export interface AccountEntitlements {
   tier: AccountTier;
   projectLimit: number;
+  /**
+   * The account's one storage allowance, for everything it stores: projects,
+   * save states, imports, exports and encrypted files. Older servers omit it;
+   * read {@link projectStorageLimitBytes} then.
+   */
+  storageLimitBytes?: number;
+  /**
+   * @deprecated Equal to `storageLimitBytes`; kept for clients that predate
+   * the single allowance.
+   */
   projectStorageLimitBytes: number;
+  /**
+   * @deprecated Equal to `storageLimitBytes`; kept for clients that predate
+   * the single allowance.
+   */
   artifactLimitBytes: number;
   ai: {
     requestLimit: number;
@@ -4393,6 +4882,11 @@ export interface E2eeProjectPreferenceRecord {
 
 export interface E2eeProjectPreferenceResponse {
   preference: E2eeProjectPreferenceRecord | null;
+  /**
+   * Whether the account's library must be encrypted: opted in, or owning or
+   * a member of an encrypted project. Absent from an older Worker.
+   */
+  libraryEncrypted?: boolean;
 }
 
 export interface E2eeSaveProjectPreferenceRequest {
@@ -4495,6 +4989,8 @@ export interface AuthConfigResponse {
   mode: 'development' | 'email-code' | 'unconfigured';
   emailCodeEnabled: boolean;
   turnstileSiteKey?: string;
+  /** Only returned to a browser holding the temporary beta QA capability. */
+  qaTurnstileBypassEmail?: string;
   /** Present only on the native readiness endpoint. Older Workers fail closed. */
   desktopAuthEnabled?: boolean;
 }
@@ -4551,6 +5047,103 @@ export const SETTINGS_ORBIT_MODES: readonly SettingsOrbitMode[] = [
  * a device's meaning for hardware the classification reads wrongly.
  */
 export type SettingsPointerNavigation = 'auto' | 'mouse' | 'trackpad';
+
+/** A 3D mouse cap axis, named for what it does to the view. */
+export type SpaceMouseAxisName =
+  'pan-x' | 'pan-y' | 'zoom' | 'tilt' | 'spin' | 'roll';
+
+export const SPACE_MOUSE_AXIS_NAMES: readonly SpaceMouseAxisName[] = [
+  'pan-x',
+  'pan-y',
+  'zoom',
+  'tilt',
+  'spin',
+  'roll'
+];
+
+/** What a 3D mouse turns the view about. */
+export type SpaceMouseRotateAbout = 'model' | 'orbit-point';
+
+/** How a 3Dconnexion SpaceMouse moves the view. */
+export interface SpaceMouseSettings {
+  /** Pan and zoom speed, as a whole percentage of the default. */
+  panZoomSpeed: number;
+  /** Tilt, spin and roll speed, as a whole percentage of the default. */
+  rotationSpeed: number;
+  /** Cap travel ignored around rest, as a whole percentage of full travel. */
+  deadZone: number;
+  /** Only the axis pushed hardest acts, so a push never also turns. */
+  dominantAxis: boolean;
+  /** The selection's or the model's centre, or the orbit point. */
+  rotateAbout: SpaceMouseRotateAbout;
+  /** Whether rolling the cap rolls the view. */
+  roll: boolean;
+  /** Axes that move the view the other way. */
+  reversed: SpaceMouseAxisName[];
+}
+
+export const SPACE_MOUSE_SPEED_BOUNDS = {
+  min: 10,
+  max: 400,
+  default: 100
+} as const;
+
+export const SPACE_MOUSE_DEAD_ZONE_BOUNDS = {
+  min: 0,
+  max: 40,
+  default: 8
+} as const;
+
+export const DEFAULT_SPACE_MOUSE_SETTINGS: SpaceMouseSettings = {
+  panZoomSpeed: SPACE_MOUSE_SPEED_BOUNDS.default,
+  rotationSpeed: SPACE_MOUSE_SPEED_BOUNDS.default,
+  deadZone: SPACE_MOUSE_DEAD_ZONE_BOUNDS.default,
+  dominantAxis: false,
+  rotateAbout: 'model',
+  roll: true,
+  reversed: []
+};
+
+/**
+ * Stored 3D mouse settings read leniently, field by field: anything missing
+ * or malformed (an older client, a newer one's unknown axis) falls back to
+ * its default, and numbers are clamped and rounded to their bounds.
+ */
+export function normalizeSpaceMouseSettings(
+  value: unknown
+): SpaceMouseSettings {
+  const record =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  const bounded = (
+    candidate: unknown,
+    bounds: { min: number; max: number; default: number }
+  ) =>
+    typeof candidate === 'number' && Number.isFinite(candidate)
+      ? Math.round(Math.min(bounds.max, Math.max(bounds.min, candidate)))
+      : bounds.default;
+  const defaults = DEFAULT_SPACE_MOUSE_SETTINGS;
+  return {
+    panZoomSpeed: bounded(record.panZoomSpeed, SPACE_MOUSE_SPEED_BOUNDS),
+    rotationSpeed: bounded(record.rotationSpeed, SPACE_MOUSE_SPEED_BOUNDS),
+    deadZone: bounded(record.deadZone, SPACE_MOUSE_DEAD_ZONE_BOUNDS),
+    dominantAxis:
+      typeof record.dominantAxis === 'boolean'
+        ? record.dominantAxis
+        : defaults.dominantAxis,
+    rotateAbout:
+      record.rotateAbout === 'model' || record.rotateAbout === 'orbit-point'
+        ? record.rotateAbout
+        : defaults.rotateAbout,
+    roll: typeof record.roll === 'boolean' ? record.roll : defaults.roll,
+    reversed: Array.isArray(record.reversed)
+      ? SPACE_MOUSE_AXIS_NAMES.filter((axis) =>
+          (record.reversed as unknown[]).includes(axis)
+        )
+      : []
+  };
+}
 /**
  * Which sketch relations draw a glyph on their geometry: all of them, only
  * those that mention the selected entity, or none. Presentation only.
@@ -4650,6 +5243,8 @@ export interface AppSettings {
      * fingers navigate.
      */
     pencilDrawsOnly: boolean;
+    /** How a 3Dconnexion SpaceMouse moves the view. */
+    spaceMouse: SpaceMouseSettings;
   };
   sketching: {
     /** Sketch-plane grid visibility is independent from grid snapping. */
@@ -4660,6 +5255,14 @@ export interface AppSettings {
     geometrySnapEnabled: boolean;
     /** Offer temporary horizontal/vertical relations while drawing. */
     inferenceEnabled: boolean;
+    /**
+     * S08: keep what a drawn entity's placement satisfies as relations
+     * (horizontal/vertical, perpendicular, tangent, coincident). Off keeps
+     * only connected endpoints and midpoints.
+     */
+    autoConstrain: boolean;
+    /** S08: name the engaged snap in text beside its glyph. */
+    snapHints: boolean;
     linearSnap: number;
     angleSnap: number;
     /** Screen-space radius used for sketch snap candidates. */
@@ -4807,13 +5410,16 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     fieldOfView: VIEWPORT_FIELD_OF_VIEW_BOUNDS.default,
     xrayOpacity: XRAY_OPACITY_BOUNDS.default,
     touchHistoryGestures: true,
-    pencilDrawsOnly: true
+    pencilDrawsOnly: true,
+    spaceMouse: DEFAULT_SPACE_MOUSE_SETTINGS
   },
   sketching: {
     gridVisible: true,
     snapEnabled: true,
     geometrySnapEnabled: true,
     inferenceEnabled: true,
+    autoConstrain: false,
+    snapHints: true,
     linearSnap: 1,
     angleSnap: 15,
     snapTolerancePx: 10,
@@ -4877,11 +5483,106 @@ export interface AppSettingsResponse {
   synced: boolean;
   credential: AssistantCredentialMetadata;
   effectiveAssistant: EffectiveAssistantSettings;
+  /**
+   * The account's whole settings sealed under its account key (base64url,
+   * ADR-024 amendment 2026-11-14), where its library is encrypted. `settings`
+   * then holds only what the Worker acts on (`accountServerSettings`); the
+   * browser opens this record for the rest. Absent from an older Worker and
+   * for an account that stores its settings readable.
+   */
+  sealedSettings?: string | null;
 }
 
 export interface UpdateAppSettingsRequest {
   settings: AppSettings;
   expectedRevision: number;
+  /**
+   * The whole settings sealed under the account key. Sent with `settings`
+   * reduced to `accountServerSettings`; omitted, the stored record is kept,
+   * as a device whose keys are locked does.
+   */
+  sealedSettings?: string;
+}
+
+/** Characters of a base64url sealed settings record the Worker stores. */
+export const MAX_SEALED_SETTINGS_CHARS = 64 * 1024;
+
+/**
+ * A settings write that carries more than `accountServerSettings` for an
+ * account whose library is encrypted (ADR-024 amendment 2026-11-14).
+ */
+export const SETTINGS_ENCRYPTION_REQUIRED_CODE = 'SETTINGS_ENCRYPTION_REQUIRED';
+
+/**
+ * A write without a sealed record, from a device whose keys are locked,
+ * while the account's settings are still stored readable from before its
+ * library was encrypted: taking it would discard them before any device
+ * sealed them (ADR-024 amendment 2026-11-14).
+ */
+export const SETTINGS_SEAL_REQUIRED_CODE = 'SETTINGS_SEAL_REQUIRED';
+
+/**
+ * What the Worker reads from an account's settings to act for it: the
+ * sharing switch, which authorizes invitations and live connections, and the
+ * assistant's route (whether it is on, whose credential, which provider,
+ * endpoint, model and limits), which it uses to call the provider. Every
+ * other field, the user's custom assistant instructions included, is
+ * reset to its default: an account whose library is encrypted keeps those
+ * in its sealed settings record only (ADR-024 amendment 2026-11-14).
+ */
+export function accountServerSettings(settings: AppSettings): AppSettings {
+  const server = structuredClone(DEFAULT_APP_SETTINGS);
+  server.collaboration = structuredClone(settings.collaboration);
+  server.assistant = {
+    ...structuredClone(settings.assistant),
+    customInstructions: DEFAULT_APP_SETTINGS.assistant.customInstructions
+  };
+  return server;
+}
+
+/** `sealed` with the fields the Worker acts on taken from `server`. */
+export function withAccountServerSettings(
+  sealed: AppSettings,
+  server: AppSettings
+): AppSettings {
+  const merged = structuredClone(sealed);
+  merged.collaboration = structuredClone(server.collaboration);
+  merged.assistant = {
+    ...structuredClone(server.assistant),
+    customInstructions: sealed.assistant.customInstructions
+  };
+  return merged;
+}
+
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (
+    typeof left !== 'object' ||
+    typeof right !== 'object' ||
+    left === null ||
+    right === null ||
+    Array.isArray(left) !== Array.isArray(right)
+  ) {
+    return false;
+  }
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(right, key) &&
+        sameJsonValue(
+          (left as Record<string, unknown>)[key],
+          (right as Record<string, unknown>)[key]
+        )
+    )
+  );
+}
+
+/** Whether `settings` carries nothing beyond `accountServerSettings`. */
+export function holdsOnlyAccountServerSettings(settings: AppSettings): boolean {
+  return sameJsonValue(settings, accountServerSettings(settings));
 }
 
 export interface SaveAssistantCredentialRequest {
@@ -5185,10 +5886,10 @@ export const MAX_CLOUD_PROJECT_WRITE_BYTES =
 /** Account limits include projects in the recycle bin until hard deletion. */
 export const MAX_ACCOUNT_PROJECTS = 100;
 /**
- * Free project storage per owner: stored documents, revisions and
- * externalized source assets, plaintext or encrypted. Premium raises it.
+ * @deprecated One allowance covers projects and artifacts alike; use
+ * {@link MAX_ACCOUNT_STORAGE_BYTES}. Kept equal to it.
  */
-export const MAX_ACCOUNT_PROJECT_STORAGE_BYTES = 1024 * 1024 * 1024;
+export const MAX_ACCOUNT_PROJECT_STORAGE_BYTES = MAX_ACCOUNT_STORAGE_BYTES;
 
 /** Serialized size of `document`, measured the way the store measures it. */
 export function persistedDocumentBytes(document: ProjectDocument): number {
@@ -5219,26 +5920,49 @@ export const MAX_LOCAL_CHECKPOINT_DOCUMENTS = 25;
 /** What an account is currently storing, for the settings panel. */
 export interface AccountStorageUsage {
   entitlements?: AccountEntitlements;
+  /**
+   * Projects the account owns outside the recycle bin (archived included),
+   * as the library lists them.
+   */
   projectCount: number;
+  /**
+   * Projects in the recycle bin, kept until they are deleted for good. Their
+   * bytes still count toward `storageBytes`. Older servers omit it.
+   */
+  trashedProjectCount?: number;
   /** Bytes held by the current copy of each project. */
   documentBytes: number;
   /** Bytes held by saved revisions, across every project. */
   revisionBytes: number;
   /**
-   * How many revisions are retained in total. Reported separately from the
-   * bytes because retention bounds the count, not the size — later revisions of
-   * a project are larger than earlier ones, so a flat byte total cannot show
-   * that pruning is working.
+   * How many named save states are retained in total. Reported separately
+   * from the bytes because retention bounds the count, not the size — later
+   * revisions of a project are larger than earlier ones, so a flat byte total
+   * cannot show that pruning is working.
    */
   revisionCount: number;
   /**
-   * Project storage as the account's quota measures it, against
-   * `entitlements.projectStorageLimitBytes`: inline documents and revisions,
-   * stored (compressed) R2 objects and source assets, and retained encrypted
-   * envelopes. Unlike `documentBytes + revisionBytes` (logical sizes, for the
-   * erasure preview), this is what a save is refused against.
+   * Project storage as the account's quota measures it: inline documents and
+   * revisions, stored (compressed) R2 objects and source assets, and retained
+   * encrypted envelopes. Unlike `documentBytes + revisionBytes` (logical
+   * sizes, for the erasure preview), this is the project share of
+   * `storageBytes`.
    */
   projectStorageBytes: number;
+  /**
+   * Everything the account stores, against `storageLimitBytes`, as the quota
+   * counts it: project storage (`projectStorageBytes`), finalized files
+   * (`artifactBytes`) and uploads in flight (`artifactReservedBytes`).
+   * Older servers omit it.
+   */
+  storageBytes?: number;
+  /**
+   * Bytes reserved by uploads still in flight: they hold their room until
+   * they finish or are abandoned. Older servers omit it.
+   */
+  artifactReservedBytes?: number;
+  /** The account's one storage allowance. Older servers omit it. */
+  storageLimitBytes?: number;
   /** The per-document ceiling, so the client can name it without hardcoding. */
   documentLimitBytes: number;
   maxRevisionsPerProject: number;
@@ -5246,7 +5970,10 @@ export interface AccountStorageUsage {
   artifactBytes: number;
   /** How many finalized artifacts the account's projects hold. */
   artifactCount: number;
-  /** The account-wide artifact ceiling, for the same no-hardcoding reason. */
+  /**
+   * @deprecated Equal to `storageLimitBytes`: files and projects share one
+   * allowance. Kept for clients that predate it.
+   */
   artifactLimitBytes: number;
 }
 
@@ -5394,6 +6121,8 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   hole: '#fb923c',
   gear: '#c084fc',
   thread: '#84cc16',
+  'sheet-metal': '#94a3b8',
+  'standard-part': '#c2b280',
   'direct-edit': '#2dd4bf',
   'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff',
@@ -5402,7 +6131,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
 };
 
 export const featureColor = (kind: FeatureKind): string =>
-  FEATURE_COLORS[kind] ?? FEATURE_COLORS.primitive;
+  ownEntry(FEATURE_COLORS, kind) ?? FEATURE_COLORS.primitive;
 
 /**
  * The colour a body's own metadata asks for, or null when it asks for none:
@@ -5475,6 +6204,18 @@ export const UNIT_TO_MM: Record<UnitSystem, number> = {
   m: 1000,
   inch: 25.4
 };
+
+/**
+ * Millimetres per `units`. Anything but a unit system is refused rather than
+ * read as `UNIT_TO_MM[units]`, which turns an unknown value into NaN geometry
+ * and an inherited name into a prototype member.
+ */
+export function millimetresPerUnit(units: UnitSystem): number {
+  const millimetres = ownEntry(UNIT_TO_MM, units);
+  if (millimetres === undefined)
+    throw new RangeError(`Unknown units "${String(units)}".`);
+  return millimetres;
+}
 
 /** One ISO 261 coarse-pitch metric thread size, in millimetres. */
 export interface IsoMetricThreadSize {
@@ -5562,3 +6303,7 @@ export function sanitizeFileName(fileName: string): string {
 export * from './legacy-project-storage';
 export * from './import-limits';
 export * from './mesh-buffer-equality';
+export * from './pipe-threads';
+export * from './thread-span';
+export * from './feature-patterns';
+export * from './sheet-metal';

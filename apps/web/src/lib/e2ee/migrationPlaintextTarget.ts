@@ -20,6 +20,10 @@ import {
   uploadArtifactBody,
   type ArtifactUploadTransport
 } from '../artifactUpload';
+import {
+  projectRequest,
+  type ProjectRequestContext
+} from '../projectWriteGate';
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -74,12 +78,14 @@ async function refusal(response: Response): Promise<ApiError> {
 export function createMigrationPlaintextTarget(
   leased: Fetch
 ): MigrationPlaintextTarget {
+  /** `context`: an upload-session request's project, as its uploader named it. */
   const send = async (
     path: string,
     method: string,
-    body?: unknown
+    body?: unknown,
+    context?: ProjectRequestContext
   ): Promise<Response> => {
-    const response = await leased(path, {
+    const init: RequestInit = {
       method,
       credentials: 'same-origin',
       ...(body === undefined
@@ -88,56 +94,79 @@ export function createMigrationPlaintextTarget(
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify(body)
           })
-    });
+    };
+    const response = await leased(
+      path,
+      context ? projectRequest(context, init) : init
+    );
     if (!response.ok) throw await refusal(response);
     return response;
   };
-  const json = async <T>(path: string, method: string, body?: unknown) =>
-    (await (await send(path, method, body)).json()) as T;
+  const json = async <T>(
+    path: string,
+    method: string,
+    body?: unknown,
+    context?: ProjectRequestContext
+  ) => (await (await send(path, method, body, context)).json()) as T;
   const project = (projectId: string) =>
     `/api/projects/${encodeURIComponent(projectId)}`;
   const uploads: ArtifactUploadTransport = {
-    async uploadArtifact(uploadUrl, body) {
-      const response = await leased(uploadUrl, {
-        method: 'PUT',
-        credentials: 'same-origin',
-        headers: { 'content-type': body.type || 'application/octet-stream' },
-        body
-      });
+    async uploadArtifact(uploadUrl, body, context) {
+      const response = await leased(
+        uploadUrl,
+        projectRequest(context, {
+          method: 'PUT',
+          credentials: 'same-origin',
+          headers: { 'content-type': body.type || 'application/octet-stream' },
+          body
+        })
+      );
       if (!response.ok) throw await refusal(response);
     },
-    createMultipartUpload: (uploadSessionId) =>
+    createMultipartUpload: (uploadSessionId, context) =>
       json<CreateMultipartUploadResponse>(
         `/api/uploads/${encodeURIComponent(uploadSessionId)}/multipart`,
-        'POST'
+        'POST',
+        undefined,
+        context
       ),
-    async uploadArtifactPart(uploadSessionId, uploadId, partNumber, body) {
+    async uploadArtifactPart(
+      uploadSessionId,
+      uploadId,
+      partNumber,
+      body,
+      context
+    ) {
       const response = await leased(
         `/api/uploads/${encodeURIComponent(uploadSessionId)}/parts/${partNumber}?uploadId=${encodeURIComponent(uploadId)}`,
-        {
+        projectRequest(context, {
           method: 'PUT',
           credentials: 'same-origin',
           headers: { 'content-type': 'application/octet-stream' },
           body
-        }
+        })
       );
       if (!response.ok) throw await refusal(response);
       return (await response.json()) as UploadedArtifactPart;
     },
     async completeMultipartUpload(
       uploadSessionId,
-      payload: CompleteMultipartUploadRequest
+      payload: CompleteMultipartUploadRequest,
+      context
     ) {
       await send(
         `/api/uploads/${encodeURIComponent(uploadSessionId)}/multipart/complete`,
         'POST',
-        payload
+        payload,
+        context
       );
     },
-    async abortMultipartUpload(uploadSessionId, uploadId) {
+    async abortMultipartUpload(uploadSessionId, uploadId, context) {
       await send(
         `/api/uploads/${encodeURIComponent(uploadSessionId)}/multipart?uploadId=${encodeURIComponent(uploadId)}`,
-        'DELETE'
+        'DELETE',
+        undefined,
+        context
       );
     }
   };
@@ -180,7 +209,12 @@ export function createMigrationPlaintextTarget(
       }
       await uploadArtifactBody(
         uploads,
-        { uploadSessionId: session.uploadSessionId, uploadUrl: session.uploadUrl },
+        {
+          projectId,
+          payload: 'plaintext',
+          uploadSessionId: session.uploadSessionId,
+          uploadUrl: session.uploadUrl
+        },
         input.body
       );
       const finalized = await json<{ artifactId: string | null }>(

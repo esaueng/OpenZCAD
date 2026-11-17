@@ -20,6 +20,7 @@ import {
   ArrowDown,
   ArrowUpFromDot,
   Axis3d,
+  Bolt,
   Box,
   BrushCleaning,
   CirclePause,
@@ -51,7 +52,8 @@ import {
 import {
   isFeatureManuallySuppressed,
   isFeatureRollbackSuppressed,
-  isFeatureSuppressed
+  isFeatureSuppressed,
+  ownEntry
 } from '@openzcad/shared';
 import type {
   BodyRepresentation,
@@ -73,6 +75,7 @@ import {
   draftGlyph,
   extrudeGlyph,
   gridPatternGlyph,
+  pointPatternGlyph,
   helicalSweepGlyph,
   linearPatternGlyph,
   loftGlyph,
@@ -83,7 +86,8 @@ import {
   splitGlyph,
   sweepGlyph,
   thickenGlyph,
-  threadGlyph
+  threadGlyph,
+  bendGlyph
 } from '../lib/toolIcons';
 
 // Row icons are constant elements: a commit re-renders every row of a long
@@ -112,7 +116,10 @@ const KIND_ICONS: Partial<Record<FeatureNode['featureKind'], ReactNode>> = {
   split: splitGlyph,
   hole: <Drill size={14} aria-hidden="true" />,
   gear: <Cog size={14} aria-hidden="true" />,
+  'standard-part': <Bolt size={14} aria-hidden="true" />,
   thread: threadGlyph,
+  // A sheet-metal feature is its bends: History reopens Bend on it.
+  'sheet-metal': bendGlyph,
   shell: shellGlyph,
   'solid-offset': solidOffsetGlyph,
   draft: draftGlyph,
@@ -130,7 +137,8 @@ const BOOLEAN_ICONS: Record<string, ReactNode> = {
 const PATTERN_ICONS: Record<string, ReactNode> = {
   linear: linearPatternGlyph,
   circular: circularPatternGlyph,
-  grid: gridPatternGlyph
+  grid: gridPatternGlyph,
+  points: pointPatternGlyph
 };
 const OFFSET_FACE_ICON = <ArrowUpFromDot size={14} aria-hidden="true" />;
 const RESIZE_DIAMETER_ICON = <Diameter size={14} aria-hidden="true" />;
@@ -166,15 +174,19 @@ export function featureIcon(feature: FeatureNode): ReactNode {
   const data = feature.data;
   switch (data.featureKind) {
     case 'primitive':
-      return PRIMITIVE_ICONS[data.primitiveKind] ?? OTHER_FEATURE_ICON;
+      return (
+        ownEntry(PRIMITIVE_ICONS, data.primitiveKind) ?? OTHER_FEATURE_ICON
+      );
     case 'boolean':
-      return BOOLEAN_ICONS[data.operation] ?? OTHER_FEATURE_ICON;
+      return ownEntry(BOOLEAN_ICONS, data.operation) ?? OTHER_FEATURE_ICON;
     case 'pattern':
-      return PATTERN_ICONS[data.patternKind] ?? OTHER_FEATURE_ICON;
+      return ownEntry(PATTERN_ICONS, data.patternKind) ?? OTHER_FEATURE_ICON;
     case 'direct-edit':
-      return DIRECT_EDIT_ICONS[data.operation?.kind] ?? OTHER_FEATURE_ICON;
+      return (
+        ownEntry(DIRECT_EDIT_ICONS, data.operation?.kind) ?? OTHER_FEATURE_ICON
+      );
     default:
-      return KIND_ICONS[feature.featureKind] ?? OTHER_FEATURE_ICON;
+      return ownEntry(KIND_ICONS, feature.featureKind) ?? OTHER_FEATURE_ICON;
   }
 }
 
@@ -284,6 +296,11 @@ export interface HistoryTimelineProps {
    * selects alone.
    */
   onDeleteFeatures?(featureIds: readonly FeatureId[]): void;
+  /**
+   * Opens a sketch step for editing in the viewport. A double-click on a
+   * sketch row calls it; without it a double-click only selects.
+   */
+  onEditSketch?(feature: FeatureNode): void;
 }
 
 export interface HistoryRevealRequest {
@@ -417,6 +434,7 @@ interface HistoryRowContext {
   onFeatureContextMenu: HistoryTimelineProps['onFeatureContextMenu'];
   onReorderFeature: HistoryTimelineProps['onReorderFeature'];
   onRenameFeature: HistoryTimelineProps['onRenameFeature'];
+  onEditSketch: HistoryTimelineProps['onEditSketch'];
   onToggleFeatureSuppression: HistoryTimelineProps['onToggleFeatureSuppression'];
   onToggleSketchVisibility: HistoryTimelineProps['onToggleSketchVisibility'];
   onToggleBodyVisibility: HistoryTimelineProps['onToggleBodyVisibility'];
@@ -751,6 +769,18 @@ const HistoryRow = memo(function HistoryRow({
               event.preventDefault();
           }}
           onClick={(event) => context.current!.activateRow(feature, event)}
+          // A sketch opens for editing on double-click, as in the Objects
+          // panel; the first click of the pair already selected the row.
+          onDoubleClick={(event) => {
+            if (
+              feature.data.featureKind !== 'sketch' ||
+              event.shiftKey ||
+              event.metaKey ||
+              event.ctrlKey
+            )
+              return;
+            context.current!.onEditSketch?.(context.current!.latest(feature));
+          }}
           // Every row used to announce the same generic kind label, so
           // a history read aloud was a list of identical items. The
           // feature's own name comes first, as on screen.
@@ -980,7 +1010,8 @@ export function HistoryTimeline({
   onReorderFeature,
   reorderBusy = false,
   onRenameFeature,
-  onDeleteFeatures
+  onDeleteFeatures,
+  onEditSketch
 }: HistoryTimelineProps) {
   const [dragFeatureId, setDragFeatureId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<FeatureId | null>(null);
@@ -1727,6 +1758,7 @@ export function HistoryTimeline({
     onFeatureContextMenu,
     onReorderFeature,
     onRenameFeature,
+    onEditSketch,
     onToggleFeatureSuppression,
     onToggleSketchVisibility,
     onToggleBodyVisibility

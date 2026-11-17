@@ -55,6 +55,8 @@ export const CAD_OPERATIONS = [
   'feature.datum-axis',
   'feature.hole',
   'feature.gear',
+  'feature.sheet-metal',
+  'feature.standard-part',
   'feature.thread',
   'feature.shell',
   'feature.solid-offset',
@@ -107,7 +109,8 @@ export const CAD_OPERATIONS = [
   'assembly.study.delete',
   'assembly.coupling.add',
   'assembly.coupling.update',
-  'assembly.coupling.delete'
+  'assembly.coupling.delete',
+  'assembly.explode.set'
 ] as const;
 /**
  * `kernel_refused`: one aggregate observation per new kernel refusal, opt-in
@@ -157,6 +160,8 @@ export const REFUSAL_OPERATIONS = [
   'hole',
   'gear',
   'thread',
+  'sheet-metal',
+  'standard-part',
   'direct-edit',
   'imported-step',
   'imported-mesh',
@@ -174,6 +179,7 @@ export const REFUSAL_FAMILIES = [
   'blend',
   'gear',
   'thread',
+  'sheet-metal',
   'reference',
   'other',
   'none'

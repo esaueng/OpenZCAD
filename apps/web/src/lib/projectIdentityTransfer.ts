@@ -26,7 +26,9 @@ import {
   sourceUploadMessage
 } from './accountImportSources';
 import { listLocalOnlyImportSources } from './importArchival';
-import { ApiError, api } from './api';
+import { ApiError, api, carryEncryptionRequirement } from './api';
+import { withSavedVersion } from './projectShelf';
+
 import { archiveArtifact as archiveArtifactBody } from './archiveArtifact';
 import {
   conflictFromDocuments,
@@ -147,11 +149,16 @@ export function retainPreviousAccountProject(
   );
 }
 
-/** Moves the same local model and companion records in one durable transaction. */
+/**
+ * Moves the same local model and companion records in one durable
+ * transaction. `beforeCommit` runs synchronously after the transaction's
+ * last read, with every write queued and none committed; a throw aborts
+ * the whole move.
+ */
 export function rekeyLocalProject(
   source: ProjectDocument,
   targetProjectId: string,
-  options: { retainSource?: boolean } = {}
+  options: { retainSource?: boolean; beforeCommit?: () => void } = {}
 ): Promise<ProjectDocument> {
   if (source.projectId === targetProjectId) return Promise.resolve(source);
   const singleStores = [
@@ -346,6 +353,7 @@ export function rekeyLocalProject(
         store(ALIAS_STORE_NAME).put({ projectId: sourceId, targetProjectId });
       }
       store(ACCOUNT_IDENTITY_STORE_NAME).put({ projectId: targetProjectId });
+      options.beforeCommit?.();
       return durable;
     }
   );
@@ -386,12 +394,25 @@ async function transferAdoptedProjectIdentity(
         local,
         app.localUserId,
         remote.ownerUserId
-      )
+      ),
+      // Inside the transaction, after its awaits: another tab can reset
+      // the account id while the move runs, and content that must stay
+      // encrypted is never committed under an id this device no longer
+      // holds durably. A throw aborts the move, so nothing lands there.
+      beforeCommit: () =>
+        carryEncryptionRequirement(sourceId, remote.projectId, {
+          account: true
+        })
     }
   );
   // The transaction's awaits may overlap another edit in this tab. Transfer
   // the live manager after commit so those edits retain their exact history.
   const latestManager = app.manager();
+  // Checked again here, synchronously before the account id is published:
+  // while the rekey ran, content that must stay encrypted can have landed
+  // under the device id (a project insert records its requirement there).
+  // Throws, publishing nothing, when it cannot be saved.
+  carryEncryptionRequirement(sourceId, remote.projectId, { account: true });
   if (latestManager?.document.projectId === sourceId) {
     const moved = latestTransferredProjectDocument(
       transferred,
@@ -493,10 +514,9 @@ export async function restoreAccountProjectFromDevice(
   return {
     document: restored,
     project: {
-      ...summary,
+      ...withSavedVersion(summary, restored),
       name: restored.name,
-      updatedAt: saved.updatedAt,
-      documentVersion: saved.version
+      updatedAt: saved.updatedAt
     }
   };
 }
@@ -569,10 +589,11 @@ async function finishAccountSourceSave(
     });
     saved = { ...prepared.document, version: stored.version };
   }
-  await app.acceptAccountDocument(saved, localForAcceptance, {
-    ...summary,
-    documentVersion: saved.version
-  });
+  await app.acceptAccountDocument(
+    saved,
+    localForAcceptance,
+    withSavedVersion(summary, saved)
+  );
   return sourceUploadMessage(prepared.result) ?? undefined;
 }
 
@@ -588,6 +609,11 @@ export async function adoptLocalProject(
   try {
     const response = await api.adoptProject(local, app.accountUserId, {
       sourceArtifactIds: importArtifactIds(local)
+    });
+    // The device project's content moves under the account's id: if it
+    // must stay encrypted, so must that project, before anything moves.
+    carryEncryptionRequirement(projectId, response.document.projectId, {
+      account: true
     });
     const accountLocal = await transferAdoptedProjectIdentity(
       local,
@@ -615,6 +641,15 @@ export async function adoptLocalProject(
         typeof error.details?.projectId === 'string'
           ? error.details.projectId
           : projectId;
+      // The account names the project this one was adopted as: this
+      // device's content moves there. If it must stay encrypted, the
+      // account's project is pinned as encrypted first, before it is read,
+      // rekeyed, uploaded to or saved, whatever the account says of its
+      // format: it is read and written only through the encrypted routes,
+      // and the recovery never sends this content as plaintext.
+      carryEncryptionRequirement(projectId, accountProjectId, {
+        account: true
+      });
       const remote = await api.loadProject(accountProjectId);
       let accountLocal: ProjectDocument;
       try {

@@ -409,7 +409,22 @@ describe('resize-blend under lineage', { timeout: 120_000 }, () => {
       )
     ).toBe(false);
 
-    const pair = resizedTopology?.opposingPlanarFacePairs?.find(
+    // A plain rebuild whose last feature is a radius edit defers the planar
+    // distance proofs (#1276): proving unrelated planar moves is capability
+    // discovery, not acceptance of the radius edit. The product reads them
+    // through an explicit analysis request, as the assistant's Analyze does.
+    const analyzed = await adapter.syncDocument(
+      document,
+      undefined,
+      undefined,
+      { bodyId, faceHashes: [] }
+    );
+    expect(analyzed.warnings).toEqual([]);
+    const analyzedTopology = analyzed.bodyRepresentations[bodyId]!.topology;
+    expect(analyzedTopology?.faces.map((face) => face.hash)).toEqual(
+      resizedTopology?.faces.map((face) => face.hash)
+    );
+    const pair = analyzedTopology?.opposingPlanarFacePairs?.find(
       (candidate) => Math.abs(candidate.normal.x) > 1 - 1e-6
     );
     expect(pair).toBeDefined();

@@ -1,7 +1,8 @@
 # Assemblies: components, joints, actuation and animation
 
 Owner rows: [AS01](../../ROADMAP.md#as01), [AS02](../../ROADMAP.md#as02),
-[AS06](../../ROADMAP.md#as06), [AS07](../../ROADMAP.md#as07), with
+[AS03](../../ROADMAP.md#as03), [AS06](../../ROADMAP.md#as06),
+[AS07](../../ROADMAP.md#as07), with
 [AS08](../../ROADMAP.md#as08) and [AS09](../../ROADMAP.md#as09) following.
 ROADMAP.md owns status; this document owns the contract.
 
@@ -172,6 +173,45 @@ relates values, it never closes a kinematic loop.
 Commands: `assembly.coupling.add` (without an offset it holds the current
 pose), `assembly.coupling.update`, `assembly.coupling.delete`.
 
+### Exploded view (schema v61)
+
+`assembly.explode?: { offsets: Record<componentId, Vector3> }`: absent
+means no part is pulled out, so every older assembly reads unchanged. An
+offset is a world translation in the placements' length unit, applied after
+the component's solved pose (`T(offset) · pose`), so a part slides straight
+out along the drag however its joints turned it.
+
+- **Presentation only.** Offsets never enter the joint solve, couplings,
+  playback, the BOM or any rebuild. Showing the assembly exploded is a view
+  toggle (Assembled / Exploded in the sidebar), never saved; leaving
+  Assemble, the joint tool, Set up motion and Place gears return to the
+  assembled view because they pick frames and place parts on the assembled
+  pose. Joint glyphs are hidden while exploded.
+- **Edited by dragging.** While exploded, a drag on any part (grounded or
+  not) slides it along the world axis X, Y or Z whose on-screen direction
+  best matches the pointer's first travel, snapped to the document's length
+  step (Shift for a free value, Escape cancels). The chip reads the axis and
+  the travel ("X +25.0 mm"). Release commits `assembly.explode.set` with that
+  part's new offset: one drag, one undo step. Reset in the sidebar clears
+  every offset as one undo step.
+- **Stored canonically.** A zero offset is not stored, offsets are kept in
+  the components' display order, and deleting a component removes its
+  offset. Validation refuses an offset for a component that is not in the
+  assembly, a non-finite or out-of-range vector, and reserved record keys.
+- **Merges per part.** The offsets are a record keyed by component, so once
+  the view has an offset the room's three-way merge keeps two devices'
+  edits to different parts, and an offset made on one device merges with a
+  pose made on the other. Two different offsets for the same part, an
+  offset on a part the other device removed, and the first offsets two
+  devices make at once (there is no record in the base to merge into) are
+  conflicts the submitter resolves; nothing is chosen silently.
+- **Not in this slice.** Several named exploded views, step-by-step
+  explode playback in motion studies (not asked for here), exploded drawing
+  views and trails.
+
+Command: `assembly.explode.set` (`offsets` per component, null or zero puts
+a part back; `reset` clears every offset first).
+
 Commands, each one undo step: `assembly.components.add`,
 `assembly.component.update`, `assembly.component.delete`,
 `assembly.joint.add`, `assembly.joint.update`, `assembly.joint.delete`,
@@ -181,6 +221,41 @@ Commands, each one undo step: `assembly.components.add`,
 `assembly.coupling.delete`. A structural edit first writes
 every component's solved pose into its placement, so nothing jumps when the
 joint graph changes.
+
+### Interference (AS04, no schema change)
+
+Assemble's sidebar has an Interference section under Exploded view. Check
+runs an exact pairwise check of the assembled parts in the geometry worker:
+every unordered pair of components, each component's live body posed at its
+solved pose (the stored joint values; never an exploded offset, a drag or
+playback). The check is a read-only query and stores nothing, so it needs no
+schema version.
+
+It is M09's body clash query (`packages/kernel-adapter/src/exact-body-clash.ts`),
+run on posed copies; AS04 adds no second engine and no mesh test. Per solid
+pair: bounding boxes apart prove clearance; otherwise the kernel's exact
+intersection measures the shared volume, and where the kernel declines an
+intersection it cannot build (a pin in a clearance hole), its exact
+difference measures it instead as `volume(b) − volume(b − a)`. A volume above
+a floor scaled to the pair (diagonal³ × 1e-9) is interference; its witnesses
+are the volume, the box of the shared region and a point that the exact and
+robust classifiers both place strictly inside both parts. No shared volume is
+clearance, with the certified distance and closest points where the kernel
+certifies them (planar faces, sphere pairs) and contact at zero. When no
+boolean answers, an interior point still proves an (unmeasured) overlap;
+otherwise the pair is reported unknown with the kernel's refusal, never clear.
+A component whose body is gone is listed as having no geometry to check.
+
+The list leads with overlaps (largest first), then unknown pairs and
+contact; clear pairs are counted. Picking a pair picks both parts and shows
+its witness. A result is tied to the model version and poses it checked and
+says "Out of date" once either changes.
+
+M09's first slice is display-only and separate from this: with a section cut
+on, bodies whose display caps overlap inside the cut are drawn over in red,
+and the toolbox (or, where it is put away, the "Section view on" chip) names
+them and says the highlight is display evidence from the meshes on screen,
+not an exact clash check.
 
 ## Interaction
 
@@ -232,8 +307,10 @@ joint graph changes.
   after a body is reshaped is a follow-up (today the stored frame is kept).
 - Loops (AS09), couplings beyond gear pairs (a general ratio between any two
   joints with its own editor, screw couplings on one cylindrical joint) and
-  video export (AS08), interference during motion (AS04, after kernel clash
-  support), exploded views and BOM (AS03).
+  video export (AS08), interference swept through a joint's motion or a
+  motion study (the static pairwise check is AS04, above), and the STEP
+  hierarchy round-trip AS04 also names. The BOM and stored exploded offsets are AS03 (above); exploded
+  drawing views wait on D01/D02.
 - A coupling's ratio is fixed when the pair is placed: editing a gear's
   tooth count or moving a joint's frame afterwards does not update it. When
   a gear's teeth no longer give the stored ratio, the joint's details (and

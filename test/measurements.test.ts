@@ -346,6 +346,45 @@ describe('measurement workbench records', () => {
     expect(bounds?.result.components).toEqual({ x: 10, y: 20, z: 30 });
   });
 
+  it('reads a circular edge by its diameter, with the length along it as detail', () => {
+    // I50: the edge of a Ø6 hole recorded "Hole edge Ø6 — 18.85 mm", its
+    // circumference, and Ø/R changed nothing.
+    const body = measuredBody();
+    const rim = createSmartMeasurement(
+      body,
+      selection('edge', 'edge:circle', 13),
+      { x: 7, y: 4, z: 5 },
+      4,
+      'mm'
+    )!;
+    expect(rim.kind).toBe('diameter');
+    expect(rim.result.value).toBeCloseTo(8, 10);
+    expect(rim.result.secondary).toEqual({
+      label: 'Circumference',
+      value: Math.PI * 8,
+      dimension: 'length'
+    });
+    expect(formatMeasurement(rim, DISPLAY).value).toBe('Ø 8.00 mm');
+    expect(formatMeasurement(rim, DISPLAY).detail).toBe(
+      'Circumference 25.13 mm'
+    );
+    expect(
+      formatMeasurement(rim, { ...DISPLAY, radialDisplay: 'radius' }).value
+    ).toBe('R 4.00 mm');
+    // A quarter arc of the same circle: its arc length, not a circumference.
+    const arc = measuredBody();
+    arc.topology!.edges[2]!.length = Math.PI * 2;
+    const quarter = createSmartMeasurement(
+      arc,
+      selection('edge', 'edge:circle', 13),
+      { x: 7, y: 4, z: 5 },
+      4,
+      'mm'
+    )!;
+    expect(quarter.result.value).toBeCloseTo(8, 10);
+    expect(quarter.result.secondary?.label).toBe('Arc length');
+  });
+
   it('hands the viewport the measured face, not the model, to stand beside', () => {
     // The top face is two triangles at z = 30; the hole's eight triangles
     // reach down to the origin, so a box from the whole mesh would not do.

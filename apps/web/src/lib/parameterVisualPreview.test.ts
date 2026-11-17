@@ -237,6 +237,26 @@ describe('matrix parameter preview', () => {
     expect(controller.group.children).toHaveLength(0);
   });
 
+  it('leaves a grid with a skipped copy to the exact build (M02)', () => {
+    const { doc, compiled } = fixture();
+    const { document } = patternBody(doc, {
+      name: 'Grid',
+      targetBodyId: compiled.bodyId,
+      patternKind: 'grid',
+      axis: 'x',
+      axis2: 'y',
+      count: 3,
+      count2: 3,
+      spacing: 20,
+      spacing2: 20,
+      skippedInstances: ['1-1']
+    });
+    // A row of every copy would draw the one the user left out.
+    expect(
+      parameterVisualPreview(document, changeWidth(document, 50))
+    ).toBeNull();
+  });
+
   it('fails closed on minimum violations, unsupported dependencies, and changed source geometry', () => {
     const { doc } = fixture();
     expect(parameterVisualPreview(doc, changeWidth(doc, 16))).toBeNull();

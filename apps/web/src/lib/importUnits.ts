@@ -1,5 +1,5 @@
 import {
-  UNIT_TO_MM,
+  millimetresPerUnit,
   type ProjectDocument,
   type SketchObjectData,
   type UnitlessImportUnits,
@@ -145,7 +145,7 @@ export function describeReadingSize(
   reading: UnitSystem,
   documentUnits: UnitSystem
 ): string {
-  const scale = UNIT_TO_MM[reading] / UNIT_TO_MM[documentUnits];
+  const scale = millimetresPerUnit(reading) / millimetresPerUnit(documentUnits);
   return `${extent.map((value) => shortNumber(value * scale)).join(' × ')} ${UNIT_SUFFIX[documentUnits]}`;
 }
 
@@ -154,7 +154,7 @@ export function verticesReadAs<T extends ArrayLike<number>>(
   vertices: T,
   reading: UnitSystem
 ): number[] {
-  const scale = UNIT_TO_MM[reading];
+  const scale = millimetresPerUnit(reading);
   return Array.from(vertices, (value) => value * scale);
 }
 

@@ -6,6 +6,13 @@ export interface RebuildProgress {
   total: number;
   status: 'started' | 'completed';
   durationMs?: number;
+  /**
+   * A completed `feature` stage only: whether the feature built or the
+   * rebuild recorded it as failed or refused. `completed` says the stage
+   * finished, not that it succeeded — the debug log used to read as a
+   * success for a feature the UI showed as failed (QA 2026-11-14).
+   */
+  outcome?: 'built' | 'failed';
 }
 
 export type RebuildProgressListener = (progress: RebuildProgress) => void;
@@ -27,14 +34,15 @@ export function rebuildReporter(listener?: RebuildProgressListener) {
   ) => {
     const start = performance.now();
     emit({ stage, name, index, total, status: 'started' });
-    return () =>
+    return (outcome?: RebuildProgress['outcome']) =>
       emit({
         stage,
         name,
         index,
         total,
         status: 'completed',
-        durationMs: Math.max(0, performance.now() - start)
+        durationMs: Math.max(0, performance.now() - start),
+        ...(outcome ? { outcome } : {})
       });
   };
 }

@@ -17,6 +17,7 @@ import {
   loadRemusTranslators
 } from '../../packages/kernel-adapter/src/remus-runtime';
 import { readThreeMfPackage } from '../../packages/kernel-adapter/src/three-mf-package';
+import { threeMfObjectLabels } from './three-mf-export';
 import { importDxfSketch } from '../../apps/web/src/lib/dxfImport';
 import { verticesReadAs } from '../../apps/web/src/lib/importUnits';
 
@@ -161,8 +162,11 @@ export async function reimportSolids(
   options: { reading?: UnitSystem; bodyNames?: readonly string[] } = {}
 ): Promise<SolidMeasure> {
   const text = latin1.decode(bytes);
+  // A 3MF is a Zip package: its names and colours are read from the model
+  // part, the way a slicer resolves them, not searched for in the archive.
+  const labels = format === '3mf' ? threeMfObjectLabels(bytes) : null;
   const bodyNames = (options.bodyNames ?? []).some((name) =>
-    text.includes(name)
+    labels ? labels.some((label) => label.name === name) : text.includes(name)
   );
   if (format === 'step') {
     const kernel = new RemusKernel();
@@ -240,8 +244,8 @@ export async function reimportSolids(
           ? /property\s+\w+\s+(red|green|blue)\b/.test(text)
           : format === 'glb'
             ? /"materials"\s*:/.test(text)
-            : format === '3mf'
-              ? /basematerials|colorgroup/.test(text)
+            : labels
+              ? labels.length > 0 && labels.every(({ color }) => color !== null)
               : false,
     bytes
   };

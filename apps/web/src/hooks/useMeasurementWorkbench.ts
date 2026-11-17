@@ -339,6 +339,17 @@ export function useMeasurementWorkbench({
         doc.version,
         doc.units
       );
+      // Already recorded and drawn on the model: its own chip says it, and
+      // a second identical chip beside it ("80.00 mm" twice) said nothing
+      // more (I54).
+      if (
+        measurement &&
+        measurements.some(
+          (entry) => entry.id === measurement.id && entry.visible
+        )
+      ) {
+        return null;
+      }
       return measurement
         ? measurementApi.formatMeasurement(measurement, measurementDisplay)
             .value

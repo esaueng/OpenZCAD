@@ -29,11 +29,18 @@
       "@openzcad/kernel-adapter/mesh-import-formats": [
         "./packages/kernel-adapter/src/mesh-import-formats.ts"
       ],
+      "@openzcad/kernel-adapter/sheet-metal-flat-pattern": [
+        "./packages/kernel-adapter/src/sheet-metal-flat-pattern.ts"
+      ],
+      "@openzcad/agent-api": ["./packages/agent-api/src/index.ts"],
       "@openzcad/ai-contracts": ["./packages/ai-contracts/src/index.ts"],
       "@openzcad/ai-contracts/auto-parameterize": [
         "./packages/ai-contracts/src/auto-parameterize.ts"
       ],
       "@openzcad/viewport": ["./packages/viewport/src/index.ts"],
+      "@openzcad/viewport/analysis-overlay": [
+        "./packages/viewport/src/scene/analysisOverlay.ts"
+      ],
       "@openzcad/viewport/edge-chain": [
         "./packages/viewport/src/pick/edgeChain.ts"
       ],
@@ -43,7 +50,13 @@
       "@openzcad/viewport/move-transform": [
         "./packages/viewport/src/gizmo/moveTransform.ts"
       ],
+      "@openzcad/viewport/space-mouse": [
+        "./packages/viewport/src/input/spaceMouse.ts"
+      ],
       "@openzcad/viewport/types": ["./packages/viewport/src/types.ts"],
+      "@openzcad/viewport/wheel-gesture": [
+        "./packages/viewport/src/input/wheelGesture.ts"
+      ],
       "@openzcad/io-step": ["./packages/io-step/src/index.ts"],
       "@openzcad/io-shapr": ["./packages/io-shapr/src/index.ts"],
       "@openzcad/io-stl": ["./packages/io-stl/src/index.ts"],

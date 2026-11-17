@@ -11,6 +11,8 @@
  * sentence a person reads here was written by a person; the kernel text is
  * never discarded, it moves into the detail the card shows on request.
  */
+
+import { ownEntry } from '@openzcad/shared';
 export interface PlainRefusal {
   message: string;
   headline?: string;
@@ -93,6 +95,31 @@ const CURVED_NEIGHBOR =
   "This face meets a curved surface that resizing and moving faces can't follow yet. Change the size on the original shape in History instead.";
 const PARTIAL_WALL =
   "This hole's wall doesn't end in full circles, which resizing can't follow yet. Change the size on the original shape in History instead.";
+/**
+ * A refused diameter, split by the kernel's cause. `wall_meets_face` — and a
+ * kernel that predates the cause (esaueng/remus#1747) — is a size limit, so a
+ * smaller diameter can help. `group_reblend_failed` says the fillets around
+ * the wall did not re-fillet on the resized body, which may hold at every
+ * diameter, so that advice would be false there.
+ */
+const DIAMETER_DOES_NOT_FIT =
+  'That diameter does not fit the existing supports and fillets. Try a smaller diameter.';
+const FILLETS_NOT_REBUILT =
+  "The fillets around this wall can't be rebuilt at that diameter. Change or remove those fillets in History, then resize the wall.";
+
+/**
+ * A refused fillet removal or resize (`resizeBlend`), by the kernel's code.
+ * Codes without an entry keep the prose table (`radius-too-large`) or the
+ * category sentence.
+ */
+const BLEND_RESIZE_SENTENCES: Readonly<Record<string, string>> = {
+  'unsupported-support-pair':
+    "This fillet joins faces that removing or resizing a fillet can't rebuild yet; that works for fillets between flat and cylindrical faces. Edit the fillet in History instead.",
+  'band-touches-freeform':
+    "This fillet touches a freeform surface, which removing or resizing a fillet can't follow yet. Edit the fillet in History instead.",
+  'blend-band-not-analytic':
+    "This fillet is not a constant-radius round, which removing or resizing a fillet can't rebuild yet. Edit the fillet in History instead."
+};
 
 /**
  * The sentence for a refused face move the kernel typed, read from its code
@@ -101,8 +128,14 @@ const PARTIAL_WALL =
  * because untyped paths (move-faces, previews) reach the same sentences.
  */
 function typedSentence(typed: RefusalClassification): string | null {
+  const blendResize = typed.code ? BLEND_RESIZE_SENTENCES[typed.code] : null;
+  if (blendResize) {
+    return blendResize;
+  }
   if (typed.code === 'cylinder-diameter-unbuildable') {
-    return 'That diameter does not fit the existing supports and fillets. Try a smaller diameter.';
+    return typed.reason === 'group_reblend_failed'
+      ? FILLETS_NOT_REBUILT
+      : DIAMETER_DOES_NOT_FIT;
   }
   if (
     typed.category === 'quality_refused' &&
@@ -228,6 +261,57 @@ const TRANSLATIONS: readonly Translation[] = [
       'The face would run into another part of the body before it got that far.'
   },
   {
+    // Draft, chamfer and split all re-trim the faces around the one they
+    // change, and the kernel can only re-trim a flat neighbour: a fillet or
+    // cone beside the face refuses (QA 2026-11-14 finding #3, "the draft
+    // moves a corner of curved face 139; re-trimming a curved neighbour
+    // against the taper is not implemented").
+    pattern:
+      /re-trimming a curved (?:boundary|neighbour)|carries a curved edge; re-trimming/i,
+    sentence:
+      "A face next to this one is curved, and re-trimming a curved face to fit isn't supported yet. Try faces that only meet flat faces."
+  },
+  {
+    // Split by plane (QA 2026-11-14 finding #4): four kernel refusals, each
+    // naming a face, edge or wire by internal id.
+    pattern: /cutting plane crosses curved edge/i,
+    sentence:
+      "The cutting plane crosses a curved edge, which splitting can't trim yet. Move the plane so it misses fillets and curved edges."
+  },
+  {
+    pattern: /cutting plane crosses inner wire/i,
+    sentence:
+      "The cutting plane runs through a hole in a face, which splitting can't handle yet. Move the plane clear of holes and openings."
+  },
+  {
+    pattern: /cutting plane crosses face .*not planar/i,
+    sentence:
+      "The cutting plane crosses a curved face, which splitting can't cut yet. Move the plane so it crosses only flat faces."
+  },
+  {
+    // Remus 3c489d7 words it as a plane that only touches the body: "the
+    // cutting plane does not cross the solid's interior; it only touches
+    // the body and contains edge 3 of the solid, so there is nothing to
+    // split". Both say the plane lies along an edge.
+    pattern:
+      /cutting plane (?:does not cross the solid's interior; it only touches the body and )?contains edge/i,
+    sentence:
+      'The cutting plane lies exactly along an existing edge. Move the plane slightly off the edge.'
+  },
+  {
+    // A face move beside a fillet: the kernel can carry the blend along only
+    // where every face around it is flat and meets its neighbours sharply.
+    pattern: /prismatic sharp support neighbou?rhood/i,
+    sentence:
+      'This face meets a fillet, and a face next to a fillet can only move when the faces around it are flat with sharp edges. Change the size on the original shape in History instead.'
+  },
+  {
+    // `${code}: ${message}` from a refused blend resize.
+    pattern: /\bradius-too-large\b/i,
+    sentence:
+      'That radius is too large for the faces this blend joins. Try a smaller radius.'
+  },
+  {
     pattern: /self-intersect/i,
     sentence: 'The resulting body would intersect itself.'
   },
@@ -285,9 +369,64 @@ const GENERIC = GENERIC_REFUSAL;
 function looksLikeKernelText(sentence: string): boolean {
   return (
     /^[a-z]/.test(sentence) ||
-    /::|\bwasm\b|\[object |\(F=|\bhandle \d|_[a-z]+:/i.test(sentence)
+    REMUS_PREFIX.test(sentence) ||
+    hasKernelNotation(sentence)
   );
 }
+
+/**
+ * Identifiers and codes only the kernel writes, wherever they sit in a
+ * sentence: a Rust `Some(Id(409))`, a snake_case code such as
+ * `exact_only_unattainable`, a kebab-case code leading a clause
+ * (`radius-too-large:`), or an entity named by its internal number
+ * (`corner 139`, `vertex 2685`). Kept case-sensitive for the entity names, so
+ * a face label the product shows ("Face 18") is not mistaken for one. QA
+ * 2026-11-14 finding #18 found each of these in a refusal's headline.
+ *
+ * `solid N` is not on the list: the STEP importer numbers a file's solids
+ * that way on purpose ("STEP file contains no closed solids: solid 1 (5
+ * faces): it is an open shell…"), so the user can find the bad one in the
+ * file, and treating it as kernel text replaced that sentence with "The
+ * exact kernel could not build this result."
+ */
+function hasKernelNotation(sentence: string): boolean {
+  // A name the user gave a body or feature is quoted, and is theirs to spell
+  // with underscores or numbers.
+  const unquoted = sentence.replace(/"[^"]*"|“[^”]*”/g, '""');
+  return (
+    /::|\bwasm\b|\[object |\(F=|\bhandle \d|_[a-z]+:/i.test(unquoted) ||
+    /\bSome\(|\b(?:face|edge) None\b|\bId\(\d|\b[a-z]+(?:_[a-z]+)+\b|\b[a-z]+(?:-[a-z]+)+: |\b(?:face|edge|vertex|wire|corner|loop|shell) \d+\b/.test(
+      unquoted
+    )
+  );
+}
+
+/**
+ * `Remus <operation> refused: <kernel text>` — the adapter's wrapper around a
+ * modeling operation the kernel threw on (draft, shell, solid offset,
+ * thicken, mirror). The capitalised prefix used to make the whole line read
+ * as a product sentence, so the kernel's words became the headline.
+ */
+const REMUS_PREFIX = /^Remus ([a-z][a-z -]*?) (?:refused|rejected):\s*/;
+
+/**
+ * What to say for a wrapped operation when its kernel text has no table
+ * entry: the operation, and the one thing worth trying. Solid offset names
+ * its documented subset (docs/capability-matrix.md: "sharp positive-outward
+ * solid offset"); QA 2026-11-14 finding #12 met it as "assembly failed: wire
+ * loop walk: no unvisited edge from vertex 2685".
+ */
+const OPERATION_FALLBACKS: Readonly<Record<string, string>> = {
+  draft:
+    'The draft could not be built on these faces. Try a smaller angle or fewer faces.',
+  shell:
+    'The shell could not be built with this wall thickness. Try a thinner wall or different open faces.',
+  'solid offset':
+    'Solid offset could not rebuild this body. It currently works on bodies with flat faces and sharp edges; fillets, shells and curved faces are not supported yet.',
+  thicken:
+    'This face could not be thickened by that amount. Try a smaller thickness.',
+  mirror: 'The mirror could not be built from this body.'
+};
 
 /**
  * Splits `<sentence>\n<detail>` and translates the sentence when the kernel
@@ -308,8 +447,17 @@ export function plainRefusal(
     ...(typed?.code ? { code: typed.code } : {})
   };
   // A lost selection is read by the card to know that no value can help; a
-  // parse error names the entity of the file that is broken. Both stay.
-  if (/no longer exists|^parse error:/.test(sentence)) {
+  // parse error names the entity of the file that is broken. Both stay. So
+  // do the STEP importer's own sentences, which name each solid it dropped
+  // and why: "it is non-manifold" there is the importer's diagnosis, not the
+  // kernel's, and a partial import that succeeded read as "The resulting
+  // body wouldn't be valid." The importer does not escape quotes in a body
+  // name, so the name is matched up to the last `" imported, but`.
+  if (
+    /no longer exists|^parse error:|^STEP file contains no |^Body ".*" imported, but /.test(
+      sentence
+    )
+  ) {
     return tail
       ? { message: sentence, detail: tail, ...classified }
       : { message: sentence, ...classified };
@@ -329,7 +477,13 @@ export function plainRefusal(
   const translation = TRANSLATIONS.find(({ pattern }) =>
     pattern.test(sentence)
   );
-  const byCategory = category ? CATEGORY_SENTENCES[category] : undefined;
+  const wrapped = REMUS_PREFIX.exec(sentence);
+  const byOperation = wrapped
+    ? ownEntry(OPERATION_FALLBACKS, wrapped[1]!)
+    : undefined;
+  const byCategory =
+    byOperation ??
+    (category ? ownEntry(CATEGORY_SENTENCES, category) : undefined);
   // A table entry names a SYMPTOM and is more specific than any category, so
   // it wins — except where its sentence IS the generic fallback, which says
   // no more than "it did not work". The category says more than that and

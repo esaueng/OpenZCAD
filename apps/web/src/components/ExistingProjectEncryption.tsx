@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import {
+  Check,
   Copy,
   Link2,
   Lock,
   Mail,
   Pause,
   Play,
+  LockOpen,
   RefreshCcw,
   X
 } from 'lucide-react';
@@ -18,11 +20,18 @@ import {
 } from '../lib/e2ee/projectMigrations';
 import type { MigrationProgress } from '../lib/e2ee/projectMigrationEngine';
 import {
+  approvalOf,
+  MIGRATION_APPROVAL_CODE,
   migrationMemberAction,
   type MigrationMember,
   type MigrationMemberState
 } from '../lib/e2ee/migrationMembers';
 import { Group, Meter, Notice, SettingRow, Status } from './settingsControls';
+import {
+  pinResetFailure,
+  PinResetConfirm,
+  pinProblemText
+} from './EncryptedPinReset';
 
 const MB = 1024 * 1024;
 const megabytes = (bytes: number) =>
@@ -44,7 +53,11 @@ async function migrationOpen(): Promise<boolean> {
 function phaseLabel(progress: MigrationProgress): string {
   switch (progress.phase) {
     case 'waiting':
-      return 'Not encrypted';
+      // Cancelled after its cutover was asked for: this device still
+      // keeps it encrypted, so editing is not back to plaintext.
+      return progress.unresolved
+        ? 'Encryption didn’t finish on this device'
+        : 'Not encrypted';
     case 'starting':
       return 'Starting…';
     case 'revisions':
@@ -64,7 +77,10 @@ function phaseLabel(progress: MigrationProgress): string {
     case 'purging':
       return 'Deleting the plaintext copy…';
     case 'done':
-      return 'Encrypted';
+      // The account says it finished; this device never saw its answer.
+      return progress.unresolved
+        ? 'Encrypted, not confirmed on this device'
+        : 'Encrypted';
     case 'paused':
       return 'Paused';
     case 'error':
@@ -294,7 +310,7 @@ function MemberReadiness({
         <li key={member.userId}>
           <span className="encryption-migration-member">
             <strong>{member.email ?? 'A member'}</strong>
-            {` · ${roleLabel(member.role)} · `}
+            {` · ${roleLabel(member.signedRole ?? member.role)} · `}
             <Status
               tone={
                 member.state === 'ready' || member.state === 'readded'
@@ -305,6 +321,15 @@ function MemberReadiness({
               {MEMBER_STATE_LABELS[member.state]}
             </Status>
           </span>
+          {(member.state === 'ready' || member.state === 'readded') &&
+          member.acceptor ? (
+            <code
+              className="encryption-code"
+              aria-label={`Contact code of ${member.email ?? 'this member'}`}
+            >
+              {member.acceptor.code}
+            </code>
+          ) : null}
           <span className="encryption-migration-member-action">
             {migrationMemberAction(member)}
           </span>
@@ -474,12 +499,33 @@ function ProjectRow({
   busy: boolean;
   controller: MigrationController;
 }) {
+  const [confirming, setConfirming] = useState(false);
+  /** Why the owner's confirmed reset did not take effect, if it did not. */
+  const [resetFailure, setResetFailure] = useState<string | null>(null);
+  const unresolved = progress.unresolved === true;
+  // Waiting, but its cutover was asked for here: retried like a stop.
+  const unfinished = unresolved && progress.phase === 'waiting';
   const stopped =
     progress.phase === 'error' ||
     progress.phase === 'paused' ||
-    progress.phase === 'members';
+    progress.phase === 'members' ||
+    unfinished;
   const active =
     progress.phase !== 'waiting' && progress.phase !== 'done' && !stopped;
+  // Every member ready: the owner approves them as shown, by contact code
+  // and signed role, before anything is staged or switched over.
+  const members = progress.members ?? [];
+  const approvable =
+    progress.phase === 'members' &&
+    progress.error?.code === MIGRATION_APPROVAL_CODE &&
+    members.some(
+      (member) =>
+        (member.state === 'ready' || member.state === 'readded') &&
+        member.acceptor
+    ) &&
+    members.every(
+      (member) => member.state === 'ready' || member.state === 'readded'
+    );
   return (
     <div
       className="encryption-migration-item"
@@ -492,11 +538,13 @@ function ProjectRow({
           <>
             <Status
               tone={
-                progress.phase === 'done'
+                progress.phase === 'done' && !progress.unresolved
                   ? 'good'
-                  : progress.phase === 'error'
+                  : progress.phase === 'done'
                     ? 'warning'
-                    : undefined
+                    : progress.phase === 'error'
+                      ? 'warning'
+                      : undefined
               }
             >
               {phaseLabel(progress)}
@@ -507,6 +555,24 @@ function ProjectRow({
       >
         {stopped ? (
           <span className="encryption-actions">
+            {approvable ? (
+              <button
+                className="primary"
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  controller.approveMembers(
+                    progress.projectId,
+                    approvalOf(members),
+                    progress.attempt
+                  );
+                  void controller.run([progress.projectId]);
+                }}
+              >
+                <Check size={13} aria-hidden="true" />
+                Approve and encrypt
+              </button>
+            ) : null}
             <button
               className="secondary"
               type="button"
@@ -518,20 +584,27 @@ function ProjectRow({
                 ? 'Resume'
                 : progress.phase === 'members'
                   ? 'Check again'
-                  : 'Retry'}
+                  : unresolved
+                    ? 'Retry encryption'
+                    : 'Retry'}
             </button>
             {/* Nothing to cancel once cut over (only the purge remains),
                 nor while members are waited for before anything is staged;
                 a resumed staging that waits for a member can still be
                 dropped. */}
             {progress.cutOver ||
+            unfinished ||
             (progress.phase === 'members' &&
               !progress.plaintextLocked) ? null : (
               <button
                 className="secondary"
                 type="button"
                 disabled={busy}
-                title="Drops what was encrypted so far and unlocks the plaintext project."
+                title={
+                  unresolved
+                    ? 'Drops what was encrypted so far. This device keeps the project encrypted until you retry or reset it.'
+                    : 'Drops what was encrypted so far and unlocks the plaintext project.'
+                }
                 onClick={() => void controller.cancel(progress.projectId)}
               >
                 <X size={13} aria-hidden="true" />
@@ -541,7 +614,60 @@ function ProjectRow({
           </span>
         ) : null}
       </SettingRow>
-      {(active || stopped) && progress.phase !== 'members' ? (
+      {unresolved && !active ? (
+        <Notice
+          tone="warning"
+          role="status"
+          action={
+            confirming ? null : (
+              <button
+                className="secondary"
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setResetFailure(null);
+                  setConfirming(true);
+                }}
+              >
+                <LockOpen size={13} aria-hidden="true" />
+                Treat as not encrypted on this device
+              </button>
+            )
+          }
+        >
+          {pinProblemText('unresolved')}{' '}
+          {progress.phase === 'done'
+            ? 'Your account reports the switch finished, but this device never got the answer to its own request, so it keeps the project read-only and can’t fully back it up. Retrying can’t confirm a switch that already finished: confirm the reset to clear this device’s record. The project stays encrypted on your account, and this device holds it as encrypted again the next time your projects are listed.'
+            : 'This device keeps it encrypted, so it can’t save or fully back it up until you retry or reset it.'}
+        </Notice>
+      ) : null}
+      {unresolved && !active && confirming ? (
+        <PinResetConfirm
+          target={{
+            kind: 'project',
+            projectId: progress.projectId,
+            name: progress.name,
+            reason: 'unresolved'
+          }}
+          onCancel={() => setConfirming(false)}
+          onConfirm={() => {
+            setConfirming(false);
+            setResetFailure(
+              controller.treatAsNotEncrypted(progress.projectId, {
+                confirmedByOwner: true
+              })
+                ? null
+                : pinResetFailure(progress.projectId)
+            );
+          }}
+        />
+      ) : null}
+      {unresolved && !active && resetFailure ? (
+        <p className="encryption-migration-error" role="alert">
+          {resetFailure}
+        </p>
+      ) : null}
+      {(active || stopped) && progress.phase !== 'members' && !unfinished ? (
         <Meter
           used={progress.bytesDone}
           limit={Math.max(progress.bytesTotal, 1)}

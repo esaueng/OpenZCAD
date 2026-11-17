@@ -22,14 +22,9 @@ const CREDENTIAL_OPTIONS: readonly SegmentOption<
   { value: 'personal', label: 'Personal token' }
 ];
 
-const DATA_USE_INTRO =
-  'The built-in assistant sends your prompts, conversation, model context, and any attachments to the configured AI provider.';
-const GENERIC_DATA_POLICY =
-  'The configured AI provider may retain this data or use it for training and service improvement under its policies. Ask your deployment operator which service and data policies apply.';
-const DATA_USE_END =
-  'Avoid sending sensitive or confidential data. Use a personal API key to choose another model; that provider’s data policies and charges apply.';
-const FREE_MODEL_NOTICE =
-  'Free with no personal API key. Usage limits and provider availability apply.';
+const SENT = 'Your prompts, conversation, model context and attachments go to';
+const FREE_MODEL_NOTICE = 'Free to use, with usage limits.';
+const CONFIDENTIAL = 'Don’t send anything confidential.';
 
 /** The AI section owns its fallback read, independently of account discovery. */
 export function AssistantConnectionSettings({
@@ -75,17 +70,25 @@ export function AssistantConnectionSettings({
   const policy =
     status?.provider === 'openrouter'
       ? {
-          text: 'OpenRouter and the model provider may retain this data or use it for training and service improvement under their policies.',
+          text: `${SENT} OpenRouter and the model’s provider, which may keep them or use them for training.`,
           href: 'https://openrouter.ai/docs/guides/privacy/provider-logging',
           label: 'OpenRouter data policies'
         }
       : status?.provider === 'openai'
         ? {
-            text: 'OpenAI may retain API data for safety and service operation. API data is not used for training unless the deployment operator opts in to sharing.',
+            text: `${SENT} OpenAI, which may keep them for safety but does not train on them unless this deployment’s operator opts in.`,
             href: 'https://developers.openai.com/api/docs/guides/your-data',
             label: 'OpenAI API data policies'
           }
-        : { text: GENERIC_DATA_POLICY, href: null, label: '' };
+        : {
+            text: `${SENT} this deployment’s AI provider, which may keep them or use them for training. Ask its operator which policies apply.`,
+            href: null,
+            label: ''
+          };
+  const free =
+    status?.configured === true &&
+    status.provider === 'openrouter' &&
+    status.model.endsWith(':free');
 
   return (
     <>
@@ -166,41 +169,23 @@ export function AssistantConnectionSettings({
       ) : (
         <Group title="Data use">
           <div className="settings-assistant-data" aria-busy={loading}>
-            {/* Invisible sizing copy reserves the longest policy and the optional
-                free-model row at every width. CSS generated text is excluded
-                from the accessibility tree; no provider copy is announced. */}
-            <div className="settings-assistant-data-reserve" aria-hidden="true">
-              <div className="settings-notice" data-copy={FREE_MODEL_NOTICE} />
+            {loading ? (
               <div
-                className="settings-notice"
-                data-copy={`${DATA_USE_INTRO} ${GENERIC_DATA_POLICY} ${DATA_USE_END}`}
+                className="settings-assistant-data-loading"
+                role="status"
+                aria-label="Loading assistant data policies"
               />
-            </div>
-            <div className="settings-assistant-data-content">
-              {loading ? (
-                <div
-                  className="settings-assistant-data-loading"
-                  role="status"
-                  aria-label="Loading assistant data policies"
-                />
-              ) : (
-                <>
-                  {status?.configured &&
-                  status.provider === 'openrouter' &&
-                  status.model.endsWith(':free') ? (
-                    <Notice>{FREE_MODEL_NOTICE}</Notice>
-                  ) : null}
-                  <Notice>
-                    {DATA_USE_INTRO} {policy.text} {DATA_USE_END}{' '}
-                    {policy.href ? (
-                      <ExternalAnchor href={policy.href}>
-                        {policy.label}
-                      </ExternalAnchor>
-                    ) : null}
-                  </Notice>
-                </>
-              )}
-            </div>
+            ) : (
+              <Notice>
+                {free ? `${FREE_MODEL_NOTICE} ` : null}
+                {policy.text} {CONFIDENTIAL}{' '}
+                {policy.href ? (
+                  <ExternalAnchor href={policy.href}>
+                    {policy.label}
+                  </ExternalAnchor>
+                ) : null}
+              </Notice>
+            )}
           </div>
         </Group>
       )}

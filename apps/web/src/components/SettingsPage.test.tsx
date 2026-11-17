@@ -55,7 +55,10 @@ const storageUsage = {
   maxRevisionsPerProject: 20,
   artifactBytes: 5 * 1_048_576,
   artifactCount: 2,
-  artifactLimitBytes: 100 * 1_048_576
+  artifactLimitBytes: 100 * 1_048_576,
+  trashedProjectCount: 0,
+  storageBytes: 3_072 + 5 * 1_048_576,
+  storageLimitBytes: 100 * 1_048_576
 };
 
 beforeEach(() => {
@@ -419,6 +422,62 @@ describe('settings number fields', () => {
     expect(loadLocalAppSettings().sketching.snapTolerancePx).toBe(24);
   });
 
+  // I69 (13 November review): 500 became 24 with nothing said, and no field
+  // showed its range.
+  it('shows each field’s range and says when a value was pulled to a bound', async () => {
+    const user = userEvent.setup();
+    renderStatefulSettings({ initialSection: 'sketching' });
+    const tolerance = screen.getByLabelText('Sketch snap tolerance');
+    expect(tolerance).toHaveAccessibleDescription(/^\d+ px – 24 px$/);
+
+    await user.clear(tolerance);
+    await user.type(tolerance, '500');
+    await user.tab();
+    expect(
+      screen.getByText('500 px is above the maximum, so it is set to 24 px.')
+    ).toHaveAttribute('role', 'status');
+
+    // The next keystroke takes the note away; an in-range value says nothing.
+    await user.clear(tolerance);
+    await user.type(tolerance, '12');
+    await user.tab();
+    expect(screen.queryByText(/is above the maximum/)).toBeNull();
+    expect(screen.queryByText(/is below the minimum/)).toBeNull();
+  });
+
+  it('says when a value was raised to the minimum', async () => {
+    const user = userEvent.setup();
+    renderStatefulSettings({ initialSection: 'sketching' });
+    const linear = screen.getByLabelText('Linear snap increment');
+    await user.clear(linear);
+    await user.type(linear, '0');
+    await user.tab();
+    expect(linear).toHaveValue(0.001);
+    expect(
+      screen.getByText('0 is below the minimum, so it is set to 0.001.')
+    ).toBeVisible();
+  });
+
+  // I69/I11: the linear snap is in the open project's units, and now says so.
+  it('names the linear snap’s unit from the open project', () => {
+    renderSettings(null, {
+      initialSection: 'sketching',
+      documentUnits: 'inch'
+    });
+    const linear = screen.getByLabelText('Linear snap increment');
+    expect(linear.closest('.settings-unit-input')).toHaveTextContent('in');
+    expect(linear).toHaveAccessibleDescription('0.001 in – 10,000 in');
+    expect(screen.getByText('In this project’s units.')).toBeVisible();
+  });
+
+  it('leaves the linear snap unitless from the start screen', () => {
+    renderSettings(null, { initialSection: 'sketching' });
+    expect(screen.getByText('In each project’s own units.')).toBeVisible();
+    expect(
+      screen.getByLabelText('Linear snap increment')
+    ).toHaveAccessibleDescription('0.001 – 10,000');
+  });
+
   it('does not offer the angular snap no tool reads yet', () => {
     renderSettings(null, { initialSection: 'sketching' });
     expect(screen.queryByLabelText('Angular snap increment')).toBeNull();
@@ -478,6 +537,16 @@ describe('settings number fields', () => {
 });
 
 describe('settings navigation', () => {
+  it('lets Appearance break only at its syllable in the phone rail', async () => {
+    renderSettings();
+    const button = await screen.findByRole('button', { name: 'Appearance' });
+    // Shown with a soft hyphen, so a rail narrower than the word breaks it
+    // as "Appear-" over "ance" rather than at an arbitrary letter; the
+    // button keeps the plain name.
+    expect(button.querySelector('span')?.textContent).toBe('Appear­ance');
+    expect(button).toHaveAccessibleName('Appearance');
+  });
+
   it('opens on the heading without focusing the active nav item or close button', async () => {
     const user = userEvent.setup();
     window.localStorage.clear();
@@ -725,10 +794,10 @@ describe('assistant data disclosure', () => {
     });
     expect(screen.getByText('Unavailable')).toBeVisible();
     expect(
-      screen.queryByText(/Free with no personal API key/)
+      screen.queryByText(/Free to use, with usage limits/)
     ).not.toBeInTheDocument();
     expect(
-      screen.getByText(/may retain this data or use it for training/)
+      screen.getByText(/may keep them or use them for training/)
     ).toBeVisible();
   });
 
@@ -755,13 +824,13 @@ describe('assistant data disclosure', () => {
 
       expect(screen.queryByText(/OpenRouter/)).not.toBeInTheDocument();
       expect(
-        screen.queryByText(/Free with no personal API key/)
+        screen.queryByText(/Free to use, with usage limits/)
       ).not.toBeInTheDocument();
       if (provider === 'openai') {
         expect(
-          screen.getByText(/OpenAI may retain API data/)
+          screen.getByText(/OpenAI, which may keep them for safety/)
         ).toHaveTextContent(
-          'API data is not used for training unless the deployment operator opts in'
+          'does not train on them unless this deployment’s operator opts in'
         );
         expect(
           screen.getByRole('link', { name: 'OpenAI API data policies' })
@@ -771,10 +840,8 @@ describe('assistant data disclosure', () => {
         );
       } else {
         expect(
-          screen.getByText(/The configured AI provider may retain this data/)
-        ).toHaveTextContent(
-          'Ask your deployment operator which service and data policies apply.'
-        );
+          screen.getByText(/this deployment’s AI provider, which may keep them/)
+        ).toHaveTextContent('Ask its operator which policies apply.');
         expect(
           screen.queryByRole('link', { name: /data policies/ })
         ).not.toBeInTheDocument();
@@ -782,7 +849,7 @@ describe('assistant data disclosure', () => {
     }
   );
 
-  it('reserves the data notice while loading, without flashing fallback copy', async () => {
+  it('holds the data notice while loading, without flashing fallback copy', async () => {
     let finishRead!: (
       result: Awaited<ReturnType<typeof loadAssistantStatus>>
     ) => void;
@@ -798,14 +865,12 @@ describe('assistant data disclosure', () => {
     expect(
       screen.getByRole('status', { name: 'Loading assistant data policies' })
     ).toBeVisible();
-    expect(screen.queryByText(/Ask your deployment operator/)).toBeNull();
+    expect(screen.queryByText(/Ask its operator/)).toBeNull();
     expect(
       screen.queryByText('Status appears when the server is reachable.')
     ).toBeNull();
     expect(screen.queryByText('Not configured')).toBeNull();
     expect(screen.queryByRole('link', { name: /data policies/ })).toBeNull();
-    const reserve = document.querySelector('.settings-assistant-data-reserve');
-    expect(reserve).toHaveAttribute('aria-hidden', 'true');
 
     const settings = defaultAppSettings();
     rerender(
@@ -834,10 +899,13 @@ describe('assistant data disclosure', () => {
     expect(
       screen.getByRole('link', { name: 'OpenRouter data policies' })
     ).toBeVisible();
-    expect(screen.queryByText(/Ask your deployment operator/)).toBeNull();
-    expect(document.querySelector('.settings-assistant-data-reserve')).toBe(
-      reserve
-    );
+    expect(screen.queryByText(/Ask its operator/)).toBeNull();
+    // One notice and no hidden sizing copy, which left an empty band
+    // below the policy when the free-model line was absent.
+    expect(
+      document.querySelectorAll('.settings-assistant-data .settings-notice')
+    ).toHaveLength(1);
+    expect(document.querySelector('[data-copy]')).toBeNull();
     expect(signal?.aborted).toBe(true);
     await act(async () => {
       finishRead({
@@ -860,7 +928,7 @@ describe('assistant data disclosure', () => {
       await screen.findByText('Status appears when the server is reachable.')
     ).toBeVisible();
     expect(screen.getByText('Unavailable')).toBeVisible();
-    expect(screen.getByText(/Ask your deployment operator/)).toBeVisible();
+    expect(screen.getByText(/Ask its operator/)).toBeVisible();
     expect(screen.queryByText('Loading…')).toBeNull();
     expect(screen.queryByText(/OpenRouter/)).toBeNull();
   });
@@ -878,7 +946,7 @@ describe('assistant data disclosure', () => {
       await screen.findByRole('link', { name: 'OpenAI API data policies' })
     ).toBeVisible();
     expect(screen.getByText('Off')).toBeVisible();
-    expect(screen.queryByText(/Ask your deployment operator/)).toBeNull();
+    expect(screen.queryByText(/Ask its operator/)).toBeNull();
   });
 
   it.each([
@@ -933,13 +1001,15 @@ describe('assistant data disclosure', () => {
       }
     });
 
-    expect(screen.getByText(/Free with no personal API key/)).toBeVisible();
+    expect(screen.getByText(/Free to use, with usage limits/)).toBeVisible();
     expect(
-      screen.getByText(/may retain this data or use it for training/)
+      screen.getByText(/may keep them or use them for training/)
     ).toBeVisible();
     expect(
-      screen.getByText(/The built-in assistant sends your prompts/)
-    ).toHaveTextContent('conversation, model context, and any attachments');
+      screen.getByText(/Your prompts, conversation, model context/)
+    ).toHaveTextContent(
+      'Free to use, with usage limits. Your prompts, conversation, model context and attachments go to OpenRouter'
+    );
     expect(
       screen.getByRole('link', { name: 'OpenRouter data policies' })
     ).toHaveAttribute(
@@ -954,7 +1024,7 @@ describe('assistant data disclosure', () => {
       screen.getByText(/That provider’s data retention, training policies/)
     ).toBeVisible();
     expect(
-      screen.queryByText(/Free with no personal API key/)
+      screen.queryByText(/Free to use, with usage limits/)
     ).not.toBeInTheDocument();
   });
 });
@@ -1024,7 +1094,9 @@ describe('settings offline mode', () => {
     expect(
       screen.queryByRole('checkbox', { name: 'Project sharing' })
     ).not.toBeInTheDocument();
-    expect(screen.queryByText('Account storage')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'Storage' })
+    ).not.toBeInTheDocument();
     await user.click(screen.getByRole('checkbox', { name: 'Cloud features' }));
     expect(onCloudFunctionsEnabledChange).toHaveBeenCalledWith(true);
   });
@@ -1058,6 +1130,8 @@ describe('settings controls section', () => {
     // meaning everywhere, then the pointer.
     expect([...headers].map((header) => header.textContent)).toEqual([
       'Navigation',
+      expect.stringContaining('3D mouse'),
+      'SpaceMouse keys',
       expect.stringContaining('Keyboard'),
       expect.stringContaining('Fixed keys'),
       'Mouse & pointer'
@@ -1066,7 +1140,7 @@ describe('settings controls section', () => {
       screen.getByRole('button', { name: 'Reset all shortcuts' })
     ).toBeDisabled();
     // The banner's guidance lives on beside the one header.
-    expect(headers[1]).toHaveTextContent(
+    expect(headers[3]).toHaveTextContent(
       'Workspace shortcuts pause while you type in a field'
     );
   });
@@ -1268,6 +1342,73 @@ describe('settings advanced section', () => {
     expect(value.textContent).toMatch(/^Remus /);
   });
 
+  it('regenerates project thumbnails from the library, with progress', async () => {
+    const user = userEvent.setup();
+    const onRegenerateThumbnails = vi.fn();
+    const view = renderSettings(null, {
+      workspaceOpen: false,
+      onRegenerateThumbnails
+    });
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+    await user.click(screen.getByRole('button', { name: 'Regenerate' }));
+    expect(onRegenerateThumbnails).toHaveBeenCalledTimes(1);
+
+    view.rerender(
+      settingsElement(null, {
+        workspaceOpen: false,
+        onRegenerateThumbnails,
+        thumbnailRegeneration: { done: 3, total: 40 }
+      })
+    );
+    expect(screen.getByRole('button', { name: 'Redrawing…' })).toBeDisabled();
+    // A live region: progress, then the result, are announced.
+    expect(screen.getByText('Redrawing 3 of 40…')).toHaveAttribute(
+      'role',
+      'status'
+    );
+
+    view.rerender(
+      settingsElement(null, {
+        workspaceOpen: false,
+        onRegenerateThumbnails,
+        thumbnailRegenerationNote: 'Redrew 40 project cards.'
+      })
+    );
+    expect(screen.getByText('Redrew 40 project cards.')).toBeInTheDocument();
+  });
+
+  it('asks to leave an open project before regenerating thumbnails', async () => {
+    const user = userEvent.setup();
+    renderSettings(null, {
+      workspaceOpen: true,
+      onRegenerateThumbnails: vi.fn()
+    });
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+    expect(screen.getByRole('button', { name: 'Regenerate' })).toBeDisabled();
+    expect(
+      screen.getByText('Go back to your projects to redraw every project card.')
+    ).toBeInTheDocument();
+  });
+
+  it('finds Regenerate project thumbnails by searching for thumbnails', async () => {
+    const user = userEvent.setup();
+    renderSettings(null, {
+      workspaceOpen: false,
+      onRegenerateThumbnails: vi.fn()
+    });
+    const field = screen.getByLabelText('Find a setting');
+    await user.type(field, 'thumbnails');
+    expect(screen.getByRole('button', { name: 'Advanced' })).toHaveAttribute(
+      'aria-current',
+      'page'
+    );
+    expect(
+      screen.getByRole('button', { name: 'Regenerate' })
+    ).toBeInTheDocument();
+    // Settings restores the last search; leave none for the next test.
+    await user.clear(field);
+  });
+
   it('turns the frame rate overlay on, off by default', async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
@@ -1375,36 +1516,33 @@ describe('settings advanced section', () => {
   });
 
   /**
-   * Production QA UI-04: below 580px the field is hidden, so a filter typed
-   * in a wider window left the rail on its matches with no way out.
+   * Production QA UI-04: below 580px the field used to be hidden, so a filter
+   * typed in a wider window left the rail on its matches with no way out, and
+   * a separate clear button stood in for it. The field now stays at every
+   * width (13 November review, I70; settings.spec.ts checks it at 390px), so
+   * the field itself is the way out, and the stand-in is gone.
    */
-  it('offers a way out of an active filter that does not need the field', async () => {
+  it('leaves an active filter from the field itself, with no stand-in button', async () => {
     const user = userEvent.setup();
     // Start unfiltered: Settings restores the last search it was left on.
     window.localStorage.clear();
     renderSettings();
-    const sectionsBefore = within(
-      screen.getByRole('complementary', { name: 'Settings sections' })
-    ).getAllByRole('button').length;
-    expect(
-      screen.queryByRole('button', { name: /^Clear the filter/ })
-    ).not.toBeInTheDocument();
-
-    await user.type(screen.getByLabelText('Find a setting'), 'snap');
-    const clear = screen.getByRole('button', {
-      name: 'Clear the filter “snap”'
+    const rail = screen.getByRole('complementary', {
+      name: 'Settings sections'
     });
-    await user.click(clear);
+    const sectionsBefore = within(rail).getAllByRole('button').length;
 
-    expect(screen.getByLabelText('Find a setting')).toHaveValue('');
+    const field = screen.getByLabelText('Find a setting');
+    await user.type(field, 'snap');
+    expect(within(rail).getAllByRole('button').length).toBeLessThan(
+      sectionsBefore
+    );
     expect(
       screen.queryByRole('button', { name: /^Clear the filter/ })
     ).not.toBeInTheDocument();
-    expect(
-      within(
-        screen.getByRole('complementary', { name: 'Settings sections' })
-      ).getAllByRole('button')
-    ).toHaveLength(sectionsBefore);
+
+    await user.clear(field);
+    expect(within(rail).getAllByRole('button')).toHaveLength(sectionsBefore);
   });
 
   it('reports cloud project storage as not ready when health fails closed', async () => {
@@ -1489,6 +1627,127 @@ describe('settings desktop account section', () => {
     }
   });
 
+  it('uses the provisioned QA capability only for its email, including resend', async () => {
+    const user = userEvent.setup();
+    const timeouts = vi.spyOn(window, 'setTimeout');
+    const onRequestLoginCode = vi.fn().mockResolvedValue({
+      challengeId: 'qa-challenge',
+      expiresInSeconds: 600
+    });
+    const turnstile = {
+      render: vi.fn(() => 'widget-qa'),
+      remove: vi.fn(),
+      reset: vi.fn()
+    };
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: turnstile
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfigStatus: 'ready',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key',
+          qaTurnstileBypassEmail: 'qa@esau.bot'
+        },
+        onRequestLoginCode
+      });
+      const email = screen.getByLabelText('Email address');
+      await user.type(email, 'other@example.com');
+      expect(
+        screen.getByRole('button', { name: 'Email me a code' })
+      ).toBeDisabled();
+      expect(
+        screen.queryByText('QA security check enabled for this browser.')
+      ).not.toBeInTheDocument();
+      await user.clear(email);
+      await user.type(email, 'QA@ESAU.BOT');
+      expect(
+        screen.getByText('QA security check enabled for this browser.')
+      ).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Email me a code' }));
+      expect(onRequestLoginCode).toHaveBeenCalledWith(
+        'QA@ESAU.BOT',
+        'qa-cookie'
+      );
+      expect(await screen.findByLabelText('Email sign-in code')).toHaveFocus();
+      expect(screen.getByRole('button', { name: 'Sign in' })).toBeDisabled();
+      const resendTimer = timeouts.mock.calls.find(
+        (call) => call[1] === 30_000
+      )?.[0];
+      expect(typeof resendTimer).toBe('function');
+      await act(async () => {
+        if (typeof resendTimer === 'function') resendTimer();
+      });
+      await user.click(
+        screen.getByRole('button', { name: 'Didn’t get the code?' })
+      );
+      await user.click(screen.getByRole('button', { name: 'Send a new code' }));
+      expect(onRequestLoginCode).toHaveBeenCalledTimes(2);
+      expect(onRequestLoginCode).toHaveBeenLastCalledWith(
+        'QA@ESAU.BOT',
+        'qa-cookie'
+      );
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+    }
+  });
+
+  it('restores Turnstile when the server refuses a stale QA capability', async () => {
+    const user = userEvent.setup();
+    const onRequestLoginCode = vi
+      .fn()
+      .mockRejectedValue(new Error('The security check expired.'));
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(() => 'widget-stale'),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfigStatus: 'ready',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key',
+          qaTurnstileBypassEmail: 'qa@esau.bot'
+        },
+        onRequestLoginCode
+      });
+      await user.type(screen.getByLabelText('Email address'), 'qa@esau.bot');
+      expect(
+        screen.getByText('QA security check enabled for this browser.')
+      ).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Email me a code' }));
+      await waitFor(() =>
+        expect(
+          screen.queryByText('QA security check enabled for this browser.')
+        ).not.toBeInTheDocument()
+      );
+      expect(
+        screen.getByRole('button', { name: 'Email me a code' })
+      ).toBeDisabled();
+      expect(screen.getByText('Security check ready.')).toBeInTheDocument();
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+    }
+  });
+
   it('keeps all six digits when a copied code is pasted with whitespace', async () => {
     const user = userEvent.setup();
     const onVerifyLoginCode = vi.fn().mockResolvedValue(undefined);
@@ -1544,6 +1803,240 @@ describe('settings desktop account section', () => {
       expect(codeField).toHaveValue('730418');
       await user.click(screen.getByRole('button', { name: 'Sign in' }));
       expect(onVerifyLoginCode).toHaveBeenCalledWith('challenge-1', '730418');
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+    }
+  });
+
+  it('says a refused sign-in code at the field', async () => {
+    // 13 November review I4: the refusal showed only in small mono text
+    // beside the Settings title, and the field had no error state.
+    const user = userEvent.setup();
+    const refused = Object.assign(new Error('That sign-in code is invalid.'), {
+      status: 400
+    });
+    const onVerifyLoginCode = vi.fn().mockRejectedValue(refused);
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(
+          (
+            _container: HTMLElement,
+            options: { callback(token: string): void }
+          ) => {
+            options.callback('turnstile-token');
+            return 'widget-1';
+          }
+        ),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key'
+        },
+        authConfigStatus: 'ready',
+        onRequestLoginCode: vi.fn().mockResolvedValue({
+          challengeId: 'challenge-1',
+          expiresInSeconds: 600
+        }),
+        onVerifyLoginCode
+      });
+      await user.type(
+        screen.getByLabelText('Email address'),
+        'person@example.com'
+      );
+      await user.click(screen.getByRole('button', { name: 'Email me a code' }));
+      const codeField = await screen.findByLabelText('Email sign-in code');
+      await user.type(codeField, '111111');
+      await user.click(screen.getByRole('button', { name: 'Sign in' }));
+      await waitFor(() => expect(codeField).toHaveAttribute('aria-invalid'));
+      expect(codeField).toHaveAccessibleDescription(
+        'That sign-in code is invalid.'
+      );
+      // The refused code is cleared (I81), so the next digit is the edit.
+      await user.type(codeField, '1');
+      expect(codeField).not.toHaveAttribute('aria-invalid');
+      expect(codeField).not.toHaveAccessibleDescription();
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+    }
+  });
+
+  // Design review I81: no Resend, a placeholder that looked typed, and a
+  // wrong code left in the field.
+  it('clears a wrong code, uses a neutral placeholder and offers a new code after a wait', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const onVerifyLoginCode = vi
+      .fn()
+      .mockRejectedValue(new Error('That sign-in code is invalid.'));
+    const onRequestLoginCode = vi
+      .fn()
+      .mockResolvedValueOnce({
+        challengeId: 'challenge-1',
+        expiresInSeconds: 600
+      })
+      .mockResolvedValueOnce({
+        challengeId: 'challenge-2',
+        expiresInSeconds: 600
+      });
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(
+          (
+            _container: HTMLElement,
+            options: { callback(token: string): void }
+          ) => {
+            options.callback('turnstile-token');
+            return 'widget-1';
+          }
+        ),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key'
+        },
+        authConfigStatus: 'ready',
+        onRequestLoginCode,
+        onVerifyLoginCode
+      });
+      await user.type(
+        screen.getByLabelText('Email address'),
+        'person@example.com'
+      );
+      await user.click(screen.getByRole('button', { name: 'Email me a code' }));
+      const codeField = await screen.findByLabelText('Email sign-in code');
+      expect(codeField).toHaveAttribute('placeholder', '6-digit code');
+      await user.type(codeField, '123456');
+      await user.click(screen.getByRole('button', { name: 'Sign in' }));
+      await waitFor(() => expect(codeField).toHaveValue(''));
+      expect(codeField).toHaveFocus();
+
+      // The resend check stays folded until asked for, so no unanswered
+      // "Verify you are human" sits under Sign in.
+      expect(
+        screen.queryByRole('button', { name: /^Send a new code/ })
+      ).toBeNull();
+      const more = screen.getByRole('button', {
+        name: 'Didn’t get the code?'
+      });
+      expect(more).toHaveAttribute('aria-expanded', 'false');
+      await user.click(more);
+      expect(more).toHaveAttribute('aria-expanded', 'true');
+      expect(
+        screen.getByRole('button', { name: /^Send a new code/ })
+      ).toBeDisabled();
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+      });
+      const resend = await screen.findByRole('button', {
+        name: 'Send a new code'
+      });
+      await waitFor(() => expect(resend).toBeEnabled());
+      await user.click(resend);
+      expect(onRequestLoginCode).toHaveBeenLastCalledWith(
+        'person@example.com',
+        'turnstile-token'
+      );
+      await user.type(
+        await screen.findByLabelText('Email sign-in code'),
+        '654321'
+      );
+      await user.click(screen.getByRole('button', { name: 'Sign in' }));
+      expect(onVerifyLoginCode).toHaveBeenLastCalledWith(
+        'challenge-2',
+        '654321'
+      );
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+      vi.useRealTimers();
+    }
+  });
+
+  // Sign-in design review: the email field masked itself as a password
+  // field on blur, hiding the address and blocking password-manager fill,
+  // and Sign in sat small beside an equal-weight "Use another email".
+  it('keeps the sign-in email plain and fillable and makes Sign in the one button', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(
+          (
+            _container: HTMLElement,
+            options: { callback(token: string): void }
+          ) => {
+            options.callback('turnstile-token');
+            return 'widget-1';
+          }
+        ),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key'
+        },
+        authConfigStatus: 'ready',
+        onRequestLoginCode: vi.fn().mockResolvedValue({
+          challengeId: 'challenge-1',
+          expiresInSeconds: 600
+        }),
+        onVerifyLoginCode: vi.fn()
+      });
+      const email = screen.getByRole('textbox', { name: 'Email address' });
+      expect(email).toHaveAttribute('type', 'email');
+      expect(email).toHaveAttribute('autocomplete', 'username');
+      expect(email).toHaveAttribute('name', 'email');
+      await user.type(email, 'person@example.com');
+      await user.tab();
+      // Blurred, it still shows what was typed.
+      expect(email).toHaveAttribute('type', 'email');
+      expect(email).toHaveValue('person@example.com');
+
+      await user.click(screen.getByRole('button', { name: 'Email me a code' }));
+      const codeField = await screen.findByLabelText('Email sign-in code');
+      await waitFor(() => expect(codeField).toHaveFocus());
+      const signIn = screen.getByRole('button', { name: 'Sign in' });
+      expect(signIn).toHaveClass('primary');
+      // A direct child of the controls column, drawn as wide as the field,
+      // not one of a pair in a button row.
+      expect(signIn.parentElement).toHaveClass('settings-auth-controls');
+      const back = screen.getByRole('button', { name: 'Use another email' });
+      expect(back).toHaveClass('settings-auth-link');
+      expect(back).not.toHaveClass('primary');
+      expect(back).not.toHaveClass('secondary');
     } finally {
       script.remove();
       delete (window as Window & { turnstile?: unknown }).turnstile;
@@ -1675,33 +2168,43 @@ describe('settings privacy and data section', () => {
     ).toHaveAttribute('href', '/privacy');
   });
 
-  it('starts profile details hidden and keeps the choice when settings reopen', async () => {
+  it('starts profile details blurred, reveals them in place and keeps the choice when settings reopen', async () => {
     const user = userEvent.setup();
     const view = renderSettings(null, { initialSection: 'account', session });
+    const profileRow = screen
+      .getByRole('button', { name: 'Sign out' })
+      .closest<HTMLElement>('.setting-row')!;
+    const profile = within(profileRow);
     expect(view.container.innerHTML).not.toContain(session.email);
-    expect(screen.getByText('Name hidden')).toBeVisible();
-    expect(screen.getByText('Email hidden')).toBeVisible();
-    // The label names the action and so carries the state; aria-pressed on
-    // top of it announced "Hide personal info, pressed".
-    const show = screen.getByRole('button', { name: 'Show personal info' });
-    expect(show).not.toHaveAttribute('aria-pressed');
-    await user.click(show);
-    expect(screen.getByText(session.displayName)).toBeVisible();
-    expect(screen.getByText(session.email)).toBeVisible();
-    const hide = screen.getByRole('button', { name: 'Hide personal info' });
-    expect(hide).not.toHaveAttribute('aria-pressed');
-    await user.click(hide);
+    // The fixture's name is a word the button's own label contains, so the
+    // check reads the text a screenshot shows.
+    expect(profileRow.textContent).not.toContain(session.displayName);
+    // The name and email are their own switches: no separate show button.
+    expect(screen.queryByText('Personal information')).toBeNull();
+    const [name, email] = profile.getAllByRole('button', {
+      name: 'Show personal info'
+    });
+    expect(name).not.toHaveAttribute('aria-pressed');
+    await user.click(email!);
+    expect(profile.getByRole('button', { name: session.email })).toBeVisible();
+    // One switch: the name shows with the email, as project sharing does.
+    const shownName = profile.getByRole('button', {
+      name: session.displayName
+    });
+    expect(shownName).toHaveAttribute('title', 'Hide personal info');
+    await user.click(shownName);
     expect(view.container.innerHTML).not.toContain(session.email);
+    expect(profileRow.textContent).not.toContain(session.displayName);
     await user.click(
-      screen.getByRole('button', { name: 'Show personal info' })
+      profile.getAllByRole('button', { name: 'Show personal info' })[0]!
     );
     view.unmount();
     // The switch is session state shared with project sharing, not panel state.
     renderSettings(null, { initialSection: 'account', session });
-    expect(screen.getByText(session.displayName)).toBeVisible();
     expect(
-      screen.getByRole('button', { name: 'Hide personal info' })
+      screen.getByRole('button', { name: session.displayName })
     ).toBeVisible();
+    expect(screen.getByRole('button', { name: session.email })).toBeVisible();
   });
 
   it('keeps all cloud deletion functions together on Privacy & data', async () => {
@@ -1729,17 +2232,16 @@ describe('settings privacy and data section', () => {
     expect(screen.getByText(/Cloud deletion never touches it/)).toBeVisible();
   });
 
-  it('keeps the file meter in range when the account is over its allowance', async () => {
+  it('keeps the storage meter in range when the account is over its allowance', async () => {
     vi.mocked(api.storageUsage).mockResolvedValue({
       ...storageUsage,
-      artifactBytes: 120 * 1_048_576
+      artifactBytes: 120 * 1_048_576,
+      storageBytes: 120 * 1_048_576
     });
     renderSettings(readyHealth, { initialSection: 'account', session });
 
-    const meter = await screen.findByRole('meter', {
-      name: 'Cloud file storage used'
-    });
-    const limit = String(storageUsage.artifactLimitBytes);
+    const meter = await screen.findByRole('meter', { name: 'Storage used' });
+    const limit = String(storageUsage.storageLimitBytes);
     // The bar is full, never past full; the text says by how much.
     expect(meter).toHaveAttribute('aria-valuemax', limit);
     expect(meter).toHaveAttribute('aria-valuenow', limit);
@@ -1750,14 +2252,23 @@ describe('settings privacy and data section', () => {
     expect(screen.getByText('120 MB of 100 MB · over allowance')).toBeVisible();
   });
 
-  it('reports in-range file usage as it is', async () => {
+  it('shows one storage row: projects and files in one meter, with the breakdown', async () => {
     renderSettings(readyHealth, { initialSection: 'account', session });
 
-    const meter = await screen.findByRole('meter', {
-      name: 'Cloud file storage used'
-    });
-    expect(meter).toHaveAttribute('aria-valuenow', String(5 * 1_048_576));
+    const meter = await screen.findByRole('meter', { name: 'Storage used' });
+    expect(meter).toHaveAttribute(
+      'aria-valuenow',
+      String(5 * 1_048_576 + 3_072)
+    );
     expect(meter).toHaveAttribute('aria-valuetext', '5 MB of 100 MB');
+    expect(
+      screen.getByText(
+        'Projects 3 KB · Imports and exports 5 MB. 3 projects · 4 save states.'
+      )
+    ).toBeVisible();
+    // The two allowances are gone.
+    expect(screen.queryByText('Account storage')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cloud file storage')).not.toBeInTheDocument();
   });
 
   it('formats Premium membership limits and account storage readably', async () => {
@@ -1767,7 +2278,10 @@ describe('settings privacy and data section', () => {
       revisionCount: 0,
       documentLimitBytes: 24 * 1024 ** 2,
       maxRevisionsPerProject: 50,
+      projectStorageBytes: 0,
       artifactBytes: 24 * 1024 ** 2,
+      storageBytes: 24 * 1024 ** 2,
+      storageLimitBytes: 100 * 1024 ** 3,
       artifactLimitBytes: 100 * 1024 ** 3
     });
     renderSettings(readyHealth, {
@@ -1777,6 +2291,7 @@ describe('settings privacy and data section', () => {
         entitlements: {
           tier: 'premium',
           projectLimit: 10_000,
+          storageLimitBytes: 100 * 1024 ** 3,
           projectStorageLimitBytes: 100 * 1024 ** 3,
           artifactLimitBytes: 100 * 1024 ** 3,
           ai: {
@@ -1791,43 +2306,78 @@ describe('settings privacy and data section', () => {
 
     expect(
       screen.getByText(
-        '10,000 cloud projects · 100 GB project storage · 100 GB cloud file storage · 500 hosted AI requests per 10 minutes'
+        '10,000 cloud projects · 100 GB storage · 500 hosted AI requests per 10 minutes'
       )
     ).toBeVisible();
     expect(
       await screen.findByText(
-        '129 projects · 0 revisions. Up to 24 MB and 50 revisions per project.'
+        'Projects 0 B · Imports and exports 24 MB. 129 projects · 0 save states.'
       )
     ).toBeVisible();
-    expect(
-      screen.getByRole('meter', { name: 'Cloud file storage used' })
-    ).toHaveAttribute('aria-valuetext', '24 MB of 100 GB');
+    expect(screen.getByRole('meter', { name: 'Storage used' })).toHaveAttribute(
+      'aria-valuetext',
+      '24 MB of 100 GB'
+    );
     expect(screen.getByText('24 MB of 100 GB')).toBeVisible();
   });
 
-  it('groups large account usage and revision-limit counts', async () => {
+  it('names the membership allowance from an older server by its project storage', () => {
+    renderSettings(readyHealth, {
+      initialSection: 'account',
+      session: {
+        ...session,
+        entitlements: {
+          tier: 'free',
+          projectLimit: 100,
+          projectStorageLimitBytes: 1024 ** 3,
+          artifactLimitBytes: 1024 ** 3,
+          ai: {
+            requestLimit: 6,
+            costLimitUnits: 24,
+            windowSeconds: 600,
+            concurrencyLimit: 2
+          }
+        }
+      }
+    });
+    expect(
+      screen.getByText(
+        '100 cloud projects · 1 GB storage · 6 hosted AI requests per 10 minutes'
+      )
+    ).toBeVisible();
+  });
+
+  it('groups large counts and says trashed projects still count', async () => {
     vi.mocked(api.storageUsage).mockResolvedValue({
       ...storageUsage,
       projectCount: 1_234,
+      trashedProjectCount: 21,
       revisionCount: 12_345,
       maxRevisionsPerProject: 1_000
     });
     renderSettings(readyHealth, { initialSection: 'account', session });
     expect(
       await screen.findByText(
-        '1,234 projects · 12,345 revisions. Up to 10 MB and 1,000 revisions per project.'
+        'Projects 3 KB · Imports and exports 5 MB. 1,234 projects · 21 in trash · 12,345 save states.'
       )
     ).toBeVisible();
+    // Trashed projects are still stored: the row says so, one click away.
+    expect(screen.getByText('Trash counts toward storage')).toBeVisible();
   });
 
-  it('states project storage as the quota measures it, against a GB allowance', async () => {
+  it('states storage as the quota measures it, against a GB allowance', async () => {
     const gibibyte = 1_073_741_824;
+    const projects = Math.round(24.8 * 1_048_576);
+    // An older server: no combined figure or limit, only the parts.
+    const { storageBytes, storageLimitBytes, ...older } = storageUsage;
+    void storageBytes;
+    void storageLimitBytes;
     vi.mocked(api.storageUsage).mockResolvedValue({
-      ...storageUsage,
+      ...older,
       // Logical sizes differ from stored ones; the quota counts stored bytes.
       documentBytes: 40 * 1_048_576,
       revisionBytes: 0,
-      projectStorageBytes: Math.round(24.8 * 1_048_576),
+      projectStorageBytes: projects,
       artifactLimitBytes: 25 * gibibyte,
       entitlements: {
         tier: 'premium',
@@ -1845,27 +2395,29 @@ describe('settings privacy and data section', () => {
     renderSettings(readyHealth, { initialSection: 'account', session });
 
     // Large allowances read in GB, never as "25600.0 MB".
-    const projects = await screen.findByRole('meter', {
-      name: 'Account storage used'
-    });
-    expect(projects).toHaveAttribute(
+    const meter = await screen.findByRole('meter', { name: 'Storage used' });
+    expect(meter).toHaveAttribute(
       'aria-valuenow',
-      String(Math.round(24.8 * 1_048_576))
+      String(projects + 5 * 1_048_576)
     );
-    expect(projects).toHaveAttribute('aria-valuemax', String(25 * gibibyte));
-    expect(screen.getByText('24.8 MB of 25 GB')).toBeVisible();
+    expect(meter).toHaveAttribute('aria-valuemax', String(25 * gibibyte));
+    expect(screen.getByText('29.8 MB of 25 GB')).toBeVisible();
     expect(
-      screen.getByRole('meter', { name: 'Cloud file storage used' })
-    ).toHaveAttribute('aria-valuetext', '5 MB of 25 GB');
+      screen.getByText(/^Projects 24\.8 MB · Imports and exports 5 MB\./)
+    ).toBeVisible();
   });
 
   it('names an account storage overage outright', async () => {
     vi.mocked(api.storageUsage).mockResolvedValue({
       ...storageUsage,
       projectStorageBytes: 2 * 1_073_741_824,
+      artifactBytes: 0,
+      storageBytes: 2 * 1_073_741_824,
+      storageLimitBytes: 1_073_741_824,
       entitlements: {
         tier: 'free',
         projectLimit: 100,
+        storageLimitBytes: 1_073_741_824,
         projectStorageLimitBytes: 1_073_741_824,
         artifactLimitBytes: 1_073_741_824,
         ai: {
@@ -1879,7 +2431,7 @@ describe('settings privacy and data section', () => {
     renderSettings(readyHealth, { initialSection: 'account', session });
 
     expect(
-      await screen.findByRole('meter', { name: 'Account storage used' })
+      await screen.findByRole('meter', { name: 'Storage used' })
     ).toHaveAttribute('aria-valuetext', '2 GB of 1 GB · over allowance');
   });
 
@@ -1895,8 +2447,12 @@ describe('settings privacy and data section', () => {
     } as unknown as typeof storageUsage);
     renderSettings(readyHealth, { initialSection: 'account', session });
 
-    expect(await screen.findByText('Cloud file storage')).toBeVisible();
-    expect(screen.getByText('Account storage')).toBeVisible();
+    expect(
+      await screen.findByText(
+        'Projects 0 B · Imports and exports 0 B. 0 projects · 0 save states.'
+      )
+    ).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Storage' })).toBeVisible();
   });
 
   it('names the diagnostic download for what it downloads', () => {
@@ -1912,10 +2468,56 @@ describe('settings privacy and data section', () => {
     renderSettings(readyHealth, { initialSection: 'privacy', session });
 
     await user.click(screen.getByText('What’s collected'));
-    expect(screen.getByText(/Local operations require opt-in\./)).toBeVisible();
     expect(
-      screen.getByText(/This expanded scope requires a fresh choice\./)
+      screen.getByText(
+        /Local operations are counted only with this switch on\./
+      )
     ).toBeVisible();
+    expect(
+      screen.getByText(/this expanded scope requires a fresh choice\./)
+    ).toBeVisible();
+  });
+
+  // I10 (13 November review): one paragraph of jargon became a plain list of
+  // what is sent, what never is, and how to stop — every statement kept.
+  it('says what analytics send, never send, and how to stop', async () => {
+    const user = userEvent.setup();
+    renderSettings(readyHealth, { initialSection: 'privacy', session });
+
+    await user.click(screen.getByText('What’s collected'));
+    const disclosure = screen.getByText('What’s collected').closest('details')!;
+    for (const heading of ['Sent', 'Never sent', 'How to stop']) {
+      expect(within(disclosure).getByText(heading)).toBeVisible();
+    }
+    // Glimpse is named, and said what it is.
+    expect(disclosure).toHaveTextContent(
+      'Glimpse, the usage-counting service OpenZCAD runs for itself'
+    );
+    for (const statement of [
+      'feature categories, workflow steps and exports',
+      'Diagnostic codes',
+      'part count, project file size and transfer size',
+      'Coarse timings',
+      'Model contents or geometry',
+      'File names or project names',
+      'Anything that identifies you',
+      'It is off until you turn it on.',
+      'Turn it off here and sending stops at once.',
+      'Do Not Track or Global Privacy Control',
+      'turning off Cloud features, pauses sending and keeps this choice',
+      'kept in this browser only, and separately for each app',
+      'cannot be traced back to you or removed',
+      'basic server counters measure API activity and reliability'
+    ]) {
+      expect(disclosure).toHaveTextContent(statement);
+    }
+    expect(
+      within(disclosure).getByRole('link', { name: 'privacy policy' })
+    ).toHaveAttribute('href', expect.stringContaining('/privacy'));
+    // Wording only: the switch still starts off.
+    expect(
+      screen.getByRole('checkbox', { name: 'Optional usage analytics' })
+    ).not.toBeChecked();
   });
 
   it('shows storage usage on Account, where the profile that owns it is', async () => {
@@ -1972,6 +2574,11 @@ describe('settings privacy and data section', () => {
     expect(confirm).toBeDisabled();
     expect(dialog.innerHTML).not.toContain(session.email);
     const confirmation = within(dialog).getByLabelText('Deletion confirmation');
+    // Masked only while it is not being typed in (design review I78): the
+    // field shows what is typed while focused and masks again on blur.
+    act(() => confirmation.focus());
+    expect(confirmation).toHaveAttribute('type', 'text');
+    act(() => confirmation.blur());
     expect(confirmation).toHaveAttribute('type', 'password');
     await user.click(
       within(dialog).getByRole('button', { name: 'Show personal info' })
@@ -1979,7 +2586,7 @@ describe('settings privacy and data section', () => {
     expect(within(dialog).getByText(session.email)).toBeVisible();
     expect(confirmation).toHaveAttribute('type', 'text');
     await user.click(
-      within(dialog).getByRole('button', { name: 'Hide personal info' })
+      within(dialog).getByRole('button', { name: session.email })
     );
     expect(dialog.innerHTML).not.toContain(session.email);
     expect(confirmation).toHaveAttribute('type', 'password');

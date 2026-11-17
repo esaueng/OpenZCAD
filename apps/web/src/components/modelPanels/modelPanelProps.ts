@@ -7,6 +7,7 @@ import type {
   FeatureNode,
   ParameterKind,
   ParameterNode,
+  ParamValue,
   ProjectCheckpoint,
   ProjectDocument,
   UnitSystem
@@ -16,6 +17,8 @@ import type { HistoryRowActions } from '../HistoryTimeline';
 import type { ObjectFolderActions } from './ObjectsPanel';
 import type { BodyAppearancePreview } from '../ModelViewer';
 import type { BodyAppearancePatch } from './BodyAppearanceEditor';
+import type { PrintClearanceState } from '../PrintClearanceRow';
+import type { ConfigurationTableProps } from '../ConfigurationTable';
 
 /**
  * Everything the five model panels read from the open document and the
@@ -84,6 +87,10 @@ export interface ModelPanelSource {
    * account. The rest are listed as history without an action.
    */
   restorableCheckpointIds: ReadonlySet<string>;
+  /** L03: the checkpoints the account holds a copy of (the sync column). */
+  accountCheckpointIds?: ReadonlySet<string>;
+  /** The signed-in account, so its own saves read "You". */
+  currentUserId?: string | null;
   onSelectFeature(nodeId: string): void;
   onSelectBody(bodyId: string, additive: boolean): void;
   onToggleBodyVisibility(bodyId: string): void;
@@ -110,6 +117,8 @@ export interface ModelPanelSource {
   onResumeHistory(): void;
   /** Renames a history feature in place, from its row's menu. */
   onRenameFeature?(featureId: FeatureId, name: string): void;
+  /** Opens a sketch step for editing; a History row's double-click. */
+  onEditSketch?(feature: FeatureNode): void;
   /**
    * Deletes a History multi-selection as one undoable step. Without it the
    * rows select one at a time, as before.
@@ -123,6 +132,19 @@ export interface ModelPanelSource {
     name: string,
     expression: string
   ): void | Promise<string | null>;
+  /** L09: the document's print clearance, as stored and as it resolves. */
+  printClearance?: PrintClearanceState;
+  /** L09: sets or clears the print clearance; answers with a refusal. */
+  onSetPrintClearance?(
+    value: ParamValue | null
+  ): string | null | Promise<string | null>;
+  /**
+   * F06: the variant table under the parameters, without the parameters and
+   * bodies the panel already has. Absent hides it.
+   */
+  configurationTable?: Omit<ConfigurationTableProps, 'parameters' | 'bodies'>;
+  /** A new parameter the add row refused before setting it (a taken name). */
+  onParameterAddRefused?(name: string, message: string): void;
   /** F05: retypes a parameter; answers with a refusal. */
   onSetParameterQuantity?(
     name: string,
@@ -148,4 +170,6 @@ export interface ModelPanelSource {
   reorderBusy?: boolean;
   onRestoreCheckpoint(checkpoint: ProjectCheckpoint): void;
   onBranchCheckpoint(checkpoint: ProjectCheckpoint): void;
+  /** L03: renames a save point; absent where the project cannot be edited. */
+  onRenameCheckpoint?(checkpoint: ProjectCheckpoint, name: string): void;
 }

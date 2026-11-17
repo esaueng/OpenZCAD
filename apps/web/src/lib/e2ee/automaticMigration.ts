@@ -10,9 +10,9 @@ import {
 } from './keySession';
 import { invalidateAccountKeyReads, unlockedAccount } from './unlockedKeys';
 import type { MigrationController } from './projectMigrations';
+import { AUTOMATIC_MIGRATION_LOAD_ERROR } from './automaticMigrationLoader';
 
-export const AUTOMATIC_MIGRATION_LOAD_ERROR =
-  'Automatic encryption could not load. Reload to try again.';
+export { AUTOMATIC_MIGRATION_LOAD_ERROR };
 
 export interface AutomaticMigrationDeps {
   config(signal: AbortSignal): Promise<E2eeConfigResponse>;

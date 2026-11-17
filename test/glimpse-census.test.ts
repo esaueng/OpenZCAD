@@ -33,7 +33,9 @@ function fixture(legacyArtifact = false, upTo = '9999') {
   db.exec(
     "INSERT INTO glimpse_account_consent(user_id,expires_at) VALUES('yes','2999-01-01'),('expired','2000-01-01'),('erasing','2999-01-01')"
   );
-  db.exec("INSERT INTO account_erasure_requests VALUES('erasing','all',1,1)");
+  db.exec(
+    "INSERT INTO account_erasure_requests (user_id, scope, started_at, updated_at) VALUES('erasing','all',1,1)"
+  );
   db.exec('UPDATE glimpse_census_clock SET generation=1');
   return db;
 }
@@ -69,11 +71,11 @@ describe('opt-in cloud census SQL against the actual migrations', () => {
     const db = fixture(true);
     try {
       db.exec(
-        "INSERT INTO project_document_objects VALUES('o','yes','private/key','sha',100,25,'gzip','committed','2026-01-01')"
+        "INSERT INTO project_document_objects (id, project_id, object_key, checksum_sha256, logical_bytes, stored_bytes, content_encoding, state, created_at) VALUES('o','yes','private/key','sha',100,25,'gzip','committed','2026-01-01')"
       );
       db.exec("UPDATE projects SET document_object_id='o' WHERE id='yes'");
       db.exec(
-        "INSERT INTO project_storage_assets VALUES('a','yes','mesh-payload','private/asset','sha',200,50,'gzip','2026-01-01')"
+        "INSERT INTO project_storage_assets (id, project_id, kind, object_key, checksum_sha256, logical_bytes, stored_bytes, content_encoding, created_at) VALUES('a','yes','mesh-payload','private/asset','sha',200,50,'gzip','2026-01-01')"
       );
       expect(census(db.prepare(CENSUS_SQL).get(), 'openzcad')).toMatchObject({
         storedBytes: 75,

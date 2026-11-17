@@ -127,6 +127,16 @@ describe('touch targets', () => {
     expect(block).toMatch(/min-height:\s*40px/);
   });
 
+  it('draws the start screen storage readout 44 px tall on touch', () => {
+    // 14 Nov 2026: the readout is one button under its line, 34 px tall on a
+    // phone between the column's foot and the launch row.
+    const block = mediaBlock(
+      read(join(componentsDir, 'touch-targets.css')),
+      '(pointer: coarse)'
+    );
+    expect(block).toMatch(/\.start-account-head\s*\{[^}]*min-height:\s*44px/);
+  });
+
   it('keeps the split instrument rail columns as wide as its buttons', () => {
     expect(
       mediaBlock(targetSize, '(pointer: coarse) and (max-height: 900px)')

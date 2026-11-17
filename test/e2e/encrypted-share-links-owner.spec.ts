@@ -63,7 +63,17 @@ for (const { width, hasTouch } of [
       await expect(revoke).toBeFocused();
       await expect(revoke).toHaveCSS('opacity', '1');
     }
+    // Revoking asks first, in place, with focus on Keep link (I2).
     await revoke.click();
+    await expect(
+      links.getByRole('button', { name: 'Keep link' })
+    ).toBeFocused();
+    expect(
+      server.db
+        .prepare('SELECT COUNT(*) AS revoked FROM e2ee_share_links WHERE revoked_at IS NOT NULL')
+        .get()
+    ).toEqual({ revoked: 0 });
+    await links.getByRole('button', { name: 'Revoke link' }).click();
     await expect(links.getByText('Only invited people')).toBeVisible({
       timeout: COMMIT_BUDGET_MS
     });

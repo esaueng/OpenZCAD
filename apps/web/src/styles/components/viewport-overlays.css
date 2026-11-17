@@ -237,6 +237,14 @@
 }
 
 /* Why an action is unavailable, under its label: wraps rather than clips. */
+/* Select other opens a list of its own; the mark says so. */
+.context-menu-submenu {
+  flex: 0 0 auto;
+  margin-left: 2px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
 .context-menu-detail {
   display: block;
   max-width: 220px;

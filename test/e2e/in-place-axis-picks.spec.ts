@@ -402,3 +402,61 @@ test('Linear pattern repeats along a picked face normal', async ({ page }) => {
     direction: { x: 0, y: -1, z: 0 }
   });
 });
+
+test('Grid pattern Done keeps a count typed in Options and commits its preview', async ({
+  page
+}) => {
+  // QA 2026-11-14 #16: Done ignored a count typed in Options, and a pattern
+  // Done rebuilt its whole history in a cold disposable worker after the
+  // preview had already built it (70 s on a 10 x 10 grid).
+  test.setTimeout(120_000);
+  await page.addInitScript(() => {
+    const Native = window.Worker;
+    const urls: string[] = [];
+    (window as unknown as { __e2eWorkerUrls: string[] }).__e2eWorkerUrls = urls;
+    window.Worker = class extends Native {
+      constructor(url: string | URL, options?: WorkerOptions) {
+        super(url, options);
+        urls.push(String(url));
+      }
+    };
+  });
+  await openBodies(page, 'Grid of blocks', (document) => block(document), 1);
+  const bar = await startTool(page, /^Grid pattern/, 'Grid pattern');
+  await pickObjectsBody(page, 'Block');
+  const done = bar.getByRole('button', { name: /Done/ });
+  await expect(done).toBeEnabled({ timeout: 30_000 });
+  await bar.getByLabel('Grid pattern options').click();
+  // Typed and left in the field: Done itself applies it.
+  const count = bar.getByRole('textbox', { name: 'X count', exact: true });
+  await count.click();
+  await count.fill('4');
+  const workersBefore = await page.evaluate(
+    () =>
+      (window as unknown as { __e2eWorkerUrls: string[] }).__e2eWorkerUrls
+        .length
+  );
+  await done.click();
+  await expect(bar).toHaveCount(0, { timeout: 30_000 });
+  // The frame Done was pressed on is what landed: no second rebuild in
+  // a disposable worker.
+  const spawned = await page.evaluate(
+    (from) =>
+      (
+        window as unknown as { __e2eWorkerUrls: string[] }
+      ).__e2eWorkerUrls.slice(from),
+    workersBefore
+  );
+  expect(spawned.filter((url) => /importRebuild/i.test(url))).toEqual([]);
+  expect(
+    features(await exportedDocument(page)).find(
+      (feature) => feature.data.featureKind === 'pattern'
+    )?.data
+  ).toMatchObject({ patternKind: 'grid', count: 4, count2: 3 });
+  // Picked afterwards, the pattern (named for its source) reads the
+  // grid's size, not the source block's.
+  await pickObjectsBody(page, 'Block');
+  await expect(page.getByRole('group', { name: 'Picked' })).toContainText(
+    '70 × 50 × 10 mm'
+  );
+});

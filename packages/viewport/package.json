@@ -6,10 +6,13 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./analysis-overlay": "./src/scene/analysisOverlay.ts",
     "./edge-chain": "./src/pick/edgeChain.ts",
     "./input-bindings": "./src/input/bindings.ts",
     "./move-transform": "./src/gizmo/moveTransform.ts",
-    "./types": "./src/types.ts"
+    "./space-mouse": "./src/input/spaceMouse.ts",
+    "./types": "./src/types.ts",
+    "./wheel-gesture": "./src/input/wheelGesture.ts"
   },
   "dependencies": {
     "@openzcad/shared": "workspace:*",

@@ -64,7 +64,13 @@ describe('writeDxf', () => {
     const text = writeDxf([
       { kind: 'line', start: [0, 0], end: [10, 5] },
       { kind: 'circle', center: [3, 4], radius: 2.5 },
-      { kind: 'arc', center: [0, 0], radius: 3, startAngleDeg: 90, endAngleDeg: 180 }
+      {
+        kind: 'arc',
+        center: [0, 0],
+        radius: 3,
+        startAngleDeg: 90,
+        endAngleDeg: 180
+      }
     ]);
     const p = pairs(text);
     const lineAt = p.findIndex(([c, v]) => c === 0 && v === 'LINE');
@@ -102,7 +108,15 @@ describe('writeDxf', () => {
 
   it('emits R12 polylines with 66=1, per-vertex entities, and SEQEND', () => {
     const text = writeDxf([
-      { kind: 'polyline', points: [[0, 0], [1, 0], [1, 1]], closed: true }
+      {
+        kind: 'polyline',
+        points: [
+          [0, 0],
+          [1, 0],
+          [1, 1]
+        ],
+        closed: true
+      }
     ]);
     const p = pairs(text);
     const polyAt = p.findIndex(([c, v]) => c === 0 && v === 'POLYLINE');
@@ -117,7 +131,18 @@ describe('writeDxf', () => {
     const seqendAt = p.findIndex(([c, v]) => c === 0 && v === 'SEQEND');
     expect(seqendAt).toBeGreaterThan(polyAt);
     // An open polyline flags 70=0.
-    const open = pairs(writeDxf([{ kind: 'polyline', points: [[0, 0], [1, 0]], closed: false }]));
+    const open = pairs(
+      writeDxf([
+        {
+          kind: 'polyline',
+          points: [
+            [0, 0],
+            [1, 0]
+          ],
+          closed: false
+        }
+      ])
+    );
     const openPolyAt = open.findIndex(([c, v]) => c === 0 && v === 'POLYLINE');
     expect(open[openPolyAt + 3]).toEqual([70, '0']);
   });
@@ -141,11 +166,178 @@ describe('writeDxf units', () => {
     ['inch', '1', '0'],
     ['cm', '5', '1'],
     ['m', '6', '1']
-  ] as const)('declares %s as $INSUNITS %s, $MEASUREMENT %s', (units, code, measurement) => {
-    const lines = header(writeDxf([], { units }));
-    const insunits = lines.findIndex(([, value]) => value === '$INSUNITS');
-    const metric = lines.findIndex(([, value]) => value === '$MEASUREMENT');
-    expect(lines[insunits + 1]).toEqual([70, code]);
-    expect(lines[metric + 1]).toEqual([70, measurement]);
+  ] as const)(
+    'declares %s as $INSUNITS %s, $MEASUREMENT %s',
+    (units, code, measurement) => {
+      const lines = header(writeDxf([], { units }));
+      const insunits = lines.findIndex(([, value]) => value === '$INSUNITS');
+      const metric = lines.findIndex(([, value]) => value === '$MEASUREMENT');
+      expect(lines[insunits + 1]).toEqual([70, code]);
+      expect(lines[metric + 1]).toEqual([70, measurement]);
+    }
+  );
+});
+
+describe('writeDxf layers and text', () => {
+  it('puts each entity on its layer, 0 when absent', () => {
+    const p = pairs(
+      writeDxf([
+        { kind: 'line', start: [0, 0], end: [1, 0], layer: 'BEND_UP' },
+        { kind: 'circle', center: [0, 0], radius: 1 },
+        {
+          kind: 'arc',
+          center: [0, 0],
+          radius: 1,
+          startAngleDeg: 0,
+          endAngleDeg: 90,
+          layer: 'ETCH'
+        },
+        {
+          kind: 'polyline',
+          points: [
+            [0, 0],
+            [1, 1]
+          ],
+          closed: false,
+          layer: 'CUT'
+        }
+      ])
+    );
+    const layerOf = (type: string) =>
+      p[p.findIndex(([c, v]) => c === 0 && v === type) + 1];
+    expect(layerOf('LINE')).toEqual([8, 'BEND_UP']);
+    expect(layerOf('CIRCLE')).toEqual([8, '0']);
+    expect(layerOf('ARC')).toEqual([8, 'ETCH']);
+    expect(layerOf('POLYLINE')).toEqual([8, 'CUT']);
+    expect(layerOf('VERTEX')).toEqual([8, 'CUT']);
+  });
+
+  it('declares layers and the line types they use in a TABLES section', () => {
+    const text = writeDxf([], {
+      layers: [
+        { name: '0' },
+        { name: 'BEND_UP', color: 3, lineType: 'DASHED' },
+        { name: 'BEND_NOTES', color: 2 }
+      ]
+    });
+    const p = pairs(text);
+    const tablesAt = p.findIndex(([c, v]) => c === 2 && v === 'TABLES');
+    const entitiesAt = p.findIndex(([c, v]) => c === 2 && v === 'ENTITIES');
+    const headerEnd = p.findIndex(([c, v]) => c === 0 && v === 'ENDSEC');
+    expect(tablesAt).toBeGreaterThan(headerEnd);
+    expect(entitiesAt).toBeGreaterThan(tablesAt);
+    const tables = p.slice(tablesAt, entitiesAt);
+    expect(tables).toEqual(
+      expect.arrayContaining([
+        [2, 'CONTINUOUS'],
+        [2, 'DASHED']
+      ])
+    );
+    const bendUpAt = tables.findIndex(([c, v]) => c === 2 && v === 'BEND_UP');
+    expect(tables.slice(bendUpAt, bendUpAt + 4)).toEqual([
+      [2, 'BEND_UP'],
+      [70, '0'],
+      [62, '3'],
+      [6, 'DASHED']
+    ]);
+    const notesAt = tables.findIndex(([c, v]) => c === 2 && v === 'BEND_NOTES');
+    expect(tables.slice(notesAt + 2, notesAt + 4)).toEqual([
+      [62, '2'],
+      [6, 'CONTINUOUS']
+    ]);
+    // No DASHED line type is declared when no layer uses it.
+    expect(writeDxf([], { layers: [{ name: 'CUT' }] })).not.toContain('DASHED');
+    // Without layers the file is exactly the historical layout.
+    expect(writeDxf([], { layers: [] })).toBe(writeDxf([]));
+  });
+
+  it('writes TEXT with height, rotation and alignment', () => {
+    const p = pairs(
+      writeDxf([
+        {
+          kind: 'text',
+          position: [5, 6],
+          height: 2.5,
+          text: 'UP 90 R1.5',
+          layer: 'BEND_NOTES'
+        },
+        {
+          kind: 'text',
+          position: [1, 2],
+          height: 1,
+          text: 'DOWN',
+          rotationDeg: 90,
+          align: 'center'
+        }
+      ])
+    );
+    const first = p.findIndex(([c, v]) => c === 0 && v === 'TEXT');
+    expect(p.slice(first, first + 7)).toEqual([
+      [0, 'TEXT'],
+      [8, 'BEND_NOTES'],
+      [10, '5'],
+      [20, '6'],
+      [30, '0'],
+      [40, '2.5'],
+      [1, 'UP 90 R1.5']
+    ]);
+    // A left-aligned unrotated text writes no rotation or alignment groups.
+    expect(p[first + 7]).toEqual([0, 'TEXT']);
+    const second = first + 7;
+    expect(p.slice(second + 7, second + 12)).toEqual([
+      [50, '90'],
+      [72, '1'],
+      [11, '1'],
+      [21, '2'],
+      [31, '0']
+    ]);
+  });
+
+  it('escapes non-ASCII text and refuses what R12 cannot carry', () => {
+    const p = pairs(
+      writeDxf([
+        { kind: 'text', position: [0, 0], height: 1, text: 'UP 90° Ø4' }
+      ])
+    );
+    expect(p).toContainEqual([1, String.raw`UP 90\U+00B0 \U+00D84`]);
+    const text = (value: string) =>
+      writeDxf([{ kind: 'text', position: [0, 0], height: 1, text: value }]);
+    expect(() => text('two\nlines')).toThrow(/single line/);
+    expect(() => text('tab\there')).toThrow(/U\+9/);
+    expect(() => text('😀')).toThrow(/U\+1F600/);
+    // 256 encoded characters is the reader limit; escapes count at length.
+    expect(() => text('x'.repeat(256))).not.toThrow();
+    expect(() => text('x'.repeat(257))).toThrow(/256 characters/);
+    expect(() => text('°'.repeat(36) + 'x'.repeat(1))).not.toThrow();
+    expect(() => text('°'.repeat(37))).toThrow(/needs 259/);
+    expect(() =>
+      writeDxf([{ kind: 'text', position: [0, 0], height: 0, text: 'x' }])
+    ).toThrow(/height/);
+  });
+
+  it('refuses layer names and colours R12 readers reject', () => {
+    expect(() =>
+      writeDxf([{ kind: 'line', start: [0, 0], end: [1, 0], layer: 'bend up' }])
+    ).toThrow(/layer name/);
+    expect(() =>
+      writeDxf([{ kind: 'line', start: [0, 0], end: [1, 0], layer: '' }])
+    ).toThrow(/layer name/);
+    expect(() =>
+      writeDxf([], { layers: [{ name: 'A' }, { name: 'A' }] })
+    ).toThrow(/twice/);
+    expect(() =>
+      writeDxf([], {
+        layers: [
+          { name: 'BEND_UP', color: 3, lineType: 'DASHED' },
+          { name: 'bend_up', color: 1 }
+        ]
+      })
+    ).toThrow(/twice/);
+    expect(() => writeDxf([], { layers: [{ name: 'A', color: 0 }] })).toThrow(
+      /ACI/
+    );
+    expect(() => writeDxf([], { layers: [{ name: 'A', color: 256 }] })).toThrow(
+      /ACI/
+    );
   });
 });

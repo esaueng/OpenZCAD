@@ -38,7 +38,7 @@ function unresolvedReason(reason: RegExp) {
 function loop(
   corners: { x: number; y: number }[],
   name = 'rectangle',
-  method: SketchComposite['method'] = 'corner'
+  method: Exclude<SketchComposite['method'], 'center-to-center'> = 'corner'
 ) {
   const edgeIds = corners.map((_, index) =>
     toEntityId(`${name}_side_${index}`)

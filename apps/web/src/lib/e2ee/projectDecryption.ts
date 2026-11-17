@@ -12,8 +12,9 @@
  *   engine carries on from the Worker's journal.
  */
 import type { ProjectSummary } from '@openzcad/shared';
-import { api, rememberProjectFormats } from '../api';
+import { api, forgetEncryptedProject } from '../api';
 import { desktopFetch } from '../desktopBridge';
+import { migrationRun } from '../projectWriteGate';
 import { flushProjectEdits } from '../migrationStatus';
 import { getKeySessionRevision } from './keySession';
 import {
@@ -95,7 +96,14 @@ function idle(project: ProjectSummary): MigrationProgress {
 export function createDecryptionController(
   deps: DecryptionControllerDeps
 ): DecryptionController {
-  const fetcher = deps.fetcher ?? desktopFetch;
+  // This device's own decrypt run: its requests stage the project's
+  // plaintext beside its ciphertext before the cutover, which the write
+  // gate otherwise refuses for a project pinned as encrypted. Only the
+  // project it is decrypting or cancelling now, through the routes it
+  // stages through; still refused while the project may not be written
+  // (`projectWriteGate.ts`).
+  const run = migrationRun('decrypt');
+  const fetcher = deps.fetcher ?? run.fetch(desktopFetch);
   const migrations = deps.migrations ?? createProjectMigrationsApi(fetcher);
   const listProjects =
     deps.listProjects ?? (async () => (await api.listProjects()).projects);
@@ -142,10 +150,9 @@ export function createDecryptionController(
       createReaders: () => opened.readers,
       leases,
       flushProject: flushProjectEdits,
-      onCutover: (projectId) =>
-        rememberProjectFormats([
-          { projectId: projectId as never, storageFormat: 1 }
-        ]),
+      // This device's own run cut the project over: the one signal that
+      // unpins it as encrypted here (`encryptedProjectPins.ts`).
+      onCutover: (projectId) => forgetEncryptedProject(projectId),
       onProgress: update
     });
     return engine;
@@ -196,7 +203,9 @@ export function createDecryptionController(
       const project = summaries.find((p) => p.projectId === projectId);
       if (!project) return;
       try {
-        await (await engineFor()).decrypt(project);
+        await run.during(projectId, async () =>
+          (await engineFor()).decrypt(project)
+        );
       } catch (error) {
         if (error instanceof MigrationPausedError) return;
         if (
@@ -241,7 +250,9 @@ export function createDecryptionController(
       if (state.running) return;
       const project = summaries.find((p) => p.projectId === projectId);
       try {
-        await (await engineFor()).cancel(projectId);
+        await run.during(projectId, async () =>
+          (await engineFor()).cancel(projectId)
+        );
         if (project) update(idle(project));
       } catch (error) {
         if (project) {

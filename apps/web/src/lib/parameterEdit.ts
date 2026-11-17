@@ -1,5 +1,6 @@
 import { growingHolderHistories } from '@openzcad/command-system';
 import { getParameterScope, listParameters } from '@openzcad/document-core';
+import { ownEntry } from '@openzcad/shared';
 import type { DerivedState, ProjectDocument } from '@openzcad/shared';
 import { newExactWarnings } from './exactWarnings';
 
@@ -63,7 +64,7 @@ export function parameterBuildError(
   const warning = newExactWarnings(base, derived)[0];
   if (warning) return warning;
   for (const id of base.derived.exportableBodyIds) {
-    if (!derived.bodyRepresentations[id])
+    if (!ownEntry(derived.bodyRepresentations, id))
       return 'The edit did not rebuild an existing result body.';
   }
   return null;

@@ -110,4 +110,34 @@ describe('ShaprImportDialog', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onCancel).toHaveBeenCalledOnce();
   });
+
+  // I67: Enter applies a ready preview, and never one still parsing.
+  it('applies with Enter once the preview is ready, not before', () => {
+    const onApply = vi.fn();
+    const inspection = {
+      ir,
+      stepChecksumSha256: 'b'.repeat(64),
+      sanitizedStepFile: new File(['STEP'], 'holder.step')
+    };
+    const dialog = (phase: 'parsing' | 'preview') => (
+      <ShaprImportDialog
+        shaprFileName="holder.shapr"
+        stepFileName="holder.step"
+        phase={phase}
+        progress="Ready"
+        error={null}
+        inspection={phase === 'preview' ? inspection : null}
+        onCancel={() => undefined}
+        onApply={onApply}
+      />
+    );
+    const { rerender } = render(dialog('parsing'));
+    const form = screen.getByRole<HTMLFormElement>('dialog');
+    form.requestSubmit();
+    expect(onApply).not.toHaveBeenCalled();
+
+    rerender(dialog('preview'));
+    form.requestSubmit();
+    expect(onApply).toHaveBeenCalledOnce();
+  });
 });

@@ -39,6 +39,7 @@ test('enrolls, unlocks and revokes with a real WebAuthn PRF virtual authenticato
   await page.goto(appUrl.href);
   const seeded = await seedE2eeDevice(page, server);
   let settings = await openEncryptionSettings(page);
+  await settings.getByText('Advanced encryption settings').click();
   const fingerprint = await settings
     .getByLabel('Your fingerprint')
     .textContent();
@@ -101,11 +102,17 @@ test('enrolls, unlocks and revokes with a real WebAuthn PRF virtual authenticato
   );
   await page.reload();
   settings = await openEncryptionSettings(page);
+  // A fresh browser of an account with a passkey offers it to unlock.
   await settings
     .getByRole('button', { name: 'Use passkey', exact: true })
     .click();
-  await expect(settings.getByText('Certified', { exact: true })).toBeVisible();
+  await settings
+    .getByRole('dialog', { name: 'Unlock this device' })
+    .getByRole('button', { name: 'Confirm with passkey', exact: true })
+    .click();
   await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
+  await expect(settings.getByText('Encryption is on')).toBeVisible();
+  await settings.getByText('Advanced encryption settings').click();
   await expect(settings.getByLabel('Your fingerprint')).toHaveText(
     fingerprint!
   );
@@ -113,9 +120,12 @@ test('enrolls, unlocks and revokes with a real WebAuthn PRF virtual authenticato
   await settings
     .getByRole('button', { name: 'Remove passkey 1', exact: true })
     .click();
-  await settings
+  const removal = settings.getByRole('dialog', { name: 'Remove passkey' });
+  await removal
     .getByRole('button', { name: 'Confirm with passkey', exact: true })
     .click();
+  // The modal hides the page from the accessibility tree until it closes.
+  await expect(removal).toHaveCount(0, { timeout: 15_000 });
   await expect(
     settings.getByRole('button', { name: 'Remove passkey 1', exact: true })
   ).toHaveCount(0);
@@ -231,8 +241,10 @@ for (const failure of ['unsupported PRF', 'append conflict'] as const) {
         .getByRole('button', { name: 'Cancel', exact: true })
         .click();
     }
+    // Recovery stays intact: the key can still be replaced, and this
+    // device stays unlocked.
     await expect(
-      settings.getByText('Confirmed', { exact: true })
+      settings.getByRole('button', { name: 'Replace…', exact: true })
     ).toBeVisible();
     await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
   });
@@ -255,7 +267,7 @@ test('disables passkeys when WebAuthn is unavailable', async ({
     settings.getByRole('button', { name: 'Add passkey', exact: true })
   ).toBeDisabled();
   await expect(
-    settings.getByText('Not available in this browser.', { exact: true })
+    settings.getByText(/^Not available in this browser\./)
   ).toBeVisible();
   await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
 });

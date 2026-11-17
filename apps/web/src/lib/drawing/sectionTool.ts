@@ -1,4 +1,5 @@
 import {
+  drawingViewFrame,
   DRAWING_VIEW_FRAMES,
   drawingPaperPerModelUnit,
   drawingSectionOrientations,
@@ -84,7 +85,7 @@ export function sectionSnapTargets(
         ? (projection.bounds.minV + projection.bounds.maxV) / 2
         : (projection.bounds.minU + projection.bounds.maxU) / 2
     );
-  const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  const frame = drawingViewFrame(view);
   for (const bodyId of view.bodyIds) {
     for (const edge of annotationBody(bodies, view, bodyId)?.topology?.edges ??
       []) {

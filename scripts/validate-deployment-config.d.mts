@@ -1,6 +1,7 @@
 export const REQUIRED_SECRETS: readonly string[];
 export const UPLOAD_CLEANUP_CRON: '17 * * * *';
 
+export const RELEASE_BUILD_CHECK: string;
 export const OFFICIAL: Readonly<{
   repository: string;
   workerName: string;
@@ -17,13 +18,26 @@ export const OFFICIAL: Readonly<{
   sender: string;
 }>;
 
+export const OFFICIAL_STABLE: Readonly<{
+  workerName: string;
+  databaseName: string;
+  databaseId: string;
+  bucketName: string;
+  sender: string;
+  publicOrigins: readonly string[];
+  servedOrigins: readonly string[];
+  branch: string;
+}>;
+
 export function validateDeploymentConfig(
   config: Record<string, any>,
   options: {
-    target: 'official' | 'selfhost' | 'example' | 'dev';
+    target: 'official' | 'stable' | 'selfhost' | 'example' | 'dev';
     configOnly?: boolean;
     originUrl?: string;
     environment?: Record<string, string | undefined>;
+    /** Required for `stable`: beta's config, to compare shared budgets. */
+    betaConfig?: Record<string, any>;
   }
 ): string[];
 

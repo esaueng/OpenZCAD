@@ -78,14 +78,16 @@ describe('desktop external link allowlist', () => {
 
   it('covers every external link the desktop app opens', () => {
     (window as TauriWindow).__TAURI_INTERNALS__ = {};
-    const settings = readFileSync(
-      resolve(__dirname, 'SettingsPage.tsx'),
-      'utf8'
-    );
+    // The provider data-policy links moved out of SettingsPage with the
+    // assistant connection rows (#1319); scan both so neither can drift.
+    const settings = ['SettingsPage.tsx', 'AssistantConnectionSettings.tsx']
+      .map((name) => readFileSync(resolve(__dirname, name), 'utf8'))
+      .join('\n');
     const providerLinks = [
       ...settings.matchAll(/href: '(https:\/\/[^']+)'/g)
     ].map((match) => match[1]);
-    expect(providerLinks.length).toBeGreaterThan(0);
+    // OpenRouter's and OpenAI's data policies.
+    expect(providerLinks).toHaveLength(2);
     for (const url of [privacyPolicyHref(), ...providerLinks]) {
       expect(approved).toContain(url);
     }

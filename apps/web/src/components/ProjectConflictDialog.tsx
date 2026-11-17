@@ -66,12 +66,48 @@ function differenceSummary(
   )}.`;
 }
 
-function ModifiedAt({ value }: { value: string }) {
+const RELATIVE_UNITS: readonly [Intl.RelativeTimeFormatUnit, number][] = [
+  ['day', 86_400],
+  ['hour', 3_600],
+  ['minute', 60],
+  ['second', 1]
+];
+
+/** "2 minutes ago": what a person compares first (design review I74). */
+export function relativeModified(time: number, now: number): string {
+  const seconds = Math.round((time - now) / 1000);
+  if (Math.abs(seconds) < 5) return 'just now';
+  const format = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+  for (const [unit, size] of RELATIVE_UNITS) {
+    if (Math.abs(seconds) >= size || unit === 'second') {
+      return format.format(Math.trunc(seconds / size), unit);
+    }
+  }
+  return 'just now';
+}
+
+function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+/**
+ * Rows show whole seconds, so two saves in one second read the same. The
+ * later one is still newer; say by how little rather than contradict the
+ * times on screen (design review I74).
+ */
+function newerLabel(newer: number, older: number): string {
+  return Math.floor(newer / 1000) === Math.floor(older / 1000)
+    ? 'Newer · under 1 s'
+    : 'Newer';
+}
+
+function ModifiedAt({ value, now }: { value: string; now: number }) {
   const time = modifiedTime(value);
   return time === null ? (
     <span className="conflict-choice-detail">Modified time unavailable</span>
   ) : (
     <time className="conflict-choice-detail" dateTime={value}>
+      {relativeModified(time, now)} ·{' '}
       {new Date(time).toLocaleString(undefined, {
         month: 'short',
         day: 'numeric',
@@ -115,7 +151,18 @@ export function ProjectConflictDialog({
   const remoteModified = lastModified(conflict.remoteDocument);
   const localTime = modifiedTime(localModified);
   const remoteTime = modifiedTime(remoteModified);
-  const canCompareTimes = localTime !== null && remoteTime !== null;
+  const localNewer =
+    localTime !== null && remoteTime !== null && localTime > remoteTime
+      ? newerLabel(localTime, remoteTime)
+      : null;
+  const remoteNewer =
+    localTime !== null && remoteTime !== null && remoteTime > localTime
+      ? newerLabel(remoteTime, localTime)
+      : null;
+  // Each row names its own copy when the names differ; the header names only
+  // this browser's (design review I74).
+  const namesDiffer = localDocument.name !== remoteDocument.name;
+  const [now] = useState(() => Date.now());
 
   async function resolve(resolution: ConflictResolution) {
     if (working) return;
@@ -187,14 +234,23 @@ export function ProjectConflictDialog({
             <span className="conflict-choice-content">
               <span className="conflict-choice-label">
                 This browser
-                {canCompareTimes && localTime > remoteTime && (
-                  <span className="conflict-newer">Newer</span>
+                {localNewer && (
+                  <span className="conflict-newer">{localNewer}</span>
                 )}
               </span>
-              <ModifiedAt value={localModified} />
+              {namesDiffer && (
+                <span className="conflict-choice-detail conflict-choice-name">
+                  “{localDocument.name}”
+                </span>
+              )}
+              <ModifiedAt value={localModified} now={now} />
               <span className="conflict-choice-detail">
-                {conflict.localDocument.revisions.length} edits ·{' '}
-                {conflict.localDocument.checkpoints.length} save points
+                {plural(localDocument.revisions.length, 'edit', 'edits')} ·{' '}
+                {plural(
+                  localDocument.checkpoints.length,
+                  'save point',
+                  'save points'
+                )}
               </span>
             </span>
             <ChevronRight size={16} aria-hidden="true" />
@@ -209,14 +265,23 @@ export function ProjectConflictDialog({
             <span className="conflict-choice-content">
               <span className="conflict-choice-label">
                 {other}
-                {canCompareTimes && remoteTime > localTime && (
-                  <span className="conflict-newer">Newer</span>
+                {remoteNewer && (
+                  <span className="conflict-newer">{remoteNewer}</span>
                 )}
               </span>
-              <ModifiedAt value={remoteModified} />
+              {namesDiffer && (
+                <span className="conflict-choice-detail conflict-choice-name">
+                  “{remoteDocument.name}”
+                </span>
+              )}
+              <ModifiedAt value={remoteModified} now={now} />
               <span className="conflict-choice-detail">
-                {conflict.remoteDocument.revisions.length} edits ·{' '}
-                {conflict.remoteDocument.checkpoints.length} save points
+                {plural(remoteDocument.revisions.length, 'edit', 'edits')} ·{' '}
+                {plural(
+                  remoteDocument.checkpoints.length,
+                  'save point',
+                  'save points'
+                )}
               </span>
             </span>
             <ChevronRight size={16} aria-hidden="true" />

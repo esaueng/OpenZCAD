@@ -19,6 +19,8 @@ export interface ContextMenuItem {
   danger?: boolean;
   /** Renders a separator line above this item. */
   section?: boolean;
+  /** Opens another menu (Select other's list): marked ▸ and announced so. */
+  submenu?: boolean;
 }
 
 export interface ContextMenuState {
@@ -129,6 +131,7 @@ export function ContextMenu({
             role="menuitem"
             className={`context-menu-item ${item.danger ? 'danger' : ''}`}
             disabled={item.disabled}
+            aria-haspopup={item.submenu ? 'menu' : undefined}
             onClick={() => {
               onSelect(item.id);
               onClose();
@@ -144,6 +147,11 @@ export function ContextMenu({
               )}
             </span>
             {item.shortcut && <kbd>{item.shortcut}</kbd>}
+            {item.submenu && (
+              <span className="context-menu-submenu" aria-hidden="true">
+                ▸
+              </span>
+            )}
           </button>
         </div>
       ))}

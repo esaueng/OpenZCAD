@@ -68,4 +68,31 @@ describe('ImportUnitsDialog', () => {
     expect(onChoose).toHaveBeenCalledTimes(2);
     expect(onChoose).toHaveBeenLastCalledWith(null);
   });
+
+  // I67: Enter on the focused radio did nothing; the dialog had no form.
+  it('imports with Enter on the focused choice, or from the checkbox', async () => {
+    const user = userEvent.setup();
+    const onChoose = renderDialog();
+    await user.click(screen.getByRole('radio', { name: 'Inches' }));
+    await user.keyboard('{Enter}');
+    expect(onChoose).toHaveBeenCalledOnce();
+    expect(onChoose).toHaveBeenCalledWith({ units: 'inch', remember: false });
+
+    onChoose.mockClear();
+    await user.click(
+      screen.getByRole('checkbox', { name: /Always read unitless files/ })
+    );
+    await user.keyboard('{Enter}');
+    expect(onChoose).toHaveBeenCalledOnce();
+    expect(onChoose).toHaveBeenCalledWith({ units: 'inch', remember: true });
+  });
+
+  it('leaves Enter on Cancel to cancel', async () => {
+    const user = userEvent.setup();
+    const onChoose = renderDialog();
+    screen.getByRole('button', { name: 'Cancel' }).focus();
+    await user.keyboard('{Enter}');
+    expect(onChoose).toHaveBeenCalledOnce();
+    expect(onChoose).toHaveBeenCalledWith(null);
+  });
 });

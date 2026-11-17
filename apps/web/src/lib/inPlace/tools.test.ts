@@ -24,7 +24,12 @@ import {
   requestNewAxis,
   resolveNewAxis,
   stepTotal,
+  inPlaceBodyMode,
+  inPlaceFaceMode,
+  takesFeatureFaces,
+  toggledPatternSkip,
   valueInRange,
+  valueRangeSentence,
   type BodyPick,
   type EdgePick,
   type FacePick,
@@ -83,6 +88,43 @@ describe('the in-place tool table', () => {
     expect(isInPlaceTool('torus')).toBe(true);
     expect(isInPlaceTool('fillet')).toBe(true);
     expect(isInPlaceTool('chamfer')).toBe(true);
+  });
+
+  it('says the range a typed value fell outside, with its unit', () => {
+    const width = IN_PLACE_TOOL_SPECS.box.values.find(
+      (value) => value.id === 'width'
+    )!;
+    expect(valueRangeSentence(width, 'mm')).toMatch(
+      /^Width must be (?:at least|more than) [\d.]+ mm\.$/
+    );
+    expect(
+      valueRangeSentence(
+        {
+          id: 'a',
+          label: 'Angle',
+          unit: 'angle',
+          initial: 90,
+          min: 0,
+          max: 180,
+          exclusive: true
+        },
+        '°'
+      )
+    ).toBe('Angle must be more than 0° and less than 180°.');
+    expect(
+      valueRangeSentence(
+        {
+          id: 'n',
+          label: 'Count',
+          unit: 'count',
+          initial: 3,
+          min: 2,
+          max: 100,
+          integer: true
+        },
+        ''
+      )
+    ).toBe('Count must be a whole number from 2 to 100.');
   });
 
   it('takes a typed value inside its range, strictly for an open one', () => {
@@ -175,6 +217,229 @@ describe('face tools build the card state', () => {
         .handles(slots, {}, CTX, { depthMode: 'through' })
         .map((h) => h.valueId)
     ).toEqual(['diameter']);
+  });
+
+  it('hole on sketch points (M01): each clicked point is a bore, the handles on the first', () => {
+    const spec = IN_PLACE_TOOL_SPECS.hole;
+    const SKETCH = 'sketch_points' as SketchId;
+    const ctx: InPlaceContext = {
+      ...CTX,
+      // A sketch below the face: its points drop onto it along the normal.
+      sketchPoints: (sketchId) =>
+        sketchId === SKETCH
+          ? [
+              { id: 'p_a', at: { x: 4, y: 3, z: 0 } },
+              { id: 'p_b', at: { x: 16, y: 7, z: 0 } }
+            ]
+          : []
+    };
+    const options = { place: 'points', depthMode: 'through', style: 'simple' };
+    const pick = (entityId: string, sketchId = SKETCH) => ({
+      sketchId,
+      entityId
+    });
+    const face = { ...EMPTY, faces: [TOP] };
+    expect(spec.hint(face, options, ctx)).toBe(
+      'Click the sketch points to drill at'
+    );
+    // Placed on points, a face alone is not yet a hole.
+    expect(spec.ready(face, options, ctx)).toBe(false);
+    expect(spec.request(face, { diameter: 4 }, options, ctx)).toBeNull();
+    // A point of another sketch is not one of this hole's.
+    const slots = {
+      ...face,
+      path: [pick('p_a'), pick('p_b'), pick('p_c', 'sketch_other' as SketchId)]
+    };
+    expect(spec.ready(slots, options, ctx)).toBe(true);
+    expect(spec.hint(slots, options, ctx)).toBe(
+      'Click more points · drag the diameter'
+    );
+    expect(spec.request(slots, { diameter: 4 }, options, ctx)).toMatchObject({
+      tool: 'modeling',
+      state: {
+        operation: 'hole',
+        value: {
+          faceHash: 11,
+          diameter: '4',
+          position: { u: '0', v: '0' },
+          points: { sketchId: SKETCH, pointIds: ['p_a', 'p_b'] }
+        }
+      }
+    });
+    // The diameter handle stands on the first point, on the face.
+    const [diameter] = spec.handles(slots, { diameter: 4 }, ctx, options);
+    expect(diameter).toMatchObject({
+      valueId: 'diameter',
+      params: { origin: { x: 4, y: 3, z: 4 } }
+    });
+    // Clicked again, the hole drops its points.
+    expect(
+      spec.request(
+        slots,
+        { diameter: 4 },
+        { ...options, place: 'clicked' },
+        ctx
+      )
+    ).not.toHaveProperty('state.value.points');
+  });
+
+  it('hole sized by a standard (M01): the table gives the diameter, which has no handle', () => {
+    const spec = IN_PLACE_TOOL_SPECS.hole;
+    const slots = { ...EMPTY, faces: [TOP] };
+    const iso = {
+      standard: 'iso',
+      isoSize: 'M8',
+      holeFor: 'clearance',
+      fit: 'close',
+      depthMode: 'blind',
+      style: 'simple'
+    };
+    const ctx: InPlaceContext = { ...CTX, units: 'mm' };
+    expect(
+      spec.request(slots, { diameter: 4, depth: 8 }, iso, ctx)
+    ).toMatchObject({
+      state: {
+        value: {
+          diameter: '8.4',
+          standard: {
+            system: 'iso',
+            size: 'M8',
+            kind: 'clearance',
+            fit: 'close'
+          }
+        }
+      }
+    });
+    expect(spec.hint(slots, iso, ctx)).toBe(
+      'Click to move it · M8 clearance (close) ⌀ 8.4'
+    );
+    // Only the depth is dragged: the table sets the diameter.
+    expect(
+      spec
+        .handles(slots, { depth: 8 }, ctx, iso)
+        .map((handle) => handle.valueId)
+    ).toEqual(['depth']);
+    // A tap drill has no fit; an inch document stores the inch diameter.
+    const tap = spec.request(
+      slots,
+      {},
+      { standard: 'ansi', ansiSize: '1/4', holeFor: 'tap-drill', fit: 'loose' },
+      { ...CTX, units: 'inch' }
+    );
+    expect(tap).toMatchObject({
+      state: {
+        value: {
+          diameter: '0.201',
+          standard: { system: 'ansi', size: '1/4', kind: 'tap-drill' }
+        }
+      }
+    });
+    expect(tap).not.toHaveProperty('state.value.standard.fit');
+    // The step sizes follow the table's bore.
+    expect(spec.defaults!(slots, ctx, {}, iso)).toMatchObject({
+      counterboreDiameter: 15.12
+    });
+    // In a metre document the steps keep their size (review): M2's Ø2.4 mm
+    // counterbore suggestion is 4.32 mm, not 0.0043 m rounded to 0.
+    expect(
+      spec.defaults!(
+        slots,
+        { ...CTX, units: 'm' },
+        {},
+        { standard: 'iso', isoSize: 'M2', holeFor: 'clearance', fit: 'normal' }
+      )
+    ).toMatchObject({
+      counterboreDiameter: 0.00432,
+      counterboreDepth: 0.0012,
+      countersinkDiameter: 0.0048
+    });
+    // Any size stores none.
+    expect(
+      spec.request(slots, { diameter: 4 }, { standard: 'none' }, ctx)
+    ).not.toHaveProperty('state.value.standard');
+  });
+
+  it('tapped hole (M01): the thread is the whole bore until its arrow is dragged', () => {
+    const spec = IN_PLACE_TOOL_SPECS.hole;
+    const slots = { ...EMPTY, faces: [TOP] };
+    const options = {
+      standard: 'iso',
+      isoSize: 'M6',
+      holeFor: 'tap-drill',
+      tap: 'tapped',
+      tapFit: 'document',
+      depthMode: 'blind'
+    };
+    const ctx: InPlaceContext = { ...CTX, units: 'mm' };
+    expect(
+      spec.request(slots, { depth: 12, tapLength: 12 }, options, ctx)
+    ).toMatchObject({
+      state: {
+        value: {
+          diameter: '5',
+          standard: { system: 'iso', size: 'M6', kind: 'tap-drill' },
+          tapped: {}
+        }
+      }
+    });
+    // Dragged short, and on an exact fit.
+    expect(
+      spec.request(
+        slots,
+        { depth: 12, tapLength: 8 },
+        { ...options, tapFit: 'exact' },
+        { ...ctx, touched: ['tapLength'] }
+      )
+    ).toMatchObject({
+      state: { value: { tapped: { length: '8', clearance: 0 } } }
+    });
+    // Its arrow stands beside the depth's, down the bore.
+    expect(
+      spec
+        .handles(slots, { depth: 12, tapLength: 12 }, ctx, options)
+        .map((handle) => handle.valueId)
+    ).toEqual(['depth', 'tapLength']);
+    // A drill only, or a clearance hole, is not tapped.
+    for (const other of [
+      { ...options, tap: 'none' },
+      { ...options, holeFor: 'clearance' }
+    ]) {
+      expect(spec.request(slots, {}, other, ctx)).not.toHaveProperty(
+        'state.value.tapped'
+      );
+    }
+    expect(spec.defaults!(slots, ctx, { depth: 12 }, options)).toMatchObject({
+      tapLength: 12
+    });
+  });
+
+  it('cosmetic thread (M01): described, not cut, and keeps no clearance', () => {
+    const spec = IN_PLACE_TOOL_SPECS.hole;
+    const slots = { ...EMPTY, faces: [TOP] };
+    const options = {
+      standard: 'iso',
+      isoSize: 'M6',
+      holeFor: 'tap-drill',
+      tap: 'tapped',
+      tapForm: 'cosmetic',
+      tapFit: 'exact'
+    };
+    expect(
+      spec.request(slots, {}, options, { ...CTX, units: 'mm' })
+    ).toMatchObject({
+      state: { value: { tapped: { cosmetic: true } } }
+    });
+    expect(
+      spec.request(slots, {}, options, { ...CTX, units: 'mm' })
+    ).not.toHaveProperty('state.value.tapped.clearance');
+    expect(
+      spec.request(
+        slots,
+        {},
+        { ...options, tapForm: 'modeled' },
+        { ...CTX, units: 'mm' }
+      )
+    ).not.toHaveProperty('state.value.tapped.cosmetic');
   });
 
   it('shell: every picked face opens, and the wall handle points inward', () => {
@@ -280,7 +545,9 @@ describe('face tools build the card state', () => {
       'the face is only 12 long.'
     );
     // An offset alone keeps them running to the far end.
-    expect(spec.carries!('offset', 3, { teeth: 20, faceWidth: 12 }, slots, {})).toEqual({
+    expect(
+      spec.carries!('offset', 3, { teeth: 20, faceWidth: 12 }, slots, {})
+    ).toEqual({
       faceWidth: 9
     });
   });
@@ -1082,6 +1349,7 @@ describe('body tools', () => {
     expect(
       spec
         .handles({ ...EMPTY, bodies: [BODY], axis }, {}, CTX, {})
+        .filter((handle) => handle.kind !== 'instance')
         .map((handle) => [handle.valueId, handle.kind])
     ).toEqual([
       ['angle', 'angle'],
@@ -1130,9 +1398,10 @@ describe('patterns', () => {
       axis: 'y',
       spacing: 30
     });
+    // M02: then a skip toggle on each copy, the original left out.
     expect(
       spec.handles(slots, {}, CTX, { axis: 'y' }).map((h) => h.kind)
-    ).toEqual(['linear', 'chip']);
+    ).toEqual(['linear', 'chip', 'instance', 'instance']);
   });
 
   it('circular: a world axis or a datum axis', () => {
@@ -1196,6 +1465,251 @@ describe('patterns', () => {
       count: 'X count',
       count2: 'Z count'
     });
+  });
+});
+
+describe('M02 feature patterns and skipped copies', () => {
+  const HOLE = 'feature_hole' as FeatureId;
+  const BORE: FacePick = {
+    bodyId: 'body_a' as BodyId,
+    hash: 21,
+    topologyId: 'f21',
+    surfaceType: 'cylinder',
+    centroid: { x: 4, y: 5, z: 2 },
+    cylinder: {
+      axisStart: { x: 4, y: 5, z: 0 },
+      axisEnd: { x: 4, y: 5, z: 4 },
+      radius: 1.5
+    },
+    feature: { featureId: HOLE, name: 'Hole' }
+  };
+  const FEATURES = { repeat: 'features' } as const;
+
+  it('Repeat: Features takes faces, many on one body, instead of the body', () => {
+    for (const id of [
+      'linear-pattern',
+      'circular-pattern',
+      'grid-pattern'
+    ] as const) {
+      const spec = IN_PLACE_TOOL_SPECS[id];
+      expect(spec.options?.some((option) => option.id === 'repeat')).toBe(true);
+      expect(takesFeatureFaces(spec, {})).toBe(false);
+      expect(inPlaceBodyMode(spec, {})).toBe('one');
+      expect(inPlaceFaceMode(spec, {})).toBeUndefined();
+      expect(inPlaceBodyMode(spec, FEATURES)).toBeUndefined();
+      expect(inPlaceFaceMode(spec, FEATURES)).toBe('many');
+    }
+    // A face command's own face list is unchanged.
+    expect(inPlaceFaceMode(IN_PLACE_TOOL_SPECS.shell, {})).toBe('many');
+  });
+
+  it('repeats the picked feature on its body, once however many faces name it', () => {
+    const spec = IN_PLACE_TOOL_SPECS['linear-pattern'];
+    const slots = {
+      ...EMPTY,
+      faces: [BORE, { ...BORE, hash: 22, topologyId: 'f22' }]
+    };
+    expect(spec.ready(slots, FEATURES)).toBe(true);
+    expect(spec.ready({ ...EMPTY, bodies: [BODY] }, FEATURES)).toBe(false);
+    expect(spec.hint({ ...EMPTY }, FEATURES)).toBe(
+      'Click a hole, boss or cut to repeat'
+    );
+    expect(
+      spec.request(
+        slots,
+        { spacing: 10, count: 3 },
+        { ...FEATURES, axis: 'x' },
+        CTX,
+        { spacing: 10, count: 3 }
+      )
+    ).toEqual({
+      tool: 'pattern',
+      targetBodyId: 'body_a',
+      sourceFeatureIds: [HOLE],
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      spacing: 10
+    });
+    // The handles stand on the hole, not the body's middle.
+    const spacing = spec
+      .handles(slots, { spacing: 10, count: 3 }, CTX, {
+        ...FEATURES,
+        axis: 'x'
+      })
+      .find((handle) => handle.valueId === 'spacing')!;
+    expect(spacing.kind === 'linear' && spacing.params.origin).toEqual({
+      x: 4,
+      y: 5,
+      z: 2
+    });
+  });
+
+  it('places a toggle on every copy where it lands, and stores the skipped ones', () => {
+    const spec = IN_PLACE_TOOL_SPECS['linear-pattern'];
+    const slots = { ...EMPTY, bodies: [BODY] };
+    const options = { axis: 'x', skip: '2' };
+    const toggles = spec
+      .handles(slots, { spacing: 30, count: 4 }, CTX, options)
+      .filter((handle) => handle.kind === 'instance');
+    expect(
+      toggles.map((handle) =>
+        handle.kind === 'instance'
+          ? [handle.params.label, handle.params.anchor.x, handle.params.skipped]
+          : null
+      )
+    ).toEqual([
+      ['1', 40, false],
+      ['2', 70, true],
+      ['3', 100, false]
+    ]);
+    expect(
+      spec.request(slots, { spacing: 30, count: 4 }, options, CTX, {
+        spacing: 30,
+        count: 4
+      })
+    ).toMatchObject({ skippedInstances: ['2'] });
+    // A copy a lowered count no longer reaches is not stored.
+    expect(
+      spec.request(slots, { spacing: 30, count: 2 }, options, CTX, {
+        spacing: 30,
+        count: 2
+      })
+    ).not.toHaveProperty('skippedInstances');
+  });
+
+  it('labels a grid copy by column and row, and a ring copy by its turn', () => {
+    const grid = IN_PLACE_TOOL_SPECS['grid-pattern'];
+    const labels = grid
+      .handles(
+        { ...EMPTY, bodies: [BODY] },
+        { spacing: 10, count: 2, spacing2: 20, count2: 3 },
+        CTX,
+        { axis: 'x', axis2: 'y' }
+      )
+      .flatMap((handle) =>
+        handle.kind === 'instance' ? [handle.params.label] : []
+      );
+    expect(labels).toEqual(['0-1', '0-2', '1-0', '1-1', '1-2']);
+    expect(
+      grid.request(
+        { ...EMPTY, bodies: [BODY] },
+        { spacing: 10, count: 2, spacing2: 20, count2: 3 },
+        { axis: 'x', axis2: 'y', skip: '1-1' },
+        CTX,
+        { spacing: 10, count: 2, spacing2: 20, count2: 3 }
+      )
+    ).toMatchObject({ skippedInstances: ['1-1'] });
+
+    const ring = IN_PLACE_TOOL_SPECS['circular-pattern'];
+    const z = axisCandidatesFor(EMPTY, CTX, 'world')[2]!;
+    const quarter = ring
+      .handles(
+        { ...EMPTY, bodies: [BODY], axis: z },
+        { count: 4, angle: 360 },
+        CTX,
+        {}
+      )
+      .find(
+        (handle) => handle.kind === 'instance' && handle.params.label === '1'
+      )!;
+    // The body's middle (10, 5) turned a quarter about Z.
+    expect(quarter.kind === 'instance' && quarter.params.anchor.x).toBeCloseTo(
+      -5,
+      9
+    );
+    expect(quarter.kind === 'instance' && quarter.params.anchor.y).toBeCloseTo(
+      10,
+      9
+    );
+  });
+
+  it('Point pattern: copies move from the point nearest the original to each picked point', () => {
+    const spec = IN_PLACE_TOOL_SPECS['point-pattern'];
+    const SKETCH = 'sketch_points' as SketchId;
+    const spots = [
+      // BODY's middle is (10, 5, 2): this point is the one it stands on.
+      { id: 'p_ref', at: { x: 11, y: 5, z: 0 } },
+      { id: 'p_a', at: { x: 41, y: 5, z: 0 } },
+      { id: 'p_b', at: { x: 11, y: 35, z: 0 } }
+    ];
+    const ctx: InPlaceContext = {
+      ...CTX,
+      sketchPoints: (sketchId) => (sketchId === SKETCH ? spots : [])
+    };
+    const pick = (entityId: string) => ({ sketchId: SKETCH, entityId });
+    expect(spec.hint({ ...EMPTY, bodies: [BODY] }, {}, ctx)).toBe(
+      'Click the sketch points to repeat at'
+    );
+    // The reference alone makes no copy.
+    const lone = { ...EMPTY, bodies: [BODY], path: [pick('p_ref')] };
+    expect(spec.ready(lone, {}, ctx)).toBe(false);
+    const slots = {
+      ...EMPTY,
+      bodies: [BODY],
+      path: [pick('p_ref'), pick('p_a'), pick('p_b')]
+    };
+    expect(spec.ready(slots, {}, ctx)).toBe(true);
+    expect(spec.request(slots, {}, { skip: 'p_b' }, ctx)).toEqual({
+      tool: 'pattern',
+      targetBodyId: 'body_a',
+      patternKind: 'points',
+      count: 3,
+      axis: 'x',
+      points: {
+        sketchId: SKETCH,
+        pointIds: ['p_ref', 'p_a', 'p_b'],
+        referencePointId: 'p_ref'
+      },
+      skippedInstances: ['p_b']
+    });
+    // Each copy's chip stands where it lands: the body's middle, moved.
+    expect(
+      spec
+        .handles(slots, {}, ctx, {})
+        .map((handle) =>
+          handle.kind === 'instance'
+            ? [handle.params.label, handle.params.anchor]
+            : null
+        )
+    ).toEqual([
+      ['p_a', { x: 40, y: 5, z: 2 }],
+      ['p_b', { x: 10, y: 35, z: 2 }]
+    ]);
+    // An edit keeps the reference it stored, wherever the body is now.
+    expect(
+      spec.request(
+        slots,
+        {},
+        {},
+        {
+          ...ctx,
+          saved: {
+            featureKind: 'pattern',
+            targetBodyId: 'body_a' as BodyId,
+            patternKind: 'points',
+            count: 2,
+            axis: 'x',
+            spacing: 10,
+            angleDeg: 360,
+            points: {
+              sketchId: SKETCH,
+              pointIds: ['p_a', 'p_b'],
+              referencePointId: 'p_a'
+            }
+          }
+        }
+      )
+    ).toMatchObject({
+      points: { pointIds: ['p_a', 'p_ref', 'p_b'], referencePointId: 'p_a' }
+    });
+  });
+
+  it('toggles a copy in and out of the skip list', () => {
+    expect(toggledPatternSkip(undefined, '2')).toBe('2');
+    expect(toggledPatternSkip('2', '3')).toBe('2,3');
+    expect(toggledPatternSkip('2,3', '2')).toBe('3');
+    expect(toggledPatternSkip('3', '3')).toBe('');
   });
 });
 
@@ -2175,6 +2689,7 @@ describe('axes and directions picked in the model', () => {
     expect(
       spec
         .handles(slots, {}, CTX, { spacing: 'step' })
+        .filter((handle) => handle.kind !== 'instance')
         .map((handle) => handle.valueId)
     ).toEqual(['step', 'count']);
     expect(spec.hint(slots, { spacing: 'step' })).toMatch(/Drag the step/);
@@ -2207,5 +2722,49 @@ describe('axes and directions picked in the model', () => {
         CTX
       )
     ).toMatchObject({ direction: { x: tilted!.values.dirX, z: 0 } });
+  });
+});
+
+describe('hints before the first pick', () => {
+  it('never send the user to an Options field that is not there yet', () => {
+    // 13 November review: "Options sets the radius" over an Options panel
+    // with no radius in it until an edge was picked.
+    for (const [tool, size] of [
+      ['fillet', 'radius'],
+      ['chamfer', 'distance']
+    ] as const) {
+      const hint = IN_PLACE_TOOL_SPECS[tool].hint(EMPTY, {});
+      expect(hint).toMatch(new RegExp(`^Click the edges to ${tool}`));
+      expect(hint).toContain(`the ${size}`);
+      expect(hint).not.toMatch(/Options/);
+    }
+    expect(IN_PLACE_TOOL_SPECS.gear.hint(EMPTY, {})).toBe(
+      'Pick a plane or flat face · then set module and teeth on the gear'
+    );
+  });
+
+  it('spells center as every other card does', () => {
+    const pivot = IN_PLACE_TOOL_SPECS.scale.options?.find(
+      (option) => option.id === 'pivot'
+    );
+    expect(pivot?.choices.map((choice) => choice.label)).toContain(
+      'Body center'
+    );
+  });
+});
+
+describe('a new primitive over a model that has bodies', () => {
+  it('says Done adds a separate body where it previews', () => {
+    // 13 November review: Cylinder, Sphere, Cone and Torus previewed at the
+    // origin inside an existing box, and nothing said what Done would make.
+    const cylinder = IN_PLACE_TOOL_SPECS.cylinder;
+    const ctx = (ids: string[]) =>
+      ({ liveBodyIds: () => ids as BodyId[] }) as never;
+    expect(cylinder.hint(EMPTY, {}, ctx([]))).toBe(
+      'Drag a footprint on the ground or a face'
+    );
+    expect(cylinder.hint(EMPTY, {}, ctx(['box']))).toBe(
+      'Drag a footprint on the ground or a face · Done adds it as a separate body where it shows'
+    );
   });
 });

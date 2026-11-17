@@ -11,9 +11,9 @@ import {
   readUnresolvedConflict,
   reaskConflict,
   rememberUnresolvedConflict,
-  resolveProjectConflict,
   type ConflictResolutionHandlers
 } from './conflictRecovery';
+import { resolveProjectConflict } from './conflictResolution';
 
 const owner = toUserId('user_conflict_owner');
 

@@ -8,7 +8,8 @@ import {
   revealModelPanel,
   waitForStillViewport,
   blendEdgesInPlace,
-  extrudeBar
+  extrudeBar,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 // Streamed preview frames arrive much later on the 2-core CI runners under
@@ -177,6 +178,8 @@ async function armChamferedTopCapOffset(page: Page) {
     )
     .not.toBeNull();
   const chip = page.getByTestId('direct-manipulation-value');
+  // A face starts on Offset; these specs read and type the cap's Total.
+  await switchFaceOffsetToTotal(page);
   await expect(chip).toHaveText('28 mm');
   // The selection's inspector stands in the right lane, inside the docked
   // panels, over the right of a model framed before it opened. Fit frames
@@ -497,6 +500,7 @@ test('reuses an exact frame on reversal and waits for complete validation on rel
 
   // A reply delivered after Escape must not resurrect the canceled gesture.
   await selectTopCap();
+  await switchFaceOffsetToTotal(page);
   await expect(chip).toHaveText('28 mm');
   const nextHandle = await canvas.evaluate((element) => ({
     x: Number(element.dataset.e2eHandleX),
@@ -699,9 +703,16 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   await expect(chip).toHaveAttribute('data-state', 'warning', {
     timeout: PREVIEW_BUDGET_MS
   });
+  // A refused frame is not the refusal while the hand is still on the
+  // handle (#1334): the operation stays Dragging, and Failed, with its card,
+  // lands only on release (the next test lets go there).
+  const operation = page.getByRole('region', {
+    name: 'Offset Face operation'
+  });
   await expect(
-    page.getByRole('region', { name: 'Offset Face operation' })
-  ).toContainText('Failed');
+    operation.locator('.selection-callout-phase-dot')
+  ).toHaveAttribute('aria-label', 'Dragging');
+  await expect(operation).not.toContainText('Failed');
   expect(await readAxisLength()).toBeCloseTo(lastValid!, 4);
   // A value that builds again recovers the gesture in place.
   await page.mouse.move(
@@ -1114,8 +1125,9 @@ test('streams an exact extrude preview while a region drag is held', async ({
   await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /.+/);
   await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
 
-  // Picking the far cap arms its handle on demand: the chip reads the stored
-  // distance, and the card says Extrude.
+  // Picking the far cap arms its handle on demand: the card says Extrude,
+  // and the chip, switched to Total, reads the stored distance (it starts on
+  // the signed Offset, QA 2026-11-14 finding #9).
   const cap = await canvas.evaluate(
     (element) =>
       new Promise<{ hasReference: boolean } | null>((resolve) => {
@@ -1127,6 +1139,8 @@ test('streams an exact extrude preview while a region drag is held', async ({
       })
   );
   expect(cap).not.toBeNull();
+  await expect(chip).toHaveText('+0 mm');
+  await switchFaceOffsetToTotal(page);
   await expect(chip).toHaveText(/^\d+(\.\d+)? mm$/);
   await expect(
     page.getByRole('region', { name: 'Extrude operation' })

@@ -180,6 +180,7 @@ describe('sketch modify tool picking', () => {
       'chamfer',
       'offset',
       'trim',
+      'extend',
       'mirror',
       'linear-pattern',
       'circular-pattern'

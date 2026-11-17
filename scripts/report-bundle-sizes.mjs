@@ -49,7 +49,20 @@ const CHECK = process.argv.includes('--check');
 // reaches now loads on it: the assembly player (View), the AI patch
 // preflight, the direct-edit attempt log, the refusal reproduction export
 // and the library folder sync engine. Entry chunk 1,019,300 → 994,564 bytes.
-const DEFAULT_RAW_BUDGET = 1024 * 1024;
+//
+// 2026-11-14: raised by 8 KiB at the maintainer's direction. Main had grown
+// back to 1,048,537 bytes, 39 under the edge, and naming a new project for
+// its first import (lib/importProjectName, itself loaded on the import) adds
+// about 580 bytes of wiring that must live in App. The tripwire stays a
+// tripwire: the next raise should again come with a split.
+//
+// 2026-11-16: raised by 16 KiB at the maintainer's direction for F06
+// configurations. Main stood at 1,059,408 bytes with exact export of any
+// row (the export dialog asks the kernel what a configuration that is not
+// shown writes); the Tweak link, per-instance rows and per-view rows add
+// a few more KB of App wiring. Export diagnostics now loads on its gesture
+// beside it. The tripwire stays a tripwire.
+const DEFAULT_RAW_BUDGET = (1024 + 24) * 1024;
 const APPROVED_LAZY_ASSETS = [
   {
     pattern: /^assets\/three-.*\.js$/,

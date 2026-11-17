@@ -15,6 +15,7 @@ import {
 import { downloadText } from '../lib/model';
 import { countLabel } from '../lib/toasts';
 import { Section } from './settingsControls';
+import { useConfirm } from './ConfirmDialog';
 
 const LEVELS: readonly ActivityLevel[] = [
   'ready',
@@ -67,8 +68,14 @@ function fileStamp(date: Date): string {
  * uncaught error of this session, newest first by default, with filters and
  * an export for bug reports. Live: entries arrive while it is open.
  */
-export function ActivityLogSettings() {
+export function ActivityLogSettings({
+  confirmDestructive = true
+}: {
+  /** Settings › General › "Confirm destructive actions". */
+  confirmDestructive?: boolean;
+} = {}) {
   const { entries, dropped, startedAt } = useActivityLog();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [query, setQuery] = useState('');
   const [levels, setLevels] = useState<ReadonlySet<ActivityLevel>>(
     () => new Set()
@@ -239,10 +246,25 @@ export function ActivityLogSettings() {
               type="button"
               className="secondary danger"
               disabled={entries.length === 0}
-              onClick={() => {
-                clearActivityLog();
-                setFeedback('Log cleared.');
-              }}
+              onClick={() =>
+                void (async () => {
+                  // The log is what a bug report is built from, and nothing
+                  // brings it back: Clear asks like every other destructive
+                  // action while "Confirm destructive actions" is on.
+                  if (
+                    confirmDestructive &&
+                    !(await confirm({
+                      title: 'Clear the activity log?',
+                      body: `${countLabel(entries.length, 'entry is', 'entries are')} removed. This cannot be undone.`,
+                      confirmLabel: 'Clear log'
+                    }))
+                  ) {
+                    return;
+                  }
+                  clearActivityLog();
+                  setFeedback('Log cleared.');
+                })()
+              }
             >
               <Trash2 size={13} aria-hidden="true" />
               Clear
@@ -267,6 +289,7 @@ export function ActivityLogSettings() {
           ))}
         </ol>
       </div>
+      {confirmDialog}
     </Section>
   );
 }

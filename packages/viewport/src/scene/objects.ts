@@ -1,14 +1,15 @@
 import * as THREE from 'three';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
-import type {
-  DisplayMode,
-  SectionViewSettings,
-  SketchOverlay
-} from '../types';
+import type { DisplayMode, SectionViewSettings, SketchOverlay } from '../types';
 import type { EdgeTopology } from '@openzcad/shared';
 import { findBodyId, isViewerMesh, type ViewerMesh } from '../pick/meshes';
 import { updateSectionCap } from './sectionCaps';
+import {
+  applySectionOverlapOverlay,
+  sectionOverlaps,
+  type SectionOverlapPair
+} from './sectionOverlap';
 import { disposeMaterial } from '../render/programRetention';
 import { applyExactSection, type ExactSectionDisplay } from './exactSection';
 import {
@@ -88,8 +89,20 @@ export function applyDisplayMode(
     } else if (isViewerMesh(child) || child.userData.sectionCap === true) {
       const mesh = child as ViewerMesh;
       const facetWireframe = child.userData.meshFacetWireframe === true;
-      mesh.material.visible = facesVisible || facetWireframe;
+      const visible = facesVisible || facetWireframe;
+      if (child.userData.analysisCovered === true) {
+        // An M09 analysis overlay stands in for these faces: keep what the
+        // mode wants for when it goes, and draw the overlay instead.
+        child.userData.analysisFacesVisible = visible;
+        mesh.material.visible = false;
+      } else {
+        mesh.material.visible = visible;
+      }
       mesh.material.wireframe = facetWireframe && !facesVisible;
+    } else if (child.userData.analysisOverlay === true) {
+      // M09: the analysis is drawn as the body's faces, so it shows when
+      // they would.
+      child.visible = facesVisible;
     } else if (child.userData.ownColourFill === true) {
       // A selected face follows the body's surfaces, including the
       // translucent faces X-ray displays over wireframe.
@@ -148,12 +161,17 @@ export function sectionClippingPlane(
  * fidelities. It is per body, because the kernel can section one body of a
  * model and refuse another — and a body with no exact section still needs its
  * cap, or it renders as an open shell.
+ *
+ * Returns the bodies whose display caps overlap inside the cut (M09's first,
+ * display-only slice), and draws that overlap over the cut. It is display
+ * evidence from the tessellation, labelled as such wherever it is shown;
+ * the exact answer is the kernel clash query.
  */
 export function applySectionPlane(
   root: THREE.Object3D,
   plane: THREE.Plane | null,
   exact: ExactSectionDisplay = null
-) {
+): SectionOverlapPair[] {
   const planes = plane ? [plane] : null;
   const meshes: ViewerMesh[] = [];
   root.updateWorldMatrix(true, true);
@@ -162,6 +180,8 @@ export function applySectionPlane(
     // Exact section geometry lies in the cutting plane; clipping it would
     // clip it away.
     if (child.userData.exactSection === true) return;
+    // So does the display overlap overlay drawn on the cut.
+    if (child.userData.sectionOverlap === true) return;
     if (isViewerMesh(child)) meshes.push(child);
     const materials = (child as THREE.Mesh).material;
     for (const material of Array.isArray(materials)
@@ -180,7 +200,8 @@ export function applySectionPlane(
     }
   });
   // Adding/removing children during traverse would skip siblings.
-  const showExact = plane !== null && exact !== null && exact.regions.length > 0;
+  const showExact =
+    plane !== null && exact !== null && exact.regions.length > 0;
   const exactBodyIds = new Set(
     showExact ? exact.regions.map((region) => region.bodyId) : []
   );
@@ -196,6 +217,11 @@ export function applySectionPlane(
     }
   }
   applyExactSection(root, showExact ? exact : null, bodyColors, bodyOpacities);
+  // M09 first slice: bodies overlapping inside the cut, from the display
+  // meshes — display evidence, never an exact clash answer.
+  const overlaps = plane ? sectionOverlaps(meshes, plane) : null;
+  applySectionOverlapOverlay(root, meshes, overlaps);
+  return (overlaps?.pairs ?? []).map(({ a, b, area }) => ({ a, b, area }));
 }
 
 export function sketchCentroid(sketch: SketchOverlay): THREE.Vector3 {

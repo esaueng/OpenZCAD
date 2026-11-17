@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { BodyRepresentation, ParameterNode } from '@openzcad/shared';
@@ -68,5 +68,101 @@ describe('ParametersPanel', () => {
       screen.getByRole('group', { name: 'Show these bodies when on' })
     );
     expect(editor.getByLabelText('Plate')).toBeInTheDocument();
+  });
+
+  describe('the print clearance (L09)', () => {
+    const unset = { stored: undefined, value: null, error: null };
+
+    it('is shown only when the workspace passes one, read-only without a setter', () => {
+      renderPanel();
+      expect(screen.queryByLabelText('Print clearance')).toBeNull();
+      renderPanel({ printClearance: unset });
+      expect(screen.getByLabelText('Print clearance')).toHaveAttribute(
+        'readonly'
+      );
+      expect(
+        screen.queryByRole('button', { name: 'Set print clearance' })
+      ).toBeNull();
+    });
+
+    it('sets a length, an expression, or clears it', async () => {
+      const onSet = vi.fn().mockReturnValue(null);
+      const { rerender } = renderPanel({
+        printClearance: unset,
+        onSetPrintClearance: onSet,
+        units: 'inch'
+      });
+      const input = screen.getByLabelText('Print clearance');
+      expect(input).toHaveAttribute('placeholder', 'none (in)');
+      fireEvent.change(input, { target: { value: '0.008' } });
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole('button', { name: 'Set print clearance' })
+        );
+      });
+      expect(onSet).toHaveBeenLastCalledWith(0.008);
+      fireEvent.change(input, { target: { value: ' 0.2 mm ' } });
+      await act(async () => {
+        fireEvent.submit(input.closest('form')!);
+      });
+      expect(onSet).toHaveBeenLastCalledWith('0.2 mm');
+      rerender(
+        <ParametersPanel
+          parameters={[]}
+          parameterValues={{}}
+          onSetParameter={vi.fn()}
+          onViewActivityLog={vi.fn()}
+          onDeleteParameter={vi.fn()}
+          onRenameParameter={vi.fn()}
+          onExposeParameter={vi.fn()}
+          onDescribeParameter={vi.fn()}
+          exposedParameterNames={new Set()}
+          bodies={[]}
+          units="inch"
+          printClearance={{ stored: '0.2 mm', value: 0.2 / 25.4, error: null }}
+          onSetPrintClearance={onSet}
+        />
+      );
+      expect(screen.getByLabelText('Print clearance')).toHaveValue('0.2 mm');
+      expect(
+        screen.getByText(/0\.0079 in radial gap for threads and gears/)
+      ).toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole('button', { name: 'Clear print clearance' })
+        );
+      });
+      expect(onSet).toHaveBeenLastCalledWith(null);
+    });
+
+    it('says why a value was refused, and why a stored one does not resolve', async () => {
+      renderPanel({
+        printClearance: unset,
+        onSetPrintClearance: () => 'Expected a length.'
+      });
+      const input = screen.getByLabelText('Print clearance');
+      fireEvent.change(input, { target: { value: '5 deg' } });
+      await act(async () => {
+        fireEvent.submit(input.closest('form')!);
+      });
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Expected a length. Not changed.'
+      );
+      expect(input).toHaveValue('5 deg');
+      expect(input).toHaveAttribute('aria-invalid', 'true');
+    });
+
+    it('shows a stored clearance that no longer resolves', () => {
+      renderPanel({
+        printClearance: {
+          stored: 'gap',
+          value: null,
+          error: 'Print clearance: must be zero or more.'
+        }
+      });
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Print clearance: must be zero or more.'
+      );
+    });
   });
 });

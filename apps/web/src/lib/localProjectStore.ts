@@ -4,6 +4,7 @@ import {
   isPurgeDue,
   MAX_LOCAL_CHECKPOINT_DOCUMENTS,
   MAX_PROJECT_CHECKPOINTS,
+  persistedDocumentBytes,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   type ArtifactId,
   type ImportedSourceReference,
@@ -14,9 +15,11 @@ import {
   type RevisionId
 } from '@openzcad/shared';
 import {
+  reservedDocumentIdentifierError,
   withoutDerivedProjection,
   normalizeDocument,
-  repairLegacyBracketModel
+  repairLegacyBracketModel,
+  UnstorableDocumentError
 } from '@openzcad/document-core';
 import type { StoredMeasurementRecord } from './measurementRecord';
 import type { SourceBlobClaim } from './sourceBlobClaims';
@@ -944,7 +947,11 @@ export function summarizeProjectDocument(
     lastRevisionId: document.revisions.at(-1)?.revisionId,
     updatedAt: document.derived.updatedAt,
     revisionCount: document.checkpoints.length,
-    documentVersion: document.version
+    documentVersion: document.version,
+    // Measured as the account measures it, so a synced project reads the
+    // same size from either store. Earlier projections lack it until the
+    // project is next saved; the shelf shows those as unmeasured.
+    documentBytes: persistedDocumentBytes(withoutDerivedProjection(document))
   };
 }
 
@@ -1015,6 +1022,7 @@ export function saveLocalProject(document: ProjectDocument): Promise<void> {
     'readwrite',
     [STORE_NAME, SUMMARY_STORE_NAME, CHECKPOINT_STORE_NAME, ALIAS_STORE_NAME],
     async (store) => {
+      assertSafeLocalDocument(document, 'saved');
       await assertCurrentProjectId(store(ALIAS_STORE_NAME), document.projectId);
       store(STORE_NAME).put(document);
       store(SUMMARY_STORE_NAME).put(summarizeProjectDocument(document));
@@ -1061,6 +1069,7 @@ export function saveLocalSaveStates(
     [CHECKPOINT_STORE_NAME, ALIAS_STORE_NAME],
     async (store) => {
       for (const document of documents) {
+        assertSafeLocalDocument(document, 'saved');
         await assertCurrentProjectId(
           store(ALIAS_STORE_NAME),
           document.projectId
@@ -1178,6 +1187,28 @@ export function checkpointKeyRange(projectId: string): IDBKeyRange {
  * this store has none of its older save states here at all. The caller falls
  * back to the account copy.
  */
+/**
+ * Refuses a device copy that uses a reserved name (`__proto__`,
+ * `constructor`, …) as a key, id or selector, where map lookups would reach
+ * inherited members. Every document this store reads or writes passes it, so
+ * a damaged or forged copy is never published to the app. Opening one fails
+ * with this message; the shelf lists projects from their summaries, so the
+ * rest of it still loads.
+ */
+function assertSafeLocalDocument(
+  document: unknown,
+  action: 'opened' | 'saved'
+): void {
+  const reason =
+    typeof document === 'object' && document !== null
+      ? reservedDocumentIdentifierError(document)
+      : 'The project document must be an object.';
+  if (reason)
+    throw new UnstorableDocumentError(
+      `This project on this device cannot be ${action}: ${reason}`
+    );
+}
+
 export function loadLocalSaveState(
   projectId: string,
   checkpointId: string
@@ -1190,7 +1221,11 @@ export function loadLocalSaveState(
       store.get([projectId, checkpointId]) as IDBRequest<
         ProjectCheckpointDocumentRecord | undefined
       >
-  ).then((record) => record?.document ?? null);
+  ).then((record) => {
+    if (!record?.document) return null;
+    assertSafeLocalDocument(record.document, 'opened');
+    return record.document;
+  });
 }
 
 /**
@@ -1276,7 +1311,11 @@ export function loadLocalProject(
     STORE_NAME,
     (store, projectId) =>
       store.get(projectId) as IDBRequest<ProjectDocument | undefined>
-  ).then((document) => document ?? null);
+  ).then((document) => {
+    if (!document) return null;
+    assertSafeLocalDocument(document, 'opened');
+    return document;
+  });
 }
 
 /**
@@ -1423,10 +1462,24 @@ export function listPendingOrganizationMirrors(): Promise<Set<string>> {
   );
 }
 
+/** A thumbnail write whose caller said, at the last moment, not to. */
+export class ThumbnailWriteCancelledError extends Error {
+  constructor() {
+    super('The project card was not saved: its caller stopped.');
+    this.name = 'AbortError';
+  }
+}
+
 /**
  * Stores a project's card preview. Called while the project is open, where the
  * meshes are already in memory — the shelf itself never renders one, because
- * doing so would mean loading the document.
+ * doing so would mean loading the document. Settings' Regenerate project
+ * thumbnails is the one other writer.
+ *
+ * `shouldWrite` is asked inside the transaction, after the store has opened
+ * and the project's id has resolved and immediately before the put, so a
+ * caller whose session ended during those waits writes nothing; it rejects
+ * with {@link ThumbnailWriteCancelledError} instead.
  */
 export function saveProjectThumbnail(
   projectId: string,
@@ -1435,15 +1488,76 @@ export function saveProjectThumbnail(
     artifactId?: ArtifactId;
     version: number;
     updatedAt: string;
-  }
+  },
+  options: { shouldWrite?: () => boolean } = {}
 ): Promise<void> {
   const record: ProjectThumbnailRecord = { projectId, ...thumbnail };
   return projectTransaction(
     'readwrite',
     projectId,
     THUMBNAIL_STORE_NAME,
-    (store) => store.put(record)
+    (store) => {
+      if (options.shouldWrite && !options.shouldWrite()) {
+        throw new ThumbnailWriteCancelledError();
+      }
+      return store.put(record);
+    }
   ).then(() => undefined);
+}
+
+/**
+ * Keeps a card image downloaded from the account, but only over the record
+ * the download was decided on (`replaces`, null for none). The check runs
+ * inside the write's transaction, so a card the workspace captured while the
+ * download was in flight — or one another tab wrote — is never overwritten
+ * with the older account image. Resolves to whether it wrote.
+ *
+ * `shouldWrite` is asked last, immediately before the put, as in
+ * {@link saveProjectThumbnail}; declining writes nothing and is not an error.
+ */
+export function saveAccountThumbnail(
+  projectId: string,
+  thumbnail: Omit<ProjectThumbnailRecord, 'projectId'>,
+  options: {
+    replaces: ProjectThumbnailRecord | null;
+    /**
+     * {@link localDeletionFence} as it stood when the download began. A
+     * project deleted since then is not written back: its thumbnail is gone
+     * by then, so the comparison above alone would let a late download put
+     * a deleted (and possibly encrypted) project's image back on disk.
+     */
+    deletionFence: number;
+    shouldWrite?: () => boolean;
+  }
+): Promise<boolean> {
+  return scopedTransaction(
+    'readwrite',
+    [THUMBNAIL_STORE_NAME, ALIAS_STORE_NAME],
+    async (store) => {
+      await assertCurrentProjectId(store(ALIAS_STORE_NAME), projectId);
+      const thumbnails = store(THUMBNAIL_STORE_NAME);
+      const current = (await settled(thumbnails.get(projectId))) as
+        ProjectThumbnailRecord | undefined;
+      if (!sameThumbnailRecord(current ?? null, options.replaces)) return false;
+      if (localDeletionFence(projectId) !== options.deletionFence) return false;
+      if (options.shouldWrite && !options.shouldWrite()) return false;
+      await settled(thumbnails.put({ ...thumbnail, projectId }));
+      return true;
+    }
+  );
+}
+
+function sameThumbnailRecord(
+  a: ProjectThumbnailRecord | null,
+  b: ProjectThumbnailRecord | null
+): boolean {
+  if (!a || !b) return a === b;
+  return (
+    a.source === b.source &&
+    a.artifactId === b.artifactId &&
+    a.version === b.version &&
+    a.updatedAt === b.updatedAt
+  );
 }
 
 /**
@@ -1597,11 +1711,26 @@ export function deleteLocalProject(projectId: string): Promise<void> {
   return deleteLocalProjectWhen(projectId).then(() => undefined);
 }
 
+/**
+ * Counts this page's deletions of each project. A deletion bumps it before
+ * its transaction opens, so a write fenced on an earlier value that commits
+ * after the deletion — necessarily later, since the two share a store — sees
+ * the change and stands down. Page-local: a deletion in another tab is not
+ * fenced here.
+ */
+const localDeletions = new Map<string, number>();
+
+/** See {@link saveAccountThumbnail}'s `deletionFence`. */
+export function localDeletionFence(projectId: string): number {
+  return localDeletions.get(projectId) ?? 0;
+}
+
 function deleteLocalProjectWhen(
   projectId: string,
   eligible?: (record: ProjectMetaRecord | undefined) => boolean,
   retainPendingOrganization = false
 ): Promise<boolean> {
+  localDeletions.set(projectId, localDeletionFence(projectId) + 1);
   const storeNames = [
     BACKUP_STORE_NAME,
     STORE_NAME,
@@ -2319,6 +2448,9 @@ export async function saveImportedProject(
     ],
     async (store) => {
       const document = backup.document;
+      assertSafeLocalDocument(document, 'saved');
+      for (const state of backup.saveStates ?? [])
+        assertSafeLocalDocument(state.document, 'saved');
       await assertCurrentProjectId(store(ALIAS_STORE_NAME), document.projectId);
       if (await settled(store(STORE_NAME).count(document.projectId)))
         throw new Error('Imported project already exists.');

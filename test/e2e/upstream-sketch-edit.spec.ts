@@ -99,9 +99,10 @@ test('refuses an upstream section edit that strands a dependent shell, and keeps
 
   // Refused, naming the feature that cannot rebuild; the card stays open
   // with the typed value so the user can change it.
-  await expect(inspector.getByRole('alert')).toContainText('no longer exists', {
-    timeout: 60_000
-  });
+  await expect(inspector.getByRole('alert')).toContainText(
+    '“Open-ended duct wall” can no longer find an edge or face',
+    { timeout: 60_000 }
+  );
   await expect(width).toHaveValue('30');
   await testInfo.attach('refused-section-edit', {
     body: await page.screenshot(),

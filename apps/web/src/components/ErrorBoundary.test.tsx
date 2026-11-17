@@ -1,4 +1,10 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen
+} from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   getActivityLogSnapshot,
@@ -154,6 +160,48 @@ describe('ErrorBoundary', () => {
     ).toHaveAttribute('title', expect.stringMatching(/check your connection/i));
   });
 
+  it('offers no Reload for a failed chunk while offline', () => {
+    vi.useFakeTimers();
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    try {
+      renderFailing(
+        new TypeError('Failed to fetch dynamically imported module: /a.js')
+      );
+      expect(screen.getByRole('status')).toHaveTextContent(
+        'You’re offline; reload once you reconnect.'
+      );
+      expect(
+        screen.queryByRole('button', { name: 'Reload workspace' })
+      ).toBeNull();
+      onLine.mockReturnValue(true);
+      act(() => {
+        window.dispatchEvent(new Event('online'));
+      });
+      expect(
+        screen.getByRole('button', { name: 'Reload workspace' })
+      ).toBeTruthy();
+    } finally {
+      onLine.mockRestore();
+    }
+  });
+
+  it('keeps the page card from suggesting a reload while offline', () => {
+    vi.useFakeTimers();
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    try {
+      renderFailing(
+        new TypeError('Failed to fetch dynamically imported module: /a.js'),
+        'page'
+      );
+      expect(screen.getByRole('alert')).toHaveTextContent(/^You’re offline\./);
+      expect(
+        screen.getByRole('button', { name: 'Waiting for a connection…' })
+      ).toBeDisabled();
+    } finally {
+      onLine.mockRestore();
+    }
+  });
+
   it('keeps the whole-app fallback on a reload', () => {
     vi.useFakeTimers();
     renderFailing(new Error('boom'), 'page');
@@ -180,5 +228,94 @@ describe('ErrorBoundary', () => {
     // The first crash, which the automatic remount hid, is recorded too.
     expect(crashes.length).toBeGreaterThanOrEqual(2);
     expect(crashes[0]).toMatchObject({ level: 'error', source: 'error' });
+  });
+
+  /** Fails as production React does when a component loops on setState. */
+  function UpdateLoop(): never {
+    throw new Error(
+      'Minified React error #185; visit https://react.dev/errors/185 for the full message'
+    );
+  }
+
+  /** The card past its automatic remount, with its details loaded. */
+  async function renderLoop() {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    render(
+      <ErrorBoundary label="3D viewer">
+        <section>
+          <UpdateLoop />
+        </section>
+      </ErrorBoundary>
+    );
+    act(() => {
+      vi.advanceTimersByTime(PANEL_AUTO_RETRY_DELAY_MS);
+    });
+    // The bare message stands in while the details load.
+    expect(screen.getByText(/^Minified React error #185/)).toBeTruthy();
+    vi.useRealTimers();
+    await screen.findByRole('button', { name: 'Copy details' });
+  }
+
+  it('shows where it failed and what a minified code means', async () => {
+    await renderLoop();
+    expect(
+      screen.getByText(/^React error #185: Maximum update depth exceeded/)
+    ).toBeTruthy();
+    // The component that threw leads the stack.
+    expect(screen.getByTestId('error-component-stack').textContent).toMatch(
+      /^at UpdateLoop/
+    );
+  });
+
+  it('shows the stack when its details were loaded before the crash', async () => {
+    // The startup prefetch usually has the chunk: the card then renders
+    // before componentDidCatch has logged the crash it describes.
+    await renderLoop();
+    cleanup();
+    function Throws2(): never {
+      throw new Error('second failure');
+    }
+    render(
+      <ErrorBoundary label="OpenZCAD workspace" scope="page">
+        <Throws2 />
+      </ErrorBoundary>
+    );
+    expect(
+      (await screen.findByTestId('error-component-stack')).textContent
+    ).toMatch(/^at Throws2/);
+  });
+
+  it('copies the whole report for a bug report', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText }
+    });
+    await renderLoop();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy details' }));
+    await act(async () => undefined);
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy();
+    const report = (writeText.mock.calls[0] as unknown as [string])[0];
+    expect(report).toMatch(/^3D viewer crashed: Minified React error #185/);
+    expect(report).toContain('React error #185: Maximum update depth');
+    expect(report).toMatch(/OpenZCAD .+ · Remus /);
+    expect(report).toContain('Component stack:\nat UpdateLoop');
+    // Both stacks come back from the crash's activity-log entry.
+    expect(report).toContain('Error stack:\nError: Minified React error #185');
+    expect(report).toMatch(/^Time \d{4}-\d\d-\d\dT/m);
+  });
+
+  it('says where to look when the clipboard is blocked', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: () => Promise.reject(new Error('denied')) }
+    });
+    await renderLoop();
+    fireEvent.click(screen.getByRole('button', { name: 'Copy details' }));
+    await act(async () => undefined);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Settings › Activity log'
+    );
   });
 });

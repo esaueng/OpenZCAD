@@ -52,7 +52,7 @@ import {
   SHARED_LINK_MESSAGES,
   SharedLinkRefusal,
   loadEncryptedSharedProject,
-  sharedBlobUrl,
+  sharedBlobPath,
   sharedLinkRefusalMessage,
   type SharedLinkRefusalReason,
   type SharedSnapshotLoaderDeps
@@ -89,6 +89,11 @@ import {
 } from './support/e2ee-share-snapshots';
 
 const THIRD = 'user_third';
+
+/** A share blob's path form, which the Worker still serves. */
+function sharedBlobUrl(token: string, blobId: string): string {
+  return `/api/e2ee/share/${token}/blobs/${blobId}`;
+}
 const DAY = 86_400_000;
 
 let owner: Account;
@@ -190,7 +195,11 @@ function visitorFetch(
         : input instanceof URL
           ? input.pathname
           : input.url;
-    expect(path.startsWith('/api/e2ee/share/')).toBe(true);
+    // The token goes in a header, never the URL that request logs record.
+    expect(path).toMatch(/^\/api\/e2ee\/share(\/blobs\/[^/]+)?$/);
+    expect(new Headers(init?.headers).get('x-openzcad-share-token')).toMatch(
+      /^[A-Za-z0-9_-]{43}$/
+    );
     expect(init?.credentials).toBe('omit');
     const response = await worker.fetch(
       new Request(`https://example.com${path}`, init),
@@ -310,16 +319,14 @@ describe('opening a link (slice 5-11)', { timeout: 120_000 }, () => {
     // checked, and sits in this browser's source store.
     expect(browser.sources.get(sha256(step))).toEqual(step);
     expect(browser.requests).toEqual([
-      `/api/e2ee/share/${view.fragment.token}`,
-      sharedBlobUrl(view.fragment.token, blobId)
+      '/api/e2ee/share',
+      sharedBlobPath(blobId)
     ]);
 
     // A second visit finds the file in the source store already.
     const tweaked = await browser.open(tweak.url);
     expect(tweaked).toMatchObject({ shareId: tweak.shareId, mode: 'tweak' });
-    expect(browser.requests.at(-1)).toBe(
-      `/api/e2ee/share/${tweak.fragment.token}`
-    );
+    expect(browser.requests.at(-1)).toBe('/api/e2ee/share');
 
     // The mode is the verified statement's, not the server's word.
     const lying = visitor(srv, {
@@ -563,7 +570,8 @@ describe('the anonymous blob route (slice 5-11)', { timeout: 120_000 }, () => {
         })
       ).status
     ).toBe(200);
-    // Plaintext share links are not limited (unchanged).
+    // Plaintext share links count in their own, larger bucket, which the
+    // encrypted snapshot budget spent above does not touch.
     for (let i = 0; i < 70; i += 1) {
       expect(
         (await anonymous(srv, `/api/share/${'p'.repeat(43)}`, env, from)).status

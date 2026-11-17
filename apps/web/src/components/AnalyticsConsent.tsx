@@ -8,6 +8,8 @@ import {
   downloadDiagnosticReport
 } from '../lib/analytics';
 import { ACCOUNT_STATISTICS_VERSION } from '../lib/glimpseContract';
+import { privacyPolicyHref } from '../lib/privacyPolicy';
+import { ExternalAnchor } from './ExternalAnchor';
 
 /**
  * The Cloud account statistics permission text, version
@@ -29,6 +31,69 @@ function grantStatus(v: {
     ? `${until} Totals only, under the earlier description without save activity. Turn this off and on to accept the current description.`
     : until;
 }
+/**
+ * The browser analytics disclosure: the approved consent text, reworded as
+ * what is sent, what never is, and how to stop. Every statement of the
+ * earlier paragraph is here, and the scope is unchanged, so the saved
+ * `granted-v2` choice still answers it. Glimpse is OpenZCAD's own counting
+ * service (docs/glimpse.md); it is named so the policy's word matches.
+ */
+function AnalyticsDisclosure() {
+  return (
+    <div className="analytics-disclosure">
+      <p>
+        When this is on, this browser sends anonymous counts to Glimpse, the
+        usage-counting service OpenZCAD runs for itself.
+      </p>
+      <strong>Sent</strong>
+      <ul>
+        <li>Which feature categories, workflow steps and exports you use</li>
+        <li>Diagnostic codes</li>
+        <li>
+          Ranges, never exact values: part count, project file size and transfer
+          size
+        </li>
+        <li>Coarse timings</li>
+        <li>
+          Work done on this device, not only in the cloud. Local operations are
+          counted only with this switch on.
+        </li>
+      </ul>
+      <strong>Never sent</strong>
+      <ul>
+        <li>Model contents or geometry</li>
+        <li>File names or project names</li>
+        <li>Anything that identifies you</li>
+      </ul>
+      <strong>How to stop</strong>
+      <ul>
+        <li>It is off until you turn it on.</li>
+        <li>Turn it off here and sending stops at once.</li>
+        <li>
+          Do Not Track or Global Privacy Control in your browser, or turning off
+          Cloud features, pauses sending and keeps this choice for later.
+        </li>
+        <li>
+          The choice is kept in this browser only, and separately for each app.
+        </li>
+        <li>
+          A yes given before this list grew does not cover it: this expanded
+          scope requires a fresh choice.
+        </li>
+      </ul>
+      <p>
+        Totals already sent are anonymous, so they cannot be traced back to you
+        or removed. Separately from this switch, basic server counters measure
+        API activity and reliability. More in the{' '}
+        <ExternalAnchor href={privacyPolicyHref()}>
+          privacy policy
+        </ExternalAnchor>
+        .
+      </p>
+    </div>
+  );
+}
+
 // One row per title whichever app renders it: the desktop app explains the
 // web-only choice in the same row rather than a second "Usage analytics".
 export function AnalyticsConsent() {
@@ -53,14 +118,14 @@ export function AnalyticsConsent() {
             'Anonymous feature counts. Never geometry, names, or identity.'
           )
         }
-        // The disclosure is the approved consent text word for word: a
-        // shortened copy dropped that local operations need opt-in.
+        // The disclosure keeps every statement of the approved consent text:
+        // a shortened copy once dropped that local operations need opt-in.
         details={
           desktop
             ? undefined
             : {
                 summary: 'What’s collected',
-                body: 'Allow Glimpse to count feature categories, workflow steps, exports, diagnostic codes, part-count and project-file-size ranges, transfer-size ranges, and coarse timings. This expanded scope requires a fresh choice. No model contents, geometry, filenames, project names or identity. Off by default. DNT/GPC and turning off cloud features suppress sending while preserving this choice; withdraw here to stop sending immediately. Existing anonymous totals cannot be attributed or removed. Basic server counters measure API activity and reliability. Local operations require opt-in. This browser-only choice is separate for each app.'
+                body: <AnalyticsDisclosure />
               }
         }
       >

@@ -1,9 +1,10 @@
 import { listFeaturesInOrder } from './feature-order';
 import { withoutDerivedProjection } from './document-projection';
-import type {
-  DocumentHistoryEntry,
-  ProjectDocument,
-  SerializedCommand
+import {
+  ownEntry,
+  type DocumentHistoryEntry,
+  type ProjectDocument,
+  type SerializedCommand
 } from '@openzcad/shared';
 
 export const BRACKET_BOSS_HEIGHT =
@@ -104,7 +105,7 @@ export function repairLegacyBracketRecipe(
     document.featureOrder?.length !== FEATURE_COUNT
   )
     return document;
-  const root = document.nodes[document.rootNodeId];
+  const root = ownEntry(document.nodes, document.rootNodeId);
   if (
     root?.kind !== 'project' ||
     root.projectId !== document.projectId ||

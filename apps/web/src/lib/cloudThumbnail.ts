@@ -5,7 +5,9 @@ import {
   type ProjectId
 } from '@openzcad/shared';
 import { isEncryptedProject } from './api';
+import { verifiedUploadUrl } from './artifactUpload';
 import { encryptedBlobSource } from './e2ee/blobReferences';
+import type { ProjectRequestContext } from './projectWriteGate';
 
 export interface ThumbnailCloudTransport {
   createUploadSession(input: {
@@ -26,7 +28,11 @@ export interface ThumbnailCloudTransport {
     uploadSessionId: string;
     artifactId: ArtifactId;
   }): Promise<{ artifactId: string | null }>;
-  uploadArtifact(uploadUrl: string, body: Blob): Promise<void>;
+  uploadArtifact(
+    uploadUrl: string,
+    body: Blob,
+    context: ProjectRequestContext
+  ): Promise<void>;
 }
 
 /**
@@ -138,7 +144,16 @@ export async function uploadCloudThumbnail(
     throw new Error('Thumbnail upload is unavailable.');
   }
   // A 360x200 WebP is many orders of magnitude below the multipart boundary.
-  await transport.uploadArtifact(session.uploadUrl, body);
+  const uploadUrl = verifiedUploadUrl({
+    uploadSessionId: session.uploadSessionId,
+    uploadUrl: session.uploadUrl
+  });
+  // Plaintext of this project: refused at its send if the project is
+  // pinned as encrypted meanwhile (`projectWriteGate.ts`).
+  await transport.uploadArtifact(uploadUrl, body, {
+    projectId: input.projectId,
+    payload: 'plaintext'
+  });
   const finalized = await transport.finalizeArtifact({
     projectId: input.projectId,
     uploadSessionId: session.uploadSessionId,

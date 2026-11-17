@@ -40,6 +40,39 @@ describe('in-memory persistence', () => {
     ).rejects.toThrow(ProjectNotFoundError);
   });
 
+  it('resets shelf state without touching the trash', async () => {
+    const service = new InMemoryPersistenceService();
+    const archived = (await service.createProject(userId, { name: 'A' }))
+      .document.projectId;
+    const trashed = (await service.createProject(userId, { name: 'T' }))
+      .document.projectId;
+    for (const projectId of [archived, trashed])
+      await service.updateProject(userId, {
+        projectId,
+        status: 'archived',
+        pinned: true,
+        sortOrder: 4
+      });
+    // Trashed elsewhere after a listing saw it archived.
+    const deletedAt = projectOrganization(
+      await service.updateProject(userId, {
+        projectId: trashed,
+        status: 'deleted'
+      })
+    ).deletedAt;
+    expect(
+      projectOrganization(await service.resetProjectShelfState(userId, trashed))
+    ).toEqual({ status: 'deleted', pinned: false, sortOrder: 0, deletedAt });
+    expect(
+      projectOrganization(
+        await service.resetProjectShelfState(userId, archived)
+      )
+    ).toEqual({ status: 'active', pinned: false, sortOrder: 0 });
+    await expect(
+      service.resetProjectShelfState(toUserId('user_other'), archived)
+    ).rejects.toThrow(ProjectNotFoundError);
+  });
+
   it('round-trips a created project through save and load', async () => {
     const service = new InMemoryPersistenceService();
     const created = await service.createProject(userId, { name: 'Round Trip' });
@@ -559,12 +592,20 @@ describe('project shelves', () => {
     ).toEqual(['Second', 'Third', 'First']);
   });
 
-  it('refuses uploads beyond the account artifact byte ceiling', async () => {
+  it('refuses uploads beyond the account storage allowance', async () => {
     // Injected tiny limit: the production ceiling is gigabytes, and the test
-    // only needs the arithmetic, not the allocation.
-    const service = new InMemoryPersistenceService(24);
+    // only needs the arithmetic, not the allocation. The project shares the
+    // allowance (one bucket), so it leaves exactly 24 bytes for files.
+    const probe = new InMemoryPersistenceService();
+    await probe.createProject(userId, { name: 'Quota' });
+    const projectBytes = (await probe.getStorageUsage(userId))
+      .projectStorageBytes;
+    const service = new InMemoryPersistenceService(projectBytes + 24);
     const created = await service.createProject(userId, { name: 'Quota' });
     const projectId = created.document.projectId;
+    expect((await service.getStorageUsage(userId)).projectStorageBytes).toBe(
+      projectBytes
+    );
 
     const first = await service.createUploadSession(userId, {
       projectId,
@@ -587,7 +628,9 @@ describe('project shelves', () => {
     const usage = await service.getStorageUsage(userId);
     expect(usage.artifactBytes).toBe(16);
     expect(usage.artifactCount).toBe(1);
-    expect(usage.artifactLimitBytes).toBe(24);
+    expect(usage.storageLimitBytes).toBe(projectBytes + 24);
+    expect(usage.artifactLimitBytes).toBe(projectBytes + 24);
+    expect(usage.storageBytes).toBe(projectBytes + 16);
 
     // A second 16-byte upload would land at 32 > 24: the single-shot PUT is
     // refused up front, and a body that slips to finalize is refused there
@@ -624,6 +667,105 @@ describe('project shelves', () => {
         kind: 'stl-import'
       })
     ).rejects.toThrow(ArtifactQuotaError);
+  });
+
+  it('refuses a project save that grows storage once files fill the one allowance', async () => {
+    const probe = new InMemoryPersistenceService();
+    await probe.createProject(userId, { name: 'Shared bucket' });
+    const projectBytes = (await probe.getStorageUsage(userId))
+      .projectStorageBytes;
+    const service = new InMemoryPersistenceService(projectBytes + 16);
+    const created = await service.createProject(userId, {
+      name: 'Shared bucket'
+    });
+    const projectId = created.document.projectId;
+    const upload = await service.createUploadSession(userId, {
+      projectId,
+      fileName: 'a.stl',
+      contentType: 'model/stl',
+      kind: 'stl-import'
+    });
+    await service.putUpload(
+      userId,
+      upload.session.uploadSessionId,
+      new ArrayBuffer(16)
+    );
+    await service.finalizeArtifact(userId, {
+      projectId,
+      uploadSessionId: upload.session.uploadSessionId,
+      artifactId: upload.session.artifactId
+    });
+    expect(await service.getStorageUsage(userId)).toMatchObject({
+      storageBytes: projectBytes + 16,
+      storageLimitBytes: projectBytes + 16
+    });
+    const grown = addPrimitiveFeature(created.document, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 10, depth: 10, height: 10 }
+    });
+    await expect(
+      service.saveDocument(userId, {
+        projectId,
+        expectedVersion: created.document.version,
+        document: grown
+      })
+    ).rejects.toMatchObject({ kind: 'storage', limit: projectBytes + 16 });
+    await expect(
+      service.createProject(userId, { name: 'Another' })
+    ).rejects.toMatchObject({ kind: 'storage' });
+  });
+
+  it('reports an upload in flight in the storage total', async () => {
+    const service = new InMemoryPersistenceService();
+    const created = await service.createProject(userId, { name: 'Inflight' });
+    const before = await service.getStorageUsage(userId);
+    const { session } = await service.createUploadSession(userId, {
+      projectId: created.document.projectId,
+      fileName: 'part.step',
+      contentType: 'model/step',
+      kind: 'snapshot'
+    });
+    const { uploadId } = await service.createMultipartUpload(
+      userId,
+      session.uploadSessionId
+    );
+    await service.putUploadPart(
+      userId,
+      session.uploadSessionId,
+      uploadId,
+      1,
+      new ArrayBuffer(400)
+    );
+    expect(await service.getStorageUsage(userId)).toMatchObject({
+      artifactBytes: 0,
+      artifactReservedBytes: 400,
+      storageBytes: before.projectStorageBytes + 400
+    });
+  });
+
+  it('counts trashed projects apart, their bytes still stored', async () => {
+    const service = new InMemoryPersistenceService();
+    const kept = await service.createProject(userId, { name: 'Kept' });
+    const archived = await service.createProject(userId, { name: 'Archived' });
+    const binned = await service.createProject(userId, { name: 'Binned' });
+    const before = await service.getStorageUsage(userId);
+    await service.updateProject(userId, {
+      projectId: archived.document.projectId,
+      status: 'archived'
+    });
+    await service.updateProject(userId, {
+      projectId: binned.document.projectId,
+      status: 'deleted'
+    });
+    const after = await service.getStorageUsage(userId);
+    expect(after).toMatchObject({
+      projectCount: 2,
+      trashedProjectCount: 1,
+      projectStorageBytes: before.projectStorageBytes,
+      storageBytes: before.storageBytes
+    });
+    expect(kept.document.projectId).toBeTruthy();
   });
 });
 

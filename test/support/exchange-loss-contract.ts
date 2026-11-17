@@ -122,19 +122,21 @@ export const EXCHANGE_LOSS_CONTRACT = {
   '3mf': {
     kind: 'solid',
     label: '3MF',
-    keeps: ['bounds', 'volume', 'watertight', 'declared-units'],
-    drops: [
-      'body-count',
-      'exact-faces',
+    keeps: [
+      'bounds',
+      'volume',
+      'watertight',
+      'declared-units',
       'body-names',
-      'body-colors',
-      'history'
+      'body-colors'
     ],
+    drops: ['body-count', 'exact-faces', 'history'],
     units: 'declared',
     notes: {
-      ...MESH_DROPS,
+      'exact-faces': MESH_DROPS['exact-faces'],
+      history: MESH_DROPS.history,
       'body-count':
-        'The package keeps one object per body, but the import merges them into one body (ZC-184).'
+        'The package keeps one named, coloured object per body, but the import merges them into one body (ZC-184).'
     }
   },
   obj: {

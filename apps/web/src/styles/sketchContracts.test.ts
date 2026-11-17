@@ -64,14 +64,16 @@ it('keeps stylesheet contracts inside their owning media block', () => {
 });
 
 describe('circle type strip', () => {
-  it('is one row as wide as its tiles, bounded by the right lane', () => {
-    // Positioned past the 40px rail with only a left edge, the strip shrank
-    // to min-content and stacked every tile in a column. Its right edge is
-    // the right lane's, so a phone wraps the tiles short of the rails.
+  it('is one column beside the rail as wide as its tiles, bounded by the right lane', () => {
+    // I37: a row of tiles ran across the middle of the canvas and took the
+    // first drawing click, so the strip is a column against the rail. With
+    // only a left edge it shrank to min-content; fit-content keeps each
+    // tile's label whole, and the right lane still bounds it on a phone.
     const strip = rule(
       sheet('direct-manipulation.css'),
       '\n.sketch-type-strip'
     );
+    expect(strip).toMatch(/flex-direction:\s*column/);
     expect(strip).toMatch(/width:\s*fit-content/);
     expect(strip).toMatch(/right:\s*calc\([^;]*var\(--lane-end\)[^;]*\)/);
   });
@@ -136,5 +138,21 @@ describe('sketch palette and labels', () => {
       '.sketch-dimension-label:focus-visible'
     );
     expect(focus).toMatch(/outline:\s*2px solid var\(--color-preselect\)/);
+  });
+});
+
+describe('sketch state chip', () => {
+  it('wraps a two-digit count inside the chip instead of overflowing it', () => {
+    // "12 DOF" is wider than the 30px chip; on one line it ran out past the
+    // border (13 November review recheck, I38).
+    const chip = rule(
+      sheet('quiet-stage.css'),
+      '.workspace-column .sketch-rail button.sketch-dof-chip'
+    );
+    expect(chip).toMatch(/white-space:\s*normal/);
+    expect(chip).not.toMatch(/white-space:\s*nowrap/);
+    // Two lines fit the chip's 20px inside its border.
+    expect(chip).toMatch(/height:\s*22px/);
+    expect(chip).toMatch(/line-height:\s*10px/);
   });
 });

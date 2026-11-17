@@ -103,4 +103,79 @@ describe('DrawingSheetTabs', () => {
       'true'
     );
   });
+
+  it('renames, duplicates, moves and deletes a sheet from its tab menu (I62)', async () => {
+    const user = userEvent.setup();
+    const onRename = vi.fn();
+    const onDuplicate = vi.fn();
+    const onMove = vi.fn();
+    const onDelete = vi.fn();
+    const sheets = [sheet(1), sheet(2), sheet(3)];
+    render(
+      <DrawingSheetTabs
+        sheets={sheets}
+        activeId={sheets[1]!.sheetId}
+        onSelect={vi.fn()}
+        onCreate={vi.fn()}
+        createDisabled={false}
+        createTitle="New sheet"
+        onRename={onRename}
+        onDuplicate={onDuplicate}
+        onMove={onMove}
+        onDelete={onDelete}
+      />
+    );
+    const tabs = screen.getByRole('tablist', { name: 'Drawing sheets' });
+    const second = within(tabs).getByRole('tab', { name: 'Sheet 2' });
+
+    // Right-click opens the menu, headed with the sheet it acts on.
+    await user.pointer({ keys: '[MouseRight]', target: second });
+    const menu = screen.getByRole('menu');
+    expect(menu).toHaveTextContent('Sheet 2');
+    await user.click(within(menu).getByRole('menuitem', { name: /Move left/ }));
+    expect(onMove).toHaveBeenCalledWith('dsh_2', 0);
+
+    // The visible Sheet actions button opens the same menu for touch.
+    await user.click(screen.getByRole('button', { name: 'Sheet actions' }));
+    await user.click(screen.getByRole('menuitem', { name: /Duplicate/ }));
+    expect(onDuplicate).toHaveBeenCalledWith('dsh_2');
+
+    // Shift+F10 from the tab, then Delete sheet.
+    second.focus();
+    await user.keyboard('{Shift>}{F10}{/Shift}');
+    await user.click(screen.getByRole('menuitem', { name: /Delete sheet/ }));
+    expect(onDelete).toHaveBeenCalledWith('dsh_2');
+
+    // F2 (or double-click) renames in place; Escape keeps the old name.
+    second.focus();
+    await user.keyboard('{F2}');
+    const field = screen.getByRole('textbox', { name: 'Rename Sheet 2' });
+    await user.clear(field);
+    await user.type(field, 'Details{Enter}');
+    expect(onRename).toHaveBeenCalledWith('dsh_2', 'Details');
+    await user.dblClick(within(tabs).getByRole('tab', { name: 'Sheet 3' }));
+    await user.keyboard('{Escape}');
+    expect(onRename).toHaveBeenCalledTimes(1);
+  });
+
+  it('greys the first sheet’s Move left and the last one’s Move right', async () => {
+    const user = userEvent.setup();
+    const sheets = [sheet(1), sheet(2)];
+    render(
+      <DrawingSheetTabs
+        sheets={sheets}
+        activeId={sheets[0]!.sheetId}
+        onSelect={vi.fn()}
+        onCreate={vi.fn()}
+        createDisabled={false}
+        createTitle="New sheet"
+        onMove={vi.fn()}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Sheet actions' }));
+    expect(screen.getByRole('menuitem', { name: /Move left/ })).toBeDisabled();
+    expect(
+      screen.getByRole('menuitem', { name: /Move right/ })
+    ).not.toBeDisabled();
+  });
 });

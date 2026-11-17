@@ -128,6 +128,7 @@ describe('project group API client', () => {
         deviceId: 'd',
         message: 'AQ',
         groupInfo: 'AQ',
+        signature: 'AQ',
         wraps: [],
         archive: {
           keyEpoch: 5,

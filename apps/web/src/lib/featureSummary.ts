@@ -1,22 +1,31 @@
-import type {
-  BooleanOperation,
-  DirectEditOperation,
-  EdgeTopologyReferenceV5,
-  FeatureNode,
-  ParamValue,
-  UnitSystem,
-  Vector3
+import {
+  ownEntry,
+  type BooleanOperation,
+  type DirectEditOperation,
+  type EdgeTopologyReferenceV5,
+  type FeatureNode,
+  type ParamValue,
+  type UnitSystem,
+  type Vector3
+} from '@openzcad/shared';
+import {
+  holeStandardLabel,
+  millimetresPerUnit,
+  pipeThreadLabel,
+  sheetMetalMaterialById,
+  standardPartDesignation,
+  standardPartProblem
 } from '@openzcad/shared';
 import { edgeSelectionName, storedLoopEdges } from './edgeLoops';
 import { unitLabel } from './measurements';
 import { evalParamValue, formatNumber } from './model';
 
 /**
- * "5 edges · r 2 mm": a blend over several edges says how many, so two
+ * "5 edges · R 2 mm": a blend over several edges says how many, so two
  * fillets of one radius still read apart. A single edge needs no count.
  *
  * A rim a boolean split into four arcs is the one closed edge the user
- * clicked, and the readout said so; the row reads "closed edge · r 3.8 mm"
+ * clicked, and the readout said so; the row reads "closed edge · R 3.8 mm"
  * rather than a count of arcs. Without stored witnesses for every edge the
  * row keeps the plain count.
  */
@@ -52,7 +61,7 @@ function booleanOperands(
   if (bodyIds.length === 0) return null;
   const names = bodyIds.map((bodyId) => bodyName?.(bodyId)?.trim());
   if (names.every((name): name is string => Boolean(name))) {
-    return names.join(BOOLEAN_JOINERS[operation]);
+    return names.join(ownEntry(BOOLEAN_JOINERS, operation) ?? ', ');
   }
   return `${bodyIds.length} bod${bodyIds.length === 1 ? 'y' : 'ies'}`;
 }
@@ -302,6 +311,16 @@ export function featureValueSummary(
         : `${teeth} teeth, ${helix}° ${data.hand ?? 'right'} ${data.herringbone ? 'herringbone' : 'helix'}`;
     }
     case 'thread': {
+      if (data.profile === 'npt' || data.profile === 'bspt') {
+        // Schema v57 pipe threads: the callout, or the standard where the
+        // face picks the size.
+        const standard = data.profile === 'npt' ? 'NPT' : 'BSPT';
+        return data.pipeSize === undefined
+          ? `${standard}, fits the face`
+          : data.profile === 'npt'
+            ? pipeThreadLabel('npt', data.pipeSize)
+            : `${data.pipeSize} BSPT`;
+      }
       const profile =
         data.profile === 'printable'
           ? 'printable'
@@ -319,16 +338,66 @@ export function featureValueSummary(
             : 'fits the face';
       return `${size}, ${profile}`;
     }
+    case 'standard-part': {
+      // M17: the designation a bill of materials lists, "ISO 4762 M6×1 × 20
+      // socket head cap screw", its length in its standard's units.
+      if (standardPartProblem(data) !== null) return null;
+      const lengthInUnits =
+        data.length === undefined ? undefined : lengthValue(data.length);
+      if (lengthInUnits === null) return null;
+      return standardPartDesignation(
+        data,
+        lengthInUnits === undefined
+          ? undefined
+          : Number(lengthInUnits) * millimetresPerUnit(units)
+      );
+    }
+    case 'sheet-metal': {
+      // "1.5 mm, 3 bends"; with a material preset, "1.5 mm mild steel, 3
+      // bends" (the preset's name without its note, alloys as written).
+      const thickness = num(data.thickness);
+      if (thickness === null) return null;
+      const material =
+        data.materialPresetId === undefined
+          ? null
+          : sheetMetalMaterialById(data.materialPresetId);
+      const materialName = material
+        ? material.label.replace(/\s*\([^)]*\)$/u, '')
+        : null;
+      const count = data.bends.length;
+      return `${thickness} ${unit}${
+        materialName
+          ? ` ${materialName.charAt(0).toLowerCase()}${materialName.slice(1)}`
+          : ''
+      }, ${count === 0 ? 'flat' : `${count} ${count === 1 ? 'bend' : 'bends'}`}`;
+    }
     case 'hole': {
       const diameter = num(data.diameter);
       if (diameter === null) {
         return null;
       }
+      // M01 (schema v64): one bore at each sketch point.
+      const count = data.points
+        ? ` at ${data.points.pointIds.length} points`
+        : '';
+      // M01 (schema v65): a standard size reads by its name.
+      // M01 (schema v66): a tapped one by its thread.
+      const size = data.standard
+        ? data.tapped
+          ? holeStandardLabel(data.standard).replace(
+              / tap drill$/,
+              data.tapped.cosmetic ? ' tapped (cosmetic)' : ' tapped'
+            )
+          : holeStandardLabel(data.standard)
+        : `⌀ ${diameter} ${unit}`;
       if (data.depthMode === 'through') {
-        return `⌀ ${diameter} ${unit} through`;
+        return `${size} through${count}`;
       }
       const depth = num(data.depth);
-      return depth === null ? null : `⌀ ${diameter} × ${depth} ${unit}`;
+      if (depth === null) return null;
+      return data.standard
+        ? `${size} × ${depth} ${unit}${count}`
+        : `⌀ ${diameter} × ${depth} ${unit}${count}`;
     }
     case 'shell':
     case 'thicken':
@@ -369,7 +438,9 @@ export function featureValueSummary(
       return withEdgeCount(
         data.edgeHashes,
         data.edgeReferences,
-        end !== null ? `r ${radius}–${end} ${unit}` : `r ${radius} ${unit}`
+        // "R", as the fillet's own radius chip and Options field name it:
+        // History said "r 2 mm" of the value the card had called "R".
+        end !== null ? `R ${radius}–${end} ${unit}` : `R ${radius} ${unit}`
       );
     }
     case 'chamfer': {
@@ -399,16 +470,23 @@ export function featureValueSummary(
     case 'direct-edit':
       return directEditSummary(data.operation, num, unit);
     case 'pattern': {
-      const count = num(data.count);
+      // M02 (schema v63): one instance per point, the original's included.
+      const count =
+        data.patternKind === 'points'
+          ? (data.points?.pointIds.length ?? null)
+          : num(data.count);
       if (count === null) {
         return null;
       }
+      // M02: copies left out are counted, so "× 5" never hides a gap.
+      const skipped = data.skippedInstances?.length ?? 0;
+      const gap = skipped > 0 ? ` · ${skipped} skipped` : '';
       if (data.patternKind === 'grid') {
         // Absent count2 reads as count (see FeatureData).
         const count2 = data.count2 === undefined ? count : num(data.count2);
-        return count2 === null ? null : `${count} × ${count2}`;
+        return count2 === null ? null : `${count} × ${count2}${gap}`;
       }
-      return `× ${count}`;
+      return `× ${count}${gap}`;
     }
     default:
       return null;

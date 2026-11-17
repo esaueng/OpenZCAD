@@ -34,8 +34,14 @@ test(
       buffer: Buffer.from('unsupported archive')
     });
     await expect(page.getByRole('contentinfo')).toContainText(
-      'Unsupported import format: unsupported.FCStd'
+      'OpenZCAD can’t import .FCStd files.'
     );
+    // The import card says it too, with the formats and FreeCAD's way out,
+    // instead of holding an earlier run's failure.
+    const card = page.locator('.activity-pill');
+    await expect(card).toContainText('Not imported');
+    await expect(card).toContainText('unsupported.FCStd');
+    await expect(card).toContainText('save it as STEP first');
     await expectBodyCount(page, 0);
     await expect(page.locator('.feature-row')).toHaveCount(0);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);

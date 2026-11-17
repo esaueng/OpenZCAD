@@ -79,6 +79,97 @@
   white-space: normal;
   overflow-wrap: anywhere;
   line-height: var(--lh-normal);
+  /* A button that reads as the row's name: a press opens the row (I82). */
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.revision-reason:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.revision-row {
+  cursor: pointer;
+}
+
+/* An opened row: its details read in full, and its labelled actions stay
+   shown without hover (design review I82, I87). */
+.revision-row.is-open {
+  background: var(--color-surface-raised);
+}
+
+.revision-row.is-open .revision-actions {
+  opacity: 1;
+}
+
+/* L03 versions-list columns: editor, device and where the save is stored,
+   on one wrapping line under the time. */
+.revision-meta {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 4px;
+  min-width: 0;
+  white-space: pre-wrap;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.revision-editor,
+.revision-device,
+.revision-sync {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.revision-details {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  grid-column: 1 / -1;
+  grid-row: 4;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+  line-height: var(--lh-normal);
+  overflow-wrap: anywhere;
+}
+
+.revision-details p {
+  margin: 0;
+}
+
+/* Renaming a save point in place of its name (L03). */
+.revision-rename {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.revision-rename-input {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  color: var(--color-text);
+  font: inherit;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.revision-rename-input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 0;
 }
 
 .revision-time {
@@ -127,12 +218,16 @@
 }
 
 .revision-action {
-  display: grid;
-  place-items: center;
-  /* The minimum pointer target; the two actions sit side by side. */
-  width: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  /* The minimum pointer target; the two actions sit side by side, each
+     named in words, not by icon alone (design review I82). */
+  min-width: 24px;
   height: 24px;
-  padding: 0;
+  padding: 0 4px;
+  font: inherit;
+  font-size: var(--fs-mini);
   color: var(--color-text-muted);
   background: none;
   border: 1px solid transparent;
@@ -311,6 +406,28 @@
 .error-page-details summary {
   cursor: pointer;
   text-align: center;
+}
+
+.error-page-details > .secondary {
+  display: block;
+  margin: var(--sp-2) auto 0;
+}
+
+/* Two classes: the page card's `.error-page p` would otherwise win. */
+.error-page-details .error-page-hint {
+  display: block;
+  margin: var(--sp-2) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  text-align: center;
+}
+
+/* Taller than the message box: the first lines name where it failed. */
+.error-page-details code.error-page-stack {
+  max-height: 14rem;
+  white-space: pre;
+  overflow-wrap: normal;
 }
 
 .error-page-details code {

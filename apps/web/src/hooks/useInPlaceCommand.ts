@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   FeatureData,
   ParamValue,
   ParametricVector3,
   ProjectDocument,
+  UnitSystem,
   Vector3
 } from '@openzcad/shared';
+import type { AnyCommand } from '@openzcad/command-system';
 import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from '../lib/livePreview';
 import {
   IN_PLACE_TOOL_SPECS,
@@ -29,7 +32,9 @@ import {
   type OptionSpec,
   type PlanePick,
   type ProfilePick,
-  type RefPick
+  type RefPick,
+  inPlaceBodyMode,
+  inPlaceFaceMode
 } from '../lib/inPlace/tools';
 import { placeImage as placedImage } from '../lib/inPlace/image';
 import type { RevolveAxisCandidate } from '../lib/inPlace/revolve';
@@ -60,6 +65,26 @@ export interface InPlaceBuiltCommand {
    * when it did not. A command with it is judged by it, not by a body.
    */
   check?(derived: ProjectDocument['derived']): void;
+  /**
+   * The host's own command behind this frame, handed back to `commit` with
+   * the frame (see {@link InPlacePreviewedFrame}). The hook never reads it.
+   */
+  command?: AnyCommand;
+}
+
+/**
+ * The valid frame on screen when Done was pressed, when it shows exactly
+ * what Done commits: the same request, built on the base version the model
+ * is still at. Its command carries the ids and names the frame was built
+ * with, so committing that command lands the document the frame rebuilt,
+ * and `derived` is that rebuild.
+ */
+export interface InPlacePreviewedFrame {
+  built: InPlaceBuiltCommand;
+  document: ProjectDocument;
+  derived: ProjectDocument['derived'];
+  /** The base document's version the frame was built on. */
+  baseVersion: number;
 }
 
 export interface UseInPlaceCommandOptions extends InPlaceContext {
@@ -86,7 +111,15 @@ export interface UseInPlaceCommandOptions extends InPlaceContext {
   reseed?(
     edit: InPlaceEditSeed
   ): { tool: InPlaceToolId; seed: InPlaceEditSeed } | null | undefined;
-  derive(document: ProjectDocument): Promise<ProjectDocument['derived']>;
+  /**
+   * The exact rebuild of a frame. `signal` aborts once the frame is no
+   * longer wanted (the command closed or replaced it), so the host can stop
+   * the worker job rather than let it run on unseen.
+   */
+  derive(
+    document: ProjectDocument,
+    signal?: AbortSignal
+  ): Promise<ProjectDocument['derived']>;
   /**
    * Builds the same command the commit runs, named for the tool so a kernel
    * refusal names it as the commit would. With `edit`, that is the feature's
@@ -110,7 +143,12 @@ export interface UseInPlaceCommandOptions extends InPlaceContext {
      * True once the command is closed or replaced while this commit still
      * validates: the host withdraws the candidate rather than land it.
      */
-    withdrawn: () => boolean
+    withdrawn: () => boolean,
+    /**
+     * The frame Done was pressed on, when it is exactly what this commits;
+     * null otherwise (an edit, or a frame no longer current).
+     */
+    previewed: InPlacePreviewedFrame | null
   ): Promise<boolean> | void;
   publishPreview(preview: ProjectDocument | null): void;
   onStatus(message: string): void;
@@ -355,6 +393,12 @@ export interface InPlaceCommand {
    * refusal goes, and Done no longer waits on it.
    */
   dropRefusal(valueId: string): void;
+  /**
+   * A typed entry of this value that does not evaluate (an undefined name,
+   * a syntax error): refused like an entry out of range, so Done waits
+   * rather than taking the value held while the field shows another.
+   */
+  refuseValue(valueId: string, message: string): void;
   /** Values the user has set, which the picks' or values' defaults leave alone. */
   touched: readonly string[];
   /**
@@ -502,6 +546,7 @@ export function useInPlaceCommand(
       datumLabel: (featureId) => optionsRef.current.datumLabel(featureId),
       linearSnap: options.linearSnap ?? null,
       bodyBounds: (bodyId) => optionsRef.current.bodyBounds?.(bodyId) ?? null,
+      liveBodyIds: () => optionsRef.current.liveBodyIds?.() ?? [],
       evaluate: (value) => optionsRef.current.evaluate?.(value) ?? null,
       touched: sessionTouched,
       ...(savedData ? { saved: savedData } : {}),
@@ -510,6 +555,10 @@ export function useInPlaceCommand(
         : {}),
       imagePlaneBasis: (plane) =>
         optionsRef.current.imagePlaneBasis?.(plane) ?? null,
+      sketchPoints: (sketchId) =>
+        optionsRef.current.sketchPoints?.(sketchId) ?? [],
+      holeFeature: (featureId) =>
+        optionsRef.current.holeFeature?.(featureId) ?? null,
       ...(options.units ? { units: options.units } : {})
     }),
     [
@@ -660,7 +709,7 @@ export function useInPlaceCommand(
   // another value does (a hole step from its bore), land on every value the
   // user has not set, each time they change.
   const defaultsKey = spec?.defaults
-    ? JSON.stringify(spec.defaults(slots, ctx, numbers))
+    ? JSON.stringify(spec.defaults(slots, ctx, numbers, session?.options ?? {}))
     : '';
   /** The defaults as they stand now, for a value put back unset. */
   const defaultsRef = useRef<Record<string, number>>({});
@@ -727,10 +776,14 @@ export function useInPlaceCommand(
         bodyId: BodyId | undefined;
         /** The base version the frame was built on. */
         base: number | null | undefined;
-        check?: InPlaceBuiltCommand['check'];
+        built: InPlaceBuiltCommand;
       }
     >()
   ).current;
+  /** The last frame published as valid; see {@link InPlacePreviewedFrame}. */
+  const lastValidFrame = useRef<
+    (InPlacePreviewedFrame & { key: string }) | null
+  >(null);
 
   const preview = useRef(
     new LivePreview<ProjectDocument, ProjectDocument['derived']>({
@@ -751,11 +804,11 @@ export function useInPlaceCommand(
           base: optionsRef.current.baseVersion,
           key: JSON.stringify(current),
           bodyId: command.resultBodyId,
-          ...(command.check ? { check: command.check } : {})
+          built: command
         });
         return built;
       },
-      derive: (document) => optionsRef.current.derive(document),
+      derive: (document, signal) => optionsRef.current.derive(document, signal),
       publish: (result) => {
         const built = result ? builtFrames.get(result.document) : undefined;
         // A frame built on a base the model has since moved past (an undo,
@@ -788,9 +841,9 @@ export function useInPlaceCommand(
             : null;
         // A datum adds no body: its own check proves it resolved.
         let unresolved: string | null = null;
-        if (result && frame?.check) {
+        if (result && frame?.built.check) {
           try {
-            frame.check(result.derived);
+            frame.built.check(result.derived);
           } catch (error) {
             unresolved =
               error instanceof Error ? error.message : 'This did not resolve.';
@@ -801,13 +854,23 @@ export function useInPlaceCommand(
         const valid = Boolean(
           result &&
           base &&
-          (frame?.check
+          (frame?.built.check
             ? unresolved === null
-            : bodyId && result.derived.bodyRepresentations[bodyId]) &&
+            : bodyId && ownEntry(result.derived.bodyRepresentations, bodyId)) &&
           !fresh
         );
         setPreviewValid(valid);
         setPreviewedKey(valid ? (frame?.key ?? null) : null);
+        lastValidFrame.current =
+          valid && result && frame && typeof frame.base === 'number'
+            ? {
+                key: frame.key,
+                built: frame.built,
+                document: result.document,
+                derived: result.derived,
+                baseVersion: frame.base
+              }
+            : null;
         if (!result) return;
         if (valid) {
           setRefusal(null);
@@ -849,6 +912,7 @@ export function useInPlaceCommand(
         }
       },
       onFailure: ({ error }) => {
+        lastValidFrame.current = null;
         setPreviewValid(false);
         setPreviewAdvisory(null);
         optionsRef.current.publishPreview(null);
@@ -1125,6 +1189,7 @@ export function useInPlaceCommand(
 
   const end = useCallback(() => {
     commitToken.current += 1;
+    lastValidFrame.current = null;
     preview.clear();
     setSession(null);
     setCommitting(false);
@@ -1403,10 +1468,17 @@ export function useInPlaceCommand(
         (other) =>
           other.sketchId === curve.sketchId && other.entityId === curve.entityId
       );
-      // A path lives in one sketch: a curve from another starts it over.
-      const sameSketch = path[0]?.sketchId === curve.sketchId;
+      // A path lives in one sketch: a curve from another starts it over
+      // (bend lines may come from any sketch on the blank's plane).
+      const sameSketch =
+        path[0]?.sketchId === curve.sketchId ||
+        IN_PLACE_TOOL_SPECS[current.tool].pathAcrossSketches === true;
       const next = picked
-        ? path.filter((other) => other.entityId !== curve.entityId)
+        ? path.filter(
+            (other) =>
+              other.entityId !== curve.entityId ||
+              other.sketchId !== curve.sketchId
+          )
         : additive && sameSketch
           ? [...path, curve]
           : [curve];
@@ -1420,21 +1492,28 @@ export function useInPlaceCommand(
     if (committingRef.current) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
-    if (!current || !toolSpec?.faceMode) return false;
+    const faceMode = inPlaceFaceMode(toolSpec, current?.options);
+    if (!current || !toolSpec || !faceMode) return false;
     if (!faceFilterAccepts(toolSpec.faceFilter, face)) {
       return false;
     }
+    // M02: a feature pattern's faces stand for the features that made them,
+    // so another face of a picked feature is that feature clicked again.
+    const same = (other: FacePick) =>
+      face.feature && other.feature
+        ? other.feature.featureId === face.feature.featureId
+        : other.hash === face.hash;
     setSession((latest) => {
       if (!latest) return latest;
       const faces = latest.slots.faces;
       const sameBody = faces[0]?.bodyId === face.bodyId;
       let next: FacePick[];
-      if (toolSpec.faceMode === 'one') {
+      if (faceMode === 'one') {
         // One face: a click replaces it, or (on the same face) moves where
         // it was clicked, which is how a hole is repositioned.
         next = [face];
       } else {
-        const picked = faces.some((other) => other.hash === face.hash);
+        const picked = faces.some(same);
         const placing =
           toolSpec.clickPlacesPoint !== undefined &&
           latest.options[toolSpec.clickPlacesPoint.optionId] ===
@@ -1457,7 +1536,7 @@ export function useInPlaceCommand(
           next = !sameBody
             ? [face]
             : picked
-              ? faces.filter((other) => other.hash !== face.hash)
+              ? faces.filter((other) => !same(other))
               : [...faces, face];
         }
       }
@@ -1470,7 +1549,9 @@ export function useInPlaceCommand(
     if (committingRef.current) return null;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
-    if (!current || toolSpec?.faceMode !== 'many') return null;
+    // A sweep's faces name no feature, so a feature pattern takes none.
+    if (!current || !toolSpec?.faceMode || toolSpec.faceMode !== 'many')
+      return null;
     const accepted = faces.filter((face) =>
       faceFilterAccepts(toolSpec.faceFilter, face)
     );
@@ -1485,13 +1566,14 @@ export function useInPlaceCommand(
     if (committingRef.current) return false;
     const current = sessionRef.current;
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
-    if (!current || !toolSpec?.bodyMode) return false;
+    const bodyMode = inPlaceBodyMode(toolSpec, current?.options);
+    if (!current || !bodyMode) return false;
     setSession((latest) => {
       if (!latest) return latest;
       const bodies = latest.slots.bodies;
       const picked = bodies.some((other) => other.bodyId === body.bodyId);
       const next =
-        toolSpec.bodyMode === 'one'
+        bodyMode === 'one'
           ? [body]
           : picked
             ? bodies.filter((other) => other.bodyId !== body.bodyId)
@@ -1832,7 +1914,11 @@ export function useInPlaceCommand(
               value,
               current.values,
               { faces: current.slots.faces },
-              valueContext(current, savedDataRef.current)
+              valueContext(
+                current,
+                savedDataRef.current,
+                optionsRef.current.units
+              )
             ) ?? null)
           : null;
       if (crossed) {
@@ -1865,7 +1951,13 @@ export function useInPlaceCommand(
           ...current,
           values: {
             ...current.values,
-            ...carriedValues(current, valueId, next, savedDataRef.current),
+            ...carriedValues(
+              current,
+              valueId,
+              next,
+              savedDataRef.current,
+              optionsRef.current.units
+            ),
             [valueId]: next
           },
           raws,
@@ -1883,6 +1975,10 @@ export function useInPlaceCommand(
       clearEntryRefusals((refused) => refused === valueId);
     },
     [clearEntryRefusals]
+  );
+  const refuseValue = useCallback(
+    (valueId: string, message: string) => refuseEntry({ valueId, message }),
+    [refuseEntry]
   );
   const previewValue = useCallback(
     (valueId: string, value: number) =>
@@ -1920,7 +2016,13 @@ export function useInPlaceCommand(
           // box's corner, with its height).
           values: {
             ...current.values,
-            ...carriedValues(current, valueId, restored, savedDataRef.current),
+            ...carriedValues(
+              current,
+              valueId,
+              restored,
+              savedDataRef.current,
+              optionsRef.current.units
+            ),
             [valueId]: restored
           },
           raws,
@@ -1952,11 +2054,23 @@ export function useInPlaceCommand(
     setCommitting(true);
     commitToken.current += 1;
     const token = commitToken.current;
+    const frame = lastValidFrame.current;
     const landed = optionsRef.current.commit(
       current,
       editing?.name ?? spec.featureName ?? spec.title,
       editing,
-      () => commitToken.current !== token
+      () => commitToken.current !== token,
+      !editing &&
+        frame &&
+        frame.key === requestKeyRef.current &&
+        frame.baseVersion === optionsRef.current.baseVersion
+        ? {
+            built: frame.built,
+            document: frame.document,
+            derived: frame.derived,
+            baseVersion: frame.baseVersion
+          }
+        : null
     );
     if (!editing) {
       if (!landed) {
@@ -2031,6 +2145,7 @@ export function useInPlaceCommand(
     const state = spec ? inPlacePanelState(spec, chosen, heldValues) : null;
     const applies = (valueId: string) => {
       if (handles.some((handle) => handle.valueId === valueId)) return true;
+      if (spec?.holdsEntry?.(valueId, slots)) return true;
       const valueSpec = spec?.values.find(
         (candidate) => candidate.id === valueId
       );
@@ -2041,7 +2156,15 @@ export function useInPlaceCommand(
       );
     };
     clearEntryRefusals((valueId) => !applies(valueId));
-  }, [entryRefusals, handles, spec, chosen, heldValues, clearEntryRefusals]);
+  }, [
+    entryRefusals,
+    handles,
+    spec,
+    slots,
+    chosen,
+    heldValues,
+    clearEntryRefusals
+  ]);
   const optionSpecs = useMemo(
     () =>
       (spec?.options ?? [])
@@ -2103,6 +2226,7 @@ export function useInPlaceCommand(
     previewValue,
     setValue,
     dropRefusal,
+    refuseValue,
     touched: session?.touched ?? EMPTY_TOUCHED,
     restoreValue,
     done,
@@ -2130,7 +2254,8 @@ function carriedValues(
   session: Session,
   valueId: string,
   value: number,
-  saved: FeatureData | undefined
+  saved: FeatureData | undefined,
+  units?: UnitSystem
 ): Record<string, number> {
   return Object.fromEntries(
     Object.entries(
@@ -2143,7 +2268,7 @@ function carriedValues(
           placement: session.slots.placement,
           faces: session.slots.faces
         },
-        valueContext(session, saved)
+        valueContext(session, saved, units)
       ) ?? {}
     ).filter(([id]) => session.raws[id] === undefined)
   );
@@ -2152,11 +2277,14 @@ function carriedValues(
 /** How a session holds its values, for a tool's value checks. */
 function valueContext(
   session: Session,
-  saved: FeatureData | undefined
+  saved: FeatureData | undefined,
+  units?: UnitSystem
 ): InPlaceValueContext {
   return {
     touched: session.touched,
     raws: session.raws,
+    options: session.options,
+    ...(units ? { units } : {}),
     ...(saved ? { saved } : {})
   };
 }

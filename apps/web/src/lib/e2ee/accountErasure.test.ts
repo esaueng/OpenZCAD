@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { eraseAccountWithKeyCleanup } from './accountErasure';
 import { memoryDeviceStore } from './deviceStore';
 import { SHELF_NAMES_PREFIX } from '../projectShelfNames';
+import { accountRowsKey, shelfEditsKey } from '../sealedShelfState';
 
 const cleanup = vi.hoisted(() => ({
   removeMls: vi.fn(async () => {}),
@@ -55,6 +56,26 @@ describe('erased account title cleanup', () => {
     ).rejects.toThrow('MLS cleanup failed');
     expect(localStorage.getItem(cacheKey)).toBeNull();
     expect(cleanup.removeSharing).toHaveBeenCalledWith(userId);
+  });
+
+  it('forgets the erased account’s listed rows and its unsynced shelf edits', async () => {
+    localStorage.setItem(
+      accountRowsKey(userId),
+      JSON.stringify({ proj_a: { p: 1 } })
+    );
+    localStorage.setItem(shelfEditsKey(userId), JSON.stringify({}));
+    localStorage.setItem(accountRowsKey('user_other'), '{}');
+    await eraseAccountWithKeyCleanup({
+      userId,
+      isCurrentSession: () => true,
+      store: memoryDeviceStore(),
+      erase: async () => ({ signedOut: true }),
+      onSignedOut: () => {}
+    });
+    expect(localStorage.getItem(accountRowsKey(userId))).toBeNull();
+    expect(localStorage.getItem(shelfEditsKey(userId))).toBeNull();
+    expect(localStorage.getItem(accountRowsKey('user_other'))).toBe('{}');
+    localStorage.removeItem(accountRowsKey('user_other'));
   });
 
   it('retains names when the server erasure fails so the user can retry', async () => {

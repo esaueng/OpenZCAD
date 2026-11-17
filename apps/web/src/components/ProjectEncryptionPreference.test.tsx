@@ -286,3 +286,44 @@ describe('project preference records in the browser', () => {
     expect(current()?.sequence).toBe(10);
   });
 });
+
+// Design review I75: "Encryption is on" sat above new projects still created
+// unencrypted. The page's status line reads this callback instead; setup
+// itself asks the question (SetupDialog.test.tsx).
+describe('reporting whether new projects are encrypted', () => {
+  it('reports off while unset, and on once switched on', async () => {
+    unlock();
+    const { api, current } = fakeApi(OPEN);
+    const reported = vi.fn();
+    render(
+      <ProjectEncryptionPreference
+        userId={USER}
+        unlocked
+        onEncryptNewChange={reported}
+        api={api}
+        pins={memoryPreferencePins()}
+      />
+    );
+    await waitFor(() => expect(reported).toHaveBeenLastCalledWith(false));
+    fireEvent.click(
+      await screen.findByRole('checkbox', { name: 'Encrypt new projects' })
+    );
+    await waitFor(() => expect(reported).toHaveBeenLastCalledWith(true));
+    expect(current()).toMatchObject({ encryptNewProjects: true });
+  });
+
+  it('reports unknown while locked', () => {
+    const { api } = fakeApi(OPEN);
+    const reported = vi.fn();
+    render(
+      <ProjectEncryptionPreference
+        userId={USER}
+        unlocked={false}
+        onEncryptNewChange={reported}
+        api={api}
+        pins={memoryPreferencePins()}
+      />
+    );
+    expect(reported).toHaveBeenLastCalledWith(null);
+  });
+});

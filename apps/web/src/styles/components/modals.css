@@ -4,23 +4,24 @@
 
 /* ── Modals (command palette, shortcuts) ─────────────────── */
 
+/* Project properties fits on one screen: two columns of sections on a
+   desktop, one on a phone, with no scrolling at 1280 x 800 or 390 x 844.
+   The body still scrolls as a fallback on shorter screens. */
 .project-properties-dialog {
-  width: min(560px, 100%);
+  width: min(720px, 100%);
   max-height: calc(100dvh - 12vh - 32px);
-  overflow-y: auto;
-  display: grid;
-  gap: var(--sp-3);
-  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
   color: var(--color-text);
   background: var(--color-surface);
   border: var(--border-strong);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-3);
+  overflow: hidden;
 }
 
 .project-properties-header,
-.project-properties-header h2,
-.project-properties-dialog > p {
+.project-properties-header h2 {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
@@ -30,79 +31,292 @@
   justify-content: space-between;
 }
 
+.project-properties-dialog > .project-properties-header {
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
+  border-bottom: var(--border-thin);
+}
+
 .project-properties-header h2 {
   margin: 0;
   font-size: var(--fs-lg);
 }
 
-.project-properties-list {
+.project-properties-body {
+  display: grid;
+  gap: var(--sp-3);
+  min-height: 0;
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* The name is edited in place: Enter or leaving the field renames. */
+.project-properties-name {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.project-properties-name input {
+  width: 100%;
+  min-height: 34px;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+}
+
+.project-properties-name p {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  overflow-wrap: anywhere;
+}
+
+.project-properties-name small {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.project-properties-name small.is-problem {
+  color: var(--color-error-text);
+}
+
+.project-properties-message {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+/* Retry sits inside the failure sentence: a button, at the compact size. */
+.project-properties-message .secondary {
+  min-height: 26px;
+  padding: 2px 10px;
+  font-size: var(--fs-xs);
+}
+
+/* What the model holds, read at a glance before the bookkeeping: each
+   count beside its label, one row of four. */
+.project-properties-counts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin: 0;
+}
+
+.project-properties-counts > div {
+  display: flex;
+  flex-direction: row-reverse;
+  justify-content: flex-end;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: 6px var(--sp-3);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.project-properties-counts dt {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-properties-counts dd {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.project-properties-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: var(--sp-4);
+  gap: var(--sp-3) var(--sp-5);
+  align-items: start;
+}
+
+.project-properties-section {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.project-properties-section h3 {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.project-properties-list {
   margin: 0;
   font-size: var(--fs-sm);
 }
 
+/* Label at its own width, value right-aligned in the rest, so short values
+   line up on the right edge whatever the label's length. */
 .project-properties-list > div {
   display: grid;
-  gap: var(--sp-1);
-  padding: var(--sp-2) 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--sp-3);
+  align-items: baseline;
+  padding: 5px 0;
   border-bottom: var(--border-thin);
 }
 
-.project-properties-list > div:first-child,
 .project-properties-list > div:last-child {
-  grid-column: 1 / -1;
+  border-bottom: 0;
 }
 
-/* An odd count between the full-width first and last rows (archived,
-   trashed or branched projects, details loading or failed) left one cell
-   alone with a half-width rule under it; it takes the row instead. */
-.project-properties-list > div:nth-last-child(2):nth-child(even) {
-  grid-column: 1 / -1;
-}
-
-@media (max-width: 480px) {
-  .project-properties-list {
-    display: block;
-  }
-
-  .project-properties-list > div {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
-    gap: var(--sp-3);
-  }
-}
-
-.project-properties-list dt,
-.project-properties-dialog > p {
+.project-properties-list dt {
   color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.project-properties-note-toggle {
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin-block: -4px;
+  color: var(--color-text-subtle);
+}
+
+.project-properties-note-toggle[aria-expanded='true'] {
+  color: var(--color-accent);
+}
+
+/* The caveat a label's info button opens: the row's full width. */
+.project-properties-list dd.project-properties-note {
+  grid-column: 1 / -1;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  text-align: left;
+}
+
+.project-properties-list dd.project-properties-note[hidden] {
+  display: none;
 }
 
 .project-properties-list dd {
   margin: 0;
   overflow-wrap: anywhere;
+  text-align: right;
 }
 
-.project-properties-dialog > p {
-  margin: 0;
-  font-size: var(--fs-sm);
-  line-height: 1.5;
+.project-properties-encryption {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.project-properties-encryption.is-encrypted svg {
+  color: var(--color-success);
+}
+
+.project-properties-encryption.is-plaintext svg,
+.project-properties-encryption.is-unreadable svg {
+  color: var(--color-text-subtle);
+}
+
+.project-properties-encryption.is-paused svg {
+  color: var(--color-warning);
+}
+
+.project-properties-encryption.is-encrypting svg {
+  color: var(--color-accent);
+}
+
+.project-properties-id {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.project-properties-id code {
+  min-width: 0;
+  /* One click selects the whole ID, the fallback when copying fails. */
+  user-select: all;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.project-properties-id .icon-button {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  min-height: 0;
 }
 
 .project-properties-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  border-top: var(--border-thin);
 }
 
-.project-properties-note {
-  padding-top: var(--sp-2);
+/* Close is this dialog's only action, so it is its answer: it keeps the
+   whole button the bare-secondary rule below takes from a Cancel beside a
+   filled primary. It read as stray text in the corner. */
+.modal-backdrop
+  .project-properties-actions
+  > .secondary:not(:hover:not(:disabled), :focus-visible) {
+  background: var(--color-surface-2);
+  border-color: var(--color-border-strong);
 }
 
-/* Retry sits inside the failure sentence: a button, at the compact size. */
-.project-properties-dialog > p .secondary {
-  min-height: 26px;
-  padding: 2px 10px;
+.project-properties-actions > .secondary {
+  min-width: 84px;
+}
+
+.project-properties-source {
+  margin-right: auto;
+  color: var(--color-text-subtle);
   font-size: var(--fs-xs);
+}
+
+@media (max-width: 640px) {
+  .project-properties-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  /* A phone gives the dialog the screen's height, not the 12vh drop the
+     command palette sits under. */
+  .modal-backdrop:has(> .project-properties-dialog) {
+    padding-top: 16px;
+  }
+
+  .project-properties-dialog {
+    max-height: calc(100dvh - 32px);
+  }
+
+  .project-properties-counts {
+    gap: 6px;
+  }
+
+  .project-properties-counts > div {
+    flex-direction: column-reverse;
+    align-items: flex-start;
+    gap: 0;
+    padding: 4px var(--sp-2);
+  }
 }
 
 .modal-backdrop {
@@ -115,6 +329,12 @@
   padding: 12vh 16px 16px;
   background: rgba(6, 7, 9, 0.55);
   backdrop-filter: blur(2px);
+}
+
+/* The shared confirm opens over the start screen and Settings as well as the
+   workspace; see --z-confirm. */
+.modal-backdrop.confirm-backdrop {
+  z-index: var(--z-confirm);
 }
 
 /* A title that wraps (Delete “a long feature name”?) squeezed its icon. */
@@ -259,6 +479,34 @@
   font-size: var(--fs-xs);
 }
 
+/* "Treat as not encrypted on this device" (EncryptedPinReset.tsx). */
+.pin-reset-dialog {
+  width: min(520px, 100%);
+  max-height: calc(100dvh - 12vh - 32px);
+  overflow-y: auto;
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 55%, transparent);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+}
+
+.pin-reset-dialog > header {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: var(--sp-3);
+  color: var(--color-warning);
+}
+
+.pin-reset-dialog h2 {
+  margin: 0;
+  font-size: var(--fs-lg);
+}
+
 .cloud-deletion-dialog {
   width: min(560px, 100%);
   max-height: calc(100dvh - 12vh - 32px);
@@ -313,6 +561,22 @@
 
 .cloud-deletion-error {
   color: var(--color-error);
+}
+
+/* "Download your data first": a link in the impact text (design review I84). */
+.cloud-deletion-download {
+  padding: 0;
+  border: 0;
+  color: var(--color-accent-hi);
+  background: transparent;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cloud-deletion-download:hover {
+  color: var(--color-text);
 }
 
 /* The personal-info toggle is a button, not a full-width bar. */
@@ -418,10 +682,13 @@
 }
 
 /* ── Delete or suppress a feature other features build on ── */
-/* The unapplied-card question (F15) is the same small alertdialog. */
+/* The unapplied-card question (F15) and the shared destructive confirm
+   (ConfirmDialog: library deletes, resets, clears) are the same small
+   alertdialog. */
 
 .delete-feature-dialog,
-.unapplied-card-dialog {
+.unapplied-card-dialog,
+.confirm-dialog {
   width: min(420px, 100%);
   display: grid;
   gap: var(--sp-3);
@@ -434,7 +701,8 @@
 }
 
 .delete-feature-dialog h2,
-.unapplied-card-dialog h2 {
+.unapplied-card-dialog h2,
+.confirm-dialog h2 {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
@@ -444,14 +712,16 @@
 }
 
 .delete-feature-dialog p,
-.unapplied-card-dialog p {
+.unapplied-card-dialog p,
+.confirm-dialog p {
   margin: 0;
   color: var(--color-text-muted);
   font-size: var(--fs-sm);
   line-height: 1.5;
 }
 
-.delete-feature-body {
+.delete-feature-body,
+.confirm-dialog-body {
   display: grid;
   gap: var(--sp-2);
 }
@@ -465,13 +735,15 @@
 }
 
 .delete-feature-actions,
-.unapplied-card-actions {
+.unapplied-card-actions,
+.confirm-dialog-actions {
   display: flex;
   justify-content: flex-end;
   gap: var(--sp-2);
 }
 
-.delete-feature-confirm {
+.delete-feature-confirm,
+.confirm-dialog-danger {
   min-height: 32px;
   padding: 6px 11px;
   color: var(--color-on-danger);
@@ -482,7 +754,8 @@
   font-weight: var(--fw-medium);
 }
 
-.delete-feature-confirm:hover {
+.delete-feature-confirm:hover,
+.confirm-dialog-danger:hover {
   filter: brightness(1.08);
 }
 
@@ -524,6 +797,19 @@
   font-size: var(--fs-sm);
 }
 
+/* F06: which configuration the export writes. */
+.export-dialog-configuration {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+}
+
+.export-dialog-configuration select {
+  flex: 1;
+  min-width: 0;
+}
+
 .export-dialog-group {
   display: grid;
   /* A long body name widened the implicit track past the group's border. */
@@ -556,6 +842,14 @@
 .export-dialog-option small {
   color: var(--color-text-subtle);
   font-size: var(--fs-xs);
+}
+
+/* Every option's name in one column, so the hints start at one edge: a
+   name that shrank to fit ("STL (ASCII)" over two lines at 390 px) pushed
+   its hint a little further each row. */
+.export-dialog-option > span {
+  flex: none;
+  min-width: 7em;
 }
 
 .export-dialog-presets {
@@ -609,6 +903,24 @@
 
 .import-units-dialog .export-dialog-option small {
   font-variant-numeric: tabular-nums;
+}
+
+/* Width and Height as one two-column table, so their fields line up under
+   labels of different widths. The labels keep wrapping their inputs. */
+.export-dialog-size {
+  display: grid;
+  grid-template-columns: max-content max-content;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.export-dialog-size > label {
+  display: contents;
+}
+
+.export-dialog-size input[type='number'] {
+  width: 90px;
 }
 
 /* Facet angle and units side by side, wrapping on a narrow dialog. */
@@ -688,6 +1000,17 @@
   font-size: var(--fs-sm);
 }
 
+.export-dialog-check-failed {
+  display: grid;
+  gap: var(--sp-1);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+
+.export-dialog-check-failed p {
+  margin: 0;
+}
+
 .export-dialog-progress {
   margin: 0;
   display: flex;
@@ -708,6 +1031,126 @@
 }
 
 .export-dialog-actions .primary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+/* On a phone, or in a short window, the dialog scrolls: Cancel and Export
+   stay pinned to its foot instead of waiting below the fold with nothing
+   to say they are there. */
+@media (max-width: 480px), (max-height: 720px) {
+  .export-dialog-actions {
+    position: sticky;
+    bottom: calc(-1 * var(--sp-4));
+    margin: 0 calc(-1 * var(--sp-4)) calc(-1 * var(--sp-4));
+    padding: var(--sp-3) var(--sp-4) var(--sp-4);
+    background: var(--color-surface);
+    border-top: var(--border-thin);
+  }
+}
+
+/* ── Sheet-metal flat pattern (M16) ── */
+
+.flat-pattern-dialog {
+  width: min(760px, 100%);
+}
+
+.flat-pattern-warning {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+}
+
+/* The drawing is black on white whatever the theme, as it prints. */
+.flat-pattern-preview {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 320px;
+  object-fit: contain;
+  background: #ffffff;
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.flat-pattern-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.flat-pattern-key {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--color-text-muted);
+}
+
+.flat-pattern-key::before {
+  content: '';
+  width: 22px;
+  border-top: 2px dashed #1f5fbf;
+}
+
+.flat-pattern-key[data-direction='down']::before {
+  border-top: 2px dotted #c62828;
+}
+
+.flat-pattern-size {
+  margin-left: auto;
+  color: var(--color-text-muted);
+}
+
+.flat-pattern-size strong {
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.flat-pattern-table-wrap {
+  overflow-x: auto;
+}
+
+.flat-pattern-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.flat-pattern-table th,
+.flat-pattern-table td {
+  padding: 4px var(--sp-2);
+  border-bottom: var(--border-thin);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.flat-pattern-table th:nth-child(-n + 2),
+.flat-pattern-table td:nth-child(-n + 2) {
+  text-align: left;
+}
+
+.flat-pattern-table th {
+  /* Headings wrap so all eight columns fit the dialog; values never do. */
+  white-space: normal;
+  vertical-align: bottom;
+  color: var(--color-text-subtle);
+  font-weight: var(--fw-medium);
+  font-size: var(--fs-xs);
+}
+
+.flat-pattern-actions {
+  flex-wrap: wrap;
+}
+
+.flat-pattern-actions button {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
@@ -755,7 +1198,14 @@
 }
 
 .shapr-import-error {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-1);
   color: var(--color-error);
+}
+
+.shapr-import-error p {
+  margin: 0;
 }
 
 .shapr-import-exact {
@@ -1215,6 +1665,24 @@
   font-size: var(--fs-xs);
 }
 
+/* The owner's explicit choice of a verified contact for an encrypted
+   invitation, each named by the contact code Contacts shows. */
+.sharing-invite-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.sharing-invite-option input {
+  margin-top: 3px;
+}
+
+.sharing-invite-option .encryption-code {
+  display: inline;
+}
+
 .sharing-invite-sent {
   margin: 0;
   color: var(--color-text-muted);
@@ -1475,6 +1943,22 @@
 
 .sharing-share-url {
   font-family: var(--font-mono);
+}
+
+/* F06: which configuration the new link opens on; it rewrites the URL. */
+.sharing-share-configuration {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  font-size: var(--fs-xs);
+}
+
+.sharing-share-configuration select {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  font-size: var(--fs-xs);
 }
 
 .sharing-share-once {
@@ -1816,4 +2300,14 @@
 .modal-backdrop .secondary:not(.danger, :hover:not(:disabled), :focus-visible) {
   background: transparent;
   border-color: transparent;
+}
+
+.conflict-choice-name {
+  color: var(--color-text);
+}
+
+/* The account email to type, once shown, weighs what the other prompts'
+   <strong> text does. */
+.cloud-deletion-confirmation .private-text.shown {
+  font-weight: var(--fw-bold);
 }

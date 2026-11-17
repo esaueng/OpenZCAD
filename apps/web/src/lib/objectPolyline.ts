@@ -134,6 +134,9 @@ export function objectPolylines(
         ? [{ points: points.slice(0, -1), closed: true }]
         : [{ points, closed: false }];
     }
+    case 'point':
+      // I01: a point has no curve; the viewport draws its dot.
+      return [];
     case 'text': {
       // Display only, at a coarser tolerance than the kernel path — the solid
       // is built from the exact beziers, never from these points. The font

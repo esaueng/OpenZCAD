@@ -33,11 +33,13 @@ describe('server account tier policy', () => {
   });
 
   it('returns finite effective limits without disclosing the membership list', () => {
+    // One storage bucket per account: Free 100 MiB in total, not 100 MiB each.
     expect(accountEntitlements(env, 'other@example.com')).toEqual({
       tier: 'free',
       projectLimit: 100,
-      projectStorageLimitBytes: 1024 ** 3,
-      artifactLimitBytes: 1024 ** 3,
+      storageLimitBytes: 100 * 1024 ** 2,
+      projectStorageLimitBytes: 100 * 1024 ** 2,
+      artifactLimitBytes: 100 * 1024 ** 2,
       ai: {
         requestLimit: 6,
         costLimitUnits: 24,
@@ -45,11 +47,13 @@ describe('server account tier policy', () => {
         windowSeconds: 600
       }
     });
+    // Premium: 1 GiB for everything, in the same one bucket.
     expect(accountEntitlements(env, 'first@example.com')).toEqual({
       tier: 'premium',
       projectLimit: 10_000,
-      projectStorageLimitBytes: 25 * 1024 ** 3,
-      artifactLimitBytes: 25 * 1024 ** 3,
+      storageLimitBytes: 1024 ** 3,
+      projectStorageLimitBytes: 1024 ** 3,
+      artifactLimitBytes: 1024 ** 3,
       ai: {
         requestLimit: 600,
         costLimitUnits: 2400,
@@ -73,6 +77,37 @@ describe('server account tier policy', () => {
         'first@example.com'
       ).artifactLimitBytes
     ).toBe(8192);
+  });
+
+  it('takes one Premium storage override, the legacy names only when it is unset', () => {
+    const premium = (overrides: Record<string, string>) =>
+      accountEntitlements({ ...env, ...overrides }, 'first@example.com');
+    const unified = premium({
+      PREMIUM_STORAGE_LIMIT_BYTES: '4096',
+      PREMIUM_PROJECT_STORAGE_LIMIT_BYTES: '8192',
+      PREMIUM_ARTIFACT_LIMIT_BYTES: '16384'
+    });
+    expect(unified).toMatchObject({
+      storageLimitBytes: 4096,
+      projectStorageLimitBytes: 4096,
+      artifactLimitBytes: 4096
+    });
+    expect(
+      premium({
+        PREMIUM_PROJECT_STORAGE_LIMIT_BYTES: '8192',
+        PREMIUM_ARTIFACT_LIMIT_BYTES: '16384'
+      }).storageLimitBytes
+    ).toBe(8192);
+    expect(
+      premium({ PREMIUM_ARTIFACT_LIMIT_BYTES: '16384' }).storageLimitBytes
+    ).toBe(16384);
+    // Free never reads a Premium override.
+    expect(
+      accountEntitlements(
+        { ...env, PREMIUM_STORAGE_LIMIT_BYTES: '4096' },
+        'other@example.com'
+      ).storageLimitBytes
+    ).toBe(100 * 1024 ** 2);
   });
 
   it('grants premium hosted AI access while retaining the existing Free allowlist', () => {
@@ -148,16 +183,16 @@ describe('stored account limit sync', () => {
         )
         .get(id);
     const free = {
-      artifact_limit_bytes: 1024 ** 3,
+      artifact_limit_bytes: 100 * 1024 ** 2,
       project_limit: 100,
-      project_storage_limit_bytes: 1024 ** 3
+      project_storage_limit_bytes: 100 * 1024 ** 2
     };
     expect(limits('user_free')).toEqual(free);
     expect(limits('user_none')).toEqual(free);
     expect(limits('user_premium')).toEqual({
-      artifact_limit_bytes: 25 * 1024 ** 3,
+      artifact_limit_bytes: 1024 ** 3,
       project_limit: 10_000,
-      project_storage_limit_bytes: 25 * 1024 ** 3
+      project_storage_limit_bytes: 1024 ** 3
     });
   });
 });

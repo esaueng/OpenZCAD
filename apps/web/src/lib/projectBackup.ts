@@ -1,4 +1,6 @@
 import {
+  JsonComplexityGuard,
+  ownEntry,
   documentNodesWithHistory,
   documentAssetsWithHistory,
   referenceImagesWithHistory,
@@ -7,6 +9,7 @@ import {
   documentStructureError
 } from '@openzcad/shared';
 import {
+  assertSafeDocumentIdentifiers,
   normalizeDocument,
   withoutDerivedProjection
 } from '@openzcad/document-core';
@@ -54,6 +57,9 @@ function record(value: unknown): Record<string, unknown> {
 function validateDocument(value: unknown): asserts value is ProjectDocument {
   const complexity = documentStructureError(value);
   if (complexity) throw new Error(complexity);
+  // Before anything indexes a map by one of its names: a reserved name such
+  // as "__proto__" as a key, id or selector would reach inherited members.
+  assertSafeDocumentIdentifiers(value);
   const doc = record(value);
   assertDocumentHistory(value as ProjectDocument);
   if (
@@ -223,6 +229,37 @@ export async function packBackupFile(
   };
 }
 
+/**
+ * A backup file's text, streamed under the size cap and a nesting/size guard
+ * so a hostile file is refused before it is ever handed to `JSON.parse`.
+ */
+export async function readProjectBackupText(file: Blob): Promise<string> {
+  if (file.size > MAX_PROJECT_BACKUP_BYTES)
+    throw new Error('Project backup exceeds the 256 MB limit.');
+  const reader = file.stream().getReader();
+  const decoder = new TextDecoder();
+  const structure = new JsonComplexityGuard(72, 2_000_000);
+  const chunks: string[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > MAX_PROJECT_BACKUP_BYTES)
+        throw new Error('Project backup exceeds the 256 MB limit.');
+      const text = decoder.decode(chunk.value, { stream: true });
+      structure.consume(text);
+      chunks.push(text);
+    }
+  } finally {
+    await reader.cancel();
+    reader.releaseLock();
+  }
+  chunks.push(decoder.decode());
+  return chunks.join('');
+}
+
 export async function parseProjectBackup(text: string): Promise<ProjectBackup> {
   if (new Blob([text]).size > MAX_PROJECT_BACKUP_BYTES)
     throw new Error('Project backup exceeds the 256 MB limit.');
@@ -375,6 +412,9 @@ export function importProjectCopy(
     copy.document,
     ...(copy.saveStates ?? []).map((state) => state.document)
   ]) {
+    // Also checked here, as this is where the copy is normalized and
+    // published; `parseProjectBackup` normally refused it already.
+    assertSafeDocumentIdentifiers(document);
     const normalized = withoutDerivedProjection(normalizeDocument(document));
     Object.assign(document, normalized, { projectId, ownerUserId });
     if (document.editHistory) {
@@ -384,7 +424,7 @@ export function importProjectCopy(
         if (historical.kind === 'project') historical.projectId = projectId;
       }
     }
-    const root = document.nodes[document.rootNodeId];
+    const root = ownEntry(document.nodes, document.rootNodeId);
     if (root?.kind === 'project') root.projectId = projectId;
     for (const asset of documentAssetsWithHistory(document))
       asset.storage = 'local';

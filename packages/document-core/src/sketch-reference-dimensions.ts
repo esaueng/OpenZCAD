@@ -1,4 +1,6 @@
 import {
+  ownEntry,
+  suppliedIds,
   createSketchReferenceAnnotationId,
   deepClone,
   documentNodesWithHistory,
@@ -179,7 +181,7 @@ function prepareReferenceDimension(
       'A reference dimension stores measured targets, not a driving value.'
     );
   const annotationId =
-    input.ids?.annotationId ?? createSketchReferenceAnnotationId();
+    suppliedIds(input.ids)?.annotationId ?? createSketchReferenceAnnotationId();
   const reference = { annotationId, data: deepClone(input.data) };
   assertSketchReferenceDimensions(
     {
@@ -190,7 +192,7 @@ function prepareReferenceDimension(
   );
   const objects = new Map(
     sketch.objectIds.flatMap((id) => {
-      const node = document.nodes[id];
+      const node = ownEntry(document.nodes, id);
       return node?.kind === 'sketch-object' ? [[id, node.data] as const] : [];
     })
   );
@@ -233,7 +235,7 @@ export function addSketchReferenceDimension(
       ? prepared.objects
       : new Map(
           sketch.objectIds.flatMap((id) => {
-            const node = view.nodes[id];
+            const node = ownEntry(view.nodes, id);
             return node?.kind === 'sketch-object'
               ? [[id, node.data] as const]
               : [];

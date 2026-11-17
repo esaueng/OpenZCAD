@@ -11,7 +11,10 @@ import {
   type ProjectPreferenceState
 } from '../lib/e2ee/projectPreferences';
 import { unlockedAccount } from '../lib/e2ee/unlockedKeys';
-import { encryptionStateChanged } from '../lib/e2ee/encryptionStateEvents';
+import {
+  encryptionStateChanged,
+  subscribeEncryptionState
+} from '../lib/e2ee/encryptionStateEvents';
 import {
   isSupportedProjectFormat,
   PROJECT_STORAGE_FORMAT_E2EE_V1
@@ -33,12 +36,20 @@ const CAN_CREATE_ENCRYPTED = isSupportedProjectFormat(
 export function ProjectEncryptionPreference({
   userId,
   unlocked,
+  onEncryptNewChange,
   api: injectedApi,
   pins: injectedPins
 }: {
   userId: string;
   /** This device holds the account key (keys set up and unlocked here). */
   unlocked: boolean;
+  /**
+   * Reports whether new projects are encrypted once known (null while
+   * unknown), so the page's status line never says "Encryption is on" above
+   * new projects still created unencrypted (design review I75). Setup itself
+   * asks the question, ticked by default (`SetupDialog`).
+   */
+  onEncryptNewChange?(encryptNew: boolean | null): void;
   api?: ProjectPreferenceApi;
   pins?: PreferencePinStore;
 }) {
@@ -85,6 +96,27 @@ export function ProjectEncryptionPreference({
   useEffect(() => {
     if (unlocked) void reload();
   }, [reload, unlocked]);
+
+  // Setup's last step saves this choice from outside this row; any change
+  // announced for the account reads it again.
+  useEffect(() => {
+    if (!unlocked) return;
+    return subscribeEncryptionState(userId, () => void reload());
+  }, [reload, unlocked, userId]);
+
+  const known: boolean | null =
+    !unlocked || enabled !== true
+      ? null
+      : required
+        ? true
+        : state?.kind === 'verified'
+          ? state.encryptNewProjects
+          : state?.kind === 'unset'
+            ? false
+            : null;
+  useEffect(() => {
+    onEncryptNewChange?.(known);
+  }, [known, onEncryptNewChange]);
 
   if (!unlocked || enabled !== true || !context()) return null;
 

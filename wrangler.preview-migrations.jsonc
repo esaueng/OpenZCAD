@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Applies D1 migrations to the staging database every Worker Preview shares
+  // (`pnpm migrate:preview`). It must name the same database as
+  // previews.d1_databases in wrangler.jsonc; a test checks that.
+  "name": "openzcad-preview-migrations",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "openzcad-preview",
+      "database_id": "41603249-77a4-478a-86e5-e349cbb2b868",
+      "migrations_dir": "apps/web/migrations"
+    }
+  ]
+}

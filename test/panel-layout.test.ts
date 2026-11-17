@@ -256,19 +256,27 @@ describe('panel layout presets', () => {
         popOutPanel(layout, 'revisions', { x: 400, y: 200, w: 300, h: 300 })
       )
     ).toBeNull();
-    // The right-only Essentials is not a menu preset.
+    // The fresh-device stack is independent of the menu presets.
     expect(matchingPreset(defaultPanelLayout())).toBeNull();
-    expect(matchingPreset(defaultPanelLayout({ leftDock: true }))).toBe(
-      'essentials'
-    );
+    expect(matchingPreset(defaultPanelLayout({ leftDock: true }))).toBeNull();
   });
 
-  it('defaults a new device to the right-only Essentials until the left dock ships', () => {
-    expect(defaultPanelLayout().right).toEqual([['bodies', 'parameters']]);
-    expect(defaultPanelLayout({ leftDock: false }).left).toEqual([]);
-    const twoSided = defaultPanelLayout({ leftDock: true });
-    expect(twoSided.left).toEqual([['bodies']]);
-    expect(twoSided.right).toEqual([['parameters']]);
+  it('defaults a new device to Objects above History on the right', () => {
+    for (const options of [{}, { leftDock: false }, { leftDock: true }]) {
+      const layout = defaultPanelLayout(options);
+      expect(layout.left).toEqual([]);
+      expect(layout.right).toEqual([['bodies', 'history']]);
+      expect(layout.floats).toEqual([]);
+      expect(layout.unpinned).toBeNull();
+      expect(layout.options.hidden).toBe(false);
+      expect(panelStatuses(layout)).toEqual({
+        bodies: 'docked',
+        history: 'docked',
+        parameters: 'closed',
+        revisions: 'closed',
+        diagnostics: 'closed'
+      });
+    }
   });
 });
 
@@ -3372,21 +3380,19 @@ describe('panel layout persistence', () => {
     ).toEqual([]);
   });
 
-  it('gives a new device the default for whether the left dock ships', () => {
+  it('loads the right-hand Objects and History stack on a fresh device without writing', () => {
     const storage = memoryStorage();
-    expect(loadPanelLayout(storage).right).toEqual([['bodies', 'parameters']]);
-    expect(
-      loadPanelLayout(storage, undefined, { leftDock: false }).left
-    ).toEqual([]);
-    const twoSided = loadPanelLayout(storage, undefined, { leftDock: true });
-    expect(twoSided.left).toEqual([['bodies']]);
-    expect(twoSided.right).toEqual([['parameters']]);
+    for (const options of [{}, { leftDock: false }, { leftDock: true }]) {
+      const layout = loadPanelLayout(storage, undefined, options);
+      expect(layout.left).toEqual([]);
+      expect(layout.right).toEqual([['bodies', 'history']]);
+    }
     expect(storage.writes).toEqual([]);
     // A corrupt v1 key reads as a new device.
     expect(
       loadPanelLayout(memoryStorage({ [PANEL_STATE_STORAGE_KEY]: '{oops' }))
         .right
-    ).toEqual([['bodies', 'parameters']]);
+    ).toEqual([['bodies', 'history']]);
   });
 
   it('migrates from a v1 state handed in, null meaning none stored', () => {
@@ -3408,8 +3414,8 @@ describe('panel layout persistence', () => {
     expect(storage.entries.get(PANEL_STATE_STORAGE_KEY)).toBe(legacy);
   });
 
-  it('never rewrites a stored layout when the left dock ships', () => {
-    const stored = defaultPanelLayout({ leftDock: false });
+  it('never replaces a saved arrangement with the fresh-device default', () => {
+    const stored = applyPreset(modelOnly(), 'essentials');
     const storage = memoryStorage();
     savePanelLayout(stored, storage);
     const raw = storage.entries.get(PANEL_LAYOUT_STORAGE_KEY);

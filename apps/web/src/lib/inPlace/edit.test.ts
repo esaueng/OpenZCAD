@@ -171,6 +171,19 @@ function untouched(
   return request && resolveNewAxis(request, null);
 }
 
+const EMPTY_SLOTS_FOR_EDIT: InPlaceSlots = {
+  profiles: [],
+  axis: null,
+  path: [],
+  guide: [],
+  faces: [],
+  bodies: [],
+  plane: null,
+  edges: [],
+  refs: [],
+  image: null
+};
+
 describe('which in-place command edits a stored feature', () => {
   it('maps kinds, booleans by operation and patterns by kind', () => {
     expect(
@@ -870,7 +883,7 @@ describe('an untouched edit writes the feature back as stored', () => {
       thread: wholeFields
     });
     // Its end dragged 4 up from the bottom: a partial thread from the start,
-    // which keeps its chamfer there and stops plain.
+    // which keeps its chamfer there and runs out where it stops.
     expect(untouched(feature(whole), { length: 4 }, ctx)).toEqual({
       tool: 'thread',
       thread: {
@@ -879,7 +892,8 @@ describe('an untouched edit writes the feature back as stored', () => {
         profile: 'printable',
         clearance: 0.1,
         length: 4,
-        chamferStart: true
+        chamferStart: true,
+        runoutEnd: true
       }
     });
     // A stored length that runs the whole face is held as given, and still
@@ -937,6 +951,53 @@ describe('an untouched edit writes the feature back as stored', () => {
         pitch: 1,
         offset: 2,
         anchor: 'end'
+      }
+    });
+    // Schema v57 (review #1458): a runout stored at an end of the face (a
+    // thread against a shoulder, written by a command) goes back a runout,
+    // though the panel would chamfer an end the span reaches. The probe's
+    // Ø6 × 20 boss: an untouched edit used to store `chamferStart` instead.
+    const shoulder: FeatureData = {
+      featureKind: 'thread',
+      targetBodyId: BODY,
+      faceHash: 31,
+      profile: 'iso-metric',
+      length: 5,
+      runoutStart: true
+    };
+    const { featureKind: _r, ...shoulderFields } = shoulder;
+    expect(untouched(feature(shoulder), {}, ctx)).toEqual({
+      tool: 'thread',
+      thread: shoulderFields
+    });
+    // A chamfer stored at a stopped-short end (a v53 thread is never one,
+    // but a command may write it) is one the build refuses: the edit
+    // finishes that end as a runout instead.
+    const stoppedChamfer: FeatureData = {
+      ...shoulder,
+      runoutStart: undefined,
+      chamferEnd: true
+    };
+    expect(untouched(feature(stoppedChamfer), {}, ctx)).toEqual({
+      tool: 'thread',
+      thread: {
+        targetBodyId: BODY,
+        faceHash: 31,
+        profile: 'iso-metric',
+        length: 5,
+        runoutEnd: true
+      }
+    });
+    // A stored runout is valid wherever it stands: its extent edited, it
+    // stays a runout.
+    expect(untouched(feature(shoulder), { length: 4 }, ctx)).toEqual({
+      tool: 'thread',
+      thread: {
+        targetBodyId: BODY,
+        faceHash: 31,
+        profile: 'iso-metric',
+        length: 4,
+        runoutStart: true
       }
     });
   });
@@ -1081,6 +1142,184 @@ describe('an untouched edit writes the feature back as stored', () => {
         request
       )?.data
     ).toMatchObject({ direction: { x: 1, y: 2, z: 0 } });
+  });
+
+  it('M02 feature pattern: a repeated feature with no face to show is kept (review)', () => {
+    const boss = 'feat_boss' as FeatureId;
+    const hole = 'feat_hole' as FeatureId;
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      spacing: 12,
+      angleDeg: 0,
+      sourceFeatureIds: [boss, hole]
+    };
+    const node = feature(data, 'body_p' as BodyId);
+    // A later cut removed the boss: the model shows only the hole's faces.
+    const context: InPlaceEditContext = {
+      ...EDIT_CTX,
+      featureFace: (bodyId, featureId) =>
+        featureId === hole
+          ? { ...TOP, bodyId, feature: { featureId, name: 'Hole' } }
+          : null
+    };
+    const armed = inPlaceEditSeed(node, context)!;
+    expect(armed.seed.slots.faces).toHaveLength(1);
+    expect(armed.seed.options.keepSources).toBe(boss);
+    // A spacing change writes both back, not only the one on screen.
+    const request = untouched(node, { spacing: 20 }, context) as Extract<
+      ResolvedInPlaceRequest,
+      { tool: 'pattern' }
+    >;
+    expect(request.sourceFeatureIds).toEqual([hole, boss]);
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: node.featureId, name: node.name, data },
+        request
+      )?.data
+    ).toMatchObject({ spacing: 20, sourceFeatureIds: [hole, boss] });
+    // A feature picked on another body starts the set over there: the boss,
+    // made on this body, is not carried to one it is not on (re-check).
+    const elsewhere = IN_PLACE_TOOL_SPECS['linear-pattern'].request(
+      {
+        ...EMPTY_SLOTS_FOR_EDIT,
+        faces: [
+          {
+            ...TOP,
+            bodyId: 'body_other' as BodyId,
+            feature: { featureId: 'feat_other' as FeatureId, name: 'Other' }
+          }
+        ]
+      },
+      { count: 3, spacing: 20 },
+      { ...armed.seed.options },
+      {
+        sketchViews: [],
+        datumAxes: undefined,
+        datumLabel: () => 'Axis',
+        saved: data
+      },
+      { count: 3, spacing: 20 }
+    );
+    expect(elsewhere).toMatchObject({
+      targetBodyId: 'body_other',
+      sourceFeatureIds: ['feat_other']
+    });
+  });
+
+  it('M02 feature pattern: its features and skipped copies round-trip unchanged', () => {
+    const hole = 'feat_hole' as FeatureId;
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'linear',
+      count: 4,
+      axis: 'x',
+      spacing: 12,
+      angleDeg: 0,
+      sourceFeatureIds: [hole],
+      skippedInstances: ['2']
+    };
+    const node = feature(data, 'body_p' as BodyId);
+    const context: InPlaceEditContext = {
+      ...EDIT_CTX,
+      featureFace: (bodyId, featureId) => ({
+        ...TOP,
+        bodyId,
+        feature: { featureId, name: 'Hole' }
+      })
+    };
+    const armed = inPlaceEditSeed(node, context)!;
+    expect(armed.tool).toBe('linear-pattern');
+    expect(armed.seed.options).toMatchObject({
+      repeat: 'features',
+      skip: '2'
+    });
+    expect(armed.seed.slots.bodies).toEqual([]);
+    const request = untouched(node, {}, context) as Extract<
+      ResolvedInPlaceRequest,
+      { tool: 'pattern' }
+    >;
+    expect(request).toMatchObject({
+      targetBodyId: BODY,
+      sourceFeatureIds: [hole],
+      skippedInstances: ['2']
+    });
+    const update = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      request
+    );
+    expect(update?.data).toMatchObject({
+      sourceFeatureIds: [hole],
+      skippedInstances: ['2']
+    });
+    expect(update).not.toHaveProperty('clearData');
+    // Every copy brought back: the stored list is cleared, not left behind.
+    const { skippedInstances: _skipped, ...kept } = request;
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: node.featureId, name: node.name, data },
+        kept
+      )?.clearData
+    ).toEqual(['skippedInstances']);
+  });
+
+  it('M02 point pattern: its points reopen as picks and write back unchanged', () => {
+    const SKETCH_P = 'sketch_points' as SketchId;
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'points',
+      count: 3,
+      axis: 'x',
+      spacing: 10,
+      angleDeg: 360,
+      points: {
+        sketchId: SKETCH_P,
+        pointIds: ['p_ref', 'p_a', 'p_b'],
+        referencePointId: 'p_ref'
+      },
+      skippedInstances: ['p_b']
+    };
+    const node = feature(data, 'body_p' as BodyId);
+    const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+    expect(armed.tool).toBe('point-pattern');
+    // The original's point stays the stored reference, not a pick.
+    expect(armed.seed.slots.path).toEqual([
+      { sketchId: SKETCH_P, entityId: 'p_a' },
+      { sketchId: SKETCH_P, entityId: 'p_b' }
+    ]);
+    expect(armed.seed.options.skip).toBe('p_b');
+    const spec = IN_PLACE_TOOL_SPECS[armed.tool];
+    const request = spec.request(
+      { ...armed.seed.slots, axis: null, refs: [], image: null },
+      {},
+      armed.seed.options,
+      {
+        sketchViews: [],
+        datumAxes: undefined,
+        datumLabel: () => 'Axis',
+        saved: data,
+        sketchPoints: () => [
+          { id: 'p_ref', at: { x: 0, y: 0, z: 0 } },
+          { id: 'p_a', at: { x: 30, y: 0, z: 0 } },
+          { id: 'p_b', at: { x: 0, y: 30, z: 0 } }
+        ]
+      }
+    ) as Extract<ResolvedInPlaceRequest, { tool: 'pattern' }>;
+    const update = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      request
+    );
+    expect(update?.data).toMatchObject({
+      patternKind: 'points',
+      points: data.points,
+      skippedInstances: ['p_b']
+    });
+    expect(update).not.toHaveProperty('clearData');
   });
 
   it('loft: a stored apex opens as a point, each coordinate editable', () => {
@@ -1304,6 +1543,136 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(
       keepAbsentHoleSteps(update, saved, ['counterboreDepth']).data
     ).not.toHaveProperty('counterboreDiameter');
+  });
+
+  it('hole on sketch points (M01): its points reopen as picks; moved off them, they clear', () => {
+    const SKETCH_P = 'sketch_points' as SketchId;
+    const saved: FeatureData = {
+      featureKind: 'hole',
+      targetBodyId: BODY,
+      faceHash: 11,
+      style: 'simple',
+      diameter: 6,
+      depthMode: 'through',
+      position: { u: 0, v: 0 },
+      points: { sketchId: SKETCH_P, pointIds: ['p_a', 'p_b'] }
+    };
+    const armed = inPlaceEditSeed(
+      feature(saved, 'body_h' as BodyId),
+      EDIT_CTX
+    )!;
+    expect(armed.tool).toBe('hole');
+    expect(armed.seed.options.place).toBe('points');
+    expect(armed.seed.slots.path).toEqual([
+      { sketchId: SKETCH_P, entityId: 'p_a' },
+      { sketchId: SKETCH_P, entityId: 'p_b' }
+    ]);
+    expect(untouched(feature(saved, 'body_h' as BodyId))).toMatchObject({
+      tool: 'modeling',
+      state: { value: { points: saved.points } }
+    });
+    // Kept on points, the patch clears nothing.
+    const kept = {
+      featureId: 'feat_1' as FeatureId,
+      data: { ...saved }
+    } as unknown as FeatureUpdateInput;
+    expect(keepAbsentHoleSteps(kept, saved, [])).not.toHaveProperty(
+      'clearData'
+    );
+    // Moved back to one position, the patch clears them.
+    const { points: _points, ...single } = saved;
+    const moved = {
+      featureId: 'feat_1' as FeatureId,
+      data: single
+    } as unknown as FeatureUpdateInput;
+    expect(keepAbsentHoleSteps(moved, saved, []).clearData).toEqual(['points']);
+  });
+
+  it('hole sized by a standard (M01): it reopens as chosen; set to Any, it clears', () => {
+    const saved: FeatureData = {
+      featureKind: 'hole',
+      targetBodyId: BODY,
+      faceHash: 11,
+      style: 'simple',
+      diameter: 0.196,
+      depthMode: 'through',
+      position: { u: 0, v: 0 },
+      standard: { system: 'ansi', size: '#10', kind: 'clearance', fit: 'close' }
+    };
+    const armed = inPlaceEditSeed(
+      feature(saved, 'body_h' as BodyId),
+      EDIT_CTX
+    )!;
+    expect(armed.seed.options).toMatchObject({
+      standard: 'ansi',
+      ansiSize: '#10',
+      holeFor: 'clearance',
+      ansiFit: 'close'
+    });
+    expect(
+      untouched(
+        feature(saved, 'body_h' as BodyId),
+        {},
+        {
+          ...EDIT_CTX
+        }
+      )
+    ).toMatchObject({
+      tool: 'modeling',
+      state: { value: { standard: saved.standard } }
+    });
+    const { standard: _standard, ...plain } = saved;
+    const update = {
+      featureId: 'feat_1' as FeatureId,
+      data: plain
+    } as unknown as FeatureUpdateInput;
+    expect(keepAbsentHoleSteps(update, saved, []).clearData).toEqual([
+      'standard'
+    ]);
+  });
+
+  it('tapped hole (M01): its thread reopens as stored; drilled only, it clears', () => {
+    const saved: FeatureData = {
+      featureKind: 'hole',
+      targetBodyId: BODY,
+      faceHash: 11,
+      style: 'simple',
+      diameter: 5,
+      depthMode: 'blind',
+      depth: 12,
+      position: { u: 0, v: 0 },
+      standard: { system: 'iso', size: 'M6', kind: 'tap-drill' },
+      tapped: { length: 8, clearance: 0, hand: 'left' }
+    };
+    const armed = inPlaceEditSeed(
+      feature(saved, 'body_h' as BodyId),
+      EDIT_CTX
+    )!;
+    expect(armed.seed.options).toMatchObject({
+      tap: 'tapped',
+      tapForm: 'modeled',
+      tapFit: 'exact',
+      holeFor: 'tap-drill'
+    });
+    // A cosmetic thread reopens as one (M01, schema v67).
+    expect(
+      inPlaceEditSeed(
+        feature({ ...saved, tapped: { cosmetic: true } }, 'body_h' as BodyId),
+        EDIT_CTX
+      )!.seed.options.tapForm
+    ).toBe('cosmetic');
+    expect(armed.seed.values.tapLength).toBe(8);
+    expect(untouched(feature(saved, 'body_h' as BodyId))).toMatchObject({
+      state: { value: { tapped: { length: '8', clearance: 0, hand: 'left' } } }
+    });
+    const { tapped: _tapped, ...drilled } = saved;
+    const update = {
+      featureId: 'feat_1' as FeatureId,
+      data: drilled
+    } as unknown as FeatureUpdateInput;
+    expect(keepAbsentHoleSteps(update, saved, []).clearData).toEqual([
+      'tapped'
+    ]);
   });
 
   it('boolean: its bodies, operation and kept inputs', () => {
@@ -1611,6 +1980,25 @@ describe('inPlaceEditSourceSketchIds', () => {
         featureKind: 'shell'
       } as unknown as FeatureData)
     ).toEqual([]);
+    // M01: so does a hole drilled at them.
+    expect(
+      inPlaceEditSourceSketchIds({
+        featureKind: 'hole',
+        points: { sketchId: SKETCH, pointIds: ['a'] }
+      } as unknown as FeatureData)
+    ).toEqual([SKETCH]);
+    // M02: a pattern on sketch points shows its sketch, hidden or not.
+    expect(
+      inPlaceEditSourceSketchIds({
+        featureKind: 'pattern',
+        patternKind: 'points',
+        points: {
+          sketchId: SKETCH,
+          pointIds: ['a', 'b'],
+          referencePointId: 'a'
+        }
+      } as unknown as FeatureData)
+    ).toEqual([SKETCH]);
   });
 });
 

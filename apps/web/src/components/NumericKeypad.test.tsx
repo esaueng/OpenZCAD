@@ -4,10 +4,15 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within
 } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { useLayoutEffect } from 'react';
+import { useLayoutEffect, useState } from 'react';
+import {
+  ParameterDefinitionProvider,
+  type ParameterDefinition
+} from './forms/parameterDefinition';
 import {
   keypadFloor,
   NumericKeypad,
@@ -478,14 +483,33 @@ describe('keyboard on the chips and keys', () => {
   });
 });
 
+/**
+ * The readout beside the field: what assistive tech hears (`spoken`), and
+ * what is on screen before the unit button that follows it (`shown`).
+ */
+function readout() {
+  const element = document.querySelector('.keypad-expr-preview');
+  const shown = Array.from(element?.childNodes ?? [])
+    .filter(
+      (node) =>
+        !(
+          node instanceof HTMLElement &&
+          node.classList.contains('visually-hidden')
+        )
+    )
+    .map((node) => node.textContent)
+    .join('');
+  return { spoken: element?.textContent ?? '', shown };
+}
+
 describe('the converted value under the field', () => {
   it('shows a plain number typed under another unit in document units', () => {
     const { input } = setup('12', false);
-    expect(screen.queryByText(/^=/)).toBeNull();
+    expect(readout().spoken).toBe('');
     fireEvent.click(screen.getByRole('radio', { name: 'cm' }));
-    expect(screen.getByText('= 120 mm')).toBeTruthy();
+    expect(readout().spoken).toBe('= 120 mm');
     fireEvent.change(input, { target: { value: '' } });
-    expect(screen.queryByText(/^=/)).toBeNull();
+    expect(readout().spoken).toBe('');
   });
 
   it('names an inch document’s unit as its chip does', () => {
@@ -507,7 +531,8 @@ describe('the converted value under the field', () => {
       />
     );
     fireEvent.click(screen.getByRole('radio', { name: 'mm' }));
-    expect(screen.getByText('= 0.394 in')).toBeTruthy();
+    expect(readout().spoken).toBe('= 0.394 in');
+    expect(readout().shown).toBe('= 0.394');
   });
 });
 
@@ -1076,7 +1101,12 @@ describe('a refusal on the control', () => {
     // Remedies are the verified ones only.
     fireEvent.click(screen.getByRole('button', { name: 'Pick another edge' }));
     expect(onPickAnother).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole('button', { name: 'Technical details' }));
+    // The kernel's words open in place; the activity log is one step on.
+    const technical = screen.getByRole('button', { name: 'Technical details' });
+    fireEvent.click(technical);
+    expect(technical).toHaveAttribute('aria-expanded', 'true');
+    expect(op.onViewDetails).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Open activity log' }));
     expect(op.onViewDetails).toHaveBeenCalledOnce();
 
     const input = screen.getByRole('textbox', { name: 'Radius' });
@@ -1152,7 +1182,18 @@ describe('the unit help and the Escape ladder', () => {
     fireEvent.change(screen.getByRole('textbox'), {
       target: { value: '2cm' }
     });
-    expect(screen.getByText('= 20 mm')).toBeInTheDocument();
+    expect(readout().spoken).toBe('= 20 mm');
+  });
+
+  it('names the unit once on screen: the unit button after it carries it', () => {
+    // The readout read "= 30 mm mm": its own unit, then the unit button's.
+    setup('', false);
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: '2*15' }
+    });
+    expect(readout().shown).toBe('= 30');
+    expect(readout().spoken).toBe('= 30 mm');
+    expect(screen.getByRole('button', { name: 'mm' })).toBeVisible();
   });
 });
 
@@ -1539,5 +1580,191 @@ describe('the keypad floor', () => {
     withVisualViewport(undefined, () => {
       expect(keypadFloor(hostOf(800))).toBe(800);
     });
+  });
+});
+
+describe('a name no parameter defines yet', () => {
+  function Harness({
+    onCommit,
+    onPreview,
+    onEntryError
+  }: {
+    onCommit(value: number, raw: string): void;
+    onPreview(value: number, raw?: string): void;
+    onEntryError?(error: string | null): void;
+  }) {
+    const [scope, setScope] = useState<Record<string, number>>({});
+    const definition: ParameterDefinition = {
+      has: (name) => name in scope,
+      define: async (name, expression) => {
+        setScope((current) => ({ ...current, [name]: Number(expression) }));
+        return null;
+      }
+    };
+    return (
+      <ParameterDefinitionProvider value={definition}>
+        <NumericKeypad
+          request={{
+            kind: 'command',
+            commandValueId: 'width',
+            label: 'Width',
+            initial: '30',
+            unitKind: 'length',
+            selectInitial: true
+          }}
+          units="mm"
+          scope={scope}
+          anchorRef={{ current: null }}
+          onPreview={onPreview}
+          onCommit={onCommit}
+          {...(onEntryError ? { onEntryError } : {})}
+          onCancel={() => undefined}
+        />
+      </ParameterDefinitionProvider>
+    );
+  }
+
+  it('is offered for definition in place, with the last value that evaluated', async () => {
+    // The keypad showed only 'Unknown identifier "foo" in expression.'.
+    const onEntryError = vi.fn();
+    render(
+      <Harness
+        onCommit={vi.fn()}
+        onPreview={vi.fn()}
+        onEntryError={onEntryError}
+      />
+    );
+    const input = screen.getByRole('textbox', { name: 'Width' });
+    fireEvent.change(input, { target: { value: 'foo * 2' } });
+    const value = await screen.findByRole('textbox', {
+      name: 'Value for new parameter foo'
+    });
+    expect(value).toHaveValue('30');
+    expect(screen.getByText('is not defined yet')).toBeVisible();
+    expect(screen.queryByText(/Unknown identifier/)).toBeNull();
+    expect(input).toHaveAccessibleDescription('foo is not defined yet');
+    expect(screen.getByRole('button', { name: 'Apply width' })).toBeDisabled();
+    // The host's Done waits on the entry meanwhile.
+    expect(onEntryError).toHaveBeenLastCalledWith(
+      expect.stringContaining('foo')
+    );
+  });
+
+  it('defined, previews the entry and lets Enter apply it', async () => {
+    const onPreview = vi.fn();
+    const onCommit = vi.fn();
+    render(<Harness onCommit={onCommit} onPreview={onPreview} />);
+    const input = screen.getByRole('textbox', { name: 'Width' });
+    fireEvent.change(input, { target: { value: 'foo * 2' } });
+    const value = await screen.findByRole('textbox', {
+      name: 'Value for new parameter foo'
+    });
+    fireEvent.change(value, { target: { value: '20' } });
+    await act(async () => {
+      // Enter defines; it must not reach the keypad and apply.
+      fireEvent.keyDown(value, { key: 'Enter' });
+    });
+    expect(onCommit).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(onPreview).toHaveBeenLastCalledWith(40, 'foo * 2')
+    );
+    expect(input).toHaveFocus();
+    expect(readout().spoken).toBe('= 40 mm');
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onCommit).toHaveBeenCalledWith(40, 'foo * 2');
+  });
+});
+
+// QA 2026-11-14 finding #9: the face offset's field took the Total size the
+// face leaves while the hint promised "an exact distance", so typing 5 on a
+// 24 mm body's top face moved it by -19, and a Total of 1e6 went unremarked.
+describe('a face offset says what its number means', () => {
+  function open(request: Partial<KeypadRequest>) {
+    render(
+      <NumericKeypad
+        request={{
+          kind: 'offset',
+          label: 'Total',
+          initial: '',
+          unitKind: 'length',
+          ...request
+        }}
+        units="mm"
+        scope={{}}
+        anchorRef={{ current: null }}
+        onPreview={vi.fn()}
+        onCommit={vi.fn()}
+        onCancel={() => undefined}
+      />
+    );
+  }
+
+  it('reads a Total as the size the face sets, with the move it makes', () => {
+    open({ totalBaseline: 24.01, totalSense: 1, initialOffset: 0 });
+    const input = screen.getByRole('textbox', { name: 'Total' });
+    expect(input).toHaveAccessibleDescription(
+      'Total: the size this face sets, 24.01 mm before this edit'
+    );
+    fireEvent.change(input, { target: { value: '5' } });
+    expect(input).toHaveAccessibleDescription(
+      'Total: the size this face sets, 24.01 mm before this edit · moves the face −19.01 mm'
+    );
+  });
+
+  it('names the size before the edit, not the dragged preview, after a drag', () => {
+    open({
+      totalBaseline: 35,
+      totalSense: 1,
+      initialOffset: 2,
+      initial: '37'
+    });
+    expect(
+      screen.getByRole('textbox', { name: 'Total' })
+    ).toHaveAccessibleDescription(
+      'Total: the size this face sets, 35 mm before this edit · moves the face +2 mm'
+    );
+  });
+
+  it('shows how far an absurd Total moves the face', () => {
+    open({ totalBaseline: 24, totalSense: 1, initialOffset: 0 });
+    const input = screen.getByRole('textbox', { name: 'Total' });
+    fireEvent.change(input, { target: { value: '1e6' } });
+    expect(input).toHaveAccessibleDescription(/moves the face \+999976 mm$/);
+  });
+
+  it('reads a Total on a face whose drag shrinks the span with the sense applied', () => {
+    open({ totalBaseline: 3, totalSense: -1, initialOffset: 0 });
+    const input = screen.getByRole('textbox', { name: 'Total' });
+    fireEvent.change(input, { target: { value: '1' } });
+    expect(input).toHaveAccessibleDescription(/moves the face \+2 mm$/);
+  });
+
+  it('reads an Offset as the signed move itself', () => {
+    open({ label: 'Offset' });
+    expect(
+      screen.getByRole('textbox', { name: 'Offset' })
+    ).toHaveAccessibleDescription(
+      'Offset: how far the face moves, + out, − in'
+    );
+  });
+
+  it('adds nothing to other values', () => {
+    render(
+      <NumericKeypad
+        request={{
+          kind: 'edge',
+          label: 'Radius',
+          initial: '2',
+          unitKind: 'length'
+        }}
+        units="mm"
+        scope={{}}
+        anchorRef={{ current: null }}
+        onPreview={vi.fn()}
+        onCommit={vi.fn()}
+        onCancel={() => undefined}
+      />
+    );
+    expect(document.querySelector('.keypad-meaning')).toBeNull();
   });
 });

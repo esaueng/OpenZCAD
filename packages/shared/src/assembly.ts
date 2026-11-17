@@ -7,7 +7,8 @@ import type { BodyId, Vector3 } from './index';
  * motion studies. A rebuild never reads it: moving a component only changes
  * its display placement, never the modelled solid. Schema v56 adds
  * `couplings`: linear relations between two joint values (meshed gears, a
- * rack and its pinion).
+ * rack and its pinion). Schema v61 adds `explode`: the stored exploded view,
+ * one world translation per component shown on top of its pose.
  *
  * Units: lengths in millimetres, angles in degrees (as `rotationDeg`).
  * Placements and frames are in the modelled coordinates of the component's
@@ -197,6 +198,20 @@ export interface AssemblyCouplingGears {
   driven: string;
 }
 
+/**
+ * AS03 exploded view (schema v61): how far each component is pulled out of
+ * the assembly when it is shown exploded. An offset is a translation in
+ * world (assembly) coordinates, in the same length unit as placements,
+ * applied after the component's solved pose, so a part moves straight out
+ * along the drag no matter how its joints turned it. Presentation only:
+ * offsets never enter the joint solve, the BOM or any rebuild. A component
+ * with no entry is not moved; zero offsets are not stored.
+ */
+export interface AssemblyExplodedView {
+  /** Component id to offset. Keys are components of the same assembly. */
+  offsets: Record<string, Vector3>;
+}
+
 export interface AssemblySet {
   /** Display order. */
   components: AssemblyComponent[];
@@ -208,6 +223,8 @@ export interface AssemblySet {
    * couplings never form a loop: any two motions are linked at most one way.
    */
   couplings?: AssemblyCoupling[];
+  /** Schema v61. Absent means no part has been pulled out. */
+  explode?: AssemblyExplodedView;
 }
 
 export type AssemblyUnsolvedReason =
@@ -585,11 +602,44 @@ export function assemblySetError(value: unknown): string | null {
     if (studyIds.has(id)) return `Motion study ${id} is listed twice.`;
     studyIds.add(id);
   }
-  return couplingsError(
-    value.couplings,
-    joints,
-    value as unknown as AssemblySet
+  return (
+    explodeError(value.explode, componentIds) ??
+    couplingsError(value.couplings, joints, value as unknown as AssemblySet)
   );
+}
+
+/** Keys an offsets record must never hold: they reach object prototypes. */
+const RESERVED_RECORD_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/** Why a stored exploded view is malformed, or null. */
+function explodeError(
+  value: unknown,
+  componentIds: ReadonlySet<string>
+): string | null {
+  if (value === undefined) return null;
+  if (!isRecord(value) || !isRecord(value.offsets))
+    return 'The exploded view is malformed.';
+  for (const [componentId, offset] of Object.entries(value.offsets)) {
+    if (RESERVED_RECORD_KEYS.has(componentId) || !componentIds.has(componentId))
+      return 'The exploded view moves a component that is not in the assembly.';
+    if (!isVector(offset))
+      return `The exploded view has no usable offset for component ${componentId}.`;
+  }
+  return null;
+}
+
+/**
+ * A component's stored exploded-view offset (world), or null when it is not
+ * pulled out.
+ */
+export function assemblyExplodeOffset(
+  set: Pick<AssemblySet, 'explode'>,
+  componentId: string
+): Vector3 | null {
+  const offsets = set.explode?.offsets;
+  return offsets && Object.hasOwn(offsets, componentId)
+    ? (offsets[componentId] ?? null)
+    : null;
 }
 
 /** The key one joint motion has in a coupling graph. */

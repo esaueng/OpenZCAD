@@ -111,6 +111,13 @@
   background: var(--color-selected-fill);
 }
 
+/* Fixed or not reads from the pin's shape as well as its colour: a fixed
+   pin is filled in, a loose one is an outline. */
+.assembly-pin.is-on svg,
+.assembly-row-action.assembly-row-pin.is-on svg {
+  fill: currentColor;
+}
+
 .assembly-pin:disabled {
   opacity: var(--opacity-disabled);
   cursor: not-allowed;
@@ -252,7 +259,8 @@
   border-color: var(--color-accent-border);
 }
 
-.assembly-tool-button:disabled {
+.assembly-tool-button:disabled,
+.assembly-tool-button[aria-disabled='true'] {
   opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
@@ -389,9 +397,9 @@
 }
 
 .assembly-row-action.assembly-row-pin {
-  color: var(--color-text-dim);
-  /* Faint, not hidden: touch screens have no hover to reveal it. */
-  opacity: 0.45;
+  color: var(--color-text-subtle);
+  /* Quiet, not hidden: touch screens have no hover to reveal it. */
+  opacity: 0.75;
 }
 
 .assembly-row-line:hover .assembly-row-pin,
@@ -402,6 +410,17 @@
 
 .assembly-row-action.assembly-row-pin.is-on {
   color: var(--color-accent);
+}
+
+/* A bill of materials row's item number: the one a drawing balloon and
+   the CSV give the same part. */
+.assembly-row-item {
+  flex: 0 0 auto;
+  min-width: 2ch;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  text-align: end;
 }
 
 .assembly-row-value {
@@ -514,6 +533,8 @@
 
 .assembly-animate .assembly-play {
   flex: 0 0 auto;
+  /* Wide enough for "Pause", so swapping it for "Play" moves nothing. */
+  min-width: 80px;
   padding: 0 var(--sp-3);
 }
 
@@ -551,7 +572,7 @@
 
 .assembly-position-apply,
 .assembly-position-delete {
-  min-height: 22px;
+  min-height: 24px;
   color: var(--color-text);
   background: none;
   border: 0;
@@ -567,7 +588,7 @@
 .assembly-position-delete {
   display: inline-grid;
   place-items: center;
-  width: 20px;
+  width: 24px;
   padding: 0;
   color: var(--color-text-subtle);
 }
@@ -601,6 +622,19 @@
 
 .assembly-link-button:hover {
   color: var(--color-accent-hi);
+}
+
+.assembly-recording {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.assembly-recording .motion-recording-dot {
+  transform: translateY(-1px);
 }
 
 .assembly-link-button.is-danger {
@@ -798,6 +832,9 @@
 .assembly-kind-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* Every tile as tall as the tallest, so a hint that wraps leaves no
+     ragged row. */
+  grid-auto-rows: 1fr;
   gap: var(--sp-1);
 }
 
@@ -851,6 +888,8 @@
   color: var(--color-text-subtle);
   font-size: var(--fs-mini);
   line-height: 1.25;
+  /* "Turns about / an axis", never a lone "axis" on its own line. */
+  text-wrap: balance;
 }
 
 .assembly-kind-suggested {
@@ -956,6 +995,20 @@
   gap: var(--sp-1);
 }
 
+/* ── Exploded view (AS03) ────────────────────────────── */
+
+.assembly-explode {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.assembly-explode > .assembly-muted {
+  flex: 1 1 100%;
+  margin: 0;
+}
+
 .assembly-segmented {
   display: inline-flex;
   padding: 2px;
@@ -1004,4 +1057,56 @@
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
+}
+
+/* AS04 interference: the exact pairwise check of the assembled parts. */
+.assembly-interference {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.assembly-interference-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.assembly-interference-head > .assembly-muted {
+  flex: 1 1 auto;
+  margin: 0;
+}
+
+.assembly-interference-stale {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  color: var(--color-warning);
+  font-size: var(--fs-mini);
+}
+
+.assembly-interference-value {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  color: var(--color-text-muted);
+}
+
+.assembly-interference-value.is-interference {
+  color: var(--color-error-text);
+}
+
+.assembly-interference-value.is-unknown {
+  color: var(--color-warning);
+}
+
+.assembly-interference-witness {
+  margin: 0;
+  padding: 0 var(--sp-2) var(--sp-2);
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }

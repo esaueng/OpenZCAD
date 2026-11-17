@@ -100,3 +100,16 @@ export function hasRefusingFeatureWarning(
 export function displayMeshGapsAdvisory(hasNurbsFace: boolean): string {
   return `The result is a valid solid, but its display mesh has gaps, so the viewport can show holes that are not in the model. Volume, measurements and STEP export use ${hasNurbsFace ? 'the solid model, not the display mesh' : 'the exact solid'}.`;
 }
+
+/**
+ * The advisory for a body whose display mesh has gaps because the model has
+ * them: a face whose boundary loops cross (see `face-loop-crossing`).
+ *
+ * {@link displayMeshGapsAdvisory} would call this a valid solid with holes
+ * only in the viewport, which is false here — the kernel's validator passes
+ * it, but the face itself leaves holes in the model, and volume,
+ * measurements and STEP export read that same face.
+ */
+export function crossedFaceLoopsAdvisory(): string {
+  return 'The result has a face whose boundary loops cross, so the model itself has holes there, not only its display mesh. Volume, measurements and STEP export may be wrong. Try a different size or change the geometry next to it.';
+}

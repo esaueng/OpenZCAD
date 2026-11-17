@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import ts from 'typescript';
 import { foldEvidence, readFragments } from '../scripts/roadmap-evidence.mjs';
 import { UPLOAD_CLEANUP_CRON } from '../scripts/validate-deployment-config.mjs';
-import { FLEET_CI_PATH } from './fleet-workflow';
+import { CI_CHECKS_PATH } from './ci-workflow';
 import { MAX_SOURCE_IMPORT_BYTES } from '@openzcad/shared';
 
 it('runs the locked deployment CLI from the repository root without registry or cached packages', () => {
@@ -126,7 +126,8 @@ describe('beta deployment safety', () => {
     for (const path of [
       'apps/web/wrangler.jsonc',
       'wrangler.selfhost.example.jsonc',
-      'wrangler.jsonc'
+      'wrangler.jsonc',
+      'wrangler.stable.jsonc'
     ]) {
       expect(cleanupCrons(path), path).toEqual([UPLOAD_CLEANUP_CRON]);
     }
@@ -197,6 +198,32 @@ describe('beta deployment safety', () => {
     expect(csp).toContain("object-src 'none'");
     expect(csp).toContain("frame-ancestors 'none'");
     expect(csp).not.toContain("'unsafe-eval'");
+    // The page holds decrypted models, unlocked account keys and, on a share
+    // link, the share key in its fragment (ADR-024): no third-party script
+    // runs in it but Turnstile on the sign-in form. Analytics injected by the
+    // edge (Cloudflare Web Analytics) is refused rather than allowlisted.
+    const directive = (name: string) =>
+      (
+        csp
+          .split(';')
+          .map((part) => part.trim().split(/\s+/))
+          .find(([key]) => key === name) ?? []
+      ).slice(1);
+    expect(directive('script-src')).toEqual([
+      "'self'",
+      "'wasm-unsafe-eval'",
+      'https://challenges.cloudflare.com'
+    ]);
+    expect(directive('connect-src')).toEqual([
+      "'self'",
+      'https://challenges.cloudflare.com'
+    ]);
+    expect(csp).not.toContain('cloudflareinsights');
+    // Directives that would override script-src for elements or handlers.
+    for (const name of ['script-src-elem', 'script-src-attr'])
+      expect(
+        csp.split(';').map((part) => part.trim().split(/\s+/)[0])
+      ).not.toContain(name);
     expect(headers.get('x-content-type-options')).toBe('nosniff');
     expect(headers.get('referrer-policy')).toBe(
       'strict-origin-when-cross-origin'
@@ -206,13 +233,13 @@ describe('beta deployment safety', () => {
   it('uses the onboarded noreply sender for authentication and project invitations', () => {
     const config = readFileSync('wrangler.jsonc', 'utf8');
 
-    expect(config).toContain('"AUTH_EMAIL_FROM": "noreply@zcad.esau.app"');
+    expect(config).toContain('"AUTH_EMAIL_FROM": "noreply@beta.zcad.app"');
     expect(config).toContain(
-      '"PROJECT_INVITATION_EMAIL_FROM": "noreply@zcad.esau.app"'
+      '"PROJECT_INVITATION_EMAIL_FROM": "noreply@beta.zcad.app"'
     );
-    expect(config).toContain('"PUBLIC_APP_ORIGIN": "https://zcad.app"');
+    expect(config).toContain('"PUBLIC_APP_ORIGIN": "https://beta.zcad.app"');
     expect(config).toMatch(
-      /"allowed_sender_addresses":\s*\[\s*"noreply@zcad\.esau\.app"\s*\]/
+      /"allowed_sender_addresses":\s*\[\s*"noreply@beta\.zcad\.app"\s*\]/
     );
   });
 });
@@ -241,17 +268,27 @@ describe('CI gates cannot silently stop testing', () => {
     // touches anything but the lockfile precisely so a kernel change gets its
     // own parity-tested review; without this guard, a Dependabot bump bypasses
     // that entirely and no commit message mentions the kernel.
-    const ci = readFileSync(FLEET_CI_PATH, 'utf8');
-    expect(ci).toContain('Refuse an unannounced geometry kernel bump');
-    expect(ci).toContain('automation/remus-');
+    // The required preflight runs the guard before any application job; its
+    // behaviour is exercised in test/kernel-pin-declaration.test.ts.
+    const ci = readFileSync(CI_CHECKS_PATH, 'utf8');
+    expect(ci).toContain(
+      "      - name: Refuse an unannounced geometry kernel bump\n        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'\n        run: node scripts/kernel-pin-declaration.mjs\n"
+    );
+    const guard = readFileSync('scripts/kernel-pin-declaration.mjs', 'utf8');
+    expect(guard).toContain('automation/remus-');
     // The default checkout is shallow, so the guard has to fetch the one base
     // commit it compares against or it silently compares nothing.
-    expect(ci).toMatch(/git fetch --no-tags --depth=1 origin "\$BASE_REF"/);
+    expect(guard).toContain(
+      "['fetch', '--no-tags', '--depth=1', 'origin', base]"
+    );
     // A guard that reads nothing and passes is the failure this repo already
-    // names elsewhere, and the first CI run of this one passed in silence. It
-    // has to refuse an empty baseline and say what it compared.
-    expect(ci).toContain('Kernel baseline missing');
-    expect(ci).toContain('Kernel pin unchanged at $head.');
+    // names elsewhere, and the first CI run of the old guard passed in
+    // silence. It has to refuse an empty baseline and say what it compared.
+    expect(guard).toContain('Missing exact kernel comparison base.');
+    expect(guard).toContain(
+      'Expected exactly one paired Remus commit in the lockfile.'
+    );
+    expect(guard).toContain('console.log(\n    checkDeclaration(');
   });
 
   it('advances a squash-merged kernel pin only from its exact merged PR head', () => {

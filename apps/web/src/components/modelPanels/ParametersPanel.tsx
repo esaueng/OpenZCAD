@@ -5,6 +5,8 @@ import {
   ParameterRow,
   parameterTable
 } from '../ParameterRows';
+import { PrintClearanceRow } from '../PrintClearanceRow';
+import { ConfigurationTable } from '../ConfigurationTable';
 
 export type ParametersPanelProps = Pick<
   ModelPanelSource,
@@ -12,6 +14,7 @@ export type ParametersPanelProps = Pick<
   | 'parameterValues'
   | 'parameterMinimums'
   | 'onSetParameter'
+  | 'onParameterAddRefused'
   | 'onSetParameterQuantity'
   | 'parameterQuantitySuggestions'
   | 'onViewActivityLog'
@@ -23,13 +26,17 @@ export type ParametersPanelProps = Pick<
   | 'onDescribeParameter'
   | 'exposedParameterNames'
   | 'onConfigureToggle'
-> & {
-  /**
-   * Every live body, for a toggle parameter's body picker. The Objects name
-   * search never narrows it.
-   */
-  bodies: BodyRepresentation[];
-};
+  | 'printClearance'
+  | 'onSetPrintClearance'
+  | 'configurationTable'
+> &
+  Partial<Pick<ModelPanelSource, 'units'>> & {
+    /**
+     * Every live body, for a toggle parameter's body picker. The Objects name
+     * search never narrows it.
+     */
+    bodies: BodyRepresentation[];
+  };
 
 /** The Parameters header count. The panel always shows, empty or not. */
 export function parameterCount(parameters: readonly ParameterNode[]): number {
@@ -41,6 +48,7 @@ export function ParametersPanel({
   parameterValues,
   parameterMinimums,
   onSetParameter,
+  onParameterAddRefused,
   onSetParameterQuantity,
   parameterQuantitySuggestions,
   onViewActivityLog,
@@ -52,7 +60,11 @@ export function ParametersPanel({
   onDescribeParameter,
   exposedParameterNames,
   onConfigureToggle,
-  bodies
+  printClearance,
+  onSetPrintClearance,
+  units = 'mm',
+  bodies,
+  configurationTable
 }: ParametersPanelProps) {
   const table = parameterTable(parameters);
   return (
@@ -93,6 +105,9 @@ export function ParametersPanel({
         <AddParameterRow
           existingNames={parameters.map((parameter) => parameter.name)}
           onSet={onSetParameter}
+          {...(onParameterAddRefused
+            ? { onRefused: onParameterAddRefused }
+            : {})}
           onConfigureToggle={onConfigureToggle}
           bodies={bodies}
         />
@@ -102,6 +117,20 @@ export function ParametersPanel({
           Name a value (<span className="mono">w = 30</span>) and use it in any
           feature field.
         </p>
+      )}
+      {printClearance && (
+        <PrintClearanceRow
+          clearance={printClearance}
+          units={units}
+          {...(onSetPrintClearance ? { onSet: onSetPrintClearance } : {})}
+        />
+      )}
+      {configurationTable && (
+        <ConfigurationTable
+          {...configurationTable}
+          parameters={parameters}
+          bodies={bodies}
+        />
       )}
     </>
   );

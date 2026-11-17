@@ -53,6 +53,10 @@ or without GitHub's ref suffix); it
 ignores requester conclusions, outputs and artifacts. Every push request audits
 all advertised owner branches/tags as well as the originally requested head, so
 annotated-tag objects and their metadata cannot be lost by event peeling.
+The requester runs for pushes to `main`, tag pushes and merge-queue candidates.
+A pull-request head is audited once, by the `pull_request_target` run; a branch
+with no pull request is inspected by the next `main` or tag push and by the
+daily audit, both of which read every advertised branch.
 Incoming Git objects are fetched into a fresh bare repository as data. The audit
 never checks out incoming trees, runs their programs, installs their dependencies,
 loads their configuration or uploads their contents as artifacts. Git subprocesses
@@ -68,8 +72,10 @@ in protected-main status checks, alongside all existing checks. The App has only
 checks write and mandatory metadata read access, installed on these six public
 repositories. Its job token is restricted to the current repository and revoked
 after use. An Actions-app check with the same name cannot satisfy either binding.
-`commit-privacy.yml` is a read-only convenience check; the protected History
-workflow publishes the authoritative identity verdict using pinned policy/code.
+The protected History workflow publishes the authoritative identity verdict
+using pinned policy/code. The read-only `commit-privacy.yml` convenience check
+that repeated it on every pull-request push was removed; it could never satisfy
+the App-bound requirement.
 Read-only metadata API requests use the contents-read Actions token, while only
 check publication uses the dedicated App token.
 The audit's own `GITHUB_TOKEN` has contents read permission only.

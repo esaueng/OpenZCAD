@@ -6,7 +6,8 @@ import {
   expectBodyCount,
   createProject,
   createPrimitiveInPlace,
-  MODEL_ONLY
+  MODEL_ONLY,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 test(
@@ -182,6 +183,10 @@ test(
           )
       );
     const original = await span();
+    // Total reads the same number before and after the commit lands (an
+    // Offset restarts at +0 on the moved face), so the chip can be held to
+    // the value the hand let go at.
+    await switchFaceOffsetToTotal(page);
     const handle = await canvas.evaluate((element) => ({
       x: Number(element.dataset.e2eHandleX),
       y: Number(element.dataset.e2eHandleY),
@@ -255,6 +260,8 @@ test(
       })
       .not.toBeNull();
     await expect.poll(span).toBeCloseTo(original + 6, 1);
+    // The Total switch is not stored: a reloaded pick starts on Offset.
+    await switchFaceOffsetToTotal(page);
     await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
       submitted
     );

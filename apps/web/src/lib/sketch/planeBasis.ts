@@ -4,6 +4,7 @@ import {
   resolveFaceAttachment,
   type FaceAttachmentCandidate
 } from '@openzcad/kernel-adapter/face-attachment';
+import { ownEntry } from '@openzcad/shared';
 import type {
   ParamValue,
   ProjectDocument,
@@ -36,7 +37,7 @@ export function resolvedSketchPlaneBasis(
   if (planeRef.type !== 'face' || !planeRef.faceReference) {
     return frameForPlaneRef(planeRef, resolveOffset);
   }
-  const body = document.derived.bodyRepresentations[planeRef.bodyId];
+  const body = ownEntry(document.derived.bodyRepresentations, planeRef.bodyId);
   const candidates: FaceAttachmentCandidate[] = (body?.topology?.faces ?? [])
     .filter(
       (face) => face.reference?.kind === 'face' && face.geometry !== undefined

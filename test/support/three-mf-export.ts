@@ -3,7 +3,7 @@ import { inflateRawSync } from 'node:zlib';
 /** Read the model part emitted by our exporter, independently of Remus import.
  * This test helper accepts generated single-part ZIPs, not arbitrary uploads.
  */
-function exportedModel(bytes: Uint8Array): string {
+export function exportedModel(bytes: Uint8Array): string {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const end = bytes.length - 22;
   if (view.getUint32(end, true) !== 0x06054b50)
@@ -41,6 +41,55 @@ function exportedModel(bytes: Uint8Array): string {
       view.getUint16(offset + 32, true);
   }
   throw new Error('Missing 3MF model');
+}
+
+function xmlAttribute(tag: string, name: string): string | null {
+  const raw = new RegExp(`\\s${name}="([^"]*)"`).exec(tag)?.[1];
+  return raw === undefined
+    ? null
+    : raw
+        .replace(/&#(\d+);/g, (_, code: string) =>
+          String.fromCharCode(Number(code))
+        )
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'")
+        .replace(/&amp;/g, '&');
+}
+
+/**
+ * Each written object's name and colour, in document order, the way a 3MF
+ * core reader resolves them: `name` on the object, and the colour from the
+ * `displaycolor` of the `<base>` its `pid`/`pindex` select. Independent of
+ * the writer, so a round trip compares two separate readings of the format.
+ */
+export function threeMfObjectLabels(bytes: Uint8Array) {
+  const xml = exportedModel(bytes);
+  const groups = new Map<string, (string | null)[]>();
+  for (const [, attributes, body] of xml.matchAll(
+    /<basematerials\b([^>]*)>([\s\S]*?)<\/basematerials>/g
+  )) {
+    const id = xmlAttribute(attributes!, 'id');
+    if (id === null) throw new Error('A basematerials group has no id');
+    groups.set(
+      id,
+      [...body!.matchAll(/<base\b[^>]*>/g)].map(([tag]) =>
+        xmlAttribute(tag, 'displaycolor')
+      )
+    );
+  }
+  return [...xml.matchAll(/<object\b[^>]*>/g)].map(([tag]) => {
+    const pid = xmlAttribute(tag, 'pid');
+    const pindex = Number(xmlAttribute(tag, 'pindex') ?? 0);
+    const group = pid === null ? undefined : groups.get(pid);
+    if (pid !== null && group === undefined)
+      throw new Error(`Object pid ${pid} names no basematerials group`);
+    return {
+      name: xmlAttribute(tag, 'name'),
+      color: group?.[pindex] ?? null
+    };
+  });
 }
 
 /** Read the length unit declared by the generated 3MF model part. */

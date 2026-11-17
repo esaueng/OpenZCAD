@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import process from 'node:process';
+import { parseFlags } from './cli-flags.mjs';
 
-const DEFAULT_ORIGIN = 'https://zcad.app';
+const DEFAULT_ORIGIN = 'https://beta.zcad.app';
 const DEFAULT_ATTEMPTS = 18;
 const DEFAULT_DELAY_MS = 5_000;
 
@@ -114,6 +115,20 @@ export async function verifyBetaDeployment(options = {}) {
   );
 }
 
+/** The origin to verify: beta's by default; stable passes --origin. */
+export function verificationOrigin(argv, env = process.env) {
+  const origin =
+    parseFlags(argv, ['--origin'])['--origin'] ??
+    env.OPENZCAD_BETA_ORIGIN ??
+    DEFAULT_ORIGIN;
+  if (!/^https:\/\/[a-z0-9.-]+$/i.test(origin)) {
+    throw new Error(
+      `--origin must be an https origin with no path; got ${origin}`
+    );
+  }
+  return origin;
+}
+
 if (process.argv[1]?.endsWith('verify-beta-deployment.mjs')) {
   const attempts = positiveInteger(
     process.env.OPENZCAD_VERIFY_ATTEMPTS,
@@ -125,7 +140,8 @@ if (process.argv[1]?.endsWith('verify-beta-deployment.mjs')) {
   );
   try {
     await verifyBetaDeployment({
-      origin: process.env.OPENZCAD_BETA_ORIGIN ?? DEFAULT_ORIGIN,
+      origin: verificationOrigin(process.argv.slice(2)),
+
       expectedCommit: currentCommit(),
       attempts,
       delayMs

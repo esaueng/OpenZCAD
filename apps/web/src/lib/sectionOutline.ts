@@ -302,9 +302,17 @@ export function sectionPlaneSpec(
  * for them instead, and quotes no number that is not exact: the label above
  * already says there is no exact section, and the disabled DXF button says
  * there is no drawing.
+ *
+ * It still says WHY, in the model's own terms, rather than one sentence for
+ * every refusal: the demos' holes, bosses and fillets all stopped the exact
+ * cut, and "can only be shown approximately" left no way to tell that a
+ * plane moved clear of them would cut exactly.
  */
 export function sectionRefusalDetail(
-  refusal: Pick<SectionOutlineReport['refusals'][number], 'reason'> | undefined
+  refusal:
+    | (Pick<SectionOutlineReport['refusals'][number], 'reason'> &
+        Partial<Pick<SectionOutlineReport['refusals'][number], 'message'>>)
+    | undefined
 ): string {
   switch (refusal?.reason) {
     case undefined:
@@ -313,9 +321,43 @@ export function sectionRefusalDetail(
       return 'The section plane does not pass through this body.';
     case 'area-mismatch':
       return 'Area is approximate for this cut.';
+    case 'kernel-refused':
+      return ROUND_FACE_REFUSAL.test(refusal.message ?? '')
+        ? 'A hole, boss or fillet on the plane cannot be cut exactly yet, so the cut is shown approximately. Move the plane clear of round faces for an exact one.'
+        : 'Exact sectioning failed for this body, so the cut is shown approximately.';
+    case 'empty-section':
+      return 'The plane only touches this body, so the cut is shown approximately.';
+    case 'non-planar-section':
+      return 'The cut came back curved, which a flat drawing cannot hold, so it is shown approximately.';
+    case 'wire-order-unverified':
+      return 'The outline of this cut could not be checked, so it is shown approximately.';
+    case 'unknown-body':
+      return 'A body on screen is still being rebuilt, so the cut is shown approximately until it is.';
     default:
       return 'This cut can only be shown approximately.';
   }
+}
+
+/**
+ * The paired kernel's refusals for a cut through a cylindrical face: along
+ * its axis ("cylindrical section parallel to axis requires authoritative cap
+ * clipping") or across a band broken by holes ("cylindrical section requires
+ * a complete two-rim band without holes"). Holes, bosses and fillets are all
+ * cylinders, so these are the ones a part meets most.
+ */
+const ROUND_FACE_REFUSAL = /\bcylindrical section\b/i;
+
+/**
+ * The refusal the panel explains: one that stops the exact section, ahead of
+ * a body the plane simply misses, which costs nothing.
+ */
+function leadingRefusal(
+  refusals: SectionOutlineReport['refusals']
+): SectionOutlineReport['refusals'][number] | undefined {
+  return (
+    refusals.find((refusal) => refusal.reason !== 'plane-misses-body') ??
+    refusals[0]
+  );
 }
 
 /** What the viewport should show for one kernel section report. */
@@ -325,7 +367,7 @@ export function sectionOutlineFromReport(
   if (report.regions.length === 0) {
     return {
       kind: 'refused',
-      detail: sectionRefusalDetail(report.refusals[0])
+      detail: sectionRefusalDetail(leadingRefusal(report.refusals))
     };
   }
   // A plane that simply misses a body is an ordinary section; a body it cuts

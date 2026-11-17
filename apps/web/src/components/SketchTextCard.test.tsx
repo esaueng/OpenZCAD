@@ -148,7 +148,7 @@ describe('SketchTextCard', () => {
   it('labels the size as the em size and only takes sizes that resolve', async () => {
     const user = userEvent.setup();
     render(<Harness initial={{ ...newSketchTextDraft(), text: 'Boa' }} />);
-    const size = screen.getByLabelText('Size (em)');
+    const size = screen.getByLabelText('Em size');
     await user.clear(size);
     await user.type(size, 'h * 2');
     expect(draftOf().size).toBe('h * 2');
@@ -180,7 +180,7 @@ describe('SketchTextCard', () => {
           onPlace={onPlace}
         />
       );
-      const size = screen.getByLabelText('Size (em)');
+      const size = screen.getByLabelText('Em size');
       fireEvent.change(size, { target: { value: '1 in + 25.4 mm' } });
       expect(size).toHaveAccessibleDescription(preview);
       expect(size).not.toHaveAttribute('aria-invalid');
@@ -203,7 +203,7 @@ describe('SketchTextCard', () => {
   it('updates the size preview when document units change without editing the draft', () => {
     const initial = { ...newSketchTextDraft(), text: 'A', size: '1 in' };
     const view = render(<Harness initial={initial} />);
-    expect(screen.getByLabelText('Size (em)')).toHaveAccessibleDescription(
+    expect(screen.getByLabelText('Em size')).toHaveAccessibleDescription(
       '= 25.4'
     );
     view.rerender(
@@ -212,9 +212,7 @@ describe('SketchTextCard', () => {
         document={{ ...EMPTY_DOCUMENT, units: 'inch' }}
       />
     );
-    expect(screen.getByLabelText('Size (em)')).toHaveAccessibleDescription(
-      '= 1'
-    );
+    expect(screen.getByLabelText('Em size')).toHaveAccessibleDescription('= 1');
     expect(screen.getByRole('button', { name: 'Place' })).toBeEnabled();
     expect(draftOf().size).toBe('1 in');
   });
@@ -233,7 +231,7 @@ describe('SketchTextCard', () => {
           onPlace={onPlace}
         />
       );
-      const size = screen.getByLabelText('Size (em)');
+      const size = screen.getByLabelText('Em size');
       fireEvent.change(size, { target: { value: expression } });
       expect(size).toHaveAttribute('aria-invalid', 'true');
       expect(size).toHaveAccessibleDescription(expected);
@@ -254,7 +252,7 @@ describe('SketchTextCard', () => {
           onPlace={onPlace}
         />
       );
-      fireEvent.change(screen.getByLabelText('Size (em)'), {
+      fireEvent.change(screen.getByLabelText('Em size'), {
         target: { value: expression }
       });
       expect(screen.getByRole('alert')).toHaveTextContent(

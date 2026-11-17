@@ -1,6 +1,7 @@
 import {
   defaultGearXDirection,
   GEAR_PLACEMENT_UNUSABLE,
+  gearBacklashForClearance,
   gearModule,
   gearPlacementFrame,
   isFeatureSuppressed,
@@ -14,6 +15,7 @@ import {
   type Vector3
 } from '@openzcad/shared';
 import { getParameterScope, resolveParamValue } from './index';
+import { documentPrintClearance } from './print-clearance';
 import { bodySourceMap } from './object-folders';
 
 /**
@@ -175,7 +177,14 @@ export function gearMeshGearOfBody(
       // the tip and root circles are all the clearance check needs.
       addendum: optional(data.addendum, 'addendum', 1),
       dedendum: optional(data.dedendum, 'dedendum', 1.25),
-      backlash: optional(data.backlash, 'backlash', 0),
+      // L09: unset, the document's print clearance thins each flank.
+      backlash:
+        data.backlash === undefined
+          ? gearBacklashForClearance(
+              documentPrintClearance(document, scope) ?? 0,
+              optional(data.pressureAngleDeg, 'pressure angle', 20)
+            )
+          : value(data.backlash, 'backlash'),
       helixAngleDeg: helix,
       hand: data.hand ?? 'right',
       herringbone: helix !== 0 && data.herringbone === true,

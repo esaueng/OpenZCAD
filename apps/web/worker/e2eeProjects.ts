@@ -27,7 +27,9 @@ import {
   decodeDeviceListEntry,
   fromBase64Url,
   parseEnvelope,
-  publicKeyHash
+  publicKeyHash,
+  verifyMlsCommitSubmission,
+  MLS_COMMIT_SIGNATURE_BYTES
 } from '@openzcad/crypto';
 import type {
   E2eeDeviceListHead,
@@ -48,6 +50,7 @@ import type {
   E2eeProjectLeavesResponse
 } from '@openzcad/shared';
 import {
+  isE2eeCommitSignatureStorageReady,
   isE2eeProjectGroupStorageReady,
   isE2eeProjectAuthorityStorageReady,
   isProjectStorageFormatReady,
@@ -55,6 +58,11 @@ import {
 } from '@openzcad/cloudflare-adapters';
 import { prepareAddCommit, type PreparedAdd } from './e2eeInvitations';
 import { prepareMembershipCommit } from './e2eeMembership';
+import {
+  parseCommitFrame,
+  parseGroupInfoContext,
+  projectGroupId
+} from '../src/lib/e2ee/mls/epochRoles';
 import {
   listProposals,
   pendingProposalCount,
@@ -909,6 +917,24 @@ export async function runBatch(
         'Cloud data deletion is in progress. Retry that deletion before making other cloud changes.'
       );
     }
+    // Migrations 0050/0055: a cleanup is removing a stored object under a
+    // key this write names (an identical retry's body, a copy's blob).
+    if (message.includes('r2_key_deleting')) {
+      refuse(
+        503,
+        'STORAGE_CLEANUP_BUSY',
+        'A stored file of this project is still being removed. Try again in a moment.'
+      );
+    }
+    // Migration 0055: this write's body was drained as abandoned before
+    // its version could commit; the save stores it again on retry.
+    if (message.includes('r2_object_not_pending')) {
+      refuse(
+        503,
+        'PROJECT_STORAGE_UNAVAILABLE',
+        'The account copy of this project could not be stored right now. Try again.'
+      );
+    }
     if (/UNIQUE constraint|PRIMARY KEY|E2EE_GROUP_EPOCH/i.test(message)) {
       await onConflict?.();
       refuse(
@@ -1004,18 +1030,27 @@ async function submitCommit(
   access?: EncryptedProjectAccess
 ): Promise<Response> {
   const fence = projectFence(access, projectId, userId, 'member');
+  if (!(await isE2eeCommitSignatureStorageReady(db))) {
+    refuse(
+      503,
+      'E2EE_UNAVAILABLE',
+      'Encrypted projects are unavailable until the database is updated.'
+    );
+  }
   const epoch = uintField(body.epoch, 'epoch');
   const kind = body.kind;
   if (kind !== 'commit' && kind !== 'external') {
     invalid('kind must be commit or external');
   }
   const deviceId = idField(body.deviceId, 'deviceId');
-  const message = bytesField(body.message, 'message', {
+  const messageField = bytesField(body.message, 'message', {
     max: MAX_MLS_MESSAGE_BYTES
-  }).text;
-  const groupInfo = bytesField(body.groupInfo, 'groupInfo', {
+  });
+  const message = messageField.text;
+  const groupInfoField = bytesField(body.groupInfo, 'groupInfo', {
     max: MAX_MLS_MESSAGE_BYTES
-  }).text;
+  });
+  const groupInfo = groupInfoField.text;
   if (kind === 'external' && body.leaf === undefined) {
     invalid('An external Commit carries the joining device’s leaf');
   }
@@ -1055,6 +1090,27 @@ async function submitCommit(
   }
   const keyEpoch = group.key_epoch_base + epoch + 1;
   if (keyEpoch > MAX_U32) invalid('The key epoch is exhausted');
+  // The device the request names must have signed exactly this Commit and
+  // GroupInfo for this account, project, epoch and kind, with the key its
+  // account's device list certifies: a session alone cannot speak for one
+  // of the account's devices.
+  const signature = await requireCommitSignature(body.signature, account, {
+    userId,
+    projectId,
+    deviceId,
+    kind,
+    epoch,
+    keyEpoch,
+    message: messageField.bytes,
+    groupInfo: groupInfoField.bytes
+  });
+  requireCommitFraming(
+    projectId,
+    epoch,
+    kind,
+    messageField.bytes,
+    groupInfoField.bytes
+  );
   const wraps = wrapsField(body.wraps, keyEpoch, account);
   const archive = archiveField(body.archive, projectId, keyEpoch, deviceId);
   // An owner's Add of an invitee (slice 5-3a): exactly the KeyPackages it
@@ -1124,8 +1180,9 @@ async function submitCommit(
     db
       .prepare(
         `INSERT INTO e2ee_mls_commits
-           (project_id, epoch, kind, sender_user_id, sender_device_id, message, created_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?
+           (project_id, epoch, kind, sender_user_id, sender_device_id, message,
+            sender_signature, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?
          FROM (SELECT ? AS bindings) AS commit_inputs
          WHERE ${authorizationSql} AND ${fenceSql}
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
@@ -1141,6 +1198,7 @@ async function submitCommit(
         userId,
         deviceId,
         message,
+        signature,
         now,
         JSON.stringify(gateInputs),
         projectId,
@@ -1189,6 +1247,84 @@ async function submitCommit(
     commit: commitRecord((await commitRow(db, projectId, epoch))!),
     group: groupRecord((await groupRow(db, projectId))!)
   } satisfies E2eeMlsCommitResponse);
+}
+
+/**
+ * Verifies the submitting device's signature on a Commit
+ * (`signMlsCommitSubmission`) with the key the account's newest device list
+ * certifies for it, and returns the signature to store. A browser older
+ * than the signature is refused, and reloads to send one.
+ */
+async function requireCommitSignature(
+  value: unknown,
+  account: CurrentAccountKey,
+  submission: Parameters<typeof verifyMlsCommitSubmission>[1]
+): Promise<string> {
+  if (value === undefined) {
+    refuse(
+      400,
+      'E2EE_COMMIT_SIGNATURE_REQUIRED',
+      'This page is out of date. Reload it to save encryption changes.'
+    );
+  }
+  const signature = bytesField(value, 'signature', {
+    exact: MLS_COMMIT_SIGNATURE_BYTES
+  });
+  let valid: boolean;
+  try {
+    valid = await verifyMlsCommitSubmission(
+      account.signingKey,
+      submission,
+      signature.bytes
+    );
+  } catch {
+    valid = false;
+  }
+  if (!valid) {
+    refuse(
+      403,
+      'E2EE_COMMIT_SIGNATURE_INVALID',
+      'The Commit is not signed by the device it names.'
+    );
+  }
+  return signature.text;
+}
+
+const sameBytes = (a: Uint8Array, b: Uint8Array) =>
+  a.length === b.length && a.every((byte, index) => byte === b[index]);
+
+/**
+ * The Commit's cleartext framing names this project's MLS group, the epoch
+ * it is submitted for and a sender of its kind, and its GroupInfo is the
+ * same group's next epoch. Neither the Commit's content nor its MLS
+ * signatures are checked here: members' engines check those.
+ */
+function requireCommitFraming(
+  projectId: string,
+  epoch: number,
+  kind: E2eeMlsCommitKind,
+  message: Uint8Array,
+  groupInfo: Uint8Array
+): void {
+  const groupId = projectGroupId(projectId);
+  let matches: boolean;
+  try {
+    const frame = parseCommitFrame(message);
+    const context = parseGroupInfoContext(groupInfo);
+    matches =
+      sameBytes(frame.groupId, groupId) &&
+      frame.epoch === epoch &&
+      frame.external === (kind === 'external') &&
+      sameBytes(context.groupId, groupId) &&
+      context.epoch === epoch + 1;
+  } catch {
+    matches = false;
+  }
+  if (!matches) {
+    invalid(
+      'message must be a Commit of this project’s group for the stated epoch and kind, with the GroupInfo of the next epoch'
+    );
+  }
 }
 
 /**
@@ -1640,7 +1776,11 @@ export async function projectGroupErasureStatements(
       ? [
           db
             .prepare(
-              `UPDATE e2ee_mls_commits SET sender_user_id = NULL, sender_device_id = NULL
+              `UPDATE e2ee_mls_commits SET sender_user_id = NULL, sender_device_id = NULL${
+                (await isE2eeCommitSignatureStorageReady(db))
+                  ? ', sender_signature = NULL'
+                  : ''
+              }
                WHERE sender_user_id = ?`
             )
             .bind(userId)

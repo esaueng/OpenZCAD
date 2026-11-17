@@ -1,7 +1,9 @@
-import { UNIT_TO_MM } from './index';
+import { millimetresPerUnit } from './index';
 import type { BodyId, Brand, UnitSystem, Vector3 } from './index';
 import {
   drawingAnnotationError,
+  drawingAnnotationCenterlines,
+  drawingAnnotationMarks,
   MAX_DRAWING_ANNOTATIONS,
   type DrawingAnnotation
 } from './drawing-annotations';
@@ -264,7 +266,7 @@ export function drawingPaperPerModelUnit(
   scale: DrawingScale,
   units: UnitSystem
 ): number {
-  return (scale.numerator / scale.denominator) * UNIT_TO_MM[units];
+  return (scale.numerator / scale.denominator) * millimetresPerUnit(units);
 }
 
 /**
@@ -327,6 +329,76 @@ export interface DrawingView {
    * drawn as a section line on its source view. Absent on every other view.
    */
   section?: DrawingSectionCut;
+  /**
+   * D03 (schema v78): this view is a detail of its source, enlarged: the
+   * part of the source inside a circle, at its own scale. Absent on every
+   * other view.
+   */
+  detail?: DrawingDetail;
+  /**
+   * D03 (schema v81): this view is an auxiliary view of its source, looking
+   * square onto a face the source sees edge-on. Absent on every other view.
+   */
+  auxiliary?: DrawingAuxiliary;
+}
+
+/**
+ * An auxiliary view (D03, schema v81): seen along a direction in its source
+ * view's plane, square to an edge the source draws true length, so a face
+ * inclined to every principal view is drawn true size. Its frame is stored
+ * (`direction` of sight and page-right `x`, unit and square to each other;
+ * page-up is the source's own direction of sight), so moving either view
+ * never turns it. It keeps its source's orientation and bodies and is placed
+ * freely, labelled VIEW A with an arrow on the source.
+ */
+export interface DrawingAuxiliary {
+  /** A principal view: not the isometric, a section, a detail or another auxiliary. */
+  sourceViewId: DrawingViewId;
+  /** One or two capitals, in the sequence sections and details share. */
+  label: string;
+  direction: Vector3;
+  x: Vector3;
+}
+
+/**
+ * The frame a view projects in: its named orientation's, or an auxiliary
+ * view's stored one (page-up `x × direction`).
+ */
+export function drawingViewFrame(
+  view: Pick<DrawingView, 'orientation' | 'auxiliary'>
+): DrawingViewFrame {
+  const auxiliary = view.auxiliary;
+  if (!auxiliary) return DRAWING_VIEW_FRAMES[view.orientation];
+  const { direction: d, x } = auxiliary;
+  return {
+    direction: { ...d },
+    x: { ...x },
+    up: {
+      x: x.y * d.z - x.z * d.y,
+      y: x.z * d.x - x.x * d.z,
+      z: x.x * d.y - x.y * d.x
+    }
+  };
+}
+
+/**
+ * A detail view (D03, schema v78): the region of its source view inside a
+ * circle, drawn at its own scale and cropped to the circle, with its own
+ * hidden-line setting. It looks the way its source looks (same orientation
+ * and bodies), stores the circle in the source's model (u, v) so moving
+ * either view never moves the region, and is placed freely on the sheet.
+ */
+export interface DrawingDetail {
+  /** A principal or isometric view, not a section or another detail. */
+  sourceViewId: DrawingViewId;
+  /** One or two capitals naming the detail ("A" for DETAIL A), unique per sheet with sections. */
+  label: string;
+  /** The circle's centre in the source view's model (u, v), model units. */
+  center: { u: number; v: number };
+  /** The circle's radius in model units. */
+  radius: number;
+  /** The detail's own scale, paper : model. */
+  scale: DrawingScale;
 }
 
 /**
@@ -417,18 +489,88 @@ export function drawingSectionOrientations(
   });
 }
 
-/** The first section label the sheet does not use yet: A, B, … Z, AA, AB … */
+/**
+ * The first section or detail label the sheet does not use yet: A, B, … Z,
+ * AA, AB … (sections and details share one sequence, as on a print).
+ */
 export function nextDrawingSectionLabel(
   sheet: Pick<DrawingSheet, 'views'>
 ): string {
   const used = new Set(
-    sheet.views.flatMap((view) => (view.section ? [view.section.label] : []))
+    sheet.views.flatMap((view) =>
+      view.section
+        ? [view.section.label]
+        : view.detail
+          ? [view.detail.label]
+          : view.auxiliary
+            ? [view.auxiliary.label]
+            : []
+    )
   );
   // I, O and Q read as digits on a print; drafting practice skips them.
   const letters = 'ABCDEFGHJKLMNPRSTUVWXYZ';
   for (const a of ['', ...letters])
     for (const b of letters) if (!used.has(a + b)) return a + b;
   throw new Error('No section labels left on this sheet.');
+}
+
+/**
+ * D02 (schema v70): the line classes a sheet prints, each with its own
+ * weight in paper millimetres (ISO 128 defaults when absent).
+ */
+export const DRAWING_LINE_CLASSES = [
+  'visible',
+  'hidden',
+  'thin',
+  'border',
+  'dimension',
+  'hatch',
+  'chain',
+  'cutting'
+] as const;
+export type DrawingLineClass = (typeof DRAWING_LINE_CLASSES)[number];
+
+export const DRAWING_LINE_CLASS_LABELS: Readonly<
+  Record<DrawingLineClass, string>
+> = {
+  visible: 'Visible edges',
+  hidden: 'Hidden edges',
+  thin: 'Title block rules',
+  border: 'Borders',
+  dimension: 'Dimensions and notes',
+  hatch: 'Section hatching',
+  chain: 'Centre and cutting-plane lines',
+  cutting: 'Cutting-plane ends'
+};
+
+export const MIN_DRAWING_LINE_WIDTH_MM = 0.05;
+export const MAX_DRAWING_LINE_WIDTH_MM = 2;
+
+/** How a sheet writes angles: decimal degrees, or degrees, minutes and seconds. */
+export type DrawingAngleFormat = 'decimal' | 'dms';
+
+/**
+ * D02 (schema v70): a sheet's drawing properties. Every field is optional
+ * and absent keeps the document's units, the units' default precision, a
+ * decimal point, decimal degrees and the ISO 128 line weights, so an older
+ * sheet draws and exports exactly as before.
+ *
+ * Dimension values and their tolerances are printed in `units`: a value is
+ * measured in the document's units and converted, and a tolerance's
+ * deviations are amounts in `units` (degrees on an angle).
+ */
+export interface DrawingSheetFormat {
+  /** The units dimensions are printed in; absent is the document's. */
+  units?: UnitSystem;
+  /** Decimal places for lengths, trailing zeros trimmed; absent is the units' default. */
+  decimals?: number;
+  /** Decimal places for decimal degrees, or for the seconds of D°M'S". */
+  angleDecimals?: number;
+  angleFormat?: DrawingAngleFormat;
+  /** Absent is a point. */
+  decimalSeparator?: 'comma';
+  /** Print weights by line class, in paper millimetres. */
+  lineWidthsMm?: Partial<Record<DrawingLineClass, number>>;
 }
 
 export interface DrawingSheet {
@@ -445,6 +587,8 @@ export interface DrawingSheet {
    * never synthesized on load.
    */
   annotations?: DrawingAnnotation[];
+  /** D02 drawing properties (schema v70); absent keeps every default. */
+  format?: DrawingSheetFormat;
 }
 
 /** The document's drawing section (schema v30). Absent means no drawings. */
@@ -538,6 +682,138 @@ function drawingViewError(view: unknown, where: string): string | null {
     if (view.parentViewId !== undefined)
       return `${where} cannot be both a section and a projected view.`;
   }
+  if (view.auxiliary !== undefined) {
+    const auxiliary = view.auxiliary;
+    const unit = (value: unknown) =>
+      isRecord(value) &&
+      Object.keys(value).length === 3 &&
+      [value.x, value.y, value.z].every(
+        (component) =>
+          typeof component === 'number' && Number.isFinite(component)
+      ) &&
+      Math.abs(
+        Math.hypot(value.x as number, value.y as number, value.z as number) - 1
+      ) <= 1e-9;
+    if (
+      !isRecord(auxiliary) ||
+      typeof auxiliary.sourceViewId !== 'string' ||
+      typeof auxiliary.label !== 'string' ||
+      !SECTION_LABEL.test(auxiliary.label) ||
+      !unit(auxiliary.direction) ||
+      !unit(auxiliary.x) ||
+      Object.keys(auxiliary).some(
+        (key) => !['sourceViewId', 'label', 'direction', 'x'].includes(key)
+      )
+    )
+      return `${where} has an invalid auxiliary view.`;
+    const d = auxiliary.direction as Vector3;
+    const x = auxiliary.x as Vector3;
+    if (Math.abs(d.x * x.x + d.y * x.y + d.z * x.z) > 1e-9)
+      return `${where} has an auxiliary frame whose axes are not square.`;
+    if (
+      view.parentViewId !== undefined ||
+      view.section !== undefined ||
+      view.detail !== undefined
+    )
+      return `${where} cannot be an auxiliary view and a projected, section or detail view.`;
+  }
+  if (view.detail !== undefined) {
+    const detail = view.detail;
+    if (
+      !isRecord(detail) ||
+      typeof detail.sourceViewId !== 'string' ||
+      typeof detail.label !== 'string' ||
+      !SECTION_LABEL.test(detail.label) ||
+      !isRecord(detail.center) ||
+      !isCoordinateValue(detail.center.u) ||
+      !isCoordinateValue(detail.center.v) ||
+      Object.keys(detail.center).length !== 2 ||
+      typeof detail.radius !== 'number' ||
+      !Number.isFinite(detail.radius) ||
+      detail.radius <= 0 ||
+      detail.radius > MAX_DRAWING_SECTION_DEPTH ||
+      !isRecord(detail.scale) ||
+      !isScaleTerm(detail.scale.numerator) ||
+      !isScaleTerm(detail.scale.denominator) ||
+      Object.keys(detail.scale).length !== 2 ||
+      Object.keys(detail).some(
+        (key) =>
+          !['sourceViewId', 'label', 'center', 'radius', 'scale'].includes(key)
+      )
+    )
+      return `${where} has an invalid detail.`;
+    if (view.parentViewId !== undefined || view.section !== undefined)
+      return `${where} cannot be a detail and a projected or section view.`;
+  }
+  return null;
+}
+
+/** A model coordinate a detail's circle may sit at. */
+function isCoordinateValue(value: unknown): boolean {
+  return (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    Math.abs(value) <= MAX_DRAWING_SECTION_DEPTH
+  );
+}
+
+const UNIT_SYSTEMS: readonly unknown[] = ['mm', 'cm', 'm', 'inch'];
+
+function isDecimals(value: unknown): boolean {
+  return (
+    Number.isSafeInteger(value) &&
+    (value as number) >= 0 &&
+    (value as number) <= 6
+  );
+}
+
+/** Why `value` is not a stored {@link DrawingSheetFormat}, or null. */
+export function drawingSheetFormatError(value: unknown): string | null {
+  if (!isRecord(value)) return 'has drawing properties that are not a record';
+  for (const key of Object.keys(value))
+    if (
+      ![
+        'units',
+        'decimals',
+        'angleDecimals',
+        'angleFormat',
+        'decimalSeparator',
+        'lineWidthsMm'
+      ].includes(key)
+    )
+      return `has an unknown drawing property "${key}"`;
+  if (value.units !== undefined && !UNIT_SYSTEMS.includes(value.units))
+    return 'prints dimensions in unknown units';
+  if (value.decimals !== undefined && !isDecimals(value.decimals))
+    return 'shows lengths to other than 0 to 6 decimals';
+  if (value.angleDecimals !== undefined && !isDecimals(value.angleDecimals))
+    return 'shows angles to other than 0 to 6 decimals';
+  if (
+    value.angleFormat !== undefined &&
+    value.angleFormat !== 'decimal' &&
+    value.angleFormat !== 'dms'
+  )
+    return 'has an unknown angle format';
+  if (
+    value.decimalSeparator !== undefined &&
+    value.decimalSeparator !== 'comma'
+  )
+    return 'has an unknown decimal separator';
+  if (value.lineWidthsMm !== undefined) {
+    const widths = value.lineWidthsMm;
+    if (!isRecord(widths)) return 'has line weights that are not a record';
+    for (const [key, width] of Object.entries(widths)) {
+      if (!(DRAWING_LINE_CLASSES as readonly string[]).includes(key))
+        return `has a weight for an unknown line class "${key}"`;
+      if (
+        typeof width !== 'number' ||
+        !Number.isFinite(width) ||
+        width < MIN_DRAWING_LINE_WIDTH_MM ||
+        width > MAX_DRAWING_LINE_WIDTH_MM
+      )
+        return `has a ${key} line weight outside ${MIN_DRAWING_LINE_WIDTH_MM}–${MAX_DRAWING_LINE_WIDTH_MM} mm`;
+    }
+  }
   return null;
 }
 
@@ -609,7 +885,13 @@ export function drawingSheetError(value: unknown): string | null {
           view.orientation as DrawingViewOrientation
         )
       : null;
-    if (!parent || parent.parentViewId !== undefined || alignment === null)
+    if (
+      !parent ||
+      parent.parentViewId !== undefined ||
+      parent.detail !== undefined ||
+      parent.auxiliary !== undefined ||
+      alignment === null
+    )
       return `${where} has a projected view that cannot fold from its base.`;
     // Aligned on the shared axis, on the side the projection angle gives
     // it: anything else contradicts the projection the title block names.
@@ -632,6 +914,55 @@ export function drawingSheetError(value: unknown): string | null {
   }
   const labels = new Set<string>();
   for (const view of views.values()) {
+    const auxiliary = view.auxiliary as DrawingAuxiliary | undefined;
+    if (!auxiliary) continue;
+    if (labels.has(auxiliary.label))
+      return `${where} names view ${auxiliary.label} twice.`;
+    labels.add(auxiliary.label);
+    const source = views.get(auxiliary.sourceViewId);
+    const sight = source
+      ? DRAWING_VIEW_FRAMES[source.orientation as DrawingViewOrientation]
+          .direction
+      : null;
+    const d = auxiliary.direction;
+    if (
+      !source ||
+      !sight ||
+      source.orientation === 'iso' ||
+      source.section !== undefined ||
+      source.detail !== undefined ||
+      source.auxiliary !== undefined ||
+      source.orientation !== view.orientation ||
+      [...(source.bodyIds as string[])].sort().join('\u0000') !==
+        [...(view.bodyIds as string[])].sort().join('\u0000') ||
+      Math.abs(d.x * sight.x + d.y * sight.y + d.z * sight.z) > 1e-9
+    )
+      return `${where} has an auxiliary view that is not seen square from its source.`;
+  }
+  for (const view of views.values()) {
+    const detail = view.detail as DrawingDetail | undefined;
+    if (!detail) continue;
+    if (labels.has(detail.label))
+      return `${where} names view ${detail.label} twice.`;
+    labels.add(detail.label);
+    const source = views.get(detail.sourceViewId);
+    const sameBodies = (a: unknown, b: unknown) =>
+      Array.isArray(a) &&
+      Array.isArray(b) &&
+      a.length === b.length &&
+      [...(a as string[])].sort().join('\u0000') ===
+        [...(b as string[])].sort().join('\u0000');
+    if (
+      !source ||
+      source.section !== undefined ||
+      source.detail !== undefined ||
+      source.auxiliary !== undefined ||
+      source.orientation !== view.orientation ||
+      !sameBodies(source.bodyIds, view.bodyIds)
+    )
+      return `${where} has a detail that does not look as its source view does.`;
+  }
+  for (const view of views.values()) {
     const section = view.section as DrawingSectionCut | undefined;
     if (!section) continue;
     if (labels.has(section.label))
@@ -641,6 +972,8 @@ export function drawingSheetError(value: unknown): string | null {
     if (
       !source ||
       source.section !== undefined ||
+      source.detail !== undefined ||
+      source.auxiliary !== undefined ||
       source.orientation === 'iso' ||
       drawingViewAlignment(
         source.orientation as DrawingViewOrientation,
@@ -669,6 +1002,10 @@ export function drawingSheetError(value: unknown): string | null {
     )
       return `${where} has a section view out of line with its source or on the wrong side for its projection angle.`;
   }
+  if (value.format !== undefined) {
+    const error = drawingSheetFormatError(value.format);
+    if (error) return `${where} ${error}.`;
+  }
   if (value.annotations !== undefined) {
     if (
       !Array.isArray(value.annotations) ||
@@ -688,6 +1025,35 @@ export function drawingSheetError(value: unknown): string | null {
       if (ids.has(id)) return `${where} names annotation ${id} twice.`;
       ids.add(id);
     }
+    // v73: a mark measured to is a centre or intersection mark of the same
+    // view. A missing one is not refused here: deleting a mark leaves what
+    // measured to it broken until it is re-picked, like a lost edge.
+    const annotations = value.annotations as DrawingAnnotation[];
+    const byId = new Map(
+      annotations.map((entry) => [entry.annotationId, entry])
+    );
+    for (const annotation of annotations)
+      for (const markId of drawingAnnotationMarks(annotation)) {
+        const mark = byId.get(markId);
+        if (
+          mark &&
+          ((mark.kind !== 'center-mark' && mark.kind !== 'intersection-mark') ||
+            mark.viewId !== annotation.viewId)
+        )
+          return `${where} annotation ${annotation.annotationId} measures to ${markId}, which is not a mark on its view.`;
+      }
+    // v75: a centreline measured to is a straight one on the same view.
+    for (const annotation of annotations)
+      for (const lineId of drawingAnnotationCenterlines(annotation)) {
+        const line = byId.get(lineId);
+        if (
+          line &&
+          (line.kind !== 'centerline' ||
+            line.mode === 'circle' ||
+            line.viewId !== annotation.viewId)
+        )
+          return `${where} annotation ${annotation.annotationId} measures to ${lineId}, which is not a straight centreline on its view.`;
+      }
   }
   return null;
 }

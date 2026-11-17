@@ -33,6 +33,62 @@ export const STALE_CHUNK_MESSAGE =
   'Part of OpenZCAD did not load. Reload when convenient, or check your connection if it keeps happening.';
 
 /**
+ * Said instead of {@link STALE_CHUNK_MESSAGE} while this browser is offline:
+ * a reload then could lose the app shell itself, so it is never suggested.
+ */
+export const OFFLINE_CHUNK_MESSAGE =
+  'You’re offline, so part of OpenZCAD could not load. Your work is saved on this device.';
+
+/** True while the browser reports no connection. */
+export function isOffline(): boolean {
+  return typeof navigator !== 'undefined' && navigator.onLine === false;
+}
+
+/** Resolves on the next `online` event, or at once when already online. */
+export function waitForOnline(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const connected = () => {
+      if (isOffline()) return;
+      window.removeEventListener('online', connected);
+      resolve();
+    };
+    window.addEventListener('online', connected);
+    connected();
+  });
+}
+
+/**
+ * Failures a loader is already retrying: the preload watch leaves them be,
+ * so the workspace does not offer a Reload for a chunk about to load.
+ */
+const retryingFailures = new WeakSet<object>();
+
+/**
+ * Loads a chunk, and when the download failed because this browser is
+ * offline, waits for the connection and tries again in place. The failed
+ * surface used to reach the page's "Loading interrupted" card, whose only
+ * way out was a reload — while offline, the one action that can lose the
+ * app shell — and the state stayed after the connection returned. A browser
+ * that re-fetches a failed dynamic import (Chromium does) recovers here; one
+ * that does not fails again once online, and only then reports.
+ */
+export async function loadRetryingOnReconnect<T>(
+  load: () => Promise<T>
+): Promise<T> {
+  for (;;) {
+    try {
+      return await load();
+    } catch (error) {
+      if (!isChunkLoadError(error) || !isOffline()) throw error;
+      if (typeof error === 'object' && error !== null) {
+        retryingFailures.add(error);
+      }
+      await waitForOnline();
+    }
+  }
+}
+
+/**
  * What the workspace offers to reload for: a confirmed newer deployment, or
  * a download that failed without one (possibly just the connection).
  */
@@ -44,17 +100,7 @@ export const NEW_VERSION_MESSAGE =
 
 /** Avoid poisoning the browser module cache with a known-offline download. */
 export async function loadWhenOnline<T>(load: () => Promise<T>): Promise<T> {
-  if (navigator.onLine === false) {
-    await new Promise<void>((resolve) => {
-      const connected = () => {
-        if (navigator.onLine === false) return;
-        window.removeEventListener('online', connected);
-        resolve();
-      };
-      window.addEventListener('online', connected);
-      connected();
-    });
-  }
+  if (isOffline()) await waitForOnline();
   return load();
 }
 
@@ -116,7 +162,7 @@ export function lazyWithStaleChunkNotice<T extends ComponentType<any>>(
   factory: () => Promise<{ default: T }>
 ): LazyExoticComponent<T> {
   return lazy(() =>
-    factory().catch((error: unknown) => {
+    loadRetryingOnReconnect(factory).catch((error: unknown) => {
       if (isChunkLoadError(error)) reportStaleChunk(error);
       throw error;
     })
@@ -141,7 +187,9 @@ export function watchPreloadErrors(target: Window = window): () => void {
     // warm-up's failure can be told apart from one the user is waiting on.
     const timer = window.setTimeout(() => {
       timers.delete(timer);
-      if (!isSpeculativeFailure(error)) reportStaleChunk(error);
+      if (!isSpeculativeFailure(error) && !isRetrying(error)) {
+        reportStaleChunk(error);
+      }
     }, 0);
     timers.add(timer);
   };
@@ -158,6 +206,12 @@ export function watchPreloadErrors(target: Window = window): () => void {
  * own load reports when the user actually opens it.
  */
 const speculativeFailures = new WeakSet<object>();
+
+function isRetrying(error: unknown): boolean {
+  return (
+    typeof error === 'object' && error !== null && retryingFailures.has(error)
+  );
+}
 
 function isSpeculativeFailure(error: unknown): boolean {
   return (
@@ -206,7 +260,7 @@ export function preloadableLazy<T extends ComponentType<any>>(
   // Only a render that fails reports a stale chunk: a warm-up that fails
   // offline is not something the user asked for or can see.
   const Lazy = lazy(() =>
-    load().catch((error: unknown) => {
+    loadRetryingOnReconnect(load).catch((error: unknown) => {
       if (isChunkLoadError(error)) reportStaleChunk(error);
       throw error;
     })

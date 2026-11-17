@@ -73,12 +73,14 @@ export * from './input/bindings';
 export * from './input/GestureRouter';
 export * from './input/RightClickGestureTracker';
 export * from './input/touchGestures';
+export * from './input/spaceMouse';
 
 // Scene graph: disposal, labels, display modes, and preview geometry.
 export * from './scene/HudLayer';
 export * from './scene/TopologyPickList';
 export * from './scene/objects';
 export * from './scene/exactSection';
+export * from './scene/sectionOverlap';
 export * from './scene/drawnBodies';
 export * from './scene/moveCopyPreview';
 

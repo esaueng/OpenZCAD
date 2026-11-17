@@ -64,6 +64,13 @@ export interface E2eeProjectMigrationRecord {
   purgedRows: number;
   purgedObjects: number;
   startedAt: string;
+  /**
+   * Which staging of the project this row holds: every new staging (a
+   * start from `abandoned` or `done`) moves it on, nothing else does
+   * (migration 0053; absent before it). Unlike `startedAt`, two attempts
+   * never share it.
+   */
+  attempt?: number;
   updatedAt: string;
   cutoverAt: string | null;
   finishedAt: string | null;
@@ -79,6 +86,26 @@ export interface E2eeMigrationStartRequest {
   direction: E2eeMigrationDirection;
   /** A device the owner's newest device list certifies. */
   deviceId: string;
+  /**
+   * The attempt the caller decided on (encrypt only): the start or resume
+   * goes ahead only while the project's migration is still exactly that,
+   * checked in the same statement that writes it, and is otherwise refused
+   * with {@link E2EE_MIGRATION_CODES}.attemptChanged. Without it (an older
+   * app), nothing is checked.
+   */
+  expectedAttempt?: E2eeMigrationAttemptExpectation;
+}
+
+/**
+ * A migration attempt as the caller read it (#1465 review): `none` when
+ * the project had no migration row, otherwise the row's state with its
+ * `attempt` (null from a Worker without migration 0053) and `startedAt`.
+ * Another tab's or device's start, cancel or restart changes it.
+ */
+export interface E2eeMigrationAttemptExpectation {
+  state: E2eeMigrationState | 'none';
+  attempt: number | null;
+  startedAt: string | null;
 }
 
 /**
@@ -150,6 +177,13 @@ export const E2EE_MIGRATION_CODES = Object.freeze({
   cleanupPending: 'E2EE_MIGRATION_CLEANUP_PENDING',
   /** The request does not fit the migration's state. */
   state: 'E2EE_MIGRATION_STATE',
+  /**
+   * The start's `expectedAttempt` no longer holds: another tab or device
+   * started, cancelled or restarted the migration since it was read.
+   * Nothing was written; read the migration again (and, for a shared
+   * project, ask the owner to approve its members again).
+   */
+  attemptChanged: 'E2EE_MIGRATION_ATTEMPT_CHANGED',
   /**
    * Slice 7-3: the account's "Encrypt new projects" opt-in is on, so it
    * cannot hold a new plaintext project (decision D2); turn it off first.

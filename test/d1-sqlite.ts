@@ -6,7 +6,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
  * Worker routes run against the production schema, its CHECK constraints
  * and foreign keys, in Vitest and in Playwright route handlers alike. Only
  * the transport is adapted: `batch` is one transaction, as on D1, and `run`
- * reports `meta.changes`.
+ * reports `meta.changes` as D1 does, rows its triggers wrote included.
  */
 export function migratedDatabase(): DatabaseSync {
   const db = new DatabaseSync(':memory:');
@@ -19,6 +19,9 @@ export function migratedDatabase(): DatabaseSync {
   }
   return db;
 }
+
+const totalChanges = (db: DatabaseSync) =>
+  Number((db.prepare('SELECT total_changes() AS n').get() as { n: number }).n);
 
 class Statement {
   values: SQLInputValue[] = [];
@@ -35,11 +38,16 @@ class Statement {
   }
 
   async run() {
-    const result = this.db.prepare(this.sql).run(...this.values);
+    // As D1: total_changes() moved by the statement, trigger writes included.
+    const before = totalChanges(this.db);
+    const prepared = this.db.prepare(this.sql);
+    const results = /\bRETURNING\b/i.test(this.sql)
+      ? prepared.all(...this.values)
+      : (prepared.run(...this.values), []);
     return {
       success: true,
-      results: [],
-      meta: { changes: Number(result.changes) }
+      results,
+      meta: { changes: totalChanges(this.db) - before }
     };
   }
 

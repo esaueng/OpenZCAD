@@ -1,7 +1,21 @@
 import {
-  DRAWING_VIEW_FRAMES,
+  assemblyBomTable,
+  assemblyComponentBodies,
+  deriveAssemblyBom,
+  isLiveAssemblyBody,
+  type AssemblyBomTable,
+  getParameterScope,
+  holeCallout,
+  holeOfBoreFace
+} from '@openzcad/document-core';
+import {
+  drawingViewFrame,
   drawingPaperPerModelUnit,
+  holeCalloutLabel,
   projectToView,
+  type BodyId,
+  type FeatureId,
+  type HoleCallout,
   type DrawingAnnotationId,
   type DrawingViewId,
   type DrawingSheet,
@@ -14,11 +28,23 @@ import {
   type DrawingPointRef,
   type DrawingView,
   type DrawingViewFrame,
+  type DrawingAngleFormat,
+  type DrawingCenterMark,
+  type DrawingDimension,
+  type DrawingDistanceTarget,
+  type DrawingBomColumnKey,
+  type DrawingGeometryAnnotation,
+  type DrawingIntersectionMark,
+  isDrawingGeometryAnnotation,
+  type DrawingSheetFormat,
+  millimetresPerUnit,
+  MAX_DRAWING_DIMENSION_DECIMALS,
   type EdgeTopology,
   type EdgeTopologyReferenceV5,
   type FaceTopology,
   type FaceTopologyReferenceV5,
   type GeometryBodyRepresentation,
+  type ProjectDocument,
   type UnitSystem,
   type Vector3
 } from '@openzcad/shared';
@@ -32,6 +58,10 @@ import {
   topologyResolutionMessage
 } from '../topologyResolution';
 import {
+  viewPaperPerModelUnit,
+  clipPolylineToCircle,
+  fitText,
+  viewClipCircle,
   sheetSafeText,
   textWidthMm,
   viewPageTransform,
@@ -80,6 +110,59 @@ export function sectionBodyKey(viewId: DrawingViewId, bodyId: string): string {
 }
 
 /** The body `view` draws for `bodyId`: its cut body when it is a section. */
+/** M01: a hole's callout data by the hole's feature id, else null. */
+export type HoleCalloutLookup = (featureId: FeatureId) => HoleCallout | null;
+
+/**
+ * M01: the hole callouts of `document`, read once per hole and bound to it:
+ * a drawing kept with this lookup calls its holes out as they were when it
+ * was drawn, however the model changes before its Update.
+ */
+export function holeCalloutLookup(
+  document: ProjectDocument
+): HoleCalloutLookup {
+  const scope = getParameterScope(document).scope;
+  const read = new Map<FeatureId, HoleCallout | null>();
+  return (featureId) => {
+    if (!read.has(featureId)) {
+      read.set(featureId, holeCallout(document, featureId, scope));
+    }
+    return read.get(featureId)!;
+  };
+}
+
+/** Below this a rim's radius is its bore's. */
+const BORE_RIM_TOLERANCE = 1e-6;
+
+/**
+ * M01: the callout of the hole whose bore `edge` rims, when the hole says
+ * more than a plain diameter (a standard size or a thread) and the rim is
+ * the bore's own diameter. A face named by a hole's bore lineage (directly,
+ * on sketch points, or as an M02 pattern copy's) names the hole.
+ */
+function boreCallout(
+  body: SourceBody | undefined,
+  edge: { adjacentFaceHashes?: readonly number[] },
+  radius: number,
+  holes: HoleCalloutLookup
+): HoleCallout | null {
+  const faces = body?.topology?.faces ?? [];
+  for (const hash of edge.adjacentFaceHashes ?? []) {
+    const face = faces.find((candidate) => candidate.hash === hash);
+    const holeId = face?.reference ? holeOfBoreFace(face.reference) : null;
+    if (!holeId) continue;
+    const callout = holes(holeId);
+    if (
+      callout &&
+      (callout.standard || callout.thread) &&
+      Math.abs(callout.diameter / 2 - radius) <=
+        BORE_RIM_TOLERANCE * Math.max(1, radius)
+    )
+      return callout;
+  }
+  return null;
+}
+
 export function annotationBody(
   bodies: AnnotationBodies,
   view: Pick<DrawingView, 'viewId' | 'section'> | undefined,
@@ -106,11 +189,56 @@ export type AnnotationBreak =
   | 'not-a-chamfer'
   | 'not-a-blend'
   | 'not-a-counterbore'
-  | 'not-a-countersink';
+  | 'not-a-countersink'
+  | 'mark-missing'
+  | 'not-parallel'
+  | 'collinear'
+  | 'no-bom'
+  | 'not-in-bom'
+  | 'not-on-part';
 
 type UV = [number, number];
 
 export type ResolvedAnnotation =
+  | {
+      /** v80: a parts list's header and rows, cells as the BOM table wrote them. */
+      kind: 'bom-table';
+      header: string[];
+      numeric: boolean[];
+      rows: string[][];
+      label: string;
+    }
+  | {
+      /** v80: a balloon's item number and its leader edge, flat `[u, v, …]`. */
+      kind: 'balloon';
+      label: string;
+      leader: number[];
+      /** As a note's (below): what its view draws of the edge. */
+      leaderDepths?: number[];
+      leaderEdge?: { bodyId: string; topologyId: string };
+      leaderPieces?: number[][];
+    }
+  | {
+      /** v73: a centre mark's circle, in view (u, v). */
+      kind: 'center-mark';
+      center: UV;
+      radius: number;
+      label: string;
+    }
+  | {
+      /** v73: where two lines cross; each edge's nearer end, to extend from. */
+      kind: 'intersection-mark';
+      point: UV;
+      from: [UV, UV];
+      label: string;
+    }
+  | {
+      /** v73: a centreline: a segment, or a circle. */
+      kind: 'centerline';
+      segment?: [UV, UV];
+      circle?: { center: UV; radius: number };
+      label: string;
+    }
   | {
       kind: 'linear';
       /** Unit measuring direction in the view plane. */
@@ -119,6 +247,8 @@ export type ResolvedAnnotation =
       to: UV;
       value: number;
       label: string;
+      /** v68: a stacked or framed label's parts; absent is `label` alone. */
+      text?: DimensionText;
     }
   | {
       kind: 'radius' | 'diameter';
@@ -132,6 +262,8 @@ export type ResolvedAnnotation =
       arc?: number[];
       value: number;
       label: string;
+      /** v68: a stacked or framed label's parts; absent is `label` alone. */
+      text?: DimensionText;
     }
   | {
       kind: 'chamfer';
@@ -143,6 +275,8 @@ export type ResolvedAnnotation =
       value: number;
       angle: number;
       label: string;
+      /** v68: a stacked or framed label's parts; absent is `label` alone. */
+      text?: DimensionText;
     }
   | {
       kind: 'angle';
@@ -151,6 +285,8 @@ export type ResolvedAnnotation =
       rays: [[UV, UV], [UV, UV]];
       value: number;
       label: string;
+      /** v68: a stacked or framed label's parts; absent is `label` alone. */
+      text?: DimensionText;
       /**
        * v51: the ray turned outward, now from the vertex along its edge's
        * extension, and that edge's near end, where its extension line
@@ -202,7 +338,7 @@ export function annotationBreakMessage(reason: AnnotationBreak): string {
     case 'invalid-reference':
       return 'The stored reference to this edge does not match its own fingerprint, so it is not trusted.';
     case 'leader-hidden':
-      return 'The view no longer draws any of the edge this note points at.';
+      return 'The view no longer draws any of the edge this points at.';
     case 'foreshortened':
       return 'This view does not see what this measures true size (it slopes into the view, or the view is isometric); dimension it where it lies parallel to the view.';
     case 'no-sharp':
@@ -215,6 +351,18 @@ export function annotationBreakMessage(reason: AnnotationBreak): string {
       return 'These circles no longer make a counterbored hole: a larger bore on the same axis, opening onto the hole.';
     case 'not-a-countersink':
       return 'These circles no longer make a countersunk hole: a cone on the same axis, opening onto the hole.';
+    case 'mark-missing':
+      return 'The centre or intersection mark this measured to has been deleted, or no longer marks a point.';
+    case 'not-parallel':
+      return 'The two edges are no longer parallel in this view, so there is no line midway between them.';
+    case 'collinear':
+      return 'The three points now lie on one line, so no circle passes through them.';
+    case 'no-bom':
+      return 'The project has no assembly parts to list.';
+    case 'not-in-bom':
+      return 'The part this balloon named is no longer in the assembly.';
+    case 'not-on-part':
+      return 'The edge this balloon points at is not on the part it names.';
   }
 }
 
@@ -235,20 +383,215 @@ export function formatDrawingNumber(value: number, decimals: number): string {
 }
 
 /**
- * A dimension's text from its value: the count, the value, and brackets for
- * a reference dimension. WinAnsi has no diameter sign; Ø (U+00D8) is the
- * usual stand-in, and × (U+00D7) is in it.
+ * v68: a dimension label laid out in parts: `head` (count and prefix),
+ * `lead` (the value and any symmetric tolerance), a deviation or limits pair
+ * stacked upper over lower, then `tail` (the suffix). A basic dimension's
+ * lead, the value alone, is framed.
  */
-function dimensionLabel(
-  annotation: Exclude<DrawingAnnotation, { kind: 'note' }>,
-  text: string
+export interface DimensionText {
+  /** The count and prefix, outside any frame ("2× "). */
+  head: string;
+  lead: string;
+  stack?: [string, string];
+  tail: string;
+  framed?: true;
+}
+
+/**
+ * What a dimension measures, before its format: `Ø` and 12.5 (a length in
+ * the sheet's printed units), or 30 (an angle, in degrees).
+ */
+interface Measured {
+  symbol: string;
+  value: number;
+  decimals: number;
+  kind: 'length' | 'angle';
+}
+
+/**
+ * D02 (schema v70): how a sheet writes numbers, from its drawing
+ * properties and the document's units. Lengths are measured in document
+ * units and printed in `units` (`lengthFactor` converts).
+ */
+export interface DrawingNumberFormat {
+  units: UnitSystem;
+  lengthFactor: number;
+  lengthDecimals: number;
+  angleDecimals: number;
+  angleFormat: DrawingAngleFormat;
+  comma: boolean;
+}
+
+export function drawingNumberFormat(
+  format: DrawingSheetFormat | undefined,
+  documentUnits: UnitSystem
+): DrawingNumberFormat {
+  const units = format?.units ?? documentUnits;
+  return {
+    units,
+    lengthFactor: millimetresPerUnit(documentUnits) / millimetresPerUnit(units),
+    lengthDecimals: format?.decimals ?? LENGTH_DECIMALS[units],
+    angleDecimals: format?.angleDecimals ?? ANGLE_DECIMALS,
+    angleFormat: format?.angleFormat ?? 'decimal',
+    comma: format?.decimalSeparator === 'comma'
+  };
+}
+
+/** The sheet's number format (absent properties: the document's). */
+export function sheetNumberFormat(
+  sheet: Pick<DrawingSheet, 'format'>,
+  documentUnits: UnitSystem
+): DrawingNumberFormat {
+  return drawingNumberFormat(sheet.format, documentUnits);
+}
+
+/** The fewest decimals (at most the bound) that state `value` exactly. */
+function significantDecimals(value: number): number {
+  for (let decimals = 0; decimals < MAX_DRAWING_DIMENSION_DECIMALS; decimals++)
+    if (
+      Math.abs(Number(value.toFixed(decimals)) - value) <=
+      1e-9 * Math.max(1, Math.abs(value))
+    )
+      return decimals;
+  return MAX_DRAWING_DIMENSION_DECIMALS;
+}
+
+/** Fixed decimals, kept so a stacked pair lines up; never "-0". */
+function fixedNumber(value: number, decimals: number): string {
+  const fixed = value.toFixed(decimals);
+  return /^-0(\.0*)?$/.test(fixed) ? fixed.slice(1) : fixed;
+}
+
+/**
+ * A number in the sheet's format: trimmed like {@link formatDrawingNumber}
+ * or fixed (a tolerance), with its decimal separator; an angle with its
+ * degree sign, or as degrees, minutes and seconds to `decimals` on the
+ * seconds.
+ */
+function writeNumber(
+  value: number,
+  decimals: number,
+  kind: Measured['kind'],
+  format: DrawingNumberFormat,
+  trim: boolean
 ): string {
+  const plain = (n: number, d: number) =>
+    trim ? formatDrawingNumber(n, d) : fixedNumber(n, d);
+  const separate = (text: string) =>
+    format.comma ? text.replace('.', ',') : text;
+  if (kind === 'length') return separate(plain(value, decimals));
+  if (format.angleFormat === 'decimal')
+    return `${separate(plain(value, decimals))}°`;
+  // Rounded once, in seconds, so 29°59'59.96" to one decimal is 30°0'0".
+  const step = 10 ** decimals;
+  let seconds = Math.round(Math.abs(value) * 3600 * step) / step;
+  const degrees = Math.floor(seconds / 3600 + 1e-9);
+  seconds -= degrees * 3600;
+  const minutes = Math.floor(seconds / 60 + 1e-9);
+  seconds = Math.max(0, seconds - minutes * 60);
+  const sign = value < 0 && degrees + minutes + seconds > 0 ? '-' : '';
+  return `${sign}${degrees}°${minutes}'${separate(plain(seconds, decimals))}"`;
+}
+
+/** A deviation: signed, and a bare `0` for none (ISO 129-1, ASME Y14.5). */
+function signedDeviation(
+  value: number,
+  decimals: number,
+  kind: Measured['kind'],
+  format: DrawingNumberFormat
+): string {
+  const step = kind === 'angle' && format.angleFormat === 'dms' ? 3600 : 1;
+  if (Math.abs(value * step) < 0.5 * 10 ** -decimals) return '0';
+  const text = writeNumber(value, decimals, kind, format, false);
+  return value < 0 ? text : `+${text}`;
+}
+
+/**
+ * A dimension's text: the count, the prefix, the value with its tolerance,
+ * the suffix, and brackets for a reference dimension. `measured` is a
+ * number to format, or text a callout already wrote (which takes no
+ * tolerance: the validator refuses one on a counterbore, a countersink or a
+ * chamfer, and a toleranced diameter states its diameter, not the hole's
+ * callout). WinAnsi has no diameter sign; Ø (U+00D8) is the usual stand-in,
+ * and × (U+00D7) and ± (U+00B1) are in it.
+ */
+export function formatDimension(
+  annotation: DrawingDimension,
+  measured: string | Measured,
+  format: DrawingNumberFormat = drawingNumberFormat(undefined, 'mm')
+): { label: string; text?: DimensionText } {
   const count =
     'count' in annotation && annotation.count !== undefined
       ? `${annotation.count}× `
       : '';
-  const label = `${count}${text}`;
-  return annotation.reference ? `(${label})` : label;
+  const head = `${count}${annotation.prefix ? `${annotation.prefix} ` : ''}`;
+  const tail = annotation.suffix ? ` ${annotation.suffix}` : '';
+  const tolerance =
+    typeof measured === 'string' ? undefined : annotation.tolerance;
+  let lead: string;
+  let stack: [string, string] | undefined;
+  let gap = '';
+  if (typeof measured === 'string') lead = measured;
+  else {
+    const { symbol, value, decimals, kind } = measured;
+    const write = (n: number, d: number, trim: boolean) =>
+      writeNumber(n, d, kind, format, trim);
+    const nominal = `${symbol}${write(value, decimals, true)}`;
+    // A tolerance keeps the decimals it needs, so a stored one never prints
+    // as zero: a length's or decimal degree's own, a D°M'S" amount's in
+    // seconds (0.000001° is 0.0036").
+    const tolerant = (...amounts: number[]) =>
+      kind === 'angle' && format.angleFormat === 'dms'
+        ? Math.max(
+            decimals,
+            ...amounts.map((amount) => significantDecimals(amount * 3600))
+          )
+        : Math.max(decimals, ...amounts.map(significantDecimals));
+    switch (tolerance?.kind) {
+      case undefined:
+      case 'basic':
+        lead = nominal;
+        break;
+      case 'symmetric': {
+        const d = tolerant(tolerance.value);
+        lead = `${nominal} ±${write(tolerance.value, d, false)}`;
+        break;
+      }
+      case 'deviation':
+      case 'limits': {
+        const d = tolerant(tolerance.upper, tolerance.lower);
+        if (tolerance.kind === 'deviation') {
+          lead = nominal;
+          gap = ' ';
+          stack = [
+            signedDeviation(tolerance.upper, d, kind, format),
+            signedDeviation(tolerance.lower, d, kind, format)
+          ];
+        } else {
+          lead = symbol;
+          stack = [
+            write(value + tolerance.upper, d, false),
+            write(value + tolerance.lower, d, false)
+          ];
+        }
+        break;
+      }
+    }
+  }
+  const framed = tolerance?.kind === 'basic';
+  const flat = `${head}${framed ? `[${lead}]` : lead}${stack ? `${gap}${stack[0]}/${stack[1]}` : ''}${tail}`;
+  const label = annotation.reference ? `(${flat})` : flat;
+  if (!stack && !framed) return { label };
+  return {
+    label,
+    text: {
+      head,
+      lead,
+      ...(stack ? { stack } : {}),
+      tail,
+      ...(framed ? { framed: true as const } : {})
+    }
+  };
 }
 
 export function defaultDimensionDecimals(
@@ -350,7 +693,7 @@ function lookupFace(
 }
 
 function projectPoint(view: DrawingView, p: ArrayLike<number>, at: number) {
-  return projectToView(DRAWING_VIEW_FRAMES[view.orientation], {
+  return projectToView(drawingViewFrame(view), {
     x: p[at]!,
     y: p[at + 1]!,
     z: p[at + 2]!
@@ -433,14 +776,14 @@ function faceOnCircle(
   | { ok: false; reason: AnnotationBreak } {
   const circle = edge.curve?.circle;
   if (!circle) return { ok: false, reason: 'not-circular' };
-  const direction = DRAWING_VIEW_FRAMES[view.orientation].direction;
+  const direction = drawingViewFrame(view).direction;
   const facing =
     circle.axis.x * direction.x +
     circle.axis.y * direction.y +
     circle.axis.z * direction.z;
   if (Math.abs(Math.abs(facing) - 1) > 1e-6)
     return { ok: false, reason: 'edge-on' };
-  const c = projectToView(DRAWING_VIEW_FRAMES[view.orientation], circle.center);
+  const c = projectToView(drawingViewFrame(view), circle.center);
   return {
     ok: true,
     center: [c.u, c.v],
@@ -491,9 +834,21 @@ function pointOf(
   point: DrawingPointRef,
   bodies: AnnotationBodies,
   along: Vector3 | null,
-  across: Vector3 | null
+  across: Vector3 | null,
+  /** v73: the sheet's annotations, for a point a mark marks. */
+  marks?: MarkLookup
 ): { ok: true; point: ViewPoint } | { ok: false; reason: AnnotationBreak } {
-  const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  const frame = drawingViewFrame(view);
+  if (point.anchor === 'mark') {
+    const mark = marks?.(point.annotationId);
+    if (
+      !mark ||
+      mark.viewId !== view.viewId ||
+      (mark.kind !== 'center-mark' && mark.kind !== 'intersection-mark')
+    )
+      return { ok: false, reason: 'mark-missing' };
+    return markPoint(mark, view, bodies);
+  }
   if (point.anchor === 'virtual-sharp') {
     const found = point.faces.map((ref) => lookupFace(ref, view, bodies));
     for (const entry of found) if (!entry.ok) return entry;
@@ -568,7 +923,7 @@ export function dimensionPointInView(
   bodies: AnnotationBodies,
   direction: 'horizontal' | 'vertical'
 ): { uv: UV; depth: number; model: Vector3 } | null {
-  const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  const frame = drawingViewFrame(view);
   const [along, across] =
     direction === 'horizontal' ? [frame.x, frame.up] : [frame.up, frame.x];
   const found = pointOf(view, point, bodies, along, across);
@@ -630,7 +985,7 @@ function blendTubeInView(
   const g = face.geometry;
   if (!g || !g.surfaceType.toLowerCase().includes('tor') || !g.axis)
     return { ok: false, reason: 'not-a-blend' };
-  const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  const frame = drawingViewFrame(view);
   const across = cross(frame.direction, g.axis);
   const width = norm(across);
   // True size only side-on: the axis lies in the view's plane.
@@ -730,6 +1085,30 @@ function projectedPolyline(view: DrawingView, edge: EdgeTopology): number[] {
   return out;
 }
 
+/**
+ * A leader's edge as a note or balloon carries it: its projected polyline,
+ * each point's depth, and the edge itself, so markHiddenLeaders can keep
+ * only what the view draws of it.
+ */
+function leaderOf(
+  view: DrawingView,
+  ref: DrawingEdgeRef,
+  edge: EdgeTopology
+): {
+  leader: number[];
+  leaderDepths: number[];
+  leaderEdge: { bodyId: string; topologyId: string };
+} {
+  const depths: number[] = [];
+  for (let i = 0; i + 2 < edge.points.length; i += 3)
+    depths.push(projectPoint(view, edge.points, i).depth);
+  return {
+    leader: projectedPolyline(view, edge),
+    leaderDepths: depths,
+    leaderEdge: { bodyId: ref.bodyId, topologyId: edge.topologyId }
+  };
+}
+
 /** A straight edge's projected ends, or why it cannot serve as a ray. */
 function straightEnds(
   view: DrawingView,
@@ -748,6 +1127,393 @@ function straightEnds(
   return { ok: true, ends: [a.uv, b.uv] };
 }
 
+/** v73: the sheet's annotations by id, for points that marks mark. */
+export type MarkLookup = (
+  annotationId: DrawingAnnotationId
+) => DrawingAnnotation | undefined;
+
+/** A point in the view at (u, v) and `depth`, with its model position. */
+function pointAt(frame: DrawingViewFrame, uv: UV, depth: number): ViewPoint {
+  const model = add(
+    add(scale(frame.x, uv[0]), scale(frame.up, uv[1])),
+    scale(frame.direction, depth)
+  );
+  return { uv, depth, model };
+}
+
+/** Where two straight edges' lines cross in the view, and each one's near end. */
+function crossing(
+  view: DrawingView,
+  edges: readonly EdgeTopology[]
+):
+  | { ok: true; point: UV; depth: number; near: [UV, UV] }
+  | { ok: false; reason: AnnotationBreak } {
+  // Where the lines cross on the page: an edge sloping into the view still
+  // has one, so only straightness is asked of it, not true length.
+  const lines: [ViewPoint, ViewPoint][] = [];
+  for (const edge of edges) {
+    if (edge.curve?.type !== 'LINE')
+      return { ok: false, reason: 'not-straight' };
+    const ends = edgeEndsWithDepth(view, edge);
+    if (!ends) return { ok: false, reason: 'not-straight' };
+    if (
+      Math.hypot(ends[1].uv[0] - ends[0].uv[0], ends[1].uv[1] - ends[0].uv[1]) <
+      1e-9
+    )
+      return { ok: false, reason: 'edge-on' };
+    lines.push(ends);
+  }
+  const [[a1, b1], [a2, b2]] = lines as [
+    [ViewPoint, ViewPoint],
+    [ViewPoint, ViewPoint]
+  ];
+  const e1: UV = [b1.uv[0] - a1.uv[0], b1.uv[1] - a1.uv[1]];
+  const e2: UV = [b2.uv[0] - a2.uv[0], b2.uv[1] - a2.uv[1]];
+  const cross = e1[0] * e2[1] - e1[1] * e2[0];
+  if (Math.abs(cross) <= 1e-9 * Math.hypot(...e1) * Math.hypot(...e2))
+    return { ok: false, reason: 'parallel' };
+  const t =
+    ((a2.uv[0] - a1.uv[0]) * e2[1] - (a2.uv[1] - a1.uv[1]) * e2[0]) / cross;
+  const point: UV = [a1.uv[0] + t * e1[0], a1.uv[1] + t * e1[1]];
+  const nearer = ([a, b]: [ViewPoint, ViewPoint]): UV =>
+    Math.hypot(a.uv[0] - point[0], a.uv[1] - point[1]) <=
+    Math.hypot(b.uv[0] - point[0], b.uv[1] - point[1])
+      ? a.uv
+      : b.uv;
+  return {
+    ok: true,
+    point,
+    depth: a1.depth + t * (b1.depth - a1.depth),
+    near: [nearer(lines[0]!), nearer(lines[1]!)]
+  };
+}
+
+/** The point a centre or intersection mark marks, read from the model. */
+function markPoint(
+  mark: DrawingCenterMark | DrawingIntersectionMark,
+  view: DrawingView,
+  bodies: AnnotationBodies
+): { ok: true; point: ViewPoint } | { ok: false; reason: AnnotationBreak } {
+  const frame = drawingViewFrame(view);
+  if (mark.kind === 'center-mark') {
+    const found = lookupEdge(mark.edge, view, bodies);
+    if (!found.ok) return found;
+    const circle = faceOnCircle(view, found.edge);
+    if (!circle.ok) return circle;
+    return { ok: true, point: pointAt(frame, circle.center, circle.depth) };
+  }
+  const edges: EdgeTopology[] = [];
+  for (const ref of mark.edges) {
+    const found = lookupEdge(ref, view, bodies);
+    if (!found.ok) return found;
+    edges.push(found.edge);
+  }
+  if (edges[0] === edges[1]) return { ok: false, reason: 'ambiguous' };
+  const crossed = crossing(view, edges);
+  if (!crossed.ok) return crossed;
+  return { ok: true, point: pointAt(frame, crossed.point, crossed.depth) };
+}
+
+/** v75: a distance target in the view: a disc (a point is one of radius 0) or a line. */
+type DistanceShape =
+  | { kind: 'disc'; center: UV; depth: number; radius: number }
+  | { kind: 'line'; a: UV; b: UV };
+
+type DistanceEnd =
+  { ok: true; end: DistanceShape } | { ok: false; reason: AnnotationBreak };
+
+/** What a v75 distance target is in `view` of the current model. */
+function distanceEnd(
+  target: DrawingDistanceTarget,
+  view: DrawingView,
+  bodies: AnnotationBodies,
+  marks: MarkLookup | undefined
+): DistanceEnd {
+  if ('point' in target) {
+    const found = pointOf(view, target.point, bodies, null, null, marks);
+    if (!found.ok) return found;
+    return {
+      ok: true,
+      end: {
+        kind: 'disc',
+        center: found.point.uv,
+        depth: found.point.depth,
+        radius: 0
+      }
+    };
+  }
+  if ('line' in target) {
+    const found = lookupEdge(target.line, view, bodies);
+    if (!found.ok) return found;
+    const straight = straightEnds(view, found.edge);
+    if (!straight.ok) return straight;
+    return {
+      ok: true,
+      end: { kind: 'line', a: straight.ends[0], b: straight.ends[1] }
+    };
+  }
+  if ('circle' in target) {
+    const found = lookupEdge(target.circle, view, bodies);
+    if (!found.ok) return found;
+    const circle = faceOnCircle(view, found.edge);
+    if (!circle.ok) return circle;
+    return {
+      ok: true,
+      end: {
+        kind: 'disc',
+        center: circle.center,
+        depth: circle.depth,
+        radius: circle.radius
+      }
+    };
+  }
+  const line = marks?.(target.centerline);
+  if (
+    !line ||
+    line.kind !== 'centerline' ||
+    line.mode === 'circle' ||
+    line.viewId !== view.viewId
+  )
+    return { ok: false, reason: 'mark-missing' };
+  const drawn = resolveGeometryAnnotation(line, view, bodies, marks);
+  if (!drawn.ok) return { ok: false, reason: drawn.reason };
+  const segment =
+    drawn.resolved.kind === 'centerline' ? drawn.resolved.segment : undefined;
+  if (!segment) return { ok: false, reason: 'mark-missing' };
+  return { ok: true, end: { kind: 'line', a: segment[0], b: segment[1] } };
+}
+
+/**
+ * The two feet a distance spans: square to a line when either end is one
+ * (from a line's midpoint when both are, which must then be parallel), else
+ * along the line between two centres. `extent` moves each circle's foot to
+ * its near (`min`) or far (`max`) side; a point is a circle of radius 0, so
+ * it moves only circles.
+ */
+function distanceFeet(
+  from: DistanceShape,
+  to: DistanceShape,
+  extent: 'min' | 'max' | undefined
+): { ok: true; from: UV; to: UV } | { ok: false; reason: AnnotationBreak } {
+  const sign = extent === 'max' ? -1 : 1;
+  const radius = (shape: DistanceShape) =>
+    shape.kind === 'disc' && extent ? shape.radius : 0;
+  const foot = (p: UV, a: UV, b: UV): UV => {
+    const d: UV = [b[0] - a[0], b[1] - a[1]];
+    const t =
+      ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / (d[0] ** 2 + d[1] ** 2);
+    return [a[0] + t * d[0], a[1] + t * d[1]];
+  };
+  if (from.kind === 'line' && to.kind === 'line') {
+    const e1: UV = [from.b[0] - from.a[0], from.b[1] - from.a[1]];
+    const e2: UV = [to.b[0] - to.a[0], to.b[1] - to.a[1]];
+    if (
+      Math.abs(e1[0] * e2[1] - e1[1] * e2[0]) >
+      1e-6 * Math.hypot(...e1) * Math.hypot(...e2)
+    )
+      return { ok: false, reason: 'not-parallel' };
+    const middle: UV = [
+      (from.a[0] + from.b[0]) / 2,
+      (from.a[1] + from.b[1]) / 2
+    ];
+    const at = foot(middle, to.a, to.b);
+    if (Math.hypot(at[0] - middle[0], at[1] - middle[1]) < 1e-9)
+      return { ok: false, reason: 'degenerate' };
+    return { ok: true, from: middle, to: at };
+  }
+  if (from.kind === 'line' || to.kind === 'line') {
+    const line = (from.kind === 'line' ? from : to) as Extract<
+      DistanceShape,
+      { kind: 'line' }
+    >;
+    const disc = (from.kind === 'disc' ? from : to) as Extract<
+      DistanceShape,
+      { kind: 'disc' }
+    >;
+    const at = foot(disc.center, line.a, line.b);
+    const away: UV = [disc.center[0] - at[0], disc.center[1] - at[1]];
+    const length = Math.hypot(...away);
+    const r = radius(disc);
+    if (length < 1e-9 || length - sign * r <= 1e-9)
+      return { ok: false, reason: 'degenerate' };
+    const w: UV = [away[0] / length, away[1] / length];
+    const side: UV = [
+      disc.center[0] - sign * w[0] * r,
+      disc.center[1] - sign * w[1] * r
+    ];
+    return from.kind === 'line'
+      ? { ok: true, from: at, to: side }
+      : { ok: true, from: side, to: at };
+  }
+  const span: UV = [
+    to.center[0] - from.center[0],
+    to.center[1] - from.center[1]
+  ];
+  const length = Math.hypot(...span);
+  if (length < 1e-9) return { ok: false, reason: 'degenerate' };
+  // Between two points, the span is true only in one plane parallel to the
+  // view, as an aligned dimension's.
+  if (Math.abs(to.depth - from.depth) > 1e-6 * Math.max(1, length))
+    return { ok: false, reason: 'foreshortened' };
+  const u: UV = [span[0] / length, span[1] / length];
+  const r1 = radius(from);
+  const r2 = radius(to);
+  if (length - sign * (r1 + r2) <= 1e-9)
+    return { ok: false, reason: 'degenerate' };
+  return {
+    ok: true,
+    from: [
+      from.center[0] + sign * u[0] * r1,
+      from.center[1] + sign * u[1] * r1
+    ],
+    to: [to.center[0] - sign * u[0] * r2, to.center[1] - sign * u[1] * r2]
+  };
+}
+
+/** v73: a centre mark, an intersection mark or a centreline, in its view. */
+function resolveGeometryAnnotation(
+  annotation: DrawingGeometryAnnotation,
+  view: DrawingView,
+  bodies: AnnotationBodies,
+  marks: MarkLookup | undefined
+): AnnotationResolution {
+  switch (annotation.kind) {
+    case 'center-mark': {
+      const found = lookupEdge(annotation.edge, view, bodies);
+      if (!found.ok) return failure(found.reason);
+      const circle = faceOnCircle(view, found.edge);
+      if (!circle.ok) return failure(circle.reason);
+      return {
+        ok: true,
+        resolved: {
+          kind: 'center-mark',
+          center: circle.center,
+          radius: circle.radius,
+          label: ''
+        }
+      };
+    }
+    case 'intersection-mark': {
+      const edges: EdgeTopology[] = [];
+      for (const ref of annotation.edges) {
+        const found = lookupEdge(ref, view, bodies);
+        if (!found.ok) return failure(found.reason);
+        edges.push(found.edge);
+      }
+      if (edges[0] === edges[1]) return failure('ambiguous');
+      const crossed = crossing(view, edges);
+      if (!crossed.ok) return failure(crossed.reason);
+      return {
+        ok: true,
+        resolved: {
+          kind: 'intersection-mark',
+          point: crossed.point,
+          from: crossed.near,
+          label: ''
+        }
+      };
+    }
+    case 'centerline': {
+      if (annotation.mode === 'lines') {
+        const lines: [UV, UV][] = [];
+        for (const ref of annotation.edges) {
+          const found = lookupEdge(ref, view, bodies);
+          if (!found.ok) return failure(found.reason);
+          // Midway on the page: an edge sloping into the view still draws
+          // a line there.
+          if (found.edge.curve?.type !== 'LINE') return failure('not-straight');
+          const ends = edgeEndsInPageOrder(view, found.edge);
+          if (!ends) return failure('not-straight');
+          if (
+            Math.hypot(ends[1][0] - ends[0][0], ends[1][1] - ends[0][1]) < 1e-9
+          )
+            return failure('edge-on');
+          lines.push(ends);
+        }
+        const [[a1, b1], [a2, b2]] = lines as [[UV, UV], [UV, UV]];
+        const length = Math.hypot(b1[0] - a1[0], b1[1] - a1[1]);
+        const d: UV = [(b1[0] - a1[0]) / length, (b1[1] - a1[1]) / length];
+        const e2: UV = [b2[0] - a2[0], b2[1] - a2[1]];
+        if (
+          Math.abs(d[0] * e2[1] - d[1] * e2[0]) >
+          1e-6 * Math.max(1, Math.hypot(...e2))
+        )
+          return failure('not-parallel');
+        const n: UV = [-d[1], d[0]];
+        const offset = (p: UV) => p[0] * n[0] + p[1] * n[1];
+        const gap = offset(a2) - offset(a1);
+        if (Math.abs(gap) < 1e-9) return failure('degenerate');
+        // Midway across, spanning both edges along their direction.
+        const along = [a1, b1, a2, b2].map((p) => p[0] * d[0] + p[1] * d[1]);
+        const mid = offset(a1) + gap / 2;
+        const at = (t: number): UV => [
+          d[0] * t + n[0] * mid,
+          d[1] * t + n[1] * mid
+        ];
+        return {
+          ok: true,
+          resolved: {
+            kind: 'centerline',
+            segment: [at(Math.min(...along)), at(Math.max(...along))],
+            label: ''
+          }
+        };
+      }
+      const refs =
+        annotation.mode === 'points'
+          ? [annotation.from, annotation.to]
+          : [...annotation.through];
+      const points: UV[] = [];
+      for (const ref of refs) {
+        const found = pointOf(view, ref, bodies, null, null, marks);
+        if (!found.ok) return failure(found.reason);
+        points.push(found.point.uv);
+      }
+      if (annotation.mode === 'points') {
+        const [a, b] = points as [UV, UV];
+        if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 1e-9)
+          return failure('degenerate');
+        return {
+          ok: true,
+          resolved: { kind: 'centerline', segment: [a, b], label: '' }
+        };
+      }
+      const [a, b, c] = points as [UV, UV, UV];
+      const d2 =
+        2 *
+        (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+      const span = Math.max(
+        Math.hypot(b[0] - a[0], b[1] - a[1]),
+        Math.hypot(c[0] - a[0], c[1] - a[1])
+      );
+      if (Math.abs(d2) <= 1e-9 * Math.max(1, span * span))
+        return failure('collinear');
+      const sq = (p: UV) => p[0] * p[0] + p[1] * p[1];
+      const center: UV = [
+        (sq(a) * (b[1] - c[1]) +
+          sq(b) * (c[1] - a[1]) +
+          sq(c) * (a[1] - b[1])) /
+          d2,
+        (sq(a) * (c[0] - b[0]) +
+          sq(b) * (a[0] - c[0]) +
+          sq(c) * (b[0] - a[0])) /
+          d2
+      ];
+      return {
+        ok: true,
+        resolved: {
+          kind: 'centerline',
+          circle: {
+            center,
+            radius: Math.hypot(a[0] - center[0], a[1] - center[1])
+          },
+          label: ''
+        }
+      };
+    }
+  }
+}
+
 /**
  * What `annotation` measures in `view` of the current model, or why it no
  * longer can. A note without a view needs no model at all.
@@ -756,54 +1522,138 @@ export function resolveDrawingAnnotation(
   annotation: DrawingAnnotation,
   view: DrawingView | undefined,
   bodies: AnnotationBodies,
-  units: UnitSystem
+  units: UnitSystem,
+  /** M01: a hole's callout data, by the hole's feature id. */
+  holes?: HoleCalloutLookup,
+  /** D02 v70: the sheet's number format; absent prints in `units`. */
+  format: DrawingNumberFormat = drawingNumberFormat(undefined, units),
+  /** D02 v73: the sheet's annotations, for points that marks mark. */
+  marks?: MarkLookup,
+  /** D02 v80: the assembly's BOM, for parts lists and balloons. */
+  bom?: SheetBom
 ): AnnotationResolution {
+  if (annotation.kind === 'bom-table') {
+    if (!bom || bom.rows.length === 0) return failure('no-bom');
+    const columns = (annotation.columns ?? DEFAULT_BOM_COLUMNS).map((key) =>
+      bom.columns.find((column) => column.key === key)!
+    );
+    return {
+      ok: true,
+      resolved: {
+        kind: 'bom-table',
+        label: '',
+        header: columns.map((column) => column.label),
+        numeric: columns.map((column) => column.numeric),
+        rows: bom.rows.map((row) =>
+          columns.map((column) => row.cells[column.key])
+        )
+      }
+    };
+  }
+  if (annotation.kind === 'balloon') {
+    if (!view) return failure('not-in-view');
+    const item = bom?.itemByComponent.get(annotation.componentId);
+    if (item === undefined) return failure('not-in-bom');
+    // The number is its row's: an edge of a part in another row would carry
+    // the wrong item number onto the paper. (Copies of one part share a row,
+    // so any of them reads the same number.)
+    const onPart = [...bom!.bodyByComponent].some(
+      ([componentId, bodyId]) =>
+        bodyId === annotation.leader.bodyId &&
+        bom!.itemByComponent.get(componentId) === item
+    );
+    if (!onPart) return failure('not-on-part');
+    const found = lookupEdge(annotation.leader, view, bodies);
+    if (!found.ok) return failure(found.reason);
+    return {
+      ok: true,
+      resolved: {
+        kind: 'balloon',
+        label: String(item),
+        ...leaderOf(view, annotation.leader, found.edge)
+      }
+    };
+  }
   if (annotation.kind === 'note') {
     const label = annotation.text;
     if (!annotation.leader || !view)
       return { ok: true, resolved: { kind: 'note', label } };
     const found = lookupEdge(annotation.leader, view, bodies);
     if (!found.ok) return failure(found.reason);
-    const depths: number[] = [];
-    for (let i = 0; i + 2 < found.edge.points.length; i += 3)
-      depths.push(projectPoint(view, found.edge.points, i).depth);
     return {
       ok: true,
       resolved: {
         kind: 'note',
         label,
-        leader: projectedPolyline(view, found.edge),
-        leaderDepths: depths,
-        leaderEdge: {
-          bodyId: annotation.leader.bodyId,
-          topologyId: found.edge.topologyId
-        }
+        ...leaderOf(view, annotation.leader, found.edge)
       }
     };
   }
   if (!view) return failure('not-in-view');
+  if (isDrawingGeometryAnnotation(annotation))
+    return resolveGeometryAnnotation(annotation, view, bodies, marks);
   // An isometric projection shortens every length by a direction-dependent
   // factor, so a span or angle read off it is not the part's. A circle seen
   // face-on there is true size and may still be dimensioned.
   if (
     view.orientation === 'iso' &&
-    (annotation.kind === 'linear' || annotation.kind === 'angle')
+    (annotation.kind === 'linear' ||
+      annotation.kind === 'angle' ||
+      annotation.kind === 'distance')
   )
     return failure('foreshortened');
   const decimals =
-    annotation.decimals ?? defaultDimensionDecimals(annotation.kind, units);
+    annotation.decimals ??
+    (annotation.kind === 'angle'
+      ? format.angleDecimals
+      : format.lengthDecimals);
+  /** A length in document units, printed. */
+  const length = (n: number, d = decimals) =>
+    writeNumber(n * format.lengthFactor, d, 'length', format, true);
+  const angle = (n: number, d: number) =>
+    writeNumber(n, d, 'angle', format, true);
+  const measuredLength = (symbol: string, n: number): Measured => ({
+    symbol,
+    value: n * format.lengthFactor,
+    decimals,
+    kind: 'length'
+  });
   switch (annotation.kind) {
+    case 'distance': {
+      const ends: Extract<DistanceEnd, { ok: true }>[] = [];
+      for (const target of [annotation.from, annotation.to]) {
+        const end = distanceEnd(target, view, bodies, marks);
+        if (!end.ok) return failure(end.reason);
+        ends.push(end);
+      }
+      const feet = distanceFeet(ends[0]!.end, ends[1]!.end, annotation.extent);
+      if (!feet.ok) return failure(feet.reason);
+      const du = feet.to[0] - feet.from[0];
+      const dv = feet.to[1] - feet.from[1];
+      const value = Math.hypot(du, dv);
+      return {
+        ok: true,
+        resolved: {
+          kind: 'linear',
+          axis: [du / value, dv / value],
+          from: feet.from,
+          to: feet.to,
+          value,
+          ...formatDimension(annotation, measuredLength('', value), format)
+        }
+      };
+    }
     case 'linear': {
-      const frame = DRAWING_VIEW_FRAMES[view.orientation];
+      const frame = drawingViewFrame(view);
       const [along, across] =
         annotation.direction === 'horizontal'
           ? [frame.x, frame.up]
           : annotation.direction === 'vertical'
             ? [frame.up, frame.x]
             : [null, null];
-      const from = pointOf(view, annotation.from, bodies, along, across);
+      const from = pointOf(view, annotation.from, bodies, along, across, marks);
       if (!from.ok) return failure(from.reason);
-      const to = pointOf(view, annotation.to, bodies, along, across);
+      const to = pointOf(view, annotation.to, bodies, along, across, marks);
       if (!to.ok) return failure(to.reason);
       const du = to.point.uv[0] - from.point.uv[0];
       const dv = to.point.uv[1] - from.point.uv[1];
@@ -834,9 +1684,10 @@ export function resolveDrawingAnnotation(
           from: from.point.uv,
           to: to.point.uv,
           value,
-          label: dimensionLabel(
+          ...formatDimension(
             annotation,
-            `${annotation.diameter ? 'Ø' : ''}${formatDrawingNumber(value, decimals)}`
+            measuredLength(annotation.diameter ? 'Ø' : '', value),
+            format
           )
         }
       };
@@ -862,9 +1713,10 @@ export function resolveDrawingAnnotation(
             radius: tube.radius,
             ...(tube.arc ? { arc: tube.arc } : {}),
             value: tube.radius,
-            label: dimensionLabel(
+            ...formatDimension(
               annotation,
-              `R${formatDrawingNumber(tube.radius, decimals)}`
+              measuredLength('R', tube.radius),
+              format
             )
           }
         };
@@ -886,7 +1738,7 @@ export function resolveDrawingAnnotation(
           body?.topology?.faces ?? []
         );
         if (!reading.ok) return failure(reading.reason);
-        const number = (n: number) => formatDrawingNumber(n, decimals);
+        const number = (n: number) => length(n);
         const hole = reading.through
           ? `Ø${number(value)} THRU`
           : `Ø${number(value)} × ${number(reading.holeDepth)} DEEP`;
@@ -897,9 +1749,10 @@ export function resolveDrawingAnnotation(
             center: circle.center,
             radius: circle.radius,
             value,
-            label: dimensionLabel(
+            ...formatDimension(
               annotation,
-              `${hole}, CSK Ø${number(2 * reading.rim.radius)} × ${formatDrawingNumber(reading.angleDeg, ANGLE_DECIMALS)}°`
+              `${hole}, CSK Ø${number(2 * reading.rim.radius)} × ${angle(reading.angleDeg, format.angleDecimals)}`,
+              format
             )
           }
         };
@@ -915,7 +1768,7 @@ export function resolveDrawingAnnotation(
           body?.topology?.faces ?? []
         );
         if (!reading.ok) return failure(reading.reason);
-        const number = (n: number) => formatDrawingNumber(n, decimals);
+        const number = (n: number) => length(n);
         const hole = reading.through
           ? `Ø${number(value)} THRU`
           : `Ø${number(value)} × ${number(reading.holeDepth)} DEEP`;
@@ -926,13 +1779,27 @@ export function resolveDrawingAnnotation(
             center: circle.center,
             radius: circle.radius,
             value,
-            label: dimensionLabel(
+            ...formatDimension(
               annotation,
-              `${hole}, CBORE Ø${number(2 * reading.bore.radius)} × ${number(reading.depth)} DEEP`
+              `${hole}, CBORE Ø${number(2 * reading.bore.radius)} × ${number(reading.depth)} DEEP`,
+              format
             )
           }
         };
       }
+      // M01: a diameter on the rim of a hole's bore reads the hole's
+      // callout (its standard, its thread, cosmetic or cut), where the hole
+      // says more than its diameter. A toleranced diameter states the
+      // diameter it tolerances instead (v68).
+      const callout =
+        annotation.kind === 'diameter' && holes && !annotation.tolerance
+          ? boreCallout(
+              annotationBody(bodies, view, annotation.edge.bodyId),
+              found.edge,
+              circle.radius,
+              holes
+            )
+          : null;
       return {
         ok: true,
         resolved: {
@@ -943,9 +1810,12 @@ export function resolveDrawingAnnotation(
             ? {}
             : { arc: projectedPolyline(view, found.edge) }),
           value,
-          label: dimensionLabel(
+          ...formatDimension(
             annotation,
-            `${annotation.kind === 'radius' ? 'R' : 'Ø'}${formatDrawingNumber(value, decimals)}`
+            callout
+              ? holeCalloutLabel(callout, (n) => length(n))
+              : measuredLength(annotation.kind === 'radius' ? 'R' : 'Ø', value),
+            format
           )
         }
       };
@@ -953,7 +1823,7 @@ export function resolveDrawingAnnotation(
     case 'chamfer': {
       const found = lookupFace(annotation.face, view, bodies);
       if (!found.ok) return failure(found.reason);
-      const frame = DRAWING_VIEW_FRAMES[view.orientation];
+      const frame = drawingViewFrame(view);
       // A planar chamfer is true size only edge-on.
       const normal = found.face.geometry?.normal;
       if (normal && Math.abs(dot(normal, frame.direction)) > 1e-6)
@@ -994,8 +1864,7 @@ export function resolveDrawingAnnotation(
           return failure('foreshortened');
         segments = [chamfer.ends.map((end) => project(end.point)) as [UV, UV]];
       }
-      const lengthDecimals =
-        annotation.decimals ?? defaultDimensionDecimals('chamfer', units);
+      const lengthDecimals = annotation.decimals ?? format.lengthDecimals;
       return {
         ok: true,
         resolved: {
@@ -1003,9 +1872,10 @@ export function resolveDrawingAnnotation(
           segments,
           value: chamfer.size,
           angle: chamfer.angleDeg,
-          label: dimensionLabel(
+          ...formatDimension(
             annotation,
-            `${formatDrawingNumber(chamfer.size, lengthDecimals)} × ${formatDrawingNumber(chamfer.angleDeg, ANGLE_DECIMALS)}°`
+            `${length(chamfer.size, lengthDecimals)} × ${angle(chamfer.angleDeg, format.angleDecimals)}`,
+            format
           )
         }
       };
@@ -1064,9 +1934,10 @@ export function resolveDrawingAnnotation(
           vertex,
           rays: ordered,
           value,
-          label: dimensionLabel(
+          ...formatDimension(
             annotation,
-            `${formatDrawingNumber(value, decimals)}°`
+            { symbol: '', value, decimals, kind: 'angle' },
+            format
           ),
           ...(outside !== undefined
             ? { outside: { index: outside, from: near! } }
@@ -1337,7 +2208,18 @@ export type AnnotationModelReading =
     };
 
 /** The body a dimension point belongs to. */
+/** The body a centre or intersection mark marks: '' across two bodies. */
+function markBody(mark: DrawingAnnotation | undefined): string {
+  if (mark?.kind === 'center-mark') return mark.edge.bodyId;
+  if (mark?.kind === 'intersection-mark')
+    return mark.edges[0].bodyId === mark.edges[1].bodyId
+      ? mark.edges[0].bodyId
+      : '';
+  return '';
+}
+
 function pointBody(point: DrawingPointRef): string {
+  if (point.anchor === 'mark') return '';
   if ('faces' in point) return point.faces[0].bodyId;
   if ('like' in point) return point.face.bodyId;
   return point.edge.bodyId;
@@ -1347,10 +2229,28 @@ export function annotationModelReading(
   annotation: DrawingAnnotation,
   view: DrawingView | undefined,
   bodies: AnnotationBodies,
-  units: UnitSystem
+  units: UnitSystem,
+  /** v73: the sheet's annotations, for points that marks mark. */
+  marks?: MarkLookup
 ): AnnotationModelReading | null {
-  if (!view || annotation.kind === 'note') return null;
-  const resolution = resolveDrawingAnnotation(annotation, view, bodies, units);
+  if (
+    !view ||
+    annotation.kind === 'note' ||
+    annotation.kind === 'distance' ||
+    annotation.kind === 'bom-table' ||
+    annotation.kind === 'balloon' ||
+    isDrawingGeometryAnnotation(annotation)
+  )
+    return null;
+  const resolution = resolveDrawingAnnotation(
+    annotation,
+    view,
+    bodies,
+    units,
+    undefined,
+    undefined,
+    marks
+  );
   if (!resolution.ok) return null;
   if (annotation.kind === 'angle') {
     if (resolution.resolved.kind !== 'angle') return null;
@@ -1364,7 +2264,7 @@ export function annotationModelReading(
       value: resolution.resolved.value
     };
   }
-  const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  const frame = drawingViewFrame(view);
   if (annotation.kind === 'linear') {
     const [along, across] =
       annotation.direction === 'horizontal'
@@ -1372,15 +2272,17 @@ export function annotationModelReading(
         : annotation.direction === 'vertical'
           ? [frame.up, frame.x]
           : [null, null];
-    const from = pointOf(view, annotation.from, bodies, along, across);
-    const to = pointOf(view, annotation.to, bodies, along, across);
+    const from = pointOf(view, annotation.from, bodies, along, across, marks);
+    const to = pointOf(view, annotation.to, bodies, along, across, marks);
     if (!from.ok || !to.ok) return null;
     // A virtual sharp's two faces may lie on two bodies; it then reads as a
-    // span between bodies.
+    // span between bodies. A mark reads as the body it marks.
     const bodyOf = (point: DrawingPointRef) =>
       'faces' in point && point.faces[0].bodyId !== point.faces[1].bodyId
         ? ''
-        : pointBody(point);
+        : point.anchor === 'mark'
+          ? markBody(marks?.(point.annotationId))
+          : pointBody(point);
     return {
       kind: 'linear',
       bodyIds: [bodyOf(annotation.from), bodyOf(annotation.to)],
@@ -1561,6 +2463,161 @@ function placedText(
   };
 }
 
+/** v68: a stacked pair's text size, and the gap between its lines. */
+const STACK_TEXT_MM = 0.7 * ANNOTATION_TEXT_MM;
+const STACK_GAP_MM = 0.4;
+/** v68: space between a label's parts, and a basic frame's margin. */
+const PART_GAP_MM = 0.6;
+const FRAME_MARGIN_MM = 0.8;
+
+interface PlacedLabel {
+  texts: SheetText[];
+  strokes: SheetStroke[];
+  box: AnnotationBox;
+}
+
+/** The width a label takes along its baseline. */
+function labelWidthMm(label: string, text: DimensionText | undefined): number {
+  if (!text) return textWidthMm(sheetSafeText(label), ANNOTATION_TEXT_MM);
+  return labelParts(text).width;
+}
+
+/**
+ * Where each part of a stacked or framed label sits along its baseline,
+ * from its start: the lead, the stack's two lines (raised and lowered about
+ * the lead's middle), then the tail, and the frame's extent.
+ */
+function labelParts(text: DimensionText): {
+  width: number;
+  parts: { text: string; at: number; lift: number; size: number }[];
+  frame: [number, number] | null;
+} {
+  const parts: { text: string; at: number; lift: number; size: number }[] = [];
+  let at = 0;
+  // Sheet text is trimmed, so a part's edge spaces ("2× " before the value,
+  // " TYP" after it) are kept as advances.
+  const space = textWidthMm(' ', ANNOTATION_TEXT_MM);
+  const head = sheetSafeText(text.head);
+  if (head) {
+    parts.push({ text: head, at, lift: 0, size: ANNOTATION_TEXT_MM });
+    at += textWidthMm(head, ANNOTATION_TEXT_MM) + space;
+  }
+  const lead = sheetSafeText(text.lead);
+  const leadWidth = lead ? textWidthMm(lead, ANNOTATION_TEXT_MM) : 0;
+  const margin = text.framed ? FRAME_MARGIN_MM : 0;
+  const frameStart = at;
+  at += margin;
+  if (lead) parts.push({ text: lead, at, lift: 0, size: ANNOTATION_TEXT_MM });
+  at += leadWidth + margin;
+  const frame: [number, number] | null = text.framed ? [frameStart, at] : null;
+  if (text.stack) {
+    if (lead) at += /\s$/.test(text.lead) ? space : PART_GAP_MM;
+    const [upper, lower] = text.stack.map(sheetSafeText) as [string, string];
+    const middle = ANNOTATION_TEXT_MM / 2;
+    const lowerLift = middle - STACK_TEXT_MM - STACK_GAP_MM / 2;
+    parts.push(
+      {
+        text: upper,
+        at,
+        lift: lowerLift + STACK_TEXT_MM + STACK_GAP_MM,
+        size: STACK_TEXT_MM
+      },
+      { text: lower, at, lift: lowerLift, size: STACK_TEXT_MM }
+    );
+    at += Math.max(
+      textWidthMm(upper, STACK_TEXT_MM),
+      textWidthMm(lower, STACK_TEXT_MM)
+    );
+  }
+  const tail = sheetSafeText(text.tail);
+  if (tail) {
+    if (/^\s/.test(text.tail)) at += space;
+    parts.push({ text: tail, at, lift: 0, size: ANNOTATION_TEXT_MM });
+    at += textWidthMm(tail, ANNOTATION_TEXT_MM);
+  }
+  return { width: at, parts, frame };
+}
+
+/**
+ * {@link placedText} for a dimension's label: its plain text when it has no
+ * parts (so a sheet without v68 formats lays out byte-identical), else each
+ * part placed along the same baseline, start-aligned, with a basic
+ * dimension's frame as a closed dimension stroke.
+ */
+function placedLabel(
+  label: string,
+  text: DimensionText | undefined,
+  at: XY,
+  angleDeg: number,
+  align: 'start' | 'middle' | 'end' = 'middle'
+): PlacedLabel {
+  if (!text) {
+    const placed = placedText(label, at, angleDeg, align);
+    return { texts: [placed.text], strokes: [], box: placed.box };
+  }
+  const { width, parts, frame } = labelParts(text);
+  const radians = (angleDeg * Math.PI) / 180;
+  const along: XY = [Math.cos(radians), Math.sin(radians)];
+  const up: XY = [-along[1], along[0]];
+  // A frame's bottom edge clears the dimension line.
+  const lift = TEXT_LIFT_MM + (frame ? FRAME_MARGIN_MM : 0);
+  const shift = align === 'middle' ? -width / 2 : align === 'end' ? -width : 0;
+  const point = (s: number, h: number): XY => [
+    at[0] + along[0] * (s + shift) + up[0] * (lift + h),
+    at[1] + along[1] * (s + shift) + up[1] * (lift + h)
+  ];
+  const texts: SheetText[] = parts.map((part) => {
+    const [x, y] = point(part.at, part.lift);
+    return {
+      x,
+      y,
+      sizeMm: part.size,
+      text: part.text,
+      ...(angleDeg !== 0 ? { angleDeg } : {})
+    };
+  });
+  const strokes: SheetStroke[] = [];
+  const corners: XY[] = [];
+  let low = 0;
+  let high = ANNOTATION_TEXT_MM;
+  for (const part of parts) {
+    low = Math.min(low, part.lift);
+    high = Math.max(high, part.lift + part.size);
+  }
+  if (frame) {
+    const bottom = -FRAME_MARGIN_MM;
+    const top = ANNOTATION_TEXT_MM + FRAME_MARGIN_MM;
+    const box = [
+      point(frame[0], bottom),
+      point(frame[1], bottom),
+      point(frame[1], top),
+      point(frame[0], top)
+    ];
+    strokes.push({ kind: 'dimension', closed: true, points: box.flat() });
+    low = Math.min(low, bottom);
+    high = Math.max(high, top);
+  }
+  corners.push(
+    point(0, low),
+    point(width, low),
+    point(0, high),
+    point(width, high)
+  );
+  const xs = corners.map((corner) => corner[0]);
+  const ys = corners.map((corner) => corner[1]);
+  const pad = 0.8;
+  return {
+    texts,
+    strokes,
+    box: {
+      x: Math.min(...xs) - pad,
+      y: Math.min(...ys) - pad,
+      width: Math.max(...xs) - Math.min(...xs) + 2 * pad,
+      height: Math.max(...ys) - Math.min(...ys) + 2 * pad
+    }
+  };
+}
+
 /** Readable text angle for a line along `direction`: in (−90°, 90°]. */
 function readableAngle(direction: XY): number {
   let angle = (Math.atan2(direction[1], direction[0]) * 180) / Math.PI;
@@ -1610,8 +2667,7 @@ function linearLayout(
   // Along the dimension line: `low` and `high` are the two feet.
   const [low, high] = dot(fa, d) <= dot(fb, d) ? [fa, fb] : [fb, fa];
   const span = dot(high, d) - dot(low, d);
-  const label = placedText(resolved.label, [0, 0], readableAngle(d));
-  const textWidth = textWidthMm(label.text.text, ANNOTATION_TEXT_MM);
+  const textWidth = labelWidthMm(resolved.label, resolved.text);
   // The text sits mid-span unless the placement is beyond either end; the
   // dimension line then runs out under it.
   const along = dot(anchor, d);
@@ -1642,8 +2698,14 @@ function linearLayout(
     arrow(low, arrowsInside ? minus : d),
     arrow(high, arrowsInside ? d : minus)
   );
-  const placed = placedText(resolved.label, centre, readableAngle(d));
-  return { strokes, texts: [placed.text], box: placed.box };
+  const placed = placedLabel(
+    resolved.label,
+    resolved.text,
+    centre,
+    readableAngle(d)
+  );
+  strokes.push(...placed.strokes);
+  return { strokes, texts: placed.texts, box: placed.box };
 }
 
 function radialLayout(
@@ -1716,13 +2778,15 @@ function radialLayout(
     line([c[0], c[1] - mark], [c[0], c[1] + mark])
   );
   const right = u[0] >= 0;
-  const placed = placedText(
+  const placed = placedLabel(
     resolved.label,
+    resolved.text,
     [end[0] + (right ? 1 : -1), end[1]],
     0,
     right ? 'start' : 'end'
   );
-  return { strokes, texts: [placed.text], box: placed.box };
+  strokes.push(...placed.strokes);
+  return { strokes, texts: placed.texts, box: placed.box };
 }
 
 function angleLayout(
@@ -1811,15 +2875,17 @@ function angleLayout(
   });
   const mid = a1 + sweep / 2;
   const reach = radius + 2;
-  const placed = placedText(
+  const placed = placedLabel(
     resolved.label,
+    resolved.text,
     [
       v[0] + Math.cos(mid) * reach,
       v[1] + Math.sin(mid) * reach - ANNOTATION_TEXT_MM / 2 - 1
     ],
     0
   );
-  return { strokes, texts: [placed.text], box: placed.box };
+  strokes.push(...placed.strokes);
+  return { strokes, texts: placed.texts, box: placed.box };
 }
 
 /**
@@ -2016,6 +3082,7 @@ export function layoutAnnotation(
   anchor: XY
 ): AnnotationLayout {
   if (resolved.kind === 'note') return noteLayout(resolved, toPage, anchor);
+  if (resolved.kind === 'bom-table') return bomTableLayout(resolved, anchor);
   if (!toPage) throw new Error('A dimension needs its view.');
   switch (resolved.kind) {
     case 'linear':
@@ -2027,6 +3094,279 @@ export function layoutAnnotation(
       return angleLayout(resolved, toPage, anchor);
     case 'chamfer':
       return chamferLayout(resolved, toPage, anchor);
+    case 'center-mark':
+    case 'intersection-mark':
+    case 'centerline':
+      return geometryLayout(resolved, toPage, k);
+    case 'balloon':
+      return balloonLayout(resolved, toPage, anchor);
+  }
+}
+
+/** v80: the parts list's default columns: item, quantity, part. */
+export const DEFAULT_BOM_COLUMNS: readonly DrawingBomColumnKey[] = [
+  'item',
+  'quantity',
+  'part'
+];
+const BOM_ROW_MM = 6;
+const BOM_PAD_MM = 1.5;
+/** The longest cell a parts list prints before it is cut with "...". */
+const BOM_MAX_CELL_MM = 70;
+
+/**
+ * v80: the parts list as a ruled table, its top-left corner at the
+ * placement: a bold header row, then one row per BOM row, numeric columns
+ * aligned to their end. Thin rules, as a title block's.
+ */
+function bomTableLayout(
+  resolved: Extract<ResolvedAnnotation, { kind: 'bom-table' }>,
+  anchor: XY
+): AnnotationLayout {
+  const size = ANNOTATION_TEXT_MM;
+  const cells = [resolved.header, ...resolved.rows].map((row, index) =>
+    row.map((cell) =>
+      fitText(sheetSafeText(cell), size, BOM_MAX_CELL_MM, index === 0)
+    )
+  );
+  const widths = resolved.header.map(
+    (_, column) =>
+      Math.max(
+        ...cells.map((row, index) =>
+          textWidthMm(row[column] ?? '', size, index === 0)
+        )
+      ) +
+      2 * BOM_PAD_MM
+  );
+  const total = widths.reduce((sum, width) => sum + width, 0);
+  const height = cells.length * BOM_ROW_MM;
+  const [x0, y0] = anchor;
+  const strokes: SheetStroke[] = [
+    {
+      kind: 'thin',
+      closed: true,
+      points: [x0, y0, x0 + total, y0, x0 + total, y0 - height, x0, y0 - height]
+    }
+  ];
+  for (let row = 1; row < cells.length; row += 1)
+    strokes.push({
+      kind: 'thin',
+      points: [x0, y0 - row * BOM_ROW_MM, x0 + total, y0 - row * BOM_ROW_MM]
+    });
+  let x = x0;
+  const texts: SheetText[] = [];
+  widths.forEach((width, column) => {
+    if (column > 0)
+      strokes.push({ kind: 'thin', points: [x, y0, x, y0 - height] });
+    cells.forEach((row, index) => {
+      const text = row[column] ?? '';
+      if (!text) return;
+      const end = resolved.numeric[column] && index > 0;
+      texts.push({
+        x: end ? x + width - BOM_PAD_MM : x + BOM_PAD_MM,
+        y: y0 - (index + 1) * BOM_ROW_MM + (BOM_ROW_MM - size) / 2,
+        sizeMm: size,
+        text,
+        ...(index === 0 ? { bold: true } : {}),
+        ...(end ? { align: 'end' as const } : {})
+      });
+    });
+    x += width;
+  });
+  return {
+    strokes,
+    texts,
+    box: { x: x0, y: y0 - height, width: total, height }
+  };
+}
+
+/** v80: a balloon's circle, at least this radius. */
+const BALLOON_RADIUS_MM = 4;
+
+/**
+ * v80: a balloon: the item number centred in a circle at the placement,
+ * and a leader from the circle's rim to the nearest point of its edge,
+ * ending in an arrow.
+ */
+function balloonLayout(
+  resolved: Extract<ResolvedAnnotation, { kind: 'balloon' }>,
+  toPage: (u: number, v: number) => XY,
+  anchor: XY
+): AnnotationLayout {
+  const text = sheetSafeText(resolved.label);
+  const radius = Math.max(
+    BALLOON_RADIUS_MM,
+    textWidthMm(text, ANNOTATION_TEXT_MM) / 2 + 1.5
+  );
+  const steps = 48;
+  const circle: number[] = [];
+  for (let i = 0; i < steps; i += 1) {
+    const angle = (2 * Math.PI * i) / steps;
+    circle.push(
+      anchor[0] + radius * Math.cos(angle),
+      anchor[1] + radius * Math.sin(angle)
+    );
+  }
+  const strokes: SheetStroke[] = [
+    { kind: 'dimension', closed: true, points: circle }
+  ];
+  // The tip lands only on what the view draws of the edge (see
+  // markHiddenLeaders): inside a detail's circle, and where it shows.
+  const pieces = (resolved.leaderPieces ?? [resolved.leader]).map((flat) => {
+    const points: XY[] = [];
+    for (let i = 0; i + 1 < flat.length; i += 2)
+      points.push(toPage(flat[i]!, flat[i + 1]!));
+    return points;
+  });
+  const tip = nearestOnPieces(pieces, anchor);
+  if (tip) {
+    const length = Math.hypot(tip[0] - anchor[0], tip[1] - anchor[1]);
+    if (length > radius + 1e-6) {
+      const d: XY = [
+        (tip[0] - anchor[0]) / length,
+        (tip[1] - anchor[1]) / length
+      ];
+      const from: XY = [anchor[0] + d[0] * radius, anchor[1] + d[1] * radius];
+      strokes.push(
+        line(from, tip),
+        arrow(tip, d, Math.min(ARROW_LENGTH_MM, length - radius))
+      );
+    }
+  }
+  return {
+    strokes,
+    texts: [
+      {
+        x: anchor[0],
+        y: anchor[1] - ANNOTATION_TEXT_MM / 2,
+        sizeMm: ANNOTATION_TEXT_MM,
+        text,
+        align: 'middle'
+      }
+    ],
+    box: {
+      x: anchor[0] - radius,
+      y: anchor[1] - radius,
+      width: 2 * radius,
+      height: 2 * radius
+    }
+  };
+}
+
+/** v73: how far centre lines run past what they mark, on the paper (ISO 128-20). */
+const CENTRE_LINE_OVERRUN_MM = 2.5;
+/** A centre line shorter than this draws solid: its chain dash would not show. */
+const CHAIN_MIN_MM = 12;
+/** A centre mark's small solid cross, each arm. */
+const CENTRE_CROSS_MM = 1.5;
+/** A mark's pick box, each side of what it marks. */
+const MARK_BOX_MM = 2.5;
+
+function chainOrThin(a: XY, b: XY): SheetStroke {
+  const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  return {
+    kind: length >= CHAIN_MIN_MM ? 'chain' : 'dimension',
+    points: [a[0], a[1], b[0], b[1]]
+  };
+}
+
+function markBox(at: XY): AnnotationBox {
+  return {
+    x: at[0] - MARK_BOX_MM,
+    y: at[1] - MARK_BOX_MM,
+    width: 2 * MARK_BOX_MM,
+    height: 2 * MARK_BOX_MM
+  };
+}
+
+/**
+ * v73: centre marks (centre lines across the circle, run past its rim, and
+ * a small cross at its centre), intersection marks (each edge's thin
+ * extension through the crossing) and centrelines (a chain line run past
+ * its ends, or a chain circle). They state no value, so they have no text;
+ * their box sits on what they mark.
+ */
+function geometryLayout(
+  resolved: Extract<
+    ResolvedAnnotation,
+    { kind: 'center-mark' | 'intersection-mark' | 'centerline' }
+  >,
+  toPage: (u: number, v: number) => XY,
+  k: number
+): AnnotationLayout {
+  const strokes: SheetStroke[] = [];
+  switch (resolved.kind) {
+    case 'center-mark': {
+      const c = toPage(...resolved.center);
+      const reach = resolved.radius * k + CENTRE_LINE_OVERRUN_MM;
+      strokes.push(
+        chainOrThin([c[0] - reach, c[1]], [c[0] + reach, c[1]]),
+        chainOrThin([c[0], c[1] - reach], [c[0], c[1] + reach]),
+        line([c[0] - CENTRE_CROSS_MM, c[1]], [c[0] + CENTRE_CROSS_MM, c[1]]),
+        line([c[0], c[1] - CENTRE_CROSS_MM], [c[0], c[1] + CENTRE_CROSS_MM])
+      );
+      return { strokes, texts: [], box: markBox(c) };
+    }
+    case 'intersection-mark': {
+      const p = toPage(...resolved.point);
+      for (const near of resolved.from) {
+        const q = toPage(...near);
+        const length = Math.hypot(p[0] - q[0], p[1] - q[1]);
+        if (length < 1e-6) continue;
+        const d: XY = [(p[0] - q[0]) / length, (p[1] - q[1]) / length];
+        const start =
+          length > EXTENSION_GAP_MM
+            ? ([
+                q[0] + d[0] * EXTENSION_GAP_MM,
+                q[1] + d[1] * EXTENSION_GAP_MM
+              ] as XY)
+            : q;
+        strokes.push(
+          line(start, [
+            p[0] + d[0] * EXTENSION_OVERSHOOT_MM,
+            p[1] + d[1] * EXTENSION_OVERSHOOT_MM
+          ])
+        );
+      }
+      return { strokes, texts: [], box: markBox(p) };
+    }
+    case 'centerline': {
+      if (resolved.circle) {
+        const c = toPage(...resolved.circle.center);
+        const r = resolved.circle.radius * k;
+        const steps = Math.max(24, Math.min(180, Math.ceil(r)));
+        const points: number[] = [];
+        for (let i = 0; i < steps; i += 1) {
+          const angle = (2 * Math.PI * i) / steps;
+          points.push(c[0] + r * Math.cos(angle), c[1] + r * Math.sin(angle));
+        }
+        strokes.push({ kind: 'chain', closed: true, points });
+        return { strokes, texts: [], box: markBox([c[0], c[1] + r]) };
+      }
+      const [a, b] = resolved.segment!.map((uv) => toPage(...uv)) as [XY, XY];
+      const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const d: XY =
+        length > 1e-9
+          ? [(b[0] - a[0]) / length, (b[1] - a[1]) / length]
+          : [1, 0];
+      strokes.push(
+        chainOrThin(
+          [
+            a[0] - d[0] * CENTRE_LINE_OVERRUN_MM,
+            a[1] - d[1] * CENTRE_LINE_OVERRUN_MM
+          ],
+          [
+            b[0] + d[0] * CENTRE_LINE_OVERRUN_MM,
+            b[1] + d[1] * CENTRE_LINE_OVERRUN_MM
+          ]
+        )
+      );
+      return {
+        strokes,
+        texts: [],
+        box: markBox([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2])
+      };
+    }
   }
 }
 
@@ -2061,26 +3401,79 @@ export function drawnLines(
     const lines: XY[][] = [];
     // Physical edges only: a silhouette is no proof an edge is drawn.
     const runs = projection.edgeRuns ?? projection;
+    // A detail draws, and so offers, only what lies inside its circle.
+    const clip = viewClipCircle(view, units);
     for (const run of view.hiddenLines
       ? [...runs.visible, ...runs.hidden]
       : runs.visible) {
       const line: XY[] = [];
       for (let i = 0; i + 1 < run.length; i += 2)
         line.push(toPage(run[i]!, run[i + 1]!));
-      lines.push(line);
+      if (clip) lines.push(...clipPolylineToCircle(line, clip));
+      else lines.push(line);
     }
     out.set(view.viewId, lines);
   }
   return out;
 }
 
-/** Every annotation of a sheet resolved against the current model. */
+/**
+ * D02 v80: the BOM a sheet reads: the AS03 table, which parts lists and
+ * balloons show, and the body showing each component, which a balloon's
+ * leader must touch for its item number to be that part's.
+ */
+export interface SheetBom extends AssemblyBomTable {
+  bodyByComponent: ReadonlyMap<string, BodyId>;
+}
+
+/** The project's BOM for its sheets; absent with no assembly parts. */
+export function sheetBom(document: ProjectDocument): SheetBom | undefined {
+  const components = document.assembly?.components ?? [];
+  if (components.length === 0) return undefined;
+  const live = assemblyComponentBodies(document, (bodyId) =>
+    isLiveAssemblyBody(document, bodyId)
+  );
+  const bodyByComponent = new Map<string, BodyId>();
+  for (const component of components)
+    bodyByComponent.set(
+      component.id,
+      live.get(component.id) ?? component.bodyId
+    );
+  return { ...assemblyBomTable(deriveAssemblyBom(document)), bodyByComponent };
+}
+
+/** The listed component a body shows: the part a balloon on it names. */
+export function balloonComponent(
+  bom: SheetBom | undefined,
+  bodyId: string | undefined
+): string | undefined {
+  if (!bom || bodyId === undefined) return undefined;
+  for (const [componentId, body] of bom.bodyByComponent)
+    if (body === bodyId && bom.itemByComponent.has(componentId))
+      return componentId;
+  return undefined;
+}
+
+/** v73: a sheet's annotations by id, for points its marks mark. */
+export function sheetMarkLookup(
+  sheet: Pick<DrawingSheet, 'annotations'>
+): MarkLookup {
+  const byId = new Map(
+    (sheet.annotations ?? []).map((entry) => [entry.annotationId, entry])
+  );
+  return (annotationId) => byId.get(annotationId);
+}
+
 export function resolveSheetAnnotations(
   sheet: DrawingSheet,
   bodies: AnnotationBodies,
-  units: UnitSystem
+  units: UnitSystem,
+  holes?: HoleCalloutLookup,
+  /** D02 v80: the assembly's BOM, for parts lists and balloons. */
+  bom?: SheetBom
 ): Map<DrawingAnnotationId, AnnotationResolution> {
   const views = new Map(sheet.views.map((view) => [view.viewId, view]));
+  const marks = sheetMarkLookup(sheet);
   return new Map(
     (sheet.annotations ?? []).map((annotation) => [
       annotation.annotationId,
@@ -2088,7 +3481,11 @@ export function resolveSheetAnnotations(
         annotation,
         annotation.viewId ? views.get(annotation.viewId) : undefined,
         bodies,
-        units
+        units,
+        holes,
+        sheetNumberFormat(sheet, units),
+        marks,
+        bom
       )
     ])
   );
@@ -2108,27 +3505,42 @@ export function markHiddenLeaders(
   bodies: AnnotationBodies
 ): Map<DrawingAnnotationId, AnnotationResolution> {
   const out = new Map(resolutions);
+  // Notes' leaders and (v80) balloons'.
   const leaders = (sheet.annotations ?? []).filter(
-    (annotation) => annotation.kind === 'note' && annotation.leader
+    (annotation) =>
+      (annotation.kind === 'note' && annotation.leader) ||
+      annotation.kind === 'balloon'
   );
   if (leaders.length === 0) return out;
   const drawn = new Map(views.map((entry) => [entry.view.viewId, entry]));
-  const k = drawingPaperPerModelUnit(sheet.scale, units);
   for (const annotation of leaders) {
     const resolution = out.get(annotation.annotationId);
     const entry = annotation.viewId ? drawn.get(annotation.viewId) : undefined;
     if (
       !resolution?.ok ||
-      resolution.resolved.kind !== 'note' ||
+      (resolution.resolved.kind !== 'note' &&
+        resolution.resolved.kind !== 'balloon') ||
       !resolution.resolved.leader ||
       !entry?.projection.bounds
     )
       continue;
+    // A detail (v78) draws at its own scale and only inside its circle: a
+    // leader may point only at what it draws there.
+    const k = viewPaperPerModelUnit(entry.view, sheet, units);
+    const clip = viewClipCircle(entry.view, units);
+    const toPage = viewPageTransform(
+      entry.view,
+      entry.projection.bounds,
+      sheet,
+      units
+    );
     const pieces = ownedLeaderPieces(
       resolution.resolved,
       entry,
       bodies,
       drawnCoincidence(bodies, entry.view.bodyIds, k)
+    ).flatMap((piece) =>
+      clip ? clipPieceToCircle(piece, toPage, clip) : [piece]
     );
     out.set(
       annotation.annotationId,
@@ -2139,6 +3551,54 @@ export function markHiddenLeaders(
             resolved: { ...resolution.resolved, leaderPieces: pieces }
           }
     );
+  }
+  return out;
+}
+
+/**
+ * The parts of a flat `[u, v, …]` piece that lie inside a page circle, each
+ * a `[u0, v0, u1, v1]` segment: a detail (v78) draws only inside its
+ * circle, so a leader may end only there. The page transform is affine, so
+ * a segment's parameter is the same on the page as in (u, v).
+ */
+function clipPieceToCircle(
+  piece: readonly number[],
+  toPage: (u: number, v: number) => XY,
+  clip: { center: XY; radius: number }
+): number[][] {
+  const out: number[][] = [];
+  for (let i = 0; i + 3 < piece.length; i += 2) {
+    const u0 = piece[i]!;
+    const v0 = piece[i + 1]!;
+    const u1 = piece[i + 2]!;
+    const v1 = piece[i + 3]!;
+    const a = toPage(u0, v0);
+    const b = toPage(u1, v1);
+    const d: XY = [b[0] - a[0], b[1] - a[1]];
+    const f: XY = [a[0] - clip.center[0], a[1] - clip.center[1]];
+    const qa = d[0] * d[0] + d[1] * d[1];
+    const qb = 2 * (f[0] * d[0] + f[1] * d[1]);
+    const qc = f[0] * f[0] + f[1] * f[1] - clip.radius * clip.radius;
+    let t0: number;
+    let t1: number;
+    if (qa <= 1e-18) {
+      if (qc > 0) continue;
+      t0 = 0;
+      t1 = 1;
+    } else {
+      const disc = qb * qb - 4 * qa * qc;
+      if (disc < 0) continue;
+      const root = Math.sqrt(disc);
+      t0 = Math.max(0, (-qb - root) / (2 * qa));
+      t1 = Math.min(1, (-qb + root) / (2 * qa));
+      if (t1 < t0) continue;
+    }
+    out.push([
+      u0 + (u1 - u0) * t0,
+      v0 + (v1 - v0) * t0,
+      u0 + (u1 - u0) * t1,
+      v0 + (v1 - v0) * t1
+    ]);
   }
   return out;
 }
@@ -2195,7 +3655,7 @@ function nearestWithDepth(
  * the drawn line is the other edge's, not this one's.
  */
 function ownedLeaderPieces(
-  resolved: Extract<ResolvedAnnotation, { kind: 'note' }>,
+  resolved: Extract<ResolvedAnnotation, { kind: 'note' | 'balloon' }>,
   entry: ComposedView,
   bodies: AnnotationBodies,
   tolerance: number
@@ -2203,7 +3663,7 @@ function ownedLeaderPieces(
   const { view, projection } = entry;
   const leader = uvPoints(resolved.leader ?? []);
   const leaderDepths = resolved.leaderDepths ?? leader.map(() => 0);
-  const frame = DRAWING_VIEW_FRAMES[view.orientation];
+  const frame = drawingViewFrame(view);
   // Every other physical edge of the view's bodies, in (u, v) with depths.
   const others: { points: XY[]; depths: number[] }[] = [];
   for (const bodyId of view.bodyIds) {
@@ -2320,17 +3780,19 @@ export function composeSheetAnnotations(
   const texts: SheetText[] = [];
   const boxes = new Map<DrawingAnnotationId, AnnotationBox>();
   const drawn = new Map(views.map((entry) => [entry.view.viewId, entry]));
-  const k = drawingPaperPerModelUnit(sheet.scale, units);
   for (const annotation of sheet.annotations ?? []) {
     const resolution = resolutions.get(annotation.annotationId);
     if (!resolution?.ok) continue;
     let toPage: ((u: number, v: number) => XY) | null = null;
     let view: DrawingView | undefined;
+    let k = drawingPaperPerModelUnit(sheet.scale, units);
     if (annotation.viewId) {
       const entry = drawn.get(annotation.viewId);
       if (!entry?.projection.bounds) continue;
       view = entry.view;
       toPage = viewPageTransform(view, entry.projection.bounds, sheet, units);
+      // A detail (v78) draws its circles at its own scale.
+      k = viewPaperPerModelUnit(view, sheet, units);
     }
     const layout = layoutAnnotation(
       resolution.resolved,

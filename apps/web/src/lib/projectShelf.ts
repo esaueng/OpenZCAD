@@ -1,14 +1,62 @@
+import { withoutDerivedProjection } from '@openzcad/document-core';
 import {
   compareProjectSummaries,
   isSupportedProjectFormat,
+  persistedDocumentBytes,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   projectOrganization,
   SUPPORTED_PROJECT_FORMATS,
+  type ProjectDocument,
   type ProjectOrganization,
   type ProjectStatus,
   type ProjectSummary
 } from '@openzcad/shared';
 import type { ProjectThumbnailRecord } from './localProjectStore';
+
+/**
+ * A document's size as every store records it: the canonical document,
+ * without its derived projection (see {@link ProjectSummary.documentBytes}).
+ */
+export function measuredDocumentBytes(document: ProjectDocument): number {
+  return persistedDocumentBytes(withoutDerivedProjection(document));
+}
+
+/**
+ * Start-screen summary of a document held on this device, for a row the app
+ * adds before the next listing: a project just created, copied or imported.
+ */
+export function summarizeLocalDocument(
+  document: ProjectDocument,
+  organization?: ProjectOrganization
+): ProjectSummary {
+  return {
+    projectId: document.projectId,
+    name: document.name,
+    lastRevisionId: document.revisions.at(-1)?.revisionId,
+    updatedAt: document.derived.updatedAt,
+    revisionCount: document.checkpoints.length,
+    documentBytes: measuredDocumentBytes(document),
+    ...(organization ? { organization } : {})
+  };
+}
+
+/**
+ * A shelf row moved to a version the app just saved. The size moves with the
+ * version: left as it was, it would describe the version before.
+ */
+export function withSavedVersion(
+  summary: ProjectSummary,
+  document: ProjectDocument,
+  // Measuring serializes the document: a caller inside a state updater, which
+  // React may run more than once, measures first and passes the figure in.
+  documentBytes = measuredDocumentBytes(document)
+): ProjectSummary {
+  return {
+    ...summary,
+    documentVersion: document.version,
+    documentBytes
+  };
+}
 
 /** What a shelf card says for a project stored in a format this build cannot open. */
 export const PROJECT_UPDATE_REQUIRED_LABEL =
@@ -53,6 +101,17 @@ export function thumbnailRecordDescribes(
 }
 
 /**
+ * The version recorded for a card this device downloaded from the account
+ * rather than drew. Which document version the account's image was drawn
+ * from is not known here, and no document version is negative, so
+ * {@link thumbnailRecordDescribes} never takes it for the version a listing
+ * names: the workspace still draws its own card on the next leave, and the
+ * publisher never sends this image back as current. The loader shows it by
+ * its artifact id (see {@link cachedThumbnailSource}).
+ */
+export const ACCOUNT_THUMBNAIL_VERSION = -1;
+
+/**
  * The shelf's preview source: this device's record, upgraded by the account's
  * artifact when the listing names one the record does not carry. Reads a
  * small image and nothing else — never the project document, which for a
@@ -68,6 +127,18 @@ export async function resolveShelfThumbnail(
   host: {
     loadCached(projectId: string): Promise<ProjectThumbnailRecord | null>;
     download(artifactId: string): Promise<string>;
+    /**
+     * Keeps a downloaded account image on this device, replacing `replaces`
+     * (the record this read found) and nothing newer. Without it every
+     * reload downloaded every tile again in any browser that had not drawn
+     * the cards itself, one request (and, for an encrypted project, one
+     * serial decrypt) per tile.
+     */
+    remember?(
+      projectId: string,
+      thumbnail: Omit<ProjectThumbnailRecord, 'projectId'>,
+      replaces: ProjectThumbnailRecord | null
+    ): Promise<unknown>;
   }
 ): Promise<string | null | undefined> {
   // A locked card shows no preview: the account's image of an encrypted
@@ -75,12 +146,29 @@ export async function resolveShelfThumbnail(
   if (projectNeedsUpdate(project)) return undefined;
   const cached = await host.loadCached(project.projectId).catch(() => null);
   const cachedSource = cachedThumbnailSource(cached, project);
-  if (cachedSource !== undefined || !project.thumbnailArtifactId) {
+  const artifactId = project.thumbnailArtifactId;
+  if (cachedSource !== undefined || !artifactId) {
     return cachedSource;
   }
-  const cloud = await host
-    .download(project.thumbnailArtifactId)
-    .catch(() => undefined);
+  const cloud = await host.download(artifactId).catch(() => undefined);
+  if (cloud && host.remember) {
+    // Off the tile's critical path: the card shows now, the write lands
+    // behind it, and a failed write only costs the next load a download.
+    void Promise.resolve()
+      .then(() =>
+        host.remember?.(
+          project.projectId,
+          {
+            source: cloud,
+            artifactId,
+            version: ACCOUNT_THUMBNAIL_VERSION,
+            updatedAt: project.updatedAt
+          },
+          cached
+        )
+      )
+      .catch(() => undefined);
+  }
   // A cached null is not a fallback here: the account holds an image, so the
   // part has geometry, and "No geometry" would be wrong. Placeholder instead.
   return cloud ?? (cached?.source || undefined);
@@ -153,8 +241,20 @@ export function mergeProjectSummaries(
     // The account decides how it stores the project: a device record from
     // before it was encrypted must not make it look openable again.
     const storageFormat = project.storageFormat ?? existing.storageFormat;
+    // A size describes one version. The newer record's own measure wins; an
+    // unmeasured one borrows the other's only when both hold that version,
+    // so a device projection from before sizes were recorded still shows
+    // the account's figure without passing off an older version's.
+    const older = newest === project ? existing : project;
+    const documentBytes =
+      newest.documentBytes ??
+      (newest.documentVersion !== undefined &&
+      older.documentVersion === newest.documentVersion
+        ? older.documentBytes
+        : undefined);
     const summary = {
       ...newest,
+      ...(documentBytes !== undefined ? { documentBytes } : {}),
       ...(pending ? { name: existing.name } : {}),
       ...(thumbnailArtifactId ? { thumbnailArtifactId } : {}),
       ...(organization ? { organization } : {}),

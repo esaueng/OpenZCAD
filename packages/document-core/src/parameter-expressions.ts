@@ -91,6 +91,7 @@ function directEdit(data: DirectEditOperation, rewrite: Rewrite): void {
       fields(data, ['newRadius'], rewrite, 'length');
       return;
     case 'remove-face-feature':
+    case 'remove-faces':
     case 'remove-blends':
       return;
     default:
@@ -194,6 +195,21 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       );
       fields(data, ['starts'], rewrite, 'number');
       return;
+    case 'sheet-metal': {
+      const relief = (value: typeof data.relief) => {
+        if (value) fields(value, ['width', 'extension'], rewrite, 'length');
+      };
+      fields(data, ['thickness', 'bendRadius'], rewrite, 'length');
+      fields(data, ['kFactor'], rewrite, 'number');
+      relief(data.relief);
+      for (const bend of data.bends) {
+        fields(bend, ['angleDeg'], rewrite, 'angle');
+        fields(bend, ['radius'], rewrite, 'length');
+        fields(bend, ['kFactor'], rewrite, 'number');
+        relief(bend.relief);
+      }
+      return;
+    }
     case 'gear':
       // A diametral pitch is teeth per inch of pitch diameter: a number in
       // every unit system. A module or circular pitch is a length.
@@ -277,6 +293,12 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       for (const point of datumAxisPointSources(data.definition))
         if (point.type === 'point') vector(point.point, rewrite, 'length');
       return;
+    case 'standard-part':
+      fields(data, ['length'], rewrite, 'length');
+      vector(data.origin, rewrite, 'length');
+      vector(data.axis, rewrite, null);
+      vector(data.xDirection, rewrite, null);
+      return;
     case 'sketch':
     case 'sweep':
     case 'imported-mesh':
@@ -333,6 +355,9 @@ function sketchObject(data: SketchObjectData, rewrite: Rewrite): void {
     case 'text':
       fields(data, ['size', 'x', 'y'], rewrite, 'length');
       fields(data, ['rotation'], rewrite, 'angle');
+      return;
+    case 'point':
+      fields(data, ['x', 'y'], rewrite, 'length');
       return;
     default:
       data satisfies never;

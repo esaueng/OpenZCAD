@@ -46,6 +46,7 @@ import {
 import {
   TOOL_GROUPS,
   TOOL_META,
+  toolDescription,
   toolDisabledReason,
   toolTitle,
   type ToolAvailability,
@@ -509,10 +510,11 @@ export function CommandCard({
       <Tooltip
         label={meta.label}
         shortcut={shortcut}
-        description={
-          disabledReason ??
-          (from === 'suggested' ? `${meta.hint}. ${SUGGESTED_HELP}` : meta.hint)
-        }
+        description={toolDescription(
+          tool,
+          availability,
+          from === 'suggested' ? `${meta.hint}. ${SUGGESTED_HELP}` : meta.hint
+        )}
       >
         <button
           type="button"
@@ -613,7 +615,9 @@ export function CommandCard({
           {meta.icon}
           <span className="command-tile-description">
             <span>{meta.label}</span>
-            {advanced && <small>{disabledReason ?? meta.hint}</small>}
+            {advanced && (
+              <small>{toolDescription(tool, availability, meta.hint)}</small>
+            )}
           </span>
           {advanced && shortcut && <kbd>{shortcut}</kbd>}
         </button>

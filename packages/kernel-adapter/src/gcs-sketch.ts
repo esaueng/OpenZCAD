@@ -94,6 +94,13 @@ export type ResolvedSketchObject =
       kind: 'spline';
       points: { x: number; y: number }[];
       closed: boolean;
+    }
+  | {
+      /** I01 (schema v59). A lone solver point, named `center`. */
+      objectId: EntityId;
+      kind: 'point';
+      x: number;
+      y: number;
     };
 
 /** Solved geometry read back from the kernel, same shapes as the input. */
@@ -135,8 +142,8 @@ export interface SketchSolveAnchor {
 }
 
 interface ObjectHandles {
-  kind: 'line' | 'circle' | 'arc' | 'ellipse' | 'spline';
-  /** The solver entity; −1 for a spline, which is points only. */
+  kind: 'line' | 'circle' | 'arc' | 'ellipse' | 'spline' | 'point';
+  /** The solver entity; −1 for a spline or a point, which are points only. */
   entity: number;
   points: Partial<Record<'start' | 'end' | 'center', number>>;
   /** A spline's every point, in order. */
@@ -178,6 +185,9 @@ function solvedEntitySize(object: ResolvedSketchObject): number {
       return object.radius;
     case 'ellipse':
       return Math.min(object.radiusX, object.radiusY);
+    case 'point':
+      // A point has no size to collapse.
+      return 1;
     case 'spline': {
       const first = object.points[0];
       return first
@@ -270,6 +280,19 @@ export function solveSketchWithGcs(
         ),
         points: { center }
       });
+    } else if (object.kind === 'point') {
+      handles.set(object.objectId, {
+        kind: 'point',
+        entity: -1,
+        points: {
+          center: kernel.gcsAddPoint(
+            sketch,
+            object.x,
+            object.y,
+            held(object.objectId, 'center')
+          )
+        }
+      });
     } else if (object.kind === 'spline') {
       const pointList = object.points.map((point) =>
         kernel.gcsAddPoint(sketch, point.x, point.y, false)
@@ -321,8 +344,15 @@ export function solveSketchWithGcs(
     return entry;
   };
   const pointHandle = (ref: SketchPointRef): number => {
-    const handle = objectHandles(ref.objectId).points[ref.point];
-    if (handle === undefined) {
+    const points = objectHandles(ref.objectId).points;
+    // Own entries only: a stored point name such as "__proto__" must not
+    // reach an inherited member, and only a solver handle (a number) may be
+    // sent to the kernel.
+    const handle =
+      typeof ref.point === 'string' && Object.hasOwn(points, ref.point)
+        ? points[ref.point]
+        : undefined;
+    if (typeof handle !== 'number') {
       throw new Error(
         `Object ${ref.objectId} has no '${ref.point}' point to constrain.`
       );
@@ -675,6 +705,10 @@ export function solveSketchWithGcs(
         radiusY: params[3] ?? 0,
         rotationDeg: (params[4] ?? 0) / RADIANS_PER_DEGREE
       };
+    }
+    if (entry.kind === 'point') {
+      const at = readPoint(entry.points.center!);
+      return { objectId: object.objectId, kind: 'point', x: at.x, y: at.y };
     }
     if (entry.kind === 'spline') {
       return {

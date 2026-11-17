@@ -483,6 +483,9 @@ function curvesForObject(
       // (`docs/plans/text-feature-plan.md`, design decision 4).
       return [];
     }
+    case 'point':
+      // I01: a sketch point is a position, not a curve; it bounds nothing.
+      return [];
   }
 }
 
@@ -682,7 +685,8 @@ function resolveSketchCurves(
         isSketchBoundaryEntityId(object.id) &&
         object.data.objectKind !== 'rectangle' &&
         object.data.objectKind !== 'polygon' &&
-        object.data.objectKind !== 'text'
+        object.data.objectKind !== 'text' &&
+        object.data.objectKind !== 'point'
       )
         for (const curve of curves)
           curve.boundaryToken = makeSketchPrimitiveBoundaryToken(

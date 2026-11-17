@@ -4,7 +4,8 @@ import {
   expect,
   stubApi,
   expectBodyCount,
-  MODEL_ONLY
+  MODEL_ONLY,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 interface ContinuityFrame {
@@ -122,6 +123,10 @@ for (const [name, normal, axis, amount] of [
         .not.toBeNull();
       const chip = page.getByTestId('direct-manipulation-value');
       await expect(chip).toBeVisible();
+      // Total reads the same number before and after the commit hands over
+      // (an Offset reading restarts at +0 on the moved face), so every frame
+      // of the handoff can be held to the submitted value.
+      await switchFaceOffsetToTotal(page);
       const handle = await canvas.evaluate((element) => ({
         x: Number(element.dataset.e2eHandleX),
         y: Number(element.dataset.e2eHandleY),

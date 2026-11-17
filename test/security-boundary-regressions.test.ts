@@ -217,7 +217,7 @@ describe('workspace and adoption erasure fences', () => {
         workspace.run();
         adoption.run();
         db.prepare(
-          "INSERT INTO account_erasure_requests VALUES (?,'all',1,1)"
+          "INSERT INTO account_erasure_requests (user_id, scope, started_at, updated_at) VALUES (?,'all',1,1)"
         ).run(erasing);
         expect(() =>
           db.prepare('UPDATE project_workspace_sessions SET sequence=2').run()

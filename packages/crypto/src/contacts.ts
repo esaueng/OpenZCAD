@@ -1,11 +1,13 @@
 import {
   ByteReader,
   ByteWriter,
+  asBytes,
   concatBytes,
   copyBytes,
   equalBytes,
   isUint,
   label,
+  utf8,
   type Bytes
 } from './bytes';
 import { publicKeyHash } from './codes';
@@ -17,7 +19,15 @@ import {
 } from './devices';
 import { E2eeError, type E2eeErrorCode } from './errors';
 import { HASH_BYTES, isEnvelopeId } from './header';
-import { sha256 } from './primitives';
+import {
+  GCM_IV_BYTES,
+  GCM_TAG_BYTES,
+  hkdfBaseKey,
+  sha256,
+  subtle,
+  systemRandom,
+  type RandomSource
+} from './primitives';
 import type { SigningPrivateKey } from './external-keys';
 
 /**
@@ -141,6 +151,12 @@ export interface VerifiedContactsList {
   readonly contacts: ReadonlyMap<string, ContactRecord>;
   /** The pin to keep after accepting this list. */
   readonly pin: ContactsListPin;
+  /**
+   * The sealed record chain the entries arrived in (amendment 2026-11-14),
+   * which the next sealed record extends; null for a plaintext list from
+   * before sealing, which must be resealed before it can grow.
+   */
+  readonly sealed: SealedContactsHead | null;
 }
 
 function isHash(value: unknown): value is Uint8Array {
@@ -460,47 +476,19 @@ export async function verifyContactsList(
   chain: readonly SignedContactsEntry[],
   options: VerifyContactsListOptions = {}
 ): Promise<VerifiedContactsList> {
-  if (!Array.isArray(chain) || chain.length === 0) {
-    broken('Contacts list is empty');
-  }
-  if (chain.length > MAX_CONTACTS_ENTRIES) {
-    throw new E2eeError(
-      'limit-exceeded',
-      `A contacts list holds at most ${MAX_CONTACTS_ENTRIES} entries`
-    );
-  }
+  // Copy the chain before the first await, so a caller editing it
+  // meanwhile cannot change what is verified.
+  const captured = captureChain(chain);
   const signaturesFrom = options.signaturesFrom ?? 0;
   if (!isUint(signaturesFrom, MAX_CONTACTS_ENTRIES)) {
     throw new E2eeError('invalid-argument', 'signaturesFrom is not an index');
   }
   const pin = options.pin;
   if (pin !== undefined) checkPin(pin);
-  // Copy the chain before the first await, so a caller editing it
-  // meanwhile cannot change what is verified.
-  const captured = (chain as readonly SignedContactsEntry[]).map((signed) => {
-    if (
-      signed === null ||
-      typeof signed !== 'object' ||
-      !(signed.entry instanceof Uint8Array) ||
-      !(signed.signature instanceof Uint8Array)
-    ) {
-      throw new E2eeError('invalid-argument', 'Not a signed contacts entry');
-    }
-    return {
-      entry: copyBytes(signed.entry),
-      signature: copyBytes(signed.signature)
-    };
-  });
   const { key, raw: identityKey } = await verifyingKey(identityPublicKey);
   const identityKeyHash = await publicKeyHash(identityKey);
-  if (pin && !equalBytes(pin.identityKeyHash, identityKeyHash)) {
-    throw new E2eeError(
-      'context-mismatch',
-      'The identity key is not the one this browser pinned'
-    );
-  }
-  const entries: { entry: ContactsEntry; hash: Bytes }[] = [];
-  const contacts = new Map<string, ContactRecord>();
+  checkPinnedIdentity(pin, identityKeyHash);
+  const decoded: DecodedEntry[] = [];
   for (const [index, signed] of captured.entries()) {
     const entry = decodeContactsEntry(signed.entry);
     if (
@@ -517,7 +505,45 @@ export async function verifyContactsList(
         `Contacts entry ${entry.sequence} is not signed by the identity key`
       );
     }
-    const hash = await contactsEntryHash(signed.entry);
+    decoded.push({ bytes: signed.entry, entry });
+  }
+  return checkEntries(identityKey, identityKeyHash, decoded, pin, null);
+}
+
+function checkPinnedIdentity(
+  pin: ContactsListPin | undefined,
+  identityKeyHash: Uint8Array
+): void {
+  if (pin && !equalBytes(pin.identityKeyHash, identityKeyHash)) {
+    throw new E2eeError(
+      'context-mismatch',
+      'The identity key is not the one this browser pinned'
+    );
+  }
+}
+
+interface DecodedEntry {
+  /** Canonical entry bytes, authenticated by the caller. */
+  readonly bytes: Uint8Array;
+  readonly entry: ContactsEntry;
+}
+
+/**
+ * The list's rules over authenticated entries, oldest first: the chain
+ * starts at sequence 0 and links by hash, every entry names the same user,
+ * every change is allowed, and the list contains `pin`.
+ */
+async function checkEntries(
+  identityKey: Bytes,
+  identityKeyHash: Bytes,
+  decoded: readonly DecodedEntry[],
+  pin: ContactsListPin | undefined,
+  sealed: SealedContactsHead | null
+): Promise<VerifiedContactsList> {
+  const entries: { entry: ContactsEntry; hash: Bytes }[] = [];
+  const contacts = new Map<string, ContactRecord>();
+  for (const { bytes, entry } of decoded) {
+    const hash = await contactsEntryHash(bytes);
     const before = entries.at(-1);
     if (!before) {
       if (entry.sequence !== 0) {
@@ -561,7 +587,8 @@ export async function verifyContactsList(
       identityKeyHash,
       sequence: last.entry.sequence,
       entryHash: last.hash
-    }
+    },
+    sealed
   };
 }
 
@@ -578,4 +605,518 @@ export function contactDeviceListPin(record: ContactRecord): DeviceListPin {
     sequence: record.deviceListHead.sequence,
     entryHash: record.deviceListHead.entryHash
   };
+}
+
+// --- Sealed contacts list (ADR-024 amendment 2026-11-14) -------------------
+
+/**
+ * The contacts list is the account's social graph: who it verified, their
+ * fingerprints and device-list heads, and when. So each entry travels
+ * sealed under the account key, and the server stores only ciphertext.
+ *
+ * A sealed record wraps exactly one canonical entry above, unchanged: the
+ * entry chain, its hashes, every list rule and every pin (including the
+ * contacts head the device-approval exchange carries) are the entries',
+ * so sealing an existing plaintext list keeps every pin valid.
+ *
+ * Layout, big-endian:
+ *
+ *   "OZC" | u8 version = 1 | u32 sequence | u8 (0|32) + previous record
+ *   hash | u32 account-key sequence | 12-byte IV | AES-256-GCM ciphertext
+ *   and tag of a fixed 384-byte plaintext
+ *
+ * The plaintext is `u16 length | canonical entry | zero padding`, so every
+ * record of a list has the same size whatever its action or contact id.
+ * The key is HKDF-SHA-256 of the account key named by the account-key
+ * sequence (`accountKeySequence` of the device list), with an empty salt
+ * and `CONTACTS_LIST_KEY_INFO`. The additional data is
+ * `SEALED_CONTACTS_AAD_LABEL`, the user id, a NUL and every byte before the
+ * ciphertext, so no header field can change and no record can move to
+ * another account. The identity key signs the whole record ("sealed
+ * contacts list" statement), and records chain by `sealedContactsRecordHash`,
+ * so the Worker can check order, links and signatures without the key.
+ *
+ * Account-key rotation reseals nothing: the account-key history keeps every
+ * replaced key reachable from its successor, so a device opens an older
+ * record's key by walking it (`openAccountKeyChain`). Records only move
+ * forward through account keys, and a writer always seals under the current
+ * one, so a removed device reads nothing written after its removal.
+ */
+export const SEALED_CONTACTS_RECORD_VERSION_1 = 1;
+/** HKDF info: distinct from every other account-key derivation. */
+export const CONTACTS_LIST_KEY_INFO = 'OpenZCAD E2EE v1 contacts list key';
+const SEALED_CONTACTS_AAD_LABEL = 'OpenZCAD E2EE v1 sealed contacts entry\0';
+const SEALED_CONTACTS_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x43); // "OZC"
+/** Every sealed record's plaintext: room for the largest canonical entry. */
+export const SEALED_CONTACTS_PLAINTEXT_BYTES = 384;
+const FIXED_HEADER_BYTES = 3 + 1 + 4 + 1;
+const SEALED_BODY_BYTES =
+  4 + GCM_IV_BYTES + SEALED_CONTACTS_PLAINTEXT_BYTES + GCM_TAG_BYTES;
+/** A first record (no previous hash) and every later one. */
+export const SEALED_CONTACTS_RECORD_BYTES = Object.freeze({
+  first: FIXED_HEADER_BYTES + SEALED_BODY_BYTES,
+  next: FIXED_HEADER_BYTES + HASH_BYTES + SEALED_BODY_BYTES
+});
+
+/** What anyone, the Worker included, can read of a sealed record. */
+export interface SealedContactsHeader {
+  readonly sequence: number;
+  /** `sealedContactsRecordHash` of the previous record; null for the first. */
+  readonly previousRecordHash: Bytes | null;
+  /** The device-list `accountKeySequence` of the key that sealed it. */
+  readonly accountKeySequence: number;
+}
+
+/** The newest record of a sealed chain: what the next record extends. */
+export interface SealedContactsHead {
+  readonly sequence: number;
+  readonly recordHash: Bytes;
+  readonly accountKeySequence: number;
+}
+
+/** Whether `bytes` claims to be a sealed record (it may still be invalid). */
+export function isSealedContactsRecord(bytes: Uint8Array): boolean {
+  return (
+    bytes instanceof Uint8Array &&
+    bytes.byteLength >= SEALED_CONTACTS_MAGIC.byteLength &&
+    equalBytes(
+      bytes.subarray(0, SEALED_CONTACTS_MAGIC.byteLength),
+      SEALED_CONTACTS_MAGIC
+    )
+  );
+}
+
+function headerLength(previous: boolean): number {
+  return FIXED_HEADER_BYTES + (previous ? HASH_BYTES : 0) + 4;
+}
+
+/** The header of a sealed record, checked for canonical form and size. */
+export function readSealedContactsHeader(
+  record: Uint8Array
+): SealedContactsHeader {
+  if (!(record instanceof Uint8Array)) {
+    throw new E2eeError('invalid-argument', 'A record must be a Uint8Array');
+  }
+  if (record.byteLength > SEALED_CONTACTS_RECORD_BYTES.next) {
+    throw new E2eeError(
+      'limit-exceeded',
+      'Sealed contacts record is too large'
+    );
+  }
+  const reader = new ByteReader(record, 'Sealed contacts record');
+  if (!equalBytes(reader.bytes(3), SEALED_CONTACTS_MAGIC)) {
+    throw new E2eeError('malformed', 'Not a sealed contacts record');
+  }
+  const version = reader.u8();
+  if (version !== SEALED_CONTACTS_RECORD_VERSION_1) {
+    throw new E2eeError(
+      'unsupported-version',
+      `Sealed contacts record version ${version} is not supported`
+    );
+  }
+  const sequence = reader.u32();
+  const previousLength = reader.u8();
+  if (previousLength !== 0 && previousLength !== HASH_BYTES) {
+    throw new E2eeError('malformed', 'Previous record hash must be 32 bytes');
+  }
+  if ((sequence === 0) !== (previousLength === 0)) {
+    throw new E2eeError(
+      'malformed',
+      'Only the first sealed record (sequence 0) has no previous record'
+    );
+  }
+  const previousRecordHash =
+    previousLength === 0 ? null : copyBytes(reader.bytes(previousLength));
+  const accountKeySequence = reader.u32();
+  if (sequence >= MAX_CONTACTS_ENTRIES) {
+    throw new E2eeError('limit-exceeded', 'Sealed contacts record sequence');
+  }
+  if (
+    record.byteLength !==
+    (previousRecordHash
+      ? SEALED_CONTACTS_RECORD_BYTES.next
+      : SEALED_CONTACTS_RECORD_BYTES.first)
+  ) {
+    throw new E2eeError('malformed', 'Sealed contacts record has a bad size');
+  }
+  return { sequence, previousRecordHash, accountKeySequence };
+}
+
+/** What the next sealed record and the Worker's stored head name. */
+export async function sealedContactsRecordHash(
+  record: Uint8Array
+): Promise<Bytes> {
+  return sha256(concatBytes(label('v1 sealed contacts record hash'), record));
+}
+
+async function contactsListKey(accountKey: Uint8Array): Promise<CryptoKey> {
+  return subtle().deriveKey(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: new Uint8Array(),
+      info: utf8(CONTACTS_LIST_KEY_INFO)
+    },
+    await hkdfBaseKey(accountKey, 'An account key'),
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+function sealedAdditionalData(userId: string, header: Uint8Array): Bytes {
+  return concatBytes(
+    utf8(SEALED_CONTACTS_AAD_LABEL),
+    utf8(userId),
+    new Uint8Array([0]),
+    header
+  );
+}
+
+export interface SealContactsEntryInput {
+  readonly userId: string;
+  /** The device-list `accountKeySequence` of `accountKey`. */
+  readonly accountKeySequence: number;
+  /** The record this one follows; null for the list's first. */
+  readonly previous: SealedContactsHead | null;
+  readonly entry: ContactsEntry;
+}
+
+/** `sealContactsEntry` with an injected random source, for fixed vectors. */
+export async function sealContactsEntryWith(
+  random: RandomSource,
+  accountKey: Uint8Array,
+  input: SealContactsEntryInput
+): Promise<Bytes> {
+  const { userId, accountKeySequence, previous, entry } = input;
+  const inner = encodeContactsEntry(entry);
+  if (entry.userId !== userId) {
+    throw new E2eeError(
+      'invalid-argument',
+      'The contacts entry names another user'
+    );
+  }
+  if (!isUint(accountKeySequence, MAX_U32)) {
+    throw new E2eeError('invalid-argument', 'accountKeySequence must be a u32');
+  }
+  if (
+    previous
+      ? previous.sequence + 1 !== entry.sequence ||
+        !(previous.recordHash instanceof Uint8Array) ||
+        previous.recordHash.byteLength !== HASH_BYTES ||
+        accountKeySequence < previous.accountKeySequence
+      : entry.sequence !== 0
+  ) {
+    throw new E2eeError(
+      'invalid-argument',
+      'A sealed record must follow the previous one, under the same or a newer account key'
+    );
+  }
+  const header = new ByteWriter()
+    .bytes(SEALED_CONTACTS_MAGIC)
+    .u8(SEALED_CONTACTS_RECORD_VERSION_1)
+    .u32(entry.sequence)
+    .u8(previous ? HASH_BYTES : 0);
+  if (previous) header.bytes(previous.recordHash);
+  header.u32(accountKeySequence);
+  // A fresh random IV per record: a list holds at most 1024 records per
+  // account key, far below the 2^32 random-IV bound for AES-GCM.
+  const iv = random(GCM_IV_BYTES);
+  const headerBytes = concatBytes(header.finish(), iv);
+  const plaintext = new Uint8Array(SEALED_CONTACTS_PLAINTEXT_BYTES);
+  new DataView(plaintext.buffer).setUint16(0, inner.byteLength);
+  plaintext.set(inner, 2);
+  const ciphertext = new Uint8Array(
+    await subtle().encrypt(
+      {
+        name: 'AES-GCM',
+        iv: asBytes(iv),
+        additionalData: sealedAdditionalData(userId, headerBytes)
+      },
+      await contactsListKey(accountKey),
+      plaintext
+    )
+  );
+  return concatBytes(headerBytes, ciphertext);
+}
+
+/** Seals one entry under the account key `accountKeySequence` names. */
+export function sealContactsEntry(
+  accountKey: Uint8Array,
+  input: SealContactsEntryInput
+): Promise<Bytes> {
+  return sealContactsEntryWith(systemRandom, accountKey, input);
+}
+
+/**
+ * Opens a sealed record with the account key its header names. Fails with
+ * `authentication-failed` for another key, another account or altered
+ * bytes, and `malformed` when the padded entry inside is not canonical or
+ * does not match the header.
+ */
+export async function openSealedContactsRecord(
+  accountKey: Uint8Array | CryptoKey,
+  userId: string,
+  record: Uint8Array
+): Promise<{
+  readonly header: SealedContactsHeader;
+  readonly bytes: Bytes;
+  readonly entry: ContactsEntry;
+}> {
+  const header = readSealedContactsHeader(record);
+  const bytes = asBytes(record);
+  const split = headerLength(header.previousRecordHash !== null) + GCM_IV_BYTES;
+  const key =
+    accountKey instanceof Uint8Array
+      ? await contactsListKey(accountKey)
+      : accountKey;
+  let plaintext: Bytes;
+  try {
+    plaintext = new Uint8Array(
+      await subtle().decrypt(
+        {
+          name: 'AES-GCM',
+          iv: bytes.subarray(split - GCM_IV_BYTES, split),
+          additionalData: sealedAdditionalData(userId, bytes.subarray(0, split))
+        },
+        key,
+        bytes.subarray(split)
+      )
+    );
+  } catch {
+    throw new E2eeError(
+      'authentication-failed',
+      `Sealed contacts record ${header.sequence} failed authentication: wrong account key or altered bytes`
+    );
+  }
+  const length = new DataView(plaintext.buffer).getUint16(0);
+  if (
+    length > SEALED_CONTACTS_PLAINTEXT_BYTES - 2 ||
+    plaintext.subarray(2 + length).some((byte) => byte !== 0)
+  ) {
+    throw new E2eeError('malformed', 'Sealed contacts record padding');
+  }
+  const inner = copyBytes(plaintext.subarray(2, 2 + length));
+  plaintext.fill(0);
+  const entry = decodeContactsEntry(inner);
+  if (entry.sequence !== header.sequence || entry.userId !== userId) {
+    throw new E2eeError(
+      'malformed',
+      'The sealed contacts entry does not match its record'
+    );
+  }
+  return { header, bytes: inner, entry };
+}
+
+/** The identity key signs a sealed record; ask for a passkey or the recovery key. */
+export async function signSealedContactsRecord(
+  identityPrivateKey: SigningPrivateKey,
+  record: Uint8Array
+): Promise<SignedContactsEntry> {
+  readSealedContactsHeader(record);
+  const bytes = copyBytes(record);
+  return {
+    entry: bytes,
+    signature: await signStatement(
+      identityPrivateKey,
+      'sealed contacts list',
+      bytes
+    )
+  };
+}
+
+/**
+ * Seals and signs `entries` as the records after `previous` (null for a
+ * whole list from its first entry: a new list, or a plaintext list being
+ * resealed), each under `accountKey`.
+ */
+export async function sealContactsEntries(
+  identityPrivateKey: SigningPrivateKey,
+  accountKey: Uint8Array,
+  input: {
+    readonly userId: string;
+    readonly accountKeySequence: number;
+    readonly previous: SealedContactsHead | null;
+    readonly entries: readonly ContactsEntry[];
+  }
+): Promise<SignedContactsEntry[]> {
+  const signed: SignedContactsEntry[] = [];
+  let previous = input.previous;
+  for (const entry of input.entries) {
+    const record = await sealContactsEntry(accountKey, {
+      userId: input.userId,
+      accountKeySequence: input.accountKeySequence,
+      previous,
+      entry
+    });
+    signed.push(await signSealedContactsRecord(identityPrivateKey, record));
+    previous = {
+      sequence: entry.sequence,
+      recordHash: await sealedContactsRecordHash(record),
+      accountKeySequence: input.accountKeySequence
+    };
+  }
+  return signed;
+}
+
+export interface VerifiedSealedContactsChain {
+  readonly identityKey: Bytes;
+  readonly identityKeyHash: Bytes;
+  readonly records: readonly {
+    readonly header: SealedContactsHeader;
+    readonly hash: Bytes;
+  }[];
+  readonly head: SealedContactsHead;
+}
+
+function captureChain(
+  chain: readonly SignedContactsEntry[]
+): SignedContactsEntry[] {
+  if (!Array.isArray(chain) || chain.length === 0) {
+    broken('Contacts list is empty');
+  }
+  if (chain.length > MAX_CONTACTS_ENTRIES) {
+    throw new E2eeError(
+      'limit-exceeded',
+      `A contacts list holds at most ${MAX_CONTACTS_ENTRIES} entries`
+    );
+  }
+  return (chain as readonly SignedContactsEntry[]).map((signed) => {
+    if (
+      signed === null ||
+      typeof signed !== 'object' ||
+      !(signed.entry instanceof Uint8Array) ||
+      !(signed.signature instanceof Uint8Array)
+    ) {
+      throw new E2eeError('invalid-argument', 'Not a signed contacts entry');
+    }
+    return {
+      entry: copyBytes(signed.entry),
+      signature: copyBytes(signed.signature)
+    };
+  });
+}
+
+/**
+ * What can be checked of a sealed list without the account key, so the
+ * Worker checks it too: every record is canonical and identity-signed, the
+ * chain starts at sequence 0 and links by record hash, and records never
+ * move back to an older account key. A plaintext entry anywhere fails
+ * (`malformed`): a list is sealed whole or not at all.
+ */
+export async function verifySealedContactsChain(
+  identityPublicKey: Uint8Array | CryptoKey,
+  chain: readonly SignedContactsEntry[],
+  options: Pick<VerifyContactsListOptions, 'signaturesFrom'> = {}
+): Promise<VerifiedSealedContactsChain> {
+  const captured = captureChain(chain);
+  const signaturesFrom = options.signaturesFrom ?? 0;
+  if (!isUint(signaturesFrom, MAX_CONTACTS_ENTRIES)) {
+    throw new E2eeError('invalid-argument', 'signaturesFrom is not an index');
+  }
+  const { key, raw: identityKey } = await verifyingKey(identityPublicKey);
+  const identityKeyHash = await publicKeyHash(identityKey);
+  const records: { header: SealedContactsHeader; hash: Bytes }[] = [];
+  for (const [index, signed] of captured.entries()) {
+    const header = readSealedContactsHeader(signed.entry);
+    if (
+      index >= signaturesFrom &&
+      !(await statementValid(
+        key,
+        'sealed contacts list',
+        signed.entry,
+        signed.signature
+      ))
+    ) {
+      throw new E2eeError(
+        'authentication-failed',
+        `Sealed contacts record ${header.sequence} is not signed by the identity key`
+      );
+    }
+    const before = records.at(-1);
+    if (
+      header.sequence !== index ||
+      (before &&
+        (!equalBytes(header.previousRecordHash!, before.hash) ||
+          header.accountKeySequence < before.header.accountKeySequence))
+    ) {
+      broken(
+        `Sealed contacts record ${header.sequence} does not follow its predecessor`
+      );
+    }
+    records.push({
+      header,
+      hash: await sealedContactsRecordHash(signed.entry)
+    });
+  }
+  const last = records.at(-1)!;
+  return {
+    identityKey,
+    identityKeyHash,
+    records,
+    head: {
+      sequence: last.header.sequence,
+      recordHash: last.hash,
+      accountKeySequence: last.header.accountKeySequence
+    }
+  };
+}
+
+export interface VerifySealedContactsListOptions {
+  /** The account the list belongs to; bound into every record. */
+  readonly userId: string;
+  /**
+   * The account key a device-list `accountKeySequence` names, from the
+   * account-key history for an older one. Asked once per key; the bytes
+   * are zeroed once the record key is derived.
+   */
+  openKey(accountKeySequence: number): Promise<Uint8Array>;
+  /** The newest entry this browser accepted: the list must contain it. */
+  readonly pin?: ContactsListPin;
+}
+
+/**
+ * `verifyContactsList` for a sealed list: the record chain as
+ * `verifySealedContactsChain` checks it, every record opened under the
+ * account key it names, and the entries inside under every rule and pin of
+ * a plaintext list. The result's pin names entry hashes, as before.
+ */
+export async function verifySealedContactsList(
+  identityPublicKey: Uint8Array | CryptoKey,
+  chain: readonly SignedContactsEntry[],
+  options: VerifySealedContactsListOptions
+): Promise<VerifiedContactsList> {
+  const pin = options.pin;
+  if (pin !== undefined) checkPin(pin);
+  const captured = captureChain(chain);
+  const outer = await verifySealedContactsChain(identityPublicKey, captured);
+  checkPinnedIdentity(pin, outer.identityKeyHash);
+  const keys = new Map<number, CryptoKey>();
+  const decoded: DecodedEntry[] = [];
+  for (const signed of captured) {
+    const { accountKeySequence } = readSealedContactsHeader(signed.entry);
+    let key = keys.get(accountKeySequence);
+    if (!key) {
+      const raw = await options.openKey(accountKeySequence);
+      try {
+        key = await contactsListKey(raw);
+      } finally {
+        raw.fill(0);
+      }
+      keys.set(accountKeySequence, key);
+    }
+    const { bytes, entry } = await openSealedContactsRecord(
+      key,
+      options.userId,
+      signed.entry
+    );
+    decoded.push({ bytes, entry });
+  }
+  return checkEntries(
+    outer.identityKey,
+    outer.identityKeyHash,
+    decoded,
+    pin,
+    outer.head
+  );
 }

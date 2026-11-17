@@ -67,13 +67,24 @@ enable Web Inspector (Settings → Apps → Safari → Advanced) and record
 Safari's Timelines on the open project; the `oz:viewer.bodies` measure
 appears under User Timing, and the rendering frames show per-frame cost.
 
+## Active 1 edit-speed baselines
+
+`scripts/measure-active1-baselines.mjs` re-runs the H02 first-edit-after-reload,
+W01 interaction and large pattern-preview baselines on a quiet host, and with
+`--check` compares their medians with `scripts/active1-budgets.mjs`. It uses
+`perf-holder-reload`, `perf-cad-edit`, `perf-pattern-preview` (the Grid pattern
+card on the ×50 bar) and the Node probe `test/perf/pattern-preview.bench.ts`.
+`OZ_PERF_ANGLE=vulkan` (or `gl`) makes those browser probes render on the
+machine's GPU, and each sample records its WebGL renderer and the host's load
+and memory. See the [baseline record](performance/2026-11-15-active1-baselines.md).
+
 ## Sharding and timing
 
 Both suites use the existing six shards and required E2E completion gate.
-The immutable fleet workflow and its runner restrictions are unchanged.
 The sharder selects files containing the smoke tag, and Playwright selects
 tagged cases within those files. An empty shard fails rather than publishing
-an empty success. Merge candidates still run no browser shards.
+an empty success. Merge candidates run five tagged save/history canaries
+against the combined tree instead of the six shards.
 
 Full measurements live in `test/e2e/shard-weights.json`; smoke measurements
 live in `test/e2e/smoke-shard-weights.json`. Initial smoke weights sum the

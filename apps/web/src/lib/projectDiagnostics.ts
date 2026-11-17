@@ -1,4 +1,5 @@
 import {
+  ownEntry,
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   FEATURE_SUPPRESSED_METADATA_KEY,
   toProjectId,
@@ -143,7 +144,9 @@ export function createProjectDiagnosticBundle(
         !command.kind.startsWith('reference-image.') &&
         // Assembly component, joint and study names are the user's words,
         // and no rebuild reads the assembly.
-        !command.kind.startsWith('assembly.')
+        !command.kind.startsWith('assembly.') &&
+        // Configuration row names are the user's words too.
+        !command.kind.startsWith('configuration.')
     )
     .map(sanitizeCommand);
   const diagnosticDocument: ProjectDocument = {
@@ -170,9 +173,19 @@ export function createProjectDiagnosticBundle(
   delete diagnosticDocument.referenceImages;
   // Component and joint names are the user's own words; no rebuild reads them.
   delete diagnosticDocument.assembly;
+  // F06: row names are the user's words; the table itself stays, since the
+  // active row decides which bodies are shown and exported.
+  if (document.configurations)
+    diagnosticDocument.configurations = {
+      ...document.configurations,
+      rows: document.configurations.rows.map((row, index) => ({
+        ...row,
+        name: `Configuration ${index + 1}`
+      }))
+    };
 
   const bodies = document.bodyOrder.flatMap((bodyId) => {
-    const body = document.derived.bodyRepresentations[bodyId];
+    const body = ownEntry(document.derived.bodyRepresentations, bodyId);
     if (!body) {
       return [];
     }

@@ -440,6 +440,46 @@ test('typed sizes go to the box, not the camera: 100 Tab 60 Tab 6 Enter', { tag:
   expect(move).toBeUndefined();
 });
 
+test('an out-of-range typed size keeps the keypad open and says the range', async ({
+  page
+}) => {
+  // 13 November review I4: Width −5 or 0 closed the keypad with no error,
+  // the chip went back to 30 mm and the refusal ("Box width takes at least
+  // 0.001.") showed only in the bar, with no unit.
+  test.setTimeout(120_000);
+  await openProject(page, null);
+  await page.keyboard.press('b');
+  const bar = page.getByRole('group', { name: 'Box command' });
+  await expect(
+    bar.getByRole('button', { name: 'Done', exact: true })
+  ).toBeEnabled({ timeout: 30_000 });
+  await page.keyboard.type('0');
+  const keypad = page.locator('.numeric-keypad');
+  const width = keypad.getByRole('textbox', { name: 'Width', exact: true });
+  await expect(width).toHaveValue('0');
+  await page.keyboard.press('Enter');
+  await expect(keypad).toHaveCount(1);
+  await expect(width).toHaveValue('0');
+  await expect(width).toBeFocused();
+  await expect(keypad.getByRole('alert')).toHaveText(
+    /^Width must be (?:at least|more than) [\d.]+ mm\.$/
+  );
+  await expect(page.getByTestId('command-handle-width')).toContainText(
+    'Width 30 mm'
+  );
+  // Still refused on the bar, so Done does not build the old 30 mm.
+  await expect(
+    bar.getByRole('button', { name: 'Done', exact: true })
+  ).toBeDisabled();
+  await width.fill('40');
+  await expect(keypad.getByRole('alert')).toHaveCount(0);
+  await page.keyboard.press('Enter');
+  await expect(keypad).toHaveCount(0);
+  await expect(page.getByTestId('command-handle-width')).toContainText(
+    'Width 40 mm'
+  );
+});
+
 test('a cylinder takes typed sizes the same way, and Escape puts a value back', async ({
   page
 }) => {

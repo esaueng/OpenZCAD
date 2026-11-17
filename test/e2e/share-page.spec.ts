@@ -4,6 +4,7 @@ import { ENCRYPTED_INVITATION_SESSION_KEY } from '../../apps/web/src/lib/e2ee/en
 import {
   test,
   expect,
+  shareLoadResponse,
   stubAnonymousApi,
   stubApi,
   stubAssistant,
@@ -27,7 +28,7 @@ test('a failed replacement preserves the previous workspace and its pending assi
   page.on('request', (request) => {
     if (request.url().endsWith('/api/assistant/proposals')) requested = true;
   });
-  await page.route('**/api/share/*', (route) =>
+  await page.route('**/api/share', (route) =>
     route.fulfill({ status: 404, json: { error: 'Unavailable' } })
   );
   await page.goto('/');
@@ -84,7 +85,7 @@ for (const pending of [false, true]) {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    await page.route('**/api/share/*', async (route) => {
+    await page.route('**/api/share', async (route) => {
       requested = true;
       if (pending) await gate;
       await route.fulfill(
@@ -125,7 +126,7 @@ for (const pending of [false, true]) {
         )
       ).toBe(invitation);
       if (pending) {
-        const response = page.waitForResponse(/\/api\/share\//);
+        const response = shareLoadResponse(page);
         release();
         await response;
         // The superseded request must get a chance to process its response.
@@ -176,7 +177,7 @@ for (const link of [
     await stubAnonymousApi(page);
     const shareReads: string[] = [];
     page.on('request', (request) => {
-      if (/\/api\/(e2ee\/)?share\//.test(request.url()))
+      if (/\/api\/(e2ee\/)?share(\/|$)/.test(new URL(request.url()).pathname))
         shareReads.push(request.url());
     });
     await page.goto(`/#share=${link}`);
@@ -207,10 +208,11 @@ for (const link of [token, encrypted]) {
     page
   }) => {
     await stubAnonymousApi(page);
-    await page.route('**/api/**/share/*', (route) =>
+    // Both loads carry the token in a header, never in the path.
+    await page.route('**/api/e2ee/share', (route) =>
       route.fulfill({ status: 404, json: { error: 'Unavailable' } })
     );
-    await page.route('**/api/share/*', (route) =>
+    await page.route('**/api/share', (route) =>
       route.fulfill({ status: 404, json: { error: 'Unavailable' } })
     );
     await page.goto(`/#share=${link}`);
@@ -236,7 +238,7 @@ test('a network failure can be retried into the shared model without going home'
     toUserId('owner')
   );
   let reads = 0;
-  await page.route('**/api/share/*', (route) => {
+  await page.route('**/api/share', (route) => {
     reads++;
     return reads === 1
       ? route.abort('internetdisconnected')
@@ -253,6 +255,10 @@ test('a network failure can be retried into the shared model without going home'
     page.getByRole('heading', { name: 'We couldn’t open this shared model' })
   ).toBeVisible();
   await expect(page.getByRole('main')).toContainText('Check your connection');
+  // The transport's own words sit under Details, not in the message.
+  await expect(page.locator('.share-page-message')).not.toContainText(
+    'Failed to fetch'
+  );
   await page.getByRole('button', { name: 'Try again' }).click();
   await expect(page.locator('.breadcrumb')).toContainText(document.name);
   await expect(
@@ -261,6 +267,26 @@ test('a network failure can be retried into the shared model without going home'
   await expect(page.getByRole('main', { name: 'Shared model' })).toHaveCount(0);
   expect(reads).toBe(2);
   expect(new URL(page.url()).hash).toBe(`#share=${token}`);
+});
+
+test('a server failure does not blame the connection', async ({ page }) => {
+  // 13 November review I3: a 500 read "Internal error." over "Check your
+  // connection and try again".
+  await stubAnonymousApi(page);
+  await page.route('**/api/share', (route) =>
+    route.fulfill({ status: 500, json: { error: 'Internal error' } })
+  );
+  await page.goto(`/#share=${token}`);
+  const main = page.getByRole('main');
+  await expect(
+    page.getByRole('heading', { name: 'We couldn’t open this shared model' })
+  ).toBeVisible();
+  await expect(main).toContainText('OpenZCAD’s server had a problem.');
+  await expect(main).not.toContainText('Check your connection');
+  await main.getByText('Details').click();
+  await expect(main.locator('.failure-details code')).toHaveText(
+    '500: Internal error'
+  );
 });
 
 test('loading a share hides the shelf and Back cancels a late completion', async ({
@@ -276,7 +302,7 @@ test('loading a share hides the shelf and Back cancels a late completion', async
     release = resolve;
   });
   let requested = false;
-  await page.route('**/api/share/*', async (route) => {
+  await page.route('**/api/share', async (route) => {
     requested = true;
     await gate;
     await route.fulfill({
@@ -295,7 +321,7 @@ test('loading a share hides the shelf and Back cancels a late completion', async
     await expect.poll(() => requested).toBe(true);
     await expect(page.getByRole('tab', { name: /^Projects/ })).toHaveCount(0);
     await page.getByRole('button', { name: 'Back to projects' }).click();
-    const response = page.waitForResponse(/\/api\/share\//);
+    const response = shareLoadResponse(page);
     release();
     await response;
     await expect(page.getByRole('tab', { name: 'Projects 0' })).toBeVisible();
@@ -322,8 +348,8 @@ test('a newer share replaces an error and ignores an older delayed failure', asy
     release = resolve;
   });
   let requested = false;
-  await page.route('**/api/share/*', async (route) => {
-    if (route.request().url().endsWith(token)) {
+  await page.route('**/api/share', async (route) => {
+    if (route.request().headers()['x-openzcad-share-token'] === token) {
       requested = true;
       await gate;
       await route.fulfill({ status: 503, json: { error: 'Old failure' } });
@@ -350,7 +376,7 @@ test('a newer share replaces an error and ignores an older delayed failure', asy
       window.location.hash = `share=${link}`;
     }, latest);
     await expect(page.locator('.breadcrumb')).toContainText(document.name);
-    const response = page.waitForResponse(/\/api\/share\/a+/);
+    const response = shareLoadResponse(page, token);
     release();
     await response;
     await expect(page.locator('.breadcrumb')).toContainText(document.name);

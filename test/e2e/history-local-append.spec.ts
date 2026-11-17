@@ -6,7 +6,8 @@ import {
   expect,
   stubApi,
   expectBodyCount,
-  modelPanel
+  modelPanel,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 test(
@@ -158,15 +159,15 @@ test(
         );
     const selected = await selection();
     await notice.press('Enter');
-    await expect(page.getByRole('dialog', { name: 'Total value' })).toHaveCount(
-      0
-    );
+    await expect(page.locator('.numeric-keypad')).toHaveCount(0);
     await expect.poll(inside).toBe(true);
     expect(await selection()).toEqual(selected);
     await expect(
       panel.getByRole('button', { name: /Show new operation:/ })
     ).toHaveCount(0);
     // The untouched Total prefill is a cancel/no-op, not another history arrival.
+    // (A face starts on Offset, whose field starts empty; Total prefills.)
+    await switchFaceOffsetToTotal(page);
     await page.getByTestId('direct-manipulation-value').click();
     const keypad = page.getByRole('dialog', { name: 'Total value' });
     await keypad.getByRole('button', { name: 'Apply total' }).click();

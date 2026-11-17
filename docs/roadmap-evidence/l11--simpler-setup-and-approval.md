@@ -1,0 +1,5 @@
+---
+row: L11
+---
+
+Simpler setup, unlock and device approval (plan `docs/plans/l11-encryption-ux-simplification.md`, ADR-024 amendment 2026-11-16): setup is one guided dialog (loss warning, recovery key saved and typed back in full, an optional passkey made with the key already in hand, then "Encrypt new projects" ticked by default); every key-authorized action confirms in one dialog with a passkey first and errors at the field; Settings › Encryption shows one status line and folds identity, recovery and beta tools under Advanced. Approving a device always certifies it (passkey or recovery key), so approved devices can save; existing read-only devices show as not finished. The new device's QR code is an `#approve-device=` link a phone's camera app opens straight into the approval, checked against the request's full key hash. Regression evidence: `test/e2ee-account-keys.test.ts` (approval always certifies), `deviceApprovalLink.test.ts`, `AuthorizeDialog.test.tsx`, `SetupDialog.test.tsx`, `ApprovalRequests.test.tsx`, `encryption-device-approval.spec.ts` (QR link approval, legacy read-only), `encryption-settings.spec.ts`, `encryption-passkeys.spec.ts`.

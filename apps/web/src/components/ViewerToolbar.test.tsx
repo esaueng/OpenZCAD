@@ -48,7 +48,8 @@ function renderToolbar(
       onToggleGrid={noop}
       onFit={noop}
       onView={noop}
-      onCycleDisplayMode={noop}
+      onDisplayMode={noop}
+      onToggleXray={noop}
       onToggleProjection={noop}
       onToggleSection={noop}
       onSectionPlane={noop}
@@ -103,7 +104,8 @@ describe('the viewer bar as one tab stop', () => {
         onToggleGrid={noop}
         onFit={noop}
         onView={noop}
-        onCycleDisplayMode={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
         onToggleProjection={noop}
         onToggleSection={noop}
         onSectionPlane={noop}
@@ -247,7 +249,8 @@ describe('Measure on the viewer bar', () => {
         measuring={measuring}
         {...(onMeasure ? { onMeasure } : {})}
         onView={noop}
-        onCycleDisplayMode={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
         onToggleProjection={noop}
         onToggleSection={noop}
         onSectionPlane={noop}
@@ -284,6 +287,46 @@ describe('Measure on the viewer bar', () => {
   });
 });
 
+describe('Section with nothing to cut', () => {
+  // I49: Section switched on in an empty project, showed no controls, and
+  // the cut then carried into the next mode with nothing to say it was on.
+  it('stays off and says why', () => {
+    const noop = () => undefined;
+    const onToggleSection = vi.fn();
+    render(
+      <ViewerToolbar
+        settings={{ ...settings, sectionView: undefined }}
+        projection="perspective"
+        canUndo={false}
+        canRedo={false}
+        sectionRange={null}
+        onUndo={noop}
+        onRedo={noop}
+        onToggleGrid={noop}
+        onFit={noop}
+        onView={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
+        onToggleProjection={noop}
+        onToggleSection={onToggleSection}
+        nothingToSection
+        onSectionPlane={noop}
+        onSectionOffset={noop}
+        onSectionCommit={noop}
+        onExportSectionDxf={noop}
+        sectionOutline={{ kind: 'clipping' }}
+        units="mm"
+      />
+    );
+    const button = screen.getByRole('button', {
+      name: /^Section view — now: Off$/
+    });
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(button);
+    expect(onToggleSection).not.toHaveBeenCalled();
+  });
+});
+
 describe('Orbit mode on the viewer bar', () => {
   function renderWithOrbit(
     orbitMode: ViewerSettings['orbitMode'],
@@ -306,7 +349,8 @@ describe('Orbit mode on the viewer bar', () => {
         onToggleGrid={noop}
         onFit={noop}
         onView={noop}
-        onCycleDisplayMode={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
         onToggleProjection={noop}
         {...(onToggleOrbitMode ? { onToggleOrbitMode } : {})}
         onToggleSection={noop}
@@ -368,7 +412,8 @@ describe('Undo at the oldest kept step', () => {
           onToggleGrid={noop}
           onFit={noop}
           onView={noop}
-          onCycleDisplayMode={noop}
+          onDisplayMode={noop}
+          onToggleXray={noop}
           onToggleProjection={noop}
           onToggleSection={noop}
           onSectionPlane={noop}
@@ -425,7 +470,8 @@ describe('the section button and its panel', () => {
       onToggleGrid: noop,
       onFit: noop,
       onView: noop,
-      onCycleDisplayMode: noop,
+      onDisplayMode: noop,
+      onToggleXray: noop,
       onToggleProjection: noop,
       onToggleSection: handlers.onToggleSection ?? noop,
       onSectionPlane: handlers.onSectionPlane ?? noop,
@@ -727,7 +773,8 @@ describe('the standard views flyout', () => {
         onToggleGrid={noop}
         onFit={noop}
         onView={noop}
-        onCycleDisplayMode={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
         onToggleProjection={noop}
         onToggleSection={noop}
         onSectionPlane={noop}
@@ -748,7 +795,35 @@ describe('the standard views flyout', () => {
     expect(saved().queryByRole('button', { name: 'Go to View 2' })).toBeNull();
     fireEvent.click(saved().getByRole('button', { name: /Save view/ }));
     expect(capture).toHaveBeenCalledTimes(1);
-    expect(onStatus).toHaveBeenLastCalledWith('Saved View 2.');
+    expect(onStatus).toHaveBeenLastCalledWith(
+      'Saved View 2 · type a name, or Enter to keep it.'
+    );
+    // I54: the new view is named in place, and the keys typed into the name
+    // never reach the workspace's shortcuts.
+    const name = saved().getByRole('textbox', { name: 'Name View 2' });
+    expect(document.activeElement).toBe(name);
+    const shortcut = vi.fn();
+    window.addEventListener('keydown', shortcut);
+    fireEvent.change(name, { target: { value: 'Bolt side' } });
+    fireEvent.keyDown(name, { key: 's' });
+    expect(shortcut).not.toHaveBeenCalled();
+    window.removeEventListener('keydown', shortcut);
+    fireEvent.keyDown(name, { key: 'Enter' });
+    expect(onStatus).toHaveBeenLastCalledWith('Renamed View 2 to Bolt side.');
+    const renamed = saved().getByRole('button', { name: 'Go to Bolt side' });
+    // Named from the keyboard, the keyboard stays on the row.
+    expect(document.activeElement).toBe(renamed);
+    // Escape puts a rename away unchanged and leaves the flyout open.
+    fireEvent.doubleClick(renamed);
+    const again = saved().getByRole('textbox', { name: 'Name Bolt side' });
+    fireEvent.change(again, { target: { value: 'Discarded' } });
+    fireEvent.keyDown(again, { key: 'Escape' });
+    fireEvent.blur(again);
+    expect(onStatus).toHaveBeenLastCalledWith('Renamed View 2 to Bolt side.');
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    expect(document.activeElement).toBe(
+      saved().getByRole('button', { name: 'Go to Bolt side' })
+    );
     // Going to a view closes the panel and returns the keyboard.
     fireEvent.click(saved().getByRole('button', { name: 'Go to View 1' }));
     expect(onApply).toHaveBeenCalledWith(
@@ -775,7 +850,8 @@ describe('the standard views flyout', () => {
         onToggleGrid={noop}
         onFit={noop}
         onView={onView}
-        onCycleDisplayMode={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
         onToggleProjection={noop}
         onToggleSection={noop}
         onSectionPlane={noop}
@@ -798,6 +874,44 @@ describe('the standard views flyout', () => {
     expect(onView).toHaveBeenCalledWith('top');
     expect(trigger).toHaveFocus();
   });
+
+  it('steps aside when a shortcut arms a tool (I54)', () => {
+    // S pressed with the flyout open armed Sketch under it, and the flyout
+    // stayed over the stage.
+    const noop = () => undefined;
+    render(
+      <ViewerToolbar
+        settings={{ ...settings, sectionView: undefined }}
+        projection="perspective"
+        canUndo={false}
+        canRedo={false}
+        sectionRange={null}
+        onUndo={noop}
+        onRedo={noop}
+        onToggleGrid={noop}
+        onFit={noop}
+        onView={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
+        onToggleProjection={noop}
+        onToggleSection={noop}
+        onSectionPlane={noop}
+        onSectionOffset={noop}
+        onSectionCommit={noop}
+        onExportSectionDxf={noop}
+        sectionOutline={{ kind: 'clipping' }}
+        units="mm"
+      />
+    );
+    const trigger = screen.getByRole('button', { name: 'Standard views' });
+    fireEvent.click(trigger);
+    // Tab and the modifiers move within it; they are not shortcuts.
+    fireEvent.keyDown(trigger, { key: 'Tab' });
+    fireEvent.keyDown(trigger, { key: 's', ctrlKey: true });
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.keyDown(trigger, { key: 's' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  });
 });
 
 describe('the section view help', () => {
@@ -815,7 +929,8 @@ describe('the section view help', () => {
         onToggleGrid={noop}
         onFit={noop}
         onView={noop}
-        onCycleDisplayMode={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
         onToggleProjection={noop}
         onToggleSection={noop}
         onSectionPlane={noop}
@@ -865,7 +980,8 @@ describe('touch modifier toggles', () => {
         onToggleGrid={noop}
         onFit={noop}
         onView={noop}
-        onCycleDisplayMode={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
         onToggleProjection={noop}
         onToggleSection={noop}
         onSectionPlane={noop}
@@ -947,7 +1063,8 @@ describe('the phone rail’s More view tools', () => {
             onToggleGrid={noop}
             onFit={noop}
             onView={noop}
-            onCycleDisplayMode={noop}
+            onDisplayMode={noop}
+            onToggleXray={noop}
             onToggleProjection={noop}
             onToggleSection={noop}
             onSectionPlane={noop}

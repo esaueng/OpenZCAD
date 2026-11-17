@@ -9,14 +9,16 @@ import {
   type RefObject
 } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronDown, Plus } from 'lucide-react';
+import { Check, ChevronDown, Ellipsis, Plus } from 'lucide-react';
 import {
   DRAWING_PAPER_LABELS,
+  MAX_DRAWING_TEXT_LENGTH,
   formatDrawingScale,
   type DrawingSheet,
   type DrawingSheetId
 } from '@openzcad/shared';
 import { useMenuKeyboard } from '../lib/useMenuKeyboard';
+import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 
 export interface DrawingSheetTabsProps {
   sheets: readonly DrawingSheet[];
@@ -25,6 +27,99 @@ export interface DrawingSheetTabsProps {
   onCreate(): void;
   createDisabled: boolean;
   createTitle: string;
+  /**
+   * Sheet edits from a tab's menu (right-click, Shift+F10, or the Sheet
+   * actions button) and by dragging a tab (review I62). Without them the
+   * strip only selects.
+   */
+  onRename?(sheetId: DrawingSheetId, name: string): void;
+  onDuplicate?(sheetId: DrawingSheetId): void;
+  onMove?(sheetId: DrawingSheetId, index: number): void;
+  onDelete?(sheetId: DrawingSheetId): void;
+  /** Why the sheet edits are unavailable, or null when they are. */
+  editDisabledReason?: string | null;
+}
+
+interface TabMenu {
+  sheetId: DrawingSheetId;
+  x: number;
+  y: number;
+}
+
+function sheetMenuItems(
+  index: number,
+  count: number,
+  props: DrawingSheetTabsProps,
+  editable: boolean
+): ContextMenuItem[] {
+  const why = props.editDisabledReason ?? undefined;
+  const item = (
+    id: string,
+    label: string,
+    available: boolean,
+    extra: Partial<ContextMenuItem> = {}
+  ): ContextMenuItem => ({
+    id,
+    label,
+    disabled: !editable || !available,
+    ...(!editable && why ? { detail: why } : {}),
+    ...extra
+  });
+  return [
+    item('rename', 'Rename', Boolean(props.onRename), { shortcut: 'F2' }),
+    item('duplicate', 'Duplicate', Boolean(props.onDuplicate)),
+    item('move-left', 'Move left', Boolean(props.onMove) && index > 0, {
+      section: true
+    }),
+    item(
+      'move-right',
+      'Move right',
+      Boolean(props.onMove) && index < count - 1
+    ),
+    item('delete', 'Delete sheet', Boolean(props.onDelete), {
+      danger: true,
+      section: true
+    })
+  ];
+}
+
+/** A tab's name edited in place: Enter or leaving saves, Escape keeps it. */
+function SheetNameField({
+  name,
+  onDone
+}: {
+  name: string;
+  onDone(name: string | null): void;
+}) {
+  const [draft, setDraft] = useState(name);
+  const done = useRef(false);
+  const finish = (value: string | null) => {
+    if (done.current) return;
+    done.current = true;
+    onDone(value);
+  };
+  return (
+    <input
+      className="drawing-sheet-tab-rename"
+      aria-label={`Rename ${name}`}
+      value={draft}
+      maxLength={MAX_DRAWING_TEXT_LENGTH}
+      autoFocus
+      onFocus={(event) => event.currentTarget.select()}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => finish(draft.trim() || null)}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          finish(draft.trim() || null);
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          finish(null);
+        }
+      }}
+    />
+  );
 }
 
 /** The short paper name a tab and the list show: "A3", "ANSI B". */
@@ -46,6 +141,13 @@ export function DrawingSheetTabs(props: DrawingSheetTabsProps) {
   const listButtonRef = useRef<HTMLButtonElement | null>(null);
   const [edges, setEdges] = useState({ before: false, after: false });
   const [listOpen, setListOpen] = useState(false);
+  const [menu, setMenu] = useState<TabMenu | null>(null);
+  const [renaming, setRenaming] = useState<DrawingSheetId | null>(null);
+  const [dragging, setDragging] = useState<DrawingSheetId | null>(null);
+  const [dropTarget, setDropTarget] = useState<DrawingSheetId | null>(null);
+  const editable =
+    Boolean(props.onRename || props.onMove || props.onDelete) &&
+    !props.editDisabledReason;
   const mixedPaper = new Set(sheets.map((entry) => entry.paper.size)).size > 1;
   const overflowing = edges.before || edges.after;
 
@@ -115,8 +217,36 @@ export function DrawingSheetTabs(props: DrawingSheetTabsProps) {
   }, []);
 
   // Arrow keys move between tabs, as a tablist promises.
+  const tabElement = (sheetId: DrawingSheetId) =>
+    stripRef.current?.querySelector<HTMLElement>(
+      `[data-sheet-id="${sheetId}"]`
+    ) ?? null;
+
+  const openMenuAt = (sheetId: DrawingSheetId, anchor: HTMLElement | null) => {
+    const rect = anchor?.getBoundingClientRect();
+    setMenu({
+      sheetId,
+      x: rect ? rect.left : 0,
+      y: rect ? rect.bottom + 2 : 0
+    });
+  };
+
   const onTabKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (renaming) return;
     const index = sheets.findIndex((entry) => entry.sheetId === activeId);
+    if (
+      event.key === 'ContextMenu' ||
+      (event.key === 'F10' && event.shiftKey)
+    ) {
+      event.preventDefault();
+      openMenuAt(activeId, tabElement(activeId));
+      return;
+    }
+    if (event.key === 'F2' && editable && props.onRename) {
+      event.preventDefault();
+      setRenaming(activeId);
+      return;
+    }
     let next: number | null = null;
     if (event.key === 'ArrowRight') next = (index + 1) % sheets.length;
     else if (event.key === 'ArrowLeft')
@@ -146,8 +276,23 @@ export function DrawingSheetTabs(props: DrawingSheetTabsProps) {
         onScroll={measure}
         onKeyDown={onTabKeyDown}
       >
-        {sheets.map((entry) => {
+        {sheets.map((entry, index) => {
           const active = entry.sheetId === activeId;
+          if (renaming === entry.sheetId)
+            return (
+              <SheetNameField
+                key={entry.sheetId}
+                name={entry.name}
+                onDone={(name) => {
+                  setRenaming(null);
+                  if (name !== null && name !== entry.name)
+                    props.onRename?.(entry.sheetId, name);
+                  requestAnimationFrame(() =>
+                    tabElement(entry.sheetId)?.focus({ preventScroll: true })
+                  );
+                }}
+              />
+            );
           return (
             <button
               key={entry.sheetId}
@@ -156,9 +301,57 @@ export function DrawingSheetTabs(props: DrawingSheetTabsProps) {
               data-sheet-id={entry.sheetId}
               aria-selected={active}
               tabIndex={active ? 0 : -1}
-              className={`drawing-sheet-tab${active ? ' active' : ''}`}
-              title={entry.name}
+              className={`drawing-sheet-tab${active ? ' active' : ''}${
+                dropTarget === entry.sheetId && dragging !== entry.sheetId
+                  ? ' is-drop-target'
+                  : ''
+              }`}
+              title={
+                editable
+                  ? `${entry.name} · right-click or Shift+F10 for sheet actions; drag to reorder`
+                  : entry.name
+              }
+              draggable={editable && Boolean(props.onMove)}
               onClick={() => onSelect(entry.sheetId)}
+              onDoubleClick={() => {
+                if (editable && props.onRename) setRenaming(entry.sheetId);
+              }}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                onSelect(entry.sheetId);
+                setMenu({
+                  sheetId: entry.sheetId,
+                  x: event.clientX,
+                  y: event.clientY
+                });
+              }}
+              onDragStart={(event) => {
+                setDragging(entry.sheetId);
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', entry.name);
+              }}
+              onDragOver={(event) => {
+                if (!dragging) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'move';
+                setDropTarget(entry.sheetId);
+              }}
+              onDragLeave={() =>
+                setDropTarget((current) =>
+                  current === entry.sheetId ? null : current
+                )
+              }
+              onDrop={(event) => {
+                event.preventDefault();
+                if (dragging && dragging !== entry.sheetId)
+                  props.onMove?.(dragging, index);
+                setDragging(null);
+                setDropTarget(null);
+              }}
+              onDragEnd={() => {
+                setDragging(null);
+                setDropTarget(null);
+              }}
             >
               <span className="drawing-sheet-tab-name">{entry.name}</span>
               {mixedPaper && (
@@ -185,6 +378,19 @@ export function DrawingSheetTabs(props: DrawingSheetTabsProps) {
           <ChevronDown size={13} aria-hidden="true" />
         </button>
       )}
+      {props.onRename || props.onDuplicate || props.onMove || props.onDelete ? (
+        <button
+          type="button"
+          className="drawing-sheet-new drawing-sheet-actions"
+          aria-label="Sheet actions"
+          aria-haspopup="menu"
+          aria-expanded={menu !== null}
+          title="Rename, duplicate, move or delete this sheet"
+          onClick={(event) => openMenuAt(activeId, event.currentTarget)}
+        >
+          <Ellipsis size={14} aria-hidden="true" />
+        </button>
+      ) : null}
       <button
         type="button"
         className="drawing-sheet-new"
@@ -195,6 +401,37 @@ export function DrawingSheetTabs(props: DrawingSheetTabsProps) {
       >
         <Plus size={14} aria-hidden="true" />
       </button>
+      {menu ? (
+        <ContextMenu
+          menu={{
+            x: menu.x,
+            y: menu.y,
+            heading:
+              sheets.find((entry) => entry.sheetId === menu.sheetId)?.name ??
+              'Sheet',
+            items: sheetMenuItems(
+              sheets.findIndex((entry) => entry.sheetId === menu.sheetId),
+              sheets.length,
+              props,
+              editable
+            )
+          }}
+          onSelect={(itemId) => {
+            const sheetId = menu.sheetId;
+            const index = sheets.findIndex(
+              (entry) => entry.sheetId === sheetId
+            );
+            setMenu(null);
+            if (itemId === 'rename') setRenaming(sheetId);
+            else if (itemId === 'duplicate') props.onDuplicate?.(sheetId);
+            else if (itemId === 'move-left') props.onMove?.(sheetId, index - 1);
+            else if (itemId === 'move-right')
+              props.onMove?.(sheetId, index + 1);
+            else if (itemId === 'delete') props.onDelete?.(sheetId);
+          }}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
       {listOpen &&
         overflowing &&
         createPortal(

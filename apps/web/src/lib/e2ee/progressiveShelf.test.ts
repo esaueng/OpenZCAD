@@ -68,4 +68,44 @@ describe('progressive encrypted shelf verification', () => {
     expect(verify).toHaveBeenCalledTimes(4);
     expect(publish).not.toHaveBeenCalled();
   });
+
+  // Regression: a listing already refused with 429s still fired every
+  // project's verification reads, about 290 for a 145-project library.
+  it('stops starting entries at the first failure haltOn matches and rejects with it', async () => {
+    const limited = Object.assign(new Error('API request limit reached.'), {
+      status: 429
+    });
+    const verify = vi.fn(async (index: number) => {
+      if (index >= 5) throw limited;
+      return `Verified ${index}`;
+    });
+    const publish = vi.fn();
+    await expect(
+      verifyShelfEntries(
+        Array.from({ length: 145 }, (_, i) => i),
+        verify,
+        publish,
+        () => true,
+        (error) => error === limited
+      )
+    ).rejects.toBe(limited);
+    // Each of the four workers stops after the request it had in flight.
+    expect(verify.mock.calls.length).toBeLessThanOrEqual(5 + 4);
+    expect(publish).toHaveBeenCalledTimes(5);
+  });
+
+  it('keeps going past failures haltOn does not match', async () => {
+    const publish = vi.fn();
+    await verifyShelfEntries(
+      [0, 1, 2, 3, 4, 5],
+      async (index) => {
+        if (index % 2) throw new Error('Signature check failed');
+        return index;
+      },
+      publish,
+      () => true,
+      () => false
+    );
+    expect(publish).toHaveBeenCalledTimes(3);
+  });
 });

@@ -44,10 +44,19 @@ test('commits a finished extrude preview with its exact IDs and geometry, withou
   test.setTimeout(180_000);
   await stubApi(page);
   await page.addInitScript(() => {
-    const scope = window as typeof window & { extrudeSyncs: ExtrudeSync[] };
+    const scope = window as typeof window & {
+      extrudeSyncs: ExtrudeSync[];
+      liveContents: number;
+    };
     scope.extrudeSyncs = [];
+    scope.liveContents = 0;
     const post = Worker.prototype.postMessage;
     Worker.prototype.postMessage = function (message, transfer) {
+      // An adopted commit tells the worker what is live instead of
+      // broadcasting the committed document for a rebuild (#1356).
+      if ((message as { type?: string }).type === 'live-content') {
+        scope.liveContents += 1;
+      }
       const sync = message as {
         type?: string;
         requestId?: string;
@@ -135,6 +144,84 @@ test('commits a finished extrude preview with its exact IDs and geometry, withou
       () =>
         (window as typeof window & { extrudeSyncs: ExtrudeSync[] }).extrudeSyncs
     );
+  const liveContents = () =>
+    page.evaluate(
+      () => (window as typeof window & { liveContents: number }).liveContents
+    );
+  /** The committed document as the device stored it, summarised as a sync. */
+  const storedExtrude = () =>
+    page.evaluate(
+      (id) =>
+        new Promise<Omit<ExtrudeSync, 'requestId'> | null>(
+          (resolve, reject) => {
+            const open = indexedDB.open('openzcad-v2');
+            open.onerror = () => reject(new Error('Could not open IndexedDB.'));
+            open.onsuccess = () => {
+              const db = open.result;
+              const read = db
+                .transaction('projects', 'readonly')
+                .objectStore('projects')
+                .get(id);
+              read.onerror = () => {
+                db.close();
+                reject(new Error('Could not read the saved project.'));
+              };
+              read.onsuccess = () => {
+                db.close();
+                const stored = read.result as
+                  | {
+                      projectId: string;
+                      version: number;
+                      featureOrder: string[];
+                      bodyOrder: string[];
+                      nodes: Record<
+                        string,
+                        {
+                          id: string;
+                          kind: string;
+                          featureKind?: string;
+                          featureId?: string;
+                          bodyId?: string;
+                          data?: Record<string, unknown>;
+                        }
+                      >;
+                    }
+                  | undefined;
+                const feature = Object.values(stored?.nodes ?? {}).find(
+                  (node) =>
+                    node.kind === 'feature' && node.featureKind === 'extrude'
+                );
+                const body = Object.values(stored?.nodes ?? {}).find(
+                  (node) =>
+                    node.kind === 'body' && node.bodyId === feature?.bodyId
+                );
+                resolve(
+                  stored &&
+                    feature?.featureId &&
+                    feature.bodyId &&
+                    feature.data &&
+                    body
+                    ? {
+                        projectId: stored.projectId,
+                        version: stored.version,
+                        featureOrder: [...stored.featureOrder],
+                        bodyOrder: [...stored.bodyOrder],
+                        feature: {
+                          nodeId: feature.id,
+                          featureId: feature.featureId,
+                          bodyId: feature.bodyId,
+                          data: feature.data
+                        },
+                        bodyNodeId: body.id
+                      }
+                    : null
+                );
+              };
+            };
+          }
+        ),
+      document.projectId
+    );
   const canvas = page.locator('.viewer-host canvas');
   const readWall = (bodyId: string) =>
     canvas.evaluate(
@@ -196,20 +283,36 @@ test('commits a finished extrude preview with its exact IDs and geometry, withou
   const requestedBeforeCommit = (await syncs()).filter(
     (entry) => entry.requestId !== null
   ).length;
+  const adoptedBeforeCommit = await liveContents();
 
   await extrudeBar(page).getByRole('button', { name: 'Done' }).click();
   await expect(page.getByRole('contentinfo')).toContainText(
     'Extruded region by -8 mm, cut into the body.',
     { timeout: 30_000 }
   );
+  // The commit installs the validated preview as the live result (#1356),
+  // or, where adoption is refused, the ordinary broadcast answers it. Either
+  // way no further validation request is built.
   await expect
-    .poll(async () => (await syncs()).some((entry) => entry.requestId === null))
+    .poll(
+      async () =>
+        (await liveContents()) > adoptedBeforeCommit ||
+        (await syncs()).some((entry) => entry.requestId === null)
+    )
     .toBe(true);
   const after = await syncs();
   expect(after.filter((entry) => entry.requestId !== null)).toHaveLength(
     requestedBeforeCommit
   );
-  const committed = after.find((entry) => entry.requestId === null);
+  const broadcast = after.find((entry) => entry.requestId === null);
+  let committed: Omit<ExtrudeSync, 'requestId'> | null | undefined = broadcast;
+  if (!broadcast) {
+    await expect
+      .poll(async () => (committed = await storedExtrude()), {
+        timeout: 30_000
+      })
+      .not.toBeNull();
+  }
   expect(committed).toBeDefined();
   expect(committed?.version).toBe(preview!.version + 1);
   expect(committed).toMatchObject({

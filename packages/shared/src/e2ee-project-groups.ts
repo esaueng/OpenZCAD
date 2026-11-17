@@ -114,6 +114,16 @@ export interface E2eeMlsCommitRequest {
   deviceId: string;
   message: string;
   groupInfo: string;
+  /**
+   * The sending device's signature (base64url, 65 bytes) over the account,
+   * project, device, epoch, the key epoch it makes, kind, and SHA-256 of
+   * `message` and `groupInfo` (`signMlsCommitSubmission`, migration 0048).
+   * The Worker verifies it with the key the account's device list
+   * certifies for `deviceId` and refuses a Commit without it
+   * (400 `E2EE_COMMIT_SIGNATURE_REQUIRED`) or with another
+   * (403 `E2EE_COMMIT_SIGNATURE_INVALID`).
+   */
+  signature: string;
   leaf?: E2eeProjectLeafInput;
   wraps: E2eeProjectKeyWrap[];
   archive: E2eeKeyArchiveRecord;

@@ -1,7 +1,16 @@
 import { saveFile } from './saveFile';
 import type { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import { LEGACY_PROJECT_FRAME_CONTENT_TYPE } from '@openzcad/shared';
+import {
+  LEGACY_PROJECT_FRAME_CONTENT_TYPE,
+  SHARE_LINK_TOKEN_HEADER
+} from '@openzcad/shared';
 import { assertCloudFunctionsEnabled, cloudRequestSignal } from './cloudMode';
+import {
+  checkOutboundRequest,
+  declaredProjectContext,
+  checkProjectRequest,
+  type ResolvedProjectRequest
+} from './projectWriteGate';
 
 export type DesktopMenuCommand =
   | 'open-model'
@@ -142,7 +151,26 @@ const NATIVE_BLOB_STREAM_PATH =
 const NATIVE_ARTIFACT_STREAM_PATH =
   /^\/api\/artifacts\/[A-Za-z0-9_-]{1,256}\/download$/;
 
-function isNativeBlobStreamPath(path: string): boolean {
+/** An encrypted share blob read with its link's token in a header. */
+const NATIVE_SHARE_BLOB_STREAM_PATH =
+  /^\/api\/e2ee\/share\/blobs\/[0-9a-f]{32}$/;
+
+/**
+ * The share-link token Rust forwards as `SHARE_LINK_TOKEN_HEADER`
+ * (`share_link_destination` in `desktop_auth.rs`); null when there is none.
+ * A malformed one is dropped, as the Worker would treat it: the read then
+ * finds no link, rather than failing in the bridge.
+ */
+function nativeShareToken(headers: Headers): string | null {
+  const token = headers.get(SHARE_LINK_TOKEN_HEADER);
+  return token !== null && /^[A-Za-z0-9_-]{1,256}$/.test(token) ? token : null;
+}
+
+function isNativeBlobStreamPath(
+  path: string,
+  shareToken: string | null
+): boolean {
+  if (shareToken !== null) return NATIVE_SHARE_BLOB_STREAM_PATH.test(path);
   return (
     NATIVE_BLOB_STREAM_PATH.test(path) ||
     NATIVE_ARTIFACT_STREAM_PATH.test(path) ||
@@ -238,16 +266,18 @@ function nativeBlobStreamSlot(signal: AbortSignal): Promise<() => void> {
 async function nativeBlobStream(
   invoke: NativeInvoke,
   path: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  shareToken: string | null
 ): Promise<Response> {
   const releaseSlot = await nativeBlobStreamSlot(signal);
   let started: NativeBlobStreamStart;
   try {
     assertCloudFunctionsEnabled();
     if (signal.aborted) throw abortError();
-    started = await invoke<NativeBlobStreamStart>('desktop_blob_stream_open', {
-      path
-    });
+    started = await invoke<NativeBlobStreamStart>(
+      'desktop_blob_stream_open',
+      shareToken ? { path, shareToken } : { path }
+    );
   } catch (error) {
     releaseSlot();
     throw error;
@@ -358,6 +388,64 @@ async function nativeBlobStream(
   return new Response(body, { status: started.status, headers });
 }
 
+interface NativeApiRequest {
+  method: string;
+  path: string;
+  contentType?: string;
+  body?: number[];
+  shareToken?: string;
+  /**
+   * The handle `desktop_prepare_access` returned for this send (empty when
+   * it readied none): Rust sends with exactly the credential it readied
+   * then, for that signed-in session and this one send, or answers 401
+   * locally; it hands a 401 back instead of refreshing and replaying.
+   */
+  prepared?: string;
+}
+
+/**
+ * A request that writes a project, through Rust. Rust would otherwise
+ * refresh an expiring credential before the send, and refresh and replay
+ * the request after a 401: requests to the account of their own, each an
+ * await the gate's check could not follow. So the credential is readied
+ * first, in a native call of its own (`desktop_prepare_access`), which
+ * answers an opaque handle bound to that credential as it is then, the
+ * signed-in session and one send; then the gate checks the request
+ * synchronously immediately before the send (`checkProjectRequest`), with
+ * nothing awaited in between; and Rust sends it with exactly that
+ * credential (`prepared`), never the one it holds at the send, or answers
+ * 401 itself when the session changed or the credential expired. A 401
+ * after a credential was ready readies a fresh one and is retried once,
+ * checked again immediately before that send.
+ */
+async function sendNativeProjectRequest(
+  invoke: NativeInvoke,
+  native: NativeApiRequest,
+  request: ResolvedProjectRequest,
+  signal: AbortSignal
+): Promise<NativeApiResponse> {
+  for (let attempt = 0; ; attempt += 1) {
+    // A desktop host without a credential answers its own 401 below.
+    const handle = await invoke<string | null>('desktop_prepare_access');
+    const ready = typeof handle === 'string' && handle !== '';
+    if (signal.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+    // Immediately before the native send, after loading Tauri, reading
+    // the body and readying the credential: a pin, an unresolved switch
+    // or a reset noted meanwhile sends nothing. Nothing is awaited
+    // between this check and the invoke.
+    checkProjectRequest(request);
+    const result = await invoke<NativeApiResponse>('desktop_api_request', {
+      request: { ...native, prepared: ready ? handle : '' }
+    });
+    if (result.status !== 401 || !ready || attempt > 0) return result;
+    if (signal.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+  }
+}
+
 function importTauriCore() {
   return import('@tauri-apps/api/core');
 }
@@ -371,13 +459,33 @@ function tauriCore(): ReturnType<typeof importTauriCore> {
 /**
  * Routes cloud requests through Rust so bearer credentials never enter the
  * WebView, localStorage, URLs, logs, or frontend bundles.
+ *
+ * A request that writes a project this tab may not write, or carries
+ * plaintext of a project this device holds as encrypted, is refused
+ * (`projectWriteGate.ts`): resolved from the request's own context first,
+ * then checked again synchronously immediately before `fetch` or the
+ * native invoke, after every await here (for a project request, after
+ * its native credential is readied: `sendNativeProjectRequest`), with
+ * nothing awaited between that check and the send.
  */
 export async function desktopFetch(
   input: RequestInfo | URL,
   init: RequestInit = {}
 ): Promise<Response> {
+  // Refused early, before anything is awaited, and again at the send.
+  const request = checkOutboundRequest(input, init);
+  return sendCloudRequest(input, init, request);
+}
+
+async function sendCloudRequest(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  request: ResolvedProjectRequest
+): Promise<Response> {
   const signal = cloudRequestSignal(init.signal);
   if (!isDesktopApp()) {
+    // Immediately before the send: nothing is awaited in between.
+    checkProjectRequest(request);
     return fetch(input, { ...init, signal });
   }
   if (signal.aborted) {
@@ -386,6 +494,10 @@ export async function desktopFetch(
   const headers = new Headers(init.headers);
   const { invoke } = await tauriCore();
   let path = apiPath(input);
+  // A share-link read's token goes to Rust beside the path, which sends it
+  // in the same header and never in the URL that request logs record. The
+  // web assets ship inside the app, so the native host always takes it.
+  const shareToken = nativeShareToken(headers);
   // Older native hosts forward content-type only. Query negotiation keeps
   // browser-side legacy decoding available without a native protocol upgrade.
   if (
@@ -400,22 +512,38 @@ export async function desktopFetch(
   if (
     (init.method ?? 'GET').toUpperCase() === 'GET' &&
     (init.body === undefined || init.body === null) &&
-    isNativeBlobStreamPath(path)
+    isNativeBlobStreamPath(path, shareToken)
   ) {
-    return nativeBlobStream(invoke, path, signal);
+    return nativeBlobStream(invoke, path, signal, shareToken);
   }
   const body = await requestBodyBytes(init.body);
   if (signal.aborted) {
     throw new DOMException('The operation was aborted.', 'AbortError');
   }
-  const result = await invoke<NativeApiResponse>('desktop_api_request', {
-    request: {
-      method: init.method ?? 'GET',
-      path,
-      contentType: headers.get('content-type') ?? undefined,
-      body
-    }
-  });
+  const native: NativeApiRequest = {
+    method: init.method ?? 'GET',
+    path,
+    contentType: headers.get('content-type') ?? undefined,
+    body,
+    ...(shareToken ? { shareToken } : {})
+  };
+  let result: NativeApiResponse;
+  // Only a request that names no project and carries none of a project's
+  // content may be refreshed and replayed by Rust; every request with a
+  // project, declared or named, is readied, checked and sent once.
+  if (
+    request.projectId === null &&
+    declaredProjectContext(init) === undefined
+  ) {
+    // Immediately before the native send, after loading Tauri and reading
+    // the body. Nothing is awaited between this check and the invoke.
+    checkProjectRequest(request);
+    result = await invoke<NativeApiResponse>('desktop_api_request', {
+      request: native
+    });
+  } else {
+    result = await sendNativeProjectRequest(invoke, native, request, signal);
+  }
   assertCloudFunctionsEnabled();
   if (signal.aborted) {
     throw new DOMException('The operation was aborted.', 'AbortError');
@@ -575,6 +703,46 @@ export async function saveCadBinaryFile(
     format,
     contents: Array.from(contents)
   });
+}
+
+/**
+ * L09: the slicers the desktop shell can open a 3MF with, by the ids
+ * `open_in_slicer` accepts (apps/desktop/src-tauri/src/slicer_handoff.rs).
+ */
+export const DESKTOP_SLICERS = [
+  { id: 'bambu-studio', label: 'Bambu Studio' },
+  { id: 'orcaslicer', label: 'OrcaSlicer' },
+  { id: 'prusaslicer', label: 'PrusaSlicer' }
+] as const;
+
+export type DesktopSlicerId = (typeof DESKTOP_SLICERS)[number]['id'];
+
+/**
+ * L09 "Open in slicer" in the desktop app: the shell writes the 3MF to a
+ * private hand-off folder and opens it with the chosen slicer, with no
+ * server involved. Rejects with the shell's reason (the slicer is not
+ * installed, say); returns false outside the desktop app.
+ */
+export async function openInDesktopSlicer(
+  slicer: DesktopSlicerId,
+  suggestedName: string,
+  contents: Uint8Array<ArrayBuffer>
+): Promise<boolean> {
+  if (!isDesktopApp()) {
+    return false;
+  }
+  const { invoke } = await import('@tauri-apps/api/core');
+  try {
+    await invoke('open_in_slicer', {
+      slicer,
+      suggestedName,
+      contents: Array.from(contents)
+    });
+  } catch (reason) {
+    // The shell rejects with its message as a plain string.
+    throw reason instanceof Error ? reason : new Error(String(reason));
+  }
+  return true;
 }
 
 export async function listenForDesktopMenu(

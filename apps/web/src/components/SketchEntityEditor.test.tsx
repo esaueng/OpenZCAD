@@ -134,7 +134,7 @@ describe('SketchEntityEditor', () => {
         y: 2,
         align: 'center'
       },
-      'Size (em)',
+      'Em size',
       '25'
     );
     expect(applied).toEqual({
@@ -220,7 +220,7 @@ describe('SketchEntityEditor', () => {
     // the same gesture.
     expect(screen.getByLabelText('Text')).toBeTruthy();
     expect(screen.getByLabelText('Font')).toBeTruthy();
-    expect(screen.getByLabelText('Size (em)')).toBeTruthy();
+    expect(screen.getByLabelText('Em size')).toBeTruthy();
     expect(screen.getByRole('group', { name: 'Font style' })).toBeTruthy();
   });
 
@@ -374,14 +374,14 @@ describe('one owner while the canvas moves the object', () => {
     const x = screen.getByLabelText('X');
     await user.clear(x);
     await user.type(x, '40');
-    const size = screen.getByLabelText('Size (em)');
+    const size = screen.getByLabelText('Em size');
     await user.clear(size);
     await user.type(size, '14');
 
     // The drag is the newer write to X; Size was not touched by it.
     moveTo({ ...placed, x: 9, y: 7 });
     expect(screen.getByLabelText('X')).toHaveValue('9');
-    expect(screen.getByLabelText('Size (em)')).toHaveValue('14');
+    expect(screen.getByLabelText('Em size')).toHaveValue('14');
   });
 
   it('follows a style change made elsewhere and keeps untouched fields exact', async () => {

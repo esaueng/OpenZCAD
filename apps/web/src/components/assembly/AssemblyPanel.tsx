@@ -17,7 +17,11 @@ import {
   TriangleAlert
 } from 'lucide-react';
 import { commandFactories } from '@openzcad/command-system';
-import { assemblyBomToCsv, deriveAssemblyBom } from '@openzcad/document-core';
+import {
+  assemblyBomTable,
+  assemblyBomToCsv,
+  deriveAssemblyBom
+} from '@openzcad/document-core';
 import {
   ASSEMBLY_JOINT_DOFS,
   coupledJointLimits,
@@ -50,7 +54,16 @@ import {
   AssemblyFirstRunCard,
   assemblyCandidateBodies
 } from './AssemblyFirstRunCard';
-import { ComponentDetails, JointDetails } from './AssemblyDetails';
+import {
+  AssemblyPositions,
+  ComponentDetails,
+  JointDetails
+} from './AssemblyDetails';
+import { AssemblyExplodedSection } from './AssemblyExplodedSection';
+import {
+  AssemblyInterferenceSection,
+  type CheckInterference
+} from './AssemblyInterferenceSection';
 import { AssemblyNameField } from './AssemblyNameField';
 import {
   AddStudyButton,
@@ -64,7 +77,10 @@ import {
   selectedGearMesh
 } from './gearMeshEntry';
 import { MotionSetupCard, openMotionSetup } from './MotionSetupCard';
-import type { MotionSetupBounds } from '../../lib/assembly/motionSetup';
+import {
+  motionSetupUnavailableReason,
+  type MotionSetupBounds
+} from '../../lib/assembly/motionSetup';
 import { useAssemblyModel } from './useAssemblyModel';
 
 // Mesh gears and its pair math load when the card first opens; the entry
@@ -77,9 +93,12 @@ export interface AssemblyPanelProps {
   document: ProjectDocument;
   execute: AssemblyExecute;
   onStatus(message: string): void;
-  /** A notice after parts are first made (the toast). */
-  onAnnounce?(message: string): void;
-  /** Replaces the Motion section (tests). */
+  /**
+   * A toast: after parts are first made, and after a delete, which offers
+   * Undo when `undo` is set.
+   */
+  onAnnounce?(message: string, options?: { undo?: boolean }): void;
+  /** Replaces the Animations section (tests). */
   studies?: ReactNode;
   /** Body boxes in modelled coordinates, for Set up motion's axis and range. */
   bodyBounds?: MotionSetupBounds;
@@ -87,6 +106,11 @@ export interface AssemblyPanelProps {
   reducedMotion?: boolean;
   /** Saves the BOM CSV; a browser download unless replaced (tests). */
   saveBomCsv?(fileName: string, csv: string): void;
+  /**
+   * AS04: the exact pairwise interference query (the geometry worker's).
+   * Without it the Interference section is not shown.
+   */
+  checkInterference?: CheckInterference;
 }
 
 type MenuTarget =
@@ -130,7 +154,9 @@ export function AssemblyPanel(props: AssemblyPanelProps) {
         <AssemblyFirstRunCard
           document={document}
           execute={execute}
-          onAnnounce={onAnnounce ?? onStatus}
+          onAnnounce={(message) =>
+            onAnnounce ? onAnnounce(message) : onStatus(message)
+          }
         />
       )}
     </aside>
@@ -168,10 +194,12 @@ function AssemblyLists({
   document,
   execute,
   onStatus,
+  onAnnounce,
   studies,
   bodyBounds,
   reducedMotion,
-  saveBomCsv
+  saveBomCsv,
+  checkInterference
 }: AssemblyPanelProps) {
   const model = useAssemblyModel(document);
   const selectedComponentId = useAssemblyRuntime((s) => s.selectedComponentId);
@@ -197,6 +225,9 @@ function AssemblyLists({
   const { set, solution, bodyByComponent } = model;
   const app = { document, execute, onStatus };
   const chip = assemblyStatusChip(set, solution);
+  // Set up motion only adds a joint: with every part fixed or already
+  // moving there is nothing for it to do, so say so instead of opening it.
+  const motionUnavailable = motionSetupUnavailableReason(model);
   const firstComponent = set.components[0];
   const playingJointId = playback?.kind === 'joint' ? playback.jointId : null;
   const used = new Set<BodyId>([
@@ -205,6 +236,8 @@ function AssemblyLists({
   ]);
   const addable = candidates.filter((body) => !used.has(body.bodyId));
   const bom = deriveAssemblyBom(document);
+  // The table the CSV and later drawing rows read: one set of item numbers.
+  const bomTable = assemblyBomTable(bom);
   const missingQuantity = bom.rows.reduce(
     (count, row) => count + (row.status === 'missing' ? row.quantity : 0),
     0
@@ -212,7 +245,7 @@ function AssemblyLists({
 
   const downloadBom = () => {
     const fileName = `${exportFileStem(document.name)}.bom.csv`;
-    const csv = `${assemblyBomToCsv(bom)}\n`;
+    const csv = `${assemblyBomToCsv(bomTable)}\n`;
     if (saveBomCsv) saveBomCsv(fileName, csv);
     else downloadText(fileName, csv, 'text/csv');
     onStatus(
@@ -315,11 +348,19 @@ function AssemblyLists({
       }
       return;
     }
-    if (itemId === 'delete') {
-      if (playingJointId === target.id) assemblyRuntime.stop();
-      if (removeAssemblyJoint(app, target.id) && selectedJointId === target.id)
-        assemblyRuntime.selectJoint(null);
-    }
+    if (itemId === 'delete') deleteJoint(target.id);
+  };
+
+  /** Deletes a joint and says so, with Undo: one undo brings it back. */
+  const deleteJoint = (jointId: string) => {
+    const joint = set.joints.find((j) => j.id === jointId);
+    if (!joint) return;
+    if (playingJointId === jointId) assemblyRuntime.stop();
+    if (!removeAssemblyJoint(app, jointId)) return;
+    if (selectedJointId === jointId) assemblyRuntime.selectJoint(null);
+    const message = `Deleted ${joint.name}.`;
+    if (onAnnounce) onAnnounce(message, { undo: true });
+    else onStatus(message);
   };
 
   const isRenaming = (kind: MenuTarget['kind'], id: string) =>
@@ -342,11 +383,16 @@ function AssemblyLists({
           <button
             type="button"
             className="assembly-tool-button"
-            title="Make another part slide or turn"
-            onClick={startMotionSetup}
+            title={motionUnavailable ?? 'Make another part slide or turn'}
+            aria-disabled={motionUnavailable !== null}
+            onClick={() =>
+              motionUnavailable
+                ? onStatus(motionUnavailable)
+                : startMotionSetup()
+            }
           >
             <MoveVertical size={13} aria-hidden="true" />
-            Motion
+            Make it move
           </button>
         ) : null}
         <button
@@ -650,6 +696,15 @@ function AssemblyLists({
                           onDoubleClick={() =>
                             setRenaming({ kind: 'joint', id: joint.id })
                           }
+                          onKeyDown={(event) => {
+                            if (
+                              event.key === 'Delete' ||
+                              event.key === 'Backspace'
+                            ) {
+                              event.preventDefault();
+                              deleteJoint(joint.id);
+                            }
+                          }}
                         >
                           <JointKindIcon kind={joint.kind} />
                           <span className="assembly-row-name">
@@ -665,7 +720,11 @@ function AssemblyLists({
                             </span>
                           ) : (
                             <span className="assembly-row-value">
-                              {jointValueSummary(joint.kind, values)}
+                              {jointValueSummary(
+                                joint.kind,
+                                values,
+                                document.units
+                              )}
                             </span>
                           )}
                         </button>
@@ -688,7 +747,11 @@ function AssemblyLists({
                       </button>
                     </div>
                     {selected ? (
-                      <JointDetails {...detailProps} joint={joint} />
+                      <JointDetails
+                        {...detailProps}
+                        joint={joint}
+                        onDelete={() => deleteJoint(joint.id)}
+                      />
                     ) : null}
                   </li>
                 );
@@ -697,13 +760,21 @@ function AssemblyLists({
           )}
         </Section>
 
+        {set.joints.some(
+          (joint) => ASSEMBLY_JOINT_DOFS[joint.kind].length > 0
+        ) || set.positions.length > 0 ? (
+          <Section title="Positions" count={set.positions.length}>
+            <AssemblyPositions execute={execute} model={model} />
+          </Section>
+        ) : null}
+
         {studies ??
           ((set.studies.length > 0 ||
             set.joints.some(
               (joint) => ASSEMBLY_JOINT_DOFS[joint.kind].length > 0
             )) && (
             <Section
-              title="Motion"
+              title="Animations"
               count={set.studies.length}
               action={
                 <AddStudyButton
@@ -718,6 +789,29 @@ function AssemblyLists({
               />
             </Section>
           ))}
+
+        {set.components.length > 0 ? (
+          <Section
+            title="Exploded view"
+            count={Object.keys(set.explode?.offsets ?? {}).length}
+          >
+            <AssemblyExplodedSection
+              set={set}
+              execute={execute}
+              onStatus={onStatus}
+            />
+          </Section>
+        ) : null}
+
+        {checkInterference && set.components.length > 0 ? (
+          <Section title="Interference">
+            <AssemblyInterferenceSection
+              document={document}
+              check={checkInterference}
+              onStatus={onStatus}
+            />
+          </Section>
+        ) : null}
 
         <Section
           title="Bill of materials"
@@ -741,36 +835,63 @@ function AssemblyLists({
             <p className="assembly-muted">No parts to list.</p>
           ) : (
             <ul className="assembly-list" aria-label="Bill of materials">
-              {bom.rows.map((row) => (
-                <li
-                  key={`${row.status}:${row.bodyId}`}
-                  className="assembly-row"
-                >
-                  <div
-                    className="assembly-row-line"
-                    title={row.instances.map((i) => i.name).join(', ')}
+              {bomTable.rows.map((row) => {
+                // A part picked on the model lights up its row; a click on
+                // the row picks every instance it counts.
+                const picked = row.componentIds.filter((id) =>
+                  selectedComponentIds.includes(id)
+                );
+                const all =
+                  picked.length === row.componentIds.length &&
+                  selectedComponentIds.length === picked.length;
+                return (
+                  <li
+                    key={`${row.status}:${row.cells.source_body}`}
+                    className={`assembly-row${picked.length > 0 ? ' is-selected' : ''}`}
                   >
-                    <span className="assembly-row-main is-static">
-                      <span className="assembly-row-name">{row.name}</span>
-                      {row.status === 'missing' && (
-                        <span
-                          className="assembly-row-flag"
-                          title="The part's body cannot be found"
-                        >
-                          <TriangleAlert size={12} aria-hidden="true" />
-                          Missing
-                        </span>
-                      )}
-                      <span
-                        className="assembly-row-value"
-                        aria-label={`Quantity ${row.quantity}`}
+                    <div
+                      className="assembly-row-line"
+                      title={row.cells.instances}
+                    >
+                      <button
+                        type="button"
+                        className="assembly-row-main"
+                        aria-pressed={all}
+                        aria-label={`Item ${row.cells.item}: ${row.cells.part}, quantity ${row.cells.quantity}${
+                          row.status === 'missing' ? ', missing' : ''
+                        }`}
+                        onClick={() =>
+                          assemblyRuntime.selectComponents(
+                            all ? [] : row.componentIds
+                          )
+                        }
                       >
-                        &times;{row.quantity}
-                      </span>
-                    </span>
-                  </div>
-                </li>
-              ))}
+                        <span className="assembly-row-item" aria-hidden="true">
+                          {row.cells.item}
+                        </span>
+                        <span className="assembly-row-name">
+                          {row.cells.part}
+                        </span>
+                        {row.status === 'missing' && (
+                          <span
+                            className="assembly-row-flag"
+                            title="The part's body cannot be found"
+                          >
+                            <TriangleAlert size={12} aria-hidden="true" />
+                            Missing
+                          </span>
+                        )}
+                        <span
+                          className="assembly-row-value"
+                          aria-label={`Quantity ${row.cells.quantity}`}
+                        >
+                          &times;{row.cells.quantity}
+                        </span>
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </Section>

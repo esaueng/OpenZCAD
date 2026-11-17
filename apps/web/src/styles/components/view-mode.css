@@ -121,6 +121,20 @@
   line-height: 1.5;
 }
 
+/* F06: the row picker, above the knobs it sets. */
+.tweak-configuration {
+  display: grid;
+  gap: 4px;
+  margin: 10px 12px 2px;
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+
+.tweak-configuration select {
+  height: 34px;
+  font-size: var(--fs-sm);
+}
+
 .tweak-panel .sidebar-hint {
   /* Its own bottom margin: at 0 the empty-state hint sat on the panel's
      bottom border. */

@@ -46,6 +46,16 @@ export {
   type OpeningAxis
 } from './growing-holder';
 import {
+  isDrawingGeometryAnnotation,
+  PIPE_THREAD_SIZES,
+  isPipeThreadSize,
+  standardPartGeometry,
+  standardPartHasLength,
+  standardPartMinimumLengthMm,
+  standardPartNoun,
+  standardPartIsThreaded,
+  standardPartProblem,
+  standardPartForHole,
   createId,
   createSketchReferenceAnnotationId,
   createSketchCompositeId,
@@ -61,6 +71,7 @@ import {
   toEntityId,
   toShaprImportId,
   type BodyId,
+  type BodyNode,
   type DatumAxisDefinition,
   type DatumPlaneDefinition,
   type DatumPlaneSource,
@@ -73,6 +84,8 @@ import {
   datumAxisPointSources,
   type EntityId,
   type FeatureId,
+  holeStandardDiameterMm,
+  millimetresPerUnit,
   type FeatureNode,
   type ParamValue,
   type ParameterKind,
@@ -85,7 +98,11 @@ import {
   type SketchProfileReference,
   type UnitSystem,
   isDatumPlaneRef,
-  isFeatureRollbackSuppressed
+  isFeatureRollbackSuppressed,
+  ownEntry,
+  reservedIdentifierError,
+  COMMAND_FEATURE_KINDS,
+  type FeatureKind
 } from '@openzcad/shared';
 import {
   assertFeatureProfileProvenance,
@@ -104,6 +121,7 @@ import {
   type SketchReferenceDimensionDeleteInput,
   type SketchReferenceLabelPositionInput,
   archiveHistorySources,
+  renameCheckpoint,
   type ImportedSourceArchiveIdentity,
   applyDocumentChanges,
   assertNoNewHistoryFork,
@@ -159,6 +177,10 @@ import {
   type HoleInput,
   gearBody,
   type GearInput,
+  sheetMetalBody,
+  type SheetMetalInput,
+  standardPartBody,
+  type StandardPartInput,
   threadBody,
   type ThreadInput,
   type ImportedMeshInput,
@@ -186,6 +208,9 @@ import {
   type ParameterSetInput,
   type ParameterToggleInput,
   patternBody,
+  validatePatternDefinition,
+  validateHolePoints,
+  validateHoleStandard,
   type PatternInput,
   type PrimitiveInput,
   renameNode,
@@ -206,6 +231,25 @@ import {
   renameObjectFolder,
   deleteObjectFolder,
   moveToObjectFolder,
+  setPrintClearance,
+  type PrintClearanceSetInput,
+  createConfigurations,
+  deleteConfigurations,
+  addConfigurationRow,
+  renameConfigurationRow,
+  deleteConfigurationRow,
+  addConfigurationColumn,
+  deleteConfigurationColumn,
+  setConfigurationCell,
+  activateConfiguration,
+  type ConfigurationCreateInput,
+  type ConfigurationRowAddInput,
+  type ConfigurationRowRenameInput,
+  type ConfigurationRowDeleteInput,
+  type ConfigurationColumnAddInput,
+  type ConfigurationColumnDeleteInput,
+  type ConfigurationCellSetInput,
+  type ConfigurationActivateInput,
   addAssemblyComponents,
   updateAssemblyComponent,
   deleteAssemblyComponent,
@@ -220,6 +264,8 @@ import {
   addAssemblyCoupling,
   updateAssemblyCoupling,
   deleteAssemblyCoupling,
+  setAssemblyExplode,
+  type AssemblyExplodeSetInput,
   type AssemblyCouplingAddInput,
   type AssemblyCouplingUpdateInput,
   type AssemblyCouplingDeleteInput,
@@ -288,8 +334,17 @@ import {
   validateDatumAxisDefinition,
   validateDatumAxisRef,
   validateDatumPlaneDefinition,
-  validateModelingPlane
+  validateModelingPlane,
+  documentIdentifierError
 } from '@openzcad/document-core';
+import {
+  SHEET_METAL_MAX_BEND_ANGLE_DEG,
+  SHEET_METAL_MOLD_LINE_MAX_ANGLE_DEG,
+  sheetMetalGaugeById,
+  sheetMetalMaterialById,
+  type SheetMetalBend,
+  type SheetMetalRelief
+} from '@openzcad/shared';
 import { drawingCommandInputs } from './drawing-annotations';
 import {
   createCadDocumentDigest,
@@ -346,6 +401,8 @@ export type CommandKind =
   | 'feature.datum-axis'
   | 'feature.hole'
   | 'feature.gear'
+  | 'feature.sheet-metal'
+  | 'feature.standard-part'
   | 'feature.thread'
   | 'feature.shell'
   | 'feature.solid-offset'
@@ -379,6 +436,16 @@ export type CommandKind =
   | 'objectFolder.rename'
   | 'objectFolder.delete'
   | 'objectFolder.move'
+  | 'printClearance.set'
+  | 'configuration.create'
+  | 'configuration.delete'
+  | 'configuration.row.add'
+  | 'configuration.row.rename'
+  | 'configuration.row.delete'
+  | 'configuration.column.add'
+  | 'configuration.column.delete'
+  | 'configuration.cell.set'
+  | 'configuration.activate'
   | 'assembly.components.add'
   | 'assembly.component.update'
   | 'assembly.component.delete'
@@ -393,12 +460,41 @@ export type CommandKind =
   | 'assembly.coupling.add'
   | 'assembly.coupling.update'
   | 'assembly.coupling.delete'
+  | 'assembly.explode.set'
   | 'drawing.annotation.add'
   | 'drawing.annotation.update'
   | 'drawing.annotation.delete'
   | 'reference-image.add'
   | 'reference-image.update'
   | 'reference-image.delete';
+
+/**
+ * The feature kind each feature-creating command creates: every
+ * `feature.<kind>` command a `<kind>` feature, and the few named otherwise.
+ */
+type CommandFeatureKinds = {
+  readonly [
+    K in Extract<CommandKind, `feature.${FeatureKind}`>
+  ]: K extends `feature.${infer F}` ? F : never;
+} & {
+  readonly 'primitive.add': 'primitive';
+  readonly 'sketch.add': 'sketch';
+  readonly 'import.mesh': 'imported-mesh';
+  readonly 'import.step': 'imported-step';
+};
+
+/**
+ * Stored-command validation reads a creation command's payload by the
+ * feature it creates, from `@openzcad/shared`'s `COMMAND_FEATURE_KINDS`
+ * (shared cannot depend on this package). This typing holds that table to
+ * {@link CommandKind} both ways: it must name every feature-creating command
+ * with the kind it creates, and nothing else.
+ */
+export const COMMAND_CREATED_FEATURE_KINDS: CommandFeatureKinds &
+  Record<
+    Exclude<keyof typeof COMMAND_FEATURE_KINDS, keyof CommandFeatureKinds>,
+    never
+  > = COMMAND_FEATURE_KINDS;
 
 export interface CommandDefinition<TPayload> {
   kind: CommandKind;
@@ -436,6 +532,7 @@ export type AnyCommand =
   | CommandDefinition<HelicalSweepInput>
   | CommandDefinition<GearInput>
   | CommandDefinition<ThreadInput>
+  | CommandDefinition<StandardPartInput>
   | CommandDefinition<BooleanInput>
   | CommandDefinition<TransformInput>
   | CommandDefinition<MirrorInput>
@@ -467,6 +564,16 @@ export type AnyCommand =
   | CommandDefinition<ObjectFolderRenameInput>
   | CommandDefinition<ObjectFolderDeleteInput>
   | CommandDefinition<ObjectFolderMoveInput>
+  | CommandDefinition<PrintClearanceSetInput>
+  | CommandDefinition<ConfigurationCreateInput>
+  | CommandDefinition<Record<string, never>>
+  | CommandDefinition<ConfigurationRowAddInput>
+  | CommandDefinition<ConfigurationRowRenameInput>
+  | CommandDefinition<ConfigurationRowDeleteInput>
+  | CommandDefinition<ConfigurationColumnAddInput>
+  | CommandDefinition<ConfigurationColumnDeleteInput>
+  | CommandDefinition<ConfigurationCellSetInput>
+  | CommandDefinition<ConfigurationActivateInput>
   | CommandDefinition<AssemblyComponentsAddInput>
   | CommandDefinition<AssemblyComponentUpdateInput>
   | CommandDefinition<AssemblyComponentDeleteInput>
@@ -481,6 +588,7 @@ export type AnyCommand =
   | CommandDefinition<AssemblyCouplingAddInput>
   | CommandDefinition<AssemblyCouplingUpdateInput>
   | CommandDefinition<AssemblyCouplingDeleteInput>
+  | CommandDefinition<AssemblyExplodeSetInput>
   | CommandDefinition<DrawingAnnotationAddInput>
   | CommandDefinition<DrawingAnnotationUpdateInput>
   | CommandDefinition<DrawingAnnotationDeleteInput>
@@ -547,6 +655,22 @@ function serializedLeaves(command: AnyCommand): SerializedCommand[] {
     : [command.serialize()];
 }
 
+/**
+ * Refuses commands whose payload uses a reserved name as an id, a key or a
+ * parameter name, or an enum value outside the union of the feature it
+ * creates or changes (see `reservedIdentifierError`), before any of them
+ * runs: the ids a creation command supplies become keys of `nodes` and other
+ * maps, and its enums the feature data a save then refuses. A
+ * `feature.update` is judged by its feature's kind in `document`.
+ */
+function assertCommandIdentifiers(
+  commands: readonly SerializedCommand[],
+  document: ProjectDocument
+): void {
+  const error = reservedIdentifierError(commands, 'commandLog', document);
+  if (error) throw new Error(`The command cannot run: ${error}`);
+}
+
 /** Every string primitive nested anywhere in a feature's data payload. */
 function collectDataStrings(value: unknown, into: Set<string>): void {
   if (typeof value === 'string') {
@@ -611,7 +735,7 @@ function sketchReadDependencies(
     if (sketch) {
       collectDataStrings(sketch, references);
       for (const id of sketch.objectIds) {
-        const object = document.nodes[id];
+        const object = ownEntry(document.nodes, id);
         if (object?.kind === 'sketch-object')
           collectDataStrings(object.data, references);
       }
@@ -721,10 +845,12 @@ function validateFeatureReorder(
     }
   });
   const bodyProducerPosition = new Map<string, number>();
+  const bodies = new Map<string, BodyNode>();
   for (const body of listNodesByKind(document, 'body')) {
     const producer = featurePosition.get(body.featureId);
     if (producer !== undefined) {
       bodyProducerPosition.set(body.bodyId, producer);
+      bodies.set(body.bodyId, body);
     }
   }
 
@@ -738,7 +864,12 @@ function validateFeatureReorder(
         featurePosition.get(feature.featureId) !== producedAt
       ) {
         throw new Error(
-          `Cannot reorder: "${feature.name}" would run before the body it uses exists.`
+          bodyOrderRefusal(
+            document,
+            feature,
+            bodies.get(id)!,
+            reordered[producedAt]!
+          )
         );
       }
       const featureAt = featurePosition.get(id);
@@ -758,6 +889,31 @@ function validateFeatureReorder(
       }
     }
   });
+}
+
+/**
+ * Why a feature cannot run before the feature that produced a body it
+ * uses. With Box → Fillet → Hole, moving Hole above Fillet was refused as
+ * running "before the body it uses exists", though the box had stood since
+ * the first step: the hole is on the body the fillet leaves. A producer that
+ * reads another body (a fillet, a hole, a boolean) changes a body that was
+ * already there, so the sentence names that change and the feature behind it.
+ */
+function bodyOrderRefusal(
+  document: ProjectDocument,
+  feature: FeatureNode,
+  body: BodyNode,
+  producer: FeatureNode
+): string {
+  const bodyIds = new Set(
+    listNodesByKind(document, 'body').map((node) => node.bodyId as string)
+  );
+  const changes = [...featureReferences(document, producer)].some((id) =>
+    bodyIds.has(id)
+  );
+  return changes
+    ? `Cannot reorder: "${feature.name}" uses ${body.name} as "${producer.name}" leaves it, so it must stay after "${producer.name}".`
+    : `Cannot reorder: "${feature.name}" would run before the body it uses exists ("${producer.name}" makes ${body.name}).`;
 }
 
 /**
@@ -883,17 +1039,22 @@ function validateExtrudeInput(
 }
 
 function validateDirectEditReference(input: DirectEditInput): void {
-  const reference = input.operation.faceReference;
-  if (!reference) {
-    return;
-  }
-  if (
-    reference.kind !== 'face' ||
-    reference.currentHash !== input.operation.faceHash
-  ) {
-    throw new Error(
-      'The direct-edit face reference does not match its legacy face hash.'
-    );
+  const faces: {
+    faceHash: number;
+    faceReference?: { kind: string; currentHash: number };
+  }[] = [
+    input.operation,
+    ...(input.operation.kind === 'remove-faces'
+      ? input.operation.additionalFaces
+      : [])
+  ];
+  for (const { faceHash, faceReference: reference } of faces) {
+    if (!reference) continue;
+    if (reference.kind !== 'face' || reference.currentHash !== faceHash) {
+      throw new Error(
+        'The direct-edit face reference does not match its legacy face hash.'
+      );
+    }
   }
 }
 
@@ -1043,18 +1204,49 @@ function validateSplitInput(
   }
 }
 
-function validateHoleInput(document: ProjectDocument, input: HoleInput): void {
+function validateHoleInput(
+  document: ProjectDocument,
+  input: HoleInput,
+  ownFeatureId: FeatureId | null = null
+): void {
   validateBodyTarget(document, input.targetBodyId);
-  const diameter = resolvedModelingValue(
-    document,
-    'hole diameter',
-    input.diameter
-  );
+  // M01 (schema v64): the sketch points, at the hole's history position.
+  validateHolePoints(document, input.points, ownFeatureId);
+  validateHoleStandard(input.standard, input.tapped);
+  if (input.tapped?.length !== undefined) {
+    const length = resolvedModelingValue(
+      document,
+      'tapped length',
+      input.tapped.length
+    );
+    if (!(length > 0)) {
+      throw new Error('Tapped length must resolve to a positive value.');
+    }
+  }
+  if (input.tapped?.clearance !== undefined) {
+    const clearance = resolvedModelingValue(
+      document,
+      'tapped clearance',
+      input.tapped.clearance
+    );
+    if (!(clearance >= 0)) {
+      throw new Error('Tapped clearance must be zero or more.');
+    }
+  }
+  // M01 (schema v65): a standard hole's table gives its diameter.
+  const diameter = input.standard
+    ? holeStandardDiameterMm(input.standard) /
+      millimetresPerUnit(document.units)
+    : resolvedModelingValue(document, 'hole diameter', input.diameter);
   if (!(diameter > 0)) {
     throw new Error('Hole diameter must resolve to a positive value.');
   }
-  resolvedModelingValue(document, 'hole position U', input.position.u);
-  resolvedModelingValue(document, 'hole position V', input.position.v);
+  // On sketch points (M01) the position is stored but not read, so a
+  // parameter it names may be gone without breaking the hole.
+  if (!input.points) {
+    resolvedModelingValue(document, 'hole position U', input.position.u);
+    resolvedModelingValue(document, 'hole position V', input.position.v);
+  }
   if (input.depthMode === 'blind') {
     if (input.depth === undefined) {
       throw new Error('A blind hole needs a depth.');
@@ -1120,6 +1312,220 @@ function validateHoleInput(document: ProjectDocument, input: HoleInput): void {
   }
 }
 
+/** M16: the most bends one sheet-metal feature holds. */
+const MAX_SHEET_METAL_BENDS = 64;
+/** M16: a bend id is part of its faces' names, so it stays a plain token. */
+const SHEET_METAL_BEND_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+const SHEET_METAL_RELIEF_SHAPES: ReadonlySet<string> = new Set([
+  'rectangular',
+  'obround',
+  'none'
+]);
+const SHEET_METAL_BEND_POSITIONS: ReadonlySet<string> = new Set([
+  'centerline',
+  'fixed-side',
+  'moving-side',
+  'outside-mold-line'
+]);
+
+/**
+ * M16: the rule fields and the bend table a sheet-metal edit replaces in one
+ * transaction. A rule field left out keeps its stored value, `clear` returns
+ * an optional one to its default, and `bends`, when given, is the whole new
+ * table. Values are stored as given, so an expression stays an expression.
+ */
+export interface SheetMetalUpdateInput {
+  featureId: FeatureId;
+  name?: string;
+  rule?: Partial<
+    Pick<
+      SheetMetalInput,
+      | 'profiles'
+      | 'thickness'
+      | 'thicknessSide'
+      | 'bendRadius'
+      | 'kFactor'
+      | 'kFactorMethod'
+      | 'relief'
+      | 'materialPresetId'
+      | 'gaugeId'
+      | 'fixedPoint'
+    >
+  >;
+  clear?: readonly (
+    | 'thicknessSide'
+    | 'kFactorMethod'
+    | 'relief'
+    | 'materialPresetId'
+    | 'gaugeId'
+    | 'fixedPoint'
+  )[];
+  bends?: SheetMetalBend[];
+}
+
+/**
+ * Structural checks for a sheet-metal feature (spec ranges, M16). Whether
+ * the bends fold (a zone that is not clear, a flange still attached beside
+ * its bend, a loop of bends) depends on the blank's geometry and surfaces as
+ * the builder's `sheet-metal:*` refusal at rebuild.
+ */
+function validateSheetMetalInput(
+  document: ProjectDocument,
+  input: SheetMetalInput
+): void {
+  if (!findSketch(document, input.sketchId)) {
+    throw new Error('Sheet metal needs an existing sketch for its blank.');
+  }
+  if (!Array.isArray(input.profiles) || input.profiles.length === 0) {
+    throw new Error('Sheet metal needs at least one sketch cell as its blank.');
+  }
+  const value = (label: string, param: ParamValue) =>
+    resolvedModelingValue(document, `sheet metal ${label}`, param);
+  const positive = (label: string, param: ParamValue) => {
+    const resolved = value(label, param);
+    if (!(resolved > 0) || !Number.isFinite(resolved)) {
+      throw new Error(`Sheet metal ${label} must be greater than 0.`);
+    }
+    return resolved;
+  };
+  const kFactor = (label: string, param: ParamValue) => {
+    const resolved = value(label, param);
+    if (!(resolved > 0 && resolved < 1)) {
+      throw new Error(
+        `Sheet metal ${label} must be greater than 0 and less than 1.`
+      );
+    }
+  };
+  const relief = (label: string, entry: SheetMetalRelief | undefined) => {
+    if (entry === undefined) return;
+    if (!SHEET_METAL_RELIEF_SHAPES.has(entry.shape)) {
+      throw new Error(`Unknown ${label} shape ${String(entry.shape)}.`);
+    }
+    if (entry.width !== undefined) positive(`${label} width`, entry.width);
+    if (entry.extension !== undefined) {
+      const extension = value(`${label} extension`, entry.extension);
+      if (!(extension >= 0) || !Number.isFinite(extension)) {
+        throw new Error(`Sheet metal ${label} extension must not be negative.`);
+      }
+    }
+  };
+  positive('thickness', input.thickness);
+  positive('inside bend radius', input.bendRadius);
+  kFactor('K-factor', input.kFactor);
+  if (
+    input.thicknessSide !== undefined &&
+    input.thicknessSide !== 'positive' &&
+    input.thicknessSide !== 'negative'
+  ) {
+    throw new Error(
+      `Unknown sheet metal thickness side ${String(input.thicknessSide)}.`
+    );
+  }
+  if (
+    input.kFactorMethod !== undefined &&
+    input.kFactorMethod !== 'value' &&
+    input.kFactorMethod !== 'din-6935'
+  ) {
+    throw new Error(
+      `Unknown sheet metal K-factor method ${String(input.kFactorMethod)}.`
+    );
+  }
+  relief('relief', input.relief);
+  if (
+    input.materialPresetId !== undefined &&
+    !sheetMetalMaterialById(input.materialPresetId)
+  ) {
+    throw new Error(
+      `Unknown sheet metal material ${String(input.materialPresetId)}.`
+    );
+  }
+  if (input.gaugeId !== undefined && !sheetMetalGaugeById(input.gaugeId)) {
+    throw new Error(`Unknown sheet metal gauge ${String(input.gaugeId)}.`);
+  }
+  if (
+    input.fixedPoint !== undefined &&
+    (!Array.isArray(input.fixedPoint) ||
+      input.fixedPoint.length !== 2 ||
+      !input.fixedPoint.every(
+        (coordinate) =>
+          typeof coordinate === 'number' && Number.isFinite(coordinate)
+      ))
+  ) {
+    throw new Error(
+      'The sheet metal fixed point needs two finite coordinates.'
+    );
+  }
+  if (!Array.isArray(input.bends)) {
+    throw new Error('Sheet metal needs a bend table (it may be empty).');
+  }
+  if (input.bends.length > MAX_SHEET_METAL_BENDS) {
+    throw new Error(
+      `Sheet metal holds at most ${MAX_SHEET_METAL_BENDS} bends.`
+    );
+  }
+  const ids = new Set<string>();
+  const lines = new Set<string>();
+  input.bends.forEach((bend, index) => {
+    const label = `bend ${index + 1}`;
+    if (typeof bend.id !== 'string' || !SHEET_METAL_BEND_ID.test(bend.id)) {
+      throw new Error(
+        `Sheet metal ${label} needs an id of letters, digits, "-" or "_".`
+      );
+    }
+    if (ids.has(bend.id)) {
+      throw new Error(`Sheet metal bend id ${bend.id} is used twice.`);
+    }
+    ids.add(bend.id);
+    const sketch = bend.line ? findSketch(document, bend.line.sketchId) : null;
+    const object = bend.line
+      ? ownEntry(document.nodes, bend.line.objectId)
+      : undefined;
+    if (
+      !sketch ||
+      !sketch.objectIds.includes(bend.line.objectId) ||
+      object?.kind !== 'sketch-object' ||
+      object.data.objectKind !== 'line'
+    ) {
+      throw new Error(`Sheet metal ${label} needs a straight sketch line.`);
+    }
+    if (lines.has(bend.line.objectId)) {
+      throw new Error(`Sheet metal ${label} reuses another bend's line.`);
+    }
+    lines.add(bend.line.objectId);
+    const angle = value(`${label} angle`, bend.angleDeg);
+    if (!(angle > 0 && angle <= SHEET_METAL_MAX_BEND_ANGLE_DEG)) {
+      throw new Error(
+        `Sheet metal ${label} angle must be greater than 0° and at most ${SHEET_METAL_MAX_BEND_ANGLE_DEG}°.`
+      );
+    }
+    if (bend.direction !== 'up' && bend.direction !== 'down') {
+      throw new Error(`Sheet metal ${label} direction must be up or down.`);
+    }
+    if (
+      bend.position !== undefined &&
+      !SHEET_METAL_BEND_POSITIONS.has(bend.position)
+    ) {
+      throw new Error(
+        `Unknown sheet metal ${label} position ${String(bend.position)}.`
+      );
+    }
+    if (
+      bend.position === 'outside-mold-line' &&
+      angle > SHEET_METAL_MOLD_LINE_MAX_ANGLE_DEG
+    ) {
+      throw new Error(
+        `Sheet metal ${label} is placed by its outside mold line, which needs an angle of at most ${SHEET_METAL_MOLD_LINE_MAX_ANGLE_DEG}°.`
+      );
+    }
+    if (bend.radius !== undefined) {
+      positive(`${label} inside radius`, bend.radius);
+    }
+    if (bend.kFactor !== undefined) kFactor(`${label} K-factor`, bend.kFactor);
+    relief(`${label} relief`, bend.relief);
+  });
+}
+
 /** Schema v53: the most thread starts the kernel's thread generator builds. */
 const MAX_THREAD_STARTS = 16;
 /** Schema v53: the steepest flank the kernel's thread generator builds. */
@@ -1168,6 +1574,49 @@ function validateThreadInput(
       'Thread chamfer angle must be strictly between 0 and 90 degrees.'
     );
   }
+  // Schema v57: an end takes a chamfer or a runout, not both.
+  for (const [end, chamfered, runout] of [
+    ['start', input.chamferStart, input.runoutStart],
+    ['end', input.chamferEnd, input.runoutEnd]
+  ] as const) {
+    if (chamfered && runout) {
+      throw new Error(
+        `A thread's ${end} takes a chamfer or a runout, not both.`
+      );
+    }
+  }
+  const pipe = input.profile === 'npt' || input.profile === 'bspt';
+  if (
+    !pipe &&
+    input.profile !== 'iso-metric' &&
+    input.profile !== 'printable' &&
+    input.profile !== 'custom'
+  ) {
+    throw new Error(`Unknown thread profile ${String(input.profile)}.`);
+  }
+  if (input.pipeSize !== undefined) {
+    if (!pipe) {
+      throw new Error('Only an NPT or BSPT pipe thread takes a pipe size.');
+    }
+    if (!isPipeThreadSize(input.pipeSize)) {
+      throw new Error(
+        `Pipe thread sizes are ${PIPE_THREAD_SIZES.join(', ')}; ${String(input.pipeSize)} is not one.`
+      );
+    }
+  }
+  if (pipe) {
+    // The pipe size sets the diameter and pitch, and the standard its form.
+    for (const [label, present] of [
+      ['diameter', input.majorDiameter],
+      ['pitch', input.pitch]
+    ] as const) {
+      if (present !== undefined) {
+        throw new Error(
+          `A pipe thread takes its ${label} from its pipe size; set the size instead.`
+        );
+      }
+    }
+  }
   const starts = value('starts', input.starts);
   if (
     starts !== undefined &&
@@ -1187,7 +1636,9 @@ function validateThreadInput(
     for (const [label, present] of custom) {
       if (present !== undefined) {
         throw new Error(
-          `Only a custom thread profile sets its ${label}; this one derives it from the pitch.`
+          pipe
+            ? `Only a custom thread profile sets its ${label}; a pipe thread takes its standard's.`
+            : `Only a custom thread profile sets its ${label}; this one derives it from the pitch.`
         );
       }
     }
@@ -1241,6 +1692,122 @@ const MIN_ENVELOPED_TEETH = 10;
  * (a pointed tip, a closed root land, a cylinder too small) is the kernel's
  * call and surfaces as its typed refusal at rebuild.
  */
+/**
+ * M17: structural checks for a standard part. The row is the catalogue's
+ * (`standardPartProblem`); a length only on a screw or dowel pin, positive
+ * and long enough to build; a placement with a non-zero axis.
+ */
+function validateStandardPartInput(
+  document: ProjectDocument,
+  input: StandardPartInput
+): void {
+  const problem = standardPartProblem(input);
+  if (problem) throw new Error(problem);
+  // M17 (schema v83): only a threaded part has a thread to simplify.
+  if (input.thread !== undefined) {
+    if (input.thread !== 'modeled' && input.thread !== 'simplified') {
+      throw new Error('A thread is modeled or simplified.');
+    }
+    if (!standardPartIsThreaded(input.partKind)) {
+      throw new Error(`A ${standardPartNoun(input)} has no thread.`);
+    }
+  }
+  const value = (label: string, param: ParamValue) =>
+    resolvedModelingValue(document, `standard part ${label}`, param);
+  if (input.hole !== undefined) validateStandardPartHole(document, input);
+  if (standardPartHasLength(input.partKind)) {
+    // M17 (schema v77): in a hole, an absent length is matched to it.
+    if (input.length === undefined) {
+      if (input.hole !== undefined) return validatePlacement();
+      throw new Error(`A ${standardPartNoun(input)} needs a length.`);
+    }
+    const length = value('length', input.length);
+    const minimum =
+      standardPartMinimumLengthMm(standardPartGeometry(input)) /
+      millimetresPerUnit(document.units);
+    if (!(length > minimum - 1e-9)) {
+      throw new Error(
+        `A ${standardPartNoun(input)} this size must be longer than ${Number(minimum.toPrecision(4))} ${document.units}.`
+      );
+    }
+  } else if (input.length !== undefined) {
+    throw new Error(
+      `A ${standardPartNoun(input)} takes its height from its table, not a length.`
+    );
+  }
+  validatePlacement();
+
+  function validatePlacement(): void {
+    if (input.origin === undefined || input.axis === undefined) {
+      throw new Error('A standard part needs an origin and an axis.');
+    }
+    value('origin X', input.origin.x);
+    value('origin Y', input.origin.y);
+    value('origin Z', input.origin.z);
+    const axisLength = Math.hypot(
+      value('axis X', input.axis.x),
+      value('axis Y', input.axis.y),
+      value('axis Z', input.axis.z)
+    );
+    if (!(axisLength > 1e-12)) {
+      throw new Error('A standard part axis must be non-zero.');
+    }
+    if (input.xDirection !== undefined) {
+      value('x direction X', input.xDirection.x);
+      value('x direction Y', input.xDirection.y);
+      value('x direction Z', input.xDirection.z);
+    }
+  }
+}
+
+/**
+ * M17 (schema v77): a part inserted into a hole names an M01 hole feature,
+ * is a screw or a dowel pin, and is the size the hole takes: a screw the
+ * hole's standard size, a dowel pin the hole's diameter.
+ */
+function validateStandardPartHole(
+  document: ProjectDocument,
+  input: StandardPartInput
+): void {
+  const hole = findFeature(document, input.hole!.featureId);
+  if (!hole || hole.data.featureKind !== 'hole') {
+    throw new Error('A part is inserted into a hole feature.');
+  }
+  if (input.partKind !== 'screw' && input.partKind !== 'dowel') {
+    throw new Error('Only a screw or a dowel pin goes into a hole.');
+  }
+  const data = hole.data;
+  const diameterMm = data.standard
+    ? holeStandardDiameterMm(data.standard)
+    : resolvedModelingValue(document, 'hole diameter', data.diameter) *
+      millimetresPerUnit(document.units);
+  const matched = standardPartForHole(
+    input.partKind,
+    {
+      ...(data.standard
+        ? {
+            standard: {
+              system: data.standard.system,
+              size: data.standard.size,
+              kind: data.standard.kind
+            }
+          }
+        : {}),
+      diameterMm,
+      through: data.depthMode === 'through',
+      boreMm: 0
+    },
+    input.system,
+    input.head
+  );
+  if (typeof matched === 'string') throw new Error(matched);
+  if (matched.system !== input.system || matched.size !== input.size) {
+    throw new Error(
+      `${hole.name} takes ${matched.system === 'iso' ? 'an ISO' : 'an ANSI'} ${matched.size}, not ${input.size}.`
+    );
+  }
+}
+
 function validateGearInput(document: ProjectDocument, input: GearInput): void {
   const value = (label: string, param: ParamValue): number => {
     const resolved = resolvedModelingValue(document, label, param);
@@ -1848,6 +2415,7 @@ function validateModelingFeatureUpdate(
     }
     case 'pattern':
       validateBodyTarget(preview, feature.data.targetBodyId);
+      validatePatternDefinition(preview, feature.data, feature.featureId);
       break;
     case 'mirror':
       validateMirrorInput(preview, {
@@ -1864,10 +2432,14 @@ function validateModelingFeatureUpdate(
       });
       break;
     case 'hole':
-      validateHoleInput(preview, {
-        name: feature.name,
-        ...feature.data
-      });
+      validateHoleInput(
+        preview,
+        {
+          name: feature.name,
+          ...feature.data
+        },
+        feature.featureId
+      );
       break;
     case 'gear': {
       const { featureKind: _kind, ...gear } = feature.data;
@@ -1877,6 +2449,16 @@ function validateModelingFeatureUpdate(
     case 'thread': {
       const { featureKind: _kind, ...thread } = feature.data;
       validateThreadInput(preview, { name: feature.name, ...thread });
+      break;
+    }
+    case 'sheet-metal': {
+      const { featureKind: _kind, ...sheet } = feature.data;
+      validateSheetMetalInput(preview, { name: feature.name, ...sheet });
+      break;
+    }
+    case 'standard-part': {
+      const { featureKind: _kind, ...part } = feature.data;
+      validateStandardPartInput(preview, { name: feature.name, ...part });
       break;
     }
     case 'shell':
@@ -2438,6 +3020,53 @@ export const commandFactories = {
       (document) => validateGearInput(document, withIds)
     );
   },
+  /** M16: a sheet-metal part from sketch cells; `bends` may be empty. */
+  sheetMetalBody(payload: SheetMetalInput): CommandDefinition<SheetMetalInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.sheet-metal',
+      'Add sheet metal',
+      withIds,
+      (document) => sheetMetalBody(document, withIds).document,
+      (document) => validateSheetMetalInput(document, withIds)
+    );
+  },
+  /**
+   * M16: replaces a sheet-metal feature's rule fields and bend table in one
+   * transaction (one `feature.update` command, so one undo step).
+   */
+  updateSheetMetal(
+    payload: SheetMetalUpdateInput
+  ): CommandDefinition<FeatureUpdateInput> {
+    return commandFactories.updateFeature(
+      {
+        featureId: payload.featureId,
+        ...(payload.name === undefined ? {} : { name: payload.name }),
+        data: {
+          featureKind: 'sheet-metal',
+          ...payload.rule,
+          ...(payload.bends === undefined ? {} : { bends: payload.bends })
+        },
+        ...(payload.clear && payload.clear.length > 0
+          ? { clearData: [...payload.clear] }
+          : {})
+      },
+      'Edit sheet metal'
+    );
+  },
+  /** M17: a standard part from its standard's table, as a new body. */
+  standardPartBody(
+    payload: StandardPartInput
+  ): CommandDefinition<StandardPartInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.standard-part',
+      `Add ${standardPartNoun(payload)}`,
+      withIds,
+      (document) => standardPartBody(document, withIds).document,
+      (document) => validateStandardPartInput(document, withIds)
+    );
+  },
   threadBody(payload: ThreadInput): CommandDefinition<ThreadInput> {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
     return makeCommand(
@@ -2556,12 +3185,15 @@ export const commandFactories = {
           ? 'Linear'
           : payload.patternKind === 'grid'
             ? 'Grid'
-            : 'Circular'
+            : payload.patternKind === 'points'
+              ? 'Point'
+              : 'Circular'
       } pattern`,
       withIds,
       (document) => patternBody(document, withIds).document,
       (document) => {
         validateBodyTarget(document, payload.targetBodyId);
+        validatePatternDefinition(document, payload, null);
         if (payload.axisRef) {
           if (payload.patternKind !== 'circular') {
             throw new Error(
@@ -2883,10 +3515,18 @@ export const commandFactories = {
   },
   setAssemblyStudy(
     payload: AssemblyStudySetInput,
-    label = 'Edit motion study'
+    label = 'Edit animation'
   ): CommandDefinition<AssemblyStudySetInput> {
     return makeCommand('assembly.study.set', label, payload, (document) =>
       setAssemblyStudy(document, payload)
+    );
+  },
+  setAssemblyExplode(
+    payload: AssemblyExplodeSetInput,
+    label = 'Move exploded part'
+  ): CommandDefinition<AssemblyExplodeSetInput> {
+    return makeCommand('assembly.explode.set', label, payload, (document) =>
+      setAssemblyExplode(document, payload)
     );
   },
   deleteAssemblyStudy(
@@ -2894,7 +3534,7 @@ export const commandFactories = {
   ): CommandDefinition<AssemblyStudyDeleteInput> {
     return makeCommand(
       'assembly.study.delete',
-      'Delete motion study',
+      'Delete animation',
       payload,
       (document) => deleteAssemblyStudy(document, payload)
     );
@@ -2961,12 +3601,100 @@ export const commandFactories = {
       moveToObjectFolder(document, payload)
     );
   },
+  createConfigurations(
+    payload: ConfigurationCreateInput,
+    label = 'Add configurations'
+  ): CommandDefinition<ConfigurationCreateInput> {
+    return makeCommand('configuration.create', label, payload, (document) =>
+      createConfigurations(document, payload)
+    );
+  },
+  deleteConfigurations(
+    label = 'Remove configurations'
+  ): CommandDefinition<Record<string, never>> {
+    return makeCommand('configuration.delete', label, {}, (document) =>
+      deleteConfigurations(document)
+    );
+  },
+  addConfigurationRow(
+    payload: ConfigurationRowAddInput,
+    label = `Add configuration ${payload.name}`
+  ): CommandDefinition<ConfigurationRowAddInput> {
+    return makeCommand('configuration.row.add', label, payload, (document) =>
+      addConfigurationRow(document, payload)
+    );
+  },
+  renameConfigurationRow(
+    payload: ConfigurationRowRenameInput,
+    label = `Rename configuration to ${payload.name}`
+  ): CommandDefinition<ConfigurationRowRenameInput> {
+    return makeCommand('configuration.row.rename', label, payload, (document) =>
+      renameConfigurationRow(document, payload)
+    );
+  },
+  deleteConfigurationRow(
+    payload: ConfigurationRowDeleteInput,
+    label = 'Delete configuration'
+  ): CommandDefinition<ConfigurationRowDeleteInput> {
+    return makeCommand('configuration.row.delete', label, payload, (document) =>
+      deleteConfigurationRow(document, payload)
+    );
+  },
+  addConfigurationColumn(
+    payload: ConfigurationColumnAddInput,
+    label = 'Add configuration column'
+  ): CommandDefinition<ConfigurationColumnAddInput> {
+    return makeCommand('configuration.column.add', label, payload, (document) =>
+      addConfigurationColumn(document, payload)
+    );
+  },
+  deleteConfigurationColumn(
+    payload: ConfigurationColumnDeleteInput,
+    label = 'Remove configuration column'
+  ): CommandDefinition<ConfigurationColumnDeleteInput> {
+    return makeCommand(
+      'configuration.column.delete',
+      label,
+      payload,
+      (document) => deleteConfigurationColumn(document, payload)
+    );
+  },
+  setConfigurationCell(
+    payload: ConfigurationCellSetInput,
+    label = 'Edit configuration'
+  ): CommandDefinition<ConfigurationCellSetInput> {
+    return makeCommand('configuration.cell.set', label, payload, (document) =>
+      setConfigurationCell(document, payload)
+    );
+  },
+  activateConfiguration(
+    payload: ConfigurationActivateInput,
+    label = 'Switch configuration'
+  ): CommandDefinition<ConfigurationActivateInput> {
+    return makeCommand('configuration.activate', label, payload, (document) =>
+      activateConfiguration(document, payload)
+    );
+  },
+  setPrintClearance(
+    payload: PrintClearanceSetInput,
+    label = payload.value === null
+      ? 'Clear print clearance'
+      : 'Set print clearance'
+  ): CommandDefinition<PrintClearanceSetInput> {
+    return makeCommand('printClearance.set', label, payload, (document) =>
+      setPrintClearance(document, payload)
+    );
+  },
   addDrawingAnnotation(
     payload: DrawingAnnotationAddInput
   ): CommandDefinition<DrawingAnnotationAddInput> {
     return makeCommand(
       'drawing.annotation.add',
-      payload.annotation.kind === 'note' ? 'Add note' : 'Add dimension',
+      payload.annotation.kind === 'note'
+        ? 'Add note'
+        : isDrawingGeometryAnnotation(payload.annotation)
+          ? 'Add mark'
+          : 'Add dimension',
       payload,
       (document) => addDrawingAnnotation(document, payload)
     );
@@ -3072,12 +3800,12 @@ function projectedParameterScope(
         pending.delete(operation.name);
         pending.set(operation.newName, pendingExpression);
       }
-      const renamedValue = scope[operation.name];
+      const renamedValue = ownEntry(scope, operation.name);
       if (renamedValue !== undefined) {
         scope[operation.newName] = renamedValue;
         delete scope[operation.name];
       }
-      const renamedKind = kinds[operation.name];
+      const renamedKind = ownEntry(kinds, operation.name);
       if (renamedKind !== undefined) {
         kinds[operation.newName] = renamedKind;
         delete kinds[operation.name];
@@ -3826,7 +4554,9 @@ export function commandsForCadPatch(
       readDocument === projectedDocument &&
       originalSketchView !== document &&
       sketch.objectIds.some(
-        (id) => originalSketchView.nodes[id] !== document.nodes[id]
+        (id) =>
+          ownEntry(originalSketchView.nodes, id) !==
+          ownEntry(document.nodes, id)
       )
     ) {
       if (invalidatedSketchReads.has(sketch.sketchId)) {
@@ -3839,7 +4569,7 @@ export function commandsForCadPatch(
       readDocument = originalSketchView;
     }
     for (const objectId of sketch.objectIds) {
-      const node = readDocument.nodes[objectId];
+      const node = ownEntry(readDocument.nodes, objectId);
       if (node?.kind === 'sketch-object') {
         objects.push(node.data);
         objectIds.push(objectId);
@@ -3979,8 +4709,10 @@ export function commandsForCadPatch(
     if (retained.some((previous) => sameSource(previous, source)))
       return source.bodyId as BodyId;
     const bodyId = resolveBody(source.bodyId);
-    const topology =
-      projectedDocument.derived.bodyRepresentations[bodyId]?.topology;
+    const topology = ownEntry(
+      projectedDocument.derived.bodyRepresentations,
+      bodyId
+    )?.topology;
     const entries =
       reference.kind === 'face' ? topology?.faces : topology?.edges;
     if (
@@ -4189,9 +4921,10 @@ export function commandsForCadPatch(
           throw new Error(
             'Raised-feature separation requires an unmodified imported source.'
           );
-        const measured =
-          projectedDocument.derived.bodyRepresentations[bodyId]?.topology
-            ?.recognizedPlanarEmboss;
+        const measured = ownEntry(
+          projectedDocument.derived.bodyRepresentations,
+          bodyId
+        )?.topology?.recognizedPlanarEmboss;
         if (
           !measured ||
           JSON.stringify(measured) !== JSON.stringify(operation.selection)
@@ -4247,7 +4980,7 @@ export function commandsForCadPatch(
         const sketch = findSketch(projectedDocument, operation.sketchId);
         const objectId = toEntityId(operation.objectId);
         const object = sketch?.objectIds.includes(objectId)
-          ? projectedDocument.nodes[objectId]
+          ? ownEntry(projectedDocument.nodes, objectId)
           : undefined;
         if (!sketch || !object || object.kind !== 'sketch-object') {
           throw new Error(
@@ -5033,8 +5766,25 @@ export function isParameterRetype(command: {
   );
 }
 
+/**
+ * Tweak's vocabulary: setting a parameter's value, and (F06) switching to
+ * another configuration row the model's author defined. Both turn the
+ * model's published knobs; neither edits its features.
+ */
+export function isTweakCommandKind(kind: string): boolean {
+  return kind === 'parameter.set' || kind === 'configuration.activate';
+}
+
+/** Whether a command is one Tweak runs: a value edit or a row switch. */
+export function isTweakCommand(command: {
+  kind: string;
+  payload?: unknown;
+}): boolean {
+  return isTweakCommandKind(command.kind) && !isParameterRetype(command);
+}
+
 function parameterOnly(kinds: string[] | null): boolean {
-  return !!kinds?.length && kinds.every((kind) => kind === 'parameter.set');
+  return !!kinds?.length && kinds.every(isTweakCommandKind);
 }
 
 /** D01: a command that edits drawing sheets and never the model. */
@@ -5088,6 +5838,36 @@ export function isAssemblyOnlyCommand(command: AnyCommand): boolean {
 /** Whether a history entry edits the assembly section and nothing else. */
 function assemblyOnly(entry: DocumentHistoryEntry | undefined): boolean {
   return sectionOnly(entry, isAssemblyCommandKind, 'assembly');
+}
+
+/**
+ * F06: a configuration command that edits only the table. Activating a row,
+ * and setting a parameter or suppression cell of the active row, change the
+ * model; body and material cells change what is shown and exported but not
+ * the geometry, so they keep the ready geometry too.
+ */
+export function isConfigurationTableOnlyCommand(
+  command: AnyCommand,
+  document: ProjectDocument
+): boolean {
+  if (command.commands)
+    return (
+      command.commands.length > 0 &&
+      command.commands.every((child) =>
+        isConfigurationTableOnlyCommand(child, document)
+      )
+    );
+  if (!command.kind.startsWith('configuration.')) return false;
+  if (command.kind === 'configuration.activate') return false;
+  if (command.kind === 'configuration.cell.set') {
+    const payload = command.payload as ConfigurationCellSetInput;
+    return (
+      payload.rowId !== document.configurations?.activeRowId ||
+      payload.column.kind === 'body' ||
+      payload.column.kind === 'material'
+    );
+  }
+  return true;
 }
 
 /** I05: a command that edits reference images and never the model. */
@@ -5321,6 +6101,7 @@ export class CommandManager {
   }
 
   execute(command: AnyCommand): ProjectDocument {
+    assertCommandIdentifiers(serializedLeaves(command), this.document);
     command.validate(this.document);
     const previous = this.document;
     let next = command.apply(this.document);
@@ -5368,6 +6149,7 @@ export class CommandManager {
    * undo/redo still matches the document.
    */
   normalize(command: AnyCommand): ProjectDocument {
+    assertCommandIdentifiers(serializedLeaves(command), this.document);
     command.validate(this.document);
     let next = command.apply(this.document);
     assertDocumentTextBudget(next);
@@ -5395,6 +6177,18 @@ export class CommandManager {
     return this.document;
   }
 
+  /**
+   * Renames a save point (L03): a forward write with no undo entry, since
+   * undo never rewinds the save-point list. See `renameCheckpoint`.
+   */
+  renameCheckpoint(checkpointId: string, name: string): ProjectDocument {
+    const next = renameCheckpoint(this.document, checkpointId, name);
+    if (next === this.document) return this.document;
+    assertDocumentTextBudget(next);
+    this.document = next;
+    return this.document;
+  }
+
   undo(): ProjectDocument {
     return this.moveHistory('undo');
   }
@@ -5412,6 +6206,14 @@ export class CommandManager {
     const next = applyDocumentChanges(this.document, entry.changes, direction);
     // Validate before advancing the cursor or publishing a restored state.
     assertDocumentTextBudget(next);
+    const identifiers = documentIdentifierError({
+      ...next,
+      editHistory: undefined
+    });
+    if (identifiers)
+      throw new Error(
+        `${direction === 'undo' ? 'Undo' : 'Redo'} refused: ${identifiers}`
+      );
     this.document = appendRevision(
       {
         ...next,
@@ -5429,6 +6231,7 @@ export class CommandManager {
     const previous = this.document;
     let next = this.document;
     const serialized: SerializedCommand[] = [];
+    assertCommandIdentifiers(commands.flatMap(serializedLeaves), this.document);
     for (const command of commands) {
       command.validate(next);
       next = command.apply(next);
@@ -5514,6 +6317,7 @@ export function replayCommands(
     commandLog: serializedCommands,
     editHistory: undefined
   });
+  assertCommandIdentifiers(serializedCommands, initialDocument);
   const commandCarrier = {
     schemaVersion: initialDocument.schemaVersion,
     commandLog: serializedCommands
@@ -5655,11 +6459,23 @@ export function replayCommands(
       case 'feature.hole':
         next = holeBody(next, command.payload as HoleInput).document;
         break;
+      case 'feature.sheet-metal':
+        next = sheetMetalBody(
+          next,
+          command.payload as SheetMetalInput
+        ).document;
+        break;
       case 'feature.gear':
         next = gearBody(next, command.payload as GearInput).document;
         break;
       case 'feature.thread':
         next = threadBody(next, command.payload as ThreadInput).document;
+        break;
+      case 'feature.standard-part':
+        next = standardPartBody(
+          next,
+          command.payload as StandardPartInput
+        ).document;
         break;
       case 'feature.shell':
         next = shellBody(next, command.payload as ShellInput).document;
@@ -5877,10 +6693,73 @@ export function replayCommands(
           command.payload as AssemblyCouplingDeleteInput
         );
         break;
+      case 'assembly.explode.set':
+        next = setAssemblyExplode(
+          next,
+          command.payload as AssemblyExplodeSetInput
+        );
+        break;
       case 'objectFolder.move':
         next = moveToObjectFolder(
           next,
           command.payload as ObjectFolderMoveInput
+        );
+        break;
+      case 'configuration.create':
+        next = createConfigurations(
+          next,
+          command.payload as ConfigurationCreateInput
+        );
+        break;
+      case 'configuration.delete':
+        next = deleteConfigurations(next);
+        break;
+      case 'configuration.row.add':
+        next = addConfigurationRow(
+          next,
+          command.payload as ConfigurationRowAddInput
+        );
+        break;
+      case 'configuration.row.rename':
+        next = renameConfigurationRow(
+          next,
+          command.payload as ConfigurationRowRenameInput
+        );
+        break;
+      case 'configuration.row.delete':
+        next = deleteConfigurationRow(
+          next,
+          command.payload as ConfigurationRowDeleteInput
+        );
+        break;
+      case 'configuration.column.add':
+        next = addConfigurationColumn(
+          next,
+          command.payload as ConfigurationColumnAddInput
+        );
+        break;
+      case 'configuration.column.delete':
+        next = deleteConfigurationColumn(
+          next,
+          command.payload as ConfigurationColumnDeleteInput
+        );
+        break;
+      case 'configuration.cell.set':
+        next = setConfigurationCell(
+          next,
+          command.payload as ConfigurationCellSetInput
+        );
+        break;
+      case 'configuration.activate':
+        next = activateConfiguration(
+          next,
+          command.payload as ConfigurationActivateInput
+        );
+        break;
+      case 'printClearance.set':
+        next = setPrintClearance(
+          next,
+          command.payload as PrintClearanceSetInput
         );
         break;
       case 'drawing.annotation.add':

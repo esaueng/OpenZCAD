@@ -240,4 +240,51 @@ describe('/api/library-folders', () => {
     const sealed = await worker.fetch(put(save(0, 2, 'c2VhbGVk')), encrypted);
     expect(sealed.status).toBe(200);
   });
+
+  it('stores only sealed folders once the account holds an encrypted project', async () => {
+    // Encrypting a project needs no opt-in, and folder records name the
+    // projects they hold: an owner or member of an encrypted project seals.
+    const projectsOn = {
+      E2EE_KEYS_ENABLED: 'true',
+      E2EE_PROJECTS_ENABLED: 'true'
+    };
+    const d1 = withUsers('user_beta_dev', 'owner');
+    const project = (id: string, owner: string, format: 1 | 2) =>
+      db!
+        .prepare(
+          `INSERT INTO projects (id, user_id, name, document_json, updated_at, storage_format)
+           VALUES (?, ?, '', ?, ?, ?)`
+        )
+        .run(id, owner, format === 2 ? 'e2ee-v1:x' : '{}', NOW, format);
+    project('proj_plain', 'user_beta_dev', 1);
+    // Plaintext projects alone leave plaintext folders allowed.
+    expect((await worker.fetch(put(save(0)), env(d1, projectsOn))).status).toBe(
+      200
+    );
+
+    project('proj_theirs', 'owner', 2);
+    db!
+      .prepare(
+        `INSERT INTO project_members
+           (project_id, user_id, role, added_by_user_id, created_at, updated_at)
+         VALUES ('proj_theirs', 'user_beta_dev', 'viewer', 'owner', 1, 1)`
+      )
+      .run();
+    const asMember = await worker.fetch(put(save(1)), env(d1, projectsOn));
+    expect(asMember.status).toBe(409);
+    expect(await asMember.json()).toMatchObject({
+      code: 'LIBRARY_FOLDERS_ENCRYPTION_REQUIRED'
+    });
+
+    db!.prepare('DELETE FROM project_members').run();
+    project('proj_mine', 'user_beta_dev', 2);
+    const asOwner = await worker.fetch(put(save(1)), env(d1, projectsOn));
+    expect(asOwner.status).toBe(409);
+    // The rollout flag still gates the rule.
+    expect((await worker.fetch(put(save(1)), env(d1))).status).toBe(200);
+    expect(
+      (await worker.fetch(put(save(2, 2, 'c2VhbGVk')), env(d1, projectsOn)))
+        .status
+    ).toBe(200);
+  });
 });

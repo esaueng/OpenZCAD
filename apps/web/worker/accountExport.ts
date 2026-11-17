@@ -10,6 +10,7 @@ import {
 } from '@openzcad/persistence';
 import type { AuthSession } from '@openzcad/shared';
 import { isConsentVersionReady } from './glimpseCensus';
+import { isSealedSettingsStorageReady } from './settings';
 
 /** Explicit projections keep credentials, token hashes and other users' data
  * out of the export. Project contents travel through the existing authorized
@@ -39,6 +40,11 @@ export async function exportAccountData(
   );
   const owned = 'SELECT id FROM projects WHERE user_id = ?';
   const shareLinkLabel = (await isShareLinkLabelReady(db)) ? 'label, ' : '';
+  // Exported as stored: an encrypted library's settings stay sealed here and
+  // open only in the browser (ADR-024 amendment 2026-11-14).
+  const sealedSettings = (await isSealedSettingsStorageReady(db))
+    ? ', sealed_settings'
+    : '';
   const queries: [string, string, unknown[]][] = [
     [
       'users',
@@ -47,7 +53,7 @@ export async function exportAccountData(
     ],
     [
       'user_settings',
-      'SELECT settings_json, revision, updated_at FROM user_settings WHERE user_id = ?',
+      `SELECT settings_json, revision, updated_at${sealedSettings} FROM user_settings WHERE user_id = ?`,
       [session.userId]
     ],
     [

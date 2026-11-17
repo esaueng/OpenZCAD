@@ -18,8 +18,8 @@ Michigan, United States (one sentence in section 1, the only place to edit).
 
 ## Placeholders
 
-None left. The effective date (November 13, 2026, for the account-activity
-addition to Cloud account statistics) is at the top of the page;
+None left. The effective date (November 14, 2026, for blocking Cloudflare
+Web Analytics in the security policy) is at the top of the page;
 update it whenever the policy changes.
 `apps/web/src/lib/privacyPolicyPlaceholders.test.ts` ("FILL IN BEFORE MERGE")
 fails in `pnpm test:web` while any placeholder in square brackets and capitals
@@ -33,11 +33,12 @@ without a new commitment. Review these before merge:
 - The lawful-bases sentence and the EU/UK representative or DPO line are
   removed: the maintainer confirmed the service is US-focused (2026-10-26).
   Restore them if the service targets EU or UK users.
-- Cloudflare Web Analytics: the page says the security policy allows it and
-  that Cloudflare can add it, not that it is on. The CSP in
-  `apps/web/public/_headers` allows it; the app's own code never loads it.
-  The maintainer was not sure whether it is enabled on the zone (2026-10-26):
-  check the Cloudflare dashboard and say plainly either way.
+- Cloudflare Web Analytics: the CSP in `apps/web/public/_headers` no longer
+  allows its script or beacon (2026-11-14), so it cannot run on the app's
+  pages even if it is enabled on the zone: the page holds decrypted models,
+  unlocked account keys and share keys (ADR-024). The page says the policy
+  blocks every third-party script but Turnstile. Edge traffic analytics,
+  which need no script, are unaffected.
 - Signed-out assistant counters: "kept without a set expiry". The code has no
   deletion path for them.
 - Analytics totals: "may be kept indefinitely". Glimpse's retention is set in

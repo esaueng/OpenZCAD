@@ -282,6 +282,36 @@ describe('offsetPreviewRejection for a blend preview', () => {
     expect(rejection?.headline).toContain('smaller diameter');
     expect(rejection?.detail).toBe('opaque refusal');
   });
+  it('points to the fillets, not a smaller diameter, when the group cannot re-fillet', () => {
+    const rejection = offsetPreviewRejection({
+      label: 'Resize Cylinder',
+      bodyId: toBodyId('body'),
+      documentMoved: false,
+      derived: {
+        bodyRepresentations: { [toBodyId('body')]: {} },
+        warnings: [],
+        featureWarnings: [
+          {
+            featureId: toFeatureId('resize'),
+            featureName: 'Resize Cylinder',
+            message: 'opaque refusal',
+            kind: 'refusal',
+            kernelRefusal: {
+              family: 'direct-edit',
+              category: 'internal',
+              code: 'cylinder-diameter-unbuildable',
+              reason: 'group_reblend_failed'
+            }
+          }
+        ]
+      }
+    });
+    expect(rejection?.headline).toBe(
+      "The fillets around this wall can't be rebuilt at that diameter. Change or remove those fillets in History, then resize the wall."
+    );
+    expect(rejection?.headline).not.toContain('smaller diameter');
+    expect(rejection?.detail).toBe('opaque refusal');
+  });
   it('names the kernel refusal without the feature prefix when the blend fails to build', () => {
     const rejection = offsetPreviewRejection({
       label: 'Fillet edges',
@@ -378,6 +408,8 @@ describe('offsetPreviewRejection for a face pushed past a neighbour', () => {
         'A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.',
       detail: kernelWords,
       category: 'invalid_topology',
+      // The typed code rides along since #1330 (`PlainRefusal.code`).
+      code: 'offset_face_collapses_neighbor',
       limit: -6.400000000000002
     });
   });

@@ -12,6 +12,8 @@ import {
   NativeDeviceKeysError,
   nativeCadFile,
   openExternalUrl,
+  DESKTOP_SLICERS,
+  openInDesktopSlicer,
   protectDesktopClose,
   saveCadBinaryFile
 } from './desktopBridge';
@@ -20,14 +22,23 @@ import {
   setCloudFunctionsEnabled
 } from './cloudMode';
 import { readSharedSourceBytes } from './sharedSourceDownload';
-import { sharedBlobUrl } from './e2ee/sharedSnapshotLoader';
+import { sharedBlobPath } from './e2ee/sharedSnapshotLoader';
 import { createContentBlobsApi } from './e2ee/encryptedContentBlobs';
 import { LEGACY_PROJECT_FRAME_CONTENT_TYPE } from '@openzcad/shared';
+import { projectRequest } from './projectWriteGate';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: vi.fn() }));
 
 const BLOB_ID = '0123456789abcdef0123456789abcdef';
+
+/**
+ * A share blob's older path form, which a desktop build before the token
+ * header used and the native host still streams.
+ */
+function sharedBlobUrl(token: string, blobId: string): string {
+  return `/api/e2ee/share/${token}/blobs/${blobId}`;
+}
 
 type NativePiece = Uint8Array | Error | 'stall';
 
@@ -221,6 +232,48 @@ describe('desktop bridge', () => {
     });
   });
 
+  it('opens a 3MF in a desktop slicer only in the desktop app (L09)', async () => {
+    const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
+    await expect(
+      openInDesktopSlicer('orcaslicer', 'gear.3mf', bytes)
+    ).resolves.toBe(false);
+    expect(invoke).not.toHaveBeenCalled();
+
+    markDesktopRuntime();
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    await expect(
+      openInDesktopSlicer('orcaslicer', 'gear.3mf', bytes)
+    ).resolves.toBe(true);
+    expect(invoke).toHaveBeenCalledWith('open_in_slicer', {
+      slicer: 'orcaslicer',
+      suggestedName: 'gear.3mf',
+      contents: [0x50, 0x4b, 0x03, 0x04]
+    });
+    vi.mocked(invoke).mockRejectedValueOnce(
+      'OrcaSlicer did not open. Is it installed?'
+    );
+    await expect(
+      openInDesktopSlicer('orcaslicer', 'gear.3mf', bytes)
+    ).rejects.toThrow('OrcaSlicer did not open. Is it installed?');
+  });
+
+  it('offers exactly the slicers the shell accepts (L09)', () => {
+    const shell = readFileSync(
+      resolve(process.cwd(), '../desktop/src-tauri/src/slicer_handoff.rs'),
+      'utf8'
+    );
+    const ids = [...shell.matchAll(/^\s+id: "([^"]+)",$/gm)].map(
+      (match) => match[1]
+    );
+    expect(ids).toEqual(DESKTOP_SLICERS.map((slicer) => slicer.id));
+    expect(
+      readFileSync(
+        resolve(process.cwd(), '../desktop/src-tauri/src/lib.rs'),
+        'utf8'
+      )
+    ).toMatch(/generate_handler!\[[^\]]*\bopen_in_slicer\b/);
+  });
+
   it('downloads binary exports through a blob anchor in the browser', async () => {
     vi.useFakeTimers();
     const createObjectURL = vi.fn<(blob: Blob) => string>(() => 'blob:mesh');
@@ -335,11 +388,13 @@ describe('desktop bridge', () => {
     });
 
     await expect(
-      desktopFetch('/api/uploads', {
-        method: 'POST',
-        body,
-        signal: controller.signal
-      })
+      desktopFetch(
+        '/api/uploads',
+        projectRequest(
+          { projectId: 'proj_upload', payload: 'plaintext' },
+          { method: 'POST', body, signal: controller.signal }
+        )
+      )
     ).rejects.toMatchObject({ name: 'AbortError' });
     expect(invoke).not.toHaveBeenCalled();
   });
@@ -436,14 +491,16 @@ describe('desktop bridge', () => {
       contentLength: 5
     });
 
-    const response = await desktopFetch(sharedBlobUrl('AbC-12_x', BLOB_ID), {
-      credentials: 'omit'
+    const response = await desktopFetch(sharedBlobPath(BLOB_ID), {
+      credentials: 'omit',
+      headers: { 'x-openzcad-share-token': 'AbC-12_x' }
     });
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-length')).toBe('5');
     expect(invoke).toHaveBeenCalledWith('desktop_blob_stream_open', {
-      path: `/api/e2ee/share/AbC-12_x/blobs/${BLOB_ID}`
+      path: `/api/e2ee/share/blobs/${BLOB_ID}`,
+      shareToken: 'AbC-12_x'
     });
     // Nothing is read from Rust before the caller reads the body.
     expect(nativeCommands()).toEqual(['desktop_blob_stream_open']);
@@ -455,6 +512,68 @@ describe('desktop bridge', () => {
       'desktop_blob_stream_read',
       { streamId: 'stream-1' }
     ]);
+  });
+
+  it("hands Rust a share read's token beside its path, never in it", async () => {
+    markDesktopRuntime();
+    mockNativeBlobStream([new Uint8Array([7])]);
+    const streamed = await desktopFetch(sharedBlobPath(BLOB_ID), {
+      credentials: 'omit',
+      headers: { 'x-openzcad-share-token': 'AbC-12_x' }
+    });
+    await streamed.arrayBuffer();
+    expect(invoke).toHaveBeenCalledWith('desktop_blob_stream_open', {
+      path: `/api/e2ee/share/blobs/${BLOB_ID}`,
+      shareToken: 'AbC-12_x'
+    });
+
+    for (const path of [
+      '/api/e2ee/share',
+      '/api/share',
+      '/api/share/sources/artifact_1',
+      // Not streamed: only a 32-hex blob id is.
+      '/api/e2ee/share/blobs/blob_1'
+    ]) {
+      vi.mocked(invoke).mockReset();
+      vi.mocked(invoke).mockResolvedValue({ status: 200, body: [] });
+      await desktopFetch(path, {
+        headers: { 'x-openzcad-share-token': 'AbC-12_x' }
+      });
+      expect(vi.mocked(invoke).mock.calls).toEqual([
+        [
+          'desktop_api_request',
+          {
+            request: {
+              method: 'GET',
+              path,
+              contentType: undefined,
+              body: undefined,
+              shareToken: 'AbC-12_x'
+            }
+          }
+        ]
+      ]);
+    }
+
+    // A malformed token is dropped, as the Worker would ignore it, and
+    // nothing without one names a token at all.
+    for (const headers of [
+      { 'x-openzcad-share-token': 'AbC 12' },
+      { 'x-openzcad-share-token': 'a'.repeat(257) },
+      {}
+    ] as Record<string, string>[]) {
+      vi.mocked(invoke).mockReset();
+      vi.mocked(invoke).mockResolvedValue({ status: 404, body: [] });
+      await desktopFetch('/api/share', { headers });
+      const [command, args] = vi.mocked(invoke).mock.calls[0]!;
+      expect(command).toBe('desktop_api_request');
+      expect(
+        (args as { request: Record<string, unknown> }).request
+      ).not.toHaveProperty('shareToken');
+      expect((args as { request: { path: string } }).request.path).toBe(
+        '/api/share'
+      );
+    }
   });
 
   it('streams only blob and archived artifact reads; everything else stays buffered', async () => {
@@ -487,7 +606,13 @@ describe('desktop bridge', () => {
       vi.mocked(invoke).mockReset();
       vi.mocked(invoke).mockResolvedValue({ status: 200, body: [] });
       await desktopFetch(path, init);
-      expect(nativeCommands(), path).toEqual(['desktop_api_request']);
+      // A project write readies its credential first (projectWriteGate.ts).
+      expect(
+        nativeCommands().filter(
+          (command) => command !== 'desktop_prepare_access'
+        ),
+        path
+      ).toEqual(['desktop_api_request']);
     }
   });
 
@@ -605,11 +730,12 @@ describe('desktop bridge', () => {
     mockNativeBlobStream(pieces, { contentLength: 60 * MiB + 1 });
 
     const bytes = await readSharedSourceBytes(
-      sharedBlobUrl('AbC-12_x', BLOB_ID),
+      sharedBlobPath(BLOB_ID),
       'bracket.step',
       desktopFetch,
       128 * MiB,
-      30_000
+      30_000,
+      { 'x-openzcad-share-token': 'AbC-12_x' }
     );
 
     expect(bytes?.byteLength).toBe(60 * MiB + 1);

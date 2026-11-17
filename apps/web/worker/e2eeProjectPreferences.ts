@@ -69,6 +69,37 @@ export async function accountRequiresEncryptedProjects(
   return row?.encrypt_new_projects === 1;
 }
 
+/**
+ * Whether this account's library must be encrypted: it opted in to
+ * encrypting new projects, or it owns or is a member of a project already
+ * stored encrypted. Encrypting existing projects and accepting an encrypted
+ * invitation need no opt-in, so the opt-in alone would let such an account
+ * keep sending plaintext beside its encrypted projects: folder records that
+ * name them, and device projects saved to the account that may be copies of
+ * them. Callers apply the rollout flag first; a database without migration
+ * 0031 holds neither.
+ */
+export async function accountRequiresEncryptedLibrary(
+  db: D1Database | undefined,
+  userId: string
+): Promise<boolean> {
+  if (!db || !(await isE2eeProjectPreferenceStorageReady(db))) return false;
+  const row = await db
+    .prepare(
+      `SELECT
+         EXISTS (SELECT 1 FROM e2ee_project_preferences
+           WHERE user_id = ?1 AND encrypt_new_projects = 1)
+         OR EXISTS (SELECT 1 FROM projects
+           WHERE user_id = ?1 AND storage_format = 2)
+         OR EXISTS (SELECT 1 FROM project_members m
+           JOIN projects p ON p.id = m.project_id
+           WHERE m.user_id = ?1 AND p.storage_format = 2) AS required`
+    )
+    .bind(userId)
+    .first<{ required: number }>();
+  return row?.required === 1;
+}
+
 /** Profile erasure removes the opt-in with the key tables. */
 export function projectPreferenceErasureStatement(
   db: D1Database,
@@ -148,9 +179,13 @@ export async function handleProjectPreferenceRequest(
   defaultOn = false
 ): Promise<Response> {
   if (request.method === 'GET') {
-    const row = await storedRow(db, userId);
+    const [row, libraryEncrypted] = await Promise.all([
+      storedRow(db, userId),
+      accountRequiresEncryptedLibrary(db, userId)
+    ]);
     return respond({
-      preference: row ? recordOf(row) : null
+      preference: row ? recordOf(row) : null,
+      libraryEncrypted
     } satisfies E2eeProjectPreferenceResponse);
   }
   if (request.method !== 'PUT') {

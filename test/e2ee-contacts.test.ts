@@ -7,8 +7,18 @@ import { readFileSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  accountKeySequence,
   decodeDeviceApprovalGrant,
+  decodeProjectInvitation,
   fromBase64Url,
+  contactsEntryHash,
+  isSealedContactsRecord,
+  MAX_CONTACTS_ENTRIES,
+  readSealedContactsHeader,
+  SEALED_CONTACTS_RECORD_BYTES,
+  sealContactsEntries,
+  sealedContactsRecordHash,
+  type SealedContactsHead,
   generateRecoveryKey,
   generateSigningKeyPair,
   signDeviceApprovalGrant,
@@ -19,16 +29,23 @@ import {
   toBase64Url,
   type Bytes
 } from '@openzcad/crypto';
-import type { E2eeContactsResponse } from '@openzcad/shared';
+import type {
+  E2eeContactsResponse,
+  E2eeCreateInvitationRequest,
+  E2eeInvitationsApi
+} from '@openzcad/shared';
 import {
   EncryptionFlowError,
   advanceApprovalAsNewDevice,
   approveDevice,
+  legacyApproveReadOnly,
   enrollWithRecoveryKey,
   loadEncryption,
   requestApproval,
+  removeDevice,
   replaceRecoveryKey,
   setUpEncryption,
+  withIdentityKey,
   type AccountView,
   type E2eeContext,
   type EncryptionState
@@ -44,6 +61,7 @@ import {
   parseContactScan,
   contactScanText,
   recordKeyChange,
+  sealContactsList,
   untrustContact,
   verifiedEncryptionKey,
   verifyContact,
@@ -54,10 +72,34 @@ import {
   type ContactPinStore
 } from '../apps/web/src/lib/e2ee/contactPins';
 import {
+  contactInvitationPeople,
+  invitableContacts,
+  inviteToEncryptedProject,
+  type InvitationContext
+} from '../apps/web/src/lib/e2ee/invitations';
+import { memoryInvitationStore } from '../apps/web/src/lib/e2ee/invitationStore';
+import type { ProjectGroupContext } from '../apps/web/src/lib/e2ee/projectGroups';
+import {
   databaseBefore,
   newServer,
   type Server
 } from './support/e2ee-documents';
+
+/**
+ * Approves as the tests did before approval always certified (L11 plan T1):
+ * a recovery key certifies, and `null` builds a legacy read-only device.
+ */
+function approveAs(
+  ctx: Parameters<typeof approveDevice>[0],
+  account: Parameters<typeof approveDevice>[1],
+  approval: Parameters<typeof approveDevice>[2],
+  proof: Parameters<typeof approveDevice>[3],
+  authorization: Parameters<typeof approveDevice>[4]
+) {
+  return authorization === null
+    ? legacyApproveReadOnly(ctx, account, approval, proof)
+    : approveDevice(ctx, account, approval, proof, authorization);
+}
 
 const ALICE = 'user_alice';
 const BOB = 'user_bob';
@@ -163,23 +205,6 @@ async function json<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
-async function signedEntry(
-  identity: CryptoKeyPair,
-  userId: string,
-  contactUserId: string
-) {
-  return signContactsEntry(
-    identity.privateKey,
-    nextContactsEntry(null, userId, {
-      issuedAt: 1,
-      action: 'verify',
-      contactUserId,
-      identityKeyHash: new Uint8Array(32).fill(1),
-      deviceListHead: { sequence: 0, entryHash: new Uint8Array(32).fill(2) }
-    })
-  );
-}
-
 describe('contacts routes', () => {
   it('append only entries signed by the identity that extend the stored head', async () => {
     const srv = serverWith();
@@ -204,76 +229,112 @@ describe('contacts routes', () => {
 
     const post = (body: unknown) =>
       srv.call('POST', '/api/e2ee/contacts', { user: ALICE, body });
-    const intruder = await generateSigningKeyPair(false);
-    // Not signed by Alice's identity (and a stale sequence 0).
-    const forged = await signedEntry(intruder, ALICE, CAROL);
-    let response = await post({
-      generation: alice.account.generation,
-      entry: toBase64Url(forged.entry),
-      signature: toBase64Url(forged.signature)
+    const generation = alice.account.generation;
+    const keySequence = accountKeySequence(alice.account.list);
+    const untrust = nextContactsEntry(book.list, ALICE, {
+      issuedAt: 2,
+      action: 'untrust',
+      contactUserId: BOB,
+      identityKeyHash: book.list!.contacts.get(BOB)!.identityKeyHash
     });
+    // The Worker cannot open a record, so any key seals one for its checks.
+    const sealed = (
+      identity: CryptoKey,
+      overrides: {
+        keySequence?: number;
+        previous?: SealedContactsHead | null;
+      } = {}
+    ) =>
+      sealContactsEntries(identity, new Uint8Array(32).fill(9), {
+        userId: ALICE,
+        accountKeySequence: overrides.keySequence ?? keySequence,
+        previous:
+          overrides.previous === undefined
+            ? book.list!.sealed
+            : overrides.previous,
+        entries: [
+          overrides.previous === null
+            ? { ...untrust, sequence: 0, previousEntryHash: null }
+            : untrust
+        ]
+      }).then(([record]) => ({
+        generation,
+        entry: toBase64Url(record!.entry),
+        signature: toBase64Url(record!.signature)
+      }));
+    const intruder = await generateSigningKeyPair(false);
+    // Not signed by Alice's identity, and a stale sequence 0.
+    let response = await post(
+      await sealed(intruder.privateKey, { previous: null })
+    );
     expect(response.status).toBe(409);
     expect(await json(response)).toMatchObject({
       code: 'E2EE_CONTACTS_CONFLICT'
     });
-    const next = await signContactsEntry(
-      intruder.privateKey,
-      nextContactsEntry(book.list, ALICE, {
-        issuedAt: 2,
-        action: 'verify',
-        contactUserId: CAROL,
-        identityKeyHash: new Uint8Array(32).fill(3),
-        deviceListHead: { sequence: 0, entryHash: new Uint8Array(32).fill(4) }
-      })
-    );
-    response = await post({
-      generation: alice.account.generation,
-      entry: toBase64Url(next.entry),
-      signature: toBase64Url(next.signature)
-    });
+    // The next sequence, but not signed by Alice's identity.
+    const next = await sealed(intruder.privateKey);
+    response = await post(next);
     expect(response.status).toBe(400);
     expect(await json(response)).toMatchObject({
       code: 'E2EE_CONTACTS_INVALID'
     });
+    // Signed by Alice's identity, but off the stored head, or sealed under
+    // an account key that is not her current one.
+    const [offHead, staleKey] = await withIdentityKey(
+      alice.keys,
+      alice.account,
+      alice.recovery.secret,
+      async (identity) => [
+        await sealed(identity, {
+          previous: { ...book.list!.sealed!, recordHash: new Uint8Array(32) }
+        }),
+        await sealed(identity, { keySequence: keySequence + 1 })
+      ]
+    );
+    response = await post(offHead);
+    expect(response.status).toBe(400);
+    expect(await json(response)).toMatchObject({
+      code: 'E2EE_CONTACTS_INVALID'
+    });
+    response = await post(staleKey);
+    expect(response.status).toBe(409);
+    expect(await json(response)).toMatchObject({
+      code: 'E2EE_DEVICE_LIST_CHANGED'
+    });
+    // A plaintext entry, however well formed, is no longer stored.
+    const plaintext = await signContactsEntry(intruder.privateKey, untrust);
+    response = await post({
+      generation,
+      entry: toBase64Url(plaintext.entry),
+      signature: toBase64Url(plaintext.signature)
+    });
+    expect(response.status).toBe(400);
+    expect(await json(response)).toMatchObject({
+      code: 'E2EE_CONTACTS_SEALED_REQUIRED'
+    });
     // Another generation, garbage, and an oversized entry.
     for (const [body, code] of [
-      [
-        {
-          generation: 9,
-          entry: toBase64Url(next.entry),
-          signature: toBase64Url(next.signature)
-        },
-        'E2EE_GENERATION_CONFLICT'
-      ],
-      [
-        {
-          generation: 1,
-          entry: 'AAAA',
-          signature: toBase64Url(next.signature)
-        },
-        'E2EE_CONTACTS_INVALID'
-      ],
-      [
-        {
-          generation: 1,
-          entry: 'A'.repeat(800),
-          signature: toBase64Url(next.signature)
-        },
-        'E2EE_REQUEST_INVALID'
-      ],
-      [
-        { generation: 1, entry: toBase64Url(next.entry), signature: 'AAAA' },
-        'E2EE_REQUEST_INVALID'
-      ]
+      [{ ...next, generation: 9 }, 'E2EE_GENERATION_CONFLICT'],
+      [{ ...next, entry: 'AAAA' }, 'E2EE_CONTACTS_INVALID'],
+      [{ ...next, entry: 'A'.repeat(800) }, 'E2EE_REQUEST_INVALID'],
+      [{ ...next, signature: 'AAAA' }, 'E2EE_REQUEST_INVALID']
     ] as const) {
       response = await post(body);
       expect(response.status, code).toBeGreaterThanOrEqual(400);
       expect(await json(response)).toMatchObject({ code });
     }
-    // Nothing but the one valid entry was stored.
-    expect(
-      srv.db.prepare('SELECT COUNT(*) AS n FROM e2ee_contact_entries').get()
-    ).toEqual({ n: 1 });
+    // Nothing but the one valid entry was stored, and only sealed: the
+    // server's copy names neither the contact nor their fingerprint.
+    const stored = srv.db
+      .prepare('SELECT entry FROM e2ee_contact_entries')
+      .all() as { entry: string }[];
+    expect(stored).toHaveLength(1);
+    const bytes = fromBase64Url(stored[0]!.entry);
+    expect(isSealedContactsRecord(bytes)).toBe(true);
+    expect(new TextDecoder('latin1').decode(bytes)).not.toContain(BOB);
+    expect(toHex(bytes)).not.toContain(
+      toHex(book.list!.contacts.get(BOB)!.identityKeyHash)
+    );
     // Bob reads only his own (empty) list, never Alice's.
     const bobList = await json<E2eeContactsResponse>(
       await srv.call('GET', '/api/e2ee/contacts', { user: BOB })
@@ -869,6 +930,117 @@ describe('verifying contacts in the browser', () => {
   });
 });
 
+describe('inviting a verified contact to an encrypted project (#1465 review)', () => {
+  /**
+   * Alice has verified Bob and Carol. The server answers her contacts
+   * lookup with Carol labelled with Bob's address (and Bob with another):
+   * the real lookup (`contactInvitationPeople`) over that answer. Her
+   * invitations are signed by her device and captured instead of posted.
+   */
+  async function relabelled() {
+    const srv = serverWith();
+    const alice = await person(srv, ALICE);
+    const bob = await person(srv, BOB);
+    const carol = await person(srv, CAROL);
+    share(srv);
+    let book = await loadContacts(alice.contacts, alice.account);
+    for (const contact of [BOB, CAROL]) {
+      book = await verifyContact(
+        alice.contacts,
+        alice.account,
+        book,
+        await inspectContact(alice.contacts, book, contact),
+        alice.recovery.secret
+      );
+    }
+    const contacts: ContactsContext = {
+      ...alice.contacts,
+      api: {
+        ...alice.contacts.api,
+        async contacts() {
+          const answer = await alice.contacts.api.contacts();
+          return {
+            ...answer,
+            people: answer.people.map((p) =>
+              p.userId === CAROL
+                ? { ...p, email: EMAILS[BOB]! }
+                : p.userId === BOB
+                  ? { ...p, email: 'elsewhere@example.com' }
+                  : p
+            )
+          };
+        }
+      }
+    };
+    const created: E2eeCreateInvitationRequest[] = [];
+    const ctx: InvitationContext = {
+      groups: {
+        account: alice.account,
+        device: alice.account.device
+      } as unknown as ProjectGroupContext,
+      api: {
+        async create(_projectId: string, request: E2eeCreateInvitationRequest) {
+          created.push(request);
+          return { invitation: { invitationId: `inv_${created.length}` } };
+        }
+      } as unknown as E2eeInvitationsApi,
+      people: contactInvitationPeople(contacts, alice.account),
+      store: memoryInvitationStore()
+    };
+    const signed = (index: number) =>
+      decodeProjectInvitation(fromBase64Url(created[index]!.statement));
+    return { alice, bob, carol, ctx, signed };
+  }
+
+  it('never binds the contact the server lists under the address typed', async () => {
+    const { bob, carol, ctx, signed } = await relabelled();
+    // Typing Bob's address offers the contact listed under it, named by
+    // their own contact code: Carol's, not Bob's.
+    const offered = await invitableContacts(ctx, EMAILS[BOB]!);
+    expect(offered).toEqual([
+      {
+        userId: CAROL,
+        identityKeyHash: toHex(carol.account.list.identityKeyHash),
+        code: (await ownVerificationCode(carol.account)).code,
+        email: EMAILS[BOB]
+      }
+    ]);
+    expect(offered[0]!.code).not.toBe(
+      (await ownVerificationCode(bob.account)).code
+    );
+    // Invited by address alone, the statement names no identity: whoever
+    // accepts waits for Alice's confirmation.
+    await inviteToEncryptedProject(ctx, 'proj_shared', EMAILS[BOB]!, 'editor');
+    expect(signed(0).inviteeIdentityKeyHash).toBeUndefined();
+    expect(signed(0).linkTokenHash).toBeDefined();
+  });
+
+  it('binds only the contact the owner picked, by the identity its code showed', async () => {
+    const { bob, carol, ctx, signed } = await relabelled();
+    const bobIdentity = toHex(bob.account.list.identityKeyHash);
+    await inviteToEncryptedProject(ctx, 'proj_shared', EMAILS[BOB]!, 'viewer', {
+      contact: { userId: BOB, identityKeyHash: bobIdentity }
+    });
+    expect(toHex(signed(0).inviteeIdentityKeyHash!)).toBe(bobIdentity);
+    // A pick whose identity is not that account's verified one (another
+    // contact's, or a key that changed since) sends nothing.
+    await expect(
+      inviteToEncryptedProject(ctx, 'proj_shared', EMAILS[BOB]!, 'viewer', {
+        contact: {
+          userId: BOB,
+          identityKeyHash: toHex(carol.account.list.identityKeyHash)
+        }
+      })
+    ).rejects.toMatchObject({ code: 'not-verified' });
+    await expect(
+      inviteToEncryptedProject(ctx, 'proj_shared', EMAILS[BOB]!, 'viewer', {
+        contact: { userId: STRANGER, identityKeyHash: bobIdentity }
+      })
+    ).rejects.toMatchObject({ code: 'not-verified' });
+    expect(() => signed(1)).toThrow();
+  });
+});
+
 // --- Migration 0037 ----------------------------------------------------------
 
 /** Statements that name the contacts table, other than the probe. */
@@ -973,7 +1145,7 @@ describe('contacts heads in device approval', () => {
   ): Promise<void> {
     const request = await requestApproval(phone, null, 'Phone');
     if (request.step !== 'waiting') throw new Error('Expected a request');
-    await approveDevice(
+    await approveAs(
       approverKeys,
       ready(await loadEncryption(approver.keys)),
       await approver.keys.api.getApproval(request.approval.id),
@@ -1036,7 +1208,7 @@ describe('contacts heads in device approval', () => {
     // laptop through the approval exchange, which needs no recovery key.
     const request = await requestApproval(phone.keys, account, 'Phone');
     if (request.step !== 'waiting') throw new Error('Expected a request');
-    await approveDevice(
+    await approveAs(
       alice.keys,
       ready(await loadEncryption(alice.keys)),
       await alice.keys.api.getApproval(request.approval.id),
@@ -1075,7 +1247,7 @@ describe('contacts heads in device approval', () => {
     expect(await phone.pins.advanceList(ALICE, fork)).toBe(true);
     const request = await requestApproval(phone.keys, account, 'Phone');
     if (request.step !== 'waiting') throw new Error('Expected a request');
-    await approveDevice(
+    await approveAs(
       alice.keys,
       ready(await loadEncryption(alice.keys)),
       await alice.keys.api.getApproval(request.approval.id),
@@ -1134,7 +1306,7 @@ describe('contacts heads in device approval', () => {
     // It asks the stale laptop to confirm: the grant names entry 0.
     const request = await requestApproval(phone.keys, account, 'Phone');
     if (request.step !== 'waiting') throw new Error('Expected a request');
-    await approveDevice(
+    await approveAs(
       alice.keys,
       ready(await loadEncryption(alice.keys)),
       await alice.keys.api.getApproval(request.approval.id),
@@ -1205,6 +1377,8 @@ describe('contacts heads in device approval', () => {
       sequence: 1,
       confirmed: true
     });
+    // Pins name entry hashes; the rows' hashes are of the sealed records.
+    const honestHead = (await alice.pins.readList(ALICE))!.entryHash;
 
     // A recovery-key phone is shown a fork: entry 0, then its own entries
     // 1' (Bob untrusted) and 2' (Bob verified again).
@@ -1243,7 +1417,7 @@ describe('contacts heads in device approval', () => {
     const laptopAccount = ready(await loadEncryption(alice.keys));
     const request = await requestApproval(alice.keys, laptopAccount, 'Laptop');
     if (request.step !== 'waiting') throw new Error('Expected a request');
-    await approveDevice(
+    await approveAs(
       phone.keys,
       ready(await loadEncryption(phone.keys)),
       await phone.keys.api.getApproval(request.approval.id),
@@ -1254,11 +1428,11 @@ describe('contacts heads in device approval', () => {
     // The laptop's pin did not move to the fork.
     expect(await alice.pins.readList(ALICE)).toMatchObject({
       sequence: 1,
-      entryHash: honest[1]!.entry_hash,
+      entryHash: honestHead,
       confirmed: true,
       pendingApproval: {
         sequence: 2,
-        entryHash: fork[2]!.entry_hash,
+        entryHash: toHex(forkBook.list!.entries[2]!.hash),
         confirmed: false
       }
     });
@@ -1378,7 +1552,7 @@ describe('contacts heads in device approval', () => {
       else expect(before).toBeNull();
       const request = await requestApproval(phone.keys, account, 'Phone');
       if (request.step !== 'waiting') throw new Error('Expected request');
-      await approveDevice(
+      await approveAs(
         approver.keys,
         ready(await loadEncryption(approver.keys)),
         await approver.keys.api.getApproval(request.approval.id),
@@ -1574,7 +1748,7 @@ describe('contacts heads in device approval', () => {
     const request = await requestApproval(third.keys, null, 'Third');
     if (request.step !== 'waiting') throw new Error('Expected request');
     const approveThird = async () =>
-      approveDevice(
+      approveAs(
         phone.keys,
         ready(await loadEncryption(phone.keys)),
         await phone.keys.api.getApproval(request.approval.id),
@@ -2067,5 +2241,356 @@ describe('erasure', () => {
     expect(book.generation).toBe(2);
     expect(book.list).toBeNull();
     expect(book.contacts.find((c) => c.userId === BOB)?.standing).toBe('seen');
+  });
+});
+
+describe('sealed contacts lists (ADR-024 amendment 2026-11-14)', () => {
+  /** Another browser of `user`, with its own device keys and pins. */
+  function otherBrowser(srv: Server, user: string) {
+    const pins = memoryContactPins();
+    const keys: E2eeContext = { ...keysFor(srv, user), contactPins: pins };
+    const contacts: ContactsContext = {
+      keys,
+      api: createContactsApi(fetcher(srv, user)),
+      pins
+    };
+    return { keys, pins, contacts };
+  }
+
+  const rowsOf = (srv: Server, user = ALICE) =>
+    srv.db
+      .prepare(
+        `SELECT generation, sequence, entry, entry_hash FROM e2ee_contact_entries
+         WHERE user_id = ? ORDER BY generation, sequence`
+      )
+      .all(user) as {
+      generation: number;
+      sequence: number;
+      entry: string;
+      entry_hash: string;
+    }[];
+
+  const keySequencesOf = (srv: Server) =>
+    rowsOf(srv).map(
+      (row) =>
+        readSealedContactsHeader(fromBase64Url(row.entry)).accountKeySequence
+    );
+
+  /**
+   * Alice's list as an older build stored it: Bob verified in a plaintext,
+   * identity-signed entry the server can read.
+   */
+  async function plaintextList() {
+    const srv = serverWith();
+    const alice = await person(srv, ALICE);
+    await person(srv, BOB);
+    await person(srv, CAROL);
+    share(srv);
+    const empty = await loadContacts(alice.contacts, alice.account);
+    const bob = await inspectContact(alice.contacts, empty, BOB);
+    const entry = nextContactsEntry(null, ALICE, {
+      issuedAt: 1,
+      action: 'verify',
+      contactUserId: BOB,
+      identityKeyHash: bob.list!.identityKeyHash,
+      deviceListHead: {
+        sequence: bob.list!.pin.sequence,
+        entryHash: bob.list!.headHash
+      }
+    });
+    const signed = await withIdentityKey(
+      alice.keys,
+      alice.account,
+      alice.recovery.secret,
+      (identity) => signContactsEntry(identity, entry)
+    );
+    srv.db
+      .prepare(
+        `INSERT INTO e2ee_contact_entries
+           (user_id, generation, sequence, entry, signature, entry_hash, created_at)
+         VALUES (?, ?, 0, ?, ?, ?, '2026-11-01T00:00:00.000Z')`
+      )
+      .run(
+        ALICE,
+        alice.account.generation,
+        toBase64Url(signed.entry),
+        toBase64Url(signed.signature),
+        toHex(await contactsEntryHash(signed.entry))
+      );
+    return { srv, alice, signed };
+  }
+
+  it('reseals a plaintext list with the same entries, so every pin stays valid', async () => {
+    const { srv, alice, signed } = await plaintextList();
+    let book = await loadContacts(alice.contacts, alice.account);
+    expect(book.list?.sealed).toBeNull();
+    expect(book.contacts.find((c) => c.userId === BOB)?.standing).toBe(
+      'verified'
+    );
+    const plaintextPin = await alice.pins.readList(ALICE);
+    // A second browser pinned the plaintext head before the reseal.
+    const tablet = otherBrowser(srv, ALICE);
+    const tabletAccount = ready(
+      await enrollWithRecoveryKey(
+        tablet.keys,
+        ready(await loadEncryption(tablet.keys)),
+        alice.recovery.secret,
+        'Tablet'
+      )
+    );
+    await loadContacts(tablet.contacts, tabletAccount);
+    const tabletPin = await tablet.pins.readList(ALICE);
+    expect(tabletPin).toMatchObject({ sequence: 0 });
+
+    // The server refuses to grow the plaintext list.
+    const post = await srv.call('POST', '/api/e2ee/contacts', {
+      user: ALICE,
+      body: {
+        generation: alice.account.generation,
+        entry: toBase64Url(signed.entry),
+        signature: toBase64Url(signed.signature)
+      }
+    });
+    expect(await json(post)).toMatchObject({
+      code: 'E2EE_CONTACTS_SEALED_REQUIRED'
+    });
+
+    // Verifying Carol reseals entry 0 and appends entry 1, both sealed.
+    book = await verifyContact(
+      alice.contacts,
+      alice.account,
+      book,
+      await inspectContact(alice.contacts, book, CAROL),
+      alice.recovery.secret
+    );
+    expect(book.list?.sealed).toMatchObject({ sequence: 1 });
+    const rows = rowsOf(srv);
+    expect(rows.map((row) => row.sequence)).toEqual([0, 1]);
+    for (const row of rows) {
+      const bytes = fromBase64Url(row.entry);
+      expect(isSealedContactsRecord(bytes)).toBe(true);
+      expect(new TextDecoder('latin1').decode(bytes)).not.toMatch(
+        /user_bob|user_carol/
+      );
+      expect(row.entry_hash).toBe(toHex(await sealedContactsRecordHash(bytes)));
+    }
+    // The entry inside is the plaintext one, so the old pin is an ancestor.
+    expect(toHex(book.list!.entries[0]!.hash)).toBe(plaintextPin!.entryHash);
+    expect(book.contacts.find((c) => c.userId === BOB)?.standing).toBe(
+      'verified'
+    );
+    const tabletBook = await loadContacts(tablet.contacts, tabletAccount);
+    expect(tabletBook.list?.pin.sequence).toBe(1);
+    expect(tabletBook.list?.contacts.get(BOB)?.status).toBe('verified');
+    expect(tabletBook.list?.contacts.get(CAROL)?.status).toBe('verified');
+  });
+
+  it('seals an unchanged list on request, and the reseal route accepts only that', async () => {
+    const { srv, alice } = await plaintextList();
+    const book = await loadContacts(alice.contacts, alice.account);
+    const put = (body: Record<string, unknown>) =>
+      srv.call('PUT', '/api/e2ee/contacts', { user: ALICE, body });
+    const resealed = await withIdentityKey(
+      alice.keys,
+      alice.account,
+      alice.recovery.secret,
+      (identity) =>
+        sealContactsEntries(identity, new Uint8Array(32).fill(9), {
+          userId: ALICE,
+          accountKeySequence: accountKeySequence(alice.account.list),
+          previous: null,
+          entries: book.list!.entries.map(({ entry }) => entry)
+        })
+    );
+    const records = resealed.map((record) => ({
+      entry: toBase64Url(record.entry),
+      signature: toBase64Url(record.signature)
+    }));
+    const base = {
+      generation: alice.account.generation,
+      replaces: toHex(book.list!.headHash),
+      entries: records
+    };
+    // Another head, another length, or not sealed: nothing is replaced.
+    for (const [body, code] of [
+      [{ ...base, replaces: '0'.repeat(64) }, 'E2EE_CONTACTS_CONFLICT'],
+      [
+        { ...base, entries: [...records, ...records] },
+        'E2EE_CONTACTS_CONFLICT'
+      ],
+      [
+        {
+          ...base,
+          entries: [{ ...records[0]!, entry: rowsOf(srv)[0]!.entry }]
+        },
+        'E2EE_CONTACTS_SEALED_REQUIRED'
+      ]
+    ] as const) {
+      const response = await put(body);
+      expect(response.status, code).toBeGreaterThanOrEqual(400);
+      expect(await json(response)).toMatchObject({ code });
+    }
+    expect(isSealedContactsRecord(fromBase64Url(rowsOf(srv)[0]!.entry))).toBe(
+      false
+    );
+    // The browser seals it without changing it.
+    const sealedBook = await sealContactsList(
+      alice.contacts,
+      alice.account,
+      book,
+      alice.recovery.secret
+    );
+    expect(sealedBook.list?.sealed).toMatchObject({ sequence: 0 });
+    expect(sealedBook.list?.pin).toEqual(book.list?.pin);
+    expect(rowsOf(srv)).toHaveLength(1);
+    expect(isSealedContactsRecord(fromBase64Url(rowsOf(srv)[0]!.entry))).toBe(
+      true
+    );
+    // Once sealed, a reseal is a conflict and changes nothing.
+    const again = await put(base);
+    expect(await json(again)).toMatchObject({ code: 'E2EE_CONTACTS_CONFLICT' });
+    expect(rowsOf(srv)[0]!.entry_hash).toBe(
+      toHex(
+        await sealedContactsRecordHash(fromBase64Url(rowsOf(srv)[0]!.entry))
+      )
+    );
+  });
+
+  it('takes a reseal of the longest list through the router, and nothing larger', async () => {
+    // #1522 review: the whole list goes in one PUT, which outgrew the 512 KiB
+    // every other encrypted route takes at about 720 entries.
+    const { srv, alice } = await plaintextList();
+    const record = {
+      entry: toBase64Url(new Uint8Array(SEALED_CONTACTS_RECORD_BYTES.next)),
+      signature: toBase64Url(new Uint8Array(65))
+    };
+    const body = (count: number) => ({
+      generation: alice.account.generation,
+      replaces: '0'.repeat(64),
+      entries: Array.from({ length: count }, () => record)
+    });
+    const longest = body(MAX_CONTACTS_ENTRIES);
+    expect(JSON.stringify(longest).length).toBeGreaterThan(512 * 1024);
+    const read = await srv.call('PUT', '/api/e2ee/contacts', {
+      user: ALICE,
+      body: longest
+    });
+    // Read and checked: these placeholder records are refused on their
+    // content, not on the size of the request.
+    const answer = await json<{ code: string }>(read);
+    expect(answer.code).not.toBe('E2EE_REQUEST_TOO_LARGE');
+    expect(read.status).not.toBe(413);
+    const oversized = await srv.call('PUT', '/api/e2ee/contacts', {
+      user: ALICE,
+      body: { ...longest, padding: 'x'.repeat(1024 * 1024) }
+    });
+    expect(oversized.status).toBe(413);
+    // An append is still held to the ordinary limit.
+    const append = await srv.call('POST', '/api/e2ee/contacts', {
+      user: ALICE,
+      body: { ...longest, entry: record.entry, signature: record.signature }
+    });
+    expect(append.status).toBe(413);
+  });
+
+  it('deletes a replaced identity’s plaintext list at the first sealed write', async () => {
+    const { srv, alice } = await plaintextList();
+    const oldGeneration = alice.account.generation;
+    const replacement = await generateRecoveryKey();
+    alice.account = ready(
+      await replaceRecoveryKey(
+        alice.keys,
+        alice.account,
+        replacement.secret,
+        alice.recovery.secret
+      )
+    );
+    expect(rowsOf(srv).map((row) => row.generation)).toEqual([oldGeneration]);
+    const book = await loadContacts(alice.contacts, alice.account);
+    expect(book.list).toBeNull();
+    await verifyContact(
+      alice.contacts,
+      alice.account,
+      book,
+      await inspectContact(alice.contacts, book, BOB),
+      replacement.secret
+    );
+    expect(
+      rowsOf(srv).map((row) => [
+        row.generation,
+        isSealedContactsRecord(fromBase64Url(row.entry))
+      ])
+    ).toEqual([[alice.account.generation, true]]);
+  });
+
+  it('reads records sealed before an account-key rotation, and seals new ones under the new key', async () => {
+    const srv = serverWith();
+    const alice = await person(srv, ALICE);
+    await person(srv, BOB);
+    await person(srv, CAROL);
+    share(srv);
+    let book = await loadContacts(alice.contacts, alice.account);
+    await verifyContact(
+      alice.contacts,
+      alice.account,
+      book,
+      await inspectContact(alice.contacts, book, BOB),
+      alice.recovery.secret
+    );
+    const phone = otherBrowser(srv, ALICE);
+    const phoneAccount = ready(
+      await enrollWithRecoveryKey(
+        phone.keys,
+        ready(await loadEncryption(phone.keys)),
+        alice.recovery.secret,
+        'Phone'
+      )
+    );
+    await loadContacts(phone.contacts, phoneAccount);
+    const before = keySequencesOf(srv);
+    // Removing the phone rotates the account key.
+    alice.account = ready(
+      await removeDevice(
+        alice.keys,
+        await refresh(alice),
+        phoneAccount.device!.deviceId,
+        alice.recovery.secret
+      )
+    );
+    const rotated = accountKeySequence(alice.account.list);
+    expect(rotated).toBeGreaterThan(before[0]!);
+    // The record under the replaced key still opens, through the history.
+    book = await loadContacts(alice.contacts, alice.account);
+    expect(book.list?.contacts.get(BOB)?.status).toBe('verified');
+    book = await verifyContact(
+      alice.contacts,
+      alice.account,
+      book,
+      await inspectContact(alice.contacts, book, CAROL),
+      alice.recovery.secret
+    );
+    expect(keySequencesOf(srv)).toEqual([before[0], rotated]);
+    expect(book.list?.contacts.get(CAROL)?.status).toBe('verified');
+  });
+
+  it('asks a locked device to unlock before reading a sealed list', async () => {
+    const srv = serverWith();
+    const alice = await person(srv, ALICE);
+    await person(srv, BOB);
+    share(srv);
+    const book = await loadContacts(alice.contacts, alice.account);
+    await verifyContact(
+      alice.contacts,
+      alice.account,
+      book,
+      await inspectContact(alice.contacts, book, BOB),
+      alice.recovery.secret
+    );
+    const stranger = otherBrowser(srv, ALICE);
+    const locked = ready(await loadEncryption(stranger.keys));
+    expect(locked.unlocked).toBe(false);
+    await expect(loadContacts(stranger.contacts, locked)).rejects.toMatchObject(
+      { code: 'locked' }
+    );
   });
 });

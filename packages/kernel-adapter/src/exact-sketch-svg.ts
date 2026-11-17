@@ -19,7 +19,7 @@
 
 import { splineBezierSegments } from '@openzcad/geometry';
 import { formatDxfNumber, type DxfEntity } from '@openzcad/io-dxf';
-import type { UnitSystem } from '@openzcad/shared';
+import { millimetresPerUnit, type UnitSystem } from '@openzcad/shared';
 
 export interface SketchSvgOptions {
   readonly units: UnitSystem;
@@ -34,13 +34,6 @@ export interface SketchSvgOptions {
 
 /** Stroke width on paper, in millimetres: a fine pen, visible at 1:1. */
 const STROKE_MM = 0.25;
-
-const MM_PER_UNIT: Record<UnitSystem, number> = {
-  mm: 1,
-  cm: 10,
-  m: 1000,
-  inch: 25.4
-};
 
 /** The physical unit `width`/`height` are stated in, and its size in document units. */
 const SVG_LENGTH: Record<UnitSystem, { suffix: string; perUnit: number }> = {
@@ -182,11 +175,15 @@ export function sketchSvgBounds(entities: readonly DxfEntity[]): Bounds {
   };
   for (const entity of entities) {
     switch (entity.kind) {
+      case 'text':
+        for (const corner of textBoxCorners(entity)) include(bounds, ...corner);
+        break;
       case 'line':
         include(bounds, ...entity.start);
         include(bounds, ...entity.end);
         break;
       case 'polyline':
+      case 'solid':
         for (const point of entity.points) include(bounds, ...point);
         break;
       case 'circle':
@@ -272,12 +269,60 @@ export function sketchSvgBounds(entities: readonly DxfEntity[]): Bounds {
   return bounds;
 }
 
-function element(entity: DxfEntity): string {
+/**
+ * An approximate glyph box for a text entity, so the viewBox does not clip
+ * it: glyph extents depend on the reader's font, so this allows an average
+ * advance of 0.6 × height per character, the cap height above the
+ * baseline and a descender of 0.25 × height below, shifted for the
+ * alignment and turned by the rotation about the anchor.
+ */
+function textBoxCorners(
+  entity: Extract<DxfEntity, { kind: 'text' }>
+): Array<[number, number]> {
+  const width = 0.6 * entity.height * [...entity.text].length;
+  const left =
+    entity.align === 'center'
+      ? -width / 2
+      : entity.align === 'right'
+        ? -width
+        : 0;
+  const box: Array<[number, number]> = [
+    [left, -0.25 * entity.height],
+    [left + width, -0.25 * entity.height],
+    [left + width, entity.height],
+    [left, entity.height]
+  ];
+  const angle = ((entity.rotationDeg ?? 0) * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const [x0, y0] = entity.position;
+  return box.map(([x, y]) => [x0 + x * cos - y * sin, y0 + x * sin + y * cos]);
+}
+
+/** One entity as its SVG element, v negated (shared by the flat-pattern SVG). */
+export function sketchSvgElement(entity: DxfEntity): string {
   switch (entity.kind) {
+    case 'text': {
+      const anchor =
+        entity.align === 'center'
+          ? 'middle'
+          : entity.align === 'right'
+            ? 'end'
+            : 'start';
+      const x = num(entity.position[0]);
+      const y = num(-entity.position[1]);
+      // y is negated, so a counter-clockwise DXF rotation is a negative SVG one.
+      const rotate = entity.rotationDeg
+        ? ` transform="rotate(${num(-entity.rotationDeg)} ${x} ${y})"`
+        : '';
+      return `<text x="${x}" y="${y}" font-size="${num(entity.height)}" text-anchor="${anchor}" stroke="none" fill="#000000"${rotate}>${escapeXml(entity.text)}</text>`;
+    }
     case 'line':
       return `<line x1="${num(entity.start[0])}" y1="${num(-entity.start[1])}" x2="${num(entity.end[0])}" y2="${num(-entity.end[1])}"/>`;
     case 'circle':
       return `<circle cx="${num(entity.center[0])}" cy="${num(-entity.center[1])}" r="${num(entity.radius)}"/>`;
+    case 'solid':
+      return `<polygon points="${entity.points.map((p) => `${num(p[0])},${num(-p[1])}`).join(' ')}" fill="#000000" stroke="none"/>`;
     case 'polyline': {
       const [first, ...rest] = entity.points;
       if (!first) return '';
@@ -372,7 +417,7 @@ export function writeSketchSvg(
   ) {
     throw new Error('The sketch extent is not finite.');
   }
-  const stroke = STROKE_MM / MM_PER_UNIT[options.units];
+  const stroke = STROKE_MM / millimetresPerUnit(options.units);
   // Half a stroke of margin each side, so the outermost curves are not
   // clipped down the middle of their pen line.
   const pad = stroke / 2;
@@ -398,7 +443,7 @@ export function writeSketchSvg(
     `<g fill="none" stroke="#000000" stroke-width="${num(stroke)}" stroke-linecap="round" stroke-linejoin="round">`
   );
   for (const entity of entities) {
-    lines.push(element(entity));
+    lines.push(sketchSvgElement(entity));
   }
   lines.push('</g>', '</svg>', '');
   return lines.join('\n');

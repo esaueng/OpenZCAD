@@ -4,6 +4,7 @@ import {
 } from '@openzcad/document-core';
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import {
+  ownEntry,
   isFeatureSuppressed,
   type BodyId,
   type DatumAxisDefinition,
@@ -215,9 +216,10 @@ export function datumAxisEdgeFromPick(
   document: ProjectDocument,
   selection: { kind: string; bodyId: BodyId; hash?: number }
 ): DatumAxisEdgeSource | { reason: string } {
-  const edge = document.derived.bodyRepresentations[
+  const edge = ownEntry(
+    document.derived.bodyRepresentations,
     selection.bodyId
-  ]?.topology?.edges.find((candidate) => candidate.hash === selection.hash);
+  )?.topology?.edges.find((candidate) => candidate.hash === selection.hash);
   const reference = edge?.reference;
   if (!reference) {
     return {
@@ -244,9 +246,10 @@ export function datumAxisFaceFromPick(
   document: ProjectDocument,
   selection: { kind: string; bodyId: BodyId; hash?: number }
 ): DatumAxisFaceSource | { reason: string } {
-  const face = document.derived.bodyRepresentations[
+  const face = ownEntry(
+    document.derived.bodyRepresentations,
     selection.bodyId
-  ]?.topology?.faces.find((candidate) => candidate.hash === selection.hash);
+  )?.topology?.faces.find((candidate) => candidate.hash === selection.hash);
   const type = face?.geometry?.surfaceType.toLowerCase();
   if (type !== 'cylinder' && type !== 'cone') {
     return {
@@ -267,7 +270,10 @@ export function datumAxisFaceFromPick(
 }
 
 function bodyName(document: ProjectDocument, bodyId: BodyId): string {
-  return document.derived.bodyRepresentations[bodyId]?.name ?? 'a missing body';
+  return (
+    ownEntry(document.derived.bodyRepresentations, bodyId)?.name ??
+    'a missing body'
+  );
 }
 
 /** What an edge source is called: its ends when known, and its body. */

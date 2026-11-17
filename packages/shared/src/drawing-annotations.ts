@@ -40,6 +40,22 @@ import type { DrawingViewId } from './drawings';
  * Schema v51 adds a countersunk hole's callout ("Ø THRU, CSK Ø × 90°", the
  * cone's outer rim) and the outside angle: one ray of an angle dimension
  * turned onto its edge's extension.
+ *
+ * Schema v68 (D02) adds a tolerance and a prefix and suffix to a dimension
+ * (see {@link DrawingTolerance}). Each is optional and absent on every older
+ * annotation.
+ *
+ * Schema v73 (D02) adds geometry annotations — centre marks, intersection
+ * marks and centrelines (through two points, midway between two lines, or a
+ * circle through three points) — and a mark as a dimension point.
+ *
+ * Schema v80 (D02) adds an assembly's parts list (`bom-table`) on the paper
+ * and balloons naming a part's item number, both read from the AS03 BOM
+ * table each time the sheet is drawn.
+ *
+ * Schema v75 (D02) adds the distance dimension: point to line, line to
+ * line, and to a circle's centre or its near or far side (min/max), where a
+ * line may be a straight edge or a centreline.
  */
 
 export type DrawingAnnotationId = Brand<string, 'DrawingAnnotationId'>;
@@ -130,11 +146,22 @@ export interface DrawingChamferCornerRef {
   side: DrawingExtremeSide;
 }
 
+/**
+ * v73: the point a centre mark or an intersection mark on the same view
+ * marks, read through it each time it is drawn. Deleting the mark breaks
+ * what measures to it.
+ */
+export interface DrawingMarkPointRef {
+  anchor: 'mark';
+  annotationId: DrawingAnnotationId;
+}
+
 export type DrawingPointRef =
   | DrawingEdgePointRef
   | DrawingSilhouettePointRef
   | DrawingVirtualSharpRef
-  | DrawingChamferCornerRef;
+  | DrawingChamferCornerRef
+  | DrawingMarkPointRef;
 
 /**
  * Which way a two-point dimension measures in its view: along the page
@@ -170,6 +197,29 @@ interface DrawingAnnotationBase {
   provenance?: DrawingAnnotationProvenance;
 }
 
+/**
+ * v68: a dimension's tolerance. Deviations are signed amounts from the
+ * measured value, in the units the dimension is printed in (the sheet's
+ * units from v70, else the document's; degrees on an angle), so
+ * a toleranced dimension stays associative: `limits` prints the measured
+ * value plus each deviation, read from the model each time it is drawn.
+ *
+ * - `symmetric`: `10 ±0.05`; `value` is positive.
+ * - `deviation`: `10` with `+0.1` over `-0.05` stacked after it.
+ * - `limits`: `10.1` over `9.95`, the value plus `upper` over plus `lower`.
+ * - `basic`: the theoretically exact value, framed.
+ *
+ * `upper` is strictly greater than `lower`. A reference dimension takes no
+ * tolerance, and a chamfer's `size × angle` callout takes none.
+ */
+export type DrawingTolerance =
+  | { kind: 'symmetric'; value: number }
+  | { kind: 'deviation'; upper: number; lower: number }
+  | { kind: 'limits'; upper: number; lower: number }
+  | { kind: 'basic' };
+
+export type DrawingToleranceKind = DrawingTolerance['kind'];
+
 interface DrawingDimensionBase extends DrawingAnnotationBase {
   viewId: DrawingViewId;
   /** Decimal places shown, trailing zeros trimmed; absent uses the units' default. */
@@ -179,6 +229,12 @@ interface DrawingDimensionBase extends DrawingAnnotationBase {
    * information although others already fix it. Absent is a dimension.
    */
   reference?: true;
+  /** v68: the dimension's tolerance; absent states the value alone. */
+  tolerance?: DrawingTolerance;
+  /** v68: text printed before the value, separated by a space ("4×", "SR"). */
+  prefix?: string;
+  /** v68: text printed after the value and tolerance, after a space ("TYP"). */
+  suffix?: string;
 }
 
 export interface DrawingLinearDimension extends DrawingDimensionBase {
@@ -261,14 +317,149 @@ export interface DrawingNote extends DrawingAnnotationBase {
   leader?: DrawingEdgeRef;
 }
 
+/**
+ * v73: a centre mark on a circle or arc the view sees face-on: a cross at
+ * its centre with centre lines run past its rim.
+ */
+export interface DrawingCenterMark extends DrawingAnnotationBase {
+  kind: 'center-mark';
+  viewId: DrawingViewId;
+  edge: DrawingEdgeRef;
+}
+
+/**
+ * v73: where two straight edges' lines cross in the view (a virtual sharp
+ * of a rounded or chamfered corner), drawn as their thin extensions.
+ */
+export interface DrawingIntersectionMark extends DrawingAnnotationBase {
+  kind: 'intersection-mark';
+  viewId: DrawingViewId;
+  edges: [DrawingEdgeRef, DrawingEdgeRef];
+}
+
+/**
+ * v73: a centreline, drawn as a thin chain line: through two points
+ * (`points`), midway between two parallel straight edges (`lines`), or the
+ * circle through three points (`circle`, a bolt circle through three hole
+ * centres).
+ */
+export type DrawingCenterline = DrawingAnnotationBase & {
+  kind: 'centerline';
+  viewId: DrawingViewId;
+} & (
+    | { mode: 'points'; from: DrawingPointRef; to: DrawingPointRef }
+    | { mode: 'lines'; edges: [DrawingEdgeRef, DrawingEdgeRef] }
+    | {
+        mode: 'circle';
+        through: [DrawingPointRef, DrawingPointRef, DrawingPointRef];
+      }
+  );
+
+/**
+ * v75: what a distance dimension measures from or to: a point (an edge end,
+ * a circle's centre or a mark), a straight edge seen true length, a
+ * `points` or `lines` centreline of the same view, or a circle seen face-on
+ * (its centre, or with `extent` its near or far side).
+ */
+export type DrawingDistanceTarget =
+  | { point: DrawingPointRef }
+  | { line: DrawingEdgeRef }
+  | { centerline: DrawingAnnotationId }
+  | { circle: DrawingEdgeRef };
+
+/**
+ * v75: the distance between two targets in the view, measured square to a
+ * line when there is one, else along the line between the two. `extent`
+ * measures to each circle's near (`min`) or far (`max`) side instead of its
+ * centre: two holes' wall gap, or their overall span.
+ */
+export interface DrawingDistanceDimension extends DrawingDimensionBase {
+  kind: 'distance';
+  from: DrawingDistanceTarget;
+  to: DrawingDistanceTarget;
+  extent?: 'min' | 'max';
+}
+
+/** v80: the BOM columns a parts list may show, by their CSV key. */
+export const DRAWING_BOM_COLUMN_KEYS = [
+  'item',
+  'quantity',
+  'part',
+  'instances',
+  'source_body',
+  'status'
+] as const;
+export type DrawingBomColumnKey = (typeof DRAWING_BOM_COLUMN_KEYS)[number];
+
+/**
+ * v80: the assembly's parts list on the paper, its top-left corner at
+ * `placementMm`. Rows, cells and item numbers come from the AS03 BOM table
+ * each time the sheet is drawn; only the choice and order of columns is
+ * stored (absent: item, quantity and part).
+ */
+export interface DrawingBomTable extends DrawingAnnotationBase {
+  kind: 'bom-table';
+  /** On the paper, never in a view: the validator refuses one. */
+  viewId?: DrawingViewId;
+  columns?: DrawingBomColumnKey[];
+}
+
+/**
+ * v80: a balloon naming the item number of the part an edge belongs to,
+ * with a leader to that edge. `componentId` is the assembly component the
+ * edge was picked on; its row's item number is read from the BOM table each
+ * time the sheet is drawn, so it follows the table's numbering.
+ */
+export interface DrawingBalloon extends DrawingAnnotationBase {
+  kind: 'balloon';
+  viewId: DrawingViewId;
+  leader: DrawingEdgeRef;
+  componentId: string;
+}
+
+/** v73: the annotations that mark geometry rather than state a value. */
+export type DrawingGeometryAnnotation =
+  DrawingCenterMark | DrawingIntersectionMark | DrawingCenterline;
+
+export const DRAWING_GEOMETRY_ANNOTATION_KINDS: readonly DrawingGeometryAnnotation['kind'][] =
+  ['center-mark', 'intersection-mark', 'centerline'];
+
+export function isDrawingGeometryAnnotation(
+  annotation: DrawingAnnotation
+): annotation is DrawingGeometryAnnotation {
+  return (
+    annotation.kind === 'center-mark' ||
+    annotation.kind === 'intersection-mark' ||
+    annotation.kind === 'centerline'
+  );
+}
+
+/** Whether `annotation` states a value: not a note, not a mark. */
+export function isDrawingDimension(
+  annotation: DrawingAnnotation
+): annotation is DrawingDimension {
+  return (
+    annotation.kind !== 'note' &&
+    annotation.kind !== 'bom-table' &&
+    annotation.kind !== 'balloon' &&
+    !isDrawingGeometryAnnotation(annotation)
+  );
+}
+
 export type DrawingDimension =
+  | DrawingDistanceDimension
   | DrawingLinearDimension
   | DrawingRadialDimension
   | DrawingBlendRadiusDimension
   | DrawingAngleDimension
   | DrawingChamferDimension;
 
-export type DrawingAnnotation = DrawingDimension | DrawingNote;
+export type DrawingAnnotation =
+  | DrawingDimension
+  | DrawingNote
+  | DrawingGeometryAnnotation
+  | DrawingBomTable
+  | DrawingBalloon;
 
 export type DrawingAnnotationKind = DrawingAnnotation['kind'];
 
@@ -277,6 +468,10 @@ export const MAX_DRAWING_NOTE_LENGTH = 200;
 export const MAX_DRAWING_DIMENSION_DECIMALS = 6;
 /** A count is at least two like features; the bound keeps it a label. */
 export const MAX_DRAWING_DIMENSION_COUNT = 999;
+/** v68: a prefix or suffix is a short label, not a note. */
+export const MAX_DRAWING_DIMENSION_AFFIX_LENGTH = 40;
+/** v68: a tolerance's deviations, in document units or degrees. */
+export const MAX_DRAWING_TOLERANCE = 1e6;
 const MAX_REQUIREMENT_LENGTH = 200;
 /** Placement bound, in paper millimetres. */
 const MAX_PLACEMENT_MM = 10_000;
@@ -497,9 +692,56 @@ function pointRefError(value: unknown): string | null {
       if (face.hash === like.hash) return 'sizes a chamfer corner like itself';
       return null;
     }
+    case 'mark':
+      if (Object.keys(value).length !== 2)
+        return 'has a mark point with unknown fields';
+      return typeof value.annotationId === 'string' &&
+        value.annotationId.startsWith(DRAWING_ANNOTATION_ID_PREFIX) &&
+        value.annotationId.length <= 64
+        ? null
+        : 'names no mark';
     default:
       return 'has an unknown point anchor';
   }
+}
+
+/** Why `value` is not a stored {@link DrawingDistanceTarget}, or null. */
+function distanceTargetError(value: unknown): string | null {
+  if (!isRecord(value) || Object.keys(value).length !== 1)
+    return 'names a distance target that is not one point, line, centreline or circle';
+  if ('point' in value) return centerlinePointError(value.point);
+  if ('line' in value) return edgeRefError(value.line);
+  if ('circle' in value) return edgeRefError(value.circle);
+  if ('centerline' in value)
+    return typeof value.centerline === 'string' &&
+      value.centerline.startsWith(DRAWING_ANNOTATION_ID_PREFIX) &&
+      value.centerline.length <= 64
+      ? null
+      : 'names no centreline';
+  return 'names a distance target that is not one point, line, centreline or circle';
+}
+
+/** v75: the edges and faces a distance target refers to. */
+function distanceTargetReferences(
+  target: DrawingDistanceTarget
+): (DrawingEdgeRef | DrawingFaceRef)[] {
+  if ('point' in target) return pointReferences(target.point);
+  if ('line' in target) return [target.line];
+  if ('circle' in target) return [target.circle];
+  return [];
+}
+
+/** A point a centreline may pass through: an end, a centre or a mark. */
+function centerlinePointError(value: unknown): string | null {
+  const error = pointRefError(value);
+  if (error) return error;
+  const anchor = (value as DrawingPointRef).anchor;
+  return anchor === 'first' ||
+    anchor === 'second' ||
+    anchor === 'center' ||
+    anchor === 'mark'
+    ? null
+    : 'passes a centreline through an extreme, which has no place without a direction';
 }
 
 /** Absent, or the literal `true`: a stored `false` would not be byte-stable. */
@@ -517,6 +759,64 @@ function countError(value: unknown, kind: unknown, where: string) {
     (value as number) > MAX_DRAWING_DIMENSION_COUNT
   )
     return `${where} counts from 2 to ${MAX_DRAWING_DIMENSION_COUNT} features.`;
+  return null;
+}
+
+/**
+ * A tolerance amount: finite, bounded, and stated to at most
+ * {@link MAX_DRAWING_DIMENSION_DECIMALS} decimals, the most a label prints.
+ * A finer amount would print as zero (`±0.000000`), or limits as two equal
+ * bounds, while the sheet stores a tolerance.
+ */
+function isDeviation(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    Math.abs(value) <= MAX_DRAWING_TOLERANCE &&
+    Math.abs(Number(value.toFixed(MAX_DRAWING_DIMENSION_DECIMALS)) - value) <=
+      1e-9 * Math.max(1, Math.abs(value))
+  );
+}
+
+/** Why `value` is not a stored {@link DrawingTolerance}, or null. */
+export function drawingToleranceError(value: unknown): string | null {
+  if (!isRecord(value)) return 'has a tolerance that is not a record';
+  switch (value.kind) {
+    case 'symmetric':
+      if (Object.keys(value).length !== 2)
+        return 'has a symmetric tolerance with unknown fields';
+      return isDeviation(value.value) && value.value > 0
+        ? null
+        : 'has a symmetric tolerance that is not a positive amount of at most six decimals';
+    case 'deviation':
+    case 'limits':
+      if (Object.keys(value).length !== 3)
+        return `has a ${value.kind} tolerance with unknown fields`;
+      if (!isDeviation(value.upper) || !isDeviation(value.lower))
+        return `has a ${value.kind} tolerance with an invalid deviation (finite, at most six decimals)`;
+      return value.upper > value.lower
+        ? null
+        : `has a ${value.kind} tolerance whose upper deviation is not above its lower`;
+    case 'basic':
+      return Object.keys(value).length === 1
+        ? null
+        : 'has a basic tolerance with unknown fields';
+    default:
+      return 'has an unknown tolerance kind';
+  }
+}
+
+/** A prefix or suffix: printable, trimmed, one line, short. */
+function affixError(value: unknown, name: string): string | null {
+  if (value === undefined) return null;
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > MAX_DRAWING_DIMENSION_AFFIX_LENGTH ||
+    value.trim() !== value ||
+    [...value].some((char) => char < ' ' || char === '\u007f')
+  )
+    return `has a ${name} that is not one trimmed line of at most ${MAX_DRAWING_DIMENSION_AFFIX_LENGTH} characters`;
   return null;
 }
 
@@ -567,9 +867,106 @@ export function drawingAnnotationError(
     return `${where} has a Ø prefix, which only a linear dimension takes.`;
   const counted = countError(value.count, value.kind, where);
   if (counted) return counted;
+  if (value.kind === 'bom-table' || value.kind === 'balloon') {
+    if (
+      [
+        'decimals',
+        'reference',
+        'tolerance',
+        'prefix',
+        'suffix',
+        'provenance'
+      ].some((key) => value[key] !== undefined)
+    )
+      return `${where} is a ${value.kind === 'balloon' ? 'balloon' : 'parts list'}, which states no measured value.`;
+    if (value.kind === 'bom-table') {
+      if (value.viewId !== undefined)
+        return `${where} is a parts list, which sits on the paper, not in a view.`;
+      if (value.columns !== undefined) {
+        const columns = value.columns;
+        if (
+          !Array.isArray(columns) ||
+          columns.length === 0 ||
+          !columns.every((key) =>
+            (DRAWING_BOM_COLUMN_KEYS as readonly unknown[]).includes(key)
+          ) ||
+          new Set(columns).size !== columns.length
+        )
+          return `${where} lists parts-list columns other than each known BOM column once.`;
+      }
+      return null;
+    }
+    if (value.viewId === undefined)
+      return `${where} is a balloon that belongs to no view.`;
+    if (!isShortText(value.componentId, 128))
+      return `${where} is a balloon that names no assembly component.`;
+    return fail(edgeRefError(value.leader));
+  }
+  if (
+    value.kind === 'center-mark' ||
+    value.kind === 'intersection-mark' ||
+    value.kind === 'centerline'
+  ) {
+    if (value.viewId === undefined)
+      return `${where} is a mark that belongs to no view.`;
+    if (
+      [
+        'decimals',
+        'reference',
+        'tolerance',
+        'prefix',
+        'suffix',
+        'provenance'
+      ].some((key) => value[key] !== undefined)
+    )
+      return `${where} is a mark, which states no value.`;
+    const twoEdges = (edges: unknown) => {
+      if (!Array.isArray(edges) || edges.length !== 2)
+        return 'must name two edges';
+      const error = edgeRefError(edges[0]) ?? edgeRefError(edges[1]);
+      if (error) return error;
+      const [a, b] = edges as DrawingEdgeRef[];
+      return a!.bodyId === b!.bodyId && a!.hash === b!.hash
+        ? 'names one edge twice'
+        : null;
+    };
+    switch (value.kind) {
+      case 'center-mark':
+        return fail(edgeRefError(value.edge));
+      case 'intersection-mark':
+        return fail(twoEdges(value.edges));
+      default:
+        switch (value.mode) {
+          case 'points':
+            return fail(
+              centerlinePointError(value.from) ?? centerlinePointError(value.to)
+            );
+          case 'lines':
+            return fail(twoEdges(value.edges));
+          case 'circle': {
+            const through = value.through;
+            if (!Array.isArray(through) || through.length !== 3)
+              return `${where} is a circular centreline that must pass through three points.`;
+            return fail(
+              centerlinePointError(through[0]) ??
+                centerlinePointError(through[1]) ??
+                centerlinePointError(through[2])
+            );
+          }
+          default:
+            return `${where} has an unknown centreline mode.`;
+        }
+    }
+  }
   if (value.kind === 'note') {
     if (value.reference !== undefined)
       return `${where} is a note, which cannot be a reference dimension.`;
+    if (
+      value.tolerance !== undefined ||
+      value.prefix !== undefined ||
+      value.suffix !== undefined
+    )
+      return `${where} is a note, which takes no tolerance, prefix or suffix.`;
     if (
       typeof value.text !== 'string' ||
       value.text.trim().length === 0 ||
@@ -598,7 +995,38 @@ export function drawingAnnotationError(
     return `${where} marks a reference dimension with anything but true.`;
   if (!isFlag(value.diameter))
     return `${where} marks a Ø prefix with anything but true.`;
+  {
+    const error =
+      affixError(value.prefix, 'prefix') ?? affixError(value.suffix, 'suffix');
+    if (error) return fail(error);
+  }
+  if (value.tolerance !== undefined) {
+    if (value.reference !== undefined)
+      return `${where} is a reference dimension, which takes no tolerance.`;
+    if (
+      value.kind === 'chamfer' ||
+      value.counterbore !== undefined ||
+      value.countersink !== undefined
+    )
+      return `${where} is a callout, which takes no tolerance.`;
+    const error = drawingToleranceError(value.tolerance);
+    if (error) return fail(error);
+  }
   switch (value.kind) {
+    case 'distance': {
+      const targets = [value.from, value.to];
+      for (const target of targets) {
+        const error = distanceTargetError(target);
+        if (error) return fail(error);
+      }
+      if (value.extent !== undefined) {
+        if (value.extent !== 'min' && value.extent !== 'max')
+          return `${where} has an unknown extent.`;
+        if (!targets.some((target) => isRecord(target) && 'circle' in target))
+          return `${where} measures to a side of a circle but names none.`;
+      }
+      return null;
+    }
     case 'linear':
       if (
         value.direction !== 'horizontal' &&
@@ -673,6 +1101,7 @@ export function drawingAnnotationError(
 function pointReferences(
   point: DrawingPointRef
 ): (DrawingEdgeRef | DrawingFaceRef)[] {
+  if (point.anchor === 'mark') return [];
   if ('faces' in point) return [...point.faces];
   if ('like' in point) return [point.face, point.like];
   return [point.edge];
@@ -689,6 +1118,17 @@ export function drawingAnnotationEdges(
       );
     case 'chamfer':
       return [];
+    case 'distance':
+      // Its points are ends, centres and marks: every reference an edge.
+      return [annotation.from, annotation.to].flatMap(
+        distanceTargetReferences
+      ) as DrawingEdgeRef[];
+    case 'centerline':
+      return annotation.mode === 'lines'
+        ? [...annotation.edges]
+        : centerlinePoints(annotation).flatMap((point) =>
+            'edge' in point ? [point.edge] : []
+          );
     case 'radius':
     case 'diameter':
       return 'face' in annotation
@@ -735,5 +1175,63 @@ export function drawingAnnotationReferences(
       return [annotation.face];
     case 'note':
       return annotation.leader ? [annotation.leader] : [];
+    case 'bom-table':
+      return [];
+    case 'balloon':
+      return [annotation.leader];
+    case 'distance':
+      return [
+        ...distanceTargetReferences(annotation.from),
+        ...distanceTargetReferences(annotation.to)
+      ];
+    case 'center-mark':
+      return [annotation.edge];
+    case 'intersection-mark':
+      return [...annotation.edges];
+    case 'centerline':
+      return annotation.mode === 'lines'
+        ? [...annotation.edges]
+        : centerlinePoints(annotation).flatMap(pointReferences);
   }
+}
+
+/** v73: the points a `points` or `circle` centreline passes through. */
+export function centerlinePoints(
+  annotation: DrawingCenterline
+): DrawingPointRef[] {
+  return annotation.mode === 'points'
+    ? [annotation.from, annotation.to]
+    : annotation.mode === 'circle'
+      ? [...annotation.through]
+      : [];
+}
+
+/** v75: the centrelines a distance dimension measures to, by id. */
+export function drawingAnnotationCenterlines(
+  annotation: DrawingAnnotation
+): DrawingAnnotationId[] {
+  return annotation.kind === 'distance'
+    ? [annotation.from, annotation.to].flatMap((target) =>
+        'centerline' in target ? [target.centerline] : []
+      )
+    : [];
+}
+
+/** v73: the marks an annotation measures to, by id. */
+export function drawingAnnotationMarks(
+  annotation: DrawingAnnotation
+): DrawingAnnotationId[] {
+  const points: DrawingPointRef[] =
+    annotation.kind === 'linear'
+      ? [annotation.from, annotation.to]
+      : annotation.kind === 'centerline'
+        ? centerlinePoints(annotation)
+        : annotation.kind === 'distance'
+          ? [annotation.from, annotation.to].flatMap((target) =>
+              'point' in target ? [target.point] : []
+            )
+          : [];
+  return points.flatMap((point) =>
+    point.anchor === 'mark' ? [point.annotationId] : []
+  );
 }

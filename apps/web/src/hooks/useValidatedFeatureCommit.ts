@@ -1,5 +1,6 @@
 import { FeatureBuildError } from '../lib/featureValidation';
 import { useRef } from 'react';
+import { ownEntry } from '@openzcad/shared';
 import type { FeatureId, BodyId, ProjectDocument } from '@openzcad/shared';
 import { CommandManager, type AnyCommand } from '@openzcad/command-system';
 import { errorMessage } from '../lib/errors';
@@ -137,6 +138,11 @@ export interface ValidatedFeatureRunOptions extends ValidatedFeatureTarget {
    */
   finalize?(): Promise<AnyCommand>;
   /**
+   * Called synchronously immediately before the commit, after every await;
+   * throws to refuse it (reported as a rejection, and nothing lands).
+   */
+  beforeCommit?(): void;
+  /**
    * Refusal sink for this run, replacing the host's. The host's renders inline
    * in an open feature form; a caller that has none — the File menu's import —
    * must not leave its refusal in an unrelated panel.
@@ -158,6 +164,20 @@ export interface ValidatedFeatureRunOptions extends ValidatedFeatureTarget {
    * finalize and commit boundaries after a successful rebuild.
    */
   signal?: AbortSignal;
+  /**
+   * The exact rebuild of this very command on the document at
+   * `projectId`/`version`, already in hand: a preview built it with the same
+   * ids and names. While the document is still at that version the run judges
+   * this result instead of rebuilding the candidate — a large pattern's
+   * preview took over a minute, and Done spent as long again proving the same
+   * geometry. Every acceptance check still runs on it. Once the document has
+   * moved, the run rebuilds as usual.
+   */
+  prebuilt?: {
+    projectId: ProjectDocument['projectId'];
+    version: number;
+    derived: ProjectDocument['derived'];
+  };
   /**
    * A lock this caller already holds, from {@link ValidatedFeatureReservation}.
    * The run adopts it rather than testing whether the lock is free — which is
@@ -274,10 +294,12 @@ export function useValidatedFeatureCommit(
     onSuccess?(): void;
     onFailure?(message: string): void;
     preview(current: ProjectDocument): ProjectDocument;
+    prebuilt?: ValidatedFeatureRunOptions['prebuilt'];
     reservation?: ValidatedFeatureReservation;
     cancelled?(): boolean;
     signal?: AbortSignal;
     finalize?(): Promise<AnyCommand>;
+    beforeCommit?(): void;
     commit(
       host: ValidatedFeatureCommitOptions,
       derived: ProjectDocument['derived'] | null,
@@ -336,10 +358,18 @@ export function useValidatedFeatureCommit(
       // rebuild running forever.
       for (let attempt = 0; ; attempt += 1) {
         const preview = input.preview(current);
+        const prebuilt =
+          attempt === 0 &&
+          input.prebuilt &&
+          input.prebuilt.projectId === current.projectId &&
+          input.prebuilt.version === current.version
+            ? input.prebuilt.derived
+            : null;
         derived =
-          input.signal && host.deriveCancellable
+          prebuilt ??
+          (input.signal && host.deriveCancellable
             ? await host.deriveCancellable(preview, input.signal)
-            : await host.derive(preview);
+            : await host.derive(preview));
         documentMoved = documentMovedFrom(current);
         if (
           !documentMoved ||
@@ -369,7 +399,7 @@ export function useValidatedFeatureCommit(
             ? { featureWarnings: derived.featureWarnings }
             : {}),
           bodyPresent: Boolean(
-            derived.bodyRepresentations[target.resultBodyId]
+            ownEntry(derived.bodyRepresentations, target.resultBodyId)
           ),
           documentMoved
         });
@@ -385,9 +415,10 @@ export function useValidatedFeatureCommit(
         // this edit newly consumes — a Boolean or Split that stops keeping,
         // or newly takes, a body a later feature uses (M11).
         if (
-          derived.bodyRepresentations[target.resultBodyId]?.consumed === true &&
-          current.derived.bodyRepresentations[target.resultBodyId]?.consumed ===
-            false
+          ownEntry(derived.bodyRepresentations, target.resultBodyId)
+            ?.consumed === true &&
+          ownEntry(current.derived.bodyRepresentations, target.resultBodyId)
+            ?.consumed === false
         ) {
           throw new FeatureBuildError(
             `${target.featureName} would lose its body: this change consumes it.`,
@@ -439,6 +470,7 @@ export function useValidatedFeatureCommit(
           return 'cancelled';
         }
       }
+      input.beforeCommit?.();
       if (!input.commit(host, commitDerived, finalized)) {
         throw new Error(input.commitFailure);
       }
@@ -503,12 +535,16 @@ export function useValidatedFeatureCommit(
           command.validate(current);
           return command.apply(current);
         },
+        ...(runOptions.prebuilt ? { prebuilt: runOptions.prebuilt } : {}),
         ...(runOptions.cancelled ? { cancelled: runOptions.cancelled } : {}),
         ...(runOptions.signal ? { signal: runOptions.signal } : {}),
         ...(runOptions.reservation
           ? { reservation: runOptions.reservation }
           : {}),
         finalize: runOptions.finalize,
+        ...(runOptions.beforeCommit
+          ? { beforeCommit: runOptions.beforeCommit }
+          : {}),
         commit: (host, derived, finalized) =>
           host.commit(finalized ?? command, derived),
         commitFailure: 'The validated operation could not be committed.'

@@ -1,4 +1,5 @@
 import type { BodyId, BodyTopology, TopologySelection } from '@openzcad/shared';
+import { distanceToAxis } from './interaction/filletFaceEdit';
 
 type FaceTopology = BodyTopology['faces'][number];
 
@@ -23,14 +24,26 @@ export interface BlendRearmPick {
  * cylindrical blend the commit created is picked for the user, with a
  * synthetic hit at its centroid facing out from the axis — the frame the
  * pointer would have supplied.
+ *
+ * A new hash alone does not make a face new. A fillet that meets an earlier
+ * one trims that earlier band, and the trimmed band comes back under a new
+ * hash (QA 2026-11-14 finding #10: Fillet 4 landed beside Fillet 3, Fillet
+ * 3's band was picked, and a typed radius edited Fillet 3). So a named band
+ * is picked only when the commit's feature produced it, and a hash-only one
+ * (a shelled or fused body publishes no names) only when no earlier blend
+ * shares its carrier: the pick is the new fillet's, or nothing.
  */
 export function newBlendFacePick(
   bodyId: BodyId,
   before: readonly FaceTopology[] | undefined,
-  after: readonly FaceTopology[] | undefined
+  after: readonly FaceTopology[] | undefined,
+  featureId: string | undefined
 ): BlendRearmPick | null {
   if (!after) return null;
   const known = new Set((before ?? []).map((face) => face.hash));
+  const earlierBlends = (before ?? []).filter(
+    (face) => face.geometry?.featureType === 'blend'
+  );
   for (const face of after) {
     const geometry = face.geometry;
     if (
@@ -38,7 +51,10 @@ export function newBlendFacePick(
       geometry?.featureType !== 'blend' ||
       geometry.surfaceType !== 'cylinder' ||
       !geometry.axisStart ||
-      !geometry.axisEnd
+      !geometry.axisEnd ||
+      (face.reference
+        ? String(face.reference.producingFeatureId) !== featureId
+        : earlierBlends.some((previous) => sameCylinderCarrier(previous, face)))
     ) {
       continue;
     }
@@ -57,6 +73,42 @@ export function newBlendFacePick(
     };
   }
   return null;
+}
+
+/**
+ * Whether two cylindrical blends lie on one carrier: the same radius about
+ * the same axis line (both ends of B's axis on A's). Trimming a band changes
+ * its extent and hash, never its carrier.
+ */
+function sameCylinderCarrier(left: FaceTopology, right: FaceTopology): boolean {
+  const a = left.geometry;
+  const b = right.geometry;
+  const radius = a?.blendRadius ?? a?.radius;
+  if (
+    a?.surfaceType !== 'cylinder' ||
+    b?.surfaceType !== 'cylinder' ||
+    !a.axisStart ||
+    !a.axisEnd ||
+    !b.axisStart ||
+    !b.axisEnd ||
+    radius === undefined
+  ) {
+    return false;
+  }
+  const { axisStart, axisEnd } = a;
+  const tolerance =
+    1e-6 *
+    Math.max(1, radius, Math.hypot(axisStart.x, axisStart.y, axisStart.z));
+  const direction = {
+    x: axisEnd.x - axisStart.x,
+    y: axisEnd.y - axisStart.y,
+    z: axisEnd.z - axisStart.z
+  };
+  return (
+    Math.abs((b.blendRadius ?? b.radius ?? Infinity) - radius) <= tolerance &&
+    distanceToAxis(b.axisStart, axisStart, direction) <= tolerance &&
+    distanceToAxis(b.axisEnd, axisStart, direction) <= tolerance
+  );
 }
 
 function radialFromAxis(

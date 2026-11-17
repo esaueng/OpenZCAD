@@ -78,7 +78,14 @@ export type KernelRefusalFamily =
   | 'blend'
   | 'gear'
   | 'thread'
+  | 'sheet-metal'
   | 'direct-edit'
+  /**
+   * A modeling feature (draft, shell, split, thicken, offset) refused by a
+   * kernel entry point that throws its `OperationsError` as prose; see
+   * `remus-operation-refusal.ts`.
+   */
+  | 'modeling'
   /** A saved edge or face selection that no longer resolves (adapter). */
   | 'reference';
 

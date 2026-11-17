@@ -1,5 +1,6 @@
 import { useRef } from 'react';
 import { refusalOfWorkerError } from '../lib/workerRefusal';
+import { ownEntry } from '@openzcad/shared';
 import type { BodyId, ProjectDocument } from '@openzcad/shared';
 import type { AnyCommand, CommandManager } from '@openzcad/command-system';
 import { createdFeatureId, directEditRejection } from '../lib/directEdit';
@@ -252,7 +253,7 @@ export function useDirectEditCommit(
                 ? { featureWarnings: derived.featureWarnings }
                 : {}),
               bodyPresent: Boolean(
-                derived.bodyRepresentations[target.resultBodyId]
+                ownEntry(derived.bodyRepresentations, target.resultBodyId)
               ),
               documentMoved
             });
@@ -274,7 +275,9 @@ export function useDirectEditCommit(
               ? { featureWarnings: derived.featureWarnings }
               : {}),
             ...(featureId ? { featureId } : {}),
-            bodyPresent: Boolean(derived.bodyRepresentations[targetBodyId]),
+            bodyPresent: Boolean(
+              ownEntry(derived.bodyRepresentations, targetBodyId)
+            ),
             documentMoved
           });
           // Classified exactly as the live preview classifies it

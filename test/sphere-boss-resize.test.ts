@@ -10,7 +10,10 @@ import {
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh
 } from '../packages/kernel-adapter/src/boolean-result-validation';
-import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
+import {
+  RemusKernel,
+  type SolidOperationDetailedResult
+} from '../packages/kernel-adapter/src/remus-runtime';
 import { filletedSphereBoss } from './support/sphere-boss-seam-fillet';
 import { sphereCylinderUnionInputs } from './support/sphere-cylinder-union';
 
@@ -165,6 +168,67 @@ describe('resizing a cylinder wall that meets a sphere', () => {
     } finally {
       typed.mockRestore();
       legacy.mockRestore();
+    }
+  }, 300_000);
+
+  it('keeps a blend-cluster "diameter unbuildable" verdict without the waypoint ladder', async () => {
+    // A boss whose joint fillet meets other fillets at a vertex the kernel
+    // cannot re-blend is refused at every diameter (2026-11-14 recording:
+    // Ø12.4, 14.26, 16.12, 10.2 and 8.4 all failed on the same vertex). The
+    // blend-cluster route has already tried every re-fillet order, so each
+    // waypoint only repeats that multi-second search. One typed call, and
+    // the verdict survives unchanged.
+    const { manager, bodyId, wall } = await filletedSphereBoss(adapter);
+    const unbuildable = (radius: number): SolidOperationDetailedResult => ({
+      status: 'error',
+      code: 'cylinder-diameter-unbuildable',
+      category: 'internal',
+      details: {
+        kernelCode: 'cylinder-diameter-unbuildable',
+        message: `blend cluster: diameter ${radius * 2} mm cannot be built with the existing supports and blends`,
+        operation: 'resizeCylindricalFace',
+        requestedDiameter: radius * 2
+      },
+      value: null
+    });
+    const typed = vi
+      .spyOn(RemusKernel.prototype, 'resizeCylindricalFaceDetailed')
+      .mockImplementation((_solid, _face, radius) => unbuildable(radius));
+    const journaled = vi
+      .spyOn(RemusKernel.prototype, 'resizeCylindricalFaceJournaled')
+      .mockImplementation(() => {
+        throw new Error('blend cluster: diameter cannot be built');
+      });
+    try {
+      // 6 -> 6.2 is a 3% change, inside the 15% band that detours.
+      const derived = await adapter.syncDocument(
+        manager.runTransaction('Resize', [
+          commandFactories.directEditBody({
+            name: 'Resize Cylinder',
+            targetBodyId: bodyId,
+            operation: {
+              kind: 'resize-cylindrical-face',
+              faceHash: wall.hash,
+              ...(wall.reference ? { faceReference: wall.reference } : {}),
+              sourceRadius: 6,
+              sourceAxisStart: wall.geometry!.axisStart!,
+              sourceAxisEnd: wall.geometry!.axisEnd!,
+              concavity: 'boss',
+              radius: 6.2
+            }
+          })
+        ])
+      );
+      const refusals = (derived.featureWarnings ?? []).filter(
+        (entry) => entry.featureName === 'Resize Cylinder'
+      );
+      expect(refusals.map((entry) => entry.kernelRefusal?.code)).toEqual([
+        'cylinder-diameter-unbuildable'
+      ]);
+      expect(typed.mock.calls.map((call) => call[2])).toEqual([6.2]);
+    } finally {
+      typed.mockRestore();
+      journaled.mockRestore();
     }
   }, 300_000);
 });

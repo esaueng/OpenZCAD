@@ -2428,3 +2428,41 @@ describe('DXF sketch import plan', () => {
     );
   });
 });
+
+describe('layered DXF round trip', () => {
+  it('imports the outline of a layered file with tables and leaves the notes out', () => {
+    const text = writeDxf(
+      [
+        {
+          kind: 'polyline',
+          points: [
+            [0, 0],
+            [40, 0],
+            [40, 20],
+            [0, 20]
+          ],
+          closed: true
+        },
+        { kind: 'line', start: [20, 0], end: [20, 20], layer: 'BEND_UP' },
+        {
+          kind: 'text',
+          position: [21, 10],
+          height: 2,
+          text: 'UP 90° R2',
+          layer: 'BEND_NOTES'
+        }
+      ],
+      {
+        layers: [
+          { name: '0' },
+          { name: 'BEND_UP', color: 3, lineType: 'DASHED' },
+          { name: 'BEND_NOTES', color: 2 }
+        ]
+      }
+    );
+    const result = importDxfSketch(text, 'mm');
+    expect(result.objects.length).toBeGreaterThanOrEqual(2);
+    expect(result.dropped).toEqual({ TEXT: 1 });
+    expect(result.refused).toEqual({});
+  });
+});

@@ -3,16 +3,28 @@ import {
   fileAccept,
   persistStorageForInstalledApp
 } from './lib/appleTouch';
+import { documentRevision } from './lib/documentRevision';
 import { registerOfflineShell } from './lib/offlineShell';
+import { spaceMouse } from './lib/spaceMouse';
+import {
+  dispatchEmulatedKey,
+  spaceMouseAction,
+  type SpaceMouseAction
+} from './lib/spaceMouseActions';
 import {
   localHistoryAppend,
   retainLocalHistoryAppend,
   type LocalHistoryAppend
 } from './lib/localHistoryAppend';
 import {
+  documentPrintClearance,
+  effectiveConfigurationRow,
+  documentForConfiguration,
   repairLegacyBracketModel,
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
+import type { PrintClearanceState } from './components/PrintClearanceRow';
+import type { ConfigurationActions } from './components/ConfigurationTable';
 import {
   noteProjectMigrating,
   registerProjectFlush,
@@ -36,6 +48,8 @@ import {
 import type { RefusalCapture } from './lib/refusalHarvest';
 import { useRefusalHarvest } from './hooks/useRefusalHarvest';
 import {
+  checkpointLabel,
+  ownEntry,
   PROJECT_MIGRATING_CODE,
   type DrawingAnnotation,
   type DrawingSheetId,
@@ -88,7 +102,9 @@ import { LatestTask } from './lib/latestTask';
 import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import {
-  activeIsolatedBodyId,
+  bodyIsolationState,
+  persistedHiddenBodyIds,
+  releaseIsolationToParameter,
   toggleBodyIsolation,
   type BodyIsolation
 } from './lib/bodyIsolation';
@@ -153,6 +169,7 @@ import {
   CirclePause,
   CirclePlay,
   Combine,
+  Cog,
   Copy,
   Crosshair,
   Download,
@@ -160,6 +177,7 @@ import {
   FolderOpen,
   Grid3x3,
   History as HistoryIcon,
+  Keyboard,
   Layers3,
   Maximize2,
   Monitor,
@@ -173,8 +191,9 @@ import {
   ScanEye,
   Settings as SettingsIcon,
   Scissors,
-  Slice,
+  SquareSplitVertical,
   SlidersHorizontal,
+  SquareDashed,
   ListOrdered,
   Spline,
   Trash2,
@@ -190,7 +209,9 @@ import {
   duplicateFeatureCommands,
   duplicateFeatureRefusal,
   isParameterRetype,
+  isTweakCommand,
   isAssemblyOnlyCommand,
+  isConfigurationTableOnlyCommand,
   isDrawingCommand,
   isObjectFolderCommandKind,
   isReferenceImageCommandKind,
@@ -204,6 +225,7 @@ import type { DrawingAssistantSource } from './lib/drawing/assistantContext';
 import {
   appendRevision,
   createCheckpoint,
+  createSavedRevision,
   createFeatureOnlyIds,
   createSavePoint,
   createProjectDocument,
@@ -212,6 +234,7 @@ import {
   listObjectFolders,
   getParameterHiddenBodyIds,
   findFeature,
+  standardPartHoleSource,
   findSketch,
   getParameterScope,
   resolvedSketchDocument,
@@ -221,6 +244,7 @@ import {
   listParameters,
   suggestParameterQuantities,
   normalizeDocument,
+  reservedDocumentIdentifierError,
   numberedBodyName,
   numberedFeatureName,
   extrudeToFaceUnresolved,
@@ -245,7 +269,10 @@ import {
   type PlaneBasis,
   type Vec2
 } from '@openzcad/geometry';
-import type { SketchSolveOutcome } from '@openzcad/kernel-adapter/exact';
+import type {
+  ExportBodySummary,
+  SketchSolveOutcome
+} from '@openzcad/kernel-adapter/exact';
 import type {
   ArtifactKind,
   AccountDeletionScope,
@@ -261,6 +288,7 @@ import type {
   FaceGeometry,
   FaceRecognitionSummary,
   ParamValue,
+  ConfigurationSet,
   FaceTopology,
   ProjectCheckpoint,
   PlaneId,
@@ -268,10 +296,12 @@ import type {
   ProjectOrganization,
   ProjectStatus,
   ProjectSummary,
+  SaveProjectDocumentRequest,
   SketchConstraintData,
   SketchId,
   SketchNode,
   SketchObjectData,
+  SketchPlaneRef,
   TopologySelection,
   UnitSystem
 } from '@openzcad/shared';
@@ -287,9 +317,9 @@ import {
   FEATURE_SUPPRESSED_METADATA_KEY,
   isFeatureManuallySuppressed,
   isFeatureSuppressed,
+  patternSourceProblem,
   projectBranchPoint,
   projectOrganization,
-  toProjectId,
   TRASH_RETENTION_DAYS
 } from '@openzcad/shared';
 import type {
@@ -321,6 +351,7 @@ import {
   residualConstraintObjectIds,
   sketchDefinedState,
   topResidualConstraints,
+  constraintRefusalMessage,
   unreferencedSnapRefusal,
   type ConstraintPick,
   type DrivingDimensionKind
@@ -353,6 +384,8 @@ import {
   type UnreferencedSnap
 } from './lib/sketch/session';
 import type { CompositeShape } from './lib/sketch/composites';
+import type { SketchSnapHint } from './lib/sketch/inference';
+import type { DrawnEntity } from './lib/sketch/inferenceCommit';
 import { resolvedSketchPlaneBasis } from './lib/sketch/planeBasis';
 import { sketchEntityEditTarget } from './lib/sketch/editTarget';
 import {
@@ -362,9 +395,13 @@ import {
 import { textPlacementBudgetError } from './lib/sketch/textPlacement';
 import { prefersSavingData } from './lib/saveData';
 import { useSurfaceReady } from './hooks/useSurfaceReady';
+import { useOnline } from './hooks/useOnline';
 import {
   lazyWithStaleChunkNotice,
+  isOffline,
+  loadRetryingOnReconnect,
   loadWhenOnline,
+  OFFLINE_CHUNK_MESSAGE,
   preloadableLazy,
   onStaleChunk,
   watchPreloadErrors,
@@ -374,10 +411,6 @@ import {
 } from './lib/staleChunk';
 import { lockAccountsExcept } from './lib/e2ee/unlockedKeys';
 import {
-  automaticProjectMigration,
-  AUTOMATIC_MIGRATION_LOAD_ERROR
-} from './lib/e2ee/automaticMigration';
-import {
   allowKeySession,
   announceKeySessionChange,
   blockKeySession,
@@ -386,24 +419,38 @@ import {
   subscribeKeySession,
   type KeySessionEvent
 } from './lib/e2ee/keySession';
+import {
+  AUTOMATIC_MIGRATION_LOAD_ERROR,
+  startAutomaticMigration
+} from './lib/e2ee/automaticMigrationLoader';
 import type { DeviceKeySignOutChoice } from './lib/e2ee/signOut';
 import {
   captureEncryptedInvitationLink,
   isEncryptedInvitationHash,
   pendingEncryptedInvitation
 } from './lib/e2ee/encryptedInvitationLink';
+import {
+  captureDeviceApprovalLink,
+  isDeviceApprovalHash,
+  pendingDeviceApproval
+} from './lib/e2ee/deviceApprovalLink';
 import { requestContactVerification } from './lib/e2ee/contactFocus';
 import { watchBuildVersion } from './lib/buildVersionWatch';
-import { commandOutcomeMessage } from './lib/commandOutcome';
+import {
+  commandOutcomeMessage,
+  historyStepMessage
+} from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
 import { cancelCommandChipEntry } from './lib/inPlace/chipCancel';
 import { commandChipName } from './lib/inPlace/chipNames';
+import { loneBodyFor } from './lib/inPlace/loneBody';
 import {
   presentedDiagnostics,
   shownFeatureWarnings
 } from './lib/diagnosticsRows';
 import { sweepFacetingAdvisories } from './lib/sweepFaceting';
+import { loftFacetingAdvisories } from './lib/loftFaceting';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
 import { useRememberedSection } from './hooks/useRememberedSection';
 import { newBlendFacePick } from './lib/blendRearm';
@@ -416,16 +463,35 @@ import { DeferredExactEntry } from './lib/deferredExactEntry';
 import type { SketchSolveStatus } from './components/SketchToolRail';
 import type { SharedLinkCopyDestination } from './components/SharedLinkCopyDialog';
 import {
+  accountSettingsAdopted,
   ApiError,
   api,
+  carryEncryptionRequirement,
+  encryptedPinProblem,
+  encryptedPinsResetElsewhere,
+  encryptedProjectResetElsewhere,
+  encryptionRequired,
+  encryptsAccountLibrary,
   encryptsNewProjects,
+  isEncryptedPinProblemError,
   isEncryptedProject,
   isProjectDocumentUnavailableError,
+  isProjectStorageCleanupPendingError,
+  retryWhileStorageCleanupPending,
   isProjectFormatUnsupportedError
 } from './lib/api';
+import { readAccountSession } from './lib/accountSession';
+import {
+  useEncryptedPins,
+  type PinResetTarget
+} from './components/encryptedPinsState';
 import type { ProjectListingProgress } from './lib/api';
+import { saveShareLinkCopy } from './lib/shareLinkCopy';
 import { createCloudConfigurationReads } from './lib/cloudConfigurationReads';
-import { assistantDisabledReason } from './lib/assistant/encryptedProject';
+import {
+  assistantDisabledReason,
+  ENCRYPTED_PROJECT_ASSISTANT_NOTICE
+} from './lib/assistant/encryptedProject';
 import {
   refreshEncryptedMemberRole,
   useEncryptedMemberRole
@@ -444,6 +510,7 @@ import {
   sourceUploadMessage
 } from './lib/accountImportSources';
 import type { ArchiveArtifactInput } from './lib/archiveArtifact';
+import { cloudArchivable } from './lib/cloudArchivable';
 import {
   archiveLocalOnlyImportSources,
   createInFlightImportChecksums,
@@ -461,23 +528,26 @@ import {
   sameLocalProjectContent,
   type LocalProjectAutosaveOptions
 } from './lib/localProjectAutosave';
+// Shapr3D migration loads on the gesture that picks a .shapr + STEP pair.
+import type { ShaprPairInspection } from './lib/shaprImportWorkerClient';
+import type { shaprMigrationDraft as ShaprMigrationDraftFn } from './lib/shaprMigration';
 import {
-  inspectShaprPair,
-  type ShaprPairInspection
-} from './lib/shaprImportWorkerClient';
-import { rebuildImportInDisposableWorker } from './lib/importRebuildWorkerClient';
-import { shaprMigrationDraft } from './lib/shaprMigration';
-import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
+  autosaveReportedSaveState,
+  presentedWorkspaceSaveState
+} from './lib/workspaceSaveStatePresentation';
 import { showsWorkspaceEmptyState } from './lib/workspaceEmptyState';
 import {
   CheckpointSaveError,
   failedCheckpointSaveState
 } from './lib/collaborationCheckpointFallback';
+import { currentCheckpointAuthor } from './lib/checkpointAuthor';
 import {
   cancelDesktopSignIn,
+  DESKTOP_SLICERS,
   isDesktopApp,
   listenForDesktopMenu,
   openDesktopCadFile,
+  openInDesktopSlicer,
   pollDesktopSignIn,
   protectDesktopClose,
   saveCadBinaryFile,
@@ -504,7 +574,11 @@ import {
   decideProjectSync,
   shouldPollForFreshness
 } from './lib/projectSyncDecision';
-import { watchLibraryFreshness } from './lib/libraryRefresh';
+import {
+  watchLibraryFreshness,
+  type LibraryFreshnessWatch
+} from './lib/libraryRefresh';
+import { rateLimitOf, type RateLimit } from './lib/rateLimit';
 import {
   claimProjectOwnership,
   type ProjectOwnershipClaim
@@ -513,6 +587,7 @@ import {
 import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
 import { beginEditTrace } from './lib/editTrace';
 import { traceFaceDrag, traceFaceDragPublish } from './lib/faceDragTrace';
+import { quantityTypedIn } from './lib/parameterQuantity';
 import {
   modalHoldsKeyboard,
   modalLendsWorkspaceKeys,
@@ -524,15 +599,20 @@ import {
   exportFileStem,
   formatMeasuredQuantity,
   formatNumber,
-  inferContentType
+  inferContentType,
+  previewExpression
 } from './lib/model';
+import {
+  flatPatternTarget,
+  sheetMetalFeatureForBody,
+  sheetMetalFeatureOptions
+} from './lib/sheetMetalFeatures';
 import {
   sketchValueResolver,
   requiredValueResolver
 } from './lib/sketch/valueResolver';
 import { countClosedProfileSketches } from './lib/sketch/profileAvailability';
 import { useDocumentFonts } from './lib/textFonts';
-import { createProjectDiagnosticBundle } from './lib/projectDiagnostics';
 import type { DirectEditFixtureOutcome } from './lib/directEditFixture';
 import type * as InteractionDiagnostics from './lib/interactionDiagnostics';
 import { KERNEL_BUILD, supportsBlendGroupEdits } from './lib/kernelBuild';
@@ -548,6 +628,8 @@ import {
 import {
   TOOL_GROUPS,
   TOOL_META,
+  editAvailability,
+  liveCylindricalFace,
   toolDisabledReason,
   type ToolAvailability,
   type ToolId
@@ -560,17 +642,26 @@ import {
   type CommandSelection
 } from './lib/commandContext';
 import { WorkspaceColumn } from './components/WorkspaceColumn';
+import {
+  LIVE_SESSION_CONNECTING,
+  LiveSessionNotice
+} from './components/LiveSessionNotice';
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
   ActivityLogButton,
   ViewportDockExtras,
   WorkspaceReadout
 } from './components/WorkspaceReadout';
+import { SECTION_PLANE_LABELS } from './lib/sectionPlaneLabels';
 import { StatusActivityLog } from './components/StatusActivityLog';
 import { recordActivity } from './lib/activityLog';
+import { reportProjectListingFailure } from './lib/projectListingFailure';
 import { WORKSPACE_MODE_OPTIONS } from './lib/topBarPresentation';
 import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { PatternProgressSlot } from './components/PatternProgressSlot';
+import { rebuildInDisposableWorker } from './lib/disposableRebuild';
+import { MotionStudyTimelineSlot } from './components/assembly/MotionStudyTimelineSlot';
 import { createLazyPanel } from './components/LazyPanel';
 import type { ModelPanel as ModelPanelComponent } from './components/modelPanels/ModelPanel';
 import type * as ModelPanelModule from './components/modelPanels/ModelPanel';
@@ -605,7 +696,7 @@ import {
   ViewModeRail
 } from './components/ViewModeRail';
 import { StartScreen } from './components/StartScreen';
-import { SharePage, type SharePageState } from './components/SharePage';
+import type { SharePageState } from './components/SharePage';
 import { StartupScreen } from './components/StartupScreen';
 import { SettingsPlaceholder } from './components/SettingsPlaceholder';
 import {
@@ -614,6 +705,7 @@ import {
 } from './components/WorkspaceLoading';
 import type { AuthConfigStatus } from './components/SettingsPage';
 import {
+  copyBaseName,
   DEMO_DEFINITIONS,
   VISUAL_SELECTION_ACCEPTANCE_DEMO
 } from './lib/demoDefinitions';
@@ -627,14 +719,17 @@ import {
 } from './lib/projectInvitationLink';
 import {
   captureProjectShareRequest,
+  captureShareConfiguration,
   isEncryptedShareLink,
   shareLinkFromHash,
   projectLinkPath,
   clearProjectShareFragment
 } from './lib/projectShareLink';
+import { sharedDocumentOnRow } from './lib/sharedConfiguration';
 import type {
   ExportProgress,
-  MeshExportDialogFormat
+  MeshExportDialogFormat,
+  SlicerTarget
 } from './components/ExportDialog';
 import type {
   PngExportOptions,
@@ -669,6 +764,29 @@ const STL_EXPORT_FILE_INFO = {
   kind: 'stl-export' as const,
   binaryFormat: 'stl' as const
 };
+/**
+ * L09 "Open in slicer": where a 3MF goes from the mesh dialog. The desktop
+ * app hands a local file to an installed slicer. The browser has no route
+ * that reaches a slicer with a local file (the slicers' URL schemes only
+ * download an http(s) URL), so it downloads the 3MF to be opened from there.
+ * Neither uploads anything.
+ */
+function slicerTargets(desktop: boolean): SlicerTarget[] {
+  return desktop
+    ? DESKTOP_SLICERS.map(({ id, label }) => ({
+        id,
+        label,
+        hint: `Opens the 3MF, each body named and coloured, in ${label} on this Mac. Nothing is uploaded.`
+      }))
+    : [
+        {
+          id: 'download',
+          label: 'Download for slicer',
+          hint: 'Downloads the 3MF, each body named and coloured, to open from your browser’s downloads in your slicer. Nothing is uploaded.'
+        }
+      ];
+}
+
 const MESH_EXPORT_FILE_INFO: Record<
   MeshExportDialogFormat,
   {
@@ -733,7 +851,9 @@ import {
   isRemovableDetail,
   selectedFeatureFaces
 } from './lib/selectionFeature';
+import { heldFaceSetBody, toggleFaceInSet } from './lib/faceSetSelection';
 import { cylinderResizeFold } from './lib/interaction/cylinderResizeFold';
+import { facePickCylinder, facePickKey } from './lib/inPlace/cylinderSide';
 import {
   cylinderRadialFrame,
   type CylinderRadiusEdit,
@@ -769,6 +889,14 @@ import {
   resolveImportedBlendFace
 } from './lib/interaction/filletFaceEdit';
 import { ToastHost } from './components/Toast';
+import { useConfirm } from './components/ConfirmDialog';
+import {
+  describeFailure as describePlainFailure,
+  describeProjectImportFailure,
+  describeShaprImportFailure,
+  describeShareOpenFailure,
+  unsupportedImportMessage
+} from './lib/plainFailure';
 import {
   commandPaletteShortcut,
   idleWorkspaceHint,
@@ -850,7 +978,11 @@ import {
   type SelectionCalloutOperation,
   type SelectionCalloutVerbId
 } from './lib/selectionCallout';
-import { ghostBodiesFor, historyFeatureFocus } from './lib/historyFocus';
+import {
+  ghostBodiesFor,
+  historyFeatureFocus,
+  isCutFace
+} from './lib/historyFocus';
 import { useLocalAutoFrame } from './hooks/useLocalAutoFrame';
 import type { AutoFrameRequest } from './lib/autoFrame';
 import { useOffsetFaceHandle } from './hooks/useOffsetFaceHandle';
@@ -878,7 +1010,12 @@ import {
   resolveFace
 } from './lib/topologyResolution';
 import { useLineageDemand } from './lib/lineageDemand';
+import { faceProducingFeature } from './lib/faceProducerName';
 import { persistsKernelSession } from './lib/kernelSessionPolicy';
+import {
+  folderClickSelection,
+  folderCommandPicks
+} from './lib/objectFolderView';
 import {
   objectPolylines,
   displayObjectsWithTextBudget
@@ -889,8 +1026,15 @@ import { useBuildToolNavigation } from './hooks/useBuildToolNavigation';
 import { useResponsiveFraming } from './hooks/useResponsiveFraming';
 import { parameterDisplayName } from './lib/parameterDisplayName';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
-import { DISPLAY_MODE_LABELS } from './lib/displayMode';
+import { DISPLAY_MODE_LABELS, DISPLAY_MODE_ORDER } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
+import {
+  FACE_VERB_PREFIX,
+  LOOK_AT_FACE_ITEM_ID,
+  selectOtherMenuItem,
+  withFaceVerbs,
+  type ViewportMenuState
+} from './lib/viewportMenu';
 import type {
   ResolveExtrudeOptions,
   ResolvedExtrude
@@ -912,13 +1056,14 @@ import type {
   ExtrudeFormValue,
   ExtrudeToFacePicking
 } from './lib/extrudeDraft';
-import {
-  ExtrudeCommand,
-  extrudeShownValues,
-  type ExtrudeCommandHandle,
-  type ExtrudeCommandState,
-  type ExtrudeValueId
+import type {
+  ExtrudeCommandHandle,
+  ExtrudeCommandState
 } from './components/ExtrudeCommand';
+import {
+  extrudeShownValues,
+  type ExtrudeValueId
+} from './lib/extrudeShownValues';
 import { DRAFT_DRAG_LIMIT_DEG, extrudeHandles } from './lib/inPlace/extrude';
 import {
   extrudeToFaceRepair,
@@ -938,7 +1083,8 @@ import type {
   BodyAppearancePreview,
   FaceResizeCommit,
   OffsetCommitOutcome,
-  NormalToFaceRequest
+  NormalToFaceRequest,
+  ViewportContextMenuOptions
 } from './components/ModelViewer';
 import type { OrientationLink } from './components/viewer/orientationCube';
 import type {
@@ -1049,6 +1195,8 @@ function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
  * BEFORE it (unsupported extension, a lone `.shapr`) stay synchronous.
  */
 const stepImportRun = () => import('./lib/stepImportRun');
+const featureDeletionRun = () => import('./lib/featureDeletionRun');
+const projectInsertRun = () => import('./lib/projectInsertRun');
 
 /**
  * Extrude classification runs only once a region extrude is previewed or
@@ -1072,6 +1220,9 @@ const preflightCadPatch: typeof AiPatchPreflight.preflightCadPatch = (
  * read only for its Settings export, neither of which waits on the result.
  */
 const interactionDiagnostics = () => import('./lib/interactionDiagnostics');
+// Loaded on Export diagnostics only, as the interaction log is.
+const projectDiagnostics = () => import('./lib/projectDiagnostics');
+const closedOpenings = () => import('./lib/closedOpenings');
 /** A refused rebuild saved as a corpus fixture, on its Save reproduction. */
 const refusalReproduction = () => import('./lib/refusalReproduction');
 
@@ -1091,6 +1242,13 @@ function withSuspense<P extends object>(Lazy: JSXElementConstructor<P>) {
   };
 }
 
+// A share link's landing page: only a share link opens it, so it waits in
+// its own chunk, outside the entry chunk, which runs at its budget.
+const SharePage = preloadableSlot('Shared link', () =>
+  import('./components/SharePage').then((module) => ({
+    default: module.SharePage
+  }))
+);
 const LazyNumericKeypad = preloadableLazy(() =>
   import('./components/NumericKeypad').then((module) => ({
     default: module.NumericKeypad
@@ -1099,12 +1257,43 @@ const LazyNumericKeypad = preloadableLazy(() =>
 const NumericKeypad = withSuspense(LazyNumericKeypad);
 // U09: an in-place command's Cancel / Done bar. Lazy, like the keypad: only
 // a running command needs it, and the entry chunk runs at its budget.
-const InPlaceCommandBar = withSuspense(
-  lazyWithStaleChunkNotice(() =>
+// Preloadable, so the first command after the idle warm-up opens its bar in
+// the same frame instead of suspending for one; behind its own boundary, so
+// a chunk that cannot load leaves the workspace standing (Escape and Enter
+// still cancel and finish the command).
+const InPlaceCommandBar = preloadableSlot(
+  'Command bar',
+  () =>
     import('./components/InPlaceCommandBar').then((module) => ({
       default: module.InPlaceCommandBar
-    }))
-  )
+    })),
+  { pending: <WorkspacePending /> }
+);
+// M16: Bend's table and fold slider, beside its command bar; only Bend
+// needs it, so it stays out of the entry chunk too.
+const SheetMetalBendPanel = preloadableSlot(
+  'Bend table',
+  () =>
+    import('./components/SheetMetalBendPanel').then((module) => ({
+      default: module.SheetMetalBendPanel
+    })),
+  { pending: null }
+);
+// The in-place Extrude bar (region extrude and editing a stored extrude).
+// It shares the command bar's chunk, so loading it on demand is what lets the
+// bar above leave the entry chunk at all. Warmed with the keypad as soon as a
+// sketch or command is up, and with the idle warm-up. Until it is ready the
+// region offers nothing the bar would have to answer (`extrudeBarReady`).
+/** Why a region's distance cannot be typed once its bar failed to load. */
+const EXTRUDE_ENTRY_UNAVAILABLE =
+  'Extrude did not load, so its distance cannot be typed. Reload to try again.';
+const ExtrudeCommand = preloadableSlot(
+  'Extrude',
+  () =>
+    import('./components/ExtrudeCommand').then((module) => ({
+      default: module.ExtrudeCommand
+    })),
+  { pending: <WorkspacePending /> }
 );
 
 const LazyViewerShell = preloadableLazy(() =>
@@ -1248,6 +1437,15 @@ const LazyEditRefusal = lazyWithStaleChunkNotice(() =>
     default: module.EditRefusal
   }))
 );
+const loadPinRecovery = () => import('./components/EncryptedPinReset');
+const ignoreFailure = () => undefined;
+// "Treat as not encrypted on this device" is offered only where a stuck
+// encrypted project is met (PR #1418); nobody else loads it.
+const LazyPinResetDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/EncryptedPinReset').then((module) => ({
+    default: module.PinResetDialog
+  }))
+);
 // The first-model tour shows once per device; nobody else pays for it.
 const LazyWorkspaceTour = lazyWithStaleChunkNotice(() =>
   import('./components/WorkspaceTour').then((module) => ({
@@ -1292,6 +1490,11 @@ const LazySaveRevisionDialog = lazyWithStaleChunkNotice(() =>
 const LazyDeleteFeatureDialog = lazyWithStaleChunkNotice(() =>
   import('./components/DeleteFeatureDialog').then((module) => ({
     default: module.DeleteFeatureDialog
+  }))
+);
+const LazyDeleteDependentsDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/DeleteDependentsDialog').then((module) => ({
+    default: module.DeleteDependentsDialog
   }))
 );
 const LazySuppressFeatureDialog = lazyWithStaleChunkNotice(() =>
@@ -1364,7 +1567,9 @@ const LazySettingsPage = preloadableLazy(() =>
 const FIRST_USE_SURFACES = [
   LazySettingsPage,
   LazyMoveOverlay,
-  LazyNumericKeypad
+  LazyNumericKeypad,
+  InPlaceCommandBar,
+  ExtrudeCommand
 ];
 const LazyProjectSharingDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ProjectSharingDialog').then((module) => ({
@@ -1386,6 +1591,11 @@ const LazyDrawingWorkspace = lazyWithStaleChunkNotice(() =>
 const LazyImageExportDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ImageExportDialog').then((module) => ({
     default: module.ImageExportDialog
+  }))
+);
+const LazyFlatPatternDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/FlatPatternDialog').then((module) => ({
+    default: module.FlatPatternDialog
   }))
 );
 // Off the entry chunk: nothing shows for the first 600 ms of a run anyway,
@@ -1468,6 +1678,8 @@ const SaveRevisionDialog = withSuspense(LazySaveRevisionDialog);
 
 const DeleteFeatureDialog = withSuspense(LazyDeleteFeatureDialog);
 
+const DeleteDependentsDialog = withSuspense(LazyDeleteDependentsDialog);
+
 const SuppressFeatureDialog = withSuspense(LazySuppressFeatureDialog);
 
 const ResumeHistoryDialog = withSuspense(LazyResumeHistoryDialog);
@@ -1514,6 +1726,18 @@ function ImageExportDialog(
     <ExportDialogBoundary onClose={props.onClose}>
       <Suspense fallback={null}>
         <LazyImageExportDialog {...props} />
+      </Suspense>
+    </ExportDialogBoundary>
+  );
+}
+
+function FlatPatternDialog(
+  props: ComponentProps<typeof LazyFlatPatternDialog>
+) {
+  return (
+    <ExportDialogBoundary onClose={props.onClose}>
+      <Suspense fallback={null}>
+        <LazyFlatPatternDialog {...props} />
       </Suspense>
     </ExportDialogBoundary>
   );
@@ -1567,6 +1791,8 @@ import {
   saveLocalProjectOrganization,
   saveLocalProjectOrganizationIfCurrent,
   saveProjectMeasurements,
+  localDeletionFence,
+  saveAccountThumbnail,
   saveProjectThumbnail,
   saveLocalProject,
   saveLocalSaveStates,
@@ -1593,11 +1819,23 @@ import {
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   projectNeedsUpdate,
   resolveShelfThumbnail,
-  cachedThumbnailSource
+  cachedThumbnailSource,
+  measuredDocumentBytes,
+  summarizeLocalDocument,
+  withSavedVersion
 } from './lib/projectShelf';
-import { preparePartThumbnails } from './components/PartThumbnail';
+import { SEALED_SHELF_APPLIED_EVENT } from './lib/sealedShelfCore';
+import type * as SealedShelf from './lib/sealedShelfState';
+import {
+  preparePartThumbnails,
+  rememberCapturedThumbnail
+} from './components/PartThumbnail';
 import { folderStorageKey, readLibraryFolders } from './lib/libraryFolders';
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
+import {
+  settleThumbnailUploads,
+  trackThumbnailUpload
+} from './lib/thumbnailUploads';
 import {
   cachedShelfNames,
   forgetShelfProjectNames,
@@ -1620,9 +1858,15 @@ import {
   isInPlaceTool,
   keypadText,
   profileRegionLoops,
+  isInPlacePatternTool,
+  inPlaceBodyMode,
+  inPlaceFaceMode,
+  takesFeatureFaces,
+  toggledPatternSkip,
   requestNewAxis,
   resolveNewAxis,
   valueInRange,
+  valueRangeSentence,
   type InPlaceRequest,
   type ResolvedInPlaceRequest,
   type BodyPick,
@@ -1636,11 +1880,23 @@ import {
   type RefPick
 } from './lib/inPlace/tools';
 import { imagePlacementPlane, placeImage } from './lib/inPlace/image';
+import {
+  FIXED_POINT_OPTION,
+  bendFixedPoint,
+  bendLineCandidates,
+  bendRows,
+  fixedPointText,
+  onBlank,
+  sheetMetalUpdate,
+  sketchPointOf
+} from './lib/inPlace/sheetMetal';
 import type * as DatumPicks from './lib/inPlace/datumPicks';
 import type { PreparedReferenceImage } from './lib/referenceImageInsert';
 import {
   parseCurveCandidateId,
-  sketchCurveCandidates
+  sketchCurveCandidates,
+  sketchPointCandidates,
+  sketchPointSpots
 } from './lib/inPlace/curves';
 import { datumAxisChoices } from './lib/datumAxisChoices';
 import {
@@ -1660,6 +1916,7 @@ import {
   inPlaceEditSourceSketchIds,
   inPlaceFeatureUpdate,
   inPlaceToolForFeature,
+  recheckedCurvePicks,
   featureEditsInPlace,
   type InPlaceEditSeed
 } from './lib/inPlace/edit';
@@ -1687,7 +1944,6 @@ import {
   type ValidatedFeatureOutcome,
   type ValidatedFeatureRunOptions
 } from './hooks/useValidatedFeatureCommit';
-import { PatternProgress } from './components/PatternProgress';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from './hooks/useDelayedUnmount';
 import {
   affectedFeatureTargets,
@@ -1721,6 +1977,7 @@ import {
   activeResumePrompt,
   failingFeatureIds,
   HistoryResumeRefusal,
+  resumeHistoryMessage,
   rollbackMarkerMove,
   rowResume,
   rowResumeAlreadyFailing,
@@ -1760,7 +2017,7 @@ import {
   type ToastModel
 } from './lib/toasts';
 import { PreviewRefusalError, splitRefusal } from './lib/featureValidation';
-import { keptOffsetValue } from './lib/offsetChip';
+import { keptOffsetValue, offsetFaceCommitMessage } from './lib/offsetChip';
 import { useCollaboration } from './lib/useCollaboration';
 import type * as AiPatchPreflight from './lib/aiPatchPreflight';
 import type {
@@ -1773,7 +2030,6 @@ import {
   reaskConflict,
   hasUnresolvedConflict,
   conflictCopyNote,
-  resolveProjectConflict,
   type ConflictResolution,
   type ConflictResolutionHandlers,
   type ProjectConflict
@@ -1807,7 +2063,12 @@ import {
   shouldAdoptAccountSettings
 } from './lib/appSettings';
 import { useCommandFold } from './hooks/useCommandFold';
-import { sketchObjectLabels } from './lib/sketch/objectLabels';
+import { sketchExitEscape } from './lib/interaction/sketchExitConfirm';
+import {
+  sketchObjectLabels,
+  sketchPointNamer
+} from './lib/sketch/objectLabels';
+import { regionsOutsideHoles } from './lib/sketch/extrudePreselect';
 import {
   commandFoldsTools,
   loadPanelState,
@@ -1879,7 +2140,6 @@ function preloadWorkspaceMode(mode: WorkspaceMode) {
 }
 import { AssemblyPanelPending } from './components/assembly/AssemblyPanelPending';
 import { meshBoundsLookup } from './lib/assembly/motionSetup';
-import { MotionStudyTimeline } from './components/assembly/MotionStudyTimeline';
 // The View-mode playback bar draws only for an assembly with something to
 // play, so a part-only session never downloads it. Its slot keeps a failure
 // local and retries on the next project.
@@ -1889,6 +2149,7 @@ const AssemblyPlayer = createAssemblyPlayer(() =>
   }))
 );
 import { createAssemblyPlayer } from './components/assembly/AssemblyPlayerSlot';
+import { preloadableSlot } from './components/PreloadableSlot';
 import {
   assembleKeyFor,
   runAssembleKey,
@@ -2013,11 +2274,6 @@ const DISABLED_COLLABORATION_ROLLOUT: ProjectCollaborationCapabilitiesResponse =
   };
 const projectSharingClient = createProjectSharingClient();
 const localUserId = toUserId('user_local_browser');
-const DISPLAY_MODE_ORDER: DisplayMode[] = [
-  'shaded-edges',
-  'shaded',
-  'wireframe'
-];
 
 interface OffsetEditPlan {
   command: AnyCommand;
@@ -2112,21 +2368,6 @@ function desktopAuthorizationAttemptFromLocation(): string | null {
   return attempt && /^[A-Za-z0-9-]{16,64}$/.test(attempt) ? attempt : null;
 }
 
-/** Start-screen summary of a document held on this device. */
-function summarizeLocalDocument(
-  document: ProjectDocument,
-  organization?: ProjectOrganization
-): ProjectSummary {
-  return {
-    projectId: document.projectId,
-    name: document.name,
-    lastRevisionId: document.revisions.at(-1)?.revisionId,
-    updatedAt: document.derived.updatedAt,
-    revisionCount: document.checkpoints.length,
-    ...(organization ? { organization } : {})
-  };
-}
-
 interface HydrateOptions {
   restoreView?: boolean;
   rememberProject?: boolean;
@@ -2138,21 +2379,37 @@ interface HydrateOptions {
   activeProjectSince?: ActiveProjectSnapshot;
 }
 
+/**
+ * The sealed shelf (ADR-024 amendment 2026-11-14), loaded on first use so
+ * the entry chunk does not carry it: only shelf listings, edits and their
+ * mirrors of a signed-in account need it.
+ */
+function loadSealedShelf(): Promise<typeof SealedShelf> {
+  return import('./lib/sealedShelfState');
+}
+
+/** The account the shelf currently lists, which the shelf's mirror writes for. */
+let shelfListingAccount: string | null = null;
+
 const organizationMirrorHost: OrganizationMirrorHost = {
   readLocal: loadLocalProjectOrganizationSnapshot,
   saveLocal: saveLocalProjectOrganizationIfCurrent,
-  updateRemote: (projectId, organization, signal) =>
-    api
-      .updateProject(
-        {
-          projectId: toProjectId(projectId),
-          status: organization.status,
-          pinned: organization.pinned,
-          sortOrder: organization.sortOrder
-        },
-        signal
-      )
-      .then(() => undefined)
+  // An account whose library is encrypted sends only trash moves; its pins,
+  // order and archive go to the sealed library record (sealedShelfState.ts).
+  // Any other account's are sent only after its library rule says plaintext.
+  updateRemote: async (projectId, organization, signal) => {
+    // The account is read when the mirror runs, not after the load.
+    const accountId = shelfListingAccount;
+    const shelf = await loadSealedShelf();
+    return shelf.mirrorShelfToAccount(
+      api,
+      accountId,
+      projectId,
+      organization,
+      encryptsAccountLibrary,
+      signal
+    );
+  }
 };
 const organizationBackground = new OrganizationMirrorBackground();
 
@@ -2178,10 +2435,31 @@ async function loadProjectSummaries(
    * than reading an absence as "local-only".
    */
   cloudProjectIds: Set<string>;
+  /**
+   * The account's read budget ran out (HTTP 429) during this listing,
+   * either refusing it or stopping its encrypted names part way. A
+   * background refresh keeps the shelf it has and waits; this is never a
+   * sign-out.
+   */
+  rateLimited: RateLimit | null;
 }> {
   const keySessionRevision = getKeySessionRevision();
   const signedIn = accountId !== null;
   const scope = organizationBackground.begin(accountId);
+  shelfListingAccount = accountId;
+  // Whether this account's shelf state is sealed, asked beside the listing.
+  // Unanswerable reads as sealed here: the listing then shows the account's
+  // own edits, record and rows, and sends nothing readable on a guess.
+  const sealedShelfModule = accountId === null ? null : loadSealedShelf();
+  const sealedShelf =
+    accountId === null || sealedShelfModule === null
+      ? Promise.resolve(false)
+      : sealedShelfModule.then((shelf) =>
+          shelf.shelfSealedOrSafe(accountId, encryptsAccountLibrary)
+        );
+  // Awaited below; a listing that fails before then must not leave it
+  // rejected and unobserved.
+  void sealedShelf.catch(() => undefined);
   const unavailableAs =
     <T,>(fallback: T) =>
     (error: unknown): T => {
@@ -2202,6 +2480,7 @@ async function loadProjectSummaries(
     });
   const progress = options?.progress;
   const shelfNames = cachedShelfNames(accountId);
+  let listingRateLimit: RateLimit | null = null;
   const [local, organizationSnapshots, remote] = await Promise.all([
     localRead,
     listLocalProjectOrganizationSnapshots().catch(
@@ -2235,7 +2514,11 @@ async function loadProjectSummaries(
                 }
               : undefined
           )
-          .catch(() => null)
+          .catch((error: unknown) => {
+            reportProjectListingFailure(error);
+            listingRateLimit = rateLimitOf(error);
+            return null;
+          })
       : Promise.resolve(null)
   ]);
   const localOrganizations = new Map(
@@ -2244,7 +2527,33 @@ async function loadProjectSummaries(
       snapshot.organization
     ])
   );
-  const remoteProjects = remote?.projects ?? [];
+  let remoteProjects = remote?.projects ?? [];
+  let legacyShelf: ReadonlyMap<string, ProjectOrganization> = new Map();
+  let sealedListing = false;
+  const shelf = sealedShelfModule ? await sealedShelfModule : null;
+  if (accountId && !remote) {
+    // Unreached, the account still owns its shelf state: an encrypted (or
+    // unanswerable) library lists its known projects from its own edits,
+    // record and last-listed rows, never from this device's rows.
+    sealedListing = await sealedShelf;
+  } else if (accountId && remote && shelf) {
+    shelf.rememberAccountRows(accountId, remoteProjects);
+    if (await sealedShelf) {
+      sealedListing = true;
+      // The account's rows speak for the trash only (ADR-024 amendment
+      // 2026-11-14): pins, order and archive come from this account's
+      // unsynced edits, its sealed record, and once from readable state
+      // still on the rows, to migrate. Never from this device's rows, which
+      // every account signed in here shares.
+      const overlaid = shelf.overlaySealedShelf(
+        remoteProjects,
+        shelf.agreedShelfState(accountId),
+        shelf.readShelfEdits(accountId)
+      );
+      remoteProjects = overlaid.projects;
+      legacyShelf = overlaid.legacy;
+    }
+  }
   const remoteIds = new Set<string>(
     remoteProjects.map((project) => project.projectId)
   );
@@ -2280,6 +2589,10 @@ async function loadProjectSummaries(
         unavailableAs(localOrganizations)
       )
     : localOrganizations;
+  // Readable shelf state goes into the sealed record with the next folder
+  // sync, which then resets those account rows.
+  if (accountId && remote && sealedListing && shelf)
+    shelf.noteLegacyShelfRows(accountId, legacyShelf);
   const pendingEncryptedProjectIds = isCurrentKeySession(keySessionRevision)
     ? remote?.pendingEncryptedProjectIds
     : undefined;
@@ -2310,7 +2623,16 @@ async function loadProjectSummaries(
         pendingEncryptedProjectIds,
         local
       ),
-      settledOrganizations
+      // A sealed library's projects take only the trash from this device's
+      // rows, which another account signed in here may have left pending,
+      // whether or not the account's listing came back.
+      accountId && sealedListing && shelf
+        ? shelf.accountListingOrganizations(
+            accountId,
+            settledOrganizations,
+            remote ? remoteProjects : null
+          )
+        : settledOrganizations
     ),
     local,
     pendingEncryptedProjectIds
@@ -2321,7 +2643,8 @@ async function loadProjectSummaries(
   return {
     projects,
     remoteReached: Boolean(remote),
-    cloudProjectIds: remoteIds
+    cloudProjectIds: remoteIds,
+    rateLimited: remote?.rateLimited ?? listingRateLimit
   };
 }
 
@@ -2338,6 +2661,8 @@ interface PendingShaprImport {
   phase: ShaprImportDialogPhase;
   progress: string;
   error: string | null;
+  /** The reader's raw words behind `error`, for its Details disclosure. */
+  errorDetail?: string | undefined;
   inspection: ShaprPairInspection | null;
 }
 
@@ -2539,6 +2864,13 @@ export function App() {
   }, []);
   useEffect(() => {
     const openFragment = () => {
+      if (isDeviceApprovalHash(window.location.hash)) {
+        if (captureDeviceApprovalLink()) {
+          updateSettingsViewState({ open: true, activeSection: 'encryption' });
+          setSettingsOpen(true);
+        }
+        return;
+      }
       if (isEncryptedInvitationHash(window.location.hash)) {
         if (captureEncryptedInvitationLink()) {
           beginProjectNavigation(false);
@@ -2694,13 +3026,15 @@ export function App() {
   const cloudConfigurationReads = useRef(createCloudConfigurationReads());
   const [authConfigStatus, setAuthConfigStatus] =
     useState<AuthConfigStatus>('loading');
+  /** The last session read could not tell signed in from signed out. */
+  const [sessionUnavailable, setSessionUnavailable] = useState(false);
   const [panelState, setPanelState] = useState<PanelState>(() =>
     loadPanelState()
   );
   // Where the model panels live (U08). Read before anything can write the
   // new key: on a device that has none, the v1 drawer state it migrates
   // from is what `loadPanelState` just read, untouched. A device with
-  // neither starts in the two-sided Essentials.
+  // neither starts with Objects above History in one right column.
   const [panelLayout, setPanelLayout] = useState<PanelLayout>(() =>
     loadPanelLayout(undefined, undefined, { leftDock: true })
   );
@@ -2777,8 +3111,18 @@ export function App() {
   // address bar at once; Settings › Encryption opens on it once the session
   // is known (below), where it is accepted after encryption is set up.
   useState(captureEncryptedInvitationLink);
+  // A new device's approval QR code, opened by a phone's camera: taken off
+  // the address bar at once, and Settings › Encryption opens on it, where
+  // this device approves the new one once it is signed in and unlocked.
+  const [bootDeviceApproval] = useState(() => {
+    const code = captureDeviceApprovalLink();
+    if (code)
+      updateSettingsViewState({ open: true, activeSection: 'encryption' });
+    return code;
+  });
   const [settingsOpen, setSettingsOpen] = useState(
     () =>
+      bootDeviceApproval !== null ||
       pendingInvitationToken !== null ||
       desktopAuthorizationAttempt !== null ||
       loadSettingsViewState().open
@@ -2803,6 +3147,21 @@ export function App() {
   });
   const [sharingOpen, setSharingOpen] = useState(false);
   const [meshExportOpen, setMeshExportOpen] = useState(false);
+  /**
+   * F06: the configuration the mesh export writes; null is the active one,
+   * the model as shown. Reset when the dialog closes.
+   */
+  const [exportRowId, setExportRowId] = useState<string | null>(null);
+  /**
+   * F06: what an export of `exportRowId` writes, asked of the kernel for the
+   * row built on its own. The mesh dialog lists these and limits its formats
+   * by them, not by the row on screen.
+   */
+  const [exportRowBodies, setExportRowBodies] = useState<{
+    rowId: string;
+    version: number;
+    bodies: ExportBodySummary[];
+  } | null>(null);
   /** A unitless import waiting for the user to say what its numbers mean. */
   const [importUnitsPrompt, setImportUnitsPrompt] = useState<Omit<
     ComponentProps<typeof LazyImportUnitsDialog>,
@@ -2818,6 +3177,9 @@ export function App() {
     height: number;
     maxSide: number;
   } | null>(null);
+  /** M16: the sheet-metal feature the flat-pattern view opened on. */
+  const [flatPatternFeatureId, setFlatPatternFeatureId] =
+    useState<FeatureId | null>(null);
   const viewportImageRef = useRef<ViewportImageSource | null>(null);
   const [pendingShaprImport, setPendingShaprImport] =
     useState<PendingShaprImport | null>(null);
@@ -2834,11 +3196,6 @@ export function App() {
    * features are added but never appears over someone's existing model.
    */
   const [tourProjectId, setTourProjectId] = useState<string | null>(null);
-  /**
-   * The step that project's tour has reached. The card unmounts while a
-   * command or a sketch runs, so the step is kept here, by project.
-   */
-  const tourStepRef = useRef<{ projectId: string; index: number } | null>(null);
   /** The export dialog has been opened this session — the tour's last signal. */
   const [tourExportSeen, setTourExportSeen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
@@ -2893,6 +3250,10 @@ export function App() {
   const [restorableCheckpointIds, setRestorableCheckpointIds] = useState<
     ReadonlySet<string>
   >(new Set());
+  /** L03: which of those the account holds, for the versions list's sync column. */
+  const [accountCheckpointIds, setAccountCheckpointIds] = useState<
+    ReadonlySet<string>
+  >(new Set());
   /** Open while the user is naming a save point. */
   const [namingSave, setNamingSave] = useState(false);
   const [pendingFeatureDelete, setPendingFeatureDelete] = useState<{
@@ -2901,6 +3262,20 @@ export function App() {
     dependents: string[];
     /** A History multi-selection deleted together, in history order. */
     batch?: FeatureId[];
+  } | null>(null);
+  /**
+   * A refused hole, fillet or chamfer delete, asking whether to delete the
+   * later details and edits built on its geometry too. Valid only for the
+   * manager and document version it was refused against: a newer copy of the
+   * project (another device, a collaborator) may have changed those steps.
+   */
+  const [pendingDetailCascade, setPendingDetailCascade] = useState<{
+    projectId: ProjectDocument['projectId'];
+    version: number;
+    manager: CommandManager;
+    name: string;
+    featureIds: FeatureId[];
+    dependents: { featureId: FeatureId; name: string }[];
   } | null>(null);
   /** A refused suppression, asking whether to pause its dependents too. */
   const [pendingSuppression, setPendingSuppression] = useState<{
@@ -3070,6 +3445,10 @@ export function App() {
     selectedEdges.length === 0
       ? boxFaces.faces
       : null;
+  /** The faces a Shift pick adds to: a swept or Shift-built set, or one face. */
+  const heldFaces =
+    boxSelectedFaces ??
+    (selectedTopology?.kind === 'face' ? [selectedTopology] : null);
   const [selectedSketchProfileId, setSelectedSketchProfileId] =
     useState<SketchId | null>(null);
   const [selectedProfiles, setSelectedProfiles] = useState<RegionPickData[]>(
@@ -3125,8 +3504,20 @@ export function App() {
   const pendingBlendRearmRef = useRef<{
     bodyId: BodyId;
     before: BodyTopology['faces'] | undefined;
+    /** The new Fillet, so a band an earlier one owns is never re-armed. */
+    featureId: string | undefined;
   } | null>(null);
   const [sketchConstruction, setSketchConstruction] = useState(false);
+  /**
+   * S08: the relations the latest drawing commit inferred. Their glyphs are
+   * drawn even when relation glyphs show only the selection's, so nothing a
+   * commit adds is out of sight; the next commit or leaving the sketch
+   * replaces them.
+   */
+  const [recentInferredConstraintIds, setRecentInferredConstraintIds] =
+    useState<readonly string[]>([]);
+  /** When a first Escape armed leaving the sketch (I43), or null. */
+  const sketchExitArmedAtRef = useRef<number | null>(null);
   /**
    * Offset for the next canonical-plane sketch, as typed. Kept as text so a
    * half-entered value ("-", "1.") survives a keystroke; the ghost planes and
@@ -3146,6 +3537,8 @@ export function App() {
   const [inPlaceEdgeTool, setInPlaceEdgeTool] = useState<
     'fillet' | 'chamfer' | null
   >(null);
+  /** M02: a pattern repeating features picks faces, mirrored for the filter. */
+  const [inPlaceFeaturePick, setInPlaceFeaturePick] = useState(false);
   /**
    * What picking is narrowed to right now. A manual choice outranks the tool's
    * so that arming Fillet does not silently undo a filter set on purpose.
@@ -3156,7 +3549,7 @@ export function App() {
   // takes over again once the sketch has a plane.
   const selectionFilter = datumRepair?.vertices
     ? 'edge'
-    : tool === 'sketch'
+    : tool === 'sketch' || (inPlaceFeaturePick && !manualSelectionFilter)
       ? 'face'
       : effectiveSelectionFilter(
           manualSelectionFilter,
@@ -3180,6 +3573,8 @@ export function App() {
    * status is set, not when the toast is raised.
    */
   const lastStatusAtRef = useRef(statusEntry.at);
+  /** The status stamp of a commit's outcome, which offers Undo while shown. */
+  const [undoableStatusAt, setUndoableStatusAt] = useState<number | null>(null);
   /**
    * Informational messages expire (lib/statusLifetime); `sticky` is for text
    * that describes a mode the user is still in, such as sketching on a plane.
@@ -3210,6 +3605,9 @@ export function App() {
   // The status line is the log; a toast is the notice. Only actions whose
   // outcome is otherwise invisible in the viewport raise one.
   const [toast, setToast] = useState<ToastModel | null>(null);
+  // Every destructive confirm in the app shell (library deletes, demo reset,
+  // settings reset) asks in-page; see ConfirmDialog for why never natively.
+  const { confirm: confirmInPage, dialog: confirmDialog } = useConfirm();
   /**
    * A confirmed update and an interrupted download are separate facts. Keep
    * their Reload offers on the start screen after the toast expires.
@@ -3221,15 +3619,21 @@ export function App() {
     (
       message: string,
       action?: ToastAction,
-      options?: { repeatsStatusAt?: number }
+      options?: { repeatsStatusAt?: number; tone?: 'warning' }
     ) => {
       toastIdRef.current += 1;
       const id = toastIdRef.current;
-      recordActivity({ level: 'ready', source: 'notice', message });
-      const repeats =
-        options?.repeatsStatusAt === undefined
+      recordActivity({
+        level: options?.tone === 'warning' ? 'warning' : 'ready',
+        source: 'notice',
+        message
+      });
+      const repeats = {
+        ...(options?.repeatsStatusAt === undefined
           ? {}
-          : { repeatsStatusAt: options.repeatsStatusAt };
+          : { repeatsStatusAt: options.repeatsStatusAt }),
+        ...(options?.tone ? { tone: options.tone } : {})
+      };
       // An action-bearing toast (the delete Undo above all) is never silently
       // replaced by a text-only notice: the action moves into the slot the new
       // message would have taken, so Undo stays one click away no matter how
@@ -3246,6 +3650,51 @@ export function App() {
   const dismissToast = useCallback((id: number) => {
     setToast((current) => (current?.id === id ? null : current));
   }, []);
+  // "Treat as not encrypted on this device" (PR #1418): asked for only
+  // from this page's own dialog, where a stuck encrypted project is met.
+  const [pinReset, setPinReset] = useState<PinResetTarget | null>(null);
+  /**
+   * Offers the confirmed reset with an error that names a stuck encrypted
+   * project, or this device's unsaved pins: the toast's action opens the
+   * dialog, which alone resets anything. Its words load with the dialog.
+   */
+  const offerPinReset = useCallback(
+    (error: unknown, projectId: string | null, name: string | null) => {
+      if (!isEncryptedPinProblemError(error)) return;
+      void loadPinRecovery().then(({ pinResetOffer }) => {
+        const offer = pinResetOffer(error, projectId, name);
+        if (offer)
+          announce(offer.message, {
+            label: offer.label,
+            run: () => setPinReset(offer.target())
+          });
+      }, ignoreFailure);
+    },
+    [announce]
+  );
+  const offerPinResetRef = useRef(offerPinReset);
+  offerPinResetRef.current = offerPinReset;
+  const pinResetDialog = pinReset ? (
+    <Suspense fallback={null}>
+      <LazyPinResetDialog
+        target={pinReset}
+        onClose={() => setPinReset(null)}
+        onReset={(result) => {
+          setPinReset(null);
+          setStatus(result.message);
+          if (result.ok) announce(result.message);
+          else announce(result.message, undefined, { tone: 'warning' });
+          // Saves held back while it was stuck go out as the account
+          // lists the project now.
+          if (result.ok) {
+            void cloudProjectAutosaveRef.current
+              ?.flushPending()
+              .catch(() => undefined);
+          }
+        }}
+      />
+    </Suspense>
+  ) : null;
   // A deploy while this tab is open renames every chunk. The version watch
   // usually notices first; if a panel's chunk goes missing before it does,
   // the failure asks the watch to look now. In the workspace the offer is one
@@ -3259,6 +3708,14 @@ export function App() {
   useEffect(() => {
     onStartScreenRef.current = doc === null;
   }, [doc]);
+  /**
+   * CAD files dropped on the start screen, waiting for the project made for
+   * them; `projectId` is that project's once it is on screen.
+   */
+  const pendingStartImportRef = useRef<{
+    files: File[];
+    projectId: string | null;
+  } | null>(null);
   useEffect(() => {
     let stopped = false;
     const watch = watchBuildVersion({
@@ -3274,7 +3731,35 @@ export function App() {
     });
     let interruptionRecorded = false;
     let libraryAnswered = false;
+    let offlineAnswered = false;
+    // 13 November review I5: a download that failed offline used to raise
+    // "Load failed · Reload", and it stayed after the connection returned.
+    // Offline, a reload could lose the app shell itself, so none is offered;
+    // the lazy surfaces retry their own download on reconnect, and anything
+    // that fails again once online reports through the ordinary path below.
+    // Reconnecting only asks the version watch whether an update explains it.
+    let failedOffline = false;
+    const onOnline = () => {
+      if (!failedOffline) return;
+      failedOffline = false;
+      offlineAnswered = false;
+      watch.checkNow();
+    };
+    window.addEventListener('online', onOnline);
     const stopStale = onStaleChunk(() => {
+      if (isOffline()) {
+        failedOffline = true;
+        if (offlineAnswered) return;
+        offlineAnswered = true;
+        if (onStartScreenRef.current) announce(OFFLINE_CHUNK_MESSAGE);
+        else
+          recordActivity({
+            level: 'warning',
+            source: 'notice',
+            message: OFFLINE_CHUNK_MESSAGE
+          });
+        return;
+      }
       // A failed download alone also occurs offline; only the version watch
       // can prove that an update exists, so ask it rather than assume.
       setDownloadInterrupted(true);
@@ -3297,14 +3782,18 @@ export function App() {
     const stopPreload = watchPreloadErrors();
     return () => {
       stopped = true;
+      window.removeEventListener('online', onOnline);
       watch();
       stopStale();
       stopPreload();
     };
   }, [announce]);
+  // Never suggest a reload while offline: it could lose the app shell.
+  const browserOnline = useOnline();
+  const loadFailureShown = downloadInterrupted && browserOnline;
   const reloadPrompt: ReloadPrompt | null = newBuildAvailable
     ? 'update'
-    : downloadInterrupted
+    : loadFailureShown
       ? 'interrupted'
       : null;
   // Load what a click opens while the page is idle, so its first open is not
@@ -3439,6 +3928,15 @@ export function App() {
       featureWarnings: derived.featureWarnings ?? []
     });
   }
+  // Isolation is session-local and never saved: while it is on, the view
+  // saves the user's own hidden set from before it (QA 2026-11-14 #17).
+  const [bodyIsolation, setBodyIsolation] = useState<
+    (BodyIsolation & { projectId: string; bodyName: string }) | null
+  >(null);
+  const currentBodyIsolation =
+    bodyIsolation && bodyIsolation.projectId === doc?.projectId
+      ? bodyIsolation
+      : null;
   const {
     projection,
     setProjection,
@@ -3460,7 +3958,9 @@ export function App() {
     onCameraSettled: persistCameraPose,
     persistSection: persistSectionView,
     forget: forgetProjectView
-  } = useProjectView(doc?.projectId ?? null);
+  } = useProjectView(doc?.projectId ?? null, (onScreen) =>
+    persistedHiddenBodyIds(onScreen, currentBodyIsolation)
+  );
   // Read at callback time: the section slider's release handler runs after
   // the change that moved it.
   const viewerSettingsRef = useRef(viewerSettings);
@@ -3469,6 +3969,11 @@ export function App() {
   // one set of visible bodies. Everything that invalidates it bumps this
   // token, and an answer that arrives under an old token is dropped.
   const sectionTokenRef = useRef(0);
+  // M09: the viewport's overlap note for the cut on screen, which the status
+  // line carries while the section controls are put away.
+  const [sectionOverlapNote, setSectionOverlapNote] = useState<string | null>(
+    null
+  );
   const pendingSectionRestoreRef = useRef<string | null>(null);
   const restoredSectionRequestTokenRef = useRef<number | null>(null);
   // Key by membership so an unrelated dimension edit keeps the viewport's
@@ -3491,7 +3996,7 @@ export function App() {
     () =>
       doc
         ? doc.bodyOrder.filter((id) => {
-            const body = doc.derived.bodyRepresentations[id];
+            const body = ownEntry(doc.derived.bodyRepresentations, id);
             return (
               body !== undefined && !body.consumed && !hiddenBodyIds.has(id)
             );
@@ -3499,11 +4004,14 @@ export function App() {
         : [],
     [doc, hiddenBodyIds]
   );
-  // The view's hidden set persists; the prior isolation snapshot is session-local.
-  const [bodyIsolation, setBodyIsolation] = useState<
-    (BodyIsolation & { projectId: string }) | null
-  >(null);
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
+  /**
+   * M16: Bend's fold slider (0–100 %, view only), and the sheet folded that
+   * far, standing in for the previewed body while it is short of 100 %.
+   */
+  const [bendFold, setBendFold] = useState(0);
+  const [bendFoldStandIn, setBendFoldStandIn] =
+    useState<ParameterPreviewBody | null>(null);
   // D06: an assistant proposal's annotations, drawn on its sheet in Draw.
   const [drawingPreview, setDrawingPreview] = useState<{
     sheetId: DrawingSheetId;
@@ -3567,7 +4075,7 @@ export function App() {
     const userId = session?.userId ?? null;
     if (!userId || encryptedInvitationSessionRef.current === userId) return;
     encryptedInvitationSessionRef.current = userId;
-    if (pendingEncryptedInvitation()) {
+    if (pendingEncryptedInvitation() || pendingDeviceApproval()) {
       updateSettingsViewState({ open: true, activeSection: 'encryption' });
       setSettingsOpen(true);
     }
@@ -3730,7 +4238,8 @@ export function App() {
     if (
       !cloudFunctionsEnabled ||
       accountResolving ||
-      authConfigStatus === 'unavailable'
+      authConfigStatus === 'unavailable' ||
+      sessionUnavailable
     )
       return;
     rememberAccountShape({ signedIn: sessionUserId !== null });
@@ -3738,28 +4247,38 @@ export function App() {
     accountResolving,
     authConfigStatus,
     cloudFunctionsEnabled,
+    sessionUnavailable,
     sessionUserId
   ]);
+  // A session from any path (startup, sign-in, a refresh) settles the
+  // question an unreachable check left open.
+  useEffect(() => {
+    if (sessionUserId !== null) setSessionUnavailable(false);
+  }, [sessionUserId]);
   useEffect(() => {
     setAutomaticMigrationLoadError(null);
     if (!sessionUserId || !cloudFunctionsEnabled) return;
-    let stopped = false;
-    // The small availability controller loads no crypto or migration engine
-    // until the server confirms all four rollout gates.
-    const migration = automaticProjectMigration(sessionUserId, (message) => {
-      if (stopped || sessionRef.current?.userId !== sessionUserId) return;
-      setAutomaticMigrationLoadError(
-        message === AUTOMATIC_MIGRATION_LOAD_ERROR ? message : null
-      );
-      setSettingsMessage(message);
-      updateSettingsViewState({ open: true, activeSection: 'encryption' });
-      setSettingsOpen(true);
-    });
-    void migration.check();
-    return () => {
-      stopped = true;
-      migration.dispose();
-    };
+    // The small availability controller loads off the entry chunk, and
+    // loads no crypto or migration engine until the server confirms all
+    // four rollout gates. A failed load is reported and retried when the
+    // page comes back online, encryption state changes or a key session
+    // becomes ready (`automaticMigrationLoader.ts`).
+    const migration = startAutomaticMigration(
+      sessionUserId,
+      (message) => {
+        setAutomaticMigrationLoadError(
+          message === AUTOMATIC_MIGRATION_LOAD_ERROR ? message : null
+        );
+        setSettingsMessage(message);
+        updateSettingsViewState({ open: true, activeSection: 'encryption' });
+        setSettingsOpen(true);
+      },
+      {
+        current: () => sessionRef.current?.userId === sessionUserId,
+        recovered: () => setAutomaticMigrationLoadError(null)
+      }
+    );
+    return () => migration.dispose();
   }, [sessionUserId, cloudFunctionsEnabled]);
   useEffect(() => {
     const online = () => organizationBackground.resume();
@@ -3785,18 +4304,87 @@ export function App() {
    * A project with no published preview simply shows the placeholder.
    */
   const loadThumbnail = useCallback(
-    (project: ProjectSummary): Promise<string | null | undefined> =>
-      resolveShelfThumbnail(project, {
+    (project: ProjectSummary): Promise<string | null | undefined> => {
+      const keyRevision = getKeySessionRevision();
+      const deletionFence = localDeletionFence(project.projectId);
+      return resolveShelfThumbnail(project, {
         loadCached: loadProjectThumbnail,
         download: async (artifactId) => {
           const { downloadCloudThumbnail } =
             await import('./lib/cloudThumbnail');
           return downloadCloudThumbnail(artifactId);
-        }
-      }),
+        },
+        // The next load reads it from this device instead of downloading
+        // it again. An encrypted project's image is kept only while the key
+        // session that decrypted it is still the current one.
+        remember: (projectId, thumbnail, replaces) =>
+          saveAccountThumbnail(projectId, thumbnail, {
+            replaces,
+            deletionFence,
+            shouldWrite: () =>
+              (project.storageFormat !== 2 &&
+                !isEncryptedProject(project.projectId)) ||
+              isCurrentKeySession(keyRevision)
+          })
+      });
+    },
     []
   );
   const [fitSignal, setFitSignal] = useState(0);
+  // A 3D mouse this browser already allows reopens with no prompt. Its keys
+  // run the same commands as the keyboard (spaceMouseActions.ts); the roll
+  // key turns the camera, so the viewer answers that one.
+  const spaceMouseActionRef = useRef<(action: SpaceMouseAction) => void>(
+    () => undefined
+  );
+  spaceMouseActionRef.current = (action) => {
+    switch (action.kind) {
+      case 'menu':
+        openSettingsAt('controls');
+        return;
+      case 'fit':
+        setFitSignal((value) => value + 1);
+        return;
+      case 'view':
+        requestView(action.view);
+        return;
+      case 'normal-to-face':
+        requestNormalToSelectedFace();
+        return;
+      case 'projection':
+        toggleProjection();
+        return;
+      case 'display':
+        cycleDisplayMode();
+        return;
+      case 'rotation-lock':
+        setStatus(
+          spaceMouse.isRotationLocked
+            ? '3D mouse rotation locked: pan and zoom only.'
+            : '3D mouse rotation unlocked.',
+          { unlogged: true }
+        );
+        return;
+      case 'key':
+        dispatchEmulatedKey(action.key, action.pressed);
+        return;
+      case 'roll':
+        return;
+    }
+  };
+  // The 3D mouse reads the cap with the account's own settings, applied at
+  // once to a cap that is held.
+  const spaceMouseSettings = appSettings.viewport.spaceMouse;
+  useEffect(() => {
+    spaceMouse.setPreferences(spaceMouseSettings);
+  }, [spaceMouseSettings]);
+  useEffect(() => {
+    void spaceMouse.restore();
+    return spaceMouse.subscribeButtons((event) => {
+      const action = spaceMouseAction(event);
+      if (action) spaceMouseActionRef.current(action);
+    });
+  }, []);
   const [presentedGeometry, setPresentedGeometry] = useState<{
     projectId: string;
     generation: number;
@@ -3856,7 +4444,9 @@ export function App() {
     }
   );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [contextMenu, setContextMenu] = useState<ViewportMenuState | null>(
+    null
+  );
   const contextMenuExit = useDelayedUnmount(contextMenu, OVERLAY_EXIT_MS);
   const orientationRef = useRef<OrientationLink | null>(null);
   /** Click point + normal of the latest topology pick (drag-handle anchor). */
@@ -3871,6 +4461,18 @@ export function App() {
   // `idle` render it was constructed during.
   const interactionRef = useRef(interaction);
   interactionRef.current = interaction;
+  // S08: which sketch session this is. Leaving sketch mode starts a new
+  // generation, so work planned in one session never lands in the next one,
+  // even on the same plane. Counted here, with `interactionRef`, so async
+  // work that reads one sees the other in step.
+  const sketchSessionGenerationRef = useRef(0);
+  const lastInteractionModeRef = useRef(interaction.mode);
+  if (interaction.mode !== lastInteractionModeRef.current) {
+    if (lastInteractionModeRef.current === 'sketch') {
+      sketchSessionGenerationRef.current += 1;
+    }
+    lastInteractionModeRef.current = interaction.mode;
+  }
   // An armed relation's or modify tool's instruction retires once the tool
   // is put down, and the live hint takes the bar back. A message set with
   // the disarm itself ("constraint added") is younger than the settle time
@@ -3887,6 +4489,12 @@ export function App() {
   toolRef.current = tool;
   /** Open exact-value entry (anchored keypad) for the armed handle. */
   const [keypad, setKeypad] = useState<KeypadRequest | null>(null);
+  // A typed in-place value outside its command's range keeps the keypad
+  // open with this sentence under the field, until the entry changes.
+  const [keypadRangeError, setKeypadRangeError] = useState<{
+    valueId: string;
+    message: string;
+  } | null>(null);
   const keypadRef = useRef(keypad);
   keypadRef.current = keypad;
   /** Latest pointer/entry value stays transient until an exact frame lands. */
@@ -4076,6 +4684,8 @@ export function App() {
     launchTool,
     validateSelectionEdit,
     handleSelectFeatureFromTree,
+    handleDeleteFeature,
+    handleDeleteImportedFace,
     toggleBodyVisibility,
     isolateBody
   });
@@ -4083,6 +4693,8 @@ export function App() {
     launchTool,
     validateSelectionEdit,
     handleSelectFeatureFromTree,
+    handleDeleteFeature,
+    handleDeleteImportedFace,
     toggleBodyVisibility,
     isolateBody
   };
@@ -4105,6 +4717,12 @@ export function App() {
   } | null>(null);
   const workspaceModeRef = useRef<WorkspaceMode | null>(null);
   const exactEntryInputEnabledRef = useRef(false);
+  /**
+   * The in-place Extrude's bar could not load (online: its chunk is gone).
+   * A region's typed entry then has no arrow ever to open on, so it is not
+   * queued to retry for one.
+   */
+  const extrudeBarFailedRef = useRef(false);
   const exactEntryQueue = useRef(
     new DeferredExactEntry<{
       interaction: InteractionState;
@@ -4120,6 +4738,10 @@ export function App() {
         owner.tool === toolRef.current &&
         owner.workspaceMode === workspaceModeRef.current &&
         workspaceModeRef.current === 'build' &&
+        !(
+          extrudeBarFailedRef.current &&
+          interactionRef.current.mode === 'region'
+        ) &&
         exactEntryInputEnabledRef.current &&
         keypadRef.current === null &&
         !isTypingTarget(document.activeElement as HTMLElement | null),
@@ -4140,7 +4762,12 @@ export function App() {
       }
     })
   ).current;
-  useEffect(() => () => exactEntryQueue.cancel(), [exactEntryQueue]);
+  useEffect(
+    () => () => {
+      exactEntryQueue.cancel();
+    },
+    [exactEntryQueue]
+  );
   useEffect(
     () => () => {
       ++parameterEditRequest.current;
@@ -4284,6 +4911,9 @@ export function App() {
       setStatus(message);
     }
   });
+  // Read by effects that must not re-run whenever the hook's object changes.
+  const geometryRef = useRef(geometry);
+  geometryRef.current = geometry;
   useThumbnailCaptureActivity(
     sharedThumbnailCapture,
     geometryBusy ||
@@ -4300,8 +4930,9 @@ export function App() {
     warnings: attributedFeatureWarnings(),
     // A user edit's check may propose carrying a later hash-only pick; the
     // commit stores it in the edit's own revision (`withCarriedSelections`).
-    rebuild: (document, analysis, lineageDemand) =>
+    rebuild: (document, analysis, lineageDemand, options) =>
       geometry.syncOnce(document, analysis, lineageDemand, {
+        ...options,
         proposeCarry: true
       }),
     track: trackKernelRefusal
@@ -4410,6 +5041,146 @@ export function App() {
     cloudProjectIds
   };
   const thumbnailAccountUserId = session?.userId;
+  // Every card the workspace captures goes straight to the shelf's tile
+  // cache, so the shelf shown on leaving draws it without waiting for the
+  // refreshed listing.
+  useEffect(
+    () =>
+      sharedThumbnailCapture.subscribe((captured) =>
+        rememberCapturedThumbnail({
+          projectId: captured.projectId,
+          source: captured.source,
+          accountId: thumbnailAccountUserId ?? null,
+          protected: isEncryptedProject(captured.projectId)
+        })
+      ),
+    [thumbnailAccountUserId]
+  );
+  // Settings › Advanced › Regenerate project thumbnails: progress while it
+  // runs, and what the last run did.
+  const [thumbnailRegeneration, setThumbnailRegeneration] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const [thumbnailRegenerationNote, setThumbnailRegenerationNote] =
+    useState('');
+  // The run in progress and the session it belongs to. It stops — and its
+  // rebuild is cancelled — the moment a project opens or the account
+  // changes; a key session locking stops it at its next step.
+  const thumbnailRegenerationRun = useRef<{
+    accountId: string | null;
+    keyRevision: number;
+    controller: AbortController;
+  } | null>(null);
+  useEffect(() => {
+    const run = thumbnailRegenerationRun.current;
+    if (run && (doc !== null || run.accountId !== (session?.userId ?? null))) {
+      run.controller.abort();
+    }
+  }, [doc, session?.userId]);
+  useEffect(
+    () => () => thumbnailRegenerationRun.current?.controller.abort(),
+    []
+  );
+  /**
+   * Redraws every project's card on this device from its model, on request
+   * only. The shelf never loads a model to draw a card (see `loadThumbnail`);
+   * this is the deliberate exception, offered from the library so no open
+   * project's rebuild competes with it. It publishes nothing: the shelf's
+   * backfill sends a redrawn card the account lacks, as it does any other.
+   */
+  async function handleRegenerateThumbnails() {
+    if (thumbnailRegeneration || doc) return;
+    const list = projects;
+    const accountId = session?.userId ?? null;
+    const cloudIds = cloudProjectIds;
+    const run = {
+      accountId,
+      keyRevision: getKeySessionRevision(),
+      controller: new AbortController()
+    };
+    thumbnailRegenerationRun.current = run;
+    // One signal for every way the run ends, so the rebuild in flight is
+    // cancelled whichever way that was.
+    const active = () => {
+      if (
+        thumbnailRegenerationRun.current !== run ||
+        !isCurrentKeySession(run.keyRevision)
+      ) {
+        run.controller.abort();
+      }
+      return !run.controller.signal.aborted;
+    };
+    let done = 0;
+    setThumbnailRegeneration({ done: 0, total: list.length });
+    try {
+      const [
+        { regenerateProjectThumbnails, ThumbnailRegenerationStopped },
+        { renderPartThumbnail }
+      ] = await Promise.all([
+        import('./lib/projectThumbnailRegeneration'),
+        import('./lib/partThumbnail')
+      ]);
+      const result = await regenerateProjectThumbnails(list, {
+        active,
+        loadLocal: loadLocalProject,
+        ...(session
+          ? {
+              loadAccount: (projectId: string) =>
+                cloudIds.has(projectId)
+                  ? api.loadProject(projectId)
+                  : Promise.reject(new Error('Not stored in the account.'))
+            }
+          : {}),
+        rebuild: (document) =>
+          geometry.syncOnce(document, undefined, undefined, {
+            signal: run.controller.signal
+          }),
+        render: renderPartThumbnail,
+        // Fenced inside the store's transaction, after its waits.
+        save: (projectId, thumbnail) =>
+          saveProjectThumbnail(projectId, thumbnail, { shouldWrite: active }),
+        drawn: (project, source) =>
+          rememberCapturedThumbnail({
+            projectId: project.projectId,
+            source,
+            accountId,
+            protected: isEncryptedProject(project.projectId)
+          }),
+        progress: (count, total) => {
+          done = count;
+          if (active()) setThumbnailRegeneration({ done: count, total });
+        }
+      }).catch((error: unknown) => {
+        if (error instanceof ThumbnailRegenerationStopped) return null;
+        throw error;
+      });
+      if (!result) {
+        const note = `Stopped after ${done} of ${list.length} project cards: a project was opened, the account changed, or encrypted projects were locked.`;
+        setThumbnailRegenerationNote(note);
+        return;
+      }
+      const note = [
+        `Redrew ${result.redrawn} ${result.redrawn === 1 ? 'project card' : 'project cards'}.`,
+        ...(result.skipped > 0
+          ? [
+              `${result.skipped} kept ${result.skipped === 1 ? 'its' : 'their'} card: unreadable here, not rebuilt, or unchanged.`
+            ]
+          : [])
+      ].join(' ');
+      setThumbnailRegenerationNote(note);
+      setStatus(note);
+    } catch (error) {
+      const note = errorMessage(error, 'Could not redraw the project cards.');
+      setThumbnailRegenerationNote(note);
+      setStatus(note);
+    } finally {
+      if (thumbnailRegenerationRun.current === run) {
+        thumbnailRegenerationRun.current = null;
+      }
+      setThumbnailRegeneration(null);
+    }
+  }
   const loadProperties = useCallback(
     async (project: ProjectSummary) => {
       const { loadProjectProperties } = await import('./lib/projectProperties');
@@ -4449,7 +5220,7 @@ export function App() {
               }) => {
                 const { uploadCloudThumbnail } =
                   await import('./lib/cloudThumbnail');
-                return uploadCloudThumbnail(api, input);
+                return trackThumbnailUpload(uploadCloudThumbnail(api, input));
               }
             }
           : {}),
@@ -4477,6 +5248,12 @@ export function App() {
     useState<ProjectConflict | null>(null);
   const accountConflictRef = useRef(accountConflict);
   accountConflictRef.current = accountConflict;
+  /**
+   * "Decide later" on an account question keeps it: the Conflict chip asks it
+   * again (design review I74). A re-raised question is a new object and shows.
+   */
+  const [dismissedAccountConflict, setDismissedAccountConflict] =
+    useState<ProjectConflict | null>(null);
   /** Hides an account question while it is being re-asked after a room choice. */
   const [accountRecheckProjectId, setAccountRecheckProjectId] = useState<
     string | null
@@ -4490,6 +5267,7 @@ export function App() {
   const [syncRun, setSyncRun] = useState<SyncEntry[] | null>(null);
   const viewNonceRef = useRef(0);
   const projectImportInputRef = useRef<HTMLInputElement | null>(null);
+  const projectInsertInputRef = useRef<HTMLInputElement | null>(null);
   const projectTransferRef = useRef(false);
   const [projectTransferBusy, setProjectTransferBusy] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -4988,6 +5766,10 @@ export function App() {
   const [regionExtrudeEntryError, setRegionExtrudeEntryError] = useState<
     string | null
   >(null);
+  /** Why a running command's open keypad entry does not evaluate (Done waits). */
+  const [commandEntryError, setCommandEntryError] = useState<string | null>(
+    null
+  );
   const extrudeEditRequest = useRef(0);
   const reusableRegionExtrudePreview = useRef<ResolvedExtrudePreview | null>(
     null
@@ -5334,7 +6116,8 @@ export function App() {
   const validatedFeature = useValidatedFeatureCommit({
     manager: () => managerRef.current,
     derive: (document) => syncCandidate(document),
-    deriveCancellable: rebuildImportInDisposableWorker,
+    deriveCancellable: (document, signal) =>
+      rebuildInDisposableWorker(document, signal),
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
       executeTransaction(label, commands, derived ?? undefined),
@@ -5402,7 +6185,7 @@ export function App() {
         const valid =
           preview &&
           bodyId &&
-          preview.derived.bodyRepresentations[bodyId] &&
+          ownEntry(preview.derived.bodyRepresentations, bodyId) &&
           !warning;
         setPreviewDoc(
           valid ? { ...preview.document, derived: preview.derived } : null
@@ -5780,9 +6563,87 @@ export function App() {
     userId: session?.userId ?? null,
     autosave: cloudProjectAutosaveRef
   });
+  // A switch to encryption this device asked for and has not seen finish
+  // (PR #1418): it is held as encrypted here, so its edits could be saved
+  // nowhere, and retrying would encrypt the account's copy without them.
+  // Locked like a project being encrypted until it is retried or reset.
+  const pinsRevision = useEncryptedPins();
+  const openPinProblem = useMemo(() => {
+    void pinsRevision;
+    return openProjectId && !shareSession
+      ? encryptedPinProblem(openProjectId)
+      : null;
+  }, [openProjectId, shareSession, pinsRevision]);
+  // Another tab reset what this tab holds of a project's encryption: this
+  // tab writes none of it until it reloads (`encryptedProjectPins.ts`).
+  const pinsResetElsewhere = useMemo(() => {
+    void pinsRevision;
+    return encryptedPinsResetElsewhere();
+  }, [pinsRevision]);
+  const openResetElsewhere = useMemo(() => {
+    void pinsRevision;
+    return openProjectId && !shareSession
+      ? encryptedProjectResetElsewhere(openProjectId)
+      : false;
+  }, [openProjectId, shareSession, pinsRevision]);
   const migrationEditReason = projectMigrating
     ? 'This project is being end-to-end encrypted'
-    : null;
+    : openResetElsewhere
+      ? 'Encryption was reset in another tab. Reload this tab'
+      : openPinProblem === 'unresolved'
+        ? 'The switch to end-to-end encryption didn’t finish on this device'
+        : null;
+  // The notices load with the reset dialog; editing is locked (above) and
+  // every send refused (`projectWriteGate.ts`) without waiting for them.
+  useEffect(() => {
+    if (!pinsResetElsewhere) return;
+    let live = true;
+    void loadPinRecovery().then(({ pinNotice }) => {
+      if (!live) return;
+      const notice = pinNotice('reset-elsewhere');
+      setStatus(notice, { sticky: true });
+      announce(notice, {
+        label: 'Reload this tab',
+        run: () => window.location.reload()
+      });
+    }, ignoreFailure);
+    return () => {
+      live = false;
+    };
+  }, [announce, pinsResetElsewhere, setStatus]);
+  // Said once, where the eye goes, with the reset one click away; said
+  // again when the project follows the account on this device.
+  const pinNoticeShownRef = useRef(false);
+  useEffect(() => {
+    const problem = openProjectId ? openPinProblem : null;
+    if (!problem && !pinNoticeShownRef.current) return;
+    let live = true;
+    void loadPinRecovery().then(({ pinNotice }) => {
+      if (!live) return;
+      pinNoticeShownRef.current = problem !== null;
+      if (!problem || !openProjectId) {
+        setStatus(
+          pinNotice(isEncryptedProject(openProjectId) ? 'finished' : 'followed')
+        );
+        return;
+      }
+      const notice = pinNotice(problem);
+      setStatus(notice, { sticky: true });
+      announce(notice, {
+        label: 'Treat as not encrypted…',
+        run: () =>
+          setPinReset({
+            kind: 'project',
+            projectId: openProjectId,
+            name: managerRef.current?.document.name ?? null,
+            reason: problem
+          })
+      });
+    }, ignoreFailure);
+    return () => {
+      live = false;
+    };
+  }, [announce, openPinProblem, openProjectId, setStatus]);
   // Said once, where the eye goes, and kept for as long as it lasts, as the
   // second tab's notice is.
   const migrationNoticeShownRef = useRef(false);
@@ -5977,8 +6838,8 @@ export function App() {
                     : collaborationRollout.editLeasesEnforced &&
                         !activeCollaborationLease
                       ? collaboration.status === 'lease-denied'
-                        ? 'Another collaborator holds the edit lease'
-                        : 'Waiting for the project edit lease'
+                        ? 'Someone else is editing this project right now'
+                        : LIVE_SESSION_CONNECTING
                       : null;
   // Being encrypted locks the document as firmly as a second tab does; the
   // second tab keeps its own notice.
@@ -6004,6 +6865,9 @@ export function App() {
           : assembleMode
             ? 'Assemble mode edits the assembly only — switch to Build to model'
             : projectEditDisabledReason;
+  // The seat is waiting for the live session: one notice says so, and the
+  // tools keep their own descriptions (design review I10).
+  const liveSessionConnecting = editDisabledReason === LIVE_SESSION_CONNECTING;
   // D01 sheet edits answer to the project's own locks in Draw and Build (a
   // read-only seat or a second tab refuses them), and to the reading
   // workspaces' locks in View and Tweak, where a drawing-only undo or redo
@@ -6053,6 +6917,24 @@ export function App() {
   // mode was entered or the project was opened in a second tab.
   const editDisabledReasonRef = useRef(editDisabledReason);
   editDisabledReasonRef.current = editDisabledReason;
+  // Files dropped on the start screen import into the project made for them
+  // once it is on screen and editable: an account project can wait a moment
+  // for its live session, and importing before then would only be refused.
+  useEffect(() => {
+    const pending = pendingStartImportRef.current;
+    if (!pending || !doc) return;
+    if (pending.projectId === null) {
+      pending.projectId = doc.projectId;
+    } else if (pending.projectId !== doc.projectId) {
+      pendingStartImportRef.current = null;
+      return;
+    }
+    if (editDisabledReason) return;
+    pendingStartImportRef.current = null;
+    void handleImportFiles(pending.files);
+    // handleImportFiles is this render's, which holds the new document.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.projectId, editDisabledReason]);
   const parameterEditDisabledReasonRef = useRef(parameterEditDisabledReason);
   parameterEditDisabledReasonRef.current = parameterEditDisabledReason;
   const drawingEditDisabledReasonRef = useRef(drawingEditDisabledReason);
@@ -6061,6 +6943,32 @@ export function App() {
   assemblyEditDisabledReasonRef.current = assemblyEditDisabledReason;
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
+  // An import into a project that is still empty and still wears its
+  // suggested name names the project for the file once the import lands as
+  // its first content (lib/importProjectName, loaded with the first import:
+  // the main chunk is at its size budget).
+  const importNamingRef = useRef<
+    ((next: ProjectDocument) => string | null | undefined) | null
+  >(null);
+  useEffect(() => {
+    const name = doc ? importNamingRef.current?.(doc) : null;
+    if (name === undefined) return;
+    importNamingRef.current = null;
+    if (doc && name && projectRenameDisabledReasonRef.current === null) {
+      executeCommand(
+        commandFactories.renameNode({ nodeId: doc.rootNodeId, name }),
+        undefined,
+        'rename'
+      );
+    }
+    // executeCommand is this render's, which holds the changed document.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc]);
+
+  /** "Cannot use Box: …": one stop, even after a reason that ends in "…". */
+  function cannotSentence(action: string, reason: string): string {
+    return `Cannot ${action}: ${reason}${/[.…!?]$/.test(reason) ? '' : '.'}`;
+  }
 
   function ensureCanEdit(action = 'edit this project'): boolean {
     const reason = editDisabledReasonRef.current;
@@ -6070,7 +6978,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6090,7 +6998,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6111,7 +7019,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6124,7 +7032,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6140,11 +7048,7 @@ export function App() {
       return ensureCanEditAssembly(action);
     }
     const parametersOnly =
-      commands.length > 0 &&
-      commands.every(
-        (command) =>
-          command.kind === 'parameter.set' && !isParameterRetype(command)
-      );
+      commands.length > 0 && commands.every(isTweakCommand);
     return parametersOnly
       ? ensureCanEditParameters(action)
       : ensureCanEdit(action);
@@ -6166,6 +7070,10 @@ export function App() {
         projects.map((project) => project.name),
         session?.userId ?? localUserId
       );
+      // A copy of a project this device keeps encrypted stays encrypted.
+      carryEncryptionRequirement(source.projectId, copy.projectId, {
+        account: false
+      });
       await saveLocalProject(copy);
       // The shelf never loads a document to draw a card, so a copy saved
       // without a preview would stay a placeholder until it is opened. Seed it
@@ -6296,6 +7204,9 @@ export function App() {
     }
     setBusy(true);
     try {
+      // Loaded with the choice: only a conflict being resolved needs it.
+      const { resolveProjectConflict } =
+        await import('./lib/conflictResolution');
       await resolveProjectConflict(
         accountConflict,
         resolution,
@@ -6323,6 +7234,9 @@ export function App() {
     }
     setBusy(true);
     try {
+      // Loaded with the choice: only a conflict being resolved needs it.
+      const { resolveProjectConflict } =
+        await import('./lib/conflictResolution');
       await resolveProjectConflict(
         conflict,
         resolution,
@@ -6406,7 +7320,9 @@ export function App() {
       ? 'Viewers cannot replace the live version.'
       : !activeCollaborationLease
         ? 'Keeping this device’s version requires an active edit lease.'
-        : null;
+        : migrationEditReason
+          ? `${migrationEditReason}. This device’s version can’t replace the live one now.`
+          : null;
 
   useEffect(() => {
     savePanelState(panelState);
@@ -6447,7 +7363,7 @@ export function App() {
     const controller = new CloudProjectAutosave({
       api,
       onStatus(status) {
-        setSaveState(status.state);
+        setSaveState(autosaveReportedSaveState(status.state, status.error));
         if (status.state === 'repair' && status.projectId) {
           accountDocumentUnavailableProjectIdRef.current = status.projectId;
           setCloudAvailable(false);
@@ -6469,6 +7385,16 @@ export function App() {
           }
         } else if (status.state === 'refused') {
           setStatus(errorMessage(status.error, PROJECT_TOO_LARGE_FOR_ACCOUNT));
+          // Kept encrypted on this device while the account disagrees, or
+          // its pins could not be saved: the confirmed reset is one click
+          // away from the refusal.
+          offerPinResetRef.current(
+            status.error,
+            status.projectId ?? null,
+            managerRef.current?.document.projectId === status.projectId
+              ? (managerRef.current?.document.name ?? null)
+              : null
+          );
           // A write refused as read-only: an encrypted member was demoted
           // (slice 5-4). Its page re-reads the role and locks editing.
           if (
@@ -6696,6 +7622,7 @@ export function App() {
     // command the new, empty one was somehow in the middle of.
     dispatchInteraction({ type: 'clear' });
     setPendingFeatureDelete(null);
+    setPendingDetailCascade(null);
     setPendingSuppression(null);
     setPendingResume(null);
     setPendingToolSwitch(null);
@@ -6931,37 +7858,110 @@ export function App() {
    * over a navigation; the next one picks the change up instead.
    */
   const libraryShown = doc === null && !shareSession;
+  /**
+   * The shelf's re-list, for the account card's Retry: true when the
+   * account answered, false when it still could not be reached, null when
+   * the shelf was busy (a navigation or a shelf edit) and nothing was asked.
+   */
+  const relistLibraryRef = useRef<(() => Promise<boolean | null>) | null>(null);
+  // Settings covers the shelf: its re-list waits meanwhile, so the shelf's
+  // verification reads (about two per encrypted project) do not spend the
+  // account's shared read budget behind it, and lists once on close.
+  const libraryFreshnessRef = useRef<LibraryFreshnessWatch | null>(null);
+  const libraryCoveredRef = useRef(settingsOpen);
+  useEffect(() => {
+    libraryCoveredRef.current = settingsOpen;
+    libraryFreshnessRef.current?.setPaused(settingsOpen);
+  }, [settingsOpen]);
   useEffect(() => {
     const accountId = session?.userId ?? null;
     if (!libraryShown || !cloudFunctionsEnabled || accountId === null) return;
     let cancelled = false;
+    // Set by the latest listing that met the account's rate limit.
+    let rateLimited: RateLimit | null = null;
     const settled = () =>
       !cancelled &&
       navigationBusyRef.current === null &&
       pendingOrganizations.current.size === 0 &&
       sessionRef.current?.userId === accountId;
-    const stop = watchLibraryFreshness(async () => {
-      if (!settled()) return;
+    const refresh = async (): Promise<boolean | null> => {
+      if (!settled()) return null;
       const before = latestProjects.current;
+      // A listing read while a card upload finalizes names the card it
+      // replaced; read after it instead (see thumbnailUploads).
+      await settleThumbnailUploads();
+      if (!settled() || latestProjects.current !== before) return null;
       // Expiry purging stays with the explicit listings.
       const listed = await loadProjectSummaries(accountId, false);
+      rateLimited = listed.rateLimited;
+      if (!settled()) return null;
       // An unreachable account keeps the shelf as it was rather than
-      // dropping it to device-only between polls.
-      if (!listed.remoteReached || !settled()) return;
-      if (latestProjects.current !== before) return;
-      // An unchanged listing leaves state alone so the shelf (and its
-      // thumbnail loads) does not re-render every poll.
-      if (JSON.stringify(listed.projects) === JSON.stringify(before)) return;
-      setProjects(listed.projects);
-      setCloudProjectIds(listed.cloudProjectIds);
+      // dropping it to device-only between polls; so does a rate limit,
+      // which may have left encrypted names unverified part way.
+      if (!listed.remoteReached || listed.rateLimited) return false;
+      if (latestProjects.current !== before) return null;
+      // The account answered, whether or not the shelf changed: a listing
+      // that failed earlier can show the very projects this one does (the
+      // device holds them all), and must not leave "Account unavailable"
+      // standing. Unchanged values keep their identity, so an unchanged
+      // poll still renders nothing.
+      setCloudProjectIds((current) =>
+        current.size === listed.cloudProjectIds.size &&
+        [...current].every((id) => listed.cloudProjectIds.has(id))
+          ? current
+          : listed.cloudProjectIds
+      );
       setAccountProjectListReached(true);
       setCloudAvailable(true);
+      // An unchanged listing leaves the shelf alone so it (and its thumbnail
+      // loads) does not re-render every poll.
+      if (JSON.stringify(listed.projects) !== JSON.stringify(before))
+        setProjects(listed.projects);
+      return true;
+    };
+    relistLibraryRef.current = refresh;
+    const stop = watchLibraryFreshness(async () => {
+      rateLimited = null;
+      await refresh();
+      return { rateLimited };
     });
+    stop.setPaused(libraryCoveredRef.current);
+    libraryFreshnessRef.current = stop;
+    // A sealed shelf sync changed the account's agreed pins, order or
+    // archive: list them now rather than at the next poll, through the watch
+    // so Settings' cover, a rate limit's backoff and a listing in flight
+    // still hold it.
+    const applied = (event: Event) => {
+      if (
+        (event as CustomEvent<{ accountId?: string }>).detail?.accountId ===
+        accountId
+      )
+        stop.requestNow();
+    };
+    window.addEventListener(SEALED_SHELF_APPLIED_EVENT, applied);
     return () => {
       cancelled = true;
+      if (relistLibraryRef.current === refresh) relistLibraryRef.current = null;
+      if (libraryFreshnessRef.current === stop)
+        libraryFreshnessRef.current = null;
       stop();
+      window.removeEventListener(SEALED_SHELF_APPLIED_EVENT, applied);
     };
   }, [cloudFunctionsEnabled, libraryShown, session?.userId]);
+  // A session check that could not be answered is asked again on the
+  // shelf's own schedule (focus, visibility, the slow timer), so a rate
+  // limit or server blip at load clears without the user doing anything.
+  const recheckSessionRef = useRef<() => Promise<void>>(async () => {});
+  useEffect(() => {
+    if (
+      !libraryShown ||
+      !cloudFunctionsEnabled ||
+      !sessionUnavailable ||
+      session !== null
+    )
+      return;
+    return watchLibraryFreshness(() => recheckSessionRef.current());
+  }, [cloudFunctionsEnabled, libraryShown, session, sessionUnavailable]);
 
   useEffect(() => {
     syncCloudSettingsSession(
@@ -7046,12 +8046,19 @@ export function App() {
         });
         let sessionLookupFailed = false;
         const sessionPromise = bootCloudFunctionsEnabledRef.current
-          ? timedAsync('startup.session', () =>
-              api.session().catch(() => {
-                sessionLookupFailed = true;
-                return null;
-              })
-            )
+          ? timedAsync('startup.session', async () => {
+              // Only a 401 is signed out. A rate limit or server error is
+              // retried and otherwise left as "unreachable", never shown as
+              // a signed-out device-only shelf.
+              const read = await readAccountSession(() => api.session(), {
+                isCurrent: () => !cancelled
+              });
+              if (!cancelled)
+                setSessionUnavailable(read.state === 'unavailable');
+              if (read.state === 'signed-in') return read.session;
+              sessionLookupFailed = true;
+              return null;
+            })
           : Promise.resolve(null);
         const [rememberedLocal, activeSession] = await Promise.all([
           startupProjectId
@@ -7239,6 +8246,10 @@ export function App() {
           ) {
             appSettingsRef.current = remoteSettings.settings;
             setAppSettings(remoteSettings.settings);
+            // Whether or not the autosave has connected yet: the page now
+            // shows an account copy (ADR-024 amendment 2026-11-14).
+            if (activeSession)
+              accountSettingsAdopted(activeSession.userId, remoteSettings);
             const controller = cloudSettingsAutosaveRef.current;
             if (controller) {
               controller.adoptSyncedSettings(
@@ -7392,6 +8403,7 @@ export function App() {
     const projectId = doc?.projectId;
     if (!projectId) {
       setRestorableCheckpointIds(new Set());
+      setAccountCheckpointIds(new Set());
       return;
     }
     const checkpoints = doc.checkpoints;
@@ -7400,6 +8412,7 @@ export function App() {
       const restorable = new Set(
         await listLocalSaveStateIds(projectId).catch(() => new Set<string>())
       );
+      const inAccount = new Set<string>();
       // The account holds save states this device never had — made on another
       // machine, or older than this device's own retention — so a project the
       // account knows is asked as well, and the two answers are merged.
@@ -7414,11 +8427,13 @@ export function App() {
         for (const checkpoint of stored ? checkpoints : []) {
           if (stored?.has(checkpoint.revisionId)) {
             restorable.add(checkpoint.checkpointId);
+            inAccount.add(checkpoint.checkpointId);
           }
         }
       }
       if (!cancelled) {
         setRestorableCheckpointIds(restorable);
+        setAccountCheckpointIds(inAccount);
       }
     })();
     return () => {
@@ -7558,6 +8573,32 @@ export function App() {
     () => requiredValueResolver(parameterScope.scope, doc?.units),
     [parameterScope.scope, doc?.units]
   );
+  // F06: the variant table as it reads, the active row as the model holds it.
+  const configurationView = useMemo((): ConfigurationSet | undefined => {
+    const set = doc?.configurations;
+    if (!doc || !set) return undefined;
+    return {
+      ...set,
+      rows: set.rows.map((row) => effectiveConfigurationRow(doc, row.id) ?? row)
+    };
+  }, [doc]);
+  // L09: the document's print clearance, as the Parameters panel shows it.
+  const printClearance = useMemo((): PrintClearanceState | undefined => {
+    if (!doc) return undefined;
+    try {
+      return {
+        stored: doc.printClearance,
+        value: documentPrintClearance(doc, parameterScope.scope) ?? null,
+        error: null
+      };
+    } catch (error) {
+      return {
+        stored: doc.printClearance,
+        value: null,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }, [doc, parameterScope.scope]);
 
   // Text profiles resolve faces synchronously on this thread as well as in the
   // worker, so the faces this document names have to be parsed here too.
@@ -7826,7 +8867,12 @@ export function App() {
       currentFaceGeometryPreview?.geometry.bodyRepresentations ??
       currentGeometrySnapshot?.bodyRepresentations ??
       shown?.derived.bodyRepresentations;
-    const faceting = shown ? sweepFacetingAdvisories(shown, shownBodies) : [];
+    const faceting = shown
+      ? [
+          ...sweepFacetingAdvisories(shown, shownBodies),
+          ...loftFacetingAdvisories(shown, shownBodies)
+        ]
+      : [];
     const featureWarnings = currentFaceGeometryPreview
       ? currentFaceGeometryPreview.geometry.featureWarnings
       : currentGeometrySnapshot
@@ -7938,25 +8984,57 @@ export function App() {
     () => partBodies.filter((body) => !hiddenBodyIds.has(body.bodyId)),
     [partBodies, hiddenBodyIds]
   );
-  const isolatedBodyId = useMemo(
+  const isolationState = useMemo(
     () =>
-      activeIsolatedBodyId(
+      bodyIsolationState(
         partBodies.map((body) => body.bodyId),
         hiddenBodyIds,
         localHiddenBodyIds,
-        bodyIsolation?.projectId === doc?.projectId ? bodyIsolation : null
+        currentBodyIsolation,
+        previewDoc !== null
       ),
     [
       partBodies,
       hiddenBodyIds,
       localHiddenBodyIds,
-      bodyIsolation,
-      doc?.projectId
+      currentBodyIsolation,
+      previewDoc
     ]
   );
-  // End the session permanently when its view changes. Merely hiding the
-  // indicator would let an old snapshot revive if the same set returns later.
-  if (bodyIsolation && isolatedBodyId === null) setBodyIsolation(null);
+  const isolatedBodyId =
+    isolationState.kind === 'active' ? isolationState.bodyId : null;
+  // A hidden set the user replaced, or another project, ends the session
+  // permanently: merely hiding the indicator would let an old snapshot revive
+  // if the same set returns later.
+  if (
+    bodyIsolation &&
+    (isolationState.kind === 'replaced' || isolationState.kind === 'none')
+  )
+    setBodyIsolation(null);
+  // The committed model took the isolated body away (deleted, consumed,
+  // undone, or switched off by a parameter). Before QA 2026-11-14 #17 the
+  // session ended silently and left every other body hidden, through a
+  // reload; it now puts back the bodies shown before isolating, and says so.
+  useEffect(() => {
+    if (isolationState.kind !== 'ended' || !currentBodyIsolation) return;
+    const { bodyName } = currentBodyIsolation;
+    setBodyIsolation(null);
+    setHiddenBodyIds(isolationState.hidden);
+    const restored = isolationState.hidden.size;
+    const notice = `Left isolation: ${bodyName} ${isolationState.reason === 'removed' ? 'is no longer in the model' : 'is now hidden'} · ${restored === 0 ? 'all bodies visible' : `${restored} previously hidden ${restored === 1 ? 'body stays' : 'bodies stay'} hidden`}.`;
+    // An Undo, Delete or boolean that ended it already reported its outcome,
+    // perhaps offering Undo; keep that and add the notice to it.
+    const offersUndo = undoableStatusAt === statusEntry.at;
+    setStatus(offersUndo ? `${statusEntry.text} ${notice}` : notice);
+    if (offersUndo) setUndoableStatusAt(lastStatusAtRef.current);
+  }, [
+    isolationState,
+    currentBodyIsolation,
+    setHiddenBodyIds,
+    setStatus,
+    statusEntry,
+    undoableStatusAt
+  ]);
   // Only whether a face drag is in progress matters to the bodies: keyed on
   // the whole interaction, every drag, keypad or selection event handed the
   // viewer a new bodies array and re-ran each of its bodies effects.
@@ -8000,9 +9078,13 @@ export function App() {
       // A parameter preview stands in for its own result body only; hidden
       // bodies stay hidden and every other part keeps its exact geometry.
       standIns:
+        (bendFoldStandIn && previewDoc && !currentGeometrySnapshot
+          ? [bendFoldStandIn]
+          : null) ??
         (!currentGeometrySnapshot
           ? parameterPreview?.filter((body) => !hiddenBodyIds.has(body.bodyId))
-          : null) ?? null,
+          : null) ??
+        null,
       // Not declared by whatever posed them — observed by the viewer in the
       // frame it drew. The Move gizmo poses a body's mesh with no state the
       // workspace can see, and the next mechanism to do that need not
@@ -8015,6 +9097,7 @@ export function App() {
       viewerBodies,
       hiddenBodyIds,
       parameterPreview,
+      bendFoldStandIn,
       currentGeometrySnapshot,
       currentFaceGeometryPreview,
       bodiesDrawnElsewhere
@@ -8050,7 +9133,7 @@ export function App() {
       if (!node) {
         return [];
       }
-      const representation = doc.derived.bodyRepresentations[bodyId];
+      const representation = ownEntry(doc.derived.bodyRepresentations, bodyId);
       return [
         { bodyId, name: node.name, consumed: representation?.consumed ?? false }
       ];
@@ -8084,7 +9167,7 @@ export function App() {
             : []
       );
     }
-    const node = doc.nodes[requestedFeatureNodeId];
+    const node = ownEntry(doc.nodes, requestedFeatureNodeId);
     return node?.kind === 'feature' ? node : null;
   }, [
     doc,
@@ -8185,6 +9268,37 @@ export function App() {
       doc && extrudeEdit ? findFeature(doc, extrudeEdit.featureId) : null;
     return feature?.data.featureKind === 'extrude' ? feature : null;
   }, [doc, extrudeEdit]);
+  // The in-place Extrude's bar loads on demand. Until it is there, a picked
+  // region shows no arrow, chip or handle: a drag, a chip tap or a handle
+  // has no bar to set yet, and holding one for it could reach the wrong
+  // region. Typed entry waits on the arrow as it always has (the deferred
+  // exact entry retries), and Escape closes that waiting entry first.
+  const [extrudeBarArrived, setExtrudeBarArrived] = useState(false);
+  const extrudeBarReady = extrudeBarArrived || ExtrudeCommand.isLoaded();
+  const extrudeBarWanted =
+    interaction.mode === 'region' || extrudeEditFeature !== null;
+  useEffect(() => {
+    if (extrudeBarReady || !extrudeBarWanted) return;
+    let current = true;
+    // Offline it waits for the connection; a failure online is final for
+    // this deploy, and the bar's own slot says it did not load.
+    loadRetryingOnReconnect(() => ExtrudeCommand.preload()).then(
+      () => {
+        extrudeBarFailedRef.current = false;
+        if (current) setExtrudeBarArrived(true);
+      },
+      () => {
+        if (!current) return;
+        extrudeBarFailedRef.current = true;
+        // An entry typed while it loaded will never find its arrow: stop
+        // waiting for it rather than retry every frame.
+        exactEntryQueue.cancel();
+      }
+    );
+    return () => {
+      current = false;
+    };
+  }, [extrudeBarReady, extrudeBarWanted, exactEntryQueue]);
   /** What it opens on: memoized, so its to-face target keeps its identity. */
   const extrudeEditInitialDraft = useMemo(
     () => (extrudeEditFeature ? extrudeEditInitial(extrudeEditFeature) : null),
@@ -8231,6 +9345,32 @@ export function App() {
   const selectedBody = selectedFeatureBodyId
     ? (renderedRepresentations[selectedFeatureBodyId] ?? null)
     : null;
+  // M16: whether the flat-pattern view has a sheet to show, and the one the
+  // current selection belongs to (the File menu opens on it).
+  const sheetMetalOptions = useMemo(
+    () => (doc ? sheetMetalFeatureOptions(doc) : []),
+    [doc]
+  );
+  const hasSheetMetal = sheetMetalOptions.length > 0;
+  const selectedSheetMetal = useMemo(
+    () =>
+      doc && hasSheetMetal
+        ? selectedFeature?.data.featureKind === 'sheet-metal'
+          ? (sheetMetalOptions.find(
+              (option) => option.featureId === selectedFeature.featureId
+            ) ?? null)
+          : selectedFeatureBodyId
+            ? sheetMetalFeatureForBody(doc, selectedFeatureBodyId)
+            : null
+        : null,
+    [
+      doc,
+      hasSheetMetal,
+      sheetMetalOptions,
+      selectedFeature,
+      selectedFeatureBodyId
+    ]
+  );
 
   /**
    * On-demand recognition of the selected imported STEP face (Phase D of the
@@ -8273,20 +9413,31 @@ export function App() {
   // ADR-024 Phase 6: an encrypted project's assistant reads it only with this
   // account's per-project consent. Null (no gate) for a plaintext project.
   // A project opened directly while the listing is unavailable has no
-  // summary; this page's own marker still says it is encrypted (#869).
+  // summary; this page's own marker still says it is encrypted (#869). The
+  // device's pin outranks the listing: a summary that reports another
+  // format does not lift the gate.
   const assistantProject:
     Pick<ProjectSummary, 'projectId' | 'storageFormat'> | undefined = doc
-    ? (projects.find((project) => project.projectId === doc.projectId) ??
-      (isEncryptedProject(doc.projectId)
-        ? {
-            projectId: doc.projectId,
-            storageFormat: PROJECT_STORAGE_FORMAT_E2EE_V1
-          }
-        : undefined))
+    ? isEncryptedProject(doc.projectId)
+      ? {
+          projectId: doc.projectId,
+          storageFormat: PROJECT_STORAGE_FORMAT_E2EE_V1
+        }
+      : projects.find((project) => project.projectId === doc.projectId)
     : undefined;
+  // PR #1418: the assistant is off for every project this device holds as
+  // encrypted (pinned, switch unresolved, or carrying an encryption
+  // requirement), whatever consent the account holds. No consent gate is
+  // mounted for it, so nothing asks; the send gate refuses it as well.
+  // Re-read on every render, which `useEncryptedPins` triggers on change.
+  const assistantHeldEncrypted = doc
+    ? encryptionRequired(doc.projectId)
+    : false;
   const assistantConsent = useAssistantConsentGate(
     session?.userId ?? null,
-    cloudFunctionsEnabled && appSettings.assistant.enabled
+    cloudFunctionsEnabled &&
+      appSettings.assistant.enabled &&
+      !assistantHeldEncrypted
       ? assistantProject
       : undefined
   );
@@ -8361,7 +9512,7 @@ export function App() {
       };
     }
     const bodyName = (bodyId: BodyId) =>
-      doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId;
+      ownEntry(doc.derived.bodyRepresentations, bodyId)?.name ?? bodyId;
     const scope = exportScope(
       Object.values(doc.derived.bodyRepresentations).map((body) => ({
         bodyId: body.bodyId,
@@ -8680,7 +9831,8 @@ export function App() {
       if (
         data.objectKind === 'text' ||
         data.objectKind === 'ellipse' ||
-        data.objectKind === 'spline'
+        data.objectKind === 'spline' ||
+        data.objectKind === 'point'
       ) {
         // Text has no single closed profile — it is many regions with holes,
         // and the region overlay renders it. I01 curves fill through region
@@ -8822,13 +9974,33 @@ export function App() {
     () => countClosedProfileSketches(doc, parameterScope.scope),
     [doc, parameterScope]
   );
+  const hasCylindricalFace = useMemo(
+    () => liveCylindricalFace(liveBodyRepresentations, hiddenBodyIds),
+    [liveBodyRepresentations, hiddenBodyIds]
+  );
+  // M16: Bend works on a sheet-metal part; unknown until bodies are built.
+  const hasSheetMetalBody = useMemo(
+    () =>
+      liveBodyRepresentations
+        ? Object.values(liveBodyRepresentations).some(
+            (body) =>
+              !body.consumed &&
+              !hiddenBodyIds.has(body.bodyId) &&
+              body.source === 'sheet-metal'
+          )
+        : undefined,
+    [liveBodyRepresentations, hiddenBodyIds]
+  );
   const availability: ToolAvailability = {
     editDisabledReason,
+    editDisabledExplained: liveSessionConnecting,
     sketchCount: sketchOptions.length,
     closedProfileSketchCount,
     liveBodyCount: committedBodyCount,
     exactGeometryReady: displayedGeometryComplete,
-    hasEdgeSelected: selectedEdges.length > 0
+    hasEdgeSelected: selectedEdges.length > 0,
+    ...(hasCylindricalFace !== undefined ? { hasCylindricalFace } : {}),
+    ...(hasSheetMetalBody !== undefined ? { hasSheetMetalBody } : {})
   };
   // What the palette, the verb rail and the command bar show. Launching
   // a tool still reads `availability`, so a tool that needs the finished
@@ -8859,7 +10031,7 @@ export function App() {
     // Against what is drawn: an edit preview republishes the faces it lights.
     const shown = previewDoc ?? doc;
     const focus = historyFeatureFocus(shown, selectedFeature, (bodyId) => {
-      const body = shown.derived.bodyRepresentations[bodyId];
+      const body = ownEntry(shown.derived.bodyRepresentations, bodyId);
       return Boolean(body && !body.consumed && !hiddenBodyIds.has(bodyId));
     });
     return focus.kind === 'focus' ? { feature: selectedFeature, focus } : null;
@@ -9217,6 +10389,12 @@ export function App() {
   ) {
     let normalized: ProjectDocument;
     try {
+      // Every document published here, from any source, is checked first: a
+      // reserved name such as "__proto__" as a key, id or selector would make
+      // map lookups reach inherited members. The project is not opened and the
+      // reason is shown; whatever was open stays open.
+      const refused = reservedDocumentIdentifierError(nextDocument);
+      if (refused) throw new Error(`This project cannot be opened: ${refused}`);
       normalized = normalizeDocument(nextDocument);
       // Shares are ephemeral; every persistence path still rejects owner writes.
       if (shareSessionRef.current) {
@@ -9512,6 +10690,11 @@ export function App() {
    * Says once, as the commit lands, that it stored a pick with no lineage
    * name: such a pick resolves only by its hash, which an upstream edit to
    * that entity orphans. Never blocks the commit (`lib/fragileSelections`).
+   *
+   * A face edit that filled in an opening an earlier cut made then says so,
+   * in the toast's place: that cut's step stays in the history but no longer
+   * changes the shape (`lib/closedOpenings`, loaded on demand). The pick
+   * advice stays in the activity log.
    */
   function announceFragileSelections(
     before: ProjectDocument,
@@ -9530,6 +10713,30 @@ export function App() {
       // Advice only: the commit has already landed.
     }
     if (advisory) announce(advisory);
+    const manager = managerRef.current;
+    if (!derived || !manager) return;
+    // The check lands a moment later. It speaks only about this commit, so
+    // it stays silent once anything moved on: an undo, redo or later edit
+    // (each moves the edit history; the rebuild's own repairs do not),
+    // another project or a reopen (another manager), or a newer notice.
+    const historyAt = (document: ProjectDocument) =>
+      `${document.editHistory?.cursor}/${document.editHistory?.entries.length}`;
+    const position = historyAt(manager.document);
+    const toastId = toastIdRef.current;
+    void closedOpenings()
+      .then(({ closedOpeningsAdvisory }) => {
+        if (
+          managerRef.current !== manager ||
+          historyAt(manager.document) !== position ||
+          toastIdRef.current !== toastId
+        )
+          return;
+        const notice = closedOpeningsAdvisory(before, after, derived);
+        if (notice) announce(notice, undefined, { tone: 'warning' });
+      })
+      .catch(() => {
+        // Advice only, as above.
+      });
   }
 
   function executeCommand(
@@ -9569,7 +10776,8 @@ export function App() {
         isDrawingCommand(command) ||
         isReferenceImageCommandKind(command.kind) ||
         isObjectFolderCommandKind(command.kind) ||
-        isAssemblyOnlyCommand(command)
+        isAssemblyOnlyCommand(command) ||
+        isConfigurationTableOnlyCommand(command, beforeDocument)
       )
         geometry.retainReadyGeometry(next);
       if (derived) {
@@ -9707,6 +10915,7 @@ export function App() {
     // includes the armed operation: an edge picked for the Fillet tool arms
     // one, and leaving it armed kept its "Fillet · Ready" chip and its lane
     // instructions up over the fillet they had just made.
+    offerUndoForCommit();
     dispatchInteraction({ type: 'commit-complete' });
     setTool(null);
     setSelectedFeatureNode(null);
@@ -9714,6 +10923,17 @@ export function App() {
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
+  }
+
+  /**
+   * "Added box." offered no Undo, though Delete and Duplicate do (13 November
+   * review I22). A toast per add would break the rule that only outcomes the
+   * viewport cannot show raise one, so the status line itself offers Undo
+   * while it still reports the commit. The success status is set just after
+   * a validated commit's `onSuccess` returns, hence the microtask.
+   */
+  function offerUndoForCommit(): void {
+    queueMicrotask(() => setUndoableStatusAt(lastStatusAtRef.current));
   }
 
   /**
@@ -9888,6 +11108,38 @@ export function App() {
     [doc]
   );
 
+  const extrudeReturnRef = useRef<{
+    sketchId: SketchId;
+    plane: SketchPlaneRef;
+    version: number;
+  } | null>(null);
+  const previousInteractionModeRef = useRef(interaction.mode);
+  useEffect(() => {
+    const previous = previousInteractionModeRef.current;
+    previousInteractionModeRef.current = interaction.mode;
+    const back = extrudeReturnRef.current;
+    if (!back || previous !== 'region' || interaction.mode === 'region') {
+      return;
+    }
+    extrudeReturnRef.current = null;
+    // Built (the document moved on) or replaced by another command: stay.
+    if (
+      interaction.mode !== 'idle' ||
+      managerRef.current?.document.version !== back.version ||
+      !findSketch(managerRef.current.document, back.sketchId)
+    ) {
+      return;
+    }
+    setSelectedProfiles([]);
+    dispatchInteraction({
+      type: 'enter-sketch',
+      plane: back.plane,
+      sketchId: back.sketchId
+    });
+    setStatus('Extrude canceled · back in the sketch.');
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs on the mode change alone
+  }, [interaction.mode]);
+
   function startExtrude(sketchId: SketchId) {
     const view = sketchViews.find(
       (candidate) => candidate.sketchId === sketchId
@@ -9932,7 +11184,15 @@ export function App() {
     // back). The commit path infers add/cut from drag direction and the
     // kernel's classification. With no prior selection, every valid profile
     // extrudes together; the largest one anchors the arrow.
-    const chosen = existing.length > 0 ? existing : available;
+    // I42: with nothing picked, the regions outside holes; a circle drawn
+    // as a hole is not extruded into a plug.
+    const outside = new Set(
+      regionsOutsideHoles(view?.regions ?? []).map(({ profileId }) => profileId)
+    );
+    const chosen =
+      existing.length > 0
+        ? existing
+        : available.filter(({ profileId }) => outside.has(profileId));
     const anchor = chosen.reduce(
       (best, candidate) => (candidate.area > best.area ? candidate : best),
       chosen[0]!
@@ -9947,6 +11207,15 @@ export function App() {
     setSelectedSketchProfileId(sketchId);
     setSelectedProfiles(chosen);
     setTool(null);
+    // Cancelled before it builds, an Extrude started in a sketch returns
+    // to that sketch rather than to Build (I42).
+    extrudeReturnRef.current = activeSketch
+      ? {
+          sketchId,
+          plane: activeSketch.plane,
+          version: managerRef.current?.document.version ?? -1
+        }
+      : null;
     if (activeSketch) {
       dispatchInteraction({ type: 'exit-sketch' });
     } else if (interaction.mode !== 'idle') {
@@ -10080,10 +11349,18 @@ export function App() {
     }
     // Bodies selected first (in the Objects panel, say) are its bodies, in
     // the order they were picked: a subtract's first is its base.
-    const initialBodies = selectedBodyIds.flatMap((bodyId) => {
+    const chosenBodies = selectedBodyIds.flatMap((bodyId) => {
       const body = inPlaceBodyPick(bodyId);
       return body ? [body] : [];
     });
+    // With nothing chosen, a model's only body is the body, as it is for
+    // Move: Scale, Mirror and the rest asked to "Click the body" of it.
+    const loneBodyId =
+      chosenBodies.length === 0 && !selectedFace && sweptFaces.length === 0
+        ? loneBodyFor(tool, representations, hiddenBodyIds)
+        : null;
+    const loneBody = loneBodyId ? inPlaceBodyPick(loneBodyId) : null;
+    const initialBodies = loneBody ? [loneBody] : chosenBodies;
     // Edges selected first (the rail's Fillet, the edge's own
     // context menu) are a fillet's or chamfer's edges, in pick order.
     const initialEdges = IN_PLACE_TOOL_SPECS[tool].edgeMode
@@ -10191,11 +11468,31 @@ export function App() {
     const command = inPlaceRef.current;
     const spec = command.spec;
     if (!spec || !(spec.axisPicks || spec.takeDirection)) return false;
+    // M02: a feature pattern acts on its picked features; a face one of
+    // those kinds made is another feature to repeat, not a line.
+    const features = takesFeatureFaces(spec, command.options);
     if (
-      command.slots.bodies.length === 0 &&
-      command.slots.profiles.length === 0
+      features
+        ? command.slots.faces.length === 0
+        : command.slots.bodies.length === 0 &&
+          command.slots.profiles.length === 0
     ) {
       return false;
+    }
+    if (features && selection.kind === 'face') {
+      const shownDocument = representations[selection.bodyId]
+        ? managerRef.current?.document
+        : previewDoc;
+      const face = shownDocument?.derived.bodyRepresentations[
+        selection.bodyId
+      ]?.topology?.faces.find((candidate) => candidate.hash === selection.hash);
+      const feature =
+        shownDocument && face
+          ? faceProducingFeature(shownDocument, face)
+          : null;
+      if (feature && !patternSourceProblem(feature.data, feature.name)) {
+        return false;
+      }
     }
     // An edit's new axis is a datum just before the feature: a body made by
     // it or later is not there yet (its result is on screen where its input
@@ -10313,14 +11610,15 @@ export function App() {
     feature: FeatureNode
   ): { middle: Vector3; outward: Vector3 } | null {
     const focus = historyFeatureFocus(current, feature, (bodyId) => {
-      const body = current.derived.bodyRepresentations[bodyId];
+      const body = ownEntry(current.derived.bodyRepresentations, bodyId);
       return Boolean(body && !body.consumed && !hiddenBodyIds.has(bodyId));
     });
     if (focus.kind !== 'focus') return null;
     for (const selection of focus.faces) {
-      const geometry = current.derived.bodyRepresentations[
+      const geometry = ownEntry(
+        current.derived.bodyRepresentations,
         selection.bodyId
-      ]?.topology?.faces.find(
+      )?.topology?.faces.find(
         (face) =>
           face.topologyId === selection.topologyId ||
           face.hash === selection.hash
@@ -10476,8 +11774,30 @@ export function App() {
           ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined, true)
           : null;
       },
+      featureFace: (bodyId, featureId) => {
+        // M02: a feature pattern's repeated feature, as one of its faces.
+        const face = representations[bodyId]?.topology?.faces.find(
+          (candidate) =>
+            faceProducingFeature(current, candidate)?.featureId === featureId
+        );
+        const pick = face
+          ? inPlaceFacePick(bodyId, face.topologyId, face.hash, undefined, true)
+          : null;
+        const source = findFeature(current, featureId);
+        return pick && source
+          ? { ...pick, feature: { featureId, name: source.name } }
+          : null;
+      },
       curve: (sketchId, entityId) =>
-        sweepCurveExists(current, sketchId, entityId),
+        sweepCurveExists(
+          current,
+          sketchId,
+          entityId,
+          feature.data.featureKind === 'sheet-metal',
+          (feature.data.featureKind === 'pattern' &&
+            feature.data.patternKind === 'points') ||
+            feature.data.featureKind === 'hole'
+        ),
       body: (bodyId) => inPlaceBodyPick(bodyId),
       laterTransforms: laterInPlaceSteps(current, feature),
       laterReshapes: laterDirectEdit(current, feature),
@@ -10502,12 +11822,7 @@ export function App() {
     if (!current || !tool) return false;
     // What a new feature needs on screen (two live bodies for a boolean,
     // closed profiles for a loft) the stored feature already has, consumed.
-    const reason = toolDisabledReason(tool, {
-      ...availability,
-      liveBodyCount: Number.POSITIVE_INFINITY,
-      sketchCount: Number.POSITIVE_INFINITY,
-      closedProfileSketchCount: Number.POSITIVE_INFINITY
-    });
+    const reason = toolDisabledReason(tool, editAvailability(availability));
     if (reason) {
       setStatus(`${TOOL_META[tool].label}: ${reason}.`);
       return false;
@@ -10632,6 +11947,18 @@ export function App() {
    */
   function cancelInPlaceCommand() {
     const editing = inPlaceRef.current.editing;
+    // A pattern's Done still rebuilding is stopped by the card's Cancel too,
+    // as by the pill's Cancel pattern: told to wait instead, the card read
+    // as having no way out of a minute-long rebuild. The command stays open
+    // with its picks, since nothing was added.
+    if (
+      patternAbortRef.current &&
+      !editing &&
+      isInPlacePatternTool(inPlaceRef.current.tool)
+    ) {
+      cancelPattern();
+      return;
+    }
     // A Done still validating keeps the command, and its selection, open.
     if (!inPlaceRef.current.cancel()) return;
     if (editing) {
@@ -10725,18 +12052,27 @@ export function App() {
 
   /**
    * Whether a sketch still has a curve a path can take: a drawn line or arc
-   * of that sketch, not construction, as the card's path options were.
+   * of that sketch, not construction, as the card's path options were. A
+   * bend line (M16) is any straight line, construction lines included.
    */
   function sweepCurveExists(
     current: ProjectDocument,
     sketchId: SketchId,
-    entityId: string
+    entityId: string,
+    bendLine = false,
+    /** M02: a pattern on sketch points picks point entities instead. */
+    point = false
   ): boolean {
-    const node = current.nodes[entityId as EntityId];
+    const node = ownEntry(current.nodes, entityId as EntityId);
     return (
       node?.kind === 'sketch-object' &&
-      !node.data.construction &&
-      (node.data.objectKind === 'line' || node.data.objectKind === 'arc') &&
+      (point
+        ? node.data.objectKind === 'point'
+        : bendLine
+          ? node.data.objectKind === 'line'
+          : !node.data.construction &&
+            (node.data.objectKind === 'line' ||
+              node.data.objectKind === 'arc')) &&
       (findSketch(current, sketchId)?.objectIds.includes(
         entityId as EntityId
       ) ??
@@ -10891,6 +12227,11 @@ export function App() {
     }
     if (!face) return null;
     const geometry = face.geometry;
+    const cylinder = facePickCylinder(
+      geometry,
+      representations[resolvedBodyId]?.mesh,
+      face
+    );
     return {
       bodyId: resolvedBodyId,
       hash: face.hash,
@@ -10901,20 +12242,74 @@ export function App() {
       ...(geometry?.normal ? { normal: geometry.normal } : {}),
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
-      ...(geometry?.surfaceType === 'cylinder' &&
-      geometry.axisStart &&
-      geometry.axisEnd &&
-      geometry.radius !== undefined
-        ? {
-            cylinder: {
-              axisStart: geometry.axisStart,
-              axisEnd: geometry.axisEnd,
-              radius: geometry.radius
-            }
-          }
-        : {}),
+      ...(cylinder ? { cylinder } : {}),
       ...(point ? { point } : {})
     };
+  }
+
+  /**
+   * M02: the face a feature pattern's click picks, naming the hole, boss or
+   * cut that made it, or null (with the reason on the status line). On the
+   * pattern's own preview the click stands for that feature's face on the
+   * body the pattern is made on.
+   */
+  function inPlaceFeatureFacePick(
+    bodyId: string,
+    topologyId: string | undefined,
+    hash: number | undefined,
+    point: { x: number; y: number; z: number } | undefined
+  ): FacePick | null {
+    const committed = managerRef.current?.document;
+    if (!committed) return null;
+    const matches = (candidate: { topologyId: string; hash: number }) =>
+      (topologyId !== undefined && candidate.topologyId === topologyId) ||
+      (hash !== undefined && candidate.hash === hash);
+    const own =
+      representations[bodyId as BodyId]?.topology?.faces.find(matches);
+    const shownDocument = own ? committed : previewDoc;
+    const face =
+      own ??
+      previewDoc?.derived.bodyRepresentations[
+        bodyId as BodyId
+      ]?.topology?.faces.find(matches);
+    if (!face || !shownDocument) return null;
+    if (!face.reference) {
+      // A boss's or cut's faces are named once something asks: ask, and the
+      // next click finds the feature.
+      addLineageDemand([bodyId as BodyId]);
+      setStatus('Reading which feature made that face · click it again.');
+      return null;
+    }
+    const feature = faceProducingFeature(shownDocument, face);
+    const problem = !feature
+      ? 'Click a face a hole, boss or cut made.'
+      : patternSourceProblem(feature.data, feature.name);
+    if (!feature || problem) {
+      setStatus(problem ?? 'Click a face a hole, boss or cut made.');
+      return null;
+    }
+    const named = { featureId: feature.featureId, name: feature.name };
+    if (own) {
+      const pick = inPlaceFacePick(bodyId, topologyId, hash, point);
+      return pick ? { ...pick, feature: named } : null;
+    }
+    const target = inPlaceRef.current.slots.faces[0]?.bodyId;
+    const stand = target
+      ? representations[target]?.topology?.faces.find(
+          (candidate) =>
+            faceProducingFeature(committed, candidate)?.featureId ===
+            feature.featureId
+        )
+      : undefined;
+    if (!target || !stand) return null;
+    const pick = inPlaceFacePick(
+      target,
+      stand.topologyId,
+      stand.hash,
+      undefined,
+      true
+    );
+    return pick ? { ...pick, feature: named } : null;
   }
 
   /**
@@ -11260,9 +12655,8 @@ export function App() {
         });
         setMoveSnap(null);
         setTool('transform');
-        setStatus(
-          'Move sketch: drag the arrows — centers snap to faces of other bodies, Shift is free.'
-        );
+        // The Move bar says the step; a toast said it a second time.
+        retireStatusMessage();
         return true;
       }
       // WF-07 (resolved): Move used to be two UIs for one command, and which
@@ -11289,9 +12683,7 @@ export function App() {
         });
         setMoveSnap(null);
         setTool('transform');
-        setStatus(
-          'Move/Rotate: drag the arrows or rings — snapping follows your zoom, Shift is free.'
-        );
+        retireStatusMessage();
         return true;
       }
     }
@@ -11332,6 +12724,20 @@ export function App() {
    * preview can never outlive the card that made it, and nobody has to count
    * presses to reach a clean workspace.
    */
+  /**
+   * Cancels a Move and says so, as every other command's Cancel does: an
+   * Escape out of Move used to report nothing.
+   */
+  function cancelMove() {
+    const sketch = movePreview?.target === 'sketch';
+    cancelPanel();
+    setStatus(
+      sketch
+        ? 'Move canceled; the sketch is unchanged.'
+        : 'Move canceled; nothing was added.'
+    );
+  }
+
   function cancelPanel() {
     cancelPendingRegionExtrusion();
     cancelDirectManipulationRef.current?.();
@@ -11735,13 +13141,30 @@ export function App() {
     setStatus(`${normalToFaceTarget.label}: viewing normal to face.`);
   }
 
+  /**
+   * Shows the model in `mode`. The toast names it at once rather than after
+   * the last message's dwell: paced, W pressed three times left "Wireframe"
+   * up while the model already showed Shaded + edges (I54).
+   */
+  function setDisplayMode(mode: DisplayMode) {
+    viewerSettingsRef.current = {
+      ...viewerSettingsRef.current,
+      displayMode: mode
+    };
+    setViewerSettings((current) => ({ ...current, displayMode: mode }));
+    setStatus(`Display: ${DISPLAY_MODE_LABELS[mode]}.`, { immediate: true });
+  }
+
   function cycleDisplayMode() {
-    const index = DISPLAY_MODE_ORDER.indexOf(viewerSettings.displayMode);
-    const next =
+    // From the latest mode, not this render's: two presses before a render
+    // would otherwise both step from the same mode.
+    const index = DISPLAY_MODE_ORDER.indexOf(
+      viewerSettingsRef.current.displayMode
+    );
+    setDisplayMode(
       DISPLAY_MODE_ORDER[(index + 1) % DISPLAY_MODE_ORDER.length] ??
-      'shaded-edges';
-    setViewerSettings((current) => ({ ...current, displayMode: next }));
-    setStatus(`Display: ${DISPLAY_MODE_LABELS[next]}.`);
+        'shaded-edges'
+    );
   }
 
   function toggleProjection() {
@@ -11780,11 +13203,15 @@ export function App() {
 
   function toggleXray() {
     const next = !viewerSettingsRef.current.xray;
+    viewerSettingsRef.current = { ...viewerSettingsRef.current, xray: next };
     setViewerSettings((current) => ({ ...current, xray: next }));
+    // At once, like the display mode it rides over: the Display menu's
+    // X-ray switch and its toast must not disagree.
     setStatus(
       next
         ? `X-ray on · faces at ${appSettings.viewport.xrayOpacity}% · picks and box selection go through them.`
-        : 'X-ray off.'
+        : 'X-ray off.',
+      { immediate: true }
     );
   }
 
@@ -11941,6 +13368,14 @@ export function App() {
       persistSectionView(undefined);
       clearSectionOutline();
       setStatus('Section view off.', { immediate: true });
+      return;
+    }
+    // An empty stage has nothing to cut; the palette says so rather than
+    // leaving a cut on with no controls to carry into the next mode (I49).
+    if (!viewerBodies.some((body) => !body.consumed)) {
+      setStatus('Nothing to cut yet · add or show a body first.', {
+        immediate: true
+      });
       return;
     }
     // Switching the cut on brings its controls back, even when they were
@@ -12104,9 +13539,10 @@ export function App() {
     const attachment = faceSketchAttachment({
       bodyId: selection.bodyId,
       pickedHash: selection.hash,
-      face: current.derived.bodyRepresentations[
+      face: ownEntry(
+        current.derived.bodyRepresentations,
         selection.bodyId
-      ]?.topology?.faces.find((face) => face.hash === selection.hash)
+      )?.topology?.faces.find((face) => face.hash === selection.hash)
     });
     return attachment.ok ? attachment.planeRef : { reason: attachment.reason };
   }
@@ -12478,21 +13914,17 @@ export function App() {
       );
       return;
     }
-    const isolation =
-      bodyIsolation && bodyIsolation.projectId === doc?.projectId
-        ? bodyIsolation
-        : null;
     const step = toggleBodyIsolation(
       partBodies.map((body) => body.bodyId),
       bodyId,
       hiddenBodyIds,
       localHiddenBodyIds,
-      isolation
+      currentBodyIsolation
     );
     setHiddenBodyIds(step.hidden);
     setBodyIsolation(
       step.isolation && doc
-        ? { ...step.isolation, projectId: doc.projectId }
+        ? { ...step.isolation, projectId: doc.projectId, bodyName: body.name }
         : null
     );
     if (!step.entered) {
@@ -12581,6 +14013,7 @@ export function App() {
     setCollaborationRollout(DISABLED_COLLABORATION_ROLLOUT);
   }
 
+  recheckSessionRef.current = refreshCloudConnection;
   async function refreshCloudConnection() {
     if (!cloudFunctionsEnabledRef.current) {
       return;
@@ -12627,12 +14060,12 @@ export function App() {
           setDeploymentHealth(health);
         }
       });
-    const [nextAuth, activeSession] = await Promise.all([
+    const [nextAuth, sessionRead] = await Promise.all([
       api
         .authConfig()
         .then((config) => ({ config, status: 'ready' as const }))
         .catch(() => ({ config: null, status: 'unavailable' as const })),
-      api.session().catch(() => null)
+      readAccountSession(() => api.session(), { isCurrent })
     ]);
     if (!isCurrent()) {
       return;
@@ -12641,6 +14074,22 @@ export function App() {
       setAuthConfig(nextAuth.config);
       setAuthConfigStatus(nextAuth.status);
     }
+    if (sessionRead.state === 'unavailable') {
+      // An unreachable session check says nothing about the account: a
+      // signed-in page keeps its session, keys and sync baselines rather
+      // than signing out on a rate limit or a server error.
+      setSessionUnavailable(sessionRef.current === null);
+      accountKnown();
+      setSettingsMessage(
+        sessionRef.current
+          ? 'Your account could not be reached · work stays saved on this device.'
+          : 'Cloud unavailable · settings and projects stay on this device.'
+      );
+      return;
+    }
+    setSessionUnavailable(false);
+    const activeSession =
+      sessionRead.state === 'signed-in' ? sessionRead.session : null;
     organizationBackground.begin(activeSession?.userId ?? null);
     sessionRef.current = activeSession;
     setSession(activeSession);
@@ -12652,7 +14101,7 @@ export function App() {
           ? // Signed out is the normal state, and the Settings footer already
             // reads "Device only"; the header stays quiet rather than repeat it.
             ''
-          : 'Beta sign-in unavailable · device settings remain active.'
+          : 'Cloud unavailable · settings and projects stay on this device.'
       );
       return;
     }
@@ -12795,7 +14244,11 @@ export function App() {
   async function handleDeleteAssistantCredential() {
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm('Remove the saved personal AI credential?')
+      !(await confirmInPage({
+        title: 'Remove the saved personal AI credential?',
+        body: 'The assistant stops using it until you add a credential again.',
+        confirmLabel: 'Remove'
+      }))
     ) {
       return;
     }
@@ -12887,6 +14340,7 @@ export function App() {
     ) {
       appSettingsRef.current = remoteSettings.settings;
       setAppSettings(remoteSettings.settings);
+      accountSettingsAdopted(activeSession.userId, remoteSettings);
       cloudSettingsAutosaveRef.current?.adoptSyncedSettings(
         remoteSettings.settings,
         remoteSettings
@@ -13148,17 +14602,13 @@ export function App() {
         projectController?.closeProject();
         await projectController?.whenIdle();
       }
-      await cloudSettingsAutosaveRef.current?.flushPending();
-
       if (sessionRef.current !== departingSession)
         throw new Error('The signed-in account changed. Try deleting again.');
       const erase = () => api.deleteAccountData(scope, confirmation);
-      const deleted =
-        scope === 'projects'
-          ? await erase()
-          : await (
-              await import('./lib/e2ee/accountErasure')
-            ).eraseAccountWithKeyCleanup({
+      const eraseProfile = () =>
+        import('./lib/e2ee/accountErasure').then(
+          ({ eraseAccountWithKeyCleanup }) =>
+            eraseAccountWithKeyCleanup({
               userId: departingSession?.userId ?? null,
               isCurrentSession: () => sessionRef.current === departingSession,
               erase,
@@ -13166,7 +14616,22 @@ export function App() {
                 endCloudSettingsSession();
                 projectController?.closeProject();
               }
-            });
+            })
+        );
+      const settingsController = cloudSettingsAutosaveRef.current;
+      const deleted =
+        scope === 'projects'
+          ? await (async () => {
+              await settingsController?.flushPending();
+              if (sessionRef.current !== departingSession)
+                throw new Error(
+                  'The signed-in account changed. Try deleting again.'
+                );
+              return erase();
+            })()
+          : settingsController
+            ? await settingsController.withProfileErasure(eraseProfile)
+            : await eraseProfile();
       if (scope === 'projects' && departingSession)
         forgetShelfProjectNames(
           departingSession.userId,
@@ -13227,12 +14692,14 @@ export function App() {
     }
   }
 
-  function handleResetAppSettings() {
+  async function handleResetAppSettings() {
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm(
-        'Reset application settings on this device? Projects are not deleted.'
-      )
+      !(await confirmInPage({
+        title: 'Reset settings on this device?',
+        body: 'Every setting goes back to its default. Projects are not deleted.',
+        confirmLabel: 'Reset settings'
+      }))
     ) {
       return;
     }
@@ -13264,7 +14731,12 @@ export function App() {
     setSettingsMessage('Viewport defaults applied to the current view.');
   }
 
-  async function handleCreateProject(name: string, units: UnitSystem) {
+  /** Resolves true once the new project is the one on screen. */
+  async function handleCreateProject(
+    name: string,
+    units: UnitSystem
+  ): Promise<boolean> {
+    let opened = false;
     const isCurrent = beginProjectNavigation();
     const activeProjectSince = snapshotActiveProject();
     setAssistantCollapsed(true);
@@ -13277,6 +14749,7 @@ export function App() {
       await saveLocalProject(localDocument);
       if (!isCurrent()) return;
       hydrateDocument(localDocument, { activeProjectSince });
+      opened = true;
       setProjects((current) => [
         summarizeLocalDocument(localDocument),
         ...current
@@ -13290,16 +14763,16 @@ export function App() {
       // This is a failed device save, not a cloud-create failure. Do not enter
       // the offline fallback and replace the unsaved project on screen.
       finishBusy();
-      return;
+      return false;
     }
     try {
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       if (!session) {
         // The document effect's flush lands on 'local' once the device write
         // is done; forcing it here would show "Local only" for a frame and
         // then the spinner the effect reports anyway.
         await createLocal(localUserId);
-        return;
+        return opened;
       }
       // The browser builds the new document and the account stores it as
       // sent (ADR-024 Phase 1). The route trims the name it compares with.
@@ -13319,16 +14792,18 @@ export function App() {
         response.document.projectId,
         response.document.version
       );
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       setCloudAvailable(true);
       setCloudProjectIds((current) =>
         new Set(current).add(response.document.projectId)
       );
       hydrateDocument(response.document, { activeProjectSince });
+      opened = true;
       setProjects((current) => [response.project, ...current]);
       setStatus(`Created ${response.project.name}.`);
+      return true;
     } catch (error) {
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       // A refused request is not an unreachable one. Falling back to local mode
       // on a validation failure would persist exactly the project the server
       // just rejected, so surface it and let the user correct the input.
@@ -13339,7 +14814,7 @@ export function App() {
       ) {
         setCloudAvailable(true);
         setStatus(errorMessage(error, 'Could not create the project.'));
-        return;
+        return false;
       }
       const sessionExpired = error instanceof ApiError && error.status === 401;
       if (sessionExpired) {
@@ -13350,6 +14825,7 @@ export function App() {
         sessionExpired ? localUserId : (session?.userId ?? localUserId),
         `${errorMessage(error, 'Cloud unavailable')} Working locally · save it to your account later.`
       );
+      return opened;
     } finally {
       finishBusy();
     }
@@ -13874,8 +15350,10 @@ export function App() {
           : `Opened ${openedDocument.name}.`
       );
     } catch (error) {
-      if (isCurrent())
+      if (isCurrent()) {
         setStatus(errorMessage(error, 'Failed to open project.'));
+        offerPinReset(error, projectId, listed?.name ?? null);
+      }
     } finally {
       finishBusy();
     }
@@ -13935,6 +15413,9 @@ export function App() {
       return;
     }
     shareOpenAttemptRef.current = pendingShareToken;
+    // F06: the configuration the link opens on, read before the fragment
+    // can be tidied away.
+    const shareRowId = captureShareConfiguration();
     updateSettingsViewState({ open: false });
     setSettingsOpen(false);
     setSharingOpen(false);
@@ -14013,6 +15494,14 @@ export function App() {
         // a safe device copy may leave without their network response.
         if (!accountSavePendingRef.current) await draining;
         if (!isCurrent()) return;
+        // F06: a link naming a configuration opens on it once that row is
+        // known to build; otherwise the model opens as saved.
+        const opening = await sharedDocumentOnRow(
+          shared.document,
+          shareRowId,
+          (candidate) => geometryRef.current.previewGeometry(candidate)
+        );
+        if (!isCurrent()) return;
         // Before the document lands: the collaboration hook and the cloud
         // autosave controller must treat this project as not account-backed,
         // whatever this browser knew about the account before.
@@ -14023,24 +15512,22 @@ export function App() {
         setShareSession(opened);
         shareSessionRef.current = opened;
         setSharePage(null);
-        hydrateSharedDocumentRef.current(shared.document, {
+        hydrateSharedDocumentRef.current(opening.document, {
           rememberProject: false
         });
         setStatus(
-          shared.encryptedMode === 'view'
-            ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
-            : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
+          `${
+            shared.encryptedMode === 'view'
+              ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
+              : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
+          }${opening.note ? ` ${opening.note}` : ''}`
         );
       } catch (error) {
         if (isCurrent()) {
           setSharePage({
             phase: 'error',
             title: 'We couldn’t open this shared model',
-            message: describeFailure
-              ? describeFailure(error)
-              : errorMessage(error, 'Could not open the share link.'),
-            guidance:
-              'Check your connection and try again. If it keeps failing, ask the owner to check the link.',
+            ...describeShareOpenFailure(error, describeFailure),
             retryable: true
           });
         }
@@ -14078,7 +15565,7 @@ export function App() {
     const finishBusy = startNavigationBusy();
     let copied: ProjectSummary | null = null;
     try {
-      const copy = duplicateProjectDocument(
+      const copy = await saveShareLinkCopy(
         source,
         duplicateProjectName(
           source.name,
@@ -14086,7 +15573,6 @@ export function App() {
         ),
         session?.userId ?? localUserId
       );
-      await saveLocalProject(copy);
       if (!isCurrent()) return;
       setShareSession(null);
       shareSessionRef.current = null;
@@ -14121,9 +15607,10 @@ export function App() {
   }
 
   /**
-   * Make a copy, from Tweak's rail or (for an encrypted link) View's: an
-   * encrypted link's signed-in visitor chooses between the account and this
-   * device (slice 5-11); every other visitor gets the device copy, as before.
+   * Make a copy, from Tweak's rail or (for an encrypted link) View's: a
+   * signed-in visitor chooses between the account and this device, whatever
+   * the link (slice 5-11; design review I85, where a plaintext link copied
+   * to the device unasked). A signed-out visitor gets the device copy.
    */
   const [shareCopyChoice, setShareCopyChoice] = useState<{
     accountEncrypts: boolean | null;
@@ -14132,7 +15619,7 @@ export function App() {
   function requestShareCopy() {
     const active = shareSessionRef.current;
     if (!active) return;
-    if (!active.encryptedMode || !session) {
+    if (!session) {
       void handleMakeShareCopy();
       return;
     }
@@ -14270,6 +15757,11 @@ export function App() {
     forgetCompleteCommit();
     clearAutoFrame();
     setDoc(null);
+    // A workspace notice speaks about the model just closed, and its action
+    // (an Undo above all) has no document left to act on. The library shares
+    // the toast slot, so one left standing was carried onto the shelf and,
+    // remounted there, started its lifetime over.
+    setToast(null);
     setArtifacts([]);
     setSelectedFeatureNode(null);
     setSelectedTopology(null);
@@ -14279,6 +15771,11 @@ export function App() {
     setSelectedProfiles([]);
     setTool(null);
     try {
+      // The flush above just started this project's card upload. The shelf
+      // already shows the card; the listing behind it is read once the upload
+      // settles, so it names that card rather than the one it replaced.
+      await settleThumbnailUploads();
+      if (!isCurrent()) return;
       const listed = await loadProjectSummaries(
         sessionRef.current?.userId ?? null
       );
@@ -14308,6 +15805,8 @@ export function App() {
     projectId: string,
     update: (current: ProjectOrganization) => ProjectOrganization
   ): Promise<ProjectOrganization> {
+    // The account that made the edit, read before it waits for anything.
+    const editAccount = sessionRef.current?.userId ?? null;
     const organization = await queueShelfWrite(async () => {
       const project = latestProjects.current.find(
         (entry) => entry.projectId === projectId
@@ -14320,7 +15819,7 @@ export function App() {
       // reconcile pushes a flagged row and adopts the account's otherwise,
       // so the flag is what keeps a change alive across a failed mirror
       // without letting this device overrule every other one forever.
-      await saveShelfRows(new Map([[projectId, next]]));
+      await saveShelfRows(new Map([[projectId, next]]), editAccount);
       return next;
     });
     if (session) {
@@ -14346,26 +15845,50 @@ export function App() {
    * write, so no other shelf write is in flight: a failure drops just these
    * rows, and the rows before them are already on the shelf.
    */
-  async function saveShelfRows(rows: Map<string, ProjectOrganization>) {
+  async function saveShelfRows(
+    rows: Map<string, ProjectOrganization>,
+    editAccount: string | null
+  ) {
+    // Loaded before anything changes, so a failed load leaves the shelf as
+    // it was, like a failed write.
+    const shelf = await loadSealedShelf();
+    const edit = shelf.beginShelfEdit(() => editAccount);
+    const before = new Map(
+      [...rows.keys()].map((projectId) => [
+        projectId,
+        pendingOrganizations.current.get(projectId) ??
+          projectOrganization(
+            latestProjects.current.find(
+              (project) => project.projectId === projectId
+            ) ?? {}
+          )
+      ])
+    );
     for (const [projectId, organization] of rows) {
       pendingOrganizations.current.set(projectId, organization);
     }
-    try {
-      await Promise.all(
-        [...rows].map(([projectId, organization]) =>
-          saveLocalProjectOrganization(projectId, organization, {
-            mirrorPending: true
-          })
-        )
-      );
-    } catch (error) {
-      for (const [projectId, organization] of rows) {
-        if (pendingOrganizations.current.get(projectId) === organization) {
-          pendingOrganizations.current.delete(projectId);
+    // The edit also waits for the account's sealed library record, which
+    // carries pins, order and archive of an account whose library is
+    // encrypted; a plaintext library's sync forgets it again. It is the
+    // account that made the edit, even if the session changed meanwhile.
+    const journaled = await edit.persist(before, rows, async () => {
+      try {
+        await Promise.all(
+          [...rows].map(([projectId, organization]) =>
+            saveLocalProjectOrganization(projectId, organization, {
+              mirrorPending: true
+            })
+          )
+        );
+      } catch (error) {
+        for (const [projectId, organization] of rows) {
+          if (pendingOrganizations.current.get(projectId) === organization) {
+            pendingOrganizations.current.delete(projectId);
+          }
         }
+        throw error;
       }
-      throw error;
-    }
+    });
     setProjects((current) =>
       current
         .map((project) => {
@@ -14374,6 +15897,121 @@ export function App() {
         })
         .sort(compareProjectSummaries)
     );
+    // An encrypted library's pin, order and archive reach the account only
+    // through the journal. Storage refused it, so the edit lasts until the
+    // tab closes unless the library syncs first: say so instead of letting
+    // the next listing quietly restore the old shelf.
+    if (!journaled && shelf.isShelfSealed(edit.accountId)) {
+      const message =
+        'Saved for now only: this browser would not store the change, so keep this tab open until your library syncs, or it will be lost.';
+      setStatus(message);
+      if (onStartScreenRef.current) {
+        announce(message, undefined, { tone: 'warning' });
+      }
+    }
+  }
+
+  /**
+   * A library action that failed. The library's only status is one grey
+   * line in its sidebar foot, so a failure there also raises a toast in a
+   * warning tone; the raw text goes to the activity log, not the message.
+   */
+  function reportLibraryFailure(error: unknown, fallback: string) {
+    const plain = describePlainFailure(error, { fallback, technical: true });
+    setStatus(plain.message, plain.detail ? { detail: plain.detail } : {});
+    if (onStartScreenRef.current) {
+      announce(plain.message, undefined, { tone: 'warning' });
+    }
+  }
+
+  /**
+   * The account card's Retry for a project list that could not be read. A
+   * shelf busy with a navigation or an edit asks nothing; its next poll does.
+   */
+  async function handleRetryAccountListing() {
+    const reached = await relistLibraryRef.current?.();
+    if (reached === false) {
+      announce(
+        'Your account still could not be reached. Your projects remain saved on this device.',
+        undefined,
+        { tone: 'warning' }
+      );
+    }
+  }
+
+  /**
+   * Renames a project from the library's tile or its Properties, without
+   * opening it (design review I14: renaming meant opening the project and
+   * waiting on the kernel). An account project is written there first,
+   * fenced on the version just read; see `renameLibraryProject`.
+   */
+  async function handleRenameLibraryProject(
+    project: ProjectSummary,
+    name: string
+  ): Promise<boolean> {
+    if (name.trim() === project.name) return true;
+    const inAccount =
+      Boolean(session) && cloudProjectIds.has(project.projectId);
+    if (session && !inAccount && !accountProjectListReached) {
+      // Unknown, not device-only: renaming this device's copy alone could
+      // leave the account's under the old name.
+      const message = `Your account could not be reached, so ${project.name} was not renamed. Try again once it is back.`;
+      setStatus(message);
+      announce(message, undefined, { tone: 'warning' });
+      return false;
+    }
+    setBusy(true);
+    try {
+      const { renameLibraryProject } =
+        await import('./lib/libraryProjectRename');
+      const stored = await renameLibraryProject(project.projectId, name, {
+        actorUserId: session?.userId ?? localUserId,
+        loadLocal: loadLocalProject,
+        saveLocal: saveLocalProject,
+        ...(inAccount
+          ? {
+              account: {
+                load: (projectId: string) => api.loadProject(projectId),
+                save: (input: SaveProjectDocumentRequest) =>
+                  api.saveProjectDocument(input),
+                markSynced: saveLastSyncedVersion
+              }
+            }
+          : {})
+      });
+      if (inAccount) {
+        remoteVersionsRef.current.set(project.projectId, stored.version);
+      }
+      const storedBytes = measuredDocumentBytes(stored);
+      setProjects((current) =>
+        current.map((candidate) =>
+          candidate.projectId === project.projectId
+            ? {
+                ...withSavedVersion(candidate, stored, storedBytes),
+                name: stored.name
+              }
+            : candidate
+        )
+      );
+      setStatus(`Renamed ${project.name} to ${stored.name}.`);
+      return true;
+    } catch (error) {
+      const { LibraryRenameRefusal } =
+        await import('./lib/libraryProjectRename');
+      if (error instanceof LibraryRenameRefusal) {
+        setStatus(error.message);
+        announce(error.message, undefined, { tone: 'warning' });
+      } else if (error instanceof ApiError && error.status === 409) {
+        const message = `${project.name} changed in your account since this list was loaded. Open it to rename it.`;
+        setStatus(message);
+        announce(message, undefined, { tone: 'warning' });
+      } else {
+        reportLibraryFailure(error, `Could not rename ${project.name}.`);
+      }
+      return false;
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function handleMoveProjectToShelf(
@@ -14391,9 +16029,57 @@ export function App() {
             ? `Archived ${project.name}.`
             : `Restored ${project.name}.`
       );
+      announceShelfMove([project], project.name, status);
     } catch (error) {
-      setStatus(errorMessage(error, `Could not move ${project.name}.`));
+      reportLibraryFailure(error, `Could not move ${project.name}.`);
     }
+  }
+
+  /**
+   * Move to trash and Archive take a project off the shelf in view, so they
+   * answer with a toast that names what went and an Undo that puts each one
+   * back on the shelf it came from; a Restore needs neither.
+   */
+  function announceShelfMove(
+    moved: readonly ProjectSummary[],
+    what: string,
+    status: ProjectStatus
+  ) {
+    if (moved.length === 0 || (status !== 'deleted' && status !== 'archived')) {
+      return;
+    }
+    const previous = moved.map((project) => ({
+      project,
+      status: project.organization?.status ?? 'active'
+    }));
+    announce(
+      status === 'deleted'
+        ? `Moved ${what} to the trash.`
+        : `Archived ${what}.`,
+      {
+        label: 'Undo',
+        run: () => {
+          void (async () => {
+            let failure: unknown;
+            for (const { project, status: back } of previous) {
+              try {
+                await persistOrganization(project.projectId, (current) =>
+                  applyOrganizationUpdate(current, { status: back })
+                );
+              } catch (error) {
+                failure ??= error;
+              }
+            }
+            setStatus(
+              failure
+                ? errorMessage(failure, `Could not put back ${what}.`)
+                : `Put back ${what}.`
+            );
+          })();
+        }
+      },
+      { repeatsStatusAt: lastStatusAtRef.current }
+    );
   }
 
   /** Several projects onto one shelf, from the library's selection. */
@@ -14402,6 +16088,7 @@ export function App() {
     status: ProjectStatus
   ) {
     let moved = 0;
+    const movedProjects: ProjectSummary[] = [];
     let failure: unknown;
     for (const project of targets) {
       try {
@@ -14409,6 +16096,7 @@ export function App() {
           applyOrganizationUpdate(current, { status })
         );
         moved += 1;
+        movedProjects.push(project);
       } catch (error) {
         failure ??= error;
       }
@@ -14418,11 +16106,9 @@ export function App() {
         ? targets[0]!.name
         : countLabel(moved, 'project', 'projects');
     if (failure) {
-      setStatus(
-        errorMessage(
-          failure,
-          `Moved ${countLabel(moved, 'project', 'projects')}; ${targets.length - moved} could not be moved.`
-        )
+      reportLibraryFailure(
+        failure,
+        `Moved ${countLabel(moved, 'project', 'projects')}; ${targets.length - moved} could not be moved.`
       );
       return;
     }
@@ -14433,6 +16119,7 @@ export function App() {
           ? `Archived ${what}.`
           : `Restored ${what}.`
     );
+    announceShelfMove(movedProjects, what, status);
   }
 
   /** Pins or unpins several projects, from the library's selection. */
@@ -14454,13 +16141,11 @@ export function App() {
       targets.length === 1
         ? targets[0]!.name
         : countLabel(targets.length, 'project', 'projects');
-    setStatus(
-      failure
-        ? errorMessage(failure, `Could not update every project.`)
-        : pinned
-          ? `Pinned ${what}.`
-          : `Unpinned ${what}.`
-    );
+    if (failure) {
+      reportLibraryFailure(failure, 'Could not update every project.');
+      return;
+    }
+    setStatus(pinned ? `Pinned ${what}.` : `Unpinned ${what}.`);
   }
 
   async function handleTogglePin(project: ProjectSummary) {
@@ -14474,7 +16159,7 @@ export function App() {
         pinned ? `Pinned ${project.name}.` : `Unpinned ${project.name}.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, `Could not update ${project.name}.`));
+      reportLibraryFailure(error, `Could not update ${project.name}.`);
     }
   }
 
@@ -14488,6 +16173,7 @@ export function App() {
     pin?: { projectId: string; pinned: boolean }
   ): Promise<void> {
     const positions = new Map(projectIds.map((id, index) => [id, index]));
+    const editAccount = sessionRef.current?.userId ?? null;
     let pinnedName: string | undefined;
     try {
       pinnedName = await queueShelfWrite(async () => {
@@ -14509,7 +16195,7 @@ export function App() {
               ];
             })
         );
-        await saveShelfRows(rows);
+        await saveShelfRows(rows, editAccount);
         return pin
           ? latestProjects.current.find(
               (project) => project.projectId === pin.projectId
@@ -14517,7 +16203,7 @@ export function App() {
           : undefined;
       });
     } catch (error) {
-      setStatus(errorMessage(error, 'Could not reorder the projects.'));
+      reportLibraryFailure(error, 'Could not reorder the projects.');
       return;
     }
     if (pin && pinnedName !== undefined) {
@@ -14534,12 +16220,13 @@ export function App() {
         projectIds,
         organizationMirrorHost,
         async (ids) =>
-          (
-            await api.reorderProjects(
-              { projectIds: ids.map(toProjectId) },
-              organizationScope.signal
-            )
-          ).projects,
+          (await loadSealedShelf()).reorderShelfOnAccount(
+            api,
+            session.userId,
+            ids,
+            encryptsAccountLibrary,
+            organizationScope.signal
+          ),
         undefined,
         organizationScope
       ).catch(() => undefined);
@@ -14572,6 +16259,32 @@ export function App() {
    * fallback, the derived-projection rescue and the shelf bookkeeping below,
    * which is where the interesting failure modes live.
    */
+  /**
+   * Gives a copy its source's card picture before its tile mounts. A tile
+   * that reads no picture asks the backfill, which finds none for a project
+   * never opened, and the copy showed the bare placeholder cube until it was.
+   * Never throws: the copy is complete without a picture.
+   */
+  async function seedCopyThumbnail(
+    source: ProjectDocument,
+    copy: ProjectDocument
+  ): Promise<void> {
+    try {
+      const [{ seedRecoveryCopyThumbnail }, { renderPartThumbnail }] =
+        await Promise.all([
+          import('./lib/recoveryCopyThumbnail'),
+          import('./lib/partThumbnail')
+        ]);
+      await seedRecoveryCopyThumbnail(source, copy, {
+        loadCached: loadProjectThumbnail,
+        save: saveProjectThumbnail,
+        render: renderPartThumbnail
+      });
+    } catch {
+      // A placeholder, filled the first time the copy is opened and left.
+    }
+  }
+
   async function handleDuplicateProject(
     project: ProjectSummary,
     saveState?: ProjectCheckpoint
@@ -14668,14 +16381,49 @@ export function App() {
           if (!isEncryptedProject(project.projectId)) {
             await copyDuplicateSaveStates(project.projectId, localCopy);
           }
-          if (response.project.organization) {
+          // A sealed shelf keeps the copy beside its source on this device
+          // (and in the sealed record); the account row holds the default.
+          const shelf =
+            response.project.organization && session
+              ? await loadSealedShelf().catch(() => null)
+              : null;
+          const copyOrganization =
+            response.project.organization &&
+            shelf?.isShelfSealed(session?.userId)
+              ? {
+                  ...response.project.organization,
+                  sortOrder: projectOrganization(project).sortOrder
+                }
+              : response.project.organization;
+          if (copyOrganization) {
             await saveLocalProjectOrganization(
               response.project.projectId,
-              response.project.organization
+              copyOrganization
             ).catch(() => undefined);
+            if (
+              session &&
+              shelf &&
+              copyOrganization !== response.project.organization
+            )
+              shelf.journalShelfEdit(
+                session.userId,
+                response.project.projectId,
+                DEFAULT_PROJECT_ORGANIZATION,
+                copyOrganization
+              );
           }
+          await seedCopyThumbnail(localSource ?? localCopy, localCopy);
+          // Measured on what the account now holds: uploading the copy's
+          // images saves a version after the one the response describes, and
+          // an encrypted account's response carries no size at all.
+          const copyRow = withSavedVersion(
+            copyOrganization
+              ? { ...response.project, organization: copyOrganization }
+              : response.project,
+            copied
+          );
           setProjects((current) =>
-            [...current, response.project].sort(compareProjectSummaries)
+            [...current, copyRow].sort(compareProjectSummaries)
           );
           setStatus(
             [
@@ -14713,7 +16461,7 @@ export function App() {
       const copy = duplicateProjectDocument(
         source,
         duplicateProjectName(
-          head.name,
+          copyBaseName(head.projectId, head.name),
           projects.map((summary) => summary.name)
         ),
         session?.userId ?? localUserId,
@@ -14724,6 +16472,12 @@ export function App() {
             })
           : undefined
       );
+      // A device copy or branch of a project this device keeps encrypted
+      // (also one the account did not answer for) must stay encrypted:
+      // recorded before the copy is written, or nothing is copied.
+      carryEncryptionRequirement(project.projectId, copy.projectId, {
+        account: false
+      });
       const organization: ProjectOrganization = {
         ...DEFAULT_PROJECT_ORGANIZATION,
         sortOrder: projectOrganization(project).sortOrder
@@ -14735,6 +16489,7 @@ export function App() {
       await saveLocalProjectOrganization(copy.projectId, organization, {
         mirrorPending: true
       }).catch(() => undefined);
+      await seedCopyThumbnail(source, copy);
       setProjects((current) =>
         [...current, summarizeLocalDocument(copy, organization)].sort(
           compareProjectSummaries
@@ -14785,6 +16540,34 @@ export function App() {
   }
 
   /**
+   * L03: renames a save point in the document. A forward write like the save
+   * point itself (undo never rewinds the list), so it syncs as an ordinary
+   * change and needs edit rights.
+   */
+  function handleRenameCheckpoint(checkpoint: ProjectCheckpoint, name: string) {
+    const manager = managerRef.current;
+    if (!manager || !ensureCanEdit('rename this save point')) return;
+    try {
+      const before = manager.document;
+      const next = manager.renameCheckpoint(checkpoint.checkpointId, name);
+      if (next === before) return;
+      // The model is unchanged: keep the ready geometry.
+      geometry.retainReadyGeometry(next);
+      setDoc(next);
+      const renamed = next.checkpoints.find(
+        (point) => point.checkpointId === checkpoint.checkpointId
+      );
+      setStatus(
+        renamed?.name
+          ? `Renamed the save point to “${renamed.name}”.`
+          : `The save point is called “${checkpoint.reason}” again.`
+      );
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not rename the save point.'));
+    }
+  }
+
+  /**
    * Rewinds the open project to one of its save states.
    *
    * Two invariants shape the order of the steps. The pre-restore document is
@@ -14824,7 +16607,7 @@ export function App() {
         );
         return;
       }
-      const reason = `Restored “${checkpoint.reason}”`;
+      const reason = `Restored “${checkpointLabel(checkpoint)}”`;
       const restoreIsCurrent = () =>
         managerRef.current === manager &&
         sameLocalProjectContent(manager.document, current) &&
@@ -14952,9 +16735,11 @@ export function App() {
   async function handleDeleteProjectForever(project: ProjectSummary) {
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm(
-        `Permanently delete “${project.name}”? This cannot be undone.`
-      )
+      !(await confirmInPage({
+        title: `Delete “${project.name}” forever?`,
+        body: 'This cannot be undone.',
+        confirmLabel: 'Delete forever'
+      }))
     ) {
       return;
     }
@@ -14963,7 +16748,7 @@ export function App() {
       await destroyProjects([project]);
       setStatus(`Deleted ${project.name} permanently.`);
     } catch (error) {
-      setStatus(errorMessage(error, 'Could not delete the project.'));
+      reportLibraryFailure(error, 'Could not delete the project.');
     } finally {
       setBusy(false);
     }
@@ -14978,9 +16763,11 @@ export function App() {
     if (
       targets.length === 0 ||
       (appSettings.general.confirmDestructiveActions &&
-        !window.confirm(
-          `Permanently delete ${countLabel(targets.length, 'project', 'projects')}? This cannot be undone.`
-        ))
+        !(await confirmInPage({
+          title: `Delete ${countLabel(targets.length, 'project', 'projects')} forever?`,
+          body: 'This cannot be undone.',
+          confirmLabel: 'Delete forever'
+        })))
     ) {
       return;
     }
@@ -14991,7 +16778,7 @@ export function App() {
         `Deleted ${countLabel(targets.length, 'project', 'projects')} permanently.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'Could not delete every project.'));
+      reportLibraryFailure(error, 'Could not delete every project.');
     } finally {
       setBusy(false);
     }
@@ -15008,9 +16795,11 @@ export function App() {
     const name = definition.name.replace('Demo · ', '');
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm(
-        `Reset the ${name} sample? Your changes to it are discarded; save a copy first to keep them.`
-      )
+      !(await confirmInPage({
+        title: `Reset the ${name} sample?`,
+        body: 'Your changes to it are discarded. Save a copy first to keep them.',
+        confirmLabel: 'Reset sample'
+      }))
     ) {
       return false;
     }
@@ -15020,7 +16809,7 @@ export function App() {
       setStatus(`Reset ${name}. It opens as the original.`);
       return true;
     } catch (error) {
-      setStatus(errorMessage(error, `Could not reset ${name}.`));
+      reportLibraryFailure(error, `Could not reset ${name}.`);
       return false;
     } finally {
       setBusy(false);
@@ -15033,9 +16822,11 @@ export function App() {
     }
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm(
-        `Permanently delete ${countLabel(trashed.length, 'project', 'projects')} in the trash? This cannot be undone.`
-      )
+      !(await confirmInPage({
+        title: 'Empty the trash?',
+        body: `${countLabel(trashed.length, 'project is', 'projects are')} deleted forever. This cannot be undone.`,
+        confirmLabel: 'Empty trash'
+      }))
     ) {
       return;
     }
@@ -15046,7 +16837,7 @@ export function App() {
         `Emptied the trash · ${countLabel(trashed.length, 'project', 'projects')} deleted.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'Could not empty the trash.'));
+      reportLibraryFailure(error, 'Could not empty the trash.');
     } finally {
       setBusy(false);
     }
@@ -15147,7 +16938,7 @@ export function App() {
     } else {
       setToast(null);
     }
-    setStatus(label ? `Undo ${label}` : 'Undo');
+    setStatus(historyStepMessage('undo', label));
   }
 
   function handleRedo() {
@@ -15203,7 +16994,7 @@ export function App() {
       };
     }
     setToast(null);
-    setStatus(label ? `Redo ${label}` : 'Redo');
+    setStatus(historyStepMessage('redo', label));
   }
 
   /**
@@ -15441,9 +17232,12 @@ export function App() {
       return;
     }
     if (
-      !window.confirm(
-        `Restore ${localDocument.name} in your account from the copy saved on this device?\n\nThe unreadable current account copy will be replaced. Existing revisions are not changed.`
-      )
+      !(await confirmInPage({
+        title: `Restore ${localDocument.name} in your account from the copy saved on this device?`,
+        body: 'The unreadable current account copy will be replaced. Existing revisions are not changed.',
+        confirmLabel: 'Restore from this device',
+        tone: 'default'
+      }))
     ) {
       setStatus(
         'Account restore canceled. Your work remains saved on this device.'
@@ -15534,7 +17328,14 @@ export function App() {
     if (!doc || !savingManager) {
       return;
     }
-    const isCurrentProject = () => managerRef.current === savingManager;
+    // Fenced to the autosave lifecycle this save began under as well as the
+    // project: a cleanup that disposes the controller keeps the manager
+    // reference, and a save outliving it must not write stale copies over
+    // what the next owner saved.
+    const savingController = cloudProjectAutosaveRef.current;
+    const isCurrentProject = () =>
+      managerRef.current === savingManager &&
+      cloudProjectAutosaveRef.current === savingController;
     if (shareSessionRef.current) {
       setStatus(
         'This is a shared link session — Make a copy to keep the model.'
@@ -15543,6 +17344,8 @@ export function App() {
     }
     if (!ensureCanSave()) return;
     accountSavePendingRef.current = true;
+    // L03: who saved and on which device, shown in the versions list.
+    const author = currentCheckpointAuthor(sessionRef.current);
     let sourceWarning: string | null = null;
     let savedOnDevice = false;
     let accountWriteStarted = false;
@@ -15561,6 +17364,7 @@ export function App() {
             savingDocument,
             reason,
             {
+              author,
               isCurrent,
               readDocument: () => savingManager.document,
               applyDocument: showAccountEcho
@@ -15573,7 +17377,7 @@ export function App() {
                 ? 'synced'
                 : 'syncing'
             );
-            setStatus('Saved revision.');
+            setStatus('Made a save point.');
           }
         } catch (error) {
           if (isCurrent()) {
@@ -15630,13 +17434,14 @@ export function App() {
         // Commit the save point before yielding so later edits descend from it.
         savingDocument = createCheckpoint(
           appendRevision(savingDocument, reason),
-          reason
+          reason,
+          author
         );
         showAccountEcho(savingDocument);
         await saveLocalProject(savingDocument);
         if (isCurrentProject())
           setStatus(
-            'Saved revision on this device · sharing through the room.'
+            'Made a save point on this device · sharing through the room.'
           );
         return;
       }
@@ -15645,7 +17450,7 @@ export function App() {
         session &&
         !cloudProjectIds.has(savingDocument.projectId)
       ) {
-        const marked = createSavePoint(savingDocument, reason);
+        const marked = createSavePoint(savingDocument, reason, author);
         await saveLocalProject(marked);
         if (!isCurrentProject()) return;
         if (savingManager.document.version === savingDocument.version) {
@@ -15691,7 +17496,7 @@ export function App() {
         // one it was born with — which would leave restore and branch with
         // nothing to offer exactly where they are needed most, and would drop
         // a name the user had just typed.
-        const marked = createSavePoint(savingDocument, reason);
+        const marked = createSavePoint(savingDocument, reason, author);
         if (savingManager.document.version === savingDocument.version) {
           await saveLocalProject(marked);
           if (!isCurrentProject()) {
@@ -15704,7 +17509,13 @@ export function App() {
         }
         setCloudAvailable(false);
         setSaveState('local');
-        setStatus('Saved on this device.');
+        // Autosave already says "Saved on this device."; this save also made
+        // a save point in Revisions, so it says so (I22).
+        setStatus(
+          reason === DEFAULT_SAVE_REASON
+            ? 'Made a save point on this device.'
+            : `Made save point “${reason}” on this device.`
+        );
         return;
       }
       // A queued autosave writing the same document behind this one would race
@@ -15724,13 +17535,30 @@ export function App() {
       }) => {
         savingDocument = input.document;
         await saveLocalProject(savingDocument);
-        if (!readDocument()) return null;
+        if (!readDocument() || !isCurrentProject()) return null;
         accountWriteStarted = true;
-        return api.saveRevision({
-          ...input,
-          reason,
-          document: withoutDerivedProjection(savingDocument)
-        });
+        // Minted here rather than by the API so the save point records its
+        // author; the API stores a save point it is handed as it is.
+        const trimmedReason = reason.trim();
+        const minted = createSavedRevision(
+          withoutDerivedProjection(savingDocument),
+          trimmedReason,
+          author
+        );
+        const savedRevisionId = minted.revisions.at(-1)!.revisionId;
+        // A save held back while earlier saves' copies are freed is retried
+        // here, account write only: the device copy is already saved, and
+        // edits may have saved newer device copies since.
+        return retryWhileStorageCleanupPending(
+          () =>
+            api.saveRevision({
+              ...input,
+              reason: trimmedReason,
+              document: minted,
+              savedRevisionId
+            }),
+          () => Boolean(readDocument()) && isCurrentProject()
+        );
       };
       const currentDocument = readDocument();
       if (!currentDocument) return;
@@ -15746,7 +17574,20 @@ export function App() {
             document: currentDocument
           });
       if (!saved) {
-        if (isCurrentProject()) controller?.schedule(savingManager.document);
+        if (isCurrentProject()) {
+          // A halted controller (before or during this save) puts back its
+          // own state and the action it offers. Otherwise the save was
+          // cancelled (the project changed mode or moved on meanwhile):
+          // settle the indicator rather than leave "Saving". The device copy
+          // was written before the account checkpoint began.
+          if (!controller?.reannounceHalt()) {
+            setSaveState('local');
+            setStatus(
+              'Save point not made. Your work is saved on this device.'
+            );
+          }
+          controller?.schedule(savingManager.document);
+        }
         return;
       }
       remoteVersionsRef.current.set(saved.projectId, saved.version);
@@ -15764,7 +17605,7 @@ export function App() {
         // controller gives it to writes already queued; this, to the model.
         showAccountEcho(withEchoedSavePoints(savingManager.document, saved));
         setCloudAvailable(true);
-        setStatus(sourceWarning ?? 'Saved revision.');
+        setStatus(sourceWarning ?? 'Made a save point.');
         return;
       }
       const restored = withLocalDerived(saved, savingManager.document);
@@ -15781,7 +17622,7 @@ export function App() {
       if (savingManager.document.version !== savingDocument.version) {
         await saveLocalProject(savingManager.document);
       }
-      setStatus(sourceWarning ?? 'Saved revision.');
+      setStatus(sourceWarning ?? 'Made a save point.');
     } catch (error) {
       if (!isCurrentProject()) {
         return;
@@ -15813,9 +17654,11 @@ export function App() {
       }
       // A local failure or a server refusal does not mean the account is
       // unreachable. Only an attempted account write with no usable response
-      // should turn the connectivity indicator offline.
+      // should turn the connectivity indicator offline. A save still held
+      // back while earlier copies are freed reached the account too.
       const accountUnreachable =
         accountWriteStarted &&
+        !isProjectStorageCleanupPendingError(error) &&
         (!(error instanceof ApiError) || error.status >= 500);
       if (accountUnreachable) setCloudAvailable(false);
       setSaveState(
@@ -15836,6 +17679,22 @@ export function App() {
   }
 
   const aiPreviewEpochRef = useRef(0);
+  // Bumped when something opens over the stage that the model should stay
+  // clear of: the viewer reframes only if part of the model is covered.
+  const [clearStageRequest, setClearStageRequest] = useState(0);
+  const sectionControlsShown =
+    viewerSettings.sectionView !== undefined &&
+    panelState.sectionPanelOpen !== false;
+  useEffect(() => {
+    if (sectionControlsShown) setClearStageRequest((request) => request + 1);
+  }, [sectionControlsShown]);
+  // The measurement workbench floats over View's and Tweak's stage (a
+  // phone's sheet across its foot, I47): what it measures stays in view.
+  // Build's workbench is a command card and never moves the camera.
+  const measuringOverStage = measuring && modelingLocked;
+  useEffect(() => {
+    if (measuringOverStage) setClearStageRequest((request) => request + 1);
+  }, [measuringOverStage]);
 
   /** D06 slice E: a proposal that edits a drawing sheet, not the model. */
   function isDrawingProposal(proposal: CadPatchProposal): boolean {
@@ -15913,6 +17772,9 @@ export function App() {
         };
       }
       setPreviewDoc(preflight.candidate);
+      // The proposal is reviewed on the model: keep it clear of the
+      // assistant's stream and the panels (I6).
+      setClearStageRequest((request) => request + 1);
       setStatus('Previewing exact proposed geometry.');
       return { ok: true };
     } catch (error) {
@@ -16037,7 +17899,13 @@ export function App() {
     // Local-first imports/exports keep their bytes on this device. A protected
     // upload cannot succeed before this project has an account copy, and its
     // failed request would add a console error to an otherwise valid import.
-    if (!sessionRef.current || !remoteVersionsRef.current.has(doc.projectId)) {
+    if (
+      !cloudArchivable(
+        Boolean(sessionRef.current),
+        doc.projectId,
+        remoteVersionsRef.current
+      )
+    ) {
       throw new Error(
         'Cloud archival needs an account project. The file stays on this device.'
       );
@@ -16168,7 +18036,7 @@ export function App() {
       return;
     }
     if (!/\.(?:stl|step|stp|3mf|obj|glb|ply)$/i.test(file.name)) {
-      setStatus(`Unsupported import format: ${file.name}`);
+      refuseImportOnCard(file.name, unsupportedImportMessage(file.name));
       return;
     }
 
@@ -16425,7 +18293,7 @@ export function App() {
         } = await import('./lib/meshImportWorkerClient');
         const format = meshImportFormatForFileName(file.name);
         if (!format) {
-          setStatus(`Unsupported import format: ${file.name}`);
+          refuseImportOnCard(file.name, unsupportedImportMessage(file.name));
           return;
         }
         // The open document's units, not millimetres: the import runs the
@@ -16626,6 +18494,18 @@ export function App() {
     }
   }
 
+  /**
+   * A file refused before it was read. The import card says so too: it used
+   * to keep showing the previous run's failure ("Not imported empty.stl")
+   * while this refusal went only to the status line (review I4).
+   */
+  function refuseImportOnCard(fileName: string, message: string) {
+    setStatus(message);
+    const sink = createImportProgressSink();
+    sink.start({ fileName, phases: ['reading'], cancellable: false });
+    sink.finish({ tone: 'error', message });
+  }
+
   function createImportProgressSink(): ImportProgressSink {
     // New per run, so a second import replaces the card rather than being
     // merged into the first one's phases.
@@ -16668,6 +18548,32 @@ export function App() {
   }
 
   /**
+   * Files dropped on the start screen, or picked through its Import. A
+   * backup restores as it does from the File menu; CAD files make a new
+   * project named for them, and the import then runs in it once it is on
+   * screen — the same import Import CAD files runs, with its units prompt
+   * and progress card. The workspace's own drop target is not mounted here,
+   * and before this the browser opened or downloaded the file instead.
+   */
+  async function handleStartScreenFiles(files: File[], units: UnitSystem) {
+    const { planStartScreenImport } = await import('./lib/startScreenImport');
+    const plan = planStartScreenImport(files);
+    if (plan.kind === 'refuse') {
+      setStatus(plan.message);
+      announce(plan.message, undefined, { tone: 'warning' });
+      return;
+    }
+    if (plan.kind === 'backup') {
+      await handleImportProject(plan.file);
+      return;
+    }
+    pendingStartImportRef.current = { files: plan.files, projectId: null };
+    if (!(await handleCreateProject(plan.name, units))) {
+      pendingStartImportRef.current = null;
+    }
+  }
+
+  /**
    * Files dropped on the viewport. A backup restores as its own project, so
    * it travels alone; anything else is the File menu's import, same rules.
    */
@@ -16678,17 +18584,26 @@ export function App() {
       return;
     }
     if (files.length !== 1) {
-      setStatus('Drop one .openzcad backup on its own.');
+      refuseImportOnCard(
+        countLabel(files.length, 'file', 'files'),
+        'Drop one .openzcad backup on its own.'
+      );
       return;
     }
     await handleImportProject(backups[0]!);
   }
 
   async function handleImportFiles(files: File[]) {
+    importNamingRef.current = doc
+      ? (await import('./lib/importProjectName')).watchImportNaming(doc, files)
+      : null;
     const shaprFiles = files.filter((file) => /\.shapr$/i.test(file.name));
     if (shaprFiles.length === 0) {
       if (files.length !== 1) {
-        setStatus('Select one STEP or mesh file, or one .shapr + STEP pair.');
+        refuseImportOnCard(
+          countLabel(files.length, 'file', 'files'),
+          'Select one STEP or mesh file, or one .shapr + STEP pair.'
+        );
         return;
       }
       await handleImportFile(files[0]!);
@@ -16725,6 +18640,8 @@ export function App() {
       inspection: null
     });
     try {
+      const { inspectShaprPair } =
+        await import('./lib/shaprImportWorkerClient');
       const inspection = await inspectShaprPair(shaprFile, sourceStepFile, {
         signal: controller.signal,
         onProgress: (progress) => {
@@ -16752,11 +18669,17 @@ export function App() {
       if (controller.signal.aborted) {
         return;
       }
-      const message = errorMessage(error, 'Shapr3D preview failed.');
-      setStatus(message);
+      const plain = describeShaprImportFailure(error);
+      setStatus(plain.message, plain.detail ? { detail: plain.detail } : {});
       setPendingShaprImport((current) =>
         current
-          ? { ...current, phase: 'preview', progress: '', error: message }
+          ? {
+              ...current,
+              phase: 'preview',
+              progress: '',
+              error: plain.message,
+              errorDetail: plain.detail
+            }
           : null
       );
     } finally {
@@ -16776,12 +18699,6 @@ export function App() {
     ) {
       return;
     }
-    const migration = shaprMigrationDraft({
-      ir: pending.inspection.ir,
-      shaprFileName: pending.shaprFile.name,
-      stepFileName: pending.sourceStepFile.name,
-      stepChecksumSha256: pending.inspection.stepChecksumSha256
-    });
     const importId = toShaprImportId(`shapr_${crypto.randomUUID()}`);
     setPendingShaprImport((current) =>
       current
@@ -16793,6 +18710,30 @@ export function App() {
           }
         : null
     );
+    // Loaded here, after the card says it is applying, so a second click
+    // during the load finds the apply already under way.
+    let shaprMigrationDraft: typeof ShaprMigrationDraftFn;
+    try {
+      ({ shaprMigrationDraft } = await import('./lib/shaprMigration'));
+    } catch (error) {
+      setPendingShaprImport((current) =>
+        current
+          ? {
+              ...current,
+              phase: 'preview',
+              progress: 'Preview ready.',
+              error: errorMessage(error, 'The import could not start.')
+            }
+          : null
+      );
+      return;
+    }
+    const migration = shaprMigrationDraft({
+      ir: pending.inspection.ir,
+      shaprFileName: pending.shaprFile.name,
+      stepFileName: pending.sourceStepFile.name,
+      stepChecksumSha256: pending.inspection.stepChecksumSha256
+    });
     const shaprAbort = startImportAbort();
     const { runStepImport } = await stepImportRun();
     const result = await runStepImport({
@@ -17018,6 +18959,21 @@ export function App() {
     }
   }
 
+  /**
+   * M16: the flat-pattern view, on the requested sheet-metal feature (or
+   * why it has none), or with none requested on the first that builds.
+   */
+  function openFlatPattern(featureId?: FeatureId) {
+    const current = managerRef.current?.document;
+    if (!current) return;
+    const target = flatPatternTarget(current, featureId);
+    if ('error' in target) {
+      setStatus(target.error);
+      return;
+    }
+    setFlatPatternFeatureId(target.featureId);
+  }
+
   function openImageExport() {
     const source = viewportImageRef.current;
     const size = source?.viewSize();
@@ -17059,35 +19015,43 @@ export function App() {
     }
   }
 
-  /** One sketch's exact curves as an SVG at 1:1 in document units. */
+  /**
+   * One sketch's exact curves as an SVG at 1:1 in document units, or (D04)
+   * as a DXF drawing in millimetres.
+   */
   async function handleExportSketchSvg(options: SvgExportOptions) {
+    const format = options.format ?? 'svg';
     // No rebuild guard: the sketch is read from the saved document, and the
     // worker queues the export behind any rebuild in flight. The dialog
     // offers SVG while the model updates, so it must be able to deliver it.
     if (!doc) {
       return;
     }
-    const fileName = `${exportFileStem(doc.name)}-sketch.svg`;
+    const fileName = `${exportFileStem(doc.name)}-sketch.${format}`;
+    const name = format.toUpperCase();
     try {
-      setStatus('Exporting the sketch as SVG…');
-      const result = await geometry.exportModel('svg', doc, [], {
+      setStatus(`Exporting the sketch ${name}…`);
+      const result = await geometry.exportModel(format, doc, [], {
         sketchId: options.sketchId as SketchId,
         transparent: options.transparent
       });
       if (!('text' in result)) {
-        throw new Error('The SVG export returned no text.');
+        throw new Error(`${name} export returned no text.`);
       }
-      const saved = await saveCadTextFile(fileName, 'svg', result.text);
+      const saved = await saveCadTextFile(fileName, format, result.text);
       setStatus(
-        saved ? `Exported the sketch to ${fileName}.` : 'SVG export cancelled.'
+        saved
+          ? `Exported the sketch to ${fileName}.`
+          : `${name} export cancelled.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'SVG export failed.'));
+      setStatus(errorMessage(error, `${name} export failed.`));
     }
   }
 
-  async function handleExportProject() {
+  async function handleExportProject(options: { localOnly?: boolean } = {}) {
     if (!doc || projectTransferRef.current) return;
+    const localOnly = options.localOnly === true;
     projectTransferRef.current = true;
     setProjectTransferBusy(true);
     const snapshot = doc;
@@ -17102,7 +19066,11 @@ export function App() {
     });
     sink.update({ phase: 'preparing', fraction: null });
     try {
-      setStatus('Preparing complete project backup…');
+      setStatus(
+        localOnly
+          ? 'Preparing this device’s copy of the project…'
+          : 'Preparing complete project backup…'
+      );
       const { createProjectBackup, downloadBackupFile } =
         await import('./lib/projectBackupTransfer');
       const text = await createProjectBackup(
@@ -17115,7 +19083,8 @@ export function App() {
               measurementDisplay,
               new Date().toISOString()
             )
-          : undefined
+          : undefined,
+        localOnly ? { localOnly: true } : {}
       );
       sink.update({ phase: 'writing', fraction: null });
       downloadBackupFile(
@@ -17128,12 +19097,33 @@ export function App() {
         const bucket = durationBucket(performance.now() - analyticsStarted);
         if (bucket) trackDetail('export_latency', bucket);
       }
-      setStatus(`Exported complete project ${snapshot.name}.`);
-      sink.finish({ tone: 'ok', message: 'complete project', landed: true });
+      if (localOnly) {
+        // Only what this device holds: files kept only in the account
+        // (archived exports, save states never opened here) are not in it.
+        setStatus(
+          `Exported this device’s copy of ${snapshot.name}. Files stored only in your account are not included.`
+        );
+        sink.finish({
+          tone: 'ok',
+          message: 'this device’s copy',
+          landed: true
+        });
+      } else {
+        setStatus(`Exported complete project ${snapshot.name}.`);
+        sink.finish({ tone: 'ok', message: 'complete project', landed: true });
+      }
     } catch (error) {
       const message = errorMessage(error, 'Unable to create backup.');
       setStatus(`Project export failed: ${message}`);
       sink.finish({ tone: 'error', message });
+      // A complete backup this device cannot vouch for: its own copy can
+      // still be exported, said as what it is.
+      if (!localOnly && isEncryptedPinProblemError(error)) {
+        announce(message, {
+          label: 'Export this device’s copy',
+          run: () => void handleExportProject({ localOnly: true })
+        });
+      }
     } finally {
       projectTransferRef.current = false;
       setProjectTransferBusy(false);
@@ -17199,13 +19189,90 @@ export function App() {
       });
     } catch (error) {
       trackDetail('error_import');
-      const message = errorMessage(error, 'Unable to read backup.');
-      if (isCurrent()) setStatus(`Project import failed: ${message}`);
-      sink.finish({ tone: 'error', message });
+      // A STEP or STL picked through "All files" used to fail with the JSON
+      // parser's words; say what the file is and where it goes instead.
+      const plain = await describeProjectImportFailure(error, file);
+      if (isCurrent()) {
+        setStatus(
+          `Project import failed. ${plain.message}`,
+          plain.detail ? { detail: plain.detail } : {}
+        );
+        if (onStartScreenRef.current) {
+          announce(plain.message, undefined, { tone: 'warning' });
+        }
+      }
+      sink.finish({ tone: 'error', message: plain.message });
     } finally {
       projectTransferRef.current = false;
       setProjectTransferBusy(false);
       finishBusy();
+    }
+  }
+
+  /**
+   * File → Insert project…: another project's bodies come into this one as
+   * one undoable step, each keeping its name, colour and opacity, filed in a
+   * folder named after the project. A copy of the solids, not of the
+   * history, and no link back (AS01). See `lib/projectInsertRun.ts`.
+   */
+  async function handleInsertProject(file: File) {
+    if (!managerRef.current || !doc || !ensureCanEdit('insert a project')) {
+      return;
+    }
+    if (importAbortRef.current) {
+      setStatus(
+        'Another import is still running. Try again once it completes.'
+      );
+      return;
+    }
+    const importManager = managerRef.current;
+    const abort = startImportAbort();
+    try {
+      let insert: Awaited<ReturnType<typeof projectInsertRun>>;
+      try {
+        insert = await projectInsertRun();
+      } catch (error) {
+        // A chunk that will not load (offline, a deploy since this page
+        // loaded) has no run to report it; say so on the card.
+        refuseImportOnCard(
+          file.name,
+          errorMessage(error, `Could not insert ${file.name}.`)
+        );
+        return;
+      }
+      await insert.runProjectInsert({
+        file,
+        ownerUserId: session?.userId ?? localUserId,
+        signal: abort.signal,
+        progress: createImportProgressSink(),
+        setStatus,
+        stillCurrent: () => managerRef.current === importManager,
+        destination: () => {
+          const projectId = managerRef.current?.document.projectId;
+          return projectId
+            ? {
+                projectId,
+                onAccount: cloudArchivable(
+                  Boolean(sessionRef.current),
+                  projectId,
+                  remoteVersionsRef.current
+                )
+              }
+            : null;
+        },
+        onFailure: () => trackDetail('error_import'),
+        stepImport: {
+          archive: archiveArtifact,
+          validatedFeature,
+          status: { setStatus, setFeatureFormError },
+          marks: importMarks(),
+          currentDocument: () => managerRef.current?.document ?? null,
+          editDisabledReason: () => editDisabledReasonRef.current,
+          newId: () => crypto.randomUUID()
+        }
+      });
+    } finally {
+      finishImportAbort(abort);
     }
   }
 
@@ -17235,6 +19302,13 @@ export function App() {
       signal: AbortSignal;
       onState(state: GeometryWorkerState): void;
     }): Promise<{ body: Blob; save(): Promise<boolean>; warnings: number }>;
+    /**
+     * Keeps a copy in the project's export archive; on by default. A slicer
+     * hand-off (L09) is local only and keeps none.
+     */
+    archive?: boolean;
+    /** The status once the file is saved, when not the export's own. */
+    completed?(bodies: string): string;
   }) {
     if (!doc || exportBodyIds.length === 0) {
       setStatus(emptyExportReason);
@@ -17288,21 +19362,23 @@ export function App() {
       trackUsage('export_completed');
       sink.update({ phase: 'archiving', fraction: null });
       let archived = false;
-      try {
-        await archiveArtifact({
-          fileName: input.fileName,
-          contentType: input.contentType,
-          kind: input.kind,
-          body: produced.body,
-          // Cancel is honoured by the two awaits above; without it here the
-          // archive kept uploading the file the user had just stopped
-          // exporting, and finalized it into the File menu.
-          signal,
-          metadata: input.metadata
-        });
-        archived = true;
-      } catch {
-        // The local download has already completed successfully.
+      if (input.archive !== false) {
+        try {
+          await archiveArtifact({
+            fileName: input.fileName,
+            contentType: input.contentType,
+            kind: input.kind,
+            body: produced.body,
+            // Cancel is honoured by the two awaits above; without it here the
+            // archive kept uploading the file the user had just stopped
+            // exporting, and finalized it into the File menu.
+            signal,
+            metadata: input.metadata
+          });
+          archived = true;
+        } catch {
+          // The local download has already completed successfully.
+        }
       }
       if (signal.aborted) {
         // The file is on disk; only the copy was stopped.
@@ -17321,7 +19397,9 @@ export function App() {
       const outcome =
         produced.warnings > 0
           ? `Exported ${input.label} with ${countLabel(produced.warnings, 'warning', 'warnings')}.`
-          : `Exported ${bodies} to ${input.fileName}${archived ? ' and archived it' : ''}.`;
+          : input.completed
+            ? input.completed(bodies)
+            : `Exported ${bodies} to ${input.fileName}${archived ? ' and archived it' : ''}.`;
       setStatus(
         exportWithheldMessage ? `${outcome} ${exportWithheldMessage}` : outcome
       );
@@ -17329,7 +19407,9 @@ export function App() {
       // signed-out or local-only session was never going to keep a copy,
       // and flagging every export there would teach people to dismiss it.
       const archiveExpected =
-        Boolean(session) && cloudProjectIds.has(doc.projectId);
+        input.archive !== false &&
+        Boolean(session) &&
+        cloudProjectIds.has(doc.projectId);
       sink.finish(
         archived || !archiveExpected
           ? { tone: 'ok', message: bodies, landed: true }
@@ -17354,32 +19434,91 @@ export function App() {
     }
   }
 
-  async function handleExportStep() {
+  /**
+   * F06: what an export of `rowId` writes. The active row (or none) is the
+   * model as shown, with the export scope's bodies. Another row is built for
+   * the file alone from `documentForConfiguration`, nothing in the open
+   * document changes, and it writes every body that row shows.
+   */
+  function exportTarget(rowId: string | null): {
+    document: ProjectDocument;
+    bodyIds: BodyId[];
+    allShownBodies: boolean;
+    rowName: string | null;
+  } | null {
+    if (!doc) return null;
+    const set = doc.configurations;
+    const row =
+      rowId && set && rowId !== set.activeRowId
+        ? set.rows.find((entry) => entry.id === rowId)
+        : undefined;
+    if (!row)
+      return {
+        document: doc,
+        bodyIds: exportBodyIds,
+        allShownBodies: false,
+        rowName: null
+      };
+    return {
+      document: documentForConfiguration(doc, row.id),
+      bodyIds: [],
+      allShownBodies: true,
+      rowName: row.name
+    };
+  }
+
+  /** The file stem of an export, naming a configuration that is not active. */
+  function exportStemFor(rowName: string | null): string {
+    return exportFileStem(
+      rowName && doc ? `${doc.name} ${rowName}` : (doc?.name ?? '')
+    );
+  }
+
+  async function handleExportStep(rowId: string | null = null) {
     if (currentGeometrySnapshot !== null) {
       setStatus(
         'The model is still updating. Try exporting again when it finishes.'
       );
       return;
     }
-    if (!doc || exportBodyIds.length === 0) {
+    let target: ReturnType<typeof exportTarget>;
+    try {
+      target = exportTarget(rowId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'That configuration cannot be exported.'));
+      return;
+    }
+    if (
+      !doc ||
+      !target ||
+      (!target.allShownBodies && target.bodyIds.length === 0)
+    ) {
       setStatus(emptyExportReason);
       return;
     }
-    const fileName = `${exportFileStem(doc.name)}.step`;
+    const { document: exported, bodyIds, allShownBodies, rowName } = target;
+    const fileName = `${exportStemFor(rowName)}.step`;
     const contentType = 'model/step';
     await runExportJob({
       fileName,
-      label: 'STEP',
+      label: rowName ? `STEP of ${rowName}` : 'STEP',
       kind: 'step-export',
       contentType,
       metadata: {
-        bodyIds: exportBodyIds.join(','),
+        bodyIds: bodyIds.join(','),
         documentVersion: doc.version,
-        units: doc.units
+        units: doc.units,
+        ...(rowName ? { configuration: rowName } : {})
       },
+      ...(rowName
+        ? {
+            completed: () => `Exported configuration ${rowName} to ${fileName}.`
+          }
+        : {}),
       produce: async (options) => {
-        const result = await geometry.exportModel('step', doc, exportBodyIds, {
+        const result = await geometry.exportModel('step', exported, bodyIds, {
           ...options,
+          ...(allShownBodies ? { allShownBodies: true } : {}),
           fileName,
           units: resolveExportUnits(
             appSettingsRef.current.files.exportUnits,
@@ -17414,28 +19553,47 @@ export function App() {
       );
       return;
     }
-    if (!doc || exportBodyIds.length === 0) {
+    let target: ReturnType<typeof exportTarget>;
+    try {
+      target = exportTarget(exportRowId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'That configuration cannot be exported.'));
+      return;
+    }
+    if (
+      !doc ||
+      !target ||
+      (!target.allShownBodies && target.bodyIds.length === 0)
+    ) {
       setStatus(emptyExportReason);
       return;
     }
+    const { document: exported, bodyIds, allShownBodies, rowName } = target;
     const info = MESH_EXPORT_FILE_INFO[format];
-    const fileName = `${exportFileStem(doc.name)}.${info.extension}`;
+    const fileName = `${exportStemFor(rowName)}.${info.extension}`;
     void runExportJob({
       fileName,
-      label: info.label,
+      label: rowName ? `${info.label} of ${rowName}` : info.label,
       kind: info.kind,
       contentType: info.contentType,
       metadata: {
-        bodyIds: exportBodyIds.join(','),
+        bodyIds: bodyIds.join(','),
         documentVersion: doc.version,
         units: doc.units,
         format,
-        deflectionMm: deflection
+        deflectionMm: deflection,
+        ...(rowName ? { configuration: rowName } : {})
       },
+      ...(rowName
+        ? {
+            completed: () => `Exported configuration ${rowName} to ${fileName}.`
+          }
+        : {}),
       produce: async (options) => {
-        const result = await geometry.exportModel(format, doc, exportBodyIds, {
+        const result = await geometry.exportModel(format, exported, bodyIds, {
           deflection,
           ...tolerances,
+          ...(allShownBodies ? { allShownBodies: true } : {}),
           units: resolveExportUnits(
             appSettingsRef.current.files.exportUnits,
             doc.units
@@ -17458,6 +19616,85 @@ export function App() {
     });
   }
 
+  /**
+   * L09 "Open in slicer": the 3MF the dialog would export, handed to a
+   * slicer on this Mac, or downloaded in the browser. Local only: it is never
+   * uploaded or archived, which keeps an encrypted project's file off the
+   * server too.
+   */
+  function handleOpenInSlicer(
+    target: string,
+    deflection: number,
+    tolerances: { angularTolerance?: number } = {}
+  ) {
+    if (currentGeometrySnapshot !== null) {
+      setStatus('The model is still updating. Try again when it finishes.');
+      return;
+    }
+    let written: ReturnType<typeof exportTarget>;
+    try {
+      written = exportTarget(exportRowId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'That configuration cannot be exported.'));
+      return;
+    }
+    if (
+      !doc ||
+      !written ||
+      (!written.allShownBodies && written.bodyIds.length === 0)
+    ) {
+      setStatus(emptyExportReason);
+      return;
+    }
+    const { document: exported, bodyIds, allShownBodies, rowName } = written;
+    const slicer = DESKTOP_SLICERS.find((entry) => entry.id === target);
+    if (!slicer && target !== 'download') return;
+    const info = MESH_EXPORT_FILE_INFO['3mf'];
+    const fileName = `${exportStemFor(rowName)}.${info.extension}`;
+    void runExportJob({
+      fileName,
+      label: slicer ? `3MF for ${slicer.label}` : '3MF for your slicer',
+      kind: info.kind,
+      contentType: info.contentType,
+      metadata: {
+        bodyIds: bodyIds.join(','),
+        documentVersion: doc.version,
+        units: doc.units,
+        format: '3mf',
+        deflectionMm: deflection,
+        ...(rowName ? { configuration: rowName } : {})
+      },
+      archive: false,
+      completed: (bodies) =>
+        slicer
+          ? `Opened ${bodies} in ${slicer.label} as ${fileName}.`
+          : `Downloaded ${bodies} as ${fileName}. Open it from your browser’s downloads in your slicer.`,
+      produce: async (options) => {
+        const result = await geometry.exportModel('3mf', exported, bodyIds, {
+          deflection,
+          ...tolerances,
+          ...(allShownBodies ? { allShownBodies: true } : {}),
+          units: resolveExportUnits(
+            appSettingsRef.current.files.exportUnits,
+            doc.units
+          ),
+          ...options
+        });
+        if (!('data' in result)) {
+          throw new Error('The 3MF export returned no file.');
+        }
+        return {
+          body: new Blob([result.data], { type: info.contentType }),
+          save: () =>
+            slicer
+              ? openInDesktopSlicer(slicer.id, fileName, result.data)
+              : saveCadBinaryFile(fileName, '3mf', result.data),
+          warnings: result.warnings.length
+        };
+      }
+    });
+  }
+
   function handleCheckMeshQuality(
     deflection: number,
     options?: {
@@ -17466,12 +19703,21 @@ export function App() {
       onProgress?(progress: ExportProgress): void;
     }
   ) {
-    if (!doc || exportBodyIds.length === 0) {
+    let target: ReturnType<typeof exportTarget>;
+    try {
+      target = exportTarget(exportRowId);
+    } catch (error) {
+      return Promise.reject(
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
+    if (!target || (!target.allShownBodies && target.bodyIds.length === 0)) {
       return Promise.reject(
         new Error(emptyExportMessage(exportScopeInfo, 'checking printability'))
       );
     }
-    return geometry.meshQuality(doc, exportBodyIds, deflection, {
+    return geometry.meshQuality(target.document, target.bodyIds, deflection, {
+      ...(target.allShownBodies ? { allShownBodies: true } : {}),
       ...(options?.angularTolerance !== undefined
         ? { angularTolerance: options.angularTolerance }
         : {}),
@@ -17539,12 +19785,13 @@ export function App() {
     }
   }
 
-  function handleExportDiagnostics() {
+  async function handleExportDiagnostics() {
     if (!doc) {
       reportSupportExport('Open a project before exporting diagnostics.');
       return;
     }
     try {
+      const { createProjectDiagnosticBundle } = await projectDiagnostics();
       const bundle = createProjectDiagnosticBundle(doc, {
         remusVersion: KERNEL_BUILD.packageVersion,
         remusCommit: KERNEL_BUILD.sourceCommit
@@ -17595,7 +19842,7 @@ export function App() {
     switch (command) {
       case 'open-model':
         void openDesktopCadFile()
-          .then((file) => (file ? handleImportFile(file) : undefined))
+          .then((file) => (file ? handleImportFiles([file]) : undefined))
           .catch((error) => {
             setStatus(errorMessage(error, 'Could not open the CAD model.'));
           });
@@ -17713,6 +19960,30 @@ export function App() {
     );
   }
 
+  /**
+   * Re-opens a sketch step in the viewport, from the Inspector's button or
+   * a History row's double-click. It opens in Select (see `enter-sketch`).
+   */
+  function editSketchFeatureInViewport(feature: FeatureNode) {
+    if (feature.data.featureKind !== 'sketch' || !doc) {
+      return;
+    }
+    const sketch = findSketch(doc, feature.data.sketchId);
+    if (sketch) {
+      selectFeatureNode(null, 'pinned');
+      setTool(null);
+      dispatchInteraction({
+        type: 'enter-sketch',
+        plane: sketch.planeRef,
+        sketchId: sketch.sketchId
+      });
+      // Same reason as the revert pill: entering a sketch from the tree
+      // changes what every key does, so it should say so rather than leaving
+      // the previous message in place.
+      setStatus(`Editing ${sketch.name} · Finish Sketch when done.`);
+    }
+  }
+
   function startSketchOnFace(target: FaceTarget): boolean {
     const faceTopology = representations[
       target.bodyId as BodyId
@@ -17753,8 +20024,10 @@ export function App() {
     document: ProjectDocument,
     selection: TopologySelection
   ): boolean {
-    const topology =
-      document.derived.bodyRepresentations[selection.bodyId]?.topology;
+    const topology = ownEntry(
+      document.derived.bodyRepresentations,
+      selection.bodyId
+    )?.topology;
     if (!topology) {
       return false;
     }
@@ -17782,7 +20055,12 @@ export function App() {
     // A later Move owns the lane. An automatic re-pick must neither ask a
     // user-selection question nor replace the values that card now holds.
     if (movePreview) return;
-    const pick = newBlendFacePick(pending.bodyId, pending.before, faces);
+    const pick = newBlendFacePick(
+      pending.bodyId,
+      pending.before,
+      faces,
+      pending.featureId
+    );
     if (pick) {
       // The pick is the app's, not the user's: it must not retire the
       // commit's own message ("Filleted 2 edges at 1 mm.") the way a real
@@ -17989,7 +20267,9 @@ export function App() {
         selection?.kind === 'face' &&
         command.spec?.wantsPlane &&
         !command.spec.bodyMode &&
-        !command.spec.faceMode
+        !command.spec.faceMode &&
+        // M17: a part going into a hole takes the bore's face instead.
+        !takesFeatureFaces(command.spec, command.options)
       ) {
         // A command that takes only a plane (a new gear) stands on a flat
         // face as clicked, the way a Mirror's plane does.
@@ -18001,7 +20281,12 @@ export function App() {
             candidate.topologyId === selection.topologyId ||
             (selection.hash !== undefined && candidate.hash === selection.hash)
         )?.geometry;
-        const on = geometry?.centroid ?? geometry?.center ?? detail?.point;
+        // A standard part stands where the face was clicked.
+        const on =
+          (command.spec.planeAtClick ? detail?.point : undefined) ??
+          geometry?.centroid ??
+          geometry?.center ??
+          detail?.point;
         if (
           geometry?.normal &&
           on &&
@@ -18015,6 +20300,20 @@ export function App() {
         }
         return false;
       }
+      if (
+        selection?.kind === 'face' &&
+        takesFeatureFaces(command.spec, command.options)
+      ) {
+        // M02: a feature pattern's click names the hole, boss or cut that
+        // made the face.
+        const face = inPlaceFeatureFacePick(
+          selection.bodyId,
+          selection.topologyId,
+          selection.hash,
+          detail?.point
+        );
+        return face ? command.pickFace(face) : true;
+      }
       if (selection?.kind === 'face' && command.spec?.faceMode) {
         const face = inPlaceFacePick(
           selection.bodyId,
@@ -18024,7 +20323,11 @@ export function App() {
         );
         if (face) return command.pickFace(face);
       }
-      if (selection && command.spec?.bodyMode) {
+      if (
+        selection &&
+        command.spec &&
+        inPlaceBodyMode(command.spec, command.options)
+      ) {
         // With the body picked, a flat face is the plane to mirror or split
         // across; otherwise any face names its body.
         if (
@@ -18343,6 +20646,40 @@ export function App() {
     ) {
       setSelectedTopology(selection);
       return;
+    }
+    // Shift on another face of the body whose face is selected adds it to a
+    // face set (Shift on a held face takes it back out), the set a box sweep
+    // with the Face filter makes: Delete removes the set and heals the body.
+    // Shift on a face of another body keeps selecting bodies, as before.
+    if (
+      additive &&
+      selection.kind === 'face' &&
+      tool === null &&
+      interaction.mode !== 'sketch'
+    ) {
+      const held = heldFaces;
+      if (held && heldFaceSetBody(held) === selection.bodyId) {
+        const next = toggleFaceInSet(held, selection);
+        if (next.length === 0) {
+          clearSelection();
+          return;
+        }
+        if (interaction.mode !== 'idle') {
+          dispatchInteraction({ type: 'clear' });
+        }
+        const bodyIds = [selection.bodyId];
+        setSelectedEdges([]);
+        setSelectedTopology(null);
+        setSelectedBodyIds(bodyIds);
+        setBoxFaces({ bodyIds, faces: next });
+        inferFeatureNodeFor(selection.bodyId);
+        setStatus(
+          next.length === 1
+            ? '1 face selected.'
+            : `${next.length} faces selected · Delete removes them and closes the gap.`
+        );
+        return;
+      }
     }
     // Sketch entry: with the Sketch tool armed, a planar face click starts a
     // face-attached sketch instead of arming the offset handle.
@@ -19170,6 +21507,7 @@ export function App() {
       gridVisible: appSettings.sketching.gridVisible,
       geometrySnapEnabled: appSettings.sketching.geometrySnapEnabled,
       inferenceEnabled: appSettings.sketching.inferenceEnabled,
+      snapHints: appSettings.sketching.snapHints,
       snapTolerancePx: appSettings.sketching.snapTolerancePx,
       drawing: session.drawing,
       objects,
@@ -19260,9 +21598,161 @@ export function App() {
     }
   }, [interaction, projectionRepair]);
 
+  /**
+   * S08: drawing commits run one at a time, in order, each against the
+   * document the previous one left: the next segment of a chain is joined to
+   * the segment before it, which a settle solve may still be committing.
+   */
+  const sketchDrawQueueRef = useRef<Promise<void>>(Promise.resolve());
+  /**
+   * The sketch a drawing commit just started, until the session learns its
+   * id: a queued second segment lands in it instead of starting another.
+   */
+  const startedSketchRef = useRef<{
+    plane: unknown;
+    sketchId: SketchId;
+  } | null>(null);
+
+  function queueDrawnEntity(
+    drawn: DrawnEntity,
+    hints: SketchSnapHint[] | undefined
+  ) {
+    setSketchDiagnosticPoints([]);
+    const next = sketchDrawQueueRef.current
+      .then(() => commitDrawnEntity(drawn, hints))
+      .catch((error: unknown) => {
+        setStatus(errorMessage(error, 'The sketch entity could not be added.'));
+      });
+    sketchDrawQueueRef.current = next;
+  }
+
+  /**
+   * Commits a drawn entity with the relations its placement satisfies
+   * (S08), in one undo step. Optional relations are kept only where a solve
+   * says they add rank, so inference never makes a sketch redundant; every
+   * kept relation is named on the status line and its glyph is shown.
+   */
+  async function commitDrawnEntity(
+    drawn: DrawnEntity,
+    hints: SketchSnapHint[] | undefined
+  ) {
+    const current = interactionRef.current;
+    const generation = sketchSessionGenerationRef.current;
+    const manager = managerRef.current;
+    const base = manager?.document;
+    if (current.mode !== 'sketch' || !manager || !base) return;
+    const session = current.session;
+    const started = startedSketchRef.current;
+    const sketchId =
+      (session.sketchId as SketchId | null) ??
+      (started &&
+      started.plane === session.plane &&
+      findSketch(base, started.sketchId)
+        ? started.sketchId
+        : null);
+    const sketch = sketchId ? findSketch(base, sketchId) : null;
+    const name = `Sketch ${String(sketchOptions.length + 1).padStart(2, '0')}`;
+    const settings = appSettingsRef.current.sketching;
+    const [
+      { drawnEntityCommands, addedConstraintIds, drawingSessionStillOpen },
+      { describeInferredRelations },
+      { settleOptionalRelations }
+    ] = await Promise.all([
+      import('./lib/sketch/inferenceCommit'),
+      import('./lib/sketch/inference'),
+      import('./lib/sketch/modify')
+    ]);
+    const resolve = sketchValueResolver(parameterScope.scope, base.units);
+    const existing = (sketch?.objectIds ?? []).flatMap((id) => {
+      const node = ownEntry(base.nodes, id);
+      return node?.kind === 'sketch-object'
+        ? [{ id: String(id), data: node.data }]
+        : [];
+    });
+    const plan = drawnEntityCommands(
+      drawn,
+      sketchId
+        ? { kind: 'sketch', sketchId }
+        : { kind: 'new-sketch', name, planeRef: session.plane },
+      existing,
+      {
+        autoConstrain: settings.autoConstrain,
+        hints,
+        resolve,
+        construction: sketchConstruction
+      }
+    );
+    // With nothing drawn before it, what an entity infers about itself can
+    // never restate an existing relation, so it needs no settling solve.
+    const commands =
+      plan.optional.length === 0 || existing.length === 0
+        ? [...plan.commands, ...plan.optional]
+        : await settleOptionalRelations(
+            base,
+            plan.sketchId,
+            plan.commands,
+            plan.optional,
+            (document, id) => geometry.solveSketch(document, id)
+          );
+    // Another project took over while the relations were settled: what was
+    // drawn belonged to the one that left.
+    if (managerRef.current !== manager) return;
+    // The sketch closed (or another opened) meanwhile: nothing lands unseen.
+    if (
+      !drawingSessionStillOpen(
+        { sketchId: sketchId ?? null, plane: session.plane, generation },
+        interactionRef.current,
+        sketchSessionGenerationRef.current
+      )
+    ) {
+      setStatus(
+        'The sketch closed before the drawn entity was added; nothing changed.'
+      );
+      return;
+    }
+    if (manager.document.version !== base.version) {
+      // Something else changed the document meanwhile: plan again against
+      // what is there now.
+      await commitDrawnEntity(drawn, hints);
+      return;
+    }
+    if (!executeTransaction(plan.label, commands)) return;
+    const inferred = commands.flatMap((command) => {
+      const kind = plan.kinds.get(command);
+      return kind ? [kind] : [];
+    });
+    setRecentInferredConstraintIds(
+      addedConstraintIds(commands.filter((command) => plan.kinds.has(command)))
+    );
+    if (!sketchId) {
+      startedSketchRef.current = {
+        plane: session.plane,
+        sketchId: plan.sketchId
+      };
+      dispatchInteraction({ type: 'sketch-created', sketchId: plan.sketchId });
+      setStatus(describeInferredRelations(`${name} started`, inferred));
+      return;
+    }
+    if (inferred.length > 0) {
+      setStatus(
+        describeInferredRelations(
+          commandOutcomeMessage(plan.label).replace(/\.$/, ''),
+          inferred
+        )
+      );
+    }
+  }
+
   /** A drawing gesture finished: commit the entity as a real command. */
-  function handleSketchCommit(object: SketchObjectData) {
+  function handleSketchCommit(
+    object: SketchObjectData,
+    hints?: SketchSnapHint[]
+  ) {
     if (interaction.mode !== 'sketch') {
+      return;
+    }
+    if (object.objectKind !== 'text') {
+      queueDrawnEntity({ kind: 'object', data: object }, hints);
       return;
     }
     setSketchDiagnosticPoints([]);
@@ -19412,7 +21902,7 @@ export function App() {
         ? affectedFeatureTargets(base, sketchFeature.featureId)
         : [];
       if (repair) {
-        const node = base.nodes[repair.objectId];
+        const node = ownEntry(base.nodes, repair.objectId);
         if (node?.kind !== 'sketch-object' || pick.objects.length !== 1) {
           setStatus(
             'Re-pick one edge: a face projects several, and the object needs one source.'
@@ -19552,32 +22042,14 @@ export function App() {
    * hold them and the record that names them commit as one transaction
    * (S04), so one undo removes the whole shape.
    */
-  async function handleSketchCommitComposite(shape: CompositeShape) {
+  function handleSketchCommitComposite(
+    shape: CompositeShape,
+    hints?: SketchSnapHint[]
+  ) {
     if (interaction.mode !== 'sketch') {
       return;
     }
-    setSketchDiagnosticPoints([]);
-    const session = interaction.session;
-    const construction = sketchConstruction;
-    const name = `Sketch ${String(sketchOptions.length + 1).padStart(2, '0')}`;
-    const { compositeCommands } = await import('./lib/sketch/composites');
-    const commit = compositeCommands(
-      shape,
-      session.sketchId
-        ? { kind: 'sketch', sketchId: session.sketchId as SketchId }
-        : { kind: 'new-sketch', name, planeRef: session.plane },
-      { construction }
-    );
-    if (!executeTransaction(commit.label, commit.commands)) {
-      return;
-    }
-    if (!session.sketchId) {
-      dispatchInteraction({
-        type: 'sketch-created',
-        sketchId: commit.sketchId
-      });
-      setStatus(`${name} started.`);
-    }
+    queueDrawnEntity({ kind: 'composite', shape }, hints);
   }
 
   function showProfileDiagnostics() {
@@ -19718,7 +22190,7 @@ export function App() {
       return false;
     const sketchId = target.sketchId as SketchId;
     const objectId = target.objectId as EntityId;
-    const selected = base.nodes[objectId];
+    const selected = ownEntry(base.nodes, objectId);
     const nextData =
       selected?.kind === 'sketch-object' && selected.data.construction
         ? { ...data, construction: true }
@@ -19778,7 +22250,7 @@ export function App() {
     if (!base || !target || sketchSolving || geometryBusy) return;
     const sketchId = target.sketchId as SketchId;
     const sourceObjectId = target.objectId as EntityId;
-    const source = base.nodes[sourceObjectId];
+    const source = ownEntry(base.nodes, sourceObjectId);
     if (
       source?.kind !== 'sketch-object' ||
       (source.data.objectKind !== 'rectangle' &&
@@ -20257,6 +22729,10 @@ export function App() {
   // orphans it.
   useEffect(() => {
     if (interaction.mode !== 'sketch') {
+      // A first Escape armed in one sketch never confirms leaving the next.
+      sketchExitArmedAtRef.current = null;
+      startedSketchRef.current = null;
+      setRecentInferredConstraintIds([]);
       setSketchSolveStatus(null);
       setSketchSolving(false);
       setSketchDimensionDraft(null);
@@ -20292,6 +22768,7 @@ export function App() {
               selectedObjectId: sketchModeState.selectedObjectId,
               selectedConstraintId: selectedSketchConstraintId,
               hiddenKinds: new Set(appSettings.sketching.hiddenRelationGlyphs),
+              alsoShownConstraintIds: new Set(recentInferredConstraintIds),
               conflictingConstraintIds: new Set(
                 sketchSolveStatus?.conflictingConstraintIds ?? []
               )
@@ -20306,7 +22783,8 @@ export function App() {
       appSettings.sketching.relationGlyphs,
       appSettings.sketching.hiddenRelationGlyphs,
       selectedSketchConstraintId,
-      sketchSolveStatus
+      sketchSolveStatus,
+      recentInferredConstraintIds
     ]
   );
   // A relation is picked from its glyph, so the pick lasts only while that
@@ -20434,8 +22912,17 @@ export function App() {
     sketchLabels
   ]);
 
+  const sketchSolveSnapshotRef = useRef(sketchSolveSnapshot);
+  sketchSolveSnapshotRef.current = sketchSolveSnapshot;
   useEffect(() => {
     setSketchDiagnosticPoints([]);
+    // A commit records its solve status for the state it commits, in the
+    // same batch as the document change. Clearing the colours here as well
+    // dropped every committed classification, so a fully constrained sketch
+    // stayed blue until a manual Solve (I38). Only a stale status is cleared.
+    if (sketchSolveSnapshotRef.current?.key === currentSketchSolveKey) {
+      return;
+    }
     setSketchSolveDiagnosticObjectIds([]);
     setSketchDefinedObjectIds([]);
   }, [currentSketchSolveKey, editingSketchNode?.sketchId]);
@@ -20458,7 +22945,11 @@ export function App() {
       .filter(({ origin }) => origin !== 'promotion-structure')
       .map(({ constraintId, data }) => ({
         constraintId: String(constraintId),
-        label: describeConstraint(data, nameOf),
+        label: describeConstraint(
+          data,
+          nameOf,
+          sketchPointNamer(editingSketchNode, sketchLabels)
+        ),
         targets: constraintInspectionTargets(
           doc,
           editingSketchNode,
@@ -20489,7 +22980,11 @@ export function App() {
       .map(({ constraintId, data }) => ({
         constraintId: String(constraintId),
         kind: data.constraintKind,
-        label: describeConstraint(data, nameOf),
+        label: describeConstraint(
+          data,
+          nameOf,
+          sketchPointNamer(editingSketchNode, sketchLabels)
+        ),
         editable:
           data.constraintKind === 'distance' ||
           data.constraintKind === 'angle' ||
@@ -20509,7 +23004,10 @@ export function App() {
       selectedSketchEntity.id
     );
     const side = composite?.edgeIds.indexOf(selectedSketchEntity.id) ?? -1;
-    if (!composite || side < 0) return null;
+    // I01: a slot's sizes are driven by ordinary dimensions on its centre
+    // line and arcs; its card has no resize yet.
+    if (!composite || side < 0 || composite.compositeKind === 'slot')
+      return null;
     const objects = new Map(
       editingSketchNode.objectIds.flatMap((id) => {
         const node = sketchReadDocument?.nodes[id];
@@ -20588,9 +23086,15 @@ export function App() {
       selectedSketchEntity && interaction.mode === 'sketch'
         ? {
             kind: selectedSketchEntity.data.objectKind,
-            fitting: constraintToolsForObject(
-              selectedSketchEntity.data.objectKind
-            ).map(({ kind }) => kind)
+            fitting: [
+              ...constraintToolsForObject(
+                selectedSketchEntity.data.objectKind
+              ).map(({ kind }) => kind),
+              // A selected line's length (I39).
+              ...(selectedSketchEntity.data.objectKind === 'line'
+                ? (['distance'] as const)
+                : [])
+            ]
           }
         : null,
     [selectedSketchEntity, interaction.mode]
@@ -20601,6 +23105,78 @@ export function App() {
    * so single-pick tools finish here and two-pick tools arm with one pick
    * left. Choosing the armed tool again disarms it, as on the rail.
    */
+  /** Finish Sketch: every edit is already committed, so nothing is lost. */
+  function finishSketchSession() {
+    dispatchInteraction({ type: 'exit-sketch' });
+    setTool(null);
+    setSketchEditError(null);
+    setSketchDiagnosticPoints([]);
+    setStatus(`${editingSketchName} finished.`);
+  }
+
+  /**
+   * A selected line's length as a driving distance (I39): its two ends are
+   * the picks, so the value prompt opens at once, prefilled with the
+   * current length.
+   */
+  function startLineLengthDimension(objectId: string) {
+    if (!doc || !editingSketchNode) return;
+    if (
+      sketchSolving ||
+      geometryBusy ||
+      !requireCurrentSketchGeometry(editingSketchNode.sketchId)
+    )
+      return;
+    const picks: ConstraintPick[] = [
+      { kind: 'point', objectId, point: 'start' },
+      { kind: 'point', objectId, point: 'end' }
+    ];
+    const measured = measureDrivingDimension(
+      doc,
+      editingSketchNode,
+      'distance',
+      picks,
+      (value) =>
+        evalParamValue(value, parameterScope.scope, doc.units) ?? undefined
+    );
+    if ('error' in measured) {
+      setStatus(measured.error);
+      return;
+    }
+    dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+    setSketchDimensionDraft({
+      kind: 'distance',
+      picks,
+      documentVersion: doc.version
+    });
+    setKeypad({
+      kind: 'sketch-dimension',
+      label: 'Distance',
+      initial: String(measured.value),
+      unitKind: 'length'
+    });
+    setStatus('Distance: enter the line’s driving length.');
+  }
+
+  /**
+   * The Dimension key: the selection decides what it measures, and with
+   * nothing selected it arms Distance for two picks.
+   */
+  function startSmartDimension() {
+    if (interaction.mode !== 'sketch') return;
+    const kind = selectedSketchEntity?.data.objectKind;
+    if (selectedSketchEntity && kind === 'line') {
+      startLineLengthDimension(selectedSketchEntity.id);
+      return;
+    }
+    if (selectedSketchEntity && (kind === 'circle' || kind === 'arc')) {
+      handleSelectionConstraintTool('radius');
+      return;
+    }
+    dispatchInteraction({ type: 'sketch-constraint-tool', kind: 'distance' });
+    setStatus(constraintToolSpec('distance').hint);
+  }
+
   function handleSelectionConstraintTool(kind: SketchConstraintToolKind) {
     if (
       interaction.mode !== 'sketch' ||
@@ -20612,6 +23188,14 @@ export function App() {
     }
     if (interaction.session.pendingConstraint?.kind === kind) {
       dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+      return;
+    }
+    // A line is dimensioned by its length: one pick, not two endpoints.
+    if (
+      kind === 'distance' &&
+      selectedSketchEntity.data.objectKind === 'line'
+    ) {
+      startLineLengthDimension(selectedSketchEntity.id);
       return;
     }
     const plan = planConstraintFromSelection(
@@ -20799,6 +23383,46 @@ export function App() {
   }
 
   /**
+   * Explains a relation or dimension the solver refused. Nothing was
+   * committed, so the committed sketch keeps its solve status and Undo still
+   * undoes the step before. The message leads with the refused value and
+   * names what it fights in people's words, never the refused constraint
+   * itself as its own culprit.
+   */
+  function reportSketchConstraintRefusal(
+    base: ProjectDocument,
+    prospective: ProjectDocument,
+    sketchId: SketchId,
+    outcome: SketchSolveOutcome,
+    refused: string,
+    replacedConstraintIds: readonly string[] = []
+  ) {
+    const committed = new Set(
+      (findSketch(base, sketchId)?.constraints ?? []).map(({ constraintId }) =>
+        String(constraintId)
+      )
+    );
+    const attempted = new Set(replacedConstraintIds);
+    for (const { constraintId } of findSketch(prospective, sketchId)
+      ?.constraints ?? []) {
+      if (!committed.has(String(constraintId))) {
+        attempted.add(String(constraintId));
+      }
+    }
+    const culprits = topResidualConstraints(
+      prospective,
+      findSketch(prospective, sketchId),
+      outcome.constraintResiduals,
+      2,
+      attempted
+    );
+    setSketchEditError(constraintRefusalMessage(refused, culprits));
+    setStatus(
+      `${refused} was not added: it conflicts with ${culprits[0] ?? 'the existing constraints'}.`
+    );
+  }
+
+  /**
    * Adds a relation and applies it in the same edit, holding its first pick
    * so the others move to meet it (ZC-041). When the hold makes it
    * unsatisfiable (only the first pick can move), it applies free and says
@@ -20868,22 +23492,15 @@ export function App() {
         return;
       }
       if (!solves(outcome)) {
-        setSketchSolveStatus(
-          solveStatusFor(outcome, findSketch(prospective, sketchId))
-        );
-        const culprits = topResidualConstraints(
+        // The refused attempt never reached the document, so its residuals
+        // must not paint the committed sketch as conflicted (I35): the
+        // last committed solve status stands.
+        reportSketchConstraintRefusal(
+          base,
           prospective,
-          findSketch(prospective, sketchId),
-          outcome.constraintResiduals,
-          2
-        );
-        const culpritSuffix =
-          culprits.length > 0 ? ` Likely culprit: ${culprits.join('; ')}.` : '';
-        setSketchEditError(
-          `${label} conflicts with existing constraints.${culpritSuffix} Edit or remove a conflicting constraint; no change was applied.`
-        );
-        setStatus(
-          `${label} refused: ${solveStatusLabel(outcome)};${culpritSuffix} no change was applied.`
+          sketchId,
+          outcome,
+          label
         );
         return;
       }
@@ -21239,23 +23856,21 @@ export function App() {
         );
         return;
       }
-      setSketchSolveStatus(
-        solveStatusFor(outcome, findSketch(prospective, sketchId))
-      );
       if (!outcome.converged || outcome.rolledBack) {
-        const culprits = topResidualConstraints(
+        // As for a relation: a refused value leaves the committed sketch,
+        // and its solve status, exactly as they were (I35).
+        const numeric = Number.isFinite(Number(raw));
+        const unit =
+          draft.kind === 'angle'
+            ? '°'
+            : ` ${base.units === 'inch' ? 'in' : base.units}`;
+        reportSketchConstraintRefusal(
+          base,
           prospective,
-          findSketch(prospective, sketchId),
-          outcome.constraintResiduals,
-          2
-        );
-        const culpritSuffix =
-          culprits.length > 0 ? ` Likely culprit: ${culprits.join('; ')}.` : '';
-        setSketchEditError(
-          `${spec.label} dimension conflicts with existing constraints.${culpritSuffix} Edit or remove a conflicting constraint; no change was applied.`
-        );
-        setStatus(
-          `${spec.label} dimension refused: ${solveStatusLabel(outcome)};${culpritSuffix} no change was applied.`
+          sketchId,
+          outcome,
+          `${spec.label} ${raw.trim()}${numeric ? unit : ''}`,
+          draft.constraintId ? [draft.constraintId] : []
         );
         return;
       }
@@ -21343,6 +23958,143 @@ export function App() {
    * real. An assistant patch already landing is awaited first, since its
    * commit is what the edit must be checked against.
    */
+  /**
+   * F06: runs one configuration command, checked against the document first
+   * so a refusal is answered (and nothing is committed) rather than thrown.
+   */
+  function runConfigurationCommand(command: AnyCommand): string | null {
+    const manager = managerRef.current;
+    if (!manager) return 'Editing is unavailable.';
+    try {
+      command.validate(manager.document);
+      command.apply(manager.document);
+    } catch (error) {
+      return error instanceof Error
+        ? error.message
+        : 'The configurations were not changed.';
+    }
+    return executeCommand(command)
+      ? null
+      : 'The configurations were not changed.';
+  }
+
+  /** F06: exports one configuration row, as STEP or from the mesh dialog. */
+  // F06: the bodies the mesh dialog's row writes, from that row's own build.
+  const exportRowDocument = meshExportOpen && exportRowId ? doc : null;
+  useEffect(() => {
+    if (!exportRowDocument || !exportRowId) return;
+    let current = true;
+    let target: ProjectDocument;
+    try {
+      target = documentForConfiguration(exportRowDocument, exportRowId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'That configuration cannot be built.'));
+      setExportRowBodies({
+        rowId: exportRowId,
+        version: exportRowDocument.version,
+        bodies: []
+      });
+      return;
+    }
+    void geometryRef.current
+      .exportBodies(target)
+      .then(
+        (bodies) => bodies,
+        (error: unknown) => {
+          if (current)
+            setStatus(
+              errorMessage(error, 'The configuration could not be built.')
+            );
+          return [];
+        }
+      )
+      .then((bodies) => {
+        if (current)
+          setExportRowBodies({
+            rowId: exportRowId,
+            version: exportRowDocument.version,
+            bodies
+          });
+      });
+    return () => {
+      current = false;
+    };
+  }, [exportRowDocument, exportRowId, setStatus]);
+
+  function handleExportConfigurationRow(rowId: string, kind: 'step' | 'mesh') {
+    if (kind === 'step') {
+      void handleExportStep(rowId);
+      return;
+    }
+    setExportRowId(rowId === doc?.configurations?.activeRowId ? null : rowId);
+    setMeshExportOpen(true);
+  }
+
+  const configurationActions: ConfigurationActions = {
+    create: (name) =>
+      runConfigurationCommand(
+        commandFactories.createConfigurations({
+          rowId: `configuration_${crypto.randomUUID()}`,
+          name
+        })
+      ),
+    remove: () =>
+      runConfigurationCommand(commandFactories.deleteConfigurations()),
+    addRow: (name) =>
+      runConfigurationCommand(
+        commandFactories.addConfigurationRow({
+          rowId: `configuration_${crypto.randomUUID()}`,
+          name
+        })
+      ),
+    renameRow: (rowId, name) =>
+      runConfigurationCommand(
+        commandFactories.renameConfigurationRow({ rowId, name })
+      ),
+    deleteRow: (rowId) =>
+      runConfigurationCommand(
+        commandFactories.deleteConfigurationRow({ rowId })
+      ),
+    addColumn: (column) =>
+      runConfigurationCommand(
+        commandFactories.addConfigurationColumn({ column })
+      ),
+    deleteColumn: (column) =>
+      runConfigurationCommand(
+        commandFactories.deleteConfigurationColumn({ column })
+      ),
+    setCell: (rowId, column, value) =>
+      runConfigurationCommand(
+        commandFactories.setConfigurationCell({ rowId, column, value })
+      ),
+    activate: (rowId) => {
+      const row = doc?.configurations?.rows.find((entry) => entry.id === rowId);
+      return runConfigurationCommand(
+        commandFactories.activateConfiguration(
+          { rowId },
+          row ? `Switch to ${row.name}` : undefined
+        )
+      );
+    }
+  };
+
+  /** L09: sets or clears the print clearance; answers with a refusal. */
+  function handleSetPrintClearance(value: ParamValue | null): string | null {
+    const manager = managerRef.current;
+    if (!manager) return 'Editing is unavailable.';
+    const command = commandFactories.setPrintClearance({ value });
+    try {
+      command.apply(manager.document);
+    } catch (error) {
+      return error instanceof Error
+        ? error.message
+        : 'The print clearance could not be changed.';
+    }
+    return executeCommand(command)
+      ? null
+      : 'The print clearance was not changed.';
+  }
+
   async function handleSetParameter(
     name: string,
     expression: string,
@@ -21355,13 +24107,20 @@ export function App() {
       return 'Parameter editing is unavailable.';
     }
     const request = ++parameterEditRequest.current;
+    // A name the table does not have was being added, not changed: the lane
+    // said "Parameter 2bad was not changed." of a name that never existed.
+    const existing = listParameters(manager.document).find(
+      (parameter) => parameter.name === name
+    );
     const refuse = (message: string) => {
       if (
         parameterEditRequest.current === request &&
         managerRef.current === manager
       )
         setStatus(
-          `Parameter ${parameterDisplayName(name, listParameters(manager.document).find((parameter) => parameter.name === name)?.description)} was not changed.`,
+          existing
+            ? `Parameter ${parameterDisplayName(name, existing.description)} was not changed.`
+            : `Parameter ${name} was not added.`,
           { detail: message }
         );
       return message;
@@ -21387,11 +24146,22 @@ export function App() {
         geometry.syncOnce(document)
       );
       if (!current()) return stale();
+      // A new parameter takes the quantity its own units state: `width =
+      // 40 mm` is a length, not a unitless 40.
+      const added = !listParameters(base).some((p) => p.name === name);
+      const typed =
+        quantity !== undefined || !added
+          ? quantity
+          : quantityTypedIn(
+              expression,
+              getParameterScope(base).scope,
+              base.units
+            );
       const parameterCommand = commandFactories.setParameter({
         name,
         expression,
         ...(addOnly ? { addOnly: true } : {}),
-        ...(quantity !== undefined ? { quantity } : {})
+        ...(typed !== undefined ? { quantity: typed } : {})
       });
       parameterCommand.validate(base);
       let prospective = parameterCommand.apply(base);
@@ -21474,14 +24244,17 @@ export function App() {
         (p) => p.name === name
       )?.toggle;
       // setParameter both adds and changes one; say which happened.
-      const added = !listParameters(base).some((p) => p.name === name);
-      if (toggle)
+      if (toggle) {
         setHiddenBodyIds(
           (hidden) =>
             new Set(
               [...hidden].filter((id) => !toggle.bodyIds.includes(id as BodyId))
             )
         );
+        setBodyIsolation((recorded) =>
+          releaseIsolationToParameter(recorded, toggle.bodyIds)
+        );
+      }
       setStatus(
         added ? `Added parameter ${name}.` : `Parameter ${name} updated.`
       );
@@ -21656,6 +24429,64 @@ export function App() {
       setStatus('Deleted constraint.');
     }
   }
+
+  // I38: the committed sketch is classified after every change that has no
+  // status of its own yet (a drawn entity, a held relation, a delete, an
+  // undo), so its colours and the DOF chip always describe what is on the
+  // canvas. Classification only: nothing is committed from this solve.
+  const classifySketchId = editingSketchNode?.sketchId ?? null;
+  const classifyConstraintCount = editingSketchNode?.constraints?.length ?? 0;
+  useEffect(() => {
+    const base = managerRef.current?.document;
+    if (
+      !base ||
+      !classifySketchId ||
+      !currentSketchSolveKey ||
+      sketchSolving ||
+      classifyConstraintCount === 0 ||
+      sketchSolveSnapshotRef.current?.key === currentSketchSolveKey
+    ) {
+      return;
+    }
+    const key = currentSketchSolveKey;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      geometry
+        .solveSketch(base, classifySketchId)
+        .then((outcome) => {
+          const session = interactionRef.current;
+          if (
+            cancelled ||
+            session.mode !== 'sketch' ||
+            session.session.sketchId !== classifySketchId ||
+            sketchSolveEvidenceKey(
+              managerRef.current?.document,
+              classifySketchId
+            ) !== key ||
+            sketchSolveSnapshotRef.current?.key === key
+          ) {
+            return;
+          }
+          setSketchSolveStatus(
+            solveStatusFor(outcome, findSketch(base, classifySketchId))
+          );
+        })
+        .catch(() => {
+          // A classification that cannot run leaves the chip as it was; an
+          // explicit Solve reports the error.
+        });
+    }, 200);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `geometry` and the status helpers are stable for the session
+  }, [
+    currentSketchSolveKey,
+    classifySketchId,
+    classifyConstraintCount,
+    sketchSolving
+  ]);
 
   async function handleSolveSketch() {
     setSketchEditError(null);
@@ -22006,6 +24837,18 @@ export function App() {
       case 'thread':
         // The threaded body keeps the name of the body it replaces.
         return commandFactories.threadBody({ name, ...request.thread });
+      case 'sheet-metal':
+        return commandFactories.sheetMetalBody({
+          name,
+          bodyName,
+          ...request.sheet
+        });
+      case 'standard-part':
+        return commandFactories.standardPartBody({
+          name,
+          bodyName,
+          ...request.part
+        });
       case 'modeling': {
         // Through the card's own submission builder, so a face operation
         // run in place is validated and stored exactly as the card's was.
@@ -22067,7 +24910,15 @@ export function App() {
           ...(request.count2 !== undefined ? { count2: request.count2 } : {}),
           ...(request.axisRef ? { axisRef: request.axisRef } : {}),
           // A custom repeat vector, which the axis then only stands beside.
-          ...(request.direction ? { direction: request.direction } : {})
+          ...(request.direction ? { direction: request.direction } : {}),
+          // M02: the features repeated, and the copies left out.
+          ...(request.sourceFeatureIds
+            ? { sourceFeatureIds: request.sourceFeatureIds }
+            : {}),
+          ...(request.skippedInstances
+            ? { skippedInstances: request.skippedInstances }
+            : {}),
+          ...(request.points ? { points: request.points } : {})
         });
       case 'edge-modifier':
         // Through the card's own command, so a fillet or chamfer made in
@@ -22252,6 +25103,16 @@ export function App() {
         edgeModifierValue(request, edit.name)
       );
     }
+    if (request.tool === 'sheet-metal') {
+      // M16: Bend's Done is one `updateSheetMetal`: the rule and the whole
+      // bend table in one transaction, so one undo step.
+      if (edit.data.featureKind !== 'sheet-metal') {
+        throw new Error(`${edit.name} cannot be edited this way.`);
+      }
+      return commandFactories.updateSheetMetal(
+        sheetMetalUpdate(edit.featureId, edit.data, request.sheet)
+      );
+    }
     const definition = requestNewAxis(request);
     if (!definition) {
       const update = inPlaceFeatureUpdate(edit, resolveNewAxis(request, null)!);
@@ -22309,7 +25170,24 @@ export function App() {
       : null,
     datumLabel: (featureId) =>
       (doc && findFeature(doc, featureId)?.name) ?? 'Datum axis',
+    // M02: a pattern on sketch points reads where each point stands.
+    sketchPoints: (sketchId) =>
+      doc
+        ? sketchPointSpots(
+            doc,
+            availableSketchViews,
+            sketchId,
+            sketchValueResolver(parameterScope.scope, doc.units)
+          )
+        : [],
     bodyBounds: (bodyId) => inPlaceBodyPick(bodyId),
+    // M17 (schema v71): the hole a standard part is inserted into.
+    holeFeature: (featureId) =>
+      doc ? standardPartHoleSource(doc, representations, featureId) : null,
+    liveBodyIds: () =>
+      Object.values(representations)
+        .filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId))
+        .map((body) => body.bodyId),
     evaluate: (value) =>
       evalParamValue(value, parameterScope.scope, doc?.units),
     imagePlaneBasis,
@@ -22327,7 +25205,20 @@ export function App() {
         ? inPlaceEditSeedFor(current, feature)
         : null;
     },
-    derive: (document) => syncCandidate(document),
+    // A pattern's frame is built as the live rebuild after its Done will
+    // be, with the live lineage demand: Done commits the frame's own result
+    // (see `commit`), and that rebuild then restores the frame instead of
+    // replaying the whole history in the other lineage mode, which built a
+    // large grid a second time.
+    derive: (document, signal) =>
+      syncCandidate(
+        document,
+        undefined,
+        isInPlacePatternTool(inPlaceRef.current.tool)
+          ? geometry.liveLineageDemand()
+          : undefined,
+        { signal }
+      ),
     buildCommand: (request, title, edit) => {
       if (edit) {
         const command = inPlaceEditCommand(request, edit);
@@ -22340,10 +25231,16 @@ export function App() {
           resultBodyId: inPlaceEditResultBodyId(request, edit)
         };
       }
-      const command = inPlaceCommandFor(request, title);
+      // A pattern's frame is named as its commit names it, so Done can land
+      // this very command and keep the rebuild the frame already made.
+      const command = inPlaceCommandFor(
+        request,
+        request.tool === 'pattern' ? newFeatureName(title) : title
+      );
       const datum = inPlaceDatum(request, command);
       const base = managerRef.current?.document;
       return {
+        command,
         validate: (document) => command.validate(document),
         apply: (document) => command.apply(document),
         resultBodyId: inPlaceResultBodyId(request, command),
@@ -22355,7 +25252,7 @@ export function App() {
           : {})
       };
     },
-    commit: (request, title, edit, withdrawn) => {
+    commit: (request, title, edit, withdrawn, previewed) => {
       // A command closed while its Done validates (another tool, a new
       // selection) withdraws the candidate: nothing lands after it is gone.
       if (edit) {
@@ -22372,7 +25269,10 @@ export function App() {
         return;
       }
       const name = newFeatureName(title);
-      const command = inPlaceCommandFor(request, name);
+      // The frame Done was pressed on built this pattern already; see below.
+      const previewedPattern =
+        request.tool === 'pattern' ? (previewed?.built.command ?? null) : null;
+      const command = previewedPattern ?? inPlaceCommandFor(request, name);
       const datum = inPlaceDatum(request, command);
       if (datum) {
         // A datum has no body to validate: its resolved frame or line is
@@ -22393,13 +25293,26 @@ export function App() {
       const resultBodyId = inPlaceResultBodyId(request, command);
       if (request.tool === 'pattern' && resultBodyId) {
         // Through the pattern runner, so a large pattern shows its progress
-        // and can be stopped, as the card's did.
+        // and can be stopped, as the card's did. Its rebuild runs in a
+        // disposable worker so Cancel can stop it; that worker starts cold
+        // and replays the whole history, which on a 10 × 10 grid repeated a
+        // minute-long preview. The preview's own exact rebuild of this same
+        // command is judged instead while the model has not moved.
         return runPattern(command, {
           featureName: name,
           resultBodyId,
           successMessage: commandOutcomeMessage(command.label),
           onSuccess: finishFeatureCreation,
-          cancelled: withdrawn
+          cancelled: withdrawn,
+          ...(previewedPattern && previewed
+            ? {
+                prebuilt: {
+                  projectId: previewed.document.projectId,
+                  version: previewed.baseVersion,
+                  derived: previewed.derived
+                }
+              }
+            : {})
         }).then((outcome) => outcome === 'committed');
       }
       // The command stays open until this lands: refused or held off by
@@ -22426,6 +25339,9 @@ export function App() {
   useEffect(() => {
     if (!keypadWithinReach || prefersSavingData()) return;
     LazyNumericKeypad.preload().catch(() => undefined);
+    // The command bars a sketch region or running command opens next.
+    InPlaceCommandBar.preload().catch(() => undefined);
+    ExtrudeCommand.preload().catch(() => undefined);
   }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
@@ -22572,6 +25488,155 @@ export function App() {
   >(null);
   const inPlaceSpec = inPlace.spec;
   const inPlaceUnits = doc?.units ?? 'mm';
+  // M16: Bend. Started on a body rather than from History, it becomes the
+  // edit of that body's sheet-metal feature, as its History row would arm.
+  const bendBodyId =
+    inPlace.tool === 'bend' && !inPlace.editing
+      ? (inPlace.slots.bodies[0]?.bodyId ?? null)
+      : null;
+  useEffect(() => {
+    if (!bendBodyId) return;
+    const current = managerRef.current?.document;
+    if (!current) return;
+    const feature = listFeaturesInOrder(current).find(
+      (candidate) =>
+        candidate.bodyId === bendBodyId &&
+        candidate.data.featureKind === 'sheet-metal'
+    );
+    if (!feature) {
+      inPlaceRef.current.setPicks({ bodies: [] });
+      setStatus('Bend works on a sheet-metal body: make one with Sheet metal.');
+      return;
+    }
+    applyHistorySelection(feature.id, current);
+    // applyHistorySelection reads refs and the live document only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bendBodyId]);
+  const bendSheet =
+    inPlace.tool === 'bend' &&
+    inPlaceEditing?.data.featureKind === 'sheet-metal'
+      ? inPlaceEditing
+      : null;
+  const bendFeatureId = bendSheet?.featureId ?? null;
+  const bendBodyOfFeature = bendSheet?.resultBodyId ?? null;
+  // Each Bend opens on the flat sheet its lines are picked on.
+  useEffect(() => {
+    setBendFold(0);
+  }, [bendFeatureId, inPlace.sessionId]);
+  const bendBlankView = bendSheet
+    ? availableSketchViews.find(
+        (view) =>
+          bendSheet.data.featureKind === 'sheet-metal' &&
+          view.sketchId === bendSheet.data.sketchId
+      )
+    : undefined;
+  /**
+   * While the sheet is shown flat, a click on it (not on a line) holds the
+   * region it lands in fixed: the click is read on the sheet's mid-plane.
+   */
+  const bendPlacementPlane = useMemo(() => {
+    if (!bendBlankView || bendFold !== 0) return null;
+    const { basis } = bendBlankView;
+    const half =
+      ((inPlace.values.thickness ?? 0) / 2) *
+      (inPlace.options.side === 'negative' ? -1 : 1);
+    return {
+      origin: {
+        x: basis.origin.x + basis.normal.x * half,
+        y: basis.origin.y + basis.normal.y * half,
+        z: basis.origin.z + basis.normal.z * half
+      },
+      normal: basis.normal
+    };
+  }, [bendBlankView, bendFold, inPlace.values.thickness, inPlace.options.side]);
+  function pickBendFixedPoint(point: Vector3) {
+    if (!bendBlankView) return;
+    const local = sketchPointOf(bendBlankView.basis, point);
+    if (!onBlank(local, bendBlankView.regions)) {
+      setStatus('Click inside the flat sheet to hold that region fixed.');
+      return;
+    }
+    inPlace.setOption(FIXED_POINT_OPTION, fixedPointText(local));
+  }
+  // The fold slider: the previewed feature folded that far, from the
+  // adapter, standing in for its body. 100 % is the preview itself.
+  useEffect(() => {
+    if (
+      !bendFeatureId ||
+      !bendBodyOfFeature ||
+      !previewDoc ||
+      bendFold >= 100
+    ) {
+      setBendFoldStandIn(null);
+      return;
+    }
+    let live = true;
+    const timer = window.setTimeout(() => {
+      geometry
+        .sheetMetalFoldPreview(previewDoc, bendFeatureId, bendFold / 100)
+        .then((folded) => {
+          if (!live) return;
+          setBendFoldStandIn({
+            bodyId: bendBodyOfFeature,
+            replaces: [bendBodyOfFeature],
+            color:
+              previewDoc.derived.bodyRepresentations[bendBodyOfFeature]
+                ?.color ?? '#94a3b8',
+            parts: [
+              {
+                key: `sheet-fold:${bendFeatureId}:${bendFold}`,
+                mesh: {
+                  kind: 'mesh',
+                  vertices: Float32Array.from(folded.positions),
+                  indices: Uint32Array.from(folded.indices)
+                },
+                matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+              }
+            ]
+          });
+        })
+        .catch(() => {
+          // A fold that does not build here shows the stored preview.
+          if (live) setBendFoldStandIn(null);
+        });
+    }, 60);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
+    // `geometry` is stable for the workspace's life.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bendFeatureId, bendBodyOfFeature, previewDoc, bendFold]);
+  // Read over the feature as the model has it now, as the request is.
+  const bendSaved = bendSheet
+    ? ((doc ? findFeature(doc, bendSheet.featureId)?.data : undefined) ??
+      bendSheet.data)
+    : undefined;
+  const bendTable =
+    bendSaved?.featureKind === 'sheet-metal'
+      ? bendRows(inPlace.slots.path, inPlace.options, { saved: bendSaved })
+      : null;
+  const bendMissingLines = useMemo(
+    () =>
+      new Set(
+        doc && bendTable
+          ? bendTable
+              .filter(
+                (row) =>
+                  !sweepCurveExists(
+                    doc,
+                    row.line.sketchId,
+                    row.line.entityId,
+                    true
+                  )
+              )
+              .map((row) => row.line.entityId)
+          : []
+      ),
+    // The rows' lines, as ids: the table itself is rebuilt each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc, bendTable?.map((row) => row.line.entityId).join('|')]
+  );
   // A command canceled mid-drag never sees the release: the next one must
   // not start with its arrows still waiting for it.
   const inPlaceSessionKey = inPlace.sessionId;
@@ -22961,7 +26026,22 @@ export function App() {
       inPlaceUnits,
       parameterScope.scope
     );
-    if (!evaluation.ok || evaluation.value === undefined) return false;
+    if (!evaluation.ok || evaluation.value === undefined) {
+      // Refused, so Done waits: it would take the value held while the
+      // field shows another. The field names the problem and offers to
+      // define a missing name.
+      const missing = previewExpression(
+        text,
+        parameterScope.scope
+      ).undefinedParameter;
+      inPlace.refuseValue(
+        valueId,
+        missing
+          ? `${valueSpec.label}: ${missing} is not defined yet.`
+          : `${valueSpec.label} was not applied: ${(evaluation.error ?? 'not a number or expression').replace(/\.$/, '')}.`
+      );
+      return false;
+    }
     // Expressions stay parametric in the stored feature.
     const accepted = inPlace.setValue(
       valueId,
@@ -22989,7 +26069,8 @@ export function App() {
   /** A face-list command's faces, lit as a sweep's are. */
   const inPlaceFocusFaces = useMemo<TopologySelection[] | null>(
     () =>
-      inPlaceSpec?.faceMode === 'many' && inPlace.slots.faces.length > 0
+      inPlaceFaceMode(inPlaceSpec, inPlace.options) === 'many' &&
+      inPlace.slots.faces.length > 0
         ? inPlace.slots.faces.map((face) => ({
             bodyId: face.bodyId,
             kind: 'face',
@@ -22997,12 +26078,25 @@ export function App() {
             hash: face.hash
           }))
         : null,
-    [inPlaceSpec, inPlace.slots.faces]
+    [inPlaceSpec, inPlace.options, inPlace.slots.faces]
   );
   /** The command's handles, with how each chip reads its value. */
   const inPlaceHandles = useMemo(
     () =>
       inPlace.handles.map((handle) => {
+        if (handle.kind === 'instance') {
+          // M02: a copy's skip toggle reads its label, and whether it is in.
+          const { label, skipped } = handle.params;
+          return {
+            ...handle,
+            value: skipped ? 1 : 0,
+            format: () => label,
+            describe: () =>
+              skipped
+                ? `Copy ${label}, skipped · bring it back`
+                : `Copy ${label} · skip it`
+          };
+        }
         const valueSpec = inPlaceSpec?.values.find(
           (candidate) => candidate.id === handle.valueId
         );
@@ -23054,7 +26148,7 @@ export function App() {
   const regionExtrudeLastValue =
     interaction.mode === 'region' ? (interaction.lastValue ?? 0) : 0;
   const regionExtrudeHandles = useMemo(() => {
-    if (inPlace.active) return [];
+    if (inPlace.active || !extrudeBarReady) return [];
     // An edit's region is its stored profile (the sketch's first region for
     // one stored before profiles); a new extrude's, the one its arrow is on.
     const edited =
@@ -23147,6 +26241,7 @@ export function App() {
     regionExtrudeState,
     extrudeEditFeature,
     inPlace.active,
+    extrudeBarReady,
     availableSketchViews,
     inPlaceUnits
   ]);
@@ -23200,10 +26295,14 @@ export function App() {
       inPlaceTool === 'fillet' || inPlaceTool === 'chamfer' ? inPlaceTool : null
     );
   }, [inPlaceTool]);
+  const featurePicking = takesFeatureFaces(inPlaceSpec, inPlace.options);
+  useEffect(() => {
+    setInPlaceFeaturePick(inPlace.active && featurePicking);
+  }, [inPlace.active, featurePicking]);
   // A body tool's picked bodies are the selection: each wears its pick
   // number in the viewport, base first, as the boolean card's list did.
   const inPlaceBodyIds =
-    inPlace.active && inPlaceSpec?.bodyMode
+    inPlace.active && inPlaceBodyMode(inPlaceSpec, inPlace.options)
       ? inPlace.slots.bodies.map((body) => body.bodyId).join(',')
       : null;
   // Again after an undo or redo, which clears the selection while the
@@ -23318,9 +26417,47 @@ export function App() {
         : null,
     [inPlaceSpec, inPlace.slots, inPlace.axisCandidates]
   );
+  // M01: where the Hole tool places its hole; sketch points are picked.
+  const inPlacePlace = inPlace.options.place;
   const inPlaceCurveCandidates = useMemo(() => {
     if (!doc || !inPlaceSpec?.wantsPath) return null;
     const resolve = sketchValueResolver(parameterScope.scope, doc.units);
+    // M16: Bend offers the straight lines on the blank's plane, the
+    // construction lines a bend is usually drawn as among them.
+    if (inPlaceSpec.id === 'bend') {
+      const blank =
+        inPlaceEditing?.data.featureKind === 'sheet-metal'
+          ? inPlaceEditing.data.sketchId
+          : null;
+      if (!blank) return null;
+      const views = availableSketchViews.filter((view) =>
+        featurePrecedes(
+          producingFeatureOf({ sketchId: view.sketchId }),
+          inPlaceEditing!.featureId
+        )
+      );
+      return bendLineCandidates(doc, views, blank, (value) => resolve(value));
+    }
+    // M02: a pattern on sketch points picks point entities, not curves.
+    if (inPlaceSpec.id === 'point-pattern') {
+      return sketchPointCandidates(doc, availableSketchViews, (value) =>
+        resolve(value)
+      );
+    }
+    // M01: a hole drilled at sketch points picks them too, only once so
+    // placed; an edit offers only sketches made before it.
+    if (inPlaceSpec.id === 'hole') {
+      if (inPlacePlace !== 'points') return null;
+      const views = inPlaceEditing
+        ? availableSketchViews.filter((view) =>
+            featurePrecedes(
+              producingFeatureOf({ sketchId: view.sketchId }),
+              inPlaceEditing.featureId
+            )
+          )
+        : availableSketchViews;
+      return sketchPointCandidates(doc, views, (value) => resolve(value));
+    }
     // Every sketch's curves, the profile's own included: one sketch may hold
     // both a closed profile and the open spine it sweeps along. An edit
     // offers only sketches made before its feature, as it takes profiles.
@@ -23333,7 +26470,14 @@ export function App() {
         )
       : availableSketchViews;
     return sketchCurveCandidates(doc, views, (value) => resolve(value));
-  }, [doc, inPlaceSpec, availableSketchViews, parameterScope, inPlaceEditing]);
+  }, [
+    doc,
+    inPlaceSpec,
+    availableSketchViews,
+    parameterScope,
+    inPlaceEditing,
+    inPlacePlace
+  ]);
   const inPlaceCurvePicker = useMemo(
     () =>
       inPlaceCurveCandidates
@@ -23504,27 +26648,31 @@ export function App() {
       if (result.cleared) reordered = true;
       return result.kept;
     };
-    const curves = (picks: readonly CurvePick[]) =>
-      ordered(
-        picks.map((pick) =>
-          sweepCurveExists(doc, pick.sketchId, pick.entityId) ? pick : null
-        )
+    // A bend table's rows stand alone (M16): a row whose line is gone is
+    // kept, marked, for the user to remove; the healthy ones never go.
+    const curves = (picks: readonly CurvePick[]) => {
+      const result = recheckedCurvePicks(
+        picks,
+        (pick) =>
+          sweepCurveExists(
+            doc,
+            pick.sketchId,
+            pick.entityId,
+            inPlace.tool === 'bend',
+            inPlace.tool === 'point-pattern' || inPlace.tool === 'hole'
+          ),
+        inPlace.tool === 'bend'
       );
+      if (result.cleared) reordered = true;
+      return result.kept;
+    };
     // Only against a body whose topology is published: one still being
     // analysed says nothing yet. A face is found as the feature rebuilds
     // it, by lineage first, and is read afresh where it stands now (its
     // hash, its plane, a saved hole's place on it), so its handles follow
     // a face an update moved.
     let facesMoved = false;
-    const placed = (pick: FacePick) =>
-      JSON.stringify([
-        pick.hash,
-        pick.topologyId,
-        pick.normal,
-        pick.centroid,
-        pick.center,
-        pick.point
-      ]);
+    const placed = facePickKey;
     const faces = inPlaceEditPicks.faces.flatMap((pick) => {
       const body = representations[pick.bodyId];
       if (!body?.topology) return [pick];
@@ -24537,7 +27685,7 @@ export function App() {
       target.hash,
       {
         localBlendGroup: localBlendGroupBoss(
-          base.derived.bodyRepresentations[target.bodyId as BodyId],
+          ownEntry(base.derived.bodyRepresentations, target.bodyId as BodyId),
           target.concavity
         )
       }
@@ -24682,7 +27830,8 @@ export function App() {
       z: value[2]
     });
     const bodyId = target.bodyId as BodyId;
-    const faces = document.derived.bodyRepresentations[bodyId]?.topology?.faces;
+    const faces = ownEntry(document.derived.bodyRepresentations, bodyId)
+      ?.topology?.faces;
     const wall = faces
       ? findResizedCylinderFace(
           faces,
@@ -24752,7 +27901,10 @@ export function App() {
       y: value[1],
       z: value[2]
     });
-    const body = document.derived.bodyRepresentations[target.bodyId as BodyId];
+    const body = ownEntry(
+      document.derived.bodyRepresentations,
+      target.bodyId as BodyId
+    );
     if (!body) return;
     const wall = findHistoryBoreFace(
       body,
@@ -25364,6 +28516,7 @@ export function App() {
     const op = interaction.op;
     const resultBodyId =
       command.payload.ids?.bodyId ?? command.payload.targetBodyId;
+    const newFeatureId = command.payload.ids?.featureId;
     const facesBefore =
       representations[command.payload.targetBodyId]?.topology?.faces;
     // Judged as the preview judges it: the kernel names a refusal after the
@@ -25379,7 +28532,8 @@ export function App() {
         if (op === 'fillet') {
           pendingBlendRearmRef.current = {
             bodyId: resultBodyId,
-            before: facesBefore
+            before: facesBefore,
+            featureId: newFeatureId
           };
         }
       },
@@ -25557,9 +28711,10 @@ export function App() {
     // As for a new blend: the preview stays until the commit or a refusal.
     stopEdgePreview();
     const removing = size <= 1e-9;
-    const sourceFace = base.derived.bodyRepresentations[
+    const sourceFace = ownEntry(
+      base.derived.bodyRepresentations,
       current.target.bodyId as BodyId
-    ]?.topology?.faces.find(
+    )?.topology?.faces.find(
       (face) => face.topologyId === current.target.topologyId
     );
     const committedDirectEditFeatureId =
@@ -26034,6 +29189,7 @@ export function App() {
     if (!open) {
       return false;
     }
+    setKeypadRangeError(null);
     if (open.kind === 'command' && open.commandValueId) {
       // Back to the value the handle showed when the chip was tapped.
       const valueId = open.commandValueId;
@@ -26241,7 +29397,10 @@ export function App() {
     }
     const target = current.target;
     const bodyId = target.bodyId as BodyId;
-    const face = base.derived.bodyRepresentations[bodyId]?.topology?.faces.find(
+    const face = ownEntry(
+      base.derived.bodyRepresentations,
+      bodyId
+    )?.topology?.faces.find(
       (candidate) =>
         candidate.topologyId === target.topologyId ||
         (target.hash !== undefined && candidate.hash === target.hash)
@@ -26250,7 +29409,10 @@ export function App() {
       return null;
     }
     const capBoundary =
-      base.derived.bodyRepresentations[bodyId]?.topology?.edges.filter((e) =>
+      ownEntry(
+        base.derived.bodyRepresentations,
+        bodyId
+      )?.topology?.edges.filter((e) =>
         e.adjacentFaceHashes?.includes(face.hash)
       ) ?? [];
     const sampledShoulderCap =
@@ -26259,12 +29421,12 @@ export function App() {
       (face.geometry?.normal?.z ?? 0) > 0.999 &&
       capBoundary.length > 0 &&
       capBoundary.every((e) => e.curve?.type === 'CIRCLE') &&
-      base.derived.bodyRepresentations[bodyId]?.topology?.faces.some(
+      ownEntry(base.derived.bodyRepresentations, bodyId)?.topology?.faces.some(
         (f) =>
           f.geometry?.surfaceType === 'torus' &&
           f.geometry.featureType === 'blend'
       ) &&
-      base.derived.bodyRepresentations[bodyId]?.topology?.faces.some(
+      ownEntry(base.derived.bodyRepresentations, bodyId)?.topology?.faces.some(
         (f) =>
           f.geometry?.surfaceType === 'cylinder' &&
           f.geometry.featureType === 'blend'
@@ -26324,7 +29486,7 @@ export function App() {
       command: plan.command,
       bodyId,
       editedFeatureId: null,
-      successMessage: `Offset face by ${Math.round(offset * 100) / 100} ${base.units}.`,
+      successMessage: offsetFaceCommitMessage(offset, base.units),
       ...(plan.travelHint ? { travelHint: plan.travelHint } : {})
     };
   }
@@ -26399,7 +29561,11 @@ export function App() {
   function handleOffsetCommit(
     offset: number,
     exact?: ParamValue,
-    options?: { keepingLastValid?: boolean }
+    options?: {
+      keepingLastValid?: boolean;
+      /** The Total the chip read at release, when it read one. */
+      total?: number;
+    }
   ): OffsetCommitOutcome {
     stopOffsetRestCheck();
     // The arrow rig is shared: in region mode its drag is an extrude height.
@@ -26471,10 +29637,22 @@ export function App() {
       if (!retakenRelease.commit(retaken)) return 'blocked';
       return 'started';
     }
+    // A plain face offset released from a Total reading names that Total
+    // beside the change its history row records.
+    const successMessage =
+      plan.editedFeatureId === null && options?.total !== undefined
+        ? offsetFaceCommitMessage(
+            offset,
+            managerRef.current?.document.units ?? '',
+            options.total
+          )
+        : reuse
+          ? reuse.successMessage
+          : plan.successMessage;
     void executeValidatedDirectEdit(
       reuse ? reuse.command : plan.command,
       reuse ? reuse.bodyId : plan.bodyId,
-      reuse ? reuse.successMessage : plan.successMessage,
+      successMessage,
       offset,
       undefined,
       reuse ? reuse.validationTargets : plan.validationTargets
@@ -26545,6 +29723,7 @@ export function App() {
     const nextTarget: FaceTarget = {
       ...stableTarget,
       topologyId: moved.topologyId,
+      movedFrom: target.topologyId,
       hash: moved.hash,
       ...(moved.reference ? { reference: moved.reference } : {}),
       point: shift(target.point),
@@ -26647,7 +29826,7 @@ export function App() {
       return;
     }
     const nodeId = featureNodeIdForBody(commit.bodyId);
-    const feature = nodeId ? doc.nodes[nodeId] : undefined;
+    const feature = nodeId ? ownEntry(doc.nodes, nodeId) : undefined;
     if (
       feature?.kind !== 'feature' ||
       feature.data.featureKind !== 'primitive' ||
@@ -26862,7 +30041,7 @@ export function App() {
     if (!current) return;
     // A datum plane's row is a plane an in-place Mirror or Split can take:
     // the way to reach one a body hides in the viewport.
-    const clicked = current.nodes[nodeId];
+    const clicked = ownEntry(current.nodes, nodeId);
     // So is it a Plane's or Axis's source, or a plane for a picture.
     if (
       inPlaceRef.current.active &&
@@ -26907,7 +30086,7 @@ export function App() {
       selectedFeatureNodeId === nodeId
         ? null
         : nodeId;
-    const node = current.nodes[nodeId];
+    const node = ownEntry(current.nodes, nodeId);
     if (node?.kind !== 'feature') {
       setStatus('This history feature is no longer available to edit.');
       return;
@@ -27019,7 +30198,7 @@ export function App() {
     // running against geometry the panel no longer shows.
     dispatchInteraction({ type: 'clear' });
     selectFeatureNode(next, 'pinned');
-    const node = next ? current.nodes[next] : undefined;
+    const node = next ? ownEntry(current.nodes, next) : undefined;
 
     const sourceSketchId =
       node?.kind === 'feature' &&
@@ -27068,7 +30247,7 @@ export function App() {
       setSelectedProfiles([]);
     }
     const visible = (id: BodyId) => {
-      const result = current.derived.bodyRepresentations[id];
+      const result = ownEntry(current.derived.bodyRepresentations, id);
       return Boolean(result && !result.consumed && !hiddenBodyIds.has(id));
     };
     // A feature still on screen selects its body. One a later feature
@@ -27169,7 +30348,7 @@ export function App() {
       return;
     }
     const declared =
-      doc.derived.bodyRepresentations[feature.bodyId]
+      ownEntry(doc.derived.bodyRepresentations, feature.bodyId)
         ?.importedStepDeclaredSolidCount ?? 0;
     if (declared === 0) {
       return;
@@ -27239,46 +30418,83 @@ export function App() {
     });
   }
 
-  function handleDeleteImportedFace(selection: TopologySelection) {
+  /**
+   * Heals one face by a replayable direct edit: a face of an imported STEP
+   * part, which has no history to delete, or a face a subtract cut, whose
+   * inferred feature (the cutting tool) the cut still needs.
+   */
+  /** The delete gestures' collaborators, bound to the manager they began on. */
+  function deletionHost(manager: CommandManager, base: ProjectDocument) {
+    return {
+      manager,
+      base,
+      isCurrent: () => managerRef.current === manager,
+      runTransaction: validatedFeature.runTransaction,
+      executeTransaction,
+      setStatus: (message: string) => setStatus(message),
+      announce: (message: string) => announce(message),
+      healed: (message: string) => {
+        clearSelection();
+        announce(message, { label: 'Undo', run: handleUndo });
+      },
+      offerDetailCascade: (
+        name: string,
+        featureIds: readonly FeatureId[],
+        dependents: readonly { featureId: FeatureId; name: string }[],
+        message: string
+      ) => offerDetailCascade(manager, name, featureIds, dependents, message)
+    };
+  }
+
+  /**
+   * Heals one face by a replayable direct edit: a face of an imported STEP
+   * part, which has no history to delete, a face a subtract cut, whose
+   * inferred feature (the cutting tool) the cut still needs, or a face no
+   * step can be shown to own.
+   */
+  function handleDeleteImportedFace(
+    selection: TopologySelection,
+    origin: 'imported' | 'cut' | 'orphan' = 'imported'
+  ) {
     // A pick may demand lineage while a complete validated body is already
     // displayed. The candidate rebuild re-resolves its face before healing.
     if (!requireDisplayedGeometryComplete()) return;
     const manager = managerRef.current;
     const base = manager?.document;
-    if (!base) return;
-    void import('./lib/featureDeletion')
-      .then(({ importedFaceDeletion }) => {
-        const current = manager.document;
-        if (
-          managerRef.current !== manager ||
-          current.projectId !== base.projectId ||
-          current.version !== base.version
-        ) {
-          setStatus(
-            'The model changed. Select the face again before deleting it.'
-          );
-          return;
-        }
-        const removal = importedFaceDeletion(current, selection);
-        void validatedFeature.runTransaction([removal.command], {
-          label: removal.command.label,
-          targets: [removal.target],
-          validatingMessage: 'Checking imported feature removal…',
-          successMessage: removal.successMessage,
-          onFailure: (message) => announce(message),
-          onSuccess: () => {
-            clearSelection();
-            announce(removal.successMessage, {
-              label: 'Undo',
-              run: handleUndo
-            });
-          }
-        });
-      })
+    if (!manager || !base) return;
+    void featureDeletionRun()
+      .then((run) =>
+        run.deleteFace(deletionHost(manager, base), selection, origin)
+      )
       .catch((error: unknown) =>
         setStatus(
-          errorMessage(error, 'Could not remove this imported feature.')
+          errorMessage(
+            error,
+            origin === 'cut'
+              ? 'Could not fill this cut.'
+              : origin === 'orphan'
+                ? 'Could not delete this face.'
+                : 'Could not remove this imported feature.'
+          )
         )
+      );
+  }
+
+  /**
+   * Several faces of one body, picked with Shift or swept with a box: delete
+   * them together and heal the body, so every wall of a window or pocket
+   * deleted at once fills it. A replayable, undoable direct edit.
+   */
+  function handleDeleteFaces(selections: readonly TopologySelection[]) {
+    if (!requireDisplayedGeometryComplete()) return;
+    const manager = managerRef.current;
+    const base = manager?.document;
+    if (!manager || !base) return;
+    const faces = selections.map((selection) => ({ ...selection }));
+    void featureDeletionRun()
+      .then((run) => run.deleteFaces(deletionHost(manager, base), faces))
+      .catch((error: unknown) =>
+        setStatus(errorMessage(error, 'Could not delete these faces.'))
       );
   }
 
@@ -27328,33 +30544,17 @@ export function App() {
     const manager = managerRef.current;
     const base = manager?.document;
     const feature = base && findFeature(base, featureId);
-    if (base && feature && isRemovableDetail(feature)) {
-      void import('./lib/featureDeletion')
-        .then(({ nativeFeatureDeletion }) => {
-          const current = manager.document;
-          if (
-            managerRef.current !== manager ||
-            current.projectId !== base.projectId ||
-            current.version !== base.version
-          ) {
-            setStatus(
-              'The model changed. Select the feature again before deleting it.'
-            );
-            return;
-          }
-          // A geometry-only echo may replace the document object while the
-          // module loads. Its project/revision still owns this deletion.
-          const removal = nativeFeatureDeletion(current, feature);
-          void validatedFeature.runTransaction([removal.command], {
-            label: `Delete ${name}`,
-            targets: [],
-            validateDerived: removal.validateDerived,
-            validatingMessage: `Checking removal of ${name}…`,
-            successMessage: deleteFeatureToastMessage(name, dependentCount),
-            onFailure: (message) => announce(message),
-            onSuccess: finish
-          });
-        })
+    if (manager && base && feature && isRemovableDetail(feature)) {
+      void featureDeletionRun()
+        .then((run) =>
+          run.deleteDetail(
+            deletionHost(manager, base),
+            feature,
+            name,
+            dependentCount,
+            finish
+          )
+        )
         .catch((error: unknown) =>
           setStatus(errorMessage(error, 'Could not remove this feature.'))
         );
@@ -27407,9 +30607,38 @@ export function App() {
     commitDeleteFeatures(featureIds, dependents.length);
   }
 
+  /**
+   * A detail delete refused because later details or edits were built on its
+   * geometry: offer to delete those too, as a refused suppression offers to
+   * pause its branch. Any other refusal is announced as before.
+   */
+  function offerDetailCascade(
+    owner: CommandManager,
+    name: string,
+    featureIds: readonly FeatureId[],
+    dependents: readonly { featureId: FeatureId; name: string }[],
+    message: string
+  ) {
+    if (managerRef.current !== owner || dependents.length === 0) {
+      announce(message);
+      return;
+    }
+    const { projectId, version } = owner.document;
+    setPendingDetailCascade({
+      projectId,
+      version,
+      manager: owner,
+      name,
+      featureIds: [...featureIds],
+      dependents: [...dependents]
+    });
+  }
+
   function commitDeleteFeatures(
     featureIds: readonly FeatureId[],
-    dependentCount: number
+    dependentCount: number,
+    /** The detail a cascade grew from, named again if it is refused. */
+    cascadeName?: string
   ) {
     const manager = managerRef.current;
     const base = manager?.document;
@@ -27433,34 +30662,16 @@ export function App() {
         { repeatsStatusAt: lastStatusAtRef.current }
       );
     };
-    void import('./lib/featureDeletion')
-      .then(({ batchFeatureDeletion }) => {
-        const current = manager.document;
-        if (
-          managerRef.current !== manager ||
-          current.projectId !== base.projectId ||
-          current.version !== base.version
-        ) {
-          setStatus(
-            'The model changed. Select the features again before deleting them.'
-          );
-          return;
-        }
-        const removal = batchFeatureDeletion(current, featureIds);
-        if (removal.validateDerived) {
-          void validatedFeature.runTransaction(removal.commands, {
-            label: removal.label,
-            targets: [],
-            validateDerived: removal.validateDerived,
-            validatingMessage: `Checking removal of ${countLabel(featureIds.length, 'feature', 'features')}…`,
-            successMessage: message,
-            onFailure: (failure) => announce(failure),
-            onSuccess: finish
-          });
-          return;
-        }
-        if (executeTransaction(removal.label, removal.commands)) finish();
-      })
+    void featureDeletionRun()
+      .then((run) =>
+        run.deleteFeatures(
+          deletionHost(manager, base),
+          featureIds,
+          message,
+          cascadeName,
+          finish
+        )
+      )
       .catch((error: unknown) =>
         setStatus(errorMessage(error, 'Could not delete these features.'))
       );
@@ -27580,7 +30791,32 @@ export function App() {
       });
     },
     selectBodies(bodyIds, additive) {
-      if (bodyIds.length === 0) return;
+      // An open body command owns the picks: the folder goes to its slots,
+      // as a body row's click does, and the selection follows them.
+      const command = inPlaceRef.current;
+      if (command.active && command.spec?.bodyMode) {
+        const plan = folderCommandPicks(
+          command.slots.bodies.map((body) => body.bodyId),
+          bodyIds.filter((bodyId) => inPlaceEditTakesBody(bodyId)),
+          command.spec.bodyMode
+        );
+        if (plan.kind === 'too-many') {
+          setStatus(
+            `${command.spec.title} takes one body; pick it in the list or the view.`
+          );
+          return;
+        }
+        if (plan.kind === 'toggle') {
+          for (const bodyId of plan.bodies) {
+            const body = inPlaceBodyPick(bodyId);
+            if (body) command.pickBody(body);
+          }
+        }
+        return;
+      }
+      // ⌘/Shift on an empty folder adds nothing; a plain click on one still
+      // replaces the selection, so the old pick does not linger.
+      if (additive && bodyIds.length === 0) return;
       if (moveHasUnappliedChange(movePreview)) {
         setStatus('Apply or cancel the move before selecting a folder.');
         return;
@@ -27593,9 +30829,7 @@ export function App() {
       setSelectedEdges([]);
       setSelectedTopology(null);
       setSelectedSketchProfileId(null);
-      const nextIds = additive
-        ? [...new Set([...selectedBodyIds, ...bodyIds])]
-        : [...bodyIds];
+      const nextIds = folderClickSelection(selectedBodyIds, bodyIds, additive);
       setSelectedBodyIds(nextIds);
       if (nextIds.length === 1) {
         setSelectedTopology({ bodyId: nextIds[0]!, kind: 'body' });
@@ -27604,7 +30838,9 @@ export function App() {
         setSelectedFeatureNode(null);
       }
       setStatus(
-        `${nextIds.length} ${nextIds.length === 1 ? 'body' : 'bodies'} selected.`
+        nextIds.length > 0
+          ? `${nextIds.length} ${nextIds.length === 1 ? 'body' : 'bodies'} selected.`
+          : 'Body selection cleared.'
       );
     }
   };
@@ -28024,10 +31260,11 @@ export function App() {
   }
 
   function handleResumeHistory() {
+    const history = liveFeatures();
     moveRollbackMarker(
-      rollbackMarkerMove(liveFeatures(), null),
+      rollbackMarkerMove(history, null),
       'Resume full history',
-      'Full history resumed. Manually suppressed features remain suppressed.'
+      resumeHistoryMessage(history)
     );
   }
 
@@ -28056,7 +31293,8 @@ export function App() {
     x: number,
     y: number,
     entries: { item: ContextMenuState['items'][number]; run(): void }[],
-    heading?: string
+    heading?: string,
+    face?: ViewportMenuState['face']
   ) {
     contextMenuActionsRef.current = Object.fromEntries(
       entries.map((entry) => [entry.item.id, entry.run])
@@ -28065,18 +31303,31 @@ export function App() {
       x,
       y,
       items: entries.map((entry) => entry.item),
-      ...(heading ? { heading } : {})
+      ...(heading ? { heading } : {}),
+      ...(face ? { face } : {})
     });
   }
 
   function handleViewportContextMenu(
     x: number,
     y: number,
-    selection: TopologySelection | null
+    selection: TopologySelection | null,
+    options: ViewportContextMenuOptions = {}
   ) {
     if (!doc) {
       return;
     }
+    // I18: over stacked targets the menu leads with Select other, whose list
+    // reopens this menu for the target chosen from it.
+    const selectOther = options.selectOther;
+    const leading = selectOther
+      ? [
+          {
+            item: selectOtherMenuItem(selectOther.count),
+            run: selectOther.open
+          }
+        ]
+      : [];
     // A running command owns both its geometry and empty viewport space.
     // A preview can move an edge away from the pointer before right-click.
     if (!modelingLocked && inPlaceRef.current.active) {
@@ -28088,12 +31339,14 @@ export function App() {
     // the viewport controls someone reading a model actually wants.
     if (!selection || modelingLocked) {
       openContextMenu(x, y, [
+        ...leading,
         {
           item: {
             id: 'fit',
             label: 'Fit view',
             icon: <Maximize2 size={13} aria-hidden="true" />,
-            shortcut: menuShortcut('view-fit')
+            shortcut: menuShortcut('view-fit'),
+            section: leading.length > 0
           },
           run: () => setFitSignal((value) => value + 1)
         },
@@ -28144,17 +31397,23 @@ export function App() {
     }
     // Actions wait for the clicked selection to land. An unapplied Move
     // owns the question first; a menu here would act on the old selection.
-    if (handleSelectTopologyFromViewer(selection, false, undefined, { x, y })) {
+    // The keyboard's menu is for the selection as it stands, so it picks
+    // nothing (a multi-selection stays whole).
+    if (
+      !options.keyboard &&
+      handleSelectTopologyFromViewer(selection, false, undefined, { x, y })
+    ) {
       setContextMenu(null);
       return;
     }
-    openViewportSelectionContextMenu(x, y, selection);
+    openViewportSelectionContextMenu(x, y, selection, leading);
   }
 
   function openViewportSelectionContextMenu(
     x: number,
     y: number,
-    selection: TopologySelection
+    selection: TopologySelection,
+    leading: { item: ContextMenuState['items'][number]; run(): void }[] = []
   ) {
     const owner = managerRef.current;
     const current = owner?.document;
@@ -28188,20 +31447,55 @@ export function App() {
         }
         run(viewportMenuHandlersRef.current);
       };
-    const body = current.derived.bodyRepresentations[selection.bodyId];
+    const body = ownEntry(
+      current.derived.bodyRepresentations,
+      selection.bodyId
+    );
     const feature = selectionFeature(current, body, selection);
+    // Delete does what the Del key does with this pick: a STEP face or a
+    // subtract's cut is healed in place, a face or edge a step defines
+    // deletes that step, and a face no step can be shown to own is healed.
+    const faceHeal: 'imported' | 'cut' | 'orphan' | null =
+      selection.kind !== 'face'
+        ? null
+        : listFeaturesInOrder(current).some(
+              (candidate) =>
+                candidate.bodyId === selection.bodyId &&
+                candidate.data.featureKind === 'imported-step'
+            )
+          ? 'imported'
+          : isCutFace(current, selection)
+            ? 'cut'
+            : feature
+              ? null
+              : 'orphan';
+    const deleteLabel = faceHeal
+      ? faceHeal === 'cut'
+        ? 'Fill cut'
+        : 'Delete face'
+      : feature && selection.kind !== 'body'
+        ? `Delete ${feature.name}`
+        : null;
+    // M16: a sheet-metal body (or one a later feature carried on) offers
+    // its flat pattern.
+    const sheetSource = sheetMetalFeatureForBody(current, selection.bodyId);
     const edge = selection.kind === 'edge';
+    // Union and Subtract say why they are greyed out, as the rail does.
+    const combineReason =
+      viewerBodies.length < 2 ? 'Needs a second body to combine with' : null;
     openContextMenu(
       x,
       y,
       [
+        ...leading,
         ...(edge
           ? [
               {
                 item: {
                   id: 'fillet',
                   label: 'Fillet edge…',
-                  icon: <Spline size={13} aria-hidden="true" />
+                  icon: <Spline size={13} aria-hidden="true" />,
+                  section: leading.length > 0
                 },
                 run: runCurrent((handlers) => handlers.launchTool('fillet'))
               },
@@ -28221,7 +31515,7 @@ export function App() {
             label: 'Move / Rotate…',
             icon: <Move3d size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-transform'),
-            section: edge
+            section: edge || leading.length > 0
           },
           run: runCurrent((handlers) => handlers.launchTool('transform'))
         },
@@ -28231,7 +31525,7 @@ export function App() {
             label: 'Union…',
             icon: <Combine size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-union'),
-            disabled: viewerBodies.length < 2
+            ...(combineReason ? { disabled: true, detail: combineReason } : {})
           },
           run: runCurrent((handlers) => handlers.launchTool('union'))
         },
@@ -28241,7 +31535,7 @@ export function App() {
             label: 'Subtract…',
             icon: <Scissors size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-subtract'),
-            disabled: viewerBodies.length < 2
+            ...(combineReason ? { disabled: true, detail: combineReason } : {})
           },
           run: runCurrent((handlers) => handlers.launchTool('subtract'))
         },
@@ -28278,6 +31572,19 @@ export function App() {
           },
           run: () => setFitSignal((value) => value + 1)
         },
+        ...(sheetSource
+          ? [
+              {
+                item: {
+                  id: 'flat-pattern',
+                  label: 'Flat pattern…',
+                  icon: <SquareDashed size={13} aria-hidden="true" />,
+                  section: true
+                },
+                run: () => openFlatPattern(sheetSource.featureId)
+              }
+            ]
+          : []),
         ...(feature
           ? [
               {
@@ -28293,9 +31600,48 @@ export function App() {
                 })
               }
             ]
+          : []),
+        ...(deleteLabel
+          ? [
+              {
+                item: {
+                  id: 'delete',
+                  label: deleteLabel,
+                  icon: <Trash2 size={13} aria-hidden="true" />,
+                  shortcut: 'Del',
+                  danger: true,
+                  section: !feature
+                },
+                run: runCurrent((handlers) => {
+                  if (
+                    !handlers.validateSelectionEdit({
+                      acceptCompleteCommit: true
+                    })
+                  )
+                    return;
+                  if (faceHeal)
+                    handlers.handleDeleteImportedFace(
+                      menuSelection.selection,
+                      faceHeal
+                    );
+                  else if (feature)
+                    handlers.handleDeleteFeature(
+                      feature.featureId,
+                      feature.name
+                    );
+                })
+              }
+            ]
           : [])
       ],
-      topologySelectionLabel(body, selection)
+      topologySelectionLabel(body, selection),
+      selection.kind === 'face'
+        ? {
+            bodyId: selection.bodyId,
+            topologyId: selection.topologyId,
+            hash: selection.hash
+          }
+        : undefined
     );
   }
 
@@ -28972,6 +32318,7 @@ export function App() {
     !meshExportOpen &&
     !importUnitsPrompt &&
     !pendingFeatureDelete &&
+    !activeResumePrompt(pendingDetailCascade, doc) &&
     !activeSuppressionPrompt(pendingSuppression, doc?.projectId) &&
     !activeResumePrompt(pendingResume, doc) &&
     !pendingToolSwitch;
@@ -29046,7 +32393,17 @@ export function App() {
       if (!doc) {
         return;
       }
-      if (event.key === 'Escape') exactEntryQueue.cancel();
+      // An exact entry still waiting for its arrow (the Extrude bar loading)
+      // is the entry Escape closes first, as an open one is: the armed
+      // region stays.
+      if (
+        event.key === 'Escape' &&
+        exactEntryQueue.cancel() &&
+        interaction.mode === 'region'
+      ) {
+        event.preventDefault();
+        return;
+      }
       // Hide all keeps the layout; the panels are Build's, so View and
       // Tweak leave it as it is.
       if (global === 'panels-hide-all') {
@@ -29061,7 +32418,10 @@ export function App() {
       if (global === 'command-palette') {
         event.preventDefault();
         setShortcutsOpen(false);
-        setPaletteOpen((open) => !open);
+        // Opening lists the commands that run here (an empty draft), so the
+        // key visibly does something before a word is typed (I20).
+        if (paletteOpen) setPaletteOpen(false);
+        else draftPrompt('');
         return;
       }
       if (paletteOpen || shortcutsOpen) {
@@ -29185,7 +32545,7 @@ export function App() {
       if (movePreview) {
         if (event.key === 'Escape') {
           event.preventDefault();
-          cancelPanel();
+          cancelMove();
           return;
         }
         // As for an in-place command: Enter on the Move bar's own controls
@@ -29298,6 +32658,48 @@ export function App() {
         if (sketchCommand === 'sketch-extrude') {
           event.preventDefault();
           startExtrude(interaction.session.sketchId as SketchId);
+          return;
+        }
+        if (sketchCommand === 'sketch-dimension') {
+          event.preventDefault();
+          startSmartDimension();
+          return;
+        }
+        if (sketchCommand === 'sketch-construction') {
+          event.preventDefault();
+          setSketchConstruction((on) => !on);
+          return;
+        }
+        if (
+          sketchCommand === 'sketch-trim' ||
+          sketchCommand === 'sketch-extend' ||
+          sketchCommand === 'sketch-offset'
+        ) {
+          event.preventDefault();
+          const editKind =
+            sketchCommand === 'sketch-trim'
+              ? 'trim'
+              : sketchCommand === 'sketch-extend'
+                ? 'extend'
+                : 'offset';
+          dispatchInteraction({
+            type: 'sketch-edit-tool',
+            kind:
+              interaction.session.pendingEdit?.kind === editKind
+                ? null
+                : editKind
+          });
+          return;
+        }
+        if (sketchCommand === 'sketch-finish') {
+          event.preventDefault();
+          finishSketchSession();
+          return;
+        }
+        // Select all would select the page's text, which is never what a
+        // sketch means by it (I46).
+        if (meta && event.key.toLowerCase() === 'a' && !event.altKey) {
+          event.preventDefault();
           return;
         }
         // A relation picked from its glyph is the narrower selection, so
@@ -29435,6 +32837,10 @@ export function App() {
       );
       if (exactEntry) {
         event.preventDefault();
+        if (interaction.mode === 'region' && extrudeBarFailedRef.current) {
+          setStatus(EXTRUDE_ENTRY_UNAVAILABLE);
+          return;
+        }
         exactEntryQueue.push(
           {
             interaction,
@@ -29478,6 +32884,15 @@ export function App() {
             return;
           }
           if (interaction.mode === 'sketch') {
+            if (event.defaultPrevented) {
+              // A value prompt (a dimension, a fillet radius, an offset)
+              // spent this press closing itself: it cancels the value and
+              // climbs no rung, so it neither leaves nor arms the exit
+              // (I43). Read before our own preventDefault below, which
+              // would otherwise make every press look spent.
+              sketchExitArmedAtRef.current = null;
+              return;
+            }
             // Inside a sketch Escape still climbs its ladder one rung per
             // press: chain, pick sequence, tool, selection, then the sketch.
             event.preventDefault();
@@ -29496,6 +32911,23 @@ export function App() {
             // sketch had already been left — only Finish Sketch said
             // anything. Both dispatch the same exit, so both can say so.
             const leftSketch = escapeTarget(interaction) === 'exit-sketch';
+            if (leftSketch) {
+              // I43: the last rung asks before it leaves; a reflex second
+              // Escape after closing a prompt or deselecting stays put.
+              const step = sketchExitEscape(
+                sketchExitArmedAtRef.current,
+                performance.now()
+              );
+              sketchExitArmedAtRef.current = step.armedAt;
+              if (!step.leave) {
+                setStatus(
+                  'Press Esc again to leave the sketch, or choose Finish Sketch. Your geometry is kept either way.'
+                );
+                return;
+              }
+            } else {
+              sketchExitArmedAtRef.current = null;
+            }
             dispatchInteraction({ type: 'escape' });
             if (leftSketch) {
               setStatus('Sketch closed.');
@@ -29578,6 +33010,31 @@ export function App() {
             }
             return;
           }
+          // Several faces picked together are deleted together and healed,
+          // whatever built the body: every wall of a window closes it.
+          if (
+            featureSelectionSource !== 'pinned' &&
+            boxSelectedFaces &&
+            boxSelectedFaces.length > 1
+          ) {
+            event.preventDefault();
+            if (new Set(boxSelectedFaces.map((face) => face.bodyId)).size > 1) {
+              setStatus(
+                'Faces on different bodies cannot be deleted together. Select faces on one body.'
+              );
+              return;
+            }
+            if (
+              !(
+                isOperationState(interaction) &&
+                interaction.phase !== 'armed' &&
+                interaction.phase !== 'failed'
+              ) &&
+              validateSelectionEdit({ acceptCompleteCommit: true })
+            )
+              handleDeleteFaces(boxSelectedFaces);
+            return;
+          }
           // A STEP face is healed by a replayable direct edit. Its import
           // history row is never deleted by a viewport face pick.
           if (
@@ -29599,6 +33056,27 @@ export function App() {
               validateSelectionEdit({ acceptCompleteCommit: true })
             )
               handleDeleteImportedFace(selectedTopology);
+            return;
+          }
+          // A face a subtract cut — the wall of a round hole — is healed in
+          // place. The feature it is inferred to is the cutting tool, and
+          // deleting that would leave the subtract with nothing to cut.
+          if (
+            featureSelectionSource !== 'pinned' &&
+            selectedTopology?.kind === 'face' &&
+            doc &&
+            isCutFace(doc, selectedTopology)
+          ) {
+            event.preventDefault();
+            if (
+              !(
+                isOperationState(interaction) &&
+                interaction.phase !== 'armed' &&
+                interaction.phase !== 'failed'
+              ) &&
+              validateSelectionEdit({ acceptCompleteCommit: true })
+            )
+              handleDeleteImportedFace(selectedTopology, 'cut');
             return;
           }
           // A drag or a commit still in flight owns the selection; Delete
@@ -29624,6 +33102,25 @@ export function App() {
               selectedFeature.featureId,
               selectedFeature.name
             );
+            return;
+          }
+          // A face no step can be shown to own (its name was lost to an
+          // earlier edit) is healed in place, as a STEP face is, rather than
+          // doing nothing or deleting a guessed feature.
+          if (
+            featureSelectionSource !== 'pinned' &&
+            !selectedFeature &&
+            selectedTopology?.kind === 'face' &&
+            selectedEdges.length === 0 &&
+            !(
+              isOperationState(interaction) &&
+              interaction.phase !== 'armed' &&
+              interaction.phase !== 'failed'
+            ) &&
+            validateSelectionEdit({ acceptCompleteCommit: true })
+          ) {
+            event.preventDefault();
+            handleDeleteImportedFace(selectedTopology, 'orphan');
           }
           return;
       }
@@ -29887,6 +33384,7 @@ export function App() {
           desktopAuthorizationApproved={desktopAuthorizationApproved}
           desktopAuthorizationCode={desktopAuthorizationCode}
           workspaceOpen={doc !== null}
+          documentUnits={doc?.units}
           onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
           onChange={handleAppSettingsChange}
           onCloudFunctionsEnabledChange={handleCloudFunctionsEnabledChange}
@@ -29902,10 +33400,13 @@ export function App() {
           onApproveDesktopLogin={handleApproveDesktopLogin}
           onLogout={handleLogout}
           onDeleteCloudData={handleDeleteCloudData}
-          onReset={handleResetAppSettings}
+          onReset={() => void handleResetAppSettings()}
           onApplyViewportDefaults={applyViewportDefaults}
-          onExportDiagnostics={handleExportDiagnostics}
+          onExportDiagnostics={() => void handleExportDiagnostics()}
           onExportInteractionLog={() => void handleExportInteractionLog()}
+          onRegenerateThumbnails={() => void handleRegenerateThumbnails()}
+          thumbnailRegeneration={thumbnailRegeneration}
+          thumbnailRegenerationNote={thumbnailRegenerationNote}
           onDismissProjectInvitation={dismissProjectInvitation}
           onClose={closeSettings}
         />
@@ -29918,6 +33419,9 @@ export function App() {
       <>
         <StartScreen
           onImportProject={(file) => void handleImportProject(file)}
+          onImportFiles={(files, units) =>
+            void handleStartScreenFiles(files, units)
+          }
           projects={projects}
           status={status}
           previousWorkspaceStatus={previousWorkspaceStatus.current}
@@ -29925,7 +33429,7 @@ export function App() {
             newBuildAvailable ? () => window.location.reload() : undefined
           }
           onReloadForLoadFailure={
-            downloadInterrupted ? () => window.location.reload() : undefined
+            loadFailureShown ? () => window.location.reload() : undefined
           }
           // Discovery must finish before a new/opened part can commit: the
           // startup result would otherwise replace its session and listing.
@@ -29952,11 +33456,22 @@ export function App() {
           onOpenSettings={openSettings}
           onSignIn={() => openSettingsAt('account')}
           onDuplicate={(project) => void handleDuplicateProject(project)}
+          onRename={handleRenameLibraryProject}
           loadProperties={loadProperties}
           cloudProjectIds={cloudProjectIds}
           accountProjectListReached={accountProjectListReached}
           conflictedProjectIds={conflictedProjectIds}
           signedIn={Boolean(session)}
+          cloudUnavailable={
+            cloudFunctionsEnabled &&
+            (authConfigStatus === 'unavailable' || sessionUnavailable)
+          }
+          onRetryCloud={() =>
+            void (sessionUnavailable
+              ? refreshCloudConnection()
+              : handleRefreshAuthConfig())
+          }
+          onRetryAccountListing={() => void handleRetryAccountListing()}
           onSaveToAccount={(project) => void handleSaveToAccount(project)}
           onSaveAllToAccount={(candidates) =>
             void handleSaveAllToAccount(candidates)
@@ -29990,6 +33505,9 @@ export function App() {
           loadThumbnail={loadThumbnail}
           thumbnailAccountId={thumbnailAccountUserId ?? null}
           publishThumbnail={publishThumbnail}
+          {...(session &&
+            cloudFunctionsEnabled && { loadStorageUsage: api.storageUsage })}
+          onOpenAccountSettings={() => openSettingsAt('account')}
         />
         <StatusActivityLog
           status={status}
@@ -30003,6 +33521,8 @@ export function App() {
           workspace="Projects"
         />
         {settingsOverlay}
+        {confirmDialog}
+        {pinResetDialog}
         <ToastHost toast={toast} onDismiss={dismissToast} />
       </>
     );
@@ -30063,7 +33583,8 @@ export function App() {
       ? 'warning'
       : !exactGeometryReady
         ? 'running'
-        : /fail|error|invalid|unable|denied|not changed|not applied|no change|refus/i.test(
+        : // A refusal is a warning, not a "ready" dot (design review I77).
+          /fail|error|invalid|unable|denied|cannot|can't|not changed|not applied|no change|refus/i.test(
               status
             )
           ? 'warning'
@@ -30133,18 +33654,23 @@ export function App() {
         setActiveMeasurementId((current) => (current === id ? null : current));
         setStatus('Measurement removed.');
       }}
-      onClear={() => {
-        if (
-          appSettings.general.confirmDestructiveActions &&
-          !window.confirm('Clear every measurement in this project?')
-        ) {
-          return;
-        }
-        setMeasurements([]);
-        setActiveMeasurementId(null);
-        clearMeasurementPicks();
-        setStatus('Measurement list cleared.');
-      }}
+      onClear={() =>
+        void (async () => {
+          if (
+            appSettings.general.confirmDestructiveActions &&
+            !(await confirmInPage({
+              title: 'Clear every measurement in this project?',
+              confirmLabel: 'Clear measurements'
+            }))
+          ) {
+            return;
+          }
+          setMeasurements([]);
+          setActiveMeasurementId(null);
+          clearMeasurementPicks();
+          setStatus('Measurement list cleared.');
+        })()
+      }
       onCopy={(measurement) => void copyMeasurements(measurement)}
       onExport={exportMeasurements}
     />
@@ -30476,7 +34002,7 @@ export function App() {
         : 'Section view: on',
       group: 'View',
       keywords: ['section', 'cut', 'clip', 'plane'],
-      icon: <Slice size={16} aria-hidden="true" />,
+      icon: <SquareSplitVertical size={16} aria-hidden="true" />,
       disabledReason: viewerBodies.length === 0 ? 'Create a body first' : null,
       run: toggleSectionView
     },
@@ -30541,6 +34067,14 @@ export function App() {
       run: () => projectImportInputRef.current?.click()
     },
     {
+      id: 'file-insert-project',
+      label: 'Insert project…',
+      group: 'File',
+      keywords: ['merge', 'combine', 'add', 'openzcad', 'into'],
+      icon: <Upload size={16} aria-hidden="true" />,
+      run: () => projectInsertInputRef.current?.click()
+    },
+    {
       // The face outline export used to be a tab on the tool card, where it
       // sat among edit modes and cost that card a quarter of its width.
       id: 'file-export-face-dxf',
@@ -30559,6 +34093,16 @@ export function App() {
           void handleExportFaceDxf(normalToFaceTarget);
         }
       }
+    },
+    {
+      // M16: the sheet-metal flat pattern, its layered DXF and bend table.
+      id: 'file-export-flat-pattern',
+      label: 'Flat pattern…',
+      group: 'File',
+      keywords: ['sheet metal', 'dxf', 'bend', 'unfold', 'laser', 'brake'],
+      icon: <SquareDashed size={16} aria-hidden="true" />,
+      disabledReason: hasSheetMetal ? null : 'Needs a sheet-metal part',
+      run: () => openFlatPattern(selectedSheetMetal?.featureId)
     },
     {
       id: 'file-export-step',
@@ -30602,15 +34146,17 @@ export function App() {
       // palette is the other way to them, found by what they are for.
       id: 'file-export-diagnostics',
       label: 'Export diagnostics',
-      group: 'File',
+      // Not "File": the File menu no longer holds it (I24). Settings ›
+      // Advanced does, under troubleshooting.
+      group: 'Support',
       keywords: ['troubleshooting', 'support', 'sanitized', 'json', 'report'],
       icon: <Download size={16} aria-hidden="true" />,
-      run: handleExportDiagnostics
+      run: () => void handleExportDiagnostics()
     },
     {
       id: 'file-export-interaction-log',
       label: 'Export interaction log',
-      group: 'File',
+      group: 'Support',
       keywords: [
         'troubleshooting',
         'support',
@@ -30633,6 +34179,8 @@ export function App() {
       id: 'file-home',
       label: 'Back to projects',
       group: 'File',
+      // The library is where a new project starts and every project opens.
+      keywords: ['home', 'library', 'projects', 'new', 'open', 'start'],
       icon: <FolderOpen size={16} aria-hidden="true" />,
       run: () => void handleGoHome()
     },
@@ -30644,6 +34192,7 @@ export function App() {
             id: 'workspace-mode-view',
             label: 'Switch to View mode',
             group: 'General',
+            keywords: ['read', 'inspect', 'mode', 'workspace'],
             shortcut: modeShortcut('view'),
             icon: <Eye size={16} aria-hidden="true" />,
             run: () => handleWorkspaceMode('view')
@@ -30656,6 +34205,7 @@ export function App() {
             id: 'workspace-mode-tweak',
             label: 'Switch to Tweak mode',
             group: 'General',
+            keywords: ['parameters', 'mode', 'workspace'],
             shortcut: modeShortcut('tweak'),
             icon: <SlidersHorizontal size={16} aria-hidden="true" />,
             disabledReason: tweakModeDisabledReason,
@@ -30669,10 +34219,26 @@ export function App() {
             id: 'workspace-mode-build',
             label: 'Switch to Build mode',
             group: 'General',
+            keywords: ['model', 'modeling', 'edit', 'mode', 'workspace'],
             shortcut: modeShortcut('build'),
             icon: <Box size={16} aria-hidden="true" />,
             disabledReason: buildModeDisabledReason,
             run: () => handleWorkspaceMode('build')
+          } satisfies PaletteCommand
+        ]
+      : []),
+    // The mode switch offers Assemble; the bar did not (I20).
+    ...(!assembleMode
+      ? [
+          {
+            id: 'workspace-mode-assemble',
+            label: 'Switch to Assemble mode',
+            group: 'General',
+            keywords: ['assembly', 'joints', 'motion', 'mode', 'workspace'],
+            shortcut: modeShortcut('assemble'),
+            icon: <Cog size={16} aria-hidden="true" />,
+            disabledReason: assembleModeDisabledReason,
+            run: () => handleWorkspaceMode('assemble')
           } satisfies PaletteCommand
         ]
       : []),
@@ -30682,10 +34248,66 @@ export function App() {
             id: 'workspace-mode-drawing',
             label: 'Switch to Draw mode',
             group: 'General',
+            keywords: ['drawing', 'sheet', '2d', 'mode', 'workspace'],
             shortcut: modeShortcut('drawing'),
             icon: <DraftingCompass size={16} aria-hidden="true" />,
             disabledReason: drawingModeDisabledReason,
             run: () => handleWorkspaceMode('drawing')
+          } satisfies PaletteCommand
+        ]
+      : []),
+    {
+      // The overlay the ? key opens, under the words people search for it
+      // by (I20: "help", "shortcuts" and "keyboard" found nothing).
+      id: 'app-help',
+      label: 'Help & keyboard shortcuts',
+      group: 'General',
+      keywords: [
+        'help',
+        'shortcuts',
+        'keyboard',
+        'keys',
+        'controls',
+        'hotkeys'
+      ],
+      shortcut: keymap.label('shortcut-reference'),
+      icon: <Keyboard size={16} aria-hidden="true" />,
+      run: () => setShortcutsOpen(true)
+    },
+    ...(doc && !shareSession
+      ? [
+          {
+            // The project name in the top bar is the rename field; the
+            // command opens it as a click on the name does.
+            id: 'project-rename',
+            label: 'Rename project',
+            group: 'File',
+            keywords: ['rename', 'name', 'title'],
+            icon: <PenLine size={16} aria-hidden="true" />,
+            run: () =>
+              document
+                .querySelector<HTMLButtonElement>('.project-title-button')
+                ?.click()
+          } satisfies PaletteCommand,
+          {
+            id: 'project-duplicate',
+            label: 'Duplicate project',
+            group: 'File',
+            keywords: ['duplicate', 'copy', 'clone'],
+            icon: <Copy size={16} aria-hidden="true" />,
+            disabledReason: projectTransferBusy
+              ? 'Project transfer in progress'
+              : null,
+            run: () => {
+              const current = managerRef.current?.document;
+              if (!current) return;
+              void handleDuplicateProject(
+                projects.find(
+                  (summary) => summary.projectId === current.projectId
+                ) ??
+                  summarizeLocalDocument(current, DEFAULT_PROJECT_ORGANIZATION)
+              );
+            }
           } satisfies PaletteCommand
         ]
       : []),
@@ -30891,9 +34513,14 @@ export function App() {
                           'Edge selected — Fillet or Chamfer in Feature tools'
                         : selectedFeature
                           ? 'Edit in the panel · Del deletes · Esc closes'
-                          : viewerBodies.length > 0
-                            ? 'Click a body, face, or edge · Shift+Click adds to selection'
-                            : idleHint));
+                          : // Nothing picked and no tool: the bar rests,
+                            // folded under its own name. "Click a body,
+                            // face, or edge · Shift+Click adds to
+                            // selection" was the same for every model and
+                            // stood on a card over the bar, the widest thing
+                            // at the foot of the stage when nothing was
+                            // happening.
+                            idleHint));
   const openReferenceImageEntry =
     (openReferenceImageId &&
       doc?.referenceImages?.images.find(
@@ -31292,6 +34919,8 @@ export function App() {
       }
       documentVersion={doc?.version ?? 0}
       restorableCheckpointIds={restorableCheckpointIds}
+      accountCheckpointIds={accountCheckpointIds}
+      currentUserId={session?.userId ?? null}
       onSelectFeature={handleSelectFeatureFromTree}
       onSelectBody={handleSelectBodyFromTree}
       selectedBodyIds={selectedBodyIds}
@@ -31312,6 +34941,9 @@ export function App() {
       onResumeHistory={handleResumeHistory}
       onRenameFeature={handleRenameFeature}
       onDeleteFeatures={editDisabledReason ? undefined : handleDeleteFeatures}
+      onEditSketch={
+        editDisabledReason ? undefined : editSketchFeatureInViewport
+      }
       units={doc?.units ?? 'mm'}
       onConfigureToggle={(name, bodyIds) => {
         if (ensureCanEdit('configure an on/off parameter')) {
@@ -31323,6 +34955,19 @@ export function App() {
       onPreviewParameter={handlePreviewParameter}
       onSetParameter={(name, expression) =>
         handleSetParameter(name, expression)
+      }
+      printClearance={printClearance}
+      configurationTable={{
+        configurations: configurationView,
+        features,
+        onExportRow: handleExportConfigurationRow,
+        ...(editDisabledReason ? {} : { actions: configurationActions })
+      }}
+      onSetPrintClearance={
+        editDisabledReason ? undefined : handleSetPrintClearance
+      }
+      onParameterAddRefused={(name, message) =>
+        setStatus(`Parameter ${name} was not added.`, { detail: message })
       }
       onSetParameterQuantity={(name, quantity, expression) => {
         const current = parameters.find((entry) => entry.name === name);
@@ -31361,6 +35006,9 @@ export function App() {
       onBranchCheckpoint={(checkpoint) =>
         void handleBranchSaveState(checkpoint)
       }
+      onRenameCheckpoint={
+        editDisabledReason ? undefined : handleRenameCheckpoint
+      }
     />
   );
   const commandPaletteKey = commandPaletteShortcut(
@@ -31380,13 +35028,7 @@ export function App() {
         className="workspace-column-finish"
         title="Finish Sketch"
         aria-label="Finish Sketch"
-        onClick={() => {
-          dispatchInteraction({ type: 'exit-sketch' });
-          setTool(null);
-          setSketchEditError(null);
-          setSketchDiagnosticPoints([]);
-          setStatus(`${editingSketchName} finished.`);
-        }}
+        onClick={finishSketchSession}
       >
         <Check size={16} aria-hidden="true" />
         <span className="workspace-column-finish-label">Finish Sketch</span>
@@ -31498,6 +35140,9 @@ export function App() {
           : null
       }
       onDropFiles={(files) => void handleDroppedFiles(files)}
+      onRefuseDroppedFiles={() =>
+        setStatus('Finish or cancel the open dialog, then drop the file again.')
+      }
       sidebarWidth={sidebarWidth}
       assistantWidth={assistantWidth}
       sidebarResizer={
@@ -31530,10 +35175,21 @@ export function App() {
               : null
           }
           onReviewEditFailure={openActivityLog}
+          onReviewConflict={
+            collaboration.conflict?.projectId === doc.projectId &&
+            dismissedRoomConflict === roomConflictKey
+              ? () => setDismissedRoomConflict(null)
+              : !collaboration.conflict &&
+                  accountConflict?.projectId === doc.projectId &&
+                  dismissedAccountConflict === accountConflict
+                ? () => setDismissedAccountConflict(null)
+                : undefined
+          }
           geometryPending={!geometry.isReadyFor(doc)}
           geometryFailed={geometry.state.phase === 'failed'}
           projectTransferBusy={projectTransferBusy}
           onImportProject={(file) => void handleImportProject(file)}
+          onInsertProject={(file) => void handleInsertProject(file)}
           onExportProject={() => void handleExportProject()}
           onDownloadArtifact={(artifact) =>
             void handleDownloadProjectArtifact(artifact)
@@ -31582,7 +35238,22 @@ export function App() {
           }
           collaborationStatus={collaboration.status}
           collaborationFailure={collaboration.failureReason}
+          readOnlySeat={
+            activeProjectIsCloud &&
+            !shareSession &&
+            (collaboration.role === 'viewer' ||
+              collaboration.status === 'read-only')
+          }
           collaboratorCount={collaboration.members.length}
+          shareSession={
+            shareSession
+              ? {
+                  // A plaintext link always opens in Tweak.
+                  mode: shareSession.encryptedMode ?? 'tweak',
+                  onMakeCopy: requestShareCopy
+                }
+              : null
+          }
           projectSharingEnabled={
             cloudFunctionsEnabled && projectSharingPreferenceEnabled
           }
@@ -31600,6 +35271,12 @@ export function App() {
           onExportStep={() => void handleExportStep()}
           onOpenMeshExport={() => setMeshExportOpen(true)}
           onOpenImageExport={openImageExport}
+          {...(hasSheetMetal
+            ? {
+                onOpenFlatPattern: () =>
+                  openFlatPattern(selectedSheetMetal?.featureId)
+              }
+            : {})}
           onArchiveLocalSources={() => void handleArchiveLocalSources()}
           onRenameProject={(name) =>
             executeCommand(
@@ -31640,9 +35317,12 @@ export function App() {
             }
             onView={requestView}
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
-            onCycleDisplayMode={cycleDisplayMode}
+            onDisplayMode={setDisplayMode}
+            onToggleXray={toggleXray}
             onToggleProjection={toggleProjection}
             onToggleOrbitMode={toggleOrbitMode}
+            onToggleSection={toggleSectionView}
+            nothingToSection={!viewerBodies.some((body) => !body.consumed)}
           />
         ) : // The sketch session brings its own tool rail. Before it, while
         // the plane is being picked, the plane chooser in the command slot
@@ -31689,7 +35369,22 @@ export function App() {
             onViewActivityLog={openActivityLog}
             onExportStep={() => void handleExportStep()}
             onOpenMeshExport={() => setMeshExportOpen(true)}
-            share={shareSession ? { onMakeCopy: requestShareCopy } : null}
+            // Make a copy is the top bar's labelled button now (I73).
+            share={null}
+            configuration={
+              doc?.configurations
+                ? {
+                    rows: doc.configurations.rows,
+                    activeRowId: doc.configurations.activeRowId,
+                    onActivate: (rowId) =>
+                      void Promise.resolve(
+                        configurationActions.activate(rowId)
+                      ).then((refused) => {
+                        if (refused) setStatus(refused);
+                      })
+                  }
+                : null
+            }
             panelOpen={panelState.tweakPanelOpen}
             onTogglePanel={() =>
               setPanelState((current) => ({
@@ -31802,6 +35497,7 @@ export function App() {
             fitSignal={fitSignal}
             autoFrame={autoFrame}
             creationFrame={creationFrame}
+            clearStageRequest={clearStageRequest}
             viewRequest={projectViewRequest}
             normalToFaceRequest={normalToFaceRequest}
             units={doc.units}
@@ -31812,6 +35508,9 @@ export function App() {
             editableBodyIds={
               parameterPreview ? EMPTY_BODY_IDS : viewerEditableBodyIds
             }
+            // The armed Extrude owns dragging from the moment it is armed,
+            // not from when its bar (and with it, its handles) has loaded.
+            dragsHeldByCommand={extrudeBarWanted}
             movePreview={movePreview}
             moveCommitHold={moveCommitHold}
             appearancePreview={bodyAppearancePreview}
@@ -31973,7 +35672,7 @@ export function App() {
                 : null
             }
             onOffsetPreview={handleOffsetPreview}
-            onOffsetCommit={(value) => {
+            onOffsetCommit={(value, reading) => {
               if (interactionRef.current.mode === 'region') {
                 regionDistanceSetter.current?.(Math.round(value * 1000) / 1000);
                 dispatchInteraction({ type: 'drag-release' });
@@ -31982,7 +35681,11 @@ export function App() {
                 );
                 return 'started';
               }
-              return handleOffsetCommit(value);
+              return handleOffsetCommit(
+                value,
+                undefined,
+                reading ? { total: reading.total } : undefined
+              );
             }}
             onOffsetCancel={handleViewerOffsetCancel}
             offsetPreviewInvalid={holdsRefusal(interaction)}
@@ -32041,9 +35744,7 @@ export function App() {
             sketchMode={modelingLocked ? null : sketchModeForViewer}
             sketchTextAnchorRef={sketchTextAnchorRef}
             onSketchCommit={handleSketchCommit}
-            onSketchCommitComposite={(shape) => {
-              void handleSketchCommitComposite(shape);
-            }}
+            onSketchCommitComposite={handleSketchCommitComposite}
             onEditSketchDimension={handleEditSketchDimension}
             onMoveSketchDimension={handleMoveSketchDimension}
             onSelectSketchConstraint={handleSelectSketchConstraint}
@@ -32130,14 +35831,19 @@ export function App() {
             placementPlane={
               modelingLocked
                 ? null
-                : imagePlacementPlane(
+                : (bendPlacementPlane ??
+                  imagePlacementPlane(
                     inPlace.slots,
                     inPlace.options,
                     imagePlacementContext,
                     inPlace.values
-                  )
+                  ))
             }
-            onPlacementClick={(point) => inPlace.placeImage({ point })}
+            onPlacementClick={(point) =>
+              bendPlacementPlane
+                ? pickBendFixedPoint(point)
+                : inPlace.placeImage({ point })
+            }
             hiddenDatumIds={hiddenDatumIds}
             referenceImages={
               inPlace.request?.tool === 'reference-image'
@@ -32294,7 +36000,9 @@ export function App() {
             }
             onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
-            regionHandle={modelingLocked ? null : regionHandleTarget}
+            regionHandle={
+              modelingLocked || !extrudeBarReady ? null : regionHandleTarget
+            }
             modelPanelsHidden={panelsHidden}
             axisPicker={modelingLocked ? null : inPlaceAxisPicker}
             onPickAxis={inPlace.pickAxis}
@@ -32328,6 +36036,12 @@ export function App() {
                 ? openInPlaceKeypad(valueId, value)
                 : openRegionExtrudeKeypad(valueId as ExtrudeValueId)
             }
+            onToggleCommandInstance={(label: string) =>
+              inPlace.setOption(
+                'skip',
+                toggledPatternSkip(inPlace.options.skip, label)
+              )
+            }
             commandSetterRef={commandSetterRef}
             // The in-place Extrude's keypad rides the chip it opened from:
             // the region arrow's, a handle's, or none from its bar.
@@ -32346,17 +36060,15 @@ export function App() {
                 }
               : {})}
             facePickOnly={toFacePick !== null}
+            faceSetPickBodyId={
+              tool === null && interaction.mode !== 'sketch'
+                ? heldFaceSetBody(heldFaces)
+                : null
+            }
             modeOverlay={
               modelingLocked ? (
                 <>
-                  {viewMode && (
-                    <ViewModeRail
-                      {...partsProps}
-                      {...(shareSession?.encryptedMode
-                        ? { onMakeCopy: requestShareCopy }
-                        : {})}
-                    />
-                  )}
+                  {viewMode && <ViewModeRail {...partsProps} />}
                   {viewMode && (
                     <AssemblyPlayer
                       projectId={doc.projectId}
@@ -32364,9 +36076,11 @@ export function App() {
                     />
                   )}
                   {assembleMode && (
-                    <MotionStudyTimeline
+                    <MotionStudyTimelineSlot
+                      resetKey={doc.projectId}
                       floating
                       assembly={doc.assembly}
+                      lengthUnit={doc.units}
                       execute={executeCommand}
                     />
                   )}
@@ -32382,6 +36096,9 @@ export function App() {
                     units={doc.units}
                     scope={parameterScope.scope}
                     anchorRef={keypadAnchorRef}
+                    // An entry that does not evaluate holds Done: it would
+                    // take the value held while the keypad shows another.
+                    onEntryError={setCommandEntryError}
                     onPreview={(value) => {
                       const valueId = keypad.commandValueId!;
                       const valueSpec = inPlaceSpec?.values.find(
@@ -32393,13 +36110,47 @@ export function App() {
                       if (valueSpec && !valueInRange(valueSpec, value)) {
                         return;
                       }
+                      setKeypadRangeError(null);
                       commandSetterRef.current?.(valueId, value);
                       inPlace.previewValue(valueId, value);
                     }}
                     onCommit={(value, raw) => {
+                      const valueId = keypad.commandValueId!;
+                      const valueSpec = inPlaceSpec?.values.find(
+                        (candidate) => candidate.id === valueId
+                      );
+                      // Out of range, the keypad stays open on what was
+                      // typed and says the range at the field. It used to
+                      // close, and the chip went back to the old value.
+                      if (valueSpec && !valueInRange(valueSpec, value)) {
+                        setKeypadRangeError({
+                          valueId,
+                          message: valueRangeSentence(
+                            valueSpec,
+                            valueSpec.unit === 'length'
+                              ? doc.units === 'inch'
+                                ? 'in'
+                                : doc.units
+                              : valueSpec.unit === 'angle'
+                                ? '°'
+                                : ''
+                          )
+                        });
+                        // Still refused on the bar as before, so Done
+                        // waits; only the keypad no longer closes on it.
+                        commitInPlaceKeypadValue(keypad, value, raw);
+                        return;
+                      }
+                      setKeypadRangeError(null);
                       setKeypad(null);
                       commitInPlaceKeypadValue(keypad, value, raw);
                     }}
+                    {...(keypadRangeError?.valueId === keypad.commandValueId
+                      ? {
+                          commitRefused: true,
+                          commitDisabledReason: keypadRangeError.message
+                        }
+                      : {})}
                     // One value has nowhere to step to: Tab stays the
                     // browser's there.
                     {...(inPlaceTypedValueIds.length > 1 &&
@@ -32666,7 +36417,8 @@ export function App() {
             onMeasure={toggleMeasure}
             onView={requestView}
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
-            onCycleDisplayMode={cycleDisplayMode}
+            onDisplayMode={setDisplayMode}
+            onToggleXray={toggleXray}
             onToggleProjection={toggleProjection}
             onToggleOrbitMode={toggleOrbitMode}
             sectionRange={
@@ -32675,7 +36427,9 @@ export function App() {
                 : null
             }
             onToggleSection={toggleSectionView}
+            nothingToSection={!viewerBodies.some((body) => !body.consumed)}
             sectionPanelOpen={panelState.sectionPanelOpen}
+            onSectionOverlapNote={setSectionOverlapNote}
             onSectionPanelOpenChange={(open) =>
               setPanelState((current) =>
                 current.sectionPanelOpen === open
@@ -32698,6 +36452,7 @@ export function App() {
             }}
             onExportSectionDxf={() => void handleExportSectionDxf()}
             sectionOutline={sectionOutline}
+            runSurfaceAnalysis={geometry.surfaceAnalysis}
           />
           {!modelingLocked &&
             !panelState.workspaceTourDismissed &&
@@ -32720,14 +36475,17 @@ export function App() {
                 }
                 historyOpen={panelShowing('history')}
                 exportSeen={tourExportSeen}
-                startIndex={
-                  tourStepRef.current?.projectId === doc.projectId
-                    ? tourStepRef.current.index
-                    : 0
+                // The step reached, kept per device: the card unmounts while
+                // a command or a sketch runs, and a second empty project
+                // picks up where the first left off (I16).
+                startIndex={panelState.workspaceTourStep}
+                onIndexChange={(index) =>
+                  setPanelState((current) =>
+                    current.workspaceTourStep === index
+                      ? current
+                      : { ...current, workspaceTourStep: index }
+                  )
                 }
-                onIndexChange={(index) => {
-                  tourStepRef.current = { projectId: doc.projectId, index };
-                }}
                 onDismiss={() =>
                   setPanelState((current) => ({
                     ...current,
@@ -32761,6 +36519,7 @@ export function App() {
               onImport={() => importInputRef.current?.click()}
             />
           )}
+          {pinResetDialog}
           <ToastHost toast={toast} onDismiss={dismissToast} />
         </ErrorBoundary>
       }
@@ -32774,9 +36533,17 @@ export function App() {
                 document={doc}
                 execute={assembleApp.execute}
                 onStatus={assembleApp.onStatus}
-                onAnnounce={(message) => announce(message)}
+                onAnnounce={(message, options) =>
+                  announce(
+                    message,
+                    options?.undo
+                      ? { label: 'Undo', run: handleUndo }
+                      : undefined
+                  )
+                }
                 bodyBounds={assemblyBodyBounds}
                 reducedMotion={appSettings.appearance.reducedMotion}
+                checkInterference={geometry.assemblyInterference}
               />
             </div>
           </ErrorBoundary>
@@ -33154,27 +36921,8 @@ export function App() {
                   );
                 }}
                 onEditModelingFeature={openModelingFeatureEditor}
-                onEditSketchInViewport={(feature) => {
-                  if (feature.data.featureKind !== 'sketch' || !doc) {
-                    return;
-                  }
-                  const sketch = findSketch(doc, feature.data.sketchId);
-                  if (sketch) {
-                    selectFeatureNode(null, 'pinned');
-                    setTool(null);
-                    dispatchInteraction({
-                      type: 'enter-sketch',
-                      plane: sketch.planeRef,
-                      sketchId: sketch.sketchId
-                    });
-                    // Same reason as the revert pill: entering a sketch from
-                    // the tree changes what every key does, so it should say
-                    // so rather than leaving the previous message in place.
-                    setStatus(
-                      `Editing ${sketch.name} · Finish Sketch when done.`
-                    );
-                  }
-                }}
+                onOpenFlatPattern={openFlatPattern}
+                onEditSketchInViewport={editSketchFeatureInViewport}
                 onApplyTransform={(feature, value) =>
                   applyValidatedFeature(
                     commandFactories.updateFeature(
@@ -33255,11 +37003,12 @@ export function App() {
               request={assistantRequest}
               onDraft={draftPrompt}
               onActivity={setAssistantActivity}
-              disabledReason={assistantDisabledReason(
-                assistantProject,
-                assistantConsent
-              )}
-              consent={assistantConsent}
+              disabledReason={
+                assistantHeldEncrypted
+                  ? ENCRYPTED_PROJECT_ASSISTANT_NOTICE
+                  : assistantDisabledReason(assistantProject, assistantConsent)
+              }
+              consent={assistantHeldEncrypted ? null : assistantConsent}
             />
           </ErrorBoundary>
         ) : null
@@ -33290,6 +37039,10 @@ export function App() {
                 editDisabledReason={drawingEditDisabledReason}
                 onCommand={(command) => executeCommand(command)}
                 onStatus={(message, options) => setStatus(message, options)}
+                onAnnounceUndoable={(message) =>
+                  announce(message, { label: 'Undo', run: handleUndo })
+                }
+                pointerNavigation={appSettings.viewport.pointerNavigation}
                 onAssistantSource={handleDrawingAssistantSource}
                 onActiveSheetChange={setDrawingActiveSheetId}
                 previewAnnotations={drawingPreview}
@@ -33307,7 +37060,7 @@ export function App() {
               file is moving, the pill is the one notice about it. */}
           <div className="activity-lane">
             {patternProgress && (
-              <PatternProgress
+              <PatternProgressSlot
                 name={patternProgress.name}
                 onCancel={cancelPattern}
               />
@@ -33318,7 +37071,18 @@ export function App() {
                   run={importRun}
                   onCancel={cancelImportRun}
                   onDismiss={dismissImportRun}
-                  onArchiveNow={archiveImportSourcesFromCard}
+                  // The same test archiveArtifact applies: signed out, or
+                  // signed in with a device-only project, the upload can
+                  // only fail (I8), so there is no Archive now.
+                  onArchiveNow={
+                    cloudArchivable(
+                      Boolean(session),
+                      doc.projectId,
+                      remoteVersionsRef.current
+                    )
+                      ? archiveImportSourcesFromCard
+                      : undefined
+                  }
                 />
               </Suspense>
             )}
@@ -33332,6 +37096,23 @@ export function App() {
               (parameterPreview !== null && !exactGeometryReady)
             }
             geometryStatus={geometryStatus}
+            // A cut left on says so on the status line once its controls
+            // are put away: View and Assemble have none, and Build's are
+            // closed with Escape or the rail button (I49).
+            section={
+              viewerSettings.sectionView &&
+              (modelingLocked ||
+                panelState.sectionPanelOpen === false ||
+                sectionAxisRange(viewerSettings.sectionView.plane) === null)
+                ? {
+                    label: `Section · ${
+                      SECTION_PLANE_LABELS[viewerSettings.sectionView.plane]
+                    }`,
+                    note: sectionOverlapNote,
+                    onTurnOff: toggleSectionView
+                  }
+                : null
+            }
             tone={tone}
             // The plane chooser carries the Sketch tool's instruction too:
             // the toast under it said the same sentence a second time. The
@@ -33341,13 +37122,20 @@ export function App() {
               sketchPlaneCardShown
             }
             onOpenLog={openActivityLog}
+            onUndo={
+              undoableStatusAt === statusEntry.at && managerRef.current?.canUndo
+                ? handleUndo
+                : undefined
+            }
             prompt={workspacePrompt}
             promptResting={workspacePrompt === idleHint}
             instructionDetails={
               displayedGeometryComplete && offsetHandleTarget
-                ? offsetHandleTarget.totalBaseline === undefined
-                  ? 'Total measures from this face to the flat face opposite it behind the picked point. Holes, fillets and chamfers are not counted; a stepped face can read differently where you pick. Offset shows only the signed distance of this edit.'
-                  : 'Total shows the feature dimension. Offset shows only the signed distance of this edit.'
+                ? `Offset is how far this edit moves the face, + out, − in. ${
+                    offsetHandleTarget.totalBaseline === undefined
+                      ? 'Where a flat face lies opposite, the tag switches to Total: the distance from this face to that face behind the picked point. Holes, fillets and chamfers are not counted; a stepped face can read differently where you pick.'
+                      : 'Switch the tag to Total to read the feature dimension.'
+                  }`
                 : null
             }
             pick={
@@ -33363,7 +37151,13 @@ export function App() {
             // the guidance row: the same line, remedies and Why? the control
             // shows, where the eye returns when the model has nothing to say.
             notice={
-              !keypad && calloutWithOperation?.operation?.error ? (
+              liveSessionConnecting &&
+              !(!keypad && calloutWithOperation?.operation?.error) ? (
+                <LiveSessionNotice
+                  key={doc.projectId}
+                  onRetry={collaboration.reconnect}
+                />
+              ) : !keypad && calloutWithOperation?.operation?.error ? (
                 <EditRefusal
                   operation={calloutWithOperation.operation}
                   variant="bar"
@@ -33388,7 +37182,17 @@ export function App() {
                   }
                   hint={inPlace.hint}
                   refusal={inPlace.refusal}
-                  canFinish={inPlace.canFinish}
+                  unitLabel={displayLengthName(doc.units)}
+                  onTrySize={(dimension, size) => {
+                    commitInPlacePanelValue(dimension, formatNumber(size));
+                  }}
+                  canFinish={
+                    inPlace.canFinish &&
+                    !(keypad?.kind === 'command' && commandEntryError)
+                  }
+                  previewPending={
+                    inPlace.request !== null && inPlace.refusal === null
+                  }
                   options={inPlace.optionSpecs.map((option) => ({
                     ...option,
                     value: inPlace.options[option.id] ?? option.initial
@@ -33419,6 +37223,34 @@ export function App() {
                   onValueCommit={commitInPlacePanelValue}
                   onValueRestore={inPlace.dropRefusal}
                   onValuePreview={previewInPlacePanelValue}
+                  scope={parameterScope.scope}
+                  aside={
+                    bendTable ? (
+                      <SheetMetalBendPanel
+                        rows={bendTable}
+                        unitLabel={displayLengthName(doc.units)}
+                        evaluate={(text) =>
+                          evalParamValue(text, parameterScope.scope, doc.units)
+                        }
+                        onOption={inPlace.setOption}
+                        onRefuse={inPlace.refuseValue}
+                        onRestore={inPlace.dropRefusal}
+                        missingLines={bendMissingLines}
+                        onRemove={(line) => inPlace.pickCurve(line)}
+                        fold={bendFold}
+                        onFold={setBendFold}
+                        fixedPoint={bendFixedPoint(
+                          inPlace.options,
+                          bendSaved?.featureKind === 'sheet-metal'
+                            ? bendSaved
+                            : undefined
+                        )}
+                        onClearFixed={() =>
+                          inPlace.setOption(FIXED_POINT_OPTION, '')
+                        }
+                      />
+                    ) : null
+                  }
                   onDone={() => inPlace.done()}
                   onCancel={cancelInPlaceCommand}
                 />
@@ -33500,7 +37332,10 @@ export function App() {
                   units={doc.units}
                   profileCount={Math.max(1, selectedProfiles.length)}
                   bodies={doc.bodyOrder.flatMap((bodyId) => {
-                    const body = doc.derived.bodyRepresentations[bodyId];
+                    const body = ownEntry(
+                      doc.derived.bodyRepresentations,
+                      bodyId
+                    );
                     return body && !body.consumed
                       ? [{ bodyId, name: body.name }]
                       : [];
@@ -33639,7 +37474,7 @@ export function App() {
                     )
                   }
                   onConfirm={confirmMove}
-                  onCancel={cancelPanel}
+                  onCancel={cancelMove}
                   copy={
                     movePreview.target === 'sketch'
                       ? undefined
@@ -33664,6 +37499,7 @@ export function App() {
             warningCount={diagnostics.length}
             documentVersion={doc.version}
             saveState={presentedSaveState}
+            orbitMode={appSettings.viewport.orbitMode}
             repeatingToast={statusRepeatedByToast(toast)}
             searchBar={
               <CommandBar
@@ -33703,6 +37539,10 @@ export function App() {
                 }
                 draft={promptDraft}
                 pick={commandContextLabel(commandSelection)}
+                result={
+                  assistantAvailable ? (assistantActivity.latest ?? null) : null
+                }
+                onResult={() => setAssistantCollapsed(false)}
               />
             }
           />
@@ -33762,6 +37602,17 @@ export function App() {
             }}
           />
           <input
+            ref={projectInsertInputRef}
+            type="file"
+            accept={fileAccept('.openzcad')}
+            hidden
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = '';
+              if (file) void handleInsertProject(file);
+            }}
+          />
+          <input
             ref={importInputRef}
             type="file"
             accept={fileAccept(CAD_IMPORT_ACCEPT)}
@@ -33797,16 +37648,45 @@ export function App() {
                 setPanelState((current) => ({
                   ...current,
                   workspaceTourDismissed: false,
-                  workspaceTourMinimized: false
+                  workspaceTourMinimized: false,
+                  // Asked for again: from the start, not where it was left.
+                  workspaceTourStep: 0
                 }));
               }}
             />
           )}
           {contextMenuExit.rendered ? (
             <ContextMenu
-              menu={contextMenuExit.rendered}
+              menu={withFaceVerbs(
+                contextMenuExit.rendered,
+                renderedSelectedTopology?.kind === 'face'
+                  ? renderedSelectedTopology
+                  : null,
+                calloutWithOperation?.anchor === 'selection'
+                  ? calloutWithOperation.verbs
+                  : null,
+                {
+                  disabledReason: normalToFaceTarget
+                    ? null
+                    : 'The face is not flat',
+                  shortcut: menuShortcut('view-normal-to-face')
+                }
+              )}
               closing={contextMenuExit.closing}
-              onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
+              onSelect={(itemId) => {
+                // A face's verbs act as its rail buttons do (I19).
+                if (itemId.startsWith(FACE_VERB_PREFIX)) {
+                  calloutWithOperation?.onVerb(
+                    itemId.slice(
+                      FACE_VERB_PREFIX.length
+                    ) as SelectionCalloutVerbId
+                  );
+                } else if (itemId === LOOK_AT_FACE_ITEM_ID) {
+                  requestNormalToSelectedFace();
+                } else {
+                  contextMenuActionsRef.current[itemId]?.();
+                }
+              }}
               onClose={() => setContextMenu(null)}
             />
           ) : null}
@@ -33817,6 +37697,7 @@ export function App() {
               <ProjectSharingDialog
                 projectId={doc.projectId}
                 projectName={doc.name}
+                configurations={doc.configurations?.rows ?? []}
                 localProject={!activeProjectIsCloud}
                 localImportSourceNames={localOnlySources.map(
                   (source) => source.sourceName
@@ -33906,6 +37787,38 @@ export function App() {
               }}
             />
           )}
+          {pendingDetailCascade &&
+            activeResumePrompt(pendingDetailCascade, doc) && (
+              <DeleteDependentsDialog
+                name={pendingDetailCascade.name}
+                dependents={pendingDetailCascade.dependents.map(
+                  (dependent) => dependent.name
+                )}
+                onCancel={() => setPendingDetailCascade(null)}
+                onDeleteAll={() => {
+                  const { name, featureIds, dependents, manager } =
+                    pendingDetailCascade;
+                  setPendingDetailCascade(null);
+                  if (
+                    managerRef.current !== manager ||
+                    !activeResumePrompt(pendingDetailCascade, manager.document)
+                  ) {
+                    setStatus(
+                      'The model changed. Select the feature again before deleting it.'
+                    );
+                    return;
+                  }
+                  commitDeleteFeatures(
+                    [
+                      ...featureIds,
+                      ...dependents.map((dependent) => dependent.featureId)
+                    ],
+                    0,
+                    name
+                  );
+                }}
+              />
+            )}
           {pendingSuppression &&
             activeSuppressionPrompt(pendingSuppression, doc?.projectId) && (
               <SuppressFeatureDialog
@@ -34004,12 +37917,13 @@ export function App() {
             accountConflict.projectId === doc.projectId &&
             !collaboration.conflict &&
             !roomConnectingForProject &&
-            accountRecheckProjectId !== doc.projectId && (
+            accountRecheckProjectId !== doc.projectId &&
+            dismissedAccountConflict !== accountConflict && (
               <ProjectConflictDialog
                 conflict={accountConflict}
                 busy={busy}
                 onResolve={resolveAccountConflict}
-                onClose={() => setAccountConflict(null)}
+                onClose={() => setDismissedAccountConflict(accountConflict)}
               />
             )}
           {importUnitsPrompt && (
@@ -34037,26 +37951,64 @@ export function App() {
           )}
           {meshExportOpen &&
             doc &&
-            // Keep the dialog open if the last visible body is hidden.
-            (exportBodyIds.length > 0 ||
+            // A row that is not shown has its own bodies (listed below once
+            // the kernel answers); otherwise keep the dialog open if the
+            // last visible body is hidden.
+            (exportRowId !== null ||
+              exportBodyIds.length > 0 ||
               (exportScopeInfo?.hiddenExcluded ?? 0) > 0) && (
               <ExportDialog
                 scopeLabel={
-                  exportScopeInfo?.selection && selectedBody
-                    ? selectedBody.name
-                    : exportScopeInfo
-                      ? exportScopeLabel(exportScopeInfo)
-                      : `all bodies (${exportBodyIds.length})`
+                  exportRowId &&
+                  doc.configurations?.rows.some((row) => row.id === exportRowId)
+                    ? `every body configuration ${doc.configurations.rows.find((row) => row.id === exportRowId)!.name} shows`
+                    : exportScopeInfo?.selection && selectedBody
+                      ? selectedBody.name
+                      : exportScopeInfo
+                        ? exportScopeLabel(exportScopeInfo)
+                        : `all bodies (${exportBodyIds.length})`
                 }
-                bodies={exportBodyIds.map((bodyId) => ({
-                  bodyId,
-                  name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId,
-                  meshReference:
-                    doc.derived.bodyRepresentations[bodyId]?.meshReference
-                }))}
+                bodies={
+                  exportRowId !== null
+                    ? exportRowBodies?.rowId === exportRowId &&
+                      exportRowBodies.version === doc.version
+                      ? exportRowBodies.bodies
+                      : []
+                    : exportBodyIds.map((bodyId) => ({
+                        bodyId,
+                        name:
+                          ownEntry(doc.derived.bodyRepresentations, bodyId)
+                            ?.name ?? bodyId,
+                        meshReference: ownEntry(
+                          doc.derived.bodyRepresentations,
+                          bodyId
+                        )?.meshReference
+                      }))
+                }
                 revision={doc.version}
-                onClose={() => setMeshExportOpen(false)}
+                key={exportRowId ?? 'active'}
+                onClose={() => {
+                  setMeshExportOpen(false);
+                  setExportRowId(null);
+                }}
                 onExport={handleExportMesh}
+                {...(doc.configurations && doc.configurations.rows.length > 1
+                  ? {
+                      configuration: {
+                        rows: doc.configurations.rows,
+                        selectedRowId:
+                          exportRowId ?? doc.configurations.activeRowId,
+                        onSelect: (rowId: string) =>
+                          setExportRowId(
+                            rowId === doc.configurations?.activeRowId
+                              ? null
+                              : rowId
+                          )
+                      }
+                    }
+                  : {})}
+                slicerTargets={slicerTargets(isDesktopApp())}
+                onOpenInSlicer={handleOpenInSlicer}
                 onCheckQuality={handleCheckMeshQuality}
                 exportUnits={appSettings.files.exportUnits}
                 documentUnits={doc.units}
@@ -34101,6 +38053,27 @@ export function App() {
               onExportSvg={(options) => void handleExportSketchSvg(options)}
             />
           )}
+          {flatPatternFeatureId && doc && sheetMetalOptions.length > 0 && (
+            <FlatPatternDialog
+              features={sheetMetalOptions}
+              initialFeatureId={flatPatternFeatureId}
+              units={doc.units}
+              projectName={doc.name}
+              // Any edit, local or a collaborator's, and any replacement of
+              // the document (even at the same version) is a new revision:
+              // the view rebuilds the pattern before it offers an export again.
+              revision={documentRevision(doc)}
+              loadPattern={(featureId) => {
+                const current = managerRef.current?.document ?? doc;
+                return geometry.sheetMetalFlatPattern(current, featureId);
+              }}
+              onSave={({ fileName, format, text }) =>
+                saveCadTextFile(fileName, format, text)
+              }
+              onCopy={(text) => navigator.clipboard.writeText(text)}
+              onClose={() => setFlatPatternFeatureId(null)}
+            />
+          )}
           {pendingShaprImport && (
             <ShaprImportDialog
               shaprFileName={pendingShaprImport.shaprFile.name}
@@ -34108,12 +38081,14 @@ export function App() {
               phase={pendingShaprImport.phase}
               progress={pendingShaprImport.progress}
               error={pendingShaprImport.error}
+              errorDetail={pendingShaprImport.errorDetail}
               inspection={pendingShaprImport.inspection}
               onCancel={cancelShaprImport}
               onApply={() => void applyShaprImport()}
             />
           )}
           {settingsOverlay}
+          {confirmDialog}
         </>
       }
     />

@@ -26,6 +26,14 @@ import type {
 } from './e2ee/encryptedRoomCodec';
 import { useCollaboration } from './useCollaboration';
 import { encryptionStateChanged } from './e2ee/encryptionStateEvents';
+import { installProjectWriteGate } from './projectWriteGate';
+
+/** The gate as a reset in another tab leaves it: every write refused. */
+function refuseWrites() {
+  installProjectWriteGate(() => {
+    throw new Error('Encryption was reset in another tab.');
+  });
+}
 
 const codec = {
   encode: vi.fn<EncryptedRoomCodec['encode']>(),
@@ -203,6 +211,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  installProjectWriteGate(null);
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
@@ -1012,6 +1021,64 @@ describe('useCollaboration in an encrypted room (ADR-024 slice 4-9)', () => {
     await flush();
     await kept;
     expect(result.current.conflict).toBeNull();
+    unmount();
+  });
+
+  it('sends nothing when the project is reset while its edit is sealed', async () => {
+    const base = createProjectDocument('Reset', toUserId('user_reset'));
+    const { socket, rerender, result, unmount } = await connectedOwner(base);
+    const sealing = codec.encode.getMockImplementation()!;
+    codec.encode.mockImplementationOnce(async (document, baseVersion) => {
+      const sealed = await sealing(document, baseVersion);
+      // Another tab resets the project while this one seals.
+      refuseWrites();
+      return sealed;
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await edit(rerender, withBox(base, 'Box'));
+    error.mockRestore();
+    expect(codec.encode).toHaveBeenCalledTimes(1);
+    expect(
+      socket.frames().filter((frame) => frame.type === 'e2ee-document')
+    ).toEqual([]);
+    expect(result.current.status).toBe('rejected');
+    unmount();
+  });
+
+  it('keeps a refused Keep my version in its dialog, sending nothing', async () => {
+    const base = createProjectDocument('Keep refused', toUserId('user_kr'));
+    const { socket, rerender, result, unmount } = await connectedOwner(base);
+    const local = withBox(base, 'Local box');
+    const remote = { ...withBox(base, 'Remote box'), version: 5 };
+    await edit(rerender, local);
+    socket.receive({ type: 'e2ee-conflict', latest: { plain: remote } });
+    await flush();
+    expect(result.current.status).toBe('conflict');
+    const sentBefore = socket.sent.length;
+    const sealing = codec.encode.getMockImplementation()!;
+    codec.encode.mockImplementationOnce(async (...args) => {
+      const sealed = await sealing(...args);
+      refuseWrites();
+      return sealed;
+    });
+    let kept!: Promise<void>;
+    act(() => {
+      kept = result.current.keepLocalVersion(remote.version);
+    });
+    const outcome = kept.then(
+      () => null,
+      (error: unknown) => error
+    );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+    await flush();
+    expect(((await outcome) as Error | null)?.message).toBe(
+      'Encryption was reset in another tab.'
+    );
+    expect(socket.sent.slice(sentBefore)).toEqual([]);
+    expect(result.current.status).toBe('conflict');
+    expect(result.current.conflict).not.toBeNull();
     unmount();
   });
 

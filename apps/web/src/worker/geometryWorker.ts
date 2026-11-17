@@ -6,8 +6,15 @@ import {
 import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import type {
+  AssemblyInterferenceOperand,
+  AssemblyInterferenceReport,
+  SurfaceAnalysisReport,
+  SurfaceAnalysisRequest
+} from '@openzcad/shared';
+import type {
   BodyId,
   FaceRecognitionSummary,
+  FeatureId,
   ProjectDocument,
   ProjectId,
   SketchId,
@@ -28,11 +35,14 @@ import type {
   kernelSnapshotBuildId,
   MeshQualityReport,
   MassPropertiesRead,
+  ExportBodySummary,
   PersistedHistorySession,
   RebuildProgress,
   SectionOutlineReport,
+  SheetMetalFlatPattern,
   SketchPlanarOperation,
   SketchPlanarResult,
+  SheetMetalFoldPreview,
   SketchSolveAnchor,
   SketchSolveOutcome
 } from '@openzcad/kernel-adapter/exact';
@@ -170,6 +180,12 @@ export type GeometryWorkerRequest =
       transparent?: boolean;
       /** 'step' only: the name the file is saved under, for its header. */
       fileName?: string;
+      /**
+       * F06: ignore `bodyIds` and write every body the document itself shows
+       * once built — a configuration that is not the displayed one, whose
+       * bodies the caller cannot list.
+       */
+      allShownBodies?: boolean;
     }
   | {
       /**
@@ -197,7 +213,8 @@ export type GeometryWorkerRequest =
       deflection: number;
       angularTolerance?: number;
       /** The space the writer tessellates in; millimetres when unset. */
-      units?: UnitSystem;
+      units?: UnitSystem; /** F06: as for an export, every body the document shows. */
+      allShownBodies?: boolean;
     }
   | {
       /**
@@ -224,6 +241,27 @@ export type GeometryWorkerRequest =
       bodyId: BodyId;
     }
   | {
+      /**
+       * F06: the bodies an export of this document writes, named and marked
+       * when they are mesh references: an export dialog for a configuration
+       * that is not shown lists and limits its formats from these.
+       */
+      type: 'export-bodies';
+      requestId: string;
+      document: ProjectDocument;
+    }
+  | {
+      /**
+       * M16: a sheet-metal feature folded to a fraction of every bend, as a
+       * view-only mesh (the adapter's `sheetMetalFoldPreview`).
+       */
+      type: 'sheet-metal-fold';
+      requestId: string;
+      document: ProjectDocument;
+      featureId: FeatureId;
+      fraction: number;
+    }
+  | {
       type: 'solve-sketch';
       requestId: string;
       document: ProjectDocument;
@@ -231,11 +269,44 @@ export type GeometryWorkerRequest =
       anchor?: SketchSolveAnchor;
     }
   | {
+      /**
+       * AS04: exact pairwise interference between assembly components posed
+       * by their matrices (the adapter's `assemblyInterference`, which runs
+       * the M09 clash query). Read-only.
+       */
+      type: 'assembly-interference';
+      requestId: string;
+      document: ProjectDocument;
+      operands: AssemblyInterferenceOperand[];
+    }
+  | {
+      /**
+       * M09 analysis overlays: the exact per-face analysis of the named
+       * bodies (the adapter's `surfaceAnalysis`). Read-only.
+       */
+      type: 'surface-analysis';
+      requestId: string;
+      document: ProjectDocument;
+      bodyIds: BodyId[];
+      analysis: SurfaceAnalysisRequest;
+    }
+  | {
       /** One planar sketch edit: corner fillet, corner chamfer, or offset. */
       type: 'sketch-2d-op';
       requestId: string;
       document: ProjectDocument;
       operation: SketchPlanarOperation;
+    }
+  | {
+      /**
+       * M16: a sheet-metal feature's flat pattern (outline loops, bend
+       * centre lines and bend rows, in the blank's sketch coordinates and
+       * document units) for the flat-pattern view. Display and export only.
+       */
+      type: 'sheet-metal-flat-pattern';
+      requestId: string;
+      document: ProjectDocument;
+      featureId: FeatureId;
     }
   | {
       /**
@@ -401,6 +472,24 @@ export type GeometryMassPropertiesResult =
     }
   | { type: 'mass-properties'; ok: false; requestId: string; error: string };
 
+export type GeometryExportBodiesResult =
+  | {
+      type: 'export-bodies';
+      ok: true;
+      requestId: string;
+      bodies: ExportBodySummary[];
+    }
+  | { type: 'export-bodies'; ok: false; requestId: string; error: string };
+
+export type GeometrySheetMetalFoldResult =
+  | {
+      type: 'sheet-metal-fold';
+      ok: true;
+      requestId: string;
+      preview: SheetMetalFoldPreview;
+    }
+  | { type: 'sheet-metal-fold'; ok: false; requestId: string; error: string };
+
 export type GeometrySectionResult =
   | {
       type: 'section';
@@ -409,6 +498,34 @@ export type GeometrySectionResult =
       report: SectionOutlineReport;
     }
   | { type: 'section'; ok: false; requestId: string; error: string };
+
+export type GeometryAssemblyInterferenceResult =
+  | {
+      type: 'assembly-interference';
+      ok: true;
+      requestId: string;
+      report: AssemblyInterferenceReport;
+    }
+  | {
+      type: 'assembly-interference';
+      ok: false;
+      requestId: string;
+      error: string;
+    };
+
+export type GeometrySurfaceAnalysisResult =
+  | {
+      type: 'surface-analysis';
+      ok: true;
+      requestId: string;
+      report: SurfaceAnalysisReport;
+    }
+  | {
+      type: 'surface-analysis';
+      ok: false;
+      requestId: string;
+      error: string;
+    };
 
 export type GeometrySolveSketchResult =
   | {
@@ -445,6 +562,20 @@ export type GeometryRecognizeImportedFaceResult =
     }
   | {
       type: 'recognize-imported-face';
+      ok: false;
+      requestId: string;
+      error: string;
+    };
+
+export type GeometrySheetMetalFlatPatternResult =
+  | {
+      type: 'sheet-metal-flat-pattern';
+      ok: true;
+      requestId: string;
+      pattern: SheetMetalFlatPattern;
+    }
+  | {
+      type: 'sheet-metal-flat-pattern';
       ok: false;
       requestId: string;
       error: string;
@@ -516,10 +647,15 @@ export type GeometryWorkerResult =
   | GeometryMeshQualityResult
   | GeometryDrawingTessellationResult
   | GeometryMassPropertiesResult
+  | GeometryExportBodiesResult
+  | GeometrySheetMetalFoldResult
   | GeometrySectionResult
   | GeometrySolveSketchResult
+  | GeometryAssemblyInterferenceResult
+  | GeometrySurfaceAnalysisResult
   | GeometrySketch2dOpResult
-  | GeometryRecognizeImportedFaceResult;
+  | GeometryRecognizeImportedFaceResult
+  | GeometrySheetMetalFlatPatternResult;
 
 type ExactKernel = Awaited<ReturnType<typeof createExactKernelAdapter>>;
 let exactKernelStatus: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
@@ -1061,6 +1197,28 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       return;
     }
 
+    if (request.type === 'export-bodies') {
+      if (exactKernelStatus !== 'ready')
+        post(stateFor('loading-remus', request, { stale: true }));
+      const exact = await loadExactKernel();
+      if (!exact) {
+        throw exactKernelError instanceof Error
+          ? exactKernelError
+          : new Error('The exact Remus kernel failed to load.');
+      }
+      post(stateFor('rebuilding', request, { stale: true }));
+      await preloadDocumentFonts(document);
+      const bodies = await exact.documentExportBodies(document);
+      post({
+        type: 'export-bodies',
+        ok: true,
+        requestId: request.requestId,
+        bodies
+      });
+      post(stateFor('ready', request, { stale: false }));
+      return;
+    }
+
     if (request.type === 'mass-properties') {
       let result: MassPropertiesRead;
       if (
@@ -1154,8 +1312,12 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       request.type === 'drawing-tessellation' ||
       request.type === 'section' ||
       request.type === 'solve-sketch' ||
+      request.type === 'assembly-interference' ||
+      request.type === 'surface-analysis' ||
       request.type === 'sketch-2d-op' ||
-      request.type === 'recognize-imported-face'
+      request.type === 'recognize-imported-face' ||
+      request.type === 'sheet-metal-fold' ||
+      request.type === 'sheet-metal-flat-pattern'
     ) {
       // 'failed' means the next load call retries, so it is a loading state
       // here too, not a terminal one.
@@ -1180,15 +1342,47 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         post(stateFor('ready', request, { stale: false }));
         return;
       }
+      if (request.type === 'sheet-metal-fold') {
+        const preview = await exact.sheetMetalFoldPreview(
+          document,
+          request.featureId,
+          request.fraction
+        );
+        post({
+          type: 'sheet-metal-fold',
+          ok: true,
+          requestId: request.requestId,
+          preview
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
+      if (request.type === 'sheet-metal-flat-pattern') {
+        const pattern = await exact.sheetMetalFlatPattern(
+          document,
+          request.featureId
+        );
+        post({
+          type: 'sheet-metal-flat-pattern',
+          ok: true,
+          requestId: request.requestId,
+          pattern
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
       if (request.type === 'recognize-imported-face') {
         // The face reference is resolved worker-side against the rebuilt
         // document: the main thread's pick carries rebuild-local identity
         // (hash + topology id) that only matches the live derived topology.
+        // Own entries only (inline, to keep this chunk within its budget):
+        // a body id such as "__proto__" must not resolve an inherited member.
+        const representations = document.derived.bodyRepresentations;
         const faceReference =
-          request.topologyId !== undefined
-            ? document.derived.bodyRepresentations[
-                request.bodyId
-              ]?.topology?.faces.find(
+          request.topologyId !== undefined &&
+          typeof request.bodyId === 'string' &&
+          Object.hasOwn(representations, request.bodyId)
+            ? representations[request.bodyId]?.topology?.faces.find(
                 (face) => face.topologyId === request.topologyId
               )?.reference
             : undefined;
@@ -1220,6 +1414,35 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           ok: true,
           requestId: request.requestId,
           outcome
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
+      if (request.type === 'assembly-interference') {
+        const report = await exact.assemblyInterference(
+          document,
+          request.operands
+        );
+        post({
+          type: 'assembly-interference',
+          ok: true,
+          requestId: request.requestId,
+          report
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
+      if (request.type === 'surface-analysis') {
+        const report = await exact.surfaceAnalysis(
+          document,
+          request.bodyIds,
+          request.analysis
+        );
+        post({
+          type: 'surface-analysis',
+          ok: true,
+          requestId: request.requestId,
+          report
         });
         post(stateFor('ready', request, { stale: false }));
         return;
@@ -1271,7 +1494,9 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       if (request.type === 'mesh-quality') {
         const report = await exact.meshQuality(
           document,
-          request.bodyIds,
+          request.allShownBodies
+            ? await exact.documentExportBodyIds(document)
+            : request.bodyIds,
           request.deflection,
           {
             ...(request.units ? { units: request.units } : {}),
@@ -1338,8 +1563,11 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         post(stateFor('ready', request, { stale: false }));
         return;
       }
+      const exportBodyIds = request.allShownBodies
+        ? await exact.documentExportBodyIds(document)
+        : request.bodyIds;
       if (request.format !== 'step' && request.format !== 'stl') {
-        const data = await exact.exportMesh(document, request.bodyIds, {
+        const data = await exact.exportMesh(document, exportBodyIds, {
           format: request.format,
           deflection: request.deflection ?? DEFAULT_EXPORT_DEFLECTION,
           ...(request.units ? { units: request.units } : {}),
@@ -1363,21 +1591,16 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       }
       const text =
         request.format === 'step'
-          ? await exact.exportStep(document, request.bodyIds, {
+          ? await exact.exportStep(document, exportBodyIds, {
               ...(request.units ? { units: request.units } : {}),
               ...(request.fileName ? { fileName: request.fileName } : {})
             })
-          : await exact.exportStl(
-              document,
-              request.bodyIds,
-              request.deflection,
-              {
-                ...(request.units ? { units: request.units } : {}),
-                ...(request.angularTolerance !== undefined
-                  ? { angularTolerance: request.angularTolerance }
-                  : {})
-              }
-            );
+          : await exact.exportStl(document, exportBodyIds, request.deflection, {
+              ...(request.units ? { units: request.units } : {}),
+              ...(request.angularTolerance !== undefined
+                ? { angularTolerance: request.angularTolerance }
+                : {})
+            });
       const result: GeometryExportResult = {
         type: 'export',
         ok: true,
@@ -1661,6 +1884,20 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         requestId: request.requestId,
         error: message
       });
+    } else if (request.type === 'export-bodies') {
+      post({
+        type: 'export-bodies',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'sheet-metal-fold') {
+      post({
+        type: 'sheet-metal-fold',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
     } else if (request.type === 'mesh-quality') {
       post({
         type: 'mesh-quality',
@@ -1689,6 +1926,20 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         requestId: request.requestId,
         error: message
       });
+    } else if (request.type === 'assembly-interference') {
+      post({
+        type: 'assembly-interference',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'surface-analysis') {
+      post({
+        type: 'surface-analysis',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
     } else if (request.type === 'sketch-2d-op') {
       post({
         type: 'sketch-2d-op',
@@ -1699,6 +1950,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     } else if (request.type === 'recognize-imported-face') {
       post({
         type: 'recognize-imported-face',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'sheet-metal-flat-pattern') {
+      post({
+        type: 'sheet-metal-flat-pattern',
         ok: false,
         requestId: request.requestId,
         error: message

@@ -129,6 +129,23 @@ export const threadGlyph = glyph(
   </>
 );
 
+/** A thin plate lying flat, its edge showing its thickness. */
+export const sheetMetalGlyph = glyph(
+  <>
+    <path d="M3 15l6-5h12l-6 5z" />
+    <path d="M3 15v2l12 .01L21 12v-2" />
+  </>
+);
+
+/** A plate folded up through a round bend, the way it turns dashed. */
+export const bendGlyph = glyph(
+  <>
+    <path d="M3 20h9a6 6 0 0 0 6-6V4" />
+    <path d="M3 16h9a2 2 0 0 0 2-2V4" />
+    <path d="M3 4l7 7" strokeDasharray={DASH} />
+  </>
+);
+
 /** A solid hollowed to an open cup. */
 export const shellGlyph = glyph(
   <>
@@ -193,6 +210,18 @@ export const circularPatternGlyph = glyph(
 );
 
 /** Copies in rows and columns, spaced apart: not the viewer's grid. */
+/** M02: copies standing on scattered sketch points. */
+export const pointPatternGlyph = glyph(
+  <>
+    <rect x="3" y="4" width="6" height="6" rx="1" />
+    <rect x="14" y="2" width="6" height="6" rx="1" />
+    <rect x="11" y="15" width="6" height="6" rx="1" />
+    <circle cx="6" cy="7" r="0.6" />
+    <circle cx="17" cy="5" r="0.6" />
+    <circle cx="14" cy="18" r="0.6" />
+  </>
+);
+
 export const gridPatternGlyph = glyph(
   <>
     <rect x="3" y="3" width="6" height="6" rx="1" />

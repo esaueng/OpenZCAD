@@ -238,8 +238,20 @@ export function ViewportScaleIndicator({
           .getComputedStyle(root)
           .getPropertyValue('--viewport-scale-pinned')
           .trim() === '1';
+      // Pinned from the top while a phone's sheet takes the foot: the rule
+      // hangs toward that sheet, so it ends a clearance above it rather
+      // than at a fixed 200px that a tall sheet or a short stage reaches.
+      const sheet =
+        box('.stage-right > .panel-lane-float') ??
+        box('.tweak-flyouts.is-open');
+      const pinnedRoom = sheet
+        ? Math.max(MIN_RULE_ROOM_PX, sheet.top - rect.top - CLEARANCE_PX)
+        : DEFAULT_SCALE_BAR_MAX_WIDTH_PX;
       const placement = pinned
-        ? { ...corner, maxLengthPx: DEFAULT_SCALE_BAR_MAX_WIDTH_PX }
+        ? {
+            ...corner,
+            maxLengthPx: Math.min(DEFAULT_SCALE_BAR_MAX_WIDTH_PX, pinnedRoom)
+          }
         : scaleRulePlacement(
             corner,
             box('.instrument-rail')?.top ?? stage.top,
@@ -267,19 +279,27 @@ export function ViewportScaleIndicator({
         ? null
         : new ResizeObserver(measure);
     const watch = () => {
+      // View and Tweak mount their measurement workbench inside the viewer
+      // shell, not beside it, so the shell's own children are watched too:
+      // without it the rule kept the length it had before a phone's sheet
+      // opened and drew over the sheet's text (I47). Observing a node again
+      // only replaces its options; a remounted shell is new.
+      const shell = area?.querySelector('.viewer-shell');
+      if (shell) mounts?.observe(shell, { childList: true });
       // Observing an element twice is a no-op; a remounted rail is new.
       for (const target of [
         area,
         area?.querySelector('.command-bar-lane'),
         area?.querySelector('.command-bar-row'),
         area?.querySelector('.workspace-column-float'),
-        area?.querySelector('.measurement-dock')
+        area?.querySelector('.measurement-dock'),
+        // A sheet opening in the right lane resizes it.
+        area?.querySelector('.stage-right')
       ]) {
         if (target) resizes?.observe(target);
       }
       measure();
     };
-    watch();
     // The tool rail and the command float (the measurement workbench's)
     // mount and unmount beside the viewer.
     const mounts =
@@ -287,6 +307,7 @@ export function ViewportScaleIndicator({
         ? new MutationObserver(watch)
         : null;
     if (area) mounts?.observe(area, { childList: true });
+    watch();
     window.addEventListener('resize', measure);
     return () => {
       resizes?.disconnect();

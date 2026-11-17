@@ -2,7 +2,9 @@ import { FileArchive, LoaderCircle, ShieldCheck, Upload } from 'lucide-react';
 import { useRef } from 'react';
 
 import type { ShaprPairInspection } from '../lib/shaprImportWorkerClient';
+import { submitOnEnter } from '../lib/submitOnEnter';
 import { useModalFocus } from '../lib/useModalFocus';
+import { FailureDetails } from './FailureDetails';
 
 export type ShaprImportDialogPhase = 'parsing' | 'preview' | 'applying';
 
@@ -12,6 +14,8 @@ export interface ShaprImportDialogProps {
   phase: ShaprImportDialogPhase;
   progress: string;
   error: string | null;
+  /** The reader's raw words behind `error`, under Details. */
+  errorDetail?: string | undefined;
   inspection: ShaprPairInspection | null;
   onCancel(): void;
   onApply(): void;
@@ -24,11 +28,12 @@ export function ShaprImportDialog({
   phase,
   progress,
   error,
+  errorDetail,
   inspection,
   onCancel,
   onApply
 }: ShaprImportDialogProps) {
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLFormElement>(null);
   useModalFocus(dialogRef, { autoFocus: true });
   const ir = inspection?.ir;
   const curveCount =
@@ -48,20 +53,30 @@ export function ShaprImportDialog({
         operation.status === 'unsupported' || operation.status === 'ambiguous'
     ).length ?? 0;
   const busy = phase === 'parsing' || phase === 'applying';
+  const canApply = phase === 'preview' && inspection !== null;
 
   return (
     <div className="modal-backdrop">
-      <div
+      {/* A form, so Enter imports once the preview is ready; until then
+          the submit is refused, as the disabled button is. */}
+      <form
         ref={dialogRef}
         className="shapr-import-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="shapr-import-title"
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (canApply) onApply();
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Escape' && phase !== 'applying') {
             event.stopPropagation();
             onCancel();
+            return;
           }
+          submitOnEnter(event);
         }}
       >
         <header>
@@ -82,9 +97,10 @@ export function ShaprImportDialog({
         ) : null}
 
         {error ? (
-          <p className="shapr-import-error" role="alert">
-            {error}
-          </p>
+          <div className="shapr-import-error" role="alert">
+            <p>{error}</p>
+            <FailureDetails detail={errorDetail} />
+          </div>
         ) : null}
 
         {ir ? (
@@ -178,12 +194,7 @@ export function ShaprImportDialog({
                 sized for it, so the usual "Cancel" sat in empty space. */}
             Cancel
           </button>
-          <button
-            type="button"
-            className="primary"
-            disabled={phase !== 'preview' || !inspection}
-            onClick={onApply}
-          >
+          <button type="submit" className="primary" disabled={!canApply}>
             <span className="icon-slot" aria-hidden="true">
               {phase === 'applying' ? (
                 <LoaderCircle size={13} className="spin" />
@@ -194,7 +205,7 @@ export function ShaprImportDialog({
             Import exact STEP + evidence
           </button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

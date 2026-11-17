@@ -9,6 +9,7 @@ import type {
   UnitSystem,
   Vector3
 } from '@openzcad/shared';
+import { millimetresPerUnit } from '@openzcad/shared';
 import {
   edgeLengthMeasurement,
   topologySelectionLabel
@@ -233,13 +234,6 @@ export interface FormattedMeasurement {
 
 /** Keep a long inspection pass bounded without tying it to document state. */
 export const MEASUREMENT_LIMIT = 50;
-
-const UNIT_TO_MM: Record<UnitSystem, number> = {
-  mm: 1,
-  cm: 10,
-  m: 1000,
-  inch: 25.4
-};
 
 const QUALITY_RANK: Record<MeasurementQuality, number> = {
   'exact-analytic': 0,
@@ -955,6 +949,36 @@ export function createSmartMeasurement(
     if (!edge || !measured || measured.value <= 0) {
       return null;
     }
+    // A circular edge is read the way a drawing reads it: by its diameter
+    // (or radius, with Ø/R), the length along it as the detail. "Hole edge
+    // Ø6 — 18.85 mm" gave the circumference, and Ø/R did nothing (I50).
+    const circle = edge.curve?.circle;
+    if (circle && Number.isFinite(circle.radius) && circle.radius > 0) {
+      const full =
+        Math.abs(measured.value - 2 * Math.PI * circle.radius) <=
+        1e-6 * Math.max(1, measured.value);
+      return {
+        ...common,
+        id: `diameter:${targetKey(target)}`,
+        kind: 'diameter',
+        label: target.label.replace(/ center$| midpoint$/, ''),
+        result: {
+          value: circle.radius * 2,
+          dimension: 'length',
+          secondary: {
+            label: full ? 'Circumference' : 'Arc length',
+            value: measured.value,
+            dimension: 'length'
+          }
+        },
+        // The kernel publishes a circle only for an exact CIRCLE curve.
+        quality: 'exact-analytic',
+        annotation: {
+          anchor: target.point ?? circle.center,
+          segments: []
+        }
+      };
+    }
     return {
       ...common,
       id: `edge:${targetKey(target)}`,
@@ -1599,7 +1623,10 @@ function convertedValue(
     return value;
   }
   const exponent = dimension === 'length' ? 1 : dimension === 'area' ? 2 : 3;
-  return value * Math.pow(UNIT_TO_MM[from] / UNIT_TO_MM[to], exponent);
+  return (
+    value *
+    Math.pow(millimetresPerUnit(from) / millimetresPerUnit(to), exponent)
+  );
 }
 
 /**
@@ -1900,9 +1927,7 @@ function delimitedCell(value: string | number, delimiter: ',' | '\t'): string {
 function spreadsheetCell(value: string | number): string {
   const text = String(value);
   const formulaLike = /^[=+\-@\t\r]/.test(text) || /^\s+[=+\-@]/.test(text);
-  return typeof value === 'string' && formulaLike
-    ? `'${text}`
-    : text;
+  return typeof value === 'string' && formulaLike ? `'${text}` : text;
 }
 
 export function measurementsToCsv(

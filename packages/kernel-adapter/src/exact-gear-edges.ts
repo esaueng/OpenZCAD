@@ -122,7 +122,10 @@ export function gearEdgeAssignments(input: {
   readonly facesOfEdge: ReadonlyMap<number, readonly number[]>;
   readonly faceNames: ReadonlyMap<number, string>;
   readonly frame: GearEdgeFrame | null;
+  /** The name's first segment; absent is `gear`. */
+  readonly prefix?: string;
 }): RemusSemanticAssignment[] {
+  const prefix = input.prefix ?? 'gear';
   const nameUse = new Map<string, number>();
   for (const name of input.faceNames.values()) {
     nameUse.set(name, (nameUse.get(name) ?? 0) + 1);
@@ -160,7 +163,7 @@ export function gearEdgeAssignments(input: {
     if (edges.length === 1) {
       assignments.push({
         ...edges[0]!,
-        lineageName: `gear.edge.between.${pair}`
+        lineageName: `${prefix}.edge.between.${pair}`
       });
       continue;
     }
@@ -169,7 +172,7 @@ export function gearEdgeAssignments(input: {
     order.forEach((piece, position) => {
       assignments.push({
         ...edges[piece]!,
-        lineageName: `gear.edge.between.${pair}.piece.${position}.of.${order.length}`
+        lineageName: `${prefix}.edge.between.${pair}.piece.${position}.of.${order.length}`
       });
     });
   }
@@ -186,6 +189,23 @@ export function withGearEdgeLineage(
   producer: FeatureId,
   faces: RemusLineageState,
   frame: GearEdgeFrame | null
+): RemusLineageState {
+  return withFacePairEdgeLineage(kernel, solid, producer, faces, frame, 'gear');
+}
+
+/**
+ * The same naming for any body whose faces are all named by role
+ * (`<prefix>.edge.between.<face>|<face>`): M16 sheet-metal bodies use it
+ * with the prefix `sheet` and no frame, so several edges between one pair
+ * of faces stay unnamed.
+ */
+export function withFacePairEdgeLineage(
+  kernel: RemusKernel,
+  solid: number,
+  producer: FeatureId,
+  faces: RemusLineageState,
+  frame: GearEdgeFrame | null,
+  prefix: string
 ): RemusLineageState {
   const facesOfEdge = new Map<number, number[]>();
   for (const face of kernel.getSolidFaces(solid)) {
@@ -206,7 +226,8 @@ export function withGearEdgeLineage(
         reference.lineageName
       ])
     ),
-    frame
+    frame,
+    prefix
   });
   return mergeRemusLineageStates([
     faces,

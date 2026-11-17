@@ -199,7 +199,7 @@ export function AssemblyPlayer({ assembly }: AssemblyPlayerProps) {
       {studies.length > 1 ? (
         <select
           className="assembly-player-study"
-          aria-label="Motion study"
+          aria-label="Animation"
           value={current.id}
           onChange={(event) => choose(event.target.value)}
         >

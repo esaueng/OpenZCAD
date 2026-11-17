@@ -42,6 +42,11 @@ import { spokenValueName } from '../lib/inPlace/chipNames';
 import type { SelectionCalloutOperation } from '../lib/selectionCallout';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { EditRefusal } from './EditRefusal';
+import { useParameterDefinition } from './forms/parameterDefinition';
+import {
+  undefinedParameterName,
+  useDefineParameterPrompt
+} from './forms/defineParameterPrompt';
 
 export interface KeypadRequest {
   /** U09: which in-place command value a `command` entry edits. */
@@ -387,6 +392,13 @@ export function keypadFloor(host: HTMLElement): number {
  * companion of every drag handle. One instance serves offsets, radii,
  * extrude heights, and sketch dimensions.
  */
+/** A signed move to the hundredth, as the offset chip writes it: "+5", "−19.01". */
+function signedHundredths(value: number): string {
+  const rounded = Math.round(value * 100) / 100;
+  if (rounded === 0) return '0';
+  return `${rounded > 0 ? '+' : '−'}${formatNumber(Math.abs(rounded))}`;
+}
+
 /** The signed drag value a typed total stands for. */
 function offsetFromTotal(
   total: number,
@@ -447,6 +459,7 @@ export function NumericKeypad({
   const gridId = useId();
   const helpId = useId();
   const stateId = useId();
+  const meaningId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const rowRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -743,6 +756,34 @@ export function NumericKeypad({
   }, [evaluation.ok, evaluation.isExpression, normalizedValue, normalizedRaw]);
 
   const entryError = evaluation.ok ? null : (evaluation.error ?? 'invalid');
+  // A name no parameter defines yet is offered for definition in place, as
+  // an expression field offers it: "foo is not defined yet · Define foo =
+  // [30]". It used to end at the bare "Unknown identifier" error.
+  const definition = useParameterDefinition();
+  const undefinedName = evaluation.ok
+    ? null
+    : undefinedParameterName(value, scope, definition, {
+        documentUnits: units,
+        dimension:
+          request.unitKind === 'angle'
+            ? 'angle'
+            : request.unitKind === 'count'
+              ? 'number'
+              : 'length'
+      });
+  const DefinePrompt = useDefineParameterPrompt(
+    definition !== null,
+    undefinedName !== null
+  );
+  // The last value the entry evaluated to, offered as the new name's value.
+  const [lastValue, setLastValue] = useState(
+    evaluation.ok ? evaluation.displayValue : undefined
+  );
+  if (evaluation.ok && evaluation.displayValue !== lastValue) {
+    setLastValue(evaluation.displayValue);
+  }
+  // The name the entry was missing as the scope last stood.
+  const missingName = useRef<string | null>(null);
   useEffect(() => {
     onEntryError?.(entryError);
   }, [entryError, onEntryError]);
@@ -776,6 +817,18 @@ export function NumericKeypad({
     // Keep the value field focused so Enter/Escape always land on the pad.
     inputRef.current?.focus();
   };
+
+  // The missing name defined (here or anywhere else), the entry evaluates
+  // against the new scope: it previews then, so Apply and Enter take it
+  // without another keystroke.
+  useEffect(() => {
+    if (missingName.current !== null && evaluation.ok) previewIfValid(value);
+    // Only on a new scope; `previewIfValid` and `value` as they stand then.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope]);
+  useEffect(() => {
+    missingName.current = undefinedName;
+  }, [undefinedName]);
 
   // The state in words, beside the colour. Only the verdict for the value
   // on screen makes it Ready: Enter never commits an earlier value's
@@ -876,21 +929,42 @@ export function NumericKeypad({
   // A converted or computed value is shown in the document's own units, so
   // a value typed in some other unit is never committed unseen — a plain
   // number under another unit's chip included.
+  // The unit itself stands right after the readout, so the readout names
+  // it only for assistive tech: it read "= 30 mm mm" on screen.
   const evaluated =
-    evaluation.isExpression ||
-    evaluation.typedUnit ||
-    (request.unitKind === 'length' && entryUnit !== units && evaluation.ok)
-      ? evaluation.ok && evaluation.value !== undefined
-        ? `= ${formatNumber(evaluation.displayValue ?? evaluation.value)}${unitText ? ` ${unitText}` : ''}`
-        : (evaluation.error ?? 'invalid')
+    (evaluation.isExpression ||
+      evaluation.typedUnit ||
+      (request.unitKind === 'length' && entryUnit !== units)) &&
+    evaluation.ok &&
+    evaluation.value !== undefined
+      ? `= ${formatNumber(evaluation.displayValue ?? evaluation.value)}`
       : '';
   // An empty field is waiting for a value, not wrong: Apply waits, but it
   // is not called an error until something unreadable is typed.
   const unreadable = state === 'invalid' && value.trim() !== '';
+  // A face offset's number is either the Total size the face leaves or the
+  // signed distance it moves, and the two read nothing alike: typing 5 for
+  // a 24 mm body's top face moved it by -19 (QA 2026-11-14 finding #9). The
+  // field says which one it takes, and in Total what the face does with it,
+  // so a Total of 1e6 is seen to move the face a kilometre. The baseline is
+  // the size before this edit, not the dragged preview's size.
+  const offsetMeaning =
+    request.kind !== 'offset'
+      ? null
+      : request.totalBaseline === undefined
+        ? 'Offset: how far the face moves, + out, − in'
+        : `Total: the size this face sets, ${formatNumber(
+            Math.round(request.totalBaseline * 100) / 100
+          )} ${unitText} before this edit${
+            evaluation.ok && normalizedValue !== undefined
+              ? ` · moves the face ${signedHundredths(normalizedValue)} ${unitText}`
+              : ''
+          }`;
   const describedBy =
     [
       explained || reasonShown || unreadable ? reasonId : null,
-      state === 'checking' ? stateId : null
+      state === 'checking' ? stateId : null,
+      offsetMeaning === null ? null : meaningId
     ]
       .filter(Boolean)
       .join(' ') || undefined;
@@ -1014,6 +1088,9 @@ export function NumericKeypad({
         />
         <span className="keypad-expr-preview" aria-live="polite">
           {state === 'invalid' ? '' : evaluated}
+          {state !== 'invalid' && evaluated && unitText ? (
+            <span className="visually-hidden"> {unitText}</span>
+          ) : null}
         </span>
         {unitText && (
           // The unit is where other units are explained: they are typed,
@@ -1066,12 +1143,37 @@ export function NumericKeypad({
           <Check size={16} aria-hidden="true" />
         </button>
       </div>
+      {offsetMeaning !== null && (
+        <p className="keypad-meaning" id={meaningId}>
+          {offsetMeaning}
+        </p>
+      )}
       {helpOpen && unitText && (
         <p className="keypad-help" id={helpId} role="note">
           {helpText}
         </p>
       )}
-      {unreadable ? (
+      {unreadable && undefinedName && definition && DefinePrompt ? (
+        <div className="keypad-define">
+          <DefinePrompt
+            // A different name is a different offer, with its own value.
+            key={undefinedName}
+            name={undefinedName}
+            initialValue={
+              lastValue === undefined ? '' : formatNumber(lastValue)
+            }
+            noteId={reasonId}
+            definition={definition}
+            onDefined={() => {
+              const input = inputRef.current;
+              if (!input) return;
+              input.focus();
+              const end = input.value.length;
+              input.setSelectionRange(end, end);
+            }}
+          />
+        </div>
+      ) : unreadable ? (
         <p className="keypad-warning" id={reasonId}>
           {entryError === 'invalid' ? 'Not a number or expression' : entryError}
         </p>

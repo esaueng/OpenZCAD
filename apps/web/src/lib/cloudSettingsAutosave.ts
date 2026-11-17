@@ -3,7 +3,7 @@ import type {
   AppSettingsResponse,
   UpdateAppSettingsRequest
 } from '@openzcad/shared';
-import { ApiError } from './api';
+import { accountSettingsAdopted, ApiError } from './api';
 
 export const SETTINGS_AUTOSAVE_DELAY_MS = 450;
 export const SETTINGS_AUTOSAVE_RETRY_DELAY_MS = 2_000;
@@ -171,6 +171,7 @@ export class CloudSettingsAutosave {
     this.#syncedRevision = account.revision;
     this.#automaticRetries = 0;
     this.#lastFailedEditEpoch = null;
+    if (this.#session) accountSettingsAdopted(this.#session.userId, account);
     if (this.#session) {
       this.#session = {
         userId: this.#session.userId,
@@ -277,6 +278,28 @@ export class CloudSettingsAutosave {
 
   async whenIdle(): Promise<void> {
     await this.#queue;
+  }
+
+  /**
+   * Profile erasure removes cloud preferences, so uploading them is neither
+   * necessary nor always possible on a locked device. Keep the device copy
+   * dirty, invalidate outstanding responses and drain writes before erasing.
+   * The action ends the session on success. Otherwise restore only this same
+   * session, never one that signed out or switched accounts during the action.
+   */
+  async withProfileErasure<T>(erase: () => Promise<T>): Promise<T> {
+    this.#assertUsable();
+    const session = this.#session;
+    this.endSession();
+    const epoch = this.#sessionEpoch;
+    try {
+      await this.whenIdle();
+      return await erase();
+    } finally {
+      if (session && this.#sessionEpoch === epoch && this.#session === null) {
+        this.connectSession(session.userId, session.account);
+      }
+    }
   }
 
   dispose(): void {

@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   assistantReplySchemaFor,
   assistantSafetyIdentifier,
-  DEFAULT_OPENROUTER_MODEL,
   streamAssistantProposal,
   testAssistantConnection
 } from '../apps/web/worker/assistant';
@@ -42,7 +41,9 @@ const reply = {
   message: 'Ready.',
   readings: null
 };
-const env = { OPENROUTER_API_KEY: 'test-key' };
+/** MiniMax: JSON mode without native schema enforcement (not the default). */
+const MINIMAX_FREE = 'minimax/minimax-m3.1-flash:free';
+const env = { OPENROUTER_API_KEY: 'test-key', AI_MODEL: MINIMAX_FREE };
 const chat = (content: unknown) =>
   Response.json({
     choices: [
@@ -251,7 +252,7 @@ describe('MiniMax JSON mode dispatch', () => {
     expect(requests).toHaveLength(2);
     for (const body of requests) {
       expect(body).toMatchObject({
-        model: DEFAULT_OPENROUTER_MODEL,
+        model: MINIMAX_FREE,
         response_format: { type: 'json_object' },
         provider: { max_price: { prompt: 0, completion: 0, request: 0 } }
       });
@@ -311,7 +312,7 @@ describe('MiniMax JSON mode dispatch', () => {
       const result = testAssistantConnection(
         {
           provider: 'openrouter',
-          model: DEFAULT_OPENROUTER_MODEL,
+          model: MINIMAX_FREE,
           apiKey: 'test-key',
           reasoningEffort: 'high',
           maxOutputTokens: 32000,

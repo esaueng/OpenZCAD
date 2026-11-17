@@ -1,4 +1,5 @@
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
+import { modelingOperationRefusal } from './remus-operation-refusal';
 
 const VOLUME_DEFLECTION_RATIO = 1e-4;
 /**
@@ -228,7 +229,11 @@ function assertNewOutputHandle(
 function operationFailure(operation: string, error: unknown): Error {
   const detail =
     error instanceof Error ? error.message : 'unknown kernel error';
-  return new Error(`Remus ${operation} refused: ${detail}`, { cause: error });
+  return modelingOperationRefusal(
+    operation,
+    error,
+    `Remus ${operation} refused: ${detail}`
+  );
 }
 
 function runOperation(
@@ -343,14 +348,20 @@ function rigidVolumeVerdict(
 function assertScaleAppropriateDistance(
   value: number,
   input: SolidSnapshot,
-  label: string
+  label: string,
+  /**
+   * Whether the distance eats into the solid. Only an inward distance (a
+   * shell wall) runs out of material at half the thinnest extent; growing
+   * outward never does, so an outward offset leaves its limit to the kernel.
+   */
+  inward: boolean
 ): void {
   if (!Number.isFinite(value) || value <= input.linearTolerance) {
     throw new Error(
       `${label} must be finite and positive at the solid's scale.`
     );
   }
-  if (value * 2 >= input.minimumExtent - input.linearTolerance) {
+  if (inward && value * 2 >= input.minimumExtent - input.linearTolerance) {
     throw new Error(
       `${label} is oversized for the target solid's minimum extent.`
     );
@@ -427,7 +438,12 @@ function shellSolid(
   input: RemusShellInput
 ): number {
   const source = inspectSolid(kernel, input.targetSolid, 'Target solid');
-  assertScaleAppropriateDistance(input.thickness, source, 'Shell thickness');
+  assertScaleAppropriateDistance(
+    input.thickness,
+    source,
+    'Shell thickness',
+    true
+  );
   if (input.openingFaces.length === 0) {
     throw new Error('Shell requires at least one opening face.');
   }
@@ -472,7 +488,7 @@ function offsetSolid(
   input: RemusSolidOffsetInput
 ): number {
   const source = inspectSolid(kernel, input.targetSolid, 'Target solid');
-  assertScaleAppropriateDistance(input.distance, source, 'Solid offset');
+  assertScaleAppropriateDistance(input.distance, source, 'Solid offset', false);
   return runOperation(
     kernel,
     'solid offset',

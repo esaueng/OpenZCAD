@@ -1,6 +1,11 @@
-import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { Component, Suspense, type ErrorInfo, type ReactNode } from 'react';
 import { recordCaughtError } from '../lib/activityLog';
-import { isChunkLoadError, STALE_CHUNK_MESSAGE } from '../lib/staleChunk';
+import {
+  isChunkLoadError,
+  lazyWithStaleChunkNotice,
+  STALE_CHUNK_MESSAGE
+} from '../lib/staleChunk';
+import { useOnline } from '../hooks/useOnline';
 import { BrandMark } from './BrandMark';
 
 interface ErrorBoundaryProps {
@@ -8,6 +13,12 @@ interface ErrorBoundaryProps {
   label: string;
   resetKey?: string | number;
   fallback?: ReactNode;
+  /**
+   * Show `fallback` during the automatic remount too, rather than nothing:
+   * for a fallback that keeps the panel's essential control (a running
+   * rebuild's Cancel), which must not blink out for the retry.
+   */
+  fallbackWhileRecovering?: boolean;
   /**
    * `page` when the boundary wraps the whole app: its fallback is then the
    * only thing on screen, so it takes the viewport rather than a panel strip.
@@ -24,6 +35,83 @@ interface ErrorBoundaryState {
 }
 
 const reload = () => window.location.reload();
+
+/** The message alone: the details until the rest loads, or if it cannot. */
+function PlainDetails({ message }: { message: string }) {
+  return (
+    <details className="error-page-details">
+      <summary>Error details</summary>
+      <code>{message}</code>
+    </details>
+  );
+}
+
+// Only a crash needs it, so it loads with the card (the startup prefetch has
+// usually fetched it already) rather than weigh on the entry chunk. A chunk
+// that cannot load leaves the plain message, never a second crash, and
+// raises no stale-version notice of its own.
+const CrashDetails = lazyWithStaleChunkNotice(() =>
+  import('./CrashDetails').then(
+    (module) => ({ default: module.CrashDetails }),
+    () => ({ default: PlainDetails })
+  )
+);
+
+/**
+ * A panel whose code did not download. Offline it says it waits for the
+ * connection and offers no Reload, which could lose the app shell itself;
+ * once online, Reload is the way back.
+ */
+function QuietChunkFailure({ label }: { label: string }) {
+  const online = useOnline();
+  return (
+    <section className="error-boundary is-quiet" role="status">
+      <span>
+        {online
+          ? `${label} did not load.`
+          : `${label} did not load. You’re offline; reload once you reconnect.`}
+      </span>
+      {online ? (
+        <button
+          type="button"
+          className="error-boundary-reload"
+          title={STALE_CHUNK_MESSAGE}
+          aria-label="Reload workspace"
+          onClick={reload}
+        >
+          Reload
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
+/** The page card's message and action for a chunk that did not download. */
+function PageChunkFailure() {
+  const online = useOnline();
+  return (
+    <>
+      <p role="alert">
+        {online
+          ? 'Check your connection, then reload the workspace to try again.'
+          : 'You’re offline. Your work is saved on this device. Reload becomes available when you reconnect.'}
+      </p>
+      <p className="error-page-note">
+        OpenZCAD autosaves as you work, and reloading reopens your projects from
+        this device.
+      </p>
+      <button
+        type="button"
+        className="primary error-page-action"
+        onClick={reload}
+        disabled={!online}
+        autoFocus
+      >
+        {online ? 'Reload workspace' : 'Waiting for a connection…'}
+      </button>
+    </>
+  );
+}
 
 /**
  * A panel crash is remounted once on its own before the card is shown, so a
@@ -52,6 +140,7 @@ export class ErrorBoundary extends Component<
 
   override componentDidCatch(error: Error, info: ErrorInfo) {
     console.error(`${this.props.label} crashed:`, error, info.componentStack);
+    // The card's details read the stacks back from this entry.
     recordCaughtError(this.props.label, error, info.componentStack);
     // A failed chunk download stays cached in the module map until
     // navigation, so a remount cannot fix it. Remounting the whole app would
@@ -87,7 +176,9 @@ export class ErrorBoundary extends Component<
       return this.props.children;
     }
     if (this.state.recovering) {
-      return null;
+      return this.props.fallbackWhileRecovering
+        ? (this.props.fallback ?? null)
+        : null;
     }
     if (this.props.fallback !== undefined) {
       return this.props.fallback;
@@ -99,20 +190,7 @@ export class ErrorBoundary extends Component<
       // Not a crash: the panel's code did not download. One muted line and a
       // text Reload, since the rest of the workspace still works and the top
       // bar keeps the same offer; the full reason is the button's tooltip.
-      return (
-        <section className="error-boundary is-quiet" role="status">
-          <span>{this.props.label} did not load.</span>
-          <button
-            type="button"
-            className="error-boundary-reload"
-            title={STALE_CHUNK_MESSAGE}
-            aria-label="Reload workspace"
-            onClick={reload}
-          >
-            Reload
-          </button>
-        </section>
-      );
+      return <QuietChunkFailure label={this.props.label} />;
     }
     return (
       <section className="error-boundary" role="alert">
@@ -127,13 +205,16 @@ export class ErrorBoundary extends Component<
         <button type="button" className="secondary" onClick={reload}>
           Reload workspace
         </button>
-        {this.state.message ? (
-          <details className="error-page-details">
-            <summary>Error details</summary>
-            <code>{this.state.message}</code>
-          </details>
-        ) : null}
+        {this.state.message ? this.renderDetails(this.state.message) : null}
       </section>
+    );
+  }
+
+  private renderDetails(message: string) {
+    return (
+      <Suspense fallback={<PlainDetails message={message} />}>
+        <CrashDetails label={this.props.label} message={message} />
+      </Suspense>
     );
   }
 
@@ -159,29 +240,30 @@ export class ErrorBoundary extends Component<
               ? 'Part of OpenZCAD could not load'
               : `${this.props.label} could not be rendered.`}
           </h1>
-          <p role="alert">
-            {stale
-              ? 'Check your connection, then reload the workspace to try again.'
-              : 'An unexpected error stopped the workspace. Reload to recover.'}
-          </p>
-          <p className="error-page-note">
-            OpenZCAD autosaves as you work, and reloading reopens your projects
-            from this device.
-          </p>
-          <button
-            type="button"
-            className="primary error-page-action"
-            onClick={reload}
-            autoFocus
-          >
-            Reload workspace
-          </button>
-          {!stale && this.state.message ? (
-            <details className="error-page-details">
-              <summary>Error details</summary>
-              <code>{this.state.message}</code>
-            </details>
-          ) : null}
+          {stale ? (
+            <PageChunkFailure />
+          ) : (
+            <>
+              <p role="alert">
+                An unexpected error stopped the workspace. Reload to recover.
+              </p>
+              <p className="error-page-note">
+                OpenZCAD autosaves as you work, and reloading reopens your
+                projects from this device.
+              </p>
+              <button
+                type="button"
+                className="primary error-page-action"
+                onClick={reload}
+                autoFocus
+              >
+                Reload workspace
+              </button>
+            </>
+          )}
+          {!stale && this.state.message
+            ? this.renderDetails(this.state.message)
+            : null}
         </div>
       </main>
     );

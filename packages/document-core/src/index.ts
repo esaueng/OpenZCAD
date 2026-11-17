@@ -18,7 +18,10 @@ export { localizeImportedSourceArtifacts } from './imported-source-artifacts';
 import { mergeJsonRecords } from './collaboration-merge';
 export { hasJsonPrefix, sameJson } from './collaboration-merge';
 export {
+  assertSafeDocumentIdentifiers,
   assertStorableDocument,
+  documentIdentifierError,
+  reservedDocumentIdentifierError,
   UnstorableDocumentError
 } from './storable-document';
 import {
@@ -48,7 +51,12 @@ import {
 export { assertSketchBoundaryTopologyPreserved } from './sketch-boundary-dependencies';
 import {
   assertDocumentContentSchema,
-  assertSketchObjectContentSchema
+  assertSheetMetalSchema,
+  assertStandardPartSchema,
+  assertPatternContentSchema,
+  assertHoleContentSchema,
+  assertSketchObjectContentSchema,
+  assertThreadContentSchema
 } from './document-content-schema';
 export * from './sketch-composites';
 export * from './sketch-projections';
@@ -57,7 +65,11 @@ export * from './drawings';
 export * from './object-folders';
 export * from './assembly';
 export * from './assembly-bom';
+export * from './assembly-interference';
 export * from './gear-mesh';
+export * from './hole-callout';
+export * from './print-clearance';
+export * from './configurations';
 export * from './reference-images';
 export * from './body-consumption';
 export {
@@ -71,14 +83,35 @@ export {
   recordDocumentEdit,
   normalizeDocumentHistory
 } from './document-history';
-import { isDocumentHistory } from '@openzcad/shared';
+import {
+  configurationHiddenBodyIds,
+  isDocumentHistory,
+  isReservedRecordKey,
+  ownEntry,
+  patternPointsProblem,
+  holePointsProblem,
+  holeStandardDiameter,
+  holeStandardProblem,
+  standardPartProblem,
+  holeTappedProblem,
+  patternSourceProblem,
+  skippedInstancesProblem,
+  suppliedIds,
+  type PatternPoints,
+  type HolePoints,
+  type HoleStandard,
+  type HoleTapped
+} from '@openzcad/shared';
 import {
   BODY_COLOR_CHOSEN_METADATA_KEY,
   BODY_COLOR_METADATA_KEY,
   BODY_OPACITY_METADATA_KEY,
   chosenBodyColor,
+  MAX_CHECKPOINT_AUTHOR_DEVICE_LENGTH,
+  MAX_CHECKPOINT_AUTHOR_NAME_LENGTH,
+  MAX_CHECKPOINT_NAME_LENGTH,
   MAX_CHECKPOINT_REASON_LENGTH,
-  UNIT_TO_MM,
+  millimetresPerUnit,
   documentNodesWithHistory,
   type ProjectId,
   createId,
@@ -89,6 +122,7 @@ import {
   assertReferenceImageSet,
   featureColor,
   isProjectCheckpoint,
+  isProjectCheckpointAuthor,
   isRevisionRecord,
   MAX_PROJECT_CHECKPOINTS,
   MAX_PROJECT_REVISION_RECORDS,
@@ -147,6 +181,7 @@ import {
   type ProjectDocument,
   type ProjectBranchPoint,
   type ProjectCheckpoint,
+  type ProjectCheckpointAuthor,
   type RevisionRecord,
   type ShaprImportId,
   type ShaprMigrationRecord,
@@ -542,6 +577,12 @@ export interface HoleInput {
   position: { u: ParamValue; v: ParamValue };
   /** Anchor `position` is measured from; see the `hole` feature data. */
   positionAnchor?: 'centroid';
+  /** M01 (schema v64): one bore at each of these sketch points. */
+  points?: HolePoints;
+  /** M01 (schema v65): the standard size whose table gives the diameter. */
+  standard?: HoleStandard;
+  /** M01 (schema v66): tapped with the standard's thread. */
+  tapped?: HoleTapped;
   ids?: BodyFeatureIds;
 }
 
@@ -568,6 +609,34 @@ export type ThreadInput = Omit<
 > & {
   name: string;
   ids?: BodyFeatureIds;
+};
+
+/**
+ * M16 (schema v58): a sheet-metal feature's input — its {@link FeatureData}
+ * fields plus the command's name, optional preallocated ids and the new
+ * body's name.
+ */
+export type SheetMetalInput = Omit<
+  Extract<FeatureData, { featureKind: 'sheet-metal' }>,
+  'featureKind'
+> & {
+  name: string;
+  ids?: BodyFeatureIds;
+  bodyName?: string;
+};
+
+/**
+ * M17 (schema v69): a standard part's input — its {@link FeatureData}
+ * fields plus the command's name, optional preallocated ids and the new
+ * body's name.
+ */
+export type StandardPartInput = Omit<
+  Extract<FeatureData, { featureKind: 'standard-part' }>,
+  'featureKind'
+> & {
+  name: string;
+  ids?: BodyFeatureIds;
+  bodyName?: string;
 };
 
 export interface SplitInput {
@@ -664,6 +733,12 @@ export interface PatternInput {
   count2?: ParamValue;
   /** R01 (schema v28), circular only: turn about this earlier datum axis. */
   axisRef?: DatumAxisRef;
+  /** M02 (schema v62): repeat these earlier features, not the whole body. */
+  sourceFeatureIds?: FeatureId[];
+  /** M02 (schema v62): the copies left out, by instance label. */
+  skippedInstances?: string[];
+  /** M02 (schema v63): required on a `points` pattern, absent otherwise. */
+  points?: PatternPoints;
   ids?: BodyFeatureIds;
 }
 
@@ -1011,7 +1086,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   const checkpoints = Array.isArray(document.checkpoints)
     ? document.checkpoints
         .slice(-MAX_PROJECT_CHECKPOINTS)
-        .filter(isProjectCheckpoint)
+        .map(storedCheckpoint)
+        .filter((checkpoint) => checkpoint !== null)
     : fallbackRevision
       ? [
           {
@@ -1033,6 +1109,12 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
         ]
       : [];
   let nodes = document.nodes;
+  // Node ids are record keys; a reserved one would be written to the
+  // prototype instead of the map below.
+  const reservedNodeId = Object.keys(document.nodes).find(isReservedRecordKey);
+  if (reservedNodeId !== undefined) {
+    throw new Error(`Project uses the reserved node id "${reservedNodeId}".`);
+  }
   // Schema v3 -> v4: sketches gain planeRef; the legacy plane/offset pair
   // becomes a canonical reference. Additive, so a missed migration degrades
   // (old fields linger) rather than corrupts.
@@ -1076,6 +1158,10 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // derive them from a legacy object or promote an older carrier silently.
   // Schema v37 boundary provenance and conversion ownership are authored.
   // Opening older content never converts it or invents source witnesses.
+  // Schema v56 -> v57 thread runouts and pipe threads are optional fields on
+  // a thread; absent keeps the v53 thread, so nothing is rewritten.
+  // Schema v60 adds the optional document print clearance. Never fill one in:
+  // absent keeps every thread and gear as it was built.
   // Schema v16 -> v17 allows reference-form mesh payloads. Keep existing
   // embedded triangles and pre-release references as written; the version
   // boundary prevents older clients from accepting meshes they cannot rebuild.
@@ -1130,7 +1216,7 @@ export function duplicateProjectDocument(
   );
   delete copy.editHistory;
   const projectId = toProjectId(createId('proj'));
-  const rootNode = copy.nodes[copy.rootNodeId];
+  const rootNode = getNode(copy, copy.rootNodeId);
   if (rootNode?.kind === 'project') {
     copy.nodes[copy.rootNodeId] = { ...rootNode, projectId, name };
   }
@@ -1178,7 +1264,7 @@ export function duplicateSaveStateDocument(
     branchedFrom: _branchedFrom,
     ...model
   } = cloneDocument(normalizeDocument(snapshot));
-  const rootNode = model.nodes[model.rootNodeId];
+  const rootNode = getNode(model, model.rootNodeId);
   if (rootNode?.kind === 'project') {
     model.nodes[model.rootNodeId] = {
       ...rootNode,
@@ -1271,7 +1357,7 @@ export function adoptProjectDocument(
   const copy = localizeImportedSourceArtifacts(
     cloneDocument(normalizeDocument(source))
   );
-  const rootNode = copy.nodes[copy.rootNodeId];
+  const rootNode = getNode(copy, copy.rootNodeId);
   if (rootNode?.kind === 'project') {
     copy.nodes[copy.rootNodeId] = { ...rootNode, name };
   }
@@ -1293,11 +1379,12 @@ export function adoptProjectDocument(
     : createCheckpoint(adopted, 'Saved to account');
 }
 
+/** The document's own node by id; never an inherited or reserved member. */
 export function getNode<TNode extends DocumentNode>(
-  document: ProjectDocument,
+  document: Pick<ProjectDocument, 'nodes'>,
   nodeId: string
 ): TNode | undefined {
-  return document.nodes[nodeId] as TNode | undefined;
+  return ownEntry(document.nodes, nodeId) as TNode | undefined;
 }
 
 export function listNodesByKind<TNode extends DocumentNode['kind']>(
@@ -1450,7 +1537,7 @@ export function addPrimitiveFeature(
 ): ProjectDocument {
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
-    input.ids ?? createBodyFeatureIds();
+    suppliedIds(input.ids) ?? createBodyFeatureIds();
 
   const feature: FeatureNode = {
     id: featureNodeId,
@@ -1502,7 +1589,7 @@ export function addSketchFeature(
     requireEarlierDatum(document, planeRef.datumFeatureId, null);
   }
   const ids = normalizeSketchFeatureIds(
-    input.ids ?? createSketchFeatureIds(objects.length)
+    suppliedIds(input.ids) ?? createSketchFeatureIds(objects.length)
   );
   const { featureId, featureNodeId, sketchId, sketchNodeId } = ids;
   const objectNodeIds = objects.map(
@@ -1602,7 +1689,7 @@ export function updateSketch(
   }
   if (input.object !== undefined) {
     const objectId = sketch.objectIds[0];
-    const objectNode = objectId ? next.nodes[objectId] : undefined;
+    const objectNode = objectId ? getNode(next, objectId) : undefined;
     if (!objectNode || objectNode.kind !== 'sketch-object') {
       throw new Error(`Sketch ${input.sketchId} has no profile object.`);
     }
@@ -1692,7 +1779,7 @@ export function translateSketch(
         ? value
         : resolveParamValue(value, scope, label, next.units) + delta;
     for (const objectId of sketch.objectIds) {
-      const node = next.nodes[objectId];
+      const node = getNode(next, objectId);
       // A linked projection belongs to its model edge, not to the sketch's
       // placement: the next rebuild would project it back regardless.
       if (
@@ -1733,10 +1820,11 @@ export function translateSketch(
           };
           break;
         case 'text':
+        case 'point':
           node.data = {
             ...data,
-            x: shift(data.x, du, 'text X'),
-            y: shift(data.y, dv, 'text Y')
+            x: shift(data.x, du, `${data.objectKind} X`),
+            y: shift(data.y, dv, `${data.objectKind} Y`)
           };
           break;
         default:
@@ -1757,8 +1845,9 @@ export function addSketchObjects(
   if (!sketch) {
     throw new Error(`Sketch ${input.sketchId} not found.`);
   }
+  const supplied = suppliedIds(input.ids);
   const objectNodeIds = input.objects.map(
-    (_, index) => input.ids?.objectNodeIds[index] ?? toEntityId(createId('ent'))
+    (_, index) => supplied?.objectNodeIds[index] ?? toEntityId(createId('ent'))
   );
   input.objects.forEach((object) =>
     assertSketchObjectContentSchema(object, document.schemaVersion)
@@ -1790,7 +1879,7 @@ function requireSketchObject(
     throw new Error(`Sketch ${sketchId} not found.`);
   }
   const objectNode = sketch.objectIds.includes(objectId)
-    ? document.nodes[objectId]
+    ? getNode(document, objectId)
     : undefined;
   if (!objectNode || objectNode.kind !== 'sketch-object') {
     throw new Error(`Sketch ${sketchId} has no object ${objectId}.`);
@@ -1889,7 +1978,8 @@ function constraintObjectIds(data: SketchConstraintData): EntityId[] {
   }
 }
 
-type ConstrainableKind = 'line' | 'arc' | 'circle' | 'ellipse' | 'spline';
+type ConstrainableKind =
+  'line' | 'arc' | 'circle' | 'ellipse' | 'spline' | 'point';
 
 function requireConstrainableObject(
   document: ProjectDocument,
@@ -1898,7 +1988,7 @@ function requireConstrainableObject(
   allowed: readonly ConstrainableKind[]
 ): ConstrainableKind {
   const node = sketch.objectIds.includes(objectId)
-    ? document.nodes[objectId]
+    ? getNode(document, objectId)
     : undefined;
   if (!node || node.kind !== 'sketch-object') {
     throw new Error(`Sketch ${sketch.sketchId} has no object ${objectId}.`);
@@ -1919,17 +2009,24 @@ function requireConstraintPoint(
   sketch: SketchNode,
   ref: SketchPointRef
 ): void {
+  // The point names a solver handle, so only the three point names are
+  // accepted; checked before the object, whose kind rules assume one of them.
+  const point: unknown = ref?.point;
+  if (point !== 'start' && point !== 'end' && point !== 'center') {
+    throw new Error('A constraint point is a start, end or center point.');
+  }
   const kind = requireConstrainableObject(document, sketch, ref.objectId, [
     'line',
     'arc',
     'circle',
     'ellipse',
-    'spline'
+    'spline',
+    'point'
   ]);
   // I01: an ellipse (or elliptical arc) is held by its centre; an open
   // spline by its two end points, which the curve passes through. A closed
   // spline has no end to hold.
-  const node = document.nodes[ref.objectId];
+  const node = getNode(document, ref.objectId);
   const closedSpline =
     node?.kind === 'sketch-object' &&
     node.data.objectKind === 'spline' &&
@@ -1937,7 +2034,7 @@ function requireConstraintPoint(
   const legal =
     kind === 'line'
       ? ref.point === 'start' || ref.point === 'end'
-      : kind === 'circle' || kind === 'ellipse'
+      : kind === 'circle' || kind === 'ellipse' || kind === 'point'
         ? ref.point === 'center'
         : kind === 'spline'
           ? !closedSpline && (ref.point === 'start' || ref.point === 'end')
@@ -2149,7 +2246,8 @@ export function addSketchConstraint(
   }
   validateSketchConstraint(next, sketch, input.constraint);
   const constraintId =
-    input.ids?.constraintId ?? toSketchConstraintId(createId('scon'));
+    suppliedIds(input.ids)?.constraintId ??
+    toSketchConstraintId(createId('scon'));
   const constraint: SketchConstraint = {
     constraintId,
     data: input.constraint
@@ -2562,7 +2660,7 @@ export function extrudeSketch(
   validateExtrudeExtent(input, extrudeParamResolver(document));
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
-    input.ids ?? createBodyFeatureIds();
+    suppliedIds(input.ids) ?? createBodyFeatureIds();
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -2638,7 +2736,7 @@ export function revolveSketch(
   assertFeatureProfileProvenance(input, document);
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
-    input.ids ?? createBodyFeatureIds();
+    suppliedIds(input.ids) ?? createBodyFeatureIds();
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -2702,7 +2800,7 @@ export function loftSections(
         ? {}
         : { endPoint: deepClone(input.endPoint) })
     },
-    input.ids,
+    suppliedIds(input.ids),
     input.bodyName
   );
 }
@@ -2725,7 +2823,7 @@ export function sweepProfile(
       // frame every sweep authored before guide rails existed swept with.
       ...(input.guide === undefined ? {} : { guide: deepClone(input.guide) })
     },
-    input.ids,
+    suppliedIds(input.ids),
     input.bodyName
   );
 }
@@ -2753,7 +2851,7 @@ export function helicalSweepProfile(
         ? {}
         : { construction: input.construction })
     },
-    input.ids,
+    suppliedIds(input.ids),
     input.bodyName
   );
 }
@@ -2774,7 +2872,7 @@ export function booleanBodies(
   });
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
-    input.ids ?? createBodyFeatureIds();
+    suppliedIds(input.ids) ?? createBodyFeatureIds();
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -3226,7 +3324,8 @@ export function addDatumAxis(
 ): { document: ProjectDocument; featureId: FeatureId } {
   validateDatumAxisDefinition(document, input.definition, null);
   const next = cloneDocument(document);
-  const { featureId, featureNodeId } = input.ids ?? createFeatureOnlyIds();
+  const { featureId, featureNodeId } =
+    suppliedIds(input.ids) ?? createFeatureOnlyIds();
   next.nodes[featureNodeId] = {
     id: featureNodeId,
     kind: 'feature',
@@ -3253,7 +3352,8 @@ export function addDatumPlane(
 ): { document: ProjectDocument; featureId: FeatureId } {
   validateDatumPlaneDefinition(document, input.definition, null);
   const next = cloneDocument(document);
-  const { featureId, featureNodeId } = input.ids ?? createFeatureOnlyIds();
+  const { featureId, featureNodeId } =
+    suppliedIds(input.ids) ?? createFeatureOnlyIds();
   next.nodes[featureNodeId] = {
     id: featureNodeId,
     kind: 'feature',
@@ -3307,7 +3407,8 @@ export function transformBody(
     return transformCopyBody(document, input, transform);
   }
   const next = cloneDocument(document);
-  const { featureId, featureNodeId } = input.ids ?? createFeatureOnlyIds();
+  const { featureId, featureNodeId } =
+    suppliedIds(input.ids) ?? createFeatureOnlyIds();
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -3358,18 +3459,19 @@ function transformCopyBody(
   if (!document.bodyOrder.includes(input.targetBodyId)) {
     throw new Error(`Copy source body ${input.targetBodyId} not found.`);
   }
+  const supplied = suppliedIds(input.ids);
   const ids =
-    input.ids && 'bodyId' in input.ids
-      ? input.ids
-      : { ...createBodyFeatureIds(), ...input.ids };
+    supplied && 'bodyId' in supplied
+      ? supplied
+      : { ...createBodyFeatureIds(), ...supplied };
   const { featureId, featureNodeId, bodyId, bodyNodeId } = ids;
   if (document.bodyOrder.includes(bodyId)) {
     throw new Error(`Copy result body ${bodyId} already exists.`);
   }
   if (
     document.featureOrder.includes(featureId) ||
-    document.nodes[featureNodeId] !== undefined ||
-    document.nodes[bodyNodeId] !== undefined ||
+    ownEntry(document.nodes, featureNodeId) !== undefined ||
+    ownEntry(document.nodes, bodyNodeId) !== undefined ||
     featureNodeId === bodyNodeId
   ) {
     throw new Error('Copy identifiers must be new and distinct.');
@@ -3444,7 +3546,8 @@ export function directEditBody(
   input: DirectEditInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   const next = cloneDocument(document);
-  const { featureId, featureNodeId } = input.ids ?? createFeatureOnlyIds();
+  const { featureId, featureNodeId } =
+    suppliedIds(input.ids) ?? createFeatureOnlyIds();
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -3478,6 +3581,8 @@ function addBodyResultFeature(
     | 'hole'
     | 'gear'
     | 'thread'
+    | 'sheet-metal'
+    | 'standard-part'
     | 'shell'
     | 'solid-offset'
     | 'loft'
@@ -3496,6 +3601,8 @@ function addBodyResultFeature(
         | 'hole'
         | 'gear'
         | 'thread'
+        | 'sheet-metal'
+        | 'standard-part'
         | 'shell'
         | 'solid-offset'
         | 'loft'
@@ -3510,7 +3617,7 @@ function addBodyResultFeature(
 ): { document: ProjectDocument; bodyId: BodyId } {
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
-    ids ?? createBodyFeatureIds();
+    suppliedIds(ids) ?? createBodyFeatureIds();
   next.nodes[featureNodeId] = {
     id: featureNodeId,
     kind: 'feature',
@@ -3566,7 +3673,7 @@ export function addSplitFeature(
     keepOriginal: input.keepOriginal
   });
   const next = cloneDocument(document);
-  const ids = input.ids ?? createSplitFeatureIds();
+  const ids = suppliedIds(input.ids) ?? createSplitFeatureIds();
   const { featureId, featureNodeId, bodyId, bodyNodeId } = ids;
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -3628,12 +3735,28 @@ export function holeBody(
   input: HoleInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   const { name, targetBodyId, ids: _ids, ...parameters } = input;
+  // Schema v64 sketch points are refused on a document that declares an
+  // older schema: written there, the document would no longer open.
+  assertHoleContentSchema(parameters, document.schemaVersion);
+  validateHolePoints(document, parameters.points, null);
+  validateHoleStandard(parameters.standard, parameters.tapped);
   return addBodyResultFeature(
     document,
     name,
     'hole',
-    deepClone({ featureKind: 'hole', targetBodyId, ...parameters }),
-    input.ids
+    deepClone({
+      featureKind: 'hole',
+      targetBodyId,
+      ...parameters,
+      // M01 (schema v65): a standard hole stores its table's diameter, so
+      // clearing the standard later keeps the bore it was drilled to.
+      ...(parameters.standard
+        ? {
+            diameter: holeStandardDiameter(parameters.standard, document.units)
+          }
+        : {})
+    }),
+    suppliedIds(input.ids)
   );
 }
 
@@ -3665,12 +3788,63 @@ export function threadBody(
   input: ThreadInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   const { name, ids, ...parameters } = input;
+  // Schema v57 runouts and pipe threads are refused on a document that
+  // declares an older schema, as v56 couplings are: written there, the
+  // document would no longer open.
+  assertThreadContentSchema(parameters, document.schemaVersion);
   return addBodyResultFeature(
     document,
     name,
     'thread',
     deepClone({ featureKind: 'thread', ...parameters }),
     ids
+  );
+}
+
+/**
+ * Adds an M16 sheet-metal part: one new body, the blank's sketch cells
+ * `thickness` thick, folded by every bend in `bends`. No body is consumed.
+ */
+export function sheetMetalBody(
+  document: ProjectDocument,
+  input: SheetMetalInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  const { name, ids, bodyName, ...parameters } = input;
+  // Written to a document that declares an older schema, the feature would
+  // be dropped by the readers that schema admits.
+  assertSheetMetalSchema(document.schemaVersion);
+  assertFeatureProfileProvenance(parameters, document);
+  return addBodyResultFeature(
+    document,
+    name,
+    'sheet-metal',
+    deepClone({ featureKind: 'sheet-metal', ...parameters }),
+    ids,
+    bodyName
+  );
+}
+
+/**
+ * Adds an M17 standard part: one new body generated from its standard's
+ * table at `origin` along `axis`. No body is consumed.
+ */
+export function standardPartBody(
+  document: ProjectDocument,
+  input: StandardPartInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  const { name, ids, bodyName, ...parameters } = input;
+  // Written to a document that declares an older schema, the feature would
+  // be dropped by the readers that schema admits.
+  assertStandardPartSchema(document.schemaVersion, parameters);
+  const problem = standardPartProblem(parameters);
+  if (problem) throw new Error(problem);
+  return addBodyResultFeature(
+    document,
+    name,
+    'standard-part',
+    deepClone({ featureKind: 'standard-part', ...parameters }),
+    ids,
+    bodyName
   );
 }
 
@@ -3689,7 +3863,7 @@ export function mirrorBody(
       targetBodyId: input.targetBodyId,
       plane: deepClone(input.plane)
     },
-    input.ids
+    suppliedIds(input.ids)
   );
 }
 
@@ -3710,7 +3884,7 @@ export function shellBody(
         : {}),
       thickness: input.thickness
     },
-    input.ids
+    suppliedIds(input.ids)
   );
 }
 
@@ -3727,7 +3901,7 @@ export function offsetSolidBody(
       targetBodyId: input.targetBodyId,
       distance: input.distance
     },
-    input.ids
+    suppliedIds(input.ids)
   );
 }
 
@@ -3750,7 +3924,7 @@ export function draftBody(
       neutralPoint: deepClone(input.neutralPoint),
       angleDeg: input.angleDeg
     },
-    input.ids
+    suppliedIds(input.ids)
   );
 }
 
@@ -3771,7 +3945,7 @@ export function thickenFace(
         : {}),
       thickness: input.thickness
     },
-    input.ids
+    suppliedIds(input.ids)
   );
 }
 
@@ -3800,7 +3974,7 @@ export function filletEdges(
           }
         : {})
     },
-    input.ids
+    suppliedIds(input.ids)
   );
 }
 
@@ -3823,7 +3997,7 @@ export function chamferEdges(
       ...(input.angleDeg !== undefined ? { angleDeg: input.angleDeg } : {}),
       ...(input.distance2 !== undefined ? { distance2: input.distance2 } : {})
     },
-    input.ids
+    suppliedIds(input.ids)
   );
 }
 
@@ -3831,6 +4005,10 @@ export function patternBody(
   document: ProjectDocument,
   input: PatternInput
 ): { document: ProjectDocument; bodyId: BodyId } {
+  // Schema v62 fields are refused on a document that declares an older
+  // schema, as thread runouts are: written there, it would no longer open.
+  assertPatternContentSchema(input, document.schemaVersion);
+  validatePatternDefinition(document, input, null);
   return addBodyResultFeature(
     document,
     input.name,
@@ -3847,10 +4025,184 @@ export function patternBody(
       ...(input.axis2 ? { axis2: input.axis2 } : {}),
       ...(input.spacing2 !== undefined ? { spacing2: input.spacing2 } : {}),
       ...(input.count2 !== undefined ? { count2: input.count2 } : {}),
-      ...(input.axisRef ? { axisRef: datumAxisRefOnly(input.axisRef) } : {})
+      ...(input.axisRef ? { axisRef: datumAxisRefOnly(input.axisRef) } : {}),
+      ...(input.sourceFeatureIds
+        ? { sourceFeatureIds: [...input.sourceFeatureIds] }
+        : {}),
+      ...(input.skippedInstances
+        ? { skippedInstances: [...input.skippedInstances] }
+        : {}),
+      ...(input.points
+        ? {
+            points: {
+              sketchId: input.points.sketchId,
+              pointIds: [...input.points.pointIds],
+              referencePointId: input.points.referencePointId
+            }
+          }
+        : {})
     },
-    input.ids
+    suppliedIds(input.ids)
   );
+}
+
+/**
+ * M02 (schema v63): a points pattern's sketch is an earlier one, and each of
+ * its points is a point entity of that sketch. Where the points stand is the
+ * build's to read, at the pattern's history position.
+ */
+function validatePatternPoints(
+  document: ProjectDocument,
+  points: PatternPoints,
+  ownFeatureId: FeatureId | null
+): void {
+  const sketch = findSketch(document, points.sketchId);
+  if (!sketch) {
+    throw new Error('The sketch this pattern stands on is no longer there.');
+  }
+  const sketchFeature = listFeaturesInOrder(document).find(
+    (feature) =>
+      feature.data.featureKind === 'sketch' &&
+      feature.data.sketchId === points.sketchId
+  );
+  const ownIndex =
+    ownFeatureId === null
+      ? document.featureOrder.length
+      : document.featureOrder.indexOf(ownFeatureId);
+  if (
+    !sketchFeature ||
+    document.featureOrder.indexOf(sketchFeature.featureId) >= ownIndex
+  ) {
+    throw new Error(
+      `${sketch.name} comes later in History; a pattern can only stand on an earlier sketch.`
+    );
+  }
+  for (const pointId of points.pointIds) {
+    const node = ownEntry(document.nodes, pointId);
+    if (
+      !(sketch.objectIds as readonly string[]).includes(pointId) ||
+      node?.kind !== 'sketch-object' ||
+      node.data.objectKind !== 'point'
+    ) {
+      throw new Error(
+        `A point this pattern stands on is no longer a point of ${sketch.name}.`
+      );
+    }
+  }
+}
+
+/**
+ * M01 (schema v64): a hole's sketch points are point entities of an earlier
+ * sketch, at the hole's history position (`ownFeatureId`, or the end for a
+ * new hole). Where they stand, and whether they meet the entry face, is the
+ * build's to read.
+ */
+export function validateHolePoints(
+  document: ProjectDocument,
+  points: HolePoints | undefined,
+  ownFeatureId: FeatureId | null
+): void {
+  if (points === undefined) return;
+  const problem = holePointsProblem(points);
+  if (problem) throw new Error(problem);
+  const sketch = findSketch(document, points.sketchId);
+  if (!sketch) {
+    throw new Error('The sketch this hole is drilled at is no longer there.');
+  }
+  const sketchFeature = listFeaturesInOrder(document).find(
+    (feature) =>
+      feature.data.featureKind === 'sketch' &&
+      feature.data.sketchId === points.sketchId
+  );
+  const ownIndex =
+    ownFeatureId === null
+      ? document.featureOrder.length
+      : document.featureOrder.indexOf(ownFeatureId);
+  if (
+    !sketchFeature ||
+    document.featureOrder.indexOf(sketchFeature.featureId) >= ownIndex
+  ) {
+    throw new Error(
+      `${sketch.name} comes later in History; a hole can only be drilled at an earlier sketch's points.`
+    );
+  }
+  for (const pointId of points.pointIds) {
+    const node = ownEntry(document.nodes, pointId);
+    if (
+      !(sketch.objectIds as readonly string[]).includes(pointId) ||
+      node?.kind !== 'sketch-object' ||
+      node.data.objectKind !== 'point'
+    ) {
+      throw new Error(
+        `A point this hole is drilled at is no longer a point of ${sketch.name}.`
+      );
+    }
+  }
+}
+
+/**
+ * M01: a hole's standard names a size its table has (schema v65), and only a
+ * standard tap drill is tapped (schema v66).
+ */
+export function validateHoleStandard(
+  standard: HoleStandard | undefined,
+  tapped?: HoleTapped
+): void {
+  const problem =
+    holeStandardProblem(standard) ?? holeTappedProblem({ standard, tapped });
+  if (problem) throw new Error(problem);
+}
+
+/**
+ * M02 (schema v62) structural checks on a pattern's repeated features and
+ * skipped copies, at its history position (`ownFeatureId`, or the end for a
+ * new pattern). Whether each feature lies on the target's body chain, and
+ * whether a skipped copy is one the counts reach, need the build and are
+ * refused there by name.
+ */
+export function validatePatternDefinition(
+  document: ProjectDocument,
+  data: Pick<
+    PatternInput,
+    'patternKind' | 'sourceFeatureIds' | 'skippedInstances' | 'points'
+  >,
+  ownFeatureId: FeatureId | null
+): void {
+  const skipProblem = skippedInstancesProblem(
+    data.patternKind,
+    data.skippedInstances
+  );
+  if (skipProblem) throw new Error(skipProblem);
+  const pointsProblem = patternPointsProblem(data);
+  if (pointsProblem) throw new Error(pointsProblem);
+  if (data.points) validatePatternPoints(document, data.points, ownFeatureId);
+  const sources = data.sourceFeatureIds;
+  if (sources === undefined) return;
+  if (!Array.isArray(sources) || sources.length === 0) {
+    throw new Error('A feature pattern repeats at least one feature.');
+  }
+  if (new Set(sources).size !== sources.length) {
+    throw new Error('A feature pattern names each feature it repeats once.');
+  }
+  const ownIndex =
+    ownFeatureId === null
+      ? document.featureOrder.length
+      : document.featureOrder.indexOf(ownFeatureId);
+  for (const featureId of sources) {
+    const source = findFeature(document, featureId);
+    if (!source || featureId === ownFeatureId) {
+      throw new Error(
+        'A feature this pattern repeats is no longer in History.'
+      );
+    }
+    const problem = patternSourceProblem(source.data, source.name);
+    if (problem) throw new Error(problem);
+    if (document.featureOrder.indexOf(featureId) >= ownIndex) {
+      throw new Error(
+        `${source.name} comes later in History; a pattern can only repeat an earlier feature.`
+      );
+    }
+  }
 }
 
 export function importMeshBody(
@@ -3868,7 +4220,7 @@ export function importMeshBody(
   }
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
-    input.ids ?? createBodyFeatureIds();
+    suppliedIds(input.ids) ?? createBodyFeatureIds();
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -3923,7 +4275,7 @@ export function importStepBody(
   }
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
-    input.ids ?? createBodyFeatureIds();
+    suppliedIds(input.ids) ?? createBodyFeatureIds();
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -3980,10 +4332,13 @@ export function importShaprGuided(
   document: ProjectDocument,
   input: ShaprGuidedImportInput
 ): { document: ProjectDocument; bodyId: BodyId; importId: ShaprImportId } {
-  if (!input.step.ids) {
+  const stepIds = suppliedIds(input.step.ids);
+  if (!stepIds) {
     throw new Error('A guided SHAPR import requires deterministic STEP ids.');
   }
-  const importId = input.importId ?? toShaprImportId(createId('shapr'));
+  const importId =
+    suppliedIds({ importId: input.importId }).importId ??
+    toShaprImportId(createId('shapr'));
   if (document.shaprImports[importId]) {
     throw new Error(`SHAPR import ${importId} already exists.`);
   }
@@ -3992,8 +4347,8 @@ export function importShaprGuided(
     ...deepClone(input.migration),
     importId,
     exactGeometry: {
-      featureId: input.step.ids.featureId,
-      bodyId: input.step.ids.bodyId,
+      featureId: stepIds.featureId,
+      bodyId: stepIds.bodyId,
       stepChecksumSha256: input.migration.companionStepChecksumSha256,
       validation: 'exact-kernel-preflight'
     }
@@ -4009,7 +4364,12 @@ export function importShaprGuided(
 export const PARAMETER_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
 export function isValidParameterName(name: string): boolean {
-  return PARAMETER_NAME_PATTERN.test(name) && !RESERVED_IDENTIFIERS.has(name);
+  return (
+    PARAMETER_NAME_PATTERN.test(name) &&
+    !RESERVED_IDENTIFIERS.has(name) &&
+    // A parameter name is a key of the expression scope.
+    !isReservedRecordKey(name)
+  );
 }
 
 export function listParameters(document: ProjectDocument): ParameterNode[] {
@@ -4081,7 +4441,8 @@ export function setParameter(
       else delete existing.quantity;
     }
   } else {
-    const { parameterId, parameterNodeId } = input.ids ?? createParameterIds();
+    const { parameterId, parameterNodeId } =
+      suppliedIds(input.ids) ?? createParameterIds();
     next.nodes[parameterNodeId] = {
       id: parameterNodeId,
       kind: 'parameter',
@@ -4131,7 +4492,7 @@ export function configureParameterToggle(
     if (!findBodyNode(document, bodyId)) {
       throw new Error(`Body "${bodyId}" does not exist.`);
     }
-    if (document.derived.bodyRepresentations[bodyId]?.consumed) {
+    if (ownEntry(document.derived.bodyRepresentations, bodyId)?.consumed) {
       throw new Error(
         'Choose a separate result body, not a consumed source body.'
       );
@@ -4162,6 +4523,9 @@ export function getParameterHiddenBodyIds(
       for (const bodyId of parameter.toggle.bodyIds) hidden.add(bodyId);
     }
   }
+  // F06: a body the active configuration hides is hidden the same way.
+  for (const bodyId of configurationHiddenBodyIds(document.configurations))
+    hidden.add(bodyId);
   return hidden;
 }
 
@@ -4228,6 +4592,10 @@ export function renameParameter(
     if (node.kind !== 'parameter' || node.name !== input.name) {
       rewriteNodeExpressions(node, rewrite);
     }
+  }
+  // L09: the document's print clearance is an expression too.
+  if (typeof next.printClearance === 'string') {
+    next.printClearance = rewrite(next.printClearance);
   }
   parameter.name = newName;
   refreshParameterValues(next);
@@ -4558,10 +4926,10 @@ export function getParameterScope(
 }
 
 /** Recomputes the cached `value` field of every parameter node. */
-function refreshParameterValues(document: ProjectDocument): void {
+export function refreshParameterValues(document: ProjectDocument): void {
   const { scope } = getParameterScope(document);
   for (const parameter of listParameters(document)) {
-    const value = scope[parameter.name];
+    const value = ownEntry(scope, parameter.name);
     if (value !== undefined) {
       parameter.value = value;
     }
@@ -4650,6 +5018,20 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
   mirror: ['targetBodyId', 'plane'],
   'datum-plane': ['definition'],
   'datum-axis': ['definition'],
+  'sheet-metal': [
+    'sketchId',
+    'profiles',
+    'thickness',
+    'thicknessSide',
+    'bendRadius',
+    'kFactor',
+    'kFactorMethod',
+    'relief',
+    'materialPresetId',
+    'gaugeId',
+    'fixedPoint',
+    'bends'
+  ],
   thread: [
     'targetBodyId',
     'faceHash',
@@ -4670,7 +5052,22 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'phaseDeg',
     'chamferStart',
     'chamferEnd',
-    'chamferAngleDeg'
+    'chamferAngleDeg',
+    'runoutStart',
+    'runoutEnd',
+    'pipeSize'
+  ],
+  'standard-part': [
+    'partKind',
+    'system',
+    'size',
+    'head',
+    'length',
+    'origin',
+    'axis',
+    'xDirection',
+    'hole',
+    'thread'
   ],
   // `secondBodyId` is body wiring, not a parameter: never patchable.
   split: ['targetBodyId', 'plane', 'keepOriginal'],
@@ -4686,7 +5083,10 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'counterboreDepth',
     'countersinkDiameter',
     'countersinkAngleDeg',
-    'position'
+    'position',
+    'points',
+    'standard',
+    'tapped'
   ],
   shell: [
     'targetBodyId',
@@ -4731,7 +5131,10 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'axis2',
     'spacing2',
     'count2',
-    'axisRef'
+    'axisRef',
+    'sourceFeatureIds',
+    'skippedInstances',
+    'points'
   ],
   gear: [
     'gearType',
@@ -4801,6 +5204,16 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   Record<FeatureKind, readonly string[]>
 > = {
   extrude: ['endCondition', 'throughAllSide', 'toFace', 'draftAngleDeg'],
+  // M16: each falls back to its documented default (positive side, a
+  // K-factor value, a rectangular relief, no preset, the largest region).
+  'sheet-metal': [
+    'thicknessSide',
+    'kFactorMethod',
+    'relief',
+    'materialPresetId',
+    'gaugeId',
+    'fixedPoint'
+  ],
   boolean: ['keepOriginals'],
   split: ['keepOriginal'],
   loft: ['endPoint'],
@@ -4810,8 +5223,18 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   // R01: clearing a datum axis returns to the sketch or world axis.
   // U09: clearing a revolve's region returns it to the first-object profile.
   revolve: ['axisRef', 'profile'],
-  pattern: ['axisRef'],
+  pattern: ['axisRef', 'sourceFeatureIds', 'skippedInstances'],
   transform: ['axisRotation'],
+  // M01: clearing a hole's sketch points (schema v64) drills it at its one
+  // stored position again; clearing its standard (schema v65) drills its
+  // stored diameter.
+  hole: ['points', 'standard', 'tapped'],
+  // M17: a screw's head goes off a part that is no longer a screw, a length
+  // off a part that has none (or, in a hole, is matched again), the
+  // x-direction back to the default, the hole when the part is placed on a
+  // face instead (schema v77), and a simplified thread when it is modeled
+  // again (schema v83).
+  'standard-part': ['head', 'length', 'xDirection', 'hole', 'thread'],
   // Schema v53: every size and placement field falls back to the face or its
   // documented default; the custom-profile fields may go only off a custom
   // profile, which the thread validation enforces. A face picked again
@@ -4833,7 +5256,10 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
     'phaseDeg',
     'chamferStart',
     'chamferEnd',
-    'chamferAngleDeg'
+    'chamferAngleDeg',
+    'runoutStart',
+    'runoutEnd',
+    'pipeSize'
   ],
   // M14: every tooth-form override falls back to its documented default;
   // `pitch` may go only where the gear keeps a cylinder's diameter, and
@@ -4918,6 +5344,15 @@ export function updateFeature(
   }
   if (input.data) {
     assertFeatureProfileProvenance(input.data, document);
+    if (feature.featureKind === 'thread') {
+      assertThreadContentSchema(input.data, document.schemaVersion);
+    }
+    if (feature.featureKind === 'pattern') {
+      assertPatternContentSchema(input.data, document.schemaVersion);
+    }
+    if (feature.featureKind === 'hole') {
+      assertHoleContentSchema(input.data, document.schemaVersion);
+    }
     const patch = { ...input.data } as Record<string, unknown>;
     if (
       'featureKind' in patch &&
@@ -4996,6 +5431,21 @@ export function updateFeature(
     validateModelingPlane(next, feature.data.plane, feature.featureId);
   }
   validateFeatureDatumAxisRefs(next, feature.data, feature.featureId);
+  if (feature.data.featureKind === 'pattern') {
+    validatePatternDefinition(next, feature.data, feature.featureId);
+  }
+  if (feature.data.featureKind === 'hole') {
+    validateHolePoints(next, feature.data.points, feature.featureId);
+    validateHoleStandard(feature.data.standard, feature.data.tapped);
+    // M01 (schema v65): whatever the patch said, a standard hole stores its
+    // table's diameter (see `holeBody`).
+    if (feature.data.standard) {
+      feature.data.diameter = holeStandardDiameter(
+        feature.data.standard,
+        next.units
+      );
+    }
+  }
   // New Body has no dependency on the previous Add/Cut target. Undefined
   // patch values are normally ignored, so clear this semantic dependency here.
   if (
@@ -5464,7 +5914,7 @@ export function renameNode(
     throw new Error('Name must not be empty.');
   }
   const next = cloneDocument(document);
-  const node = next.nodes[input.nodeId];
+  const node = getNode(next, input.nodeId);
   if (!node) {
     throw new Error(`Node ${input.nodeId} not found.`);
   }
@@ -5488,7 +5938,7 @@ export function setNodeMetadata(
   input: NodeMetadataInput
 ): ProjectDocument {
   const next = cloneDocument(document);
-  const node = next.nodes[input.nodeId];
+  const node = getNode(next, input.nodeId);
   if (!node) {
     throw new Error(`Node ${input.nodeId} not found.`);
   }
@@ -5546,10 +5996,15 @@ export function appendRevision(
 /** A persisted save owns a fresh revision ID; model version and undo stay unchanged. */
 export function createSavedRevision(
   document: ProjectDocument,
-  reason: string
+  reason: string,
+  author?: ProjectCheckpointAuthor
 ): ProjectDocument {
   const appended = appendRevision(document, reason);
-  return createCheckpoint({ ...appended, version: document.version }, reason);
+  return createCheckpoint(
+    { ...appended, version: document.version },
+    reason,
+    author
+  );
 }
 
 /**
@@ -5558,9 +6013,10 @@ export function createSavedRevision(
  */
 export function createAdvancingSavePoint(
   document: ProjectDocument,
-  reason: string
+  reason: string,
+  author?: ProjectCheckpointAuthor
 ): ProjectDocument {
-  return createCheckpoint(appendRevision(document, reason), reason);
+  return createCheckpoint(appendRevision(document, reason), reason, author);
 }
 
 /**
@@ -5598,6 +6054,9 @@ export function withEchoedSavePoints(
   const checkpointIds = new Set(
     echo.checkpoints.map((checkpoint) => checkpoint.checkpointId)
   );
+  const liveCheckpoints = new Map(
+    live.checkpoints.map((checkpoint) => [checkpoint.checkpointId, checkpoint])
+  );
   return {
     ...live,
     revisions: [
@@ -5606,8 +6065,13 @@ export function withEchoedSavePoints(
         (revision) => !revisionIds.has(revision.revisionId)
       )
     ].slice(-MAX_PROJECT_REVISION_RECORDS),
+    // A save point both hold keeps the live copy: it is the newer one, and
+    // may have been renamed (L03) while the save was in flight.
     checkpoints: [
-      ...echo.checkpoints,
+      ...echo.checkpoints.map(
+        (checkpoint) =>
+          liveCheckpoints.get(checkpoint.checkpointId) ?? checkpoint
+      ),
       ...live.checkpoints.filter(
         (checkpoint) => !checkpointIds.has(checkpoint.checkpointId)
       )
@@ -5625,17 +6089,19 @@ export function withEchoedSavePoints(
  */
 export function createSavePoint(
   document: ProjectDocument,
-  reason: string
+  reason: string,
+  author?: ProjectCheckpointAuthor
 ): ProjectDocument {
   return document.revisions.length === 0
-    ? createSavedRevision(document, reason)
-    : createCheckpoint(document, reason);
+    ? createSavedRevision(document, reason, author)
+    : createCheckpoint(document, reason, author);
 }
 
 /** Records a durable save point without changing model or undo semantics. */
 export function createCheckpoint(
   document: ProjectDocument,
-  reason: string
+  reason: string,
+  author?: ProjectCheckpointAuthor
 ): ProjectDocument {
   const latestRevision = document.revisions.at(-1);
   if (!latestRevision) {
@@ -5650,6 +6116,7 @@ export function createCheckpoint(
   ) {
     return document;
   }
+  const recordedAuthor = author ? checkpointAuthor(author) : undefined;
   return {
     ...document,
     checkpoints: [
@@ -5659,9 +6126,103 @@ export function createCheckpoint(
         revisionId: latestRevision.revisionId,
         documentVersion: document.version,
         createdAt: nowIso(),
-        reason: normalizedReason
+        reason: normalizedReason,
+        ...(recordedAuthor ? { author: recordedAuthor } : {})
       }
     ].slice(-MAX_PROJECT_CHECKPOINTS)
+  };
+}
+
+function boundedText(value: string | undefined, max: number): string | null {
+  // Control characters would let a name break the row it is shown in.
+  // eslint-disable-next-line no-control-regex
+  const text = value?.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim();
+  if (!text) return null;
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/**
+ * The author fields a save point records, bounded to what
+ * `isProjectCheckpointAuthor` accepts; undefined when nothing is left.
+ */
+export function checkpointAuthor(
+  author: ProjectCheckpointAuthor
+): ProjectCheckpointAuthor | undefined {
+  const userId = boundedText(author.userId, 200);
+  const name = boundedText(author.name, MAX_CHECKPOINT_AUTHOR_NAME_LENGTH);
+  const device = boundedText(
+    author.device,
+    MAX_CHECKPOINT_AUTHOR_DEVICE_LENGTH
+  );
+  const recorded: ProjectCheckpointAuthor = {
+    ...(userId ? { userId } : {}),
+    ...(name ? { name } : {}),
+    ...(device ? { device } : {})
+  };
+  return Object.keys(recorded).length ? recorded : undefined;
+}
+
+/**
+ * Renames a save point (L03). The name is shown in place of the reason the
+ * save was made with; an empty name clears it, so the reason shows again.
+ *
+ * A forward write, not an undoable edit: like the save point itself it is a
+ * record of the timeline, which undo never rewinds (`checkpoints` is not a
+ * history field), and it advances the version so the account, the room and
+ * every other device take it like any other change.
+ */
+export function renameCheckpoint(
+  document: ProjectDocument,
+  checkpointId: string,
+  name: string
+): ProjectDocument {
+  const index = document.checkpoints.findIndex(
+    (checkpoint) => checkpoint.checkpointId === checkpointId
+  );
+  if (index < 0) throw new Error('That save point is not in this project.');
+  const current = document.checkpoints[index]!;
+  const next = boundedText(name, MAX_CHECKPOINT_NAME_LENGTH);
+  // A name equal to the reason is no name at all.
+  const recorded = next === null || next === current.reason ? null : next;
+  if ((current.name ?? null) === recorded) return document;
+  const { name: _previous, ...rest } = current;
+  const renamed: ProjectCheckpoint = recorded
+    ? { ...rest, name: recorded }
+    : rest;
+  return appendRevision(
+    {
+      ...document,
+      checkpoints: document.checkpoints.map((checkpoint, at) =>
+        at === index ? renamed : checkpoint
+      )
+    },
+    'Rename save point'
+  );
+}
+
+/**
+ * A stored save point with any malformed optional field dropped, so a bad
+ * name or author never costs the save point itself; null when the save point
+ * is malformed.
+ */
+function storedCheckpoint(value: unknown): ProjectCheckpoint | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const { name, author, ...base } = value as Record<string, unknown>;
+  if (!isProjectCheckpoint(base)) return null;
+  const candidate = {
+    ...base,
+    ...(name !== undefined ? { name } : {}),
+    ...(author !== undefined ? { author } : {})
+  };
+  if (isProjectCheckpoint(candidate)) return candidate;
+  return {
+    ...base,
+    ...(name !== undefined && isProjectCheckpoint({ ...base, name })
+      ? { name: name as string }
+      : {}),
+    ...(author !== undefined && isProjectCheckpointAuthor(author)
+      ? { author }
+      : {})
   };
 }
 
@@ -5842,7 +6403,11 @@ const EXPRESSION_ANGLE_UNITS: Record<string, number> = {
  */
 function isUnitSuffix(name: string): boolean {
   const suffix = name.toLowerCase();
-  return suffix in EXPRESSION_LENGTH_UNITS || suffix in EXPRESSION_ANGLE_UNITS;
+  // Own entries only: a suffix such as `constructor` is no unit.
+  return (
+    ownEntry(EXPRESSION_LENGTH_UNITS, suffix) !== undefined ||
+    ownEntry(EXPRESSION_ANGLE_UNITS, suffix) !== undefined
+  );
 }
 
 /** Trigonometry takes degrees — the conventional unit in CAD parameter tables. */
@@ -6236,16 +6801,20 @@ function parseExpressionQuantity(
   /** Converts a raw suffixed number into document units with its dimension. */
   function applyUnitSuffix(raw: number, suffix: string): ExpressionQuantity {
     const lowered = suffix.toLowerCase();
-    const millimeters = EXPRESSION_LENGTH_UNITS[lowered];
+    const millimeters = ownEntry(EXPRESSION_LENGTH_UNITS, lowered);
     if (millimeters !== undefined) {
       if (documentUnits === undefined) {
         throw new Error(
           `A "${suffix}" length needs the document's units, which this field does not know; enter the value in document units.`
         );
       }
-      return quantity((raw * millimeters) / UNIT_TO_MM[documentUnits], 1, 0);
+      return quantity(
+        (raw * millimeters) / millimetresPerUnit(documentUnits),
+        1,
+        0
+      );
     }
-    const degrees = EXPRESSION_ANGLE_UNITS[lowered];
+    const degrees = ownEntry(EXPRESSION_ANGLE_UNITS, lowered);
     if (degrees !== undefined) {
       return quantity(raw * degrees, 0, 1);
     }
@@ -6273,7 +6842,7 @@ function parseExpressionQuantity(
   }
 
   function parseCall(name: string): ExpressionQuantity {
-    const fn = EXPRESSION_FUNCTIONS[name];
+    const fn = ownEntry(EXPRESSION_FUNCTIONS, name);
     if (!fn) {
       throw new Error(`Unknown function "${name}" in expression.`);
     }
@@ -6351,17 +6920,19 @@ function parseExpressionQuantity(
         position += 1;
         return parseCall(token.name);
       }
-      const constant = EXPRESSION_CONSTANTS[token.name];
+      const constant = ownEntry(EXPRESSION_CONSTANTS, token.name);
       if (constant !== undefined) {
         return quantity(constant);
       }
-      const value = scope[token.name];
+      // Only the scope's own names: an inherited member is no parameter.
+      const value = ownEntry(scope, token.name);
       if (value === undefined) {
         throw new Error(`Unknown identifier "${token.name}" in expression.`);
       }
       // A typed parameter (F05) brings its dimension; unitless ones and any
       // plain scope value stay dimensionless, exactly as before v21.
-      const kind = (scope as KindedScope)[PARAMETER_KINDS]?.[token.name];
+      const kinds = (scope as KindedScope)[PARAMETER_KINDS];
+      const kind = kinds ? ownEntry(kinds, token.name) : undefined;
       return quantity(
         value,
         kind === 'length' ? 1 : 0,
@@ -6496,6 +7067,17 @@ function parseExpressionQuantity(
 
   const result = parseAdditive();
   if (position < tokens.length) {
+    // `2,5` stops at the comma: say what a decimal comma reader needs to
+    // know instead of naming the tokens. The comma is never accepted.
+    if (
+      tokens[position]?.type === 'comma' &&
+      tokens[position - 1]?.type === 'number' &&
+      tokens[position + 1]?.type === 'number'
+    ) {
+      throw new Error(
+        'Unexpected trailing tokens in expression: use a point for decimals (2.5, not 2,5).'
+      );
+    }
     throw new Error('Unexpected trailing tokens in expression.');
   }
   if (callError !== undefined) throw callError;
@@ -6757,7 +7339,7 @@ export function findParameterReferences(
   name: string
 ): ParameterReference[] {
   const { scope } = getParameterScope(document);
-  if (scope[name] === undefined) {
+  if (ownEntry(scope, name) === undefined) {
     // An unevaluatable parameter is read by nobody: every expression naming
     // it already fails, so the delete repairs the document rather than
     // breaking it.
@@ -6789,6 +7371,18 @@ export function findParameterReferences(
         expressions
       });
     }
+  }
+  // L09: the document's print clearance can read a parameter as well.
+  const clearance = document.printClearance;
+  if (
+    typeof clearance === 'string' &&
+    readsParameter(clearance, name, scope, document.units)
+  ) {
+    references.push({
+      nodeId: document.rootNodeId,
+      label: 'The print clearance',
+      expressions: [clearance]
+    });
   }
   return references;
 }
@@ -6844,6 +7438,21 @@ export function parameterQuantityRefusal(
       return expression;
     });
     if (refusal) return refusal;
+  }
+  // L09: the print clearance is a length field of the document itself.
+  const clearance = candidate.printClearance;
+  if (
+    typeof clearance === 'string' &&
+    expressionIdentifiers(clearance).includes(name)
+  ) {
+    try {
+      requireFieldDimension(
+        parseExpressionQuantity(clearance, scope, candidate.units),
+        'length'
+      );
+    } catch (error) {
+      return `The print clearance uses "${clearance}": ${error instanceof Error ? error.message : 'it no longer evaluates.'}`;
+    }
   }
   return null;
 }
@@ -6967,7 +7576,9 @@ export function typedParameterMisuse(
     if (node.kind === 'sketch')
       return sketchFeature.get(String(node.sketchId)) ?? null;
     if (node.kind === 'sketch-object') {
-      const parent = node.parentId ? document.nodes[node.parentId] : undefined;
+      const parent = node.parentId
+        ? getNode(document, node.parentId)
+        : undefined;
       return parent?.kind === 'sketch'
         ? (sketchFeature.get(String(parent.sketchId)) ?? null)
         : null;
@@ -7144,3 +7755,44 @@ export {
 } from './imported-payload-key';
 
 export { resolvedSketchDocument } from './sketch-geometry';
+
+/**
+ * M17 (schema v77): an M01 hole feature a standard part can go into: its
+ * name, its stored data, and its entry face's outward normal as `bodies`
+ * (the derived body representations) show it. Null for anything else.
+ */
+export function standardPartHoleSource(
+  document: ProjectDocument,
+  bodies: Readonly<
+    Record<
+      string,
+      | {
+          topology?: {
+            faces: readonly {
+              hash: number;
+              geometry?: { normal?: { x: number; y: number; z: number } };
+            }[];
+          };
+        }
+      | undefined
+    >
+  >,
+  featureId: FeatureId
+): {
+  name: string;
+  data: Extract<FeatureData, { featureKind: 'hole' }>;
+  entryNormal: { x: number; y: number; z: number } | null;
+} | null {
+  const feature = findFeature(document, featureId);
+  if (!feature || feature.data.featureKind !== 'hole') return null;
+  const data = feature.data;
+  const hash = data.faceReference?.currentHash ?? data.faceHash;
+  const entry = bodies[data.targetBodyId]?.topology?.faces.find(
+    (face) => face.hash === hash
+  );
+  return {
+    name: feature.name,
+    data,
+    entryNormal: entry?.geometry?.normal ?? null
+  };
+}

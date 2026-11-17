@@ -225,11 +225,13 @@ describe('opposingPlaneSpan', () => {
   it('reads the chip text the user sees as the box width', () => {
     const span = opposingPlaneSpan(filletedBoxWithHole(), HOLE_ALIGNED, RIGHT);
     const state = faceOffsetChipState(undefined, span);
-    expect(state.mode).toBe('total');
+    // The chip starts on the signed move; Total is offered for this span.
+    expect(state.mode).toBe('offset');
+    expect(state.totalAvailable).toBe(true);
     expect(
       offsetChipText({
         rawValue: 0,
-        mode: state.mode,
+        mode: 'total',
         span: state.extent,
         sense: 1,
         units: 'mm'
@@ -284,7 +286,7 @@ describe('opposingPlaneSpan', () => {
     expect(
       faceTotalSpan(dee, 'flat', new THREE.Vector3(0, 0, 2), flat)
     ).toBeNull();
-    expect(faceOffsetChipState(undefined, null).mode).toBe('offset');
+    expect(faceOffsetChipState(undefined, null).totalAvailable).toBe(false);
 
     // A wedge: the face behind the pick leans 45° away from square.
     const wedgeShape = new THREE.Shape();
@@ -423,8 +425,7 @@ describe('opposingPlaneSpan', () => {
         () => ({ id: 'hole', surfaceType: 'cylinder' })
       )
     );
-    const faces = (plate.userData.topology as { faces: FaceTopology[] })
-      .faces;
+    const faces = (plate.userData.topology as { faces: FaceTopology[] }).faces;
     faces.find((face) => face.topologyId === 'top')!.geometry!.centroid = {
       x: 40,
       y: 20,

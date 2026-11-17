@@ -42,6 +42,31 @@ describe('dialog layout', () => {
   );
 });
 
+describe('project properties actions', () => {
+  /**
+   * The shared rule that rests a dialog's secondary actions bare left Close,
+   * the properties dialog's only action, as stray text in the corner.
+   */
+  it('keeps Close a whole button at rest', () => {
+    const bare = css.indexOf(
+      '\n.modal-backdrop .secondary:not(.danger, :hover:not(:disabled), :focus-visible) {'
+    );
+    const close = css.indexOf(
+      '\n.modal-backdrop\n  .project-properties-actions\n  > .secondary:not(:hover:not(:disabled), :focus-visible) {'
+    );
+    expect(bare).toBeGreaterThan(-1);
+    expect(close).toBeGreaterThan(-1);
+    const declarations = css.slice(
+      css.indexOf('{', close) + 1,
+      css.indexOf('}', close)
+    );
+    expect(declarations).toMatch(/background:\s*var\(--color-surface-2\)/);
+    expect(declarations).toMatch(
+      /border-color:\s*var\(--color-border-strong\)/
+    );
+  });
+});
+
 describe('dialog focus', () => {
   it('draws a focus indicator on the borderless sharing invite field', () => {
     // `.sharing-invite input:focus` strips border, shadow and outline.

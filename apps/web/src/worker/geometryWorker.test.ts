@@ -2488,6 +2488,60 @@ describe('geometry worker rebuild coordination', () => {
       )
     );
   });
+
+  it.each(['__proto__', 'constructor', 'toString'])(
+    'never resolves a face reference through an inherited member for body "%s"',
+    async (bodyId) => {
+      const inherited: string[] = [];
+      Object.defineProperty(Object.prototype, 'topology', {
+        configurable: true,
+        get(this: unknown) {
+          if (this === Object.prototype || typeof this === 'function')
+            inherited.push(String(bodyId));
+          return undefined;
+        }
+      });
+      try {
+        const recognizeImportedFace = vi.fn(async () => ({
+          kind: 'unsupported',
+          refusalReason: 'seed-face-missing',
+          message: 'missing'
+        }));
+        const { scope } = await installWorker(async () => derived('unused'), {
+          recognizeImportedFace
+        });
+        const document = addPrimitiveFeature(
+          createProjectDocument('Recognition Ids', toUserId('user')),
+          {
+            name: 'Box',
+            primitiveKind: 'box',
+            dimensions: { width: 10, height: 20, depth: 30 }
+          }
+        );
+        post(scope, {
+          type: 'recognize-imported-face',
+          requestId: 'recognition-3',
+          document,
+          bodyId: toBodyId(bodyId),
+          faceHash: 703,
+          topologyId: 'face:703'
+        });
+        await vi.waitFor(() =>
+          expect(scope.postMessage).toHaveBeenCalledWith(
+            expect.objectContaining({ requestId: 'recognition-3', ok: true })
+          )
+        );
+        expect(inherited).toEqual([]);
+        const input = (
+          recognizeImportedFace.mock.calls[0] as unknown[] | undefined
+        )?.[0] as Record<string, unknown> | undefined;
+        expect(input).toBeDefined();
+        expect(input).not.toHaveProperty('faceReference');
+      } finally {
+        delete (Object.prototype as { topology?: unknown }).topology;
+      }
+    }
+  );
 });
 
 describe('resolveSourceBytes download safeguards', () => {

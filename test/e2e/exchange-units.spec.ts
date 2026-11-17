@@ -87,6 +87,61 @@ test('a unitless STL asks for its unit and lands at the size the answer makes', 
   await expect(prompt).toHaveCount(0);
 });
 
+/** Drops a named file on whatever element `selector` finds, as Finder would. */
+async function dropFile(page: Page, selector: string, name: string) {
+  return page.evaluate(
+    ({ selector, name }) => {
+      const target = document.querySelector(selector)!;
+      const transfer = new DataTransfer();
+      transfer.items.add(new File(['ISO-10303-21;'], name));
+      let accepted = true;
+      for (const type of ['dragenter', 'dragover', 'drop']) {
+        accepted = target.dispatchEvent(
+          new DragEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            dataTransfer: transfer
+          })
+        );
+      }
+      // false: the page took the drop rather than letting the browser open it.
+      return accepted;
+    },
+    { selector, name }
+  );
+}
+
+// I67 and I68 (13 November review): Enter on the focused radio did nothing,
+// and a STEP dropped on the stage imported behind the open dialog.
+test('the Units dialog takes Enter, and refuses a file dropped under it', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await createProject(page, 'Units dialog keys');
+
+  await page.getByLabel(/^Import STEP or /).setInputFiles(STL);
+  const prompt = page.getByRole('dialog', {
+    name: 'Units for simple-block.stl'
+  });
+  await expect(prompt).toBeVisible();
+
+  expect(await dropFile(page, '.viewer-host', 'bracket.step')).toBe(false);
+  expect(await dropFile(page, '.modal-backdrop', 'bracket.step')).toBe(false);
+  // The status line sits behind the dialog, inert until it closes.
+  await expect(
+    page.getByRole('contentinfo', { includeHidden: true })
+  ).toContainText(
+    'Finish or cancel the open dialog, then drop the file again.'
+  );
+  await expect(prompt).toBeVisible();
+
+  await prompt.getByRole('radio', { name: 'Millimeters' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(prompt).toHaveCount(0);
+  await expectBodyCount(page, 1);
+});
+
 test('mesh export writes the chosen unit and facet angle, as its check measured', async ({
   page
 }) => {

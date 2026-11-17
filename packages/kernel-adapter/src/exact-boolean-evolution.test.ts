@@ -92,9 +92,12 @@ describe('probeBooleanEntityEvolution', () => {
   });
 
   it('declines where the evolution fuse lands on a different body', () => {
-    // Measured on the pin: the plain fuse of these two cylinders has six
-    // faces, the evolution fuse five. Same volume, different topology — and a
-    // payload that partitions a different body is not evidence about this one.
+    // Until esaueng/remus#1792 the plain fuseAll of a post standing on a base
+    // kept both caps (six faces) while the evolution fuse merged them (five),
+    // and the probe had to decline. The pin now ships the five-face body
+    // itself, so the genuine pair agrees; a payload that partitions a
+    // different body must still be no evidence about this one, so the probe
+    // is handed a shipped union with a taller post.
     const kernel = new RemusKernel();
     const base = kernel.makeCylinder(20, 5);
     const post = kernel.makeCylinder(5, 20);
@@ -103,24 +106,39 @@ describe('probeBooleanEntityEvolution', () => {
       namedOperand(kernel, base, 'base', 'target'),
       namedOperand(kernel, post, 'post', 'tool')
     ];
-    const shipped = unifyUnionFaces(
+    const probe = (shipped: number) =>
+      probeBooleanEntityEvolution({
+        kernel,
+        operation: 'fuse',
+        a: base,
+        b: post,
+        shipped,
+        unify: (candidate) => unifyUnionFaces(kernel, candidate),
+        operands
+      });
+
+    const genuine = unifyUnionFaces(
       kernel,
       kernel.fuseAll(Uint32Array.from([base, post]))
     );
-    expect(kernel.getSolidFaces(shipped).length).toBe(6);
-    const evidence = probeBooleanEntityEvolution({
+    expect(kernel.getSolidFaces(genuine).length).toBe(5);
+    expect(probe(genuine).declined).toBeNull();
+
+    const taller = kernel.makeCylinder(5, 25);
+    kernel.transformSolid(taller, rowMajor(0, 0, 5));
+    const shipped = unifyUnionFaces(
       kernel,
-      operation: 'fuse',
-      a: base,
-      b: post,
-      shipped,
-      unify: (candidate) => unifyUnionFaces(kernel, candidate),
-      operands
-    });
+      kernel.fuseAll(Uint32Array.from([base, taller]))
+    );
+    const evidence = probe(shipped);
     expect(evidence.evolution).toBeNull();
     expect(evidence.declined).toMatch(/did not reproduce the body/);
     // And the geometry is untouched by the refusal.
-    expect(kernel.getSolidFaces(shipped).length).toBe(6);
+    expect(kernel.getSolidFaces(shipped).length).toBe(5);
+    expect(kernel.volume(shipped, 0.01)).toBeCloseTo(
+      Math.PI * (20 ** 2 * 5 + 5 ** 2 * 25),
+      6
+    );
   });
 
   it('declines where the evolution call refuses a boolean the plain call performs', () => {

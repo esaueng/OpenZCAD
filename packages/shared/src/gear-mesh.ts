@@ -16,6 +16,7 @@ import type {
   GearMeshSolution
 } from './gear-mesh-types';
 import { GEAR_PLACEMENT_UNUSABLE, gearPlacementFrame } from './gear-mesh-types';
+import { ownEntry } from './document-validation';
 
 /**
  * M14 meshing-pair helper: where a second gear goes so that it meshes with a
@@ -102,7 +103,7 @@ export function gearMeshPairError(
   axisSense: 1 | -1 = 1
 ): GearMeshRefusal | null {
   for (const gear of [a, b]) {
-    const reason = UNSUPPORTED[gear.gearType];
+    const reason = ownEntry(UNSUPPORTED, gear.gearType);
     if (reason) return refusal('gear-mesh:unsupported-type', reason);
   }
   if (a.gearType === 'rack' && b.gearType === 'rack')

@@ -1,4 +1,5 @@
 import { listFeaturesInOrder } from '@openzcad/document-core';
+import { ownEntry } from '@openzcad/shared';
 import type { ProjectDocument } from '@openzcad/shared';
 
 /** A new operation from a successful local command, independent of selection. */
@@ -14,7 +15,7 @@ export function retainLocalHistoryAppend(
   document: ProjectDocument
 ): LocalHistoryAppend | null {
   return append?.projectId === document.projectId &&
-    document.nodes[append.nodeId]?.kind === 'feature'
+    ownEntry(document.nodes, append.nodeId)?.kind === 'feature'
     ? append
     : null;
 }
@@ -31,7 +32,7 @@ export function localHistoryAppend(
   const features = listFeaturesInOrder(after);
   for (let index = features.length - 1; index >= 0; index--) {
     const feature = features[index]!;
-    if (!before.nodes[feature.id])
+    if (!ownEntry(before.nodes, feature.id))
       return {
         projectId: after.projectId,
         nodeId: feature.id,

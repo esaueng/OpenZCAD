@@ -482,3 +482,24 @@ describe('F05 typed fields: the dimension a field holds', () => {
     }
   });
 });
+
+// QA 2026-11-14 P3: a decimal comma read as stray tokens with no hint.
+describe('decimal comma guidance', () => {
+  it('names the decimal point when a comma splits two numbers', () => {
+    for (const expression of ['2,5', '12,75', '2,5 mm', '1 + 2,5']) {
+      expect(() => evaluateExpression(expression, {})).toThrow(
+        /use a point for decimals \(2\.5, not 2,5\)/
+      );
+    }
+  });
+
+  it('keeps commas between function arguments and other trailing tokens as they were', () => {
+    expect(evaluateExpression('max(2,5)', {})).toBe(5);
+    expect(() => evaluateExpression('5 3', {})).toThrow(
+      /^Unexpected trailing tokens in expression\.$/
+    );
+    expect(() => evaluateExpression('width,', { width: 2 })).toThrow(
+      /^Unexpected trailing tokens in expression\.$/
+    );
+  });
+});

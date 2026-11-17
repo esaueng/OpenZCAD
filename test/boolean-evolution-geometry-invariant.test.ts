@@ -165,13 +165,17 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
   );
 
   it(
-    'keeps the exact-only refusal where the evolution entry point would ship a body',
+    'builds the cylinder ∩ sphere the exact pipeline now answers exactly',
     async () => {
-      // Measured on the pin: the plain intersect refuses this by the exact-only
-      // policy, while `intersectWithEntityEvolution` returns a two-face body of
-      // 1946.740248 mm^3. Shipping that body is the fail-closed violation this
-      // case exists to prevent.
-      const { document, bodyId, operandIds } = operandDocument(
+      // Before Remus 2026.1.142 the plain intersect refused this by the
+      // exact-only policy while `intersectWithEntityEvolution` already
+      // returned a two-face body. 1.142 builds it on the plain pipeline too:
+      // the sphere (r 8 at z 5) less the 3 mm cap the cylinder's end plane
+      // cuts off, closed by a planar disc, exactly
+      // 4/3·π·8³ − π·3²·(3·8 − 3)/3 = 2048π/3 − 63π mm³. The part is taller
+      // than the radius, so it keeps the sphere's equator seam: two sphere
+      // patches and the disc.
+      const { document, bodyId } = operandDocument(
         'Cylinder meets sphere',
         [
           { name: 'Cylinder', primitive: { kind: 'cylinder', radius: 10, height: 20 } },
@@ -184,10 +188,14 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
         'intersect'
       );
       const derived = await adapter.syncDocument(document);
-      // Refused, so no boolean geometry ships: the first operand is passed
-      // through unchanged (ADR-017, November 2026).
-      expectPassedThrough(derived, bodyId, operandIds[0]!);
-      expect(derived.warnings.join('\n')).toMatch(/exact-only policy/);
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[bodyId];
+      expect(body, 'the intersection body').toBeDefined();
+      expect(body!.faceCount).toBe(3);
+      expect(
+        body!.topology!.faces.map((face) => face.geometry?.surfaceType).sort()
+      ).toEqual(['plane', 'sphere', 'sphere']);
+      expect(body!.volume).toBeCloseTo((2048 * Math.PI) / 3 - 63 * Math.PI, 6);
     },
     120_000
   );
@@ -286,12 +294,16 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
   );
 
   it(
-    'keeps the plain fuse topology on a stepped cylinder union',
+    'ships the merged topology on a stepped cylinder union',
     async () => {
-      // The evolution fuse returns five faces for this union where the plain
-      // fuse returns six. Whichever is the nicer body, the stored face hashes
-      // of every such union move if the shipped topology changes, so the
-      // shipped one stays the plain one.
+      // This case once pinned six faces as "the plain fuse" topology against
+      // the evolution fuse's five. The six were not a different body but a
+      // defective one: `fuseAll` joined the two cylinders cap to cap without
+      // a boolean, keeping the base's full top disc and the post's bottom
+      // disc as an internal wall (QA 2026-11-14 finding #1). The union gate
+      // now refolds that result with the pairwise fuse, so the shipped body
+      // is the merged one: base bottom, base wall, the top annulus, the post
+      // wall and the post top. See `test/touching-cylinder-union.test.ts`.
       const { document, bodyId } = operandDocument(
         'Stepped shaft',
         [
@@ -308,8 +320,17 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
       expect(derived.warnings).toEqual([]);
       const body = derived.bodyRepresentations[bodyId];
       expect(body, 'the union body').toBeDefined();
-      expect(body!.faceCount).toBe(6);
+      expect(body!.faceCount).toBe(5);
       expect(body!.volume).toBeCloseTo(7853.981634, 4);
+      const planes = body!.topology!.faces
+        .filter((face) => face.geometry?.surfaceType === 'plane')
+        .map((face) => face.geometry!.area)
+        .sort((left, right) => left - right);
+      // Post top π·5², base top annulus π·(20² − 5²), base bottom π·20².
+      expect(planes).toHaveLength(3);
+      expect(planes[0]).toBeCloseTo(25 * Math.PI, 6);
+      expect(planes[1]).toBeCloseTo(375 * Math.PI, 6);
+      expect(planes[2]).toBeCloseTo(400 * Math.PI, 6);
     },
     120_000
   );
@@ -320,6 +341,13 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
       // Plain: 523.545492 mm^3 (523.553418 since Remus 2026.1.69, nearer the
       // closed-form octant 500π/3 ≈ 523.5988). Evolution: 523.528813 mm^3 — a silent
       // geometric change on a path advertised as changing provenance only.
+      //
+      // Since Remus 2026.1.125 the measured volume is 523.592254 mm^3 for both
+      // entry points. The body did not change: the kernel's deflection-free
+      // `massProperties` integral was already 523.5922535 for the plain and
+      // the evolution result on 2026.1.124. Only `volume(solid, 0.08)` moved,
+      // from a polyline-biased mesh reading (523.553418 plain, 523.539600
+      // evolution) to that integral. The case still pins the shipped value.
       const { document, bodyId } = operandDocument(
         'Ball corner',
         [
@@ -336,7 +364,7 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
       const body = derived.bodyRepresentations[bodyId];
       expect(body, 'the intersection body').toBeDefined();
       expect(body!.faceCount).toBe(4);
-      expect(body!.volume).toBeCloseTo(523.553418, 4);
+      expect(body!.volume).toBeCloseTo(523.592254, 4);
     },
     120_000
   );

@@ -293,6 +293,20 @@ describe('workspace panel state', () => {
     ).toBe(true);
   });
 
+  it('keeps the tour step reached on this device (I16)', () => {
+    // A second empty project picked the tour up at 1/4 again.
+    expect(defaultPanelState().workspaceTourStep).toBe(0);
+    expect(
+      savePanelState({ ...defaultPanelState(), workspaceTourStep: 2 })
+    ).toBe(true);
+    expect(loadPanelState().workspaceTourStep).toBe(2);
+    for (const bad of ['2', -1, 1.5, 999, null]) {
+      expect(
+        normalizePanelState({ workspaceTourStep: bad }).workspaceTourStep
+      ).toBe(0);
+    }
+  });
+
   it('remembers a dismissed first-model tour across reloads', () => {
     // Not dismissed to begin with — a fresh device gets the tour on its first
     // empty project — and a dismissal is forever on this device.

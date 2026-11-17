@@ -22,6 +22,7 @@ import {
   type BlendRefusal
 } from './exact-blend-refusal';
 import { ADAPTER_REFUSALS } from './adapter-refusal';
+import { crossingFaceLoops } from './face-loop-crossing';
 import { KernelRefusal } from './kernel-refusal';
 import { surfaceTypeOf } from './exact-sync-memo';
 import { MEASUREMENT_DEFLECTION, edgeSampleOf } from './exact-witnesses';
@@ -495,6 +496,28 @@ export function applyEdgeModifier(
       }
     }
   }
+  // A blend must not leave a face whose boundary loops cross. The kernel can
+  // move a planar face's outline (a fillet's spring line) across a hole or
+  // boss circle in the same face without trimming either, and its validator
+  // reports no error: on the pin, a 0.5 fillet along a plate edge 0.137
+  // outside a fused hub's base circle leaves the plate face's outer loop
+  // 0.363 inside that circle, two holes in the model and an open mesh. See
+  // `face-loop-crossing`. Refused here, the ladder below quotes the largest
+  // size that does build.
+  //
+  // Like the measurements above it is skipped on a display-only drag frame,
+  // and the checked rebuild at rest and on release runs it. A target whose
+  // own loops already cross is not this blend's fault, so it is not refused
+  // for them.
+  if (!displayOnlyBlendsActive()) {
+    const crossing = crossingFaceLoops(kernel, [modified]);
+    if (crossing && !crossingFaceLoops(kernel, [target])) {
+      reportRefusal?.(
+        `${featureKind} left a face whose boundary loops cross: one loop runs ${crossing.depth.toPrecision(3)} past another, so the result has holes in the model`
+      );
+      return null;
+    }
+  }
   if (evolution) {
     reportEvolution?.(evolution);
   }
@@ -791,48 +814,61 @@ export function refineAcceptedEdgeModifierSize(
     return accepted;
   }
   const angle = featureKind === 'chamfer' ? chamferAngleRadians : undefined;
-  const step = refineStep(accepted, refused);
-  let low = Math.floor(accepted / step);
-  let high = Math.ceil(refused / step);
   let best = accepted;
+  // The smallest size proved to refuse: the next, finer pass searches the
+  // gap between it and `best` rather than the whole original gap.
+  let ceiling = refused;
   let calls = 0;
-  while (high - low > 1 && calls < steps) {
-    const middle = Math.floor((low + high) / 2);
-    const size = Number((middle * step).toPrecision(12));
-    if (size <= accepted + GEOMETRY_EPSILON) {
-      low = middle;
-      continue;
+  let step = refineStep(accepted, refused);
+  // One pass per scale. A single pass at the gap's own scale stopped when two
+  // round sizes bracketed the limit, with calls to spare: a 40 mm cube that
+  // refused r20 was told "radius 15 builds here" while 19.6 built (QA
+  // 2026-11-14). The finer pass spends the rest of the same budget.
+  while (calls < steps) {
+    let low = Math.floor(best / step);
+    let high = Math.ceil(ceiling / step);
+    while (high - low > 1 && calls < steps) {
+      const middle = Math.floor((low + high) / 2);
+      const size = Number((middle * step).toPrecision(12));
+      if (size <= best + GEOMETRY_EPSILON) {
+        low = middle;
+        continue;
+      }
+      if (size >= ceiling - GEOMETRY_EPSILON) {
+        high = middle;
+        continue;
+      }
+      calls += 1;
+      let builds = false;
+      try {
+        builds =
+          applyEdgeModifier(
+            kernel,
+            target,
+            selected,
+            featureKind,
+            size,
+            undefined,
+            undefined,
+            angle,
+            undefined,
+            undefined,
+            true
+          ) !== null;
+      } catch {
+        // A throw is a refusal like any other.
+      }
+      if (builds) {
+        low = middle;
+        best = size;
+      } else {
+        high = middle;
+        ceiling = size;
+      }
     }
-    if (size >= refused - GEOMETRY_EPSILON) {
-      high = middle;
-      continue;
-    }
-    calls += 1;
-    let builds = false;
-    try {
-      builds =
-        applyEdgeModifier(
-          kernel,
-          target,
-          selected,
-          featureKind,
-          size,
-          undefined,
-          undefined,
-          angle,
-          undefined,
-          undefined,
-          true
-        ) !== null;
-    } catch {
-      // A throw is a refusal like any other.
-    }
-    if (builds) {
-      low = middle;
-      best = size;
-    } else {
-      high = middle;
-    }
+    const finer = refineStep(best, ceiling);
+    if (!(finer < step)) break;
+    step = finer;
   }
   return best;
 }

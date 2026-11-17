@@ -122,6 +122,15 @@ class SnapshotTests(unittest.TestCase):
         with self.assertRaises(SnapshotError):
             complete_snapshot(self.root, SOURCE)
 
+    def test_unreviewed_later_migrations_are_refused(self):
+        for name in ['0051_future.sql', '0052_future.sql', '0058_future.sql', '0060_future.sql']:
+            with self.subTest(name=name):
+                self.db.execute('INSERT INTO d1_migrations VALUES (?)', (name,))
+                self.sql()
+                with self.assertRaisesRegex(SnapshotError, 'Review new migrations|Unsupported migration ledger'):
+                    complete_snapshot(self.root, SOURCE)
+                self.db.execute('DELETE FROM d1_migrations WHERE rowid=(SELECT MAX(rowid) FROM d1_migrations)')
+
     def test_missing_runtime_tables_are_refused(self):
         self.db.execute("INSERT INTO d1_migrations VALUES ('0040_e2ee_share_links.sql')")
         self.sql()
@@ -211,7 +220,7 @@ class SnapshotTests(unittest.TestCase):
         validate_restore_target(SOURCE, target)
         for field, value in [('database', SOURCE['database']),
                              ('database', '7263c6f1-8781-40d1-a0fa-ea03ce874ef2'),
-                             ('bucket', 'openzcad-beta-artifacts'), ('worker', 'openzcad'),
+                             ('bucket', 'openzcad-beta-artifacts'), ('worker', 'openzcad-beta'), ('worker', 'openzcad-stable'),
                              ('origin', 'https://zcad.app'), ('origin', 'http://'+worker+'.example.workers.dev')]:
             with self.subTest(field=field), self.assertRaises(SnapshotError):
                 validate_restore_target(SOURCE, {**target, field: value})

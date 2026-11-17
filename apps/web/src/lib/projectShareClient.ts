@@ -5,6 +5,7 @@ import type {
   ProjectShareLinkSummary,
   SharedProjectResponse
 } from '@openzcad/shared';
+import { SHARE_LINK_TOKEN_HEADER } from '@openzcad/shared';
 import {
   assertStorableDocument,
   UnstorableDocumentError
@@ -73,23 +74,22 @@ export function buildShareLinkUrl(token: string): string {
   return `${location.origin}/#share=${encodeURIComponent(token)}`;
 }
 
+/**
+ * The header that carries a share link's token on its anonymous reads. The
+ * token never goes in the URL, which request logs record.
+ */
+export function shareTokenHeaders(token: string): Record<string, string> {
+  return { [SHARE_LINK_TOKEN_HEADER]: routePart(token, 'Share token') };
+}
+
 /** Where a share-link visitor fetches one import-source asset from. */
-export function sharedAssetUrl(token: string, assetId: string): string {
-  return `/api/share/${routePart(token, 'Share token')}/assets/${routePart(
-    assetId,
-    'Asset ID'
-  )}`;
+export function sharedAssetPath(assetId: string): string {
+  return `/api/share/assets/${routePart(assetId, 'Asset ID')}`;
 }
 
 /** Anonymous STEP source referenced by a shared project's feature history. */
-export function sharedImportSourceUrl(
-  token: string,
-  artifactId: string
-): string {
-  return `/api/share/${routePart(token, 'Share token')}/sources/${routePart(
-    artifactId,
-    'Artifact ID'
-  )}`;
+export function sharedImportSourcePath(artifactId: string): string {
+  return `/api/share/sources/${routePart(artifactId, 'Artifact ID')}`;
 }
 
 /** Typed client for the owner share-link routes and the anonymous read. */
@@ -157,11 +157,11 @@ export function createProjectShareLinkClient(
       }
     },
     async fetchSharedProject(token) {
-      const response = await fetcher(
-        `/api/share/${routePart(token, 'Share token')}`,
+      const response = await fetcher('/api/share', {
         // Visitors have no session; never send one that might exist.
-        { credentials: 'omit' }
-      );
+        credentials: 'omit',
+        headers: shareTokenHeaders(token)
+      });
       if (response.status === 404) {
         return null;
       }

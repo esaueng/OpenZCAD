@@ -577,6 +577,42 @@ comparison, which is safe only because of its commitment step.
   one comparison per person, not one per project. The comparison is mutual:
   the invitee verifies the owner's fingerprint in the same step, which anchors
   the project's roster for them. Sharing remains owner-only (ADR-019).
+  The owner's statement also names a hash of the emailed link's token, which
+  the owner's browser makes, so the invitee's browser accepts by link only
+  the invitation that names the link it opened. The invitee's device then
+  signs an acceptance of that exact statement, and the owner adds only an
+  account whose device signed one. An invitation the server merely lists,
+  or one whose statement names no link, is joined only on the invitee's
+  explicit confirmation of the verified statement. The server delivers the
+  email and labels contacts with their addresses, so the address alone
+  never decides who is added. An invitation is email-only by default. When
+  the typed address matches a verified contact, the owner's browser offers
+  that contact as an explicit choice, shown by the contact code Contacts
+  shows; only when the owner picks it does the statement (version 3) name
+  that contact's identity key, and the owner's browser then adds
+  automatically only an acceptance by that identity. Every other acceptance
+  waits for the owner to confirm the accepting contact, shown by the same
+  contact code, or to decline it. Migrating a shared project works the same
+  way: before anything is staged, the owner approves each member to be
+  added back by contact code and signed role, and the cutover adds exactly
+  those identities, stopping to ask again if the roster, an identity or a
+  role changed. Every re-add must name the migrating project, in the
+  server's record and in the owner-signed statement alike. A staging
+  resumed after a reload, or one an older app version left, reaches the
+  cutover only with the owner's approval of the whole staged roster,
+  members already re-added included, given again or recorded on that
+  owner's browser for that same staging; a member re-added without an
+  acceptance the owner can review drops the staging, which starts again.
+  The roster checked is the staged MLS group's own, not the server's
+  listing: before a resumed staging is written to, and again just before
+  the cutover, every account in the group besides the owner's must be an
+  approved identity (a verified contact certifying each of its leaves)
+  with the approved role in the group's roles, or the staging is dropped
+  and starts again. An approval is spent once: recorded for the staging it
+  went ahead with, or dropped with that staging or a cancel.
+  Automatic adds also require that the owner's browser saw every removal
+  from the project since its group began (it created the group); a device
+  that joined from the project's history asks the owner for every Add.
 - **Invitation emails** name the sender, not the project.
 - **Share links** become `#share=<token>.<key>.<owner>`, where `<owner>` is
   the full hash of the owner's identity key; the fragment never reaches the
@@ -612,17 +648,22 @@ comparison, which is safe only because of its commitment step.
   - The visitor's browser checks, in order: the owner hash in the link, the
     identity-signed share delegation and its expiry, that the statement's
     signing device is named in it, the statement's signature and expiry,
-    then that the snapshot's signing credential is one the statement names.
-    The author's own device list is not trusted here, because a visitor has
+    then that the snapshot's signing credential is one the statement names,
+    and that the snapshot was signed no earlier than the statement was
+    issued (ten minutes of clock skew allowed), so a newer statement does
+    not vouch for an older snapshot. The owner's browser republishes a
+    link's snapshot with each new statement, and again on its next upkeep
+    if that publication failed. The author's own device list is not trusted here, because a visitor has
     no pin for it and could be shown a stale one. It accepts the snapshot only if every
     step holds.
   - Any of the owner's devices renews the statement while it is online, and
     issues a new one at once when an editor is removed or the link revoked.
-  - Two bounds follow. A former editor can publish snapshots that visitors
-    accept only until the statement they were listed in expires (seven days
-    by default). A stolen, removed owner device can sign statements that
-    visitors accept only until the last delegation naming it expires (at most
-    30 days). After either expiry, visitors see that the owner has not
+  - Two bounds follow. A former editor, or an editor's revoked device, can
+    publish snapshots that visitors accept only until the statement they were
+    listed in expires (seven days by default). A stolen, removed owner device
+    keeps its signing key, so with a server replaying an earlier delegation
+    that names it, it can keep signing new statements that visitors accept
+    until that delegation expires (at most 30 days after it was issued). After either expiry, visitors see that the owner has not
     recently confirmed the link. These limits are inherent to anonymous
     access. "Make a copy" decrypts in the visitor's browser and saves under
     the visitor's keys, or locally.
@@ -827,7 +868,11 @@ the envelope header fields, and each user's device list: device labels, when
 devices and unlock methods were added or removed, and their public keys.
 Project names, checkpoint names, revision reasons,
 upload file names, thumbnails, measurements, workspace view state, archived
-exports and library folders are encrypted. R2 keys use opaque ids only.
+exports, library folders and the contacts list are encrypted (the list's
+entry count and write times stay visible; see the amendment of 2026-11-14).
+R2 keys use opaque ids only. Which projects are in the trash, and since
+when, stays readable; pins, manual order and the archive of an account whose
+library is encrypted do not (amendment 2026-11-14, shelf state).
 
 ### AI assistant
 
@@ -851,6 +896,23 @@ MAC'd under the account key and pinned by sequence in each browser, so a
 server-forged consent never makes a browser send; the Worker keeps a live row
 as defence in depth. It is asked again when the copy version or the provider
 route changes.
+
+Consent copy version 2 (D06 slice E) adds the drawing sheet an ask from Draw
+is made on: its name, scale and views, the model edges each view draws with
+their positions on the paper, and its dimensions and notes with their values
+and text.
+
+Provider retention (2026-11-14). An encrypted project's request through
+OpenRouter carries `provider.data_collection: 'deny'`, so OpenRouter routes it
+only to providers whose policy is not to train on or store prompts, and
+refuses it (reported as no eligible route) rather than falling back to one
+that does. That is not zero retention: a provider may still keep a request
+for a while for abuse monitoring (OpenRouter's stricter `zdr` routing would
+narrow that further, at the cost of fewer eligible providers). Requests to
+OpenAI's Responses API already carry `store: false`, which leaves OpenAI's
+own abuse-monitoring retention. Any other route, such as a user's own
+Responses-compatible endpoint, follows that provider's terms. The consent
+dialog says all of this. A plaintext project's request is unchanged.
 
 ### Settled product decisions
 
@@ -1384,3 +1446,399 @@ changes.
   refuses a plaintext project (decision D2).
 - **Review.** This is a new account-key derivation and record format, so the
   Phase 8 outside review covers it with the other account records.
+
+## Amendment 2026-11-14: the account library rule
+
+Encrypting existing projects and accepting an encrypted invitation need no
+"Encrypt new projects" opt-in. Keying the library on the opt-in alone let
+such an account keep storing plaintext beside its encrypted projects:
+folder records that name them, and device projects saved to the account
+that may be "Keep both" or recovery copies of them.
+
+- **Rule.** An account's library is encrypted when it opted in, or owns or
+  is a member of a project stored encrypted (format 2). New blank projects
+  still follow the opt-in alone.
+- **What it covers.** Library folder records are stored sealed only, and a
+  device project saved to the account is adopted encrypted. The Worker
+  refuses a plaintext folder record (`LIBRARY_FOLDERS_ENCRYPTION_REQUIRED`)
+  and a plaintext adoption (`ENCRYPTED_PROJECTS_REQUIRED`) for such an
+  account, and reports `libraryEncrypted` with the stored preference.
+- **The browser decides before sending.** It asks the opt-in exactly as
+  before, with every guarantee of decision D2, then the Worker's
+  `libraryEncrypted`, which can only add encryption. An answer it cannot
+  read while encrypted projects are open refuses
+  (`E2EE_PREFERENCE_UNVERIFIED`) rather than reading as no. A folder sync
+  that meets the refusal mid-visit seals from its next round.
+
+### Account settings
+
+Settings are the user's own words and habits: custom assistant
+instructions, units, theme, keymap, viewport and sketching preferences. An
+account whose library is encrypted (the rule above) stores them sealed.
+
+- **What stays readable.** The Worker acts on two parts of the settings: the
+  sharing switch, which authorizes invitations and live connections, and the
+  assistant's route (on or off, whose credential, provider, endpoint, model,
+  reasoning effort, output and time limits), which it uses to call the
+  provider. `settings_json` holds only those (`accountServerSettings`),
+  every other field at its default.
+- **Sealed record.** The whole settings are one record in
+  `user_settings.sealed_settings` (migration 0057), with the library-folder
+  layout under its own key: HKDF-SHA-256 of the account key, empty salt, info
+  `OpenZCAD E2EE v1 account settings key`, additional-data label
+  `OpenZCAD E2EE v1 account settings`. Plaintext is at most 32 KiB. The
+  shared code is `sealed-records.ts`; the folder record now uses it too,
+  with its bytes unchanged (pinned by its fixed vector).
+- **Reads.** The browser opens the record and takes the readable part from
+  `settings_json`, which wins for the fields the Worker acts on. A record it
+  cannot use (another account key, a sequence below its pin, failed
+  authentication), or locked keys, leaves this device's own values for the
+  sealed fields. Readable settings left from before the account encrypted
+  are sealed by the first read that holds the account key.
+- **Writes.** The browser sends the readable part and a new record, at a
+  sequence above both its own pin and every record it has seen the account
+  hold (read from the header, which needs no key), so no device reuses or
+  lowers a sequence. A device with locked keys sends the readable part alone
+  and the Worker keeps the stored record; while the account's settings are
+  still readable from before and unsealed, it refuses that write instead
+  (`SETTINGS_SEAL_REQUIRED`), since it would reset them for every device.
+  The Worker refuses a write that carries more than the readable part, or
+  that omits fields it would fill from the stored copy
+  (`SETTINGS_ENCRYPTION_REQUIRED`); an account that stores settings readable
+  drops any sealed record on its next write.
+- **Never sealing over a record it has not opened.** Each device keeps,
+  per account in device storage, the record the account held when it last
+  read or wrote, that record's settings once opened, and what it showed in
+  their place while it could not open them, with the settings revision it
+  saw the record at. A sealed save replaces the account's record only after
+  this device opened it at the revision the save names (the Worker's
+  revision check then makes sure it is still the one replaced; a revision
+  learned elsewhere, such as from a credential change, sends the device to
+  read the account first, and a refresh that cannot confirm the revision
+  stops the save as a conflict). While the device shows its own values in
+  place of a record it could not open, a save merges onto the account's
+  settings: each field changed since what it showed or last sent keeps the
+  device's value, every other field takes the account's. That ends once the
+  page adopts an account copy it opened or a save catches up. Two devices
+  that can both open the record follow last-writer-wins on the whole
+  settings, as accounts that store them readable always have. A save that
+  merged becomes the new base, so an edit queued behind it merges too, and the
+  state survives a reload; the page folds the merged result into what it
+  shows, keeping edits made meanwhile. A record sealed before an account-key
+  rotation is opened with that older key through the account-key history
+  (each replaced key is wrapped under its successor) and resealed under the
+  current one. A device that cannot open the record (keys locked, behind its
+  pin, altered, or a key it cannot reach) saves the readable part only and
+  reports the rest as kept on this device (`SETTINGS_SEAL_DEFERRED`), so its
+  edit stays pending instead of reading as saved. The device keeps one copy
+  of the settings, so once another account reads or saves them there, every
+  other account's state is dropped rather than merged against a copy that is
+  no longer its own.
+- **Unanswered library rule.** Only a Worker without the encryption routes
+  reads as "not encrypted"; one that cannot be reached or fails refuses the
+  save (`E2EE_PREFERENCE_UNVERIFIED`), so settings never leave readable on a
+  guess.
+- **Custom instructions** travel with each assistant request
+  (`customInstructions`) instead of being read from the stored settings, so
+  the Worker still adds them for the provider. The request gained a field,
+  so the consent copy lists it and moves to version 3, which asks again on
+  every encrypted project; the transit sentence no longer says the server
+  adds them from settings.
+- **What the server sees.** The readable part, the record's length, write
+  times, revision and the account-key commitment in its header.
+
+### Shelf state
+
+An audit found the shelf state of every project (pinned, manual order,
+archived and when, in the trash and when) stored readable on the account's
+project rows, written by the shelf's organization route and its reorder
+route and read back in every listing, although "Plaintext metadata" never
+listed it. For an account whose library is encrypted (the rule above), pins,
+manual order and the archive are now sealed; the trash stays readable.
+
+- **What is sealed.** The sealed library record (format 2) carries each
+  project's pin, manual order, archived flag and archive time beside the
+  folders, keyed by project id with one merge stamp per field, so a pin on
+  one device and a reorder on another both survive. The folder set's own
+  version moves from 2 to 3 for it. Version 2 sets stay readable and read
+  as carrying no shelf state; the plaintext record (format 1) stays
+  version 2, since a plaintext library keeps its shelf state on its rows.
+  A client that predates version 3 reads a version 3 record as
+  unsupported and stops syncing folders rather than overwriting it.
+- **What stays readable, and why.** Whether a project is in the trash and
+  since when. The server acts on it: members, collaboration rooms and share
+  links lose access to a trashed project, the purge deletes it once the
+  retention window ends, and the account's quotas count it.
+- **The Worker.** For such an account the project rows hold the defaults
+  (unpinned, order 0, active unless in the trash, no archive time). Behind
+  the library rule's flags, the organization route refuses a pin, a
+  non-zero position or the archive with 409 `PROJECT_SHELF_STATE_SEALED`,
+  the reorder route refuses more than one project, and copies start at
+  order 0 instead of beside their source. Trash, restore and the defaults
+  pass. An encrypted copy always starts at order 0: its owner holds an
+  encrypted project.
+- **The browser.** Shelf edits are noted per account until a sealed sync
+  takes them, and the shelf's account writes carry only moves into and out
+  of the trash. A pin, an order or an archive is sent readable only after
+  the library rule answered, for that write, that the account's library is
+  plaintext: another tab may have encrypted a project or accepted an
+  encrypted invitation, and a refusal from the Worker would come after it
+  had read the value. When the rule cannot answer, the trash move is still
+  sent and the rest stays on the device (its row pending, its edit noted)
+  until it can. Listings take the trash from the account's rows, and pins,
+  order and archive from the account's unsynced edits on this device, then
+  its agreed sealed record, then (once, to migrate) readable state its rows
+  still hold. With locked keys a device sends nothing readable; a fresh
+  device takes the sealed record once its keys unlock. A sync records only
+  edits made on the shelf, never a row as it stands, so a row the listing
+  wrote cannot overrule the account.
+- **Accounts sharing a device.** This device's project organization rows
+  are shared by every account signed in on it, so they are attributable to
+  none. An account's sealed record is seeded only from that account's own
+  edits and its own listed rows, and its sync never writes the device rows;
+  the listing lays the agreed record over the account's rows instead. A
+  device row still pending a mirror may hold another account's choices, so
+  a sealed library's listing takes only an unmirrored move into or out of
+  the trash from it, and an edit is noted as the fields it changed over the
+  account's own state (its edit, its record, its listed row, else the
+  defaults), never over what the shelf showed. The same holds when the
+  account's listing fails and its library is encrypted or cannot be
+  checked: the projects the account is known to hold here (listed on this
+  device before, this visit or an earlier one, or present in its edits or
+  record) take their pin, order and archive from that account's state, and
+  only a project the account knows nothing of keeps this device's row, as
+  a project of this device alone would. An edit is noted under the account
+  signed in when it was made, read before the edit waits for earlier shelf
+  writes or for storage, so ending the session or signing in another
+  account meanwhile neither drops it nor files it under the other account.
+  A second account signing in therefore never sees the first one's pending
+  pins, order or archive on a project it is known to hold, never seals its
+  private project ids, pins or archive (not even by editing a project the
+  first one left pending, from a listing that reached the account or not),
+  nor overwrites them on the device; the first account finds its noted
+  edits when it returns. Known limit: device rows carry no account, so an
+  edit a plaintext library left pending on the device is settled by the
+  next account's shelf mirror: an encrypted library's mirror sends none of
+  it and drops it there, and a plaintext library's mirror still writes it
+  to its own rows, as before. Attributing device rows to their writer would
+  fix this only by leaving a row another account wrote pending under the
+  current one, which keeps it retried and its local model protected from
+  expiry until that account returns (perhaps never); the case needs a
+  project both accounts hold, edited by the plaintext one while its mirror
+  could not run, so it stays a documented limit.
+- **What the device keeps per account.** Two localStorage entries: the
+  journal of unsynced edits (`openzcad.library.shelf.edits.v1:<account>`)
+  and the account's rows as last listed
+  (`openzcad.library.shelf.rows.v1:<account>`), kept for a listing that
+  cannot reach the account. The rows hold only what differs from the
+  defaults, at most 1,000 of them, rows with shelf state first; a project
+  left out counts as one the account knows nothing of. An edit's starting
+  point reads the stored row when this visit has not listed the account
+  yet, so a pin made from a failed listing after a reload keeps the
+  readable archive and order still waiting to migrate, instead of sealing
+  the defaults over them where no later migration could replace them. If
+  localStorage refuses the journal (full or blocked) after the device row
+  was written, the edit is kept in memory for the visit. Listings and the
+  sealed sync read it from there, and it is stored with the next journal
+  write that succeeds. The shelf warns that the change is lost if the tab
+  closes before the library syncs, since the device row no longer speaks
+  for an encrypted library's pin, order or archive. Signing out forgets
+  the stored rows, as it forgets cached project titles, but keeps the
+  journal, so an edit the sealed record has not taken still reaches it
+  when the account returns. Until that account lists again, a failed
+  listing knows its projects only from its journal and record. Erasing the
+  account forgets both entries. The agreed folder record is the folder
+  sync's own state and is unchanged here.
+- **Migration.** Rows that still hold readable shelf state are shown once
+  and seeded into the sealed record wherever it holds nothing for the
+  project, stamped below every real edit. Only after that record is saved,
+  and only for an account the Worker or the preference route confirmed is
+  encrypted, are the rows reset, through a route of its own
+  (`POST /api/projects/:id/shelf/reset`) that the Worker applies as one
+  conditional write to the row as it stands: pin and order to the
+  defaults, the archive cleared only while the row is still archived, and
+  the trash (status and time) never touched, so a project trashed on
+  another device after the listing stays in the trash. Only the owner's
+  row changes; a project another account owns is never reset.
+- **Members.** Only an owner writes a project's row. A member used to see
+  the owner's pins and archive; a member whose library is encrypted now
+  keeps its own shelf state for shared projects in its own sealed record,
+  seeded once from whatever the owner's row still shows. A member of a
+  project whose owner's library is encrypted sees the defaults there.
+
+## Amendment 2026-11-14: sealed contacts list
+
+The contacts list (see [Version integrity](#version-integrity), "Pins must
+not roll back") was stored as identity-signed plaintext. That is a social
+graph the server could read: whom the user verified, their identity
+fingerprints and device-list heads, the action and when. The
+[Plaintext metadata](#plaintext-metadata) list never named it. The list now
+travels sealed under the account key. Its rules, its signatures and its
+rollback and fork protection stay as they were. These points extend the
+record above; apart from naming the list under Plaintext metadata, nothing in
+it changes.
+
+- **What is sealed.** Each entry is sealed on its own, in a record that
+  wraps exactly the canonical entry of the plaintext format, byte for byte.
+  The entry chain is unchanged: its hashes, its list rules, every device's
+  contacts pin, and the contacts head that device approval carries inside
+  its authenticated exchange all name the inner entries.
+- **Layout.** `"OZC"`, a version byte (1), the sequence (4 bytes), the
+  previous record's hash (length byte, then 0 or 32 bytes), the account-key
+  sequence (4 bytes: the device list's `accountKeySequence` of the key that
+  sealed it), a fresh random 96-bit IV, then AES-256-GCM ciphertext and tag
+  of a fixed 384-byte plaintext: `u16 length | entry | zero padding`. Every
+  record of a list therefore has the same size, whatever its action or
+  contact id. The key is derived from the account key by HKDF-SHA-256 with
+  an empty salt and the info label `OpenZCAD E2EE v1 contacts list key`,
+  distinct from every other account-key derivation. The additional data is
+  the label `OpenZCAD E2EE v1 sealed contacts entry`, a NUL, the user id, a
+  NUL and every byte before the ciphertext.
+- **Signatures and chain.** The identity key signs the whole sealed record
+  (a "sealed contacts list" statement, so a plaintext-entry signature never
+  verifies as one). Records chain by record hash, SHA-256 over the label
+  `OpenZCAD E2EE v1 sealed contacts record hash` and the record. A list is
+  sealed whole or not at all: a browser refuses a list that mixes records
+  and plaintext entries.
+- **What the Worker still checks.** Without the key, the Worker checks every
+  appended record as defence in depth: canonical header and size, the
+  identity signature, the sequence, the link to the stored head, and that
+  it is sealed under the account's current account key, in the same
+  statement that checks the device list has not moved. It refuses a
+  plaintext entry and stores the record hash as the row's `entry_hash`.
+  Browsers remain the authority: they open every record, apply every rule
+  and check their own pin, as before.
+- **Account-key rotation.** Removing a device rotates the account key.
+  Records are not resealed: the account-key history that the rotation writes
+  atomically (each replaced key wrapped under its successor) already keeps
+  every older key reachable from the current one, and only from it. A device
+  opens a record by walking the history back to the key its header names,
+  so every current device reads the whole effective pin set after any
+  number of rotations. Writers always seal under the current key, and
+  records never move back to an older key, so a removed device, which holds
+  only replaced keys, reads nothing written after its removal. Resealing the
+  list under each new key was rejected: the rotation would have to write a
+  signed snapshot in the same step as the key change, a rotation that
+  stopped part-way would leave records that no current key opens, and the
+  snapshot would be a second source of truth for pins. The history already
+  lands atomically with the rotation, and the removed device gains nothing
+  from it that it did not hold before.
+- **Identity generations.** The list stays per identity generation. A
+  replaced identity's list is never read again, so the account's first
+  sealed write deletes any plaintext rows that a replaced identity left.
+  Sealed rows of a replaced identity go when its identity is pruned, as
+  before.
+- **Migration.** Signed history cannot be rewritten in place, and none of it
+  needs to be. A browser reseals a plaintext list as the same entries in new
+  records, signed again by the identity key, and the Worker swaps the rows
+  in one transaction (`PUT /api/e2ee/contacts`). The swap goes through only
+  while the stored list is still the plaintext list whose head the browser
+  named, of the same length, and every record is under the current account
+  key. Because the inner entries are unchanged, every existing pin and
+  pending approval head stays valid. A device pinned anywhere in the old
+  list accepts the sealed one only if it contains that pinned entry, so the
+  cut-over cannot roll a pin back or hide a fork. A server that replays its
+  saved plaintext copy afterwards shows at most the state at the cut-over:
+  a device pinned past it refuses that as a rollback, and the server learns
+  nothing it had not already seen. Resealing needs the identity key, so it
+  happens at the user's next contacts signature, or at once from
+  Settings › Encryption › Contacts, which offers it while the list is
+  plaintext. Until then that list stays readable to the server, as it was.
+- **Reading needs an unlocked device.** A device that has not unlocked the
+  account key cannot read a sealed list. It is told to unlock first rather
+  than shown a list it cannot check.
+- **Who reads a contacts list.** Only the account's own devices, through
+  `GET /api/e2ee/contacts`, which returns only the caller's list. No other
+  user and no other route reads another account's list. The same response
+  lists the people the caller may look up (decision M2); that comes from
+  membership and invitations, not from the list, and is unchanged.
+- **What the server sees.** For each record: the user, the identity
+  generation, the sequence, the record hash and its predecessor, the
+  account-key sequence (which the device list already reveals), the fixed
+  record size and the time it was stored. So it learns how many changes the
+  user signed and when, but not whom they concern or what they were. Each
+  entry's own timestamp, action, contact, fingerprint and device-list head
+  are inside the ciphertext.
+- **Review.** This is a new account-key derivation and record format, so the
+  Phase 8 outside review covers it with the other account records.
+
+## Amendment 2026-11-16: approval certifies, and the approval link
+
+The [L11 plan for simpler setup, unlock and devices](../plans/l11-encryption-ux-simplification.md)
+changes two client policies. Neither changes a key, wrap, record format,
+Worker route or migration.
+
+### Approval always certifies
+
+[Unlock and devices](#unlock-and-devices) let an approving device hand over
+the account key without certifying the new device, which could then read but
+not write until it certified itself. In practice that left most approved
+devices unable to save. Approval now always certifies:
+
+- `approveDevice` opens the identity key with a passkey or the recovery key
+  (`UnlockAuthorization`, the type removal and revocation already take),
+  appends the device to the device list and wraps the account key to its
+  unlock key. Settings asks for a passkey touch first and keeps the recovery
+  key one click away.
+- Without an authorization, `approveDevice` refuses
+  (`certification-required`) unless the request comes from a device already
+  certified with exactly the same keys, which only asks to have its contacts
+  head confirmed; that path is unchanged.
+- The identity key is still never wrapped to a device unlock key. An
+  approver with neither a passkey nor the recovery key at hand cannot
+  approve; the new device can unlock itself with the recovery key instead,
+  with the first-sight freshness limit stated under
+  [Unlock and devices](#unlock-and-devices).
+- Existing read-only devices keep working, and readers are unchanged. They
+  show as "Not finished", finish with a passkey or the recovery key, and
+  "Revoke read-only devices" stays (under Advanced) while any remain. The
+  sealing path that made them (`device-approval` wraps) is kept only as
+  `legacyApproveReadOnly` for fixtures. A later change, once no read-only
+  devices remain, stops the Worker accepting read-only grants and deletes it.
+- Read-only devices hold no MLS leaf (decision D4). A newly approved device
+  is certified exactly as a recovery-key or passkey enrolment certifies one,
+  and joins project groups the same way.
+
+### The approval link
+
+The new device's QR code now carries a link,
+`<origin>/#approve-device=<code>`, where `<code>` is the same full 256-bit
+`pk_new` hash in Crockford base32 that the scan form already used
+(`deviceScanCode`). A phone's own camera app opens it into OpenZCAD, which
+offers to approve exactly the request whose keys hash to it
+(`approvalMatchesScanCode`); `approveDevice` checks the scan again. The
+in-app scanner reads the link as well as the bare code (`parseScanCode`).
+
+- **What it authenticates.** Exactly what the scan form did: the approving
+  browser compares the full hash, read off the new device's screen, with
+  the keys the server delivered. The link adds no secret and no server
+  input. A link that matches no listed request offers nothing.
+- **Where it travels.** The code is in the fragment, so it never reaches the
+  server in a request. The app scrubs it from the address bar at once and
+  keeps it tab-scoped while the user signs in or unlocks
+  (`deviceApprovalLink.ts`).
+- **Phishing.** A link only pre-fills the scan. Approving still needs the
+  user's explicit Approve and a passkey or the recovery key, and the dialog
+  says to approve only a device they have with them or just set up. This is
+  the same exposure as an attacker showing someone a QR code to scan in the
+  app today: an attacker who controls the inbox can open an approval
+  request, but cannot make the victim's device approve it unseen.
+- **Size.** The QR encoder covers byte mode up to version 6-M (106 bytes),
+  which fits an origin of up to 29 characters. A longer self-hosted origin
+  falls back to the bare code, which the in-app scanner still reads.
+
+### Passkeys in setup
+
+Setup now offers to add a passkey right after the recovery key is
+confirmed, using the recovery secret already in memory, so nothing is typed
+twice. A further passkey can be added with an existing passkey as well as
+the recovery key (`addPasskey` takes an `UnlockAuthorization`). Setup skips
+the step where `PublicKeyCredential.getClientCapabilities()` reports no PRF
+support; where the browser does not say, creation still fails closed as
+before.
+
+### Review
+
+T1 changes when the identity key is opened and removes a path the review
+packet describes, so the Phase 8 review packet (section 3.2) is updated to
+match.

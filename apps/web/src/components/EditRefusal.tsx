@@ -58,13 +58,19 @@ export function EditRefusal({
   const ownLineId = useId();
   const cardId = useId();
   const headingId = useId();
+  const detailId = useId();
   const whyRef = useRef<HTMLButtonElement | null>(null);
   // One refusal is one operation's one sentence: any change opens closed.
   const identity = `${operation.title}\u0000${error?.message ?? ''}`;
-  const [why, setWhy] = useState({ identity, open: false });
-  if (why.identity !== identity && why.open) setWhy({ identity, open: false });
+  const [why, setWhy] = useState({ identity, open: false, details: false });
+  if (why.identity !== identity && (why.open || why.details))
+    setWhy({ identity, open: false, details: false });
   const open = why.identity === identity && why.open;
-  const setOpen = (next: boolean) => setWhy({ identity, open: next });
+  const setOpen = (next: boolean) =>
+    setWhy({ identity, open: next, details: false });
+  // The kernel's own words, shown in place: "Technical details" used to
+  // leave the workspace for Settings › Activity log (QA 2026-11-14 #18).
+  const detailsOpen = open && why.details;
 
   const onOpenChangeRef = useRef(onOpenChange);
   onOpenChangeRef.current = onOpenChange;
@@ -81,7 +87,7 @@ export function EditRefusal({
       if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      setWhy((current) => ({ ...current, open: false }));
+      setWhy((current) => ({ ...current, open: false, details: false }));
       // Focus inside the card would be left on a removed node.
       const active = document.activeElement;
       if (active instanceof HTMLElement && active.closest('.edit-refusal-card'))
@@ -205,7 +211,11 @@ export function EditRefusal({
               <button
                 type="button"
                 className="edit-refusal-action is-quiet"
-                onClick={operation.onViewDetails}
+                aria-expanded={detailsOpen}
+                aria-controls={detailId}
+                onClick={() =>
+                  setWhy({ identity, open: true, details: !detailsOpen })
+                }
               >
                 Technical details
               </button>
@@ -221,6 +231,18 @@ export function EditRefusal({
               </button>
             )}
           </div>
+          {error.detail && detailsOpen && (
+            <div id={detailId} className="edit-refusal-detail">
+              <pre>{error.detail}</pre>
+              <button
+                type="button"
+                className="edit-refusal-action is-quiet"
+                onClick={operation.onViewDetails}
+              >
+                Open activity log
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

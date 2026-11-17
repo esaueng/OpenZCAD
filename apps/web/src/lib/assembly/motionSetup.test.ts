@@ -15,6 +15,8 @@ import {
   defaultSlideTravel,
   meshBoundsLookup,
   motionSetupJoint,
+  motionSetupMovers,
+  motionSetupUnavailableReason,
   type MotionSetupBox,
   type MotionSetupContext,
   type MotionSetupDraft
@@ -249,6 +251,68 @@ describe('Set up motion joint', () => {
       error:
         'Tool already moves on Tool slide. Open that joint to change its motion.'
     });
+  });
+});
+
+describe('Set up motion on a joined assembly (review I55)', () => {
+  /** The holder fixed, the tool already sliding on it, a free hook beside. */
+  function joinedSet(withHook: boolean): AssemblySet {
+    const set = holderSet();
+    const first = motionSetupJoint(
+      contextFor(set),
+      defaultMotionSetup(contextFor(set)),
+      'j_lift'
+    );
+    if ('error' in first) throw new Error(first.error);
+    return {
+      ...set,
+      components: [
+        ...set.components,
+        ...(withHook ? [component('hook', false)] : [])
+      ],
+      joints: [first.joint]
+    };
+  }
+
+  it('offers only parts that are neither fixed nor already moving', () => {
+    const context = contextFor(joinedSet(true));
+    expect(motionSetupMovers(context, 'holder').map((c) => c.id)).toEqual([
+      'hook'
+    ]);
+    const made = defaultMotionSetup(context);
+    expect([made.baseId, made.movingId]).toEqual(['holder', 'hook']);
+    expect(motionSetupUnavailableReason(context)).toBeNull();
+    // The default it opens with is one Create accepts.
+    expect('joint' in motionSetupJoint(context, made, 'j_hook')).toBe(true);
+  });
+
+  it('says why when every part is fixed or already moves', () => {
+    const context = contextFor(joinedSet(false));
+    expect(motionSetupMovers(context, 'holder')).toEqual([]);
+    expect(motionSetupUnavailableReason(context)).toBe(
+      'Every part is fixed or already moves on a joint. Open a joint to change its motion.'
+    );
+  });
+});
+
+describe('Set up motion in an inch project (review I56)', () => {
+  it('sizes the slide in the document unit, not in millimetres', () => {
+    const inch = { ...contextFor(holderSet()), lengthUnit: 'inch' as const };
+    // No size known: 2 in, not 50 (which would be 50 in).
+    expect(defaultSlideTravel(undefined, null, 'z', 'inch')).toBe(2);
+    // A 1 in base rounds up to 1 in, not to 5.
+    expect(
+      defaultSlideTravel(
+        { t: { x: 0, y: 0, z: 0 }, q: { x: 0, y: 0, z: 0, w: 1 } },
+        { min: { x: 0, y: 0, z: 0 }, max: { x: 4, y: 2, z: 1 } },
+        'z',
+        'inch'
+      )
+    ).toBe(1);
+    // The holder's 48 units of Z, read as inches, round up to 48 in.
+    expect(
+      defaultMotionRange(inch, { baseId: 'holder', move: 'slide', axis: 'z' })
+    ).toEqual({ min: 0, max: 48 });
   });
 });
 

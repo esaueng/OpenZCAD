@@ -1,5 +1,6 @@
 import {
   accountTier,
+  cachedSchemaProbe,
   isCloudflareFeatureEnabled
 } from '@openzcad/cloudflare-adapters';
 import {
@@ -7,6 +8,9 @@ import {
   DEFAULT_APP_SETTINGS,
   deepClone,
   EXPORT_UNITS,
+  holdsOnlyAccountServerSettings,
+  MAX_SEALED_SETTINGS_CHARS,
+  SETTINGS_SEAL_REQUIRED_CODE,
   normalizeHiddenRelationGlyphs,
   normalizeKeymapOverrides,
   nowIso,
@@ -23,7 +27,8 @@ import {
   type AssistantProvider,
   type EffectiveAssistantSettings,
   type UpdateAppSettingsRequest,
-  type UserId
+  type UserId,
+  normalizeSpaceMouseSettings
 } from '@openzcad/shared';
 import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
 import {
@@ -33,11 +38,24 @@ import {
 } from './assistant';
 import { isPrivateHostname } from './privateNetwork';
 import { HttpError } from './validation';
+import { SharingRequestError } from './sharing';
 
 interface SettingsRow {
   settings_json: string;
   revision: number;
+  sealed_settings?: string | null;
 }
+
+/**
+ * Whether migration 0057 added the sealed settings column (ADR-024
+ * amendment 2026-11-14). Without it an account's settings stay as they
+ * were stored, and an account whose library is encrypted cannot save them.
+ */
+export const isSealedSettingsStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS columns FROM pragma_table_info('user_settings')
+   WHERE name = 'sealed_settings'`,
+  (row) => row?.columns === 1
+);
 
 interface CredentialRow {
   ciphertext: string;
@@ -236,6 +254,30 @@ export function validateAssistantBaseUrl(
   return url.toString();
 }
 
+/**
+ * The sealed settings record a write carries, if any (ADR-024 amendment
+ * 2026-11-14): base64url the Worker stores without reading.
+ */
+export function parseSealedSettings(body: unknown): string | undefined {
+  const value =
+    body && typeof body === 'object' && !Array.isArray(body)
+      ? (body as Record<string, unknown>).sealedSettings
+      : undefined;
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > MAX_SEALED_SETTINGS_CHARS ||
+    !/^[A-Za-z0-9_-]+$/.test(value)
+  ) {
+    throw new HttpError(
+      400,
+      `"sealedSettings" must be base64url of at most ${MAX_SEALED_SETTINGS_CHARS} characters.`
+    );
+  }
+  return value;
+}
+
 export function parseUpdateAppSettingsRequest(
   value: unknown,
   environment: CloudflareEnv['ENVIRONMENT'],
@@ -371,7 +413,11 @@ export function parseUpdateAppSettingsRequest(
         pencilDrawsOnly:
           typeof viewport.pencilDrawsOnly === 'boolean'
             ? viewport.pencilDrawsOnly
-            : DEFAULT_APP_SETTINGS.viewport.pencilDrawsOnly
+            : DEFAULT_APP_SETTINGS.viewport.pencilDrawsOnly,
+        // Optional and read leniently, like the panel widths: an older client
+        // omits it and its save carries the stored value forward
+        // (CarriedViewportField); a newer one's unknown parts fall back.
+        spaceMouse: normalizeSpaceMouseSettings(viewport.spaceMouse)
       },
       sketching: {
         gridVisible:
@@ -387,6 +433,14 @@ export function parseUpdateAppSettingsRequest(
           typeof sketching.inferenceEnabled === 'boolean'
             ? sketching.inferenceEnabled
             : DEFAULT_APP_SETTINGS.sketching.inferenceEnabled,
+        autoConstrain:
+          typeof sketching.autoConstrain === 'boolean'
+            ? sketching.autoConstrain
+            : DEFAULT_APP_SETTINGS.sketching.autoConstrain,
+        snapHints:
+          typeof sketching.snapHints === 'boolean'
+            ? sketching.snapHints
+            : DEFAULT_APP_SETTINGS.sketching.snapHints,
         linearSnap: requiredNumber(sketching, 'linearSnap', 0.001, 10_000),
         angleSnap: requiredNumber(sketching, 'angleSnap', 1, 90),
         snapTolerancePx:
@@ -607,16 +661,25 @@ export function salvageStoredSettings(raw: string): AppSettings {
 async function readSettings(
   userId: UserId,
   env: CloudflareEnv
-): Promise<{ settings: AppSettings; revision: number; synced: boolean }> {
+): Promise<{
+  settings: AppSettings;
+  revision: number;
+  synced: boolean;
+  sealed: string | null;
+}> {
   if (!env.DB) {
     return {
       settings: deepClone(DEFAULT_APP_SETTINGS),
       revision: 0,
-      synced: false
+      synced: false,
+      sealed: null
     };
   }
+  const sealedColumn = (await isSealedSettingsStorageReady(env.DB))
+    ? ', sealed_settings'
+    : '';
   const row = await env.DB.prepare(
-    'SELECT settings_json, revision FROM user_settings WHERE user_id = ?'
+    `SELECT settings_json, revision${sealedColumn} FROM user_settings WHERE user_id = ?`
   )
     .bind(userId)
     .first<SettingsRow>();
@@ -624,9 +687,11 @@ async function readSettings(
     return {
       settings: deepClone(DEFAULT_APP_SETTINGS),
       revision: 0,
-      synced: true
+      synced: true,
+      sealed: null
     };
   }
+  const sealed = row.sealed_settings ?? null;
   try {
     const parsedSettings: unknown = JSON.parse(row.settings_json);
     return {
@@ -639,13 +704,15 @@ async function readSettings(
         env.AI_ALLOWED_BASE_URL_HOSTS
       ).settings,
       revision: row.revision,
-      synced: true
+      synced: true,
+      sealed
     };
   } catch {
     return {
       settings: salvageStoredSettings(row.settings_json),
       revision: row.revision,
-      synced: true
+      synced: true,
+      sealed
     };
   }
 }
@@ -766,6 +833,13 @@ function unboundAssistantStatus(
   email?: string
 ): EffectiveAssistantSettings {
   if (!settings.assistant.enabled) {
+    // The built-in assistant's model is the deployment's, whatever the
+    // personal-token model in settings says. A signed-out caller reaches this
+    // through the defaults (assistant off), and would otherwise be shown that
+    // personal default instead of the model the deployment actually serves.
+    if (settings.assistant.credentialSource === 'deployment') {
+      return { ...deploymentEffective(env), configured: false };
+    }
     return {
       configured: false,
       source: settings.assistant.credentialSource,
@@ -884,6 +958,36 @@ async function resolveAssistantFromSettings(
   };
 }
 
+/**
+ * The runtime a proposal runs with: the browser's copy of the custom
+ * instructions wins over the stored one (ADR-024 amendment 2026-11-14), as
+ * an account whose library is encrypted keeps them sealed, out of the
+ * Worker's reach. An older client sends none and keeps the stored ones.
+ */
+export function withRequestCustomInstructions(
+  runtime: AssistantRuntimeConfig | null,
+  request: { customInstructions?: string }
+): AssistantRuntimeConfig | undefined {
+  if (!runtime) return undefined;
+  return request.customInstructions === undefined
+    ? runtime
+    : { ...runtime, customInstructions: request.customInstructions };
+}
+
+/**
+ * `GET /api/assistant/status` for a caller with no session: such a caller
+ * cannot store settings or a credential, so its status is the defaults',
+ * answered without reading D1.
+ */
+export function anonymousAssistantStatus(
+  env: CloudflareEnv
+): EffectiveAssistantSettings & { credential: AssistantCredentialMetadata } {
+  return {
+    ...effectiveAssistantStatus(DEFAULT_APP_SETTINGS, null, env),
+    credential: credentialMetadata(null, env)
+  };
+}
+
 export async function getAppSettings(
   userId: UserId,
   env: CloudflareEnv,
@@ -897,6 +1001,7 @@ export async function getAppSettings(
     settings: stored.settings,
     revision: stored.revision,
     synced: stored.synced,
+    ...(stored.sealed ? { sealedSettings: stored.sealed } : {}),
     credential: credentialMetadata(credential, env),
     effectiveAssistant: effectiveAssistantStatus(
       stored.settings,
@@ -981,7 +1086,8 @@ export type CarriedViewportField =
   | 'touchHistoryGestures'
   | 'pencilDrawsOnly'
   | 'tangentEdges'
-  | 'orbitMode';
+  | 'orbitMode'
+  | 'spaceMouse';
 
 /**
  * The viewport preferences a settings PATCH leaves out because its client
@@ -996,7 +1102,8 @@ export function settingsRequestOmittedViewportFields(
     'touchHistoryGestures',
     'pencilDrawsOnly',
     'tangentEdges',
-    'orbitMode'
+    'orbitMode',
+    'spaceMouse'
   ];
   if (!body || typeof body !== 'object') return fields;
   const settings = (body as Record<string, unknown>).settings;
@@ -1042,12 +1149,42 @@ export async function updateAppSettings(
     keepStoredRelationGlyphs?: boolean;
     keepStoredHiddenRelationGlyphs?: boolean;
     keepStoredViewportFields?: readonly CarriedViewportField[];
+    /**
+     * The account's library is encrypted (ADR-024 amendment 2026-11-14):
+     * the caller has checked that `request.settings` holds only
+     * `accountServerSettings`, and the stored sealed record is replaced
+     * only by a new one.
+     */
+    libraryEncrypted?: boolean;
   } = {}
 ): Promise<AppSettingsUpdate> {
   if (!env.DB) {
     throw new HttpError(503, 'Account settings storage is unavailable.');
   }
+  const sealedReady = await isSealedSettingsStorageReady(env.DB);
+  if ((options.libraryEncrypted || request.sealedSettings) && !sealedReady) {
+    throw new HttpError(
+      503,
+      'Encrypted account settings are unavailable. Settings remain saved on this device.'
+    );
+  }
   const current = await readSettings(userId, env);
+  if (
+    options.libraryEncrypted &&
+    request.sealedSettings === undefined &&
+    current.sealed === null &&
+    !holdsOnlyAccountServerSettings(current.settings)
+  ) {
+    // Settings stored readable before the library was encrypted, and no
+    // device has sealed them yet: a write without a record would reset them
+    // to their defaults for every device. A device holding the account key
+    // seals them first.
+    throw new SharingRequestError(
+      409,
+      SETTINGS_SEAL_REQUIRED_CODE,
+      'Your account settings are sealed under your account key before they can change. Unlock encryption on this device, then they save.'
+    );
+  }
   if (current.revision !== request.expectedRevision) {
     throw new HttpError(
       409,
@@ -1103,8 +1240,15 @@ export async function updateAppSettings(
   ) {
     await clearAssistantCredentialValidation(userId, env);
   }
-  const result =
-    current.revision === 0
+  // An encrypted library keeps its sealed record until a new one arrives (a
+  // device with locked keys still saves the sharing switch and the
+  // assistant's route); a readable account's whole settings are in
+  // `settings_json`, so any older sealed record is dropped.
+  const sealed = options.libraryEncrypted
+    ? (request.sealedSettings ?? current.sealed)
+    : null;
+  const result = !sealedReady
+    ? current.revision === 0
       ? await env.DB.prepare(
           `INSERT OR IGNORE INTO user_settings
              (user_id, settings_json, revision, updated_at)
@@ -1118,6 +1262,29 @@ export async function updateAppSettings(
            WHERE user_id = ? AND revision = ?`
         )
           .bind(serialized, nextRevision, timestamp, userId, current.revision)
+          .run()
+    : current.revision === 0
+      ? await env.DB.prepare(
+          `INSERT OR IGNORE INTO user_settings
+             (user_id, settings_json, revision, updated_at, sealed_settings)
+           VALUES (?, ?, ?, ?, ?)`
+        )
+          .bind(userId, serialized, nextRevision, timestamp, sealed)
+          .run()
+      : await env.DB.prepare(
+          `UPDATE user_settings
+           SET settings_json = ?, revision = ?, updated_at = ?,
+               sealed_settings = ?
+           WHERE user_id = ? AND revision = ?`
+        )
+          .bind(
+            serialized,
+            nextRevision,
+            timestamp,
+            sealed,
+            userId,
+            current.revision
+          )
           .run();
   if (result.meta?.changes !== 1) {
     throw new HttpError(

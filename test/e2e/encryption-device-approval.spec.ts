@@ -1,10 +1,16 @@
 import type { Browser, Page } from '@playwright/test';
-import { requestApproval } from '../../apps/web/src/lib/e2ee/accountKeys';
+import {
+  enrollWithRecoveryKey,
+  legacyApproveReadOnly,
+  loadEncryption,
+  requestApproval
+} from '../../apps/web/src/lib/e2ee/accountKeys';
 import { expect, stubApi, test } from './openzcad-fixtures';
 import {
   createE2eeServer,
   E2E_USER_ID,
   installE2eeServer,
+  approveWithRecoveryKey,
   openEncryptionSettings,
   seedE2eeDevice,
   type E2eeServer
@@ -26,7 +32,7 @@ async function approverWith(page: Page, server: E2eeServer) {
   await page.goto('/');
   const seeded = await seedE2eeDevice(page, server, { label: 'Laptop' });
   const settings = await openEncryptionSettings(page);
-  await expect(settings.getByText('Certified', { exact: true })).toBeVisible();
+  await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
   return { seeded, settings };
 }
 
@@ -131,12 +137,20 @@ test('certifies a new device approved by its full-hash scan code', { tag: '@ci-s
   const phone = await secondDevice(browser, server);
   try {
     const phoneSettings = await openEncryptionSettings(phone.page);
+    // A locked device offers no Remove beside the certified one (I83).
+    await expect(
+      phoneSettings.getByRole('button', { name: /^Remove / })
+    ).toHaveCount(0);
     await phoneSettings
       .getByRole('button', { name: 'Ask for approval' })
       .click();
     await expect(
       phoneSettings.getByRole('img', { name: 'Device approval QR code' })
     ).toBeVisible();
+    // It names the control the unlocked device really has (I83).
+    await expect(phoneSettings).toContainText(
+      'appears under Requests to join: choose Scan code, or Compare codes'
+    );
     const code = (await phoneSettings
       .getByLabel('Device approval code')
       .textContent())!;
@@ -144,30 +158,76 @@ test('certifies a new device approved by its full-hash scan code', { tag: '@ci-s
 
     // The approver sees the request and checks the code it scans or types.
     await expect(
-      settings.getByText('Devices asking to join', { exact: true })
+      settings.getByText('Requests to join', { exact: true })
     ).toBeVisible({ timeout: 10_000 });
     await settings.getByRole('button', { name: 'Scan code' }).click();
     await settings
       .getByLabel('Code from the new device')
       .fill(code.replace(/.$/, code.endsWith('0') ? '1' : '0'));
-    await settings
-      .getByLabel('Recovery key to certify the new device')
-      .fill(seeded.recoveryKey);
     await settings.getByRole('button', { name: 'Approve device' }).click();
+    // A wrong code is refused before any key is asked for.
     await expect(settings.getByRole('alert')).toContainText(
       'does not match the device asking for approval'
     );
+    await expect(
+      settings.getByRole('dialog', { name: /^Approve “/ })
+    ).toHaveCount(0);
     await settings.getByLabel('Code from the new device').fill(code);
     await settings.getByRole('button', { name: 'Approve device' }).click();
-    await expect(settings.getByText('2 certified')).toBeVisible();
+    await approveWithRecoveryKey(settings, seeded.recoveryKey);
+    await expect(
+      settings.getByText('2 devices', { exact: true })
+    ).toBeVisible();
 
     // The phone verifies the signed grant and unlocks, certified.
     await expect(
-      phoneSettings.getByText('Certified', { exact: true })
+      phoneSettings.getByText('Unlocked', { exact: true })
     ).toBeVisible({ timeout: 15_000 });
     await expect(
       phoneSettings.getByText('Unlocked', { exact: true })
     ).toBeVisible();
+  } finally {
+    await phone.context.close();
+  }
+});
+
+// The new device's QR code is a link: a phone's own camera app opens it,
+// and OpenZCAD there offers to approve exactly that device (L11 plan).
+test('approves a device from its QR link, opened as a camera app would', { tag: '@ci-smoke' }, async ({
+  page,
+  browser
+}) => {
+  const server = createE2eeServer();
+  const { seeded } = await approverWith(page, server);
+  const phone = await secondDevice(browser, server);
+  try {
+    const phoneSettings = await openEncryptionSettings(phone.page);
+    await phoneSettings
+      .getByRole('button', { name: 'Ask for approval' })
+      .click();
+    const qr = phoneSettings.getByRole('img', {
+      name: 'Device approval QR code'
+    });
+    await expect(qr).toBeVisible();
+    const link = (await qr.getAttribute('data-link'))!;
+    expect(link).toMatch(/\/#approve-device=[0-9A-Z]{52}$/);
+
+    // The approving device opens the link: Settings › Encryption names the
+    // device, and the fragment is gone from the address bar at once.
+    await page.goto(link);
+    const settings = page.getByRole('dialog', { name: 'Settings' });
+    await expect(
+      settings.getByText(/You scanned this device’s code/)
+    ).toBeVisible({ timeout: 15_000 });
+    expect(new URL(page.url()).hash).toBe('');
+    await settings.getByRole('button', { name: 'Approve', exact: true }).click();
+    await approveWithRecoveryKey(settings, seeded.recoveryKey);
+    await expect(
+      settings.getByText('2 devices', { exact: true })
+    ).toBeVisible();
+    await expect(phoneSettings.getByText('Encryption is on')).toBeVisible({
+      timeout: 15_000
+    });
   } finally {
     await phone.context.close();
   }
@@ -247,22 +307,20 @@ test('two approval tabs retain one staged device and can both unlock it', async 
       settings.getByRole('button', { name: 'Refresh', exact: true })
     ).toBeEnabled();
     await expect(
-      settings.getByText('Devices asking to join', { exact: true })
+      settings.getByText('Requests to join', { exact: true })
     ).toBeVisible({ timeout: 10_000 });
     await settings.getByRole('button', { name: 'Scan code' }).click();
     await settings.getByLabel('Code from the new device').fill(code);
-    await settings
-      .getByLabel('Recovery key to certify the new device')
-      .fill(seeded.recoveryKey);
     await settings.getByRole('button', { name: 'Approve device' }).click();
+    await approveWithRecoveryKey(settings, seeded.recoveryKey);
     await expect(
-      otherSettings.getByText('Certified', { exact: true })
+      otherSettings.getByText('Unlocked', { exact: true })
     ).toBeVisible({ timeout: 15_000 });
     await firstSettings
       .getByRole('button', { name: 'Refresh', exact: true })
       .click();
     for (const panel of [firstSettings, otherSettings]) {
-      await expect(panel.getByText('Certified', { exact: true })).toBeVisible();
+      await expect(panel.getByText('Unlocked', { exact: true })).toBeVisible();
       await expect(panel.getByText('Unlocked', { exact: true })).toBeVisible();
     }
   } finally {
@@ -276,7 +334,7 @@ test('resumes comparison after an accepted response is lost', async ({
   browser
 }) => {
   const server = createE2eeServer();
-  const { settings } = await approverWith(page, server);
+  const { seeded, settings } = await approverWith(page, server);
   const phone = await secondDevice(browser, server);
   let responses = 0;
   page.on('request', (request) => {
@@ -328,7 +386,8 @@ test('resumes comparison after an accepted response is lost', async ({
     await settings
       .getByRole('button', { name: 'Codes match, approve' })
       .click();
-    await expect(phoneSettings.getByText('Approved, read-only')).toBeVisible({
+    await approveWithRecoveryKey(settings, seeded.recoveryKey);
+    await expect(phoneSettings.getByText('Encryption is on')).toBeVisible({
       timeout: 15_000
     });
     await expect(
@@ -345,7 +404,7 @@ test('restarts comparison after session lock before response delivery', async ({
   browser
 }, testInfo) => {
   const server = createE2eeServer();
-  const { settings } = await approverWith(page, server);
+  const { seeded, settings } = await approverWith(page, server);
   const phone = await secondDevice(browser, server);
   const responses: unknown[] = [];
   await page.route('**/api/e2ee/approvals/*/respond', async (route) => {
@@ -420,7 +479,8 @@ test('restarts comparison after session lock before response delivery', async ({
     await settings
       .getByRole('button', { name: 'Codes match, approve' })
       .click();
-    await expect(phoneSettings.getByText('Approved, read-only')).toBeVisible({
+    await approveWithRecoveryKey(settings, seeded.recoveryKey);
+    await expect(phoneSettings.getByText('Encryption is on')).toBeVisible({
       timeout: 15_000
     });
     await expect(
@@ -436,7 +496,7 @@ test('resumes the requesting device comparison after reloading its browser', asy
   browser
 }) => {
   const server = createE2eeServer();
-  const { settings } = await approverWith(page, server);
+  const { seeded, settings } = await approverWith(page, server);
   const phone = await secondDevice(browser, server);
   try {
     let phoneSettings = await openEncryptionSettings(phone.page);
@@ -470,7 +530,8 @@ test('resumes the requesting device comparison after reloading its browser', asy
     await settings
       .getByRole('button', { name: 'Codes match, approve' })
       .click();
-    await expect(phoneSettings.getByText('Approved, read-only')).toBeVisible({
+    await approveWithRecoveryKey(settings, seeded.recoveryKey);
+    await expect(phoneSettings.getByText('Encryption is on')).toBeVisible({
       timeout: 15_000
     });
     await expect(
@@ -481,13 +542,13 @@ test('resumes the requesting device comparison after reloading its browser', asy
   }
 });
 
-test('approves read-only after both devices show the same six digits', async ({
+test('certifies after both devices show the same six digits', async ({
   page,
   browser
 }) => {
   const server = createE2eeServer();
   const { settings, seeded } = await approverWith(page, server);
-  // Nothing to revoke until a read-only device exists.
+  // Nothing to revoke: approval no longer makes read-only devices.
   await expect(
     settings.getByRole('button', {
       name: 'Revoke read-only devices',
@@ -522,58 +583,77 @@ test('approves read-only after both devices show the same six digits', async ({
     await settings
       .getByRole('button', { name: 'Codes match, approve' })
       .click();
-    await expect(phoneSettings.getByText('Approved, read-only')).toBeVisible({
+    await approveWithRecoveryKey(settings, seeded.recoveryKey);
+    await expect(phoneSettings.getByText('Encryption is on')).toBeVisible({
       timeout: 15_000
     });
     await expect(
       phoneSettings.getByText('Unlocked', { exact: true })
     ).toBeVisible();
+    // Certified in the device list; nothing sealed for read-only access.
     expect(
       server.db
         .prepare(
           `SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE purpose = 'account-key-approval'`
         )
         .get()
-    ).toEqual({ n: 1 });
-    await expect(
-      settings.getByText('1 approved', { exact: true })
-    ).toBeVisible();
-    await settings
-      .getByRole('button', { name: 'Revoke read-only devices', exact: true })
-      .click();
-    await expect(
-      settings.getByText(
-        'All read-only devices will need approval again. Certified devices keep working.'
-      )
-    ).toBeVisible();
-    await settings
-      .getByLabel('Recovery key', { exact: true })
-      .fill(seeded.recoveryKey);
-    await settings
-      .getByRole('button', { name: 'Revoke read-only access', exact: true })
-      .click();
-    await expect(settings.getByText('1 approved', { exact: true })).toHaveCount(
-      0
-    );
-    await expect(
-      settings.getByText('1 certified', { exact: true })
-    ).toBeVisible();
-    expect(
-      server.db
-        .prepare(
-          "SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE purpose = 'account-key-approval'"
-        )
-        .get()
     ).toEqual({ n: 0 });
-    await phone.page.reload();
-    const reloaded = await openEncryptionSettings(phone.page);
-    await expect(reloaded.getByText('Unlocked', { exact: true })).toHaveCount(
-      0
-    );
     await expect(
-      reloaded.getByRole('button', { name: 'Ask for approval' })
+      settings.getByText('2 devices', { exact: true })
     ).toBeVisible();
   } finally {
     await phone.context.close();
   }
+});
+
+test('lists a legacy read-only device as not finished, and revokes it', async ({
+  page
+}) => {
+  const server = createE2eeServer();
+  const { settings, seeded } = await approverWith(page, server);
+  // A read-only device approved before approval always certified.
+  const approver = server.nodeDevice();
+  const before = await loadEncryption(approver);
+  if (before.kind !== 'ready') throw new Error('seed failed');
+  const enrolled = await enrollWithRecoveryKey(
+    approver,
+    before.account,
+    seeded.recoverySecret,
+    'Node approver'
+  );
+  if (enrolled.kind !== 'ready') throw new Error('seed failed');
+  const phone = server.nodeDevice();
+  const request = await requestApproval(phone, null, 'Old phone');
+  if (request.step !== 'waiting') throw new Error('seed failed');
+  const [approval] = (await approver.api.listApprovals()).approvals;
+  await legacyApproveReadOnly(approver, enrolled.account, approval!, {
+    kind: 'scan',
+    code: request.scanCode
+  });
+  await settings.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(settings.getByText('Old phone', { exact: true })).toBeVisible();
+  await expect(
+    settings.getByText('Not finished', { exact: true })
+  ).toBeVisible();
+  await settings.getByText('Advanced encryption settings').click();
+  await settings
+    .getByRole('button', { name: 'Revoke read-only devices', exact: true })
+    .click();
+  const revoke = settings.getByRole('dialog', {
+    name: 'Revoke read-only devices'
+  });
+  await revoke
+    .getByLabel('Recovery key', { exact: true })
+    .fill(seeded.recoveryKey);
+  await revoke
+    .getByRole('button', { name: 'Revoke read-only access', exact: true })
+    .click();
+  await expect(settings.getByText('Old phone', { exact: true })).toHaveCount(0);
+  expect(
+    server.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE purpose = 'account-key-approval'"
+      )
+      .get()
+  ).toEqual({ n: 0 });
 });

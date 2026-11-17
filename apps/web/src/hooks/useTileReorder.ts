@@ -105,6 +105,12 @@ export interface TileReorderOptions {
   canPlaceBeside?(draggedId: string, targetId: string): boolean;
   /** Saves a drop into a target `dropInto` named. */
   onDropInto?(draggedId: string, target: string): void | Promise<unknown>;
+  /**
+   * The direction tiles run in: across a grid (`x`, the default) a tile lands
+   * before or after the one under the pointer by its left and right halves;
+   * down a single-column list (`y`), by its top and bottom halves.
+   */
+  axis?: 'x' | 'y';
 }
 
 /**
@@ -128,7 +134,8 @@ export function useTileReorder({
   onCommit,
   dropInto,
   canPlaceBeside,
-  onDropInto
+  onDropInto,
+  axis = 'x'
 }: TileReorderOptions) {
   const [order, setOrder] = useState<string[] | null>(null);
   const [moved, setMoved] = useState<TileMoves>(NO_MOVES);
@@ -152,6 +159,7 @@ export function useTileReorder({
     dropInto,
     canPlaceBeside,
     onDropInto,
+    axis,
     order,
     moved
   });
@@ -163,6 +171,7 @@ export function useTileReorder({
     dropInto,
     canPlaceBeside,
     onDropInto,
+    axis,
     order,
     moved
   };
@@ -196,7 +205,11 @@ export function useTileReorder({
   useLayoutEffect(() => {
     const current = session.current;
     if (current?.active) {
-      followPointer(tileRefs.current.get(current.id), current);
+      followPointer(
+        tileRefs.current.get(current.id),
+        current,
+        latest.current.axis
+      );
     }
     const previous = before.current;
     before.current = null;
@@ -247,7 +260,11 @@ export function useTileReorder({
   }
 
   function follow(current: DragSession) {
-    followPointer(tileRefs.current.get(current.id), current);
+    followPointer(
+      tileRefs.current.get(current.id),
+      current,
+      latest.current.axis
+    );
   }
 
   /**
@@ -314,7 +331,10 @@ export function useTileReorder({
         return;
       }
       const box = under.getBoundingClientRect();
-      const after = current.x > box.left + box.width / 2;
+      const after =
+        latest.current.axis === 'y'
+          ? current.y > box.top + box.height / 2
+          : current.x > box.left + box.width / 2;
       next.splice(after ? to + 1 : to, 0, current.id);
       group = groupOf(target);
     } else {
@@ -625,17 +645,38 @@ export function useTileReorder({
   return { order, moved, draggingId, dropTarget, onPointerDown };
 }
 
-/** Keeps the dragged tile under the pointer, wherever its slot now is. */
-function followPointer(tile: HTMLElement | undefined, current: DragSession) {
+/**
+ * Keeps the dragged tile under the pointer, wherever its slot now is.
+ *
+ * Down a column (`y`) the tile only slides up and down, and never past the
+ * list's visible box: a list that scrolls counts a transformed child in its
+ * scroll area, so a row pulled past its edge or sideways would grow it and
+ * raise scrollbars mid-drag. A grid tile roams freely, since it can be
+ * dropped into a folder outside its grid.
+ */
+function followPointer(
+  tile: HTMLElement | undefined,
+  current: DragSession,
+  axis: 'x' | 'y'
+) {
   if (!tile) {
     return;
   }
   const box = tile.getBoundingClientRect();
   const slotLeft = box.left - current.tx;
   const slotTop = box.top - current.ty;
-  current.tx = current.x - current.grabX - slotLeft;
-  current.ty = current.y - current.grabY - slotTop;
-  tile.style.transform = `translate(${current.tx}px, ${current.ty}px)`;
+  let tx = current.x - current.grabX - slotLeft;
+  let ty = current.y - current.grabY - slotTop;
+  const list = axis === 'y' ? tile.parentElement : null;
+  if (list) {
+    tx = 0;
+    const top = list.getBoundingClientRect().top + list.clientTop;
+    const bottom = top + list.clientHeight;
+    ty = Math.max(top - slotTop, Math.min(ty, bottom - box.height - slotTop));
+  }
+  current.tx = tx;
+  current.ty = ty;
+  tile.style.transform = `translate(${tx}px, ${ty}px)`;
 }
 
 /** Disarms a timeout held in a ref, such as a dropped order's fallback. */

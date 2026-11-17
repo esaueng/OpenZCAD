@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { toArtifactId, toProjectId } from '@openzcad/shared';
 import { ProjectThumbnailSyncAgent } from './ProjectThumbnailSyncAgent';
 import { createThumbnailCapture } from '../lib/projectThumbnailCapture';
+import { settleThumbnailUploads } from '../lib/thumbnailUploads';
 
 function transportPublishing(artifactId: ReturnType<typeof toArtifactId>) {
   return {
@@ -54,6 +55,67 @@ describe('ProjectThumbnailSyncAgent', () => {
       })
     );
     expect(transport.uploadArtifact).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds the shelf listing refresh until its upload is recorded', async () => {
+    // A listing read while the upload finalizes names the card it replaced.
+    const artifactId = toArtifactId('artifact_tracked');
+    let finalize!: (value: { artifactId: string }) => void;
+    const transport = {
+      ...transportPublishing(artifactId),
+      finalizeArtifact: vi.fn(
+        () =>
+          new Promise<{ artifactId: string }>((resolve) => {
+            finalize = resolve;
+          })
+      )
+    };
+    let saved!: () => void;
+    const saveThumbnail = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          saved = resolve;
+        })
+    );
+    const capture = createThumbnailCapture({ idleMs: 0 });
+    render(
+      <ProjectThumbnailSyncAgent
+        projectId={toProjectId('project_tracked')}
+        version={3}
+        updatedAt="2026-08-08T12:00:00.000Z"
+        bodyRepresentations={{}}
+        publishToCloud
+        transport={transport}
+        loadThumbnail={vi.fn().mockResolvedValue({
+          projectId: 'project_tracked',
+          source: 'data:image/webp;base64,dHJhY2tlZA==',
+          version: 3,
+          updatedAt: '2026-08-08T12:00:00.000Z'
+        })}
+        saveThumbnail={saveThumbnail}
+        capture={capture}
+      />
+    );
+    await act(() => capture.flush());
+    let settled = false;
+    const listingMayRead = settleThumbnailUploads().then(() => {
+      settled = true;
+    });
+    await vi.waitFor(() =>
+      expect(transport.finalizeArtifact).toHaveBeenCalled()
+    );
+    expect(settled).toBe(false);
+    finalize({ artifactId });
+    // The device record is written before the listing may read, too.
+    await vi.waitFor(() => expect(saveThumbnail).toHaveBeenCalled());
+    await act(async () => undefined);
+    expect(settled).toBe(false);
+    saved();
+    await listingMayRead;
+    expect(saveThumbnail).toHaveBeenCalledWith(
+      'project_tracked',
+      expect.objectContaining({ artifactId })
+    );
   });
 
   it('stages the ready geometry so a leave flush can write the card', async () => {

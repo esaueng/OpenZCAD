@@ -5,6 +5,7 @@ import {
   resolvedSketchDocument,
   resolveParamValue
 } from '@openzcad/document-core';
+import { ownEntry } from '@openzcad/shared';
 import type {
   ParamValue,
   ProjectDocument,
@@ -21,7 +22,7 @@ export function sketchUsesProjectionGeometry(
   const sketch = findSketch(document, sketchId);
   return (
     sketch?.objectIds.some((id) => {
-      const node = document.nodes[id];
+      const node = ownEntry(document.nodes, id);
       return (
         (node?.kind === 'sketch-object' &&
           node.data.projection?.mode === 'linked') ||
@@ -110,8 +111,8 @@ export function retainSketchGeometryCommands(
   const excluded = new Set(excludedObjectIds);
   return sketch.objectIds.flatMap((objectId) => {
     if (excluded.has(objectId)) return [];
-    const authored = document.nodes[objectId];
-    const solved = view.nodes[objectId];
+    const authored = ownEntry(document.nodes, objectId);
+    const solved = ownEntry(view.nodes, objectId);
     if (authored?.kind !== 'sketch-object' || solved?.kind !== 'sketch-object')
       return [];
     const data = releasedData(authored.data, solved.data, resolve);

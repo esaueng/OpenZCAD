@@ -53,7 +53,7 @@ describe.each([
             session: {
               uploadSessionId: 'upload_test',
               artifactId: 'artifact_test',
-              uploadUrl: 'https://upload.test/source'
+              uploadUrl: '/api/uploads/upload_test/content'
             }
           })),
           uploadArtifact: vi.fn(async (_url: string, body: Blob) => {

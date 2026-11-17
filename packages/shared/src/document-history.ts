@@ -1,7 +1,17 @@
 import type { ProjectDocument, UserId } from './index';
 import { drawingSetError } from './drawings';
 import { objectFolderSetError } from './object-folders';
+import { printClearanceError } from './print-clearance';
 import { assemblySetError } from './assembly';
+import { configurationSetError } from './configurations';
+import {
+  documentFeatureKinds,
+  historyChangeIdentifierError,
+  isReservedRecordKey,
+  nodeIdentityError,
+  nodeMapKeyError,
+  type FeatureKinds
+} from './document-validation';
 import {
   referenceImageSetError,
   type ReferenceImage
@@ -28,7 +38,9 @@ export const HISTORY_FIELDS = [
   'drawings',
   'objectFolders',
   'referenceImages',
-  'assembly'
+  'assembly',
+  'printClearance',
+  'configurations'
 ] as const;
 export type HistoryField = (typeof HISTORY_FIELDS)[number];
 
@@ -110,6 +122,7 @@ export function isDocumentHistory(
   )
     return false;
   const ids = new Set<string>();
+  let features: FeatureKinds | undefined;
   for (const entry of value.entries) {
     if (
       !record(entry) ||
@@ -151,7 +164,20 @@ export function isDocumentHistory(
         if (
           change.key !== undefined &&
           (typeof change.key !== 'string' ||
+            isReservedRecordKey(change.key) ||
             !['nodes', 'assets', 'shaprImports'].includes(String(change.field)))
+        )
+          return false;
+        // Undo and redo restore a whole node map verbatim as well.
+        if (
+          change.field === 'nodes' &&
+          (change.key === undefined
+            ? [change.before, change.after].some(
+                (side) => nodeMapKeyError(side) !== null
+              )
+            : [change.before, change.after].some(
+                (side) => record(side) && nodeIdentityError(side) !== null
+              ))
         )
           return false;
         if (!Object.hasOwn(change, 'before') && !Object.hasOwn(change, 'after'))
@@ -186,6 +212,15 @@ export function isDocumentHistory(
             ))
         )
           return false;
+        // The same holds for the print clearance (L09): one value, no key.
+        if (
+          change.field === 'printClearance' &&
+          (change.key !== undefined ||
+            [change.before, change.after].some(
+              (side) => side !== undefined && printClearanceError(side) !== null
+            ))
+        )
+          return false;
         // The same holds for the assembly section (AS01).
         if (
           change.field === 'assembly' &&
@@ -195,7 +230,24 @@ export function isDocumentHistory(
             ))
         )
           return false;
+        // The same holds for the F06 configuration table.
+        if (
+          change.field === 'configurations' &&
+          (change.key !== undefined ||
+            [change.before, change.after].some(
+              (side) =>
+                side !== undefined && configurationSetError(side) !== null
+            ))
+        )
+          return false;
       } else return false;
+      // Undo and redo publish these values as they are: a root reference,
+      // an id list, a node snapshot or a whole map. None may use a reserved
+      // name as an id or key; the change's field and key say which it is.
+      // A stored feature.update is judged by its feature's kind, which any
+      // entry may restore.
+      features ??= documentFeatureKinds({ editHistory: value });
+      if (historyChangeIdentifierError(change, features) !== null) return false;
     }
   }
   try {

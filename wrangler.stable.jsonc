@@ -1,0 +1,191 @@
+// The stable (production) channel: Worker openzcad-stable, deployed by
+// Workers Builds from the `stable` branch, which only ever fast-forwards to a
+// commit already on main (`pnpm promote:stable`). Its D1 database, R2 bucket,
+// secrets and rate-limit namespaces are its own; nothing is shared with the
+// beta Worker in wrangler.jsonc. docs/release-channels.md describes both.
+//
+// It serves zcad.app (production) and stable.zcad.app. Glimpse stays off
+// with no GLIMPSE service binding: both Workers report as app "openzcad",
+// so turning it on here would mix two user bases in one census while beta
+// still reports.
+//
+// Keep it in step with wrangler.jsonc: test/release-channels.test.ts fails
+// on any difference beyond the ones listed there.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "openzcad-stable",
+  "main": "./apps/web/worker/index.ts",
+  "compatibility_date": "2026-04-12",
+  "compatibility_flags": ["nodejs_compat"],
+  "build": {
+    "command": "pnpm -w run check:release-build"
+  },
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "zcad.app",
+      "custom_domain": true
+    },
+    {
+      "pattern": "stable.zcad.app",
+      "custom_domain": true
+    }
+  ],
+  "preview_urls": false,
+  "observability": {
+    "issues": {
+      "enabled": true
+    },
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "invocation_logs": false
+    }
+  },
+  "triggers": {
+    "crons": ["17 * * * *"]
+  },
+  "ratelimits": [
+    {
+      "name": "GLIMPSE_USAGE_LIMITER",
+      "namespace_id": "2026111601",
+      "simple": {
+        "limit": 120,
+        "period": 60
+      }
+    },
+    {
+      "name": "AUTH_REQUEST_LIMITER",
+      "namespace_id": "2026111602",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
+    },
+    {
+      "name": "DESKTOP_EXCHANGE_LIMITER",
+      "namespace_id": "2026111603",
+      "simple": {
+        "limit": 60,
+        "period": 60
+      }
+    },
+    {
+      "name": "ANONYMOUS_ASSISTANT_LIMITER",
+      "namespace_id": "2026111604",
+      "simple": {
+        "limit": 20,
+        "period": 60
+      }
+    },
+    {
+      "name": "SHARE_LINK_LIMITER",
+      "namespace_id": "2026111605",
+      "simple": {
+        "limit": 300,
+        "period": 60
+      }
+    },
+    {
+      "name": "ACCOUNT_READ_LIMITER",
+      "namespace_id": "2026111606",
+      "simple": {
+        "limit": 1200,
+        "period": 60
+      }
+    },
+    {
+      "name": "DESKTOP_START_LIMITER",
+      "namespace_id": "2026111607",
+      "simple": {
+        "limit": 10,
+        "period": 60
+      }
+    },
+    {
+      "name": "SHARE_READ_CEILING_LIMITER",
+      "namespace_id": "2026111608",
+      "simple": {
+        "limit": 30000,
+        "period": 60
+      }
+    }
+  ],
+  "assets": {
+    "directory": "./apps/web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "none",
+    "run_worker_first": ["/api/*", "/healthz"]
+  },
+  "vars": {
+    "GLIMPSE_BASIC_ENABLED": "false",
+    "GLIMPSE_USAGE_ENABLED": "false",
+    "ENVIRONMENT": "beta",
+    "AUTH_MODE": "email-code",
+    "PRODUCTION_GUARD": "enabled",
+    "AUTH_EMAIL_FROM": "noreply@zcad.app",
+    "PROJECT_INVITATION_EMAIL_FROM": "noreply@zcad.app",
+    "PUBLIC_APP_ORIGIN": "https://zcad.app",
+    "AUTH_SESSION_DAYS": "30",
+    "DESKTOP_AUTH_ENABLED": "true",
+    "TURNSTILE_SITE_KEY": "0x4AAAAAAD_j6Y7NvXKtcxNX",
+    "AI_PROVIDER": "openrouter",
+    "AI_MODEL": "nvidia/nemotron-3.5-super-vl:free",
+    "AI_REASONING_EFFORT": "high",
+    "AI_DEPLOYMENT_FREE_ENABLED": "true",
+    "PROJECT_SHARING_ENABLED": "true",
+    "PROJECT_EDIT_LEASES_ENFORCED": "true",
+    "PROJECT_PERSONAL_SYNC_ENABLED": "true",
+    "LIBRARY_FOLDER_SYNC_ENABLED": "true",
+    "E2EE_KEYS_ENABLED": "true",
+    "E2EE_PROJECTS_ENABLED": "true",
+    "E2EE_MIGRATION_ENABLED": "true",
+    "E2EE_REVERSE_ENABLED": "false",
+    "E2EE_DEFAULT_ON": "false",
+    "E2EE_PLAINTEXT_FROZEN": "false",
+    "AI_PATCH_DIRECT_EDIT_ENABLED": "true",
+    "AI_PATCH_GROWING_HOLDER_ENABLED": "true",
+    "AI_PATCH_FACE_SKETCH_ENABLED": "true",
+    "AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED": "true",
+    "AI_PATCH_MIRROR_ENABLED": "true",
+    "AI_PATCH_SHELL_ENABLED": "true",
+    "AI_PATCH_SOLID_OFFSET_ENABLED": "true",
+    "AI_PATCH_PARTIAL_REVOLVE_ENABLED": "true",
+    "AI_PATCH_DATUM_PLANE_ENABLED": "true",
+    "AI_PATCH_DATUM_GEOMETRY_ENABLED": "true"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "openzcad-stable",
+      "database_id": "3b5fb65e-0af0-46a8-a50c-b7b5bd69c56b",
+      "migrations_dir": "apps/web/migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "openzcad-stable-artifacts"
+    }
+  ],
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": ["noreply@zcad.app"]
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PROJECT_ROOM",
+        "class_name": "ProjectCollaborationRoom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ProjectCollaborationRoom"]
+    }
+  ]
+}

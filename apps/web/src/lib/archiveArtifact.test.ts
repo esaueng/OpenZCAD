@@ -45,7 +45,7 @@ function transport(overrides: Partial<ArchiveArtifactTransport> = {}) {
         session: {
           uploadSessionId: 'ups_1',
           artifactId: 'art_one',
-          uploadUrl: 'https://upload.test/put'
+          uploadUrl: '/api/uploads/ups_1/content'
         }
       })
     ) as unknown as ArchiveArtifactTransport['createUploadSession'],

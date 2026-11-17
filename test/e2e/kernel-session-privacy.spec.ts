@@ -97,7 +97,7 @@ test(
         dimensions: { width: 40, height: 24, depth: 10 }
       }
     );
-    await page.route('**/api/share/*', (route) =>
+    await page.route('**/api/share', (route) =>
       route.fulfill({
         json: {
           document,

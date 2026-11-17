@@ -37,7 +37,9 @@ import {
   addPasskey,
   enrollWithPasskey,
   removePasskey,
+  approvalMatchesScanCode,
   approveDevice,
+  legacyApproveReadOnly,
   confirmApprovalCode,
   cancelApprovalRequest,
   approverComparisonCode,
@@ -62,6 +64,7 @@ import {
   type E2eeContext,
   type EncryptionState
 } from '../apps/web/src/lib/e2ee/accountKeys';
+import { deviceApprovalLink } from '../apps/web/src/lib/e2ee/deviceApprovalLink';
 import { createE2eeApi, E2eeApiError } from '../apps/web/src/lib/e2ee/e2eeApi';
 import {
   invalidateAccountKeyReads,
@@ -95,6 +98,22 @@ import {
   confirmKeySessionEnded,
   getKeySessionRevision
 } from '../apps/web/src/lib/e2ee/keySession';
+
+/**
+ * Approves as the tests did before approval always certified (L11 plan T1):
+ * a recovery key certifies, and `null` builds a legacy read-only device.
+ */
+function approveAs(
+  ctx: Parameters<typeof approveDevice>[0],
+  account: Parameters<typeof approveDevice>[1],
+  approval: Parameters<typeof approveDevice>[2],
+  proof: Parameters<typeof approveDevice>[3],
+  authorization: Parameters<typeof approveDevice>[4]
+) {
+  return authorization === null
+    ? legacyApproveReadOnly(ctx, account, approval, proof)
+    : approveDevice(ctx, account, approval, proof, authorization);
+}
 
 const USER = 'user_alice';
 
@@ -693,6 +712,82 @@ describe('removing a device', () => {
     lockAccount(USER);
     expect(ready(await loadEncryption(tablet.ctx)).unlocked).toBe(true);
   });
+
+  it.each(['browser', 'desktop'] as const)(
+    'ends the account’s other sessions once a removal lands, keeping the remover’s (%s)',
+    async (backend) => {
+      const srv = server();
+      const hash = async (token: string) =>
+        Buffer.from(
+          await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))
+        ).toString('hex');
+      const token = 'r'.repeat(43);
+      srv.credential = { token, desktop: backend === 'desktop' };
+      const browser = (tokenHash: string) =>
+        srv.db
+          .prepare('INSERT INTO auth_sessions VALUES (?, ?, ?, ?)')
+          .run(tokenHash, USER, 0, 9_999_999_999);
+      const desktop = (tokenHash: string, session: string) => {
+        srv.db
+          .prepare(
+            'INSERT INTO desktop_access_tokens VALUES (?, ?, ?, ?, ?, ?, NULL)'
+          )
+          .run(tokenHash, session, USER, 'openzcad-macos', 0, 9_999_999_999);
+        srv.db
+          .prepare(
+            'INSERT INTO desktop_refresh_tokens VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)'
+          )
+          .run(
+            `refresh-${session}`,
+            session,
+            USER,
+            'openzcad-macos',
+            0,
+            9_999_999_999
+          );
+      };
+      if (backend === 'browser') browser(await hash(token));
+      else desktop(await hash(token), 'remover-session');
+      // Another browser's session and another desktop's, any of which may
+      // be the device about to be removed.
+      browser(await hash('o'.repeat(43)));
+      desktop(await hash('d'.repeat(43)), 'other-desktop');
+      const sessions = () =>
+        srv.db
+          .prepare('SELECT token_hash FROM auth_sessions ORDER BY token_hash')
+          .all()
+          .map((row) => (row as { token_hash: string }).token_hash);
+      const live = (table: string) =>
+        srv.db
+          .prepare(
+            `SELECT DISTINCT session_id FROM ${table} WHERE revoked_at IS NULL ORDER BY session_id`
+          )
+          .all()
+          .map((row) => (row as { session_id: string }).session_id);
+
+      const { recovery, laptop } = await setUp(srv);
+      const phone = await enrolled(srv, recovery.secret, 'Phone');
+      // Certifying devices ends nothing.
+      expect(sessions()).toHaveLength(backend === 'browser' ? 2 : 1);
+      expect(live('desktop_access_tokens')).toHaveLength(
+        backend === 'browser' ? 1 : 2
+      );
+
+      await removeDevice(
+        laptop,
+        ready(await loadEncryption(laptop)),
+        phone.account.device!.deviceId,
+        recovery.secret
+      );
+      expect(sessions()).toEqual(
+        backend === 'browser' ? [await hash(token)] : []
+      );
+      for (const table of ['desktop_access_tokens', 'desktop_refresh_tokens'])
+        expect(live(table)).toEqual(
+          backend === 'browser' ? [] : ['remover-session']
+        );
+    }
+  );
 
   /**
    * A plaintext project staged for encryption (slice 7-1) by `deviceId`:
@@ -2069,7 +2164,9 @@ describe('account-key history', () => {
     async () => {
       const srv = server();
       srv.db
-        .prepare('INSERT INTO account_erasure_requests VALUES (?, ?, ?, ?)')
+        .prepare(
+          'INSERT INTO account_erasure_requests (user_id, scope, started_at, updated_at) VALUES (?, ?, ?, ?)'
+        )
         .run(USER, 'profile', 1, 1);
       expect(() =>
         srv.db
@@ -2302,7 +2399,7 @@ describe('device approval', () => {
       'status',
       404
     );
-    await approveDevice(
+    await approveAs(
       laptop,
       account,
       b.approval,
@@ -2424,7 +2521,7 @@ describe('device approval', () => {
       'First read-only device'
     );
     if (original.step !== 'waiting') throw new Error('Expected request');
-    await approveDevice(
+    await approveAs(
       laptop,
       account,
       original.approval,
@@ -2465,7 +2562,7 @@ describe('device approval', () => {
     };
     const results = await Promise.allSettled(
       pending.map((request) =>
-        approveDevice(
+        approveAs(
           laptop,
           current,
           request.approval,
@@ -2486,7 +2583,7 @@ describe('device approval', () => {
     ).toBe(limit);
     const loser = pending[results.findIndex((r) => r.status === 'rejected')]!;
     await expect(
-      approveDevice(
+      approveAs(
         laptop,
         ready(await loadEncryption(laptop)),
         loser.approval,
@@ -2504,7 +2601,7 @@ describe('device approval', () => {
     expect(rotated.approvedDevices).toHaveLength(0);
     const fresh = await requestApproval(device(srv), null, 'After revocation');
     if (fresh.step !== 'waiting') throw new Error('Expected request');
-    await approveDevice(
+    await approveAs(
       laptop,
       rotated,
       fresh.approval,
@@ -2586,7 +2683,7 @@ describe('device approval', () => {
         }
         const request = await requestApproval(phone, null, label);
         if (request.step !== 'waiting') throw new Error('Expected request');
-        await approveDevice(
+        await approveAs(
           laptop,
           ready(await loadEncryption(laptop)),
           await laptop.api.getApproval(request.approval.id),
@@ -2597,7 +2694,7 @@ describe('device approval', () => {
         if (metadata === 'duplicate receipts' && label === 'Lost phone') {
           const again = await requestApproval(phone, null, label);
           if (again.step !== 'waiting') throw new Error('Expected request');
-          await approveDevice(
+          await approveAs(
             laptop,
             ready(await loadEncryption(laptop)),
             again.approval,
@@ -2702,7 +2799,7 @@ describe('device approval', () => {
     const { laptop, account } = await setUp(srv);
     const request = await requestApproval(device(srv), null, 'Phone');
     if (request.step !== 'waiting') throw new Error('Expected request');
-    await approveDevice(
+    await approveAs(
       laptop,
       account,
       request.approval,
@@ -2800,7 +2897,7 @@ describe('device approval', () => {
       .prepare('UPDATE e2ee_device_approvals SET approver_key = ? WHERE id = ?')
       .run(alias, approval!.id);
     await advanceApprovalAsNewDevice(phone);
-    await approveDevice(
+    await approveAs(
       laptop,
       account,
       await laptop.api.getApproval(approval!.id),
@@ -2847,7 +2944,7 @@ describe('device approval', () => {
       }
     };
     const refused = await refusal(
-      approveDevice(
+      approveAs(
         intercept,
         account,
         approval!,
@@ -2887,7 +2984,7 @@ describe('device approval', () => {
       }
     };
     await expect(
-      approveDevice(
+      approveAs(
         lost,
         account,
         request.approval,
@@ -2901,7 +2998,7 @@ describe('device approval', () => {
     );
     const entries = ready(await loadEncryption(laptop)).list.entries.length;
     // Retry from the same, now stale, view without appending again.
-    await approveDevice(
+    await approveAs(
       laptop,
       account,
       request.approval,
@@ -2944,7 +3041,7 @@ describe('device approval', () => {
       stale.list.head.accountKeyCommitment
     );
     await flowRefusal(
-      approveDevice(
+      approveAs(
         laptop,
         stale,
         request.approval,
@@ -2982,7 +3079,7 @@ describe('device approval', () => {
           await reveal();
         };
       const rejected = await refusal(
-        approveDevice(
+        approveAs(
           other.ctx,
           other.account,
           scanSnapshot!,
@@ -3002,7 +3099,7 @@ describe('device approval', () => {
           "SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE purpose = 'account-key-approval'"
         )
       ).toBe(0);
-      await approveDevice(laptop, account, pending, { kind: 'compare' }, null);
+      await approveAs(laptop, account, pending, { kind: 'compare' }, null);
       const done = await confirmShownApproval(phone);
       if (done.step !== 'done')
         throw new Error('Expected completed comparison');
@@ -3084,7 +3181,7 @@ describe('device approval', () => {
         }
       }
     };
-    await approveDevice(
+    await approveAs(
       intercept,
       account,
       approval!,
@@ -3152,7 +3249,7 @@ describe('device approval', () => {
           );
       };
       await refusal(
-        approveDevice(
+        approveAs(
           laptop,
           account,
           approval!,
@@ -3194,7 +3291,7 @@ describe('device approval', () => {
     const intruderRequest = await requestApproval(intruder, null, 'Intruder');
     if (intruderRequest.step !== 'waiting') throw new Error('expected');
     await flowRefusal(
-      approveDevice(
+      approveAs(
         laptop,
         approver,
         pending[0]!,
@@ -3204,7 +3301,7 @@ describe('device approval', () => {
       'scan-mismatch'
     );
     ready(
-      await approveDevice(
+      await approveAs(
         laptop,
         approver,
         pending[0]!,
@@ -3242,7 +3339,7 @@ describe('device approval', () => {
     );
     expect(approverCode).toBe(shown.code);
     expect(approverCode).toMatch(/^\d{3} \d{3}$/);
-    await approveDevice(laptop, approver, revealed, { kind: 'compare' }, null);
+    await approveAs(laptop, approver, revealed, { kind: 'compare' }, null);
     lockAccount(USER);
     // The phone waits for its own confirmation even though the approval is
     // complete; then it finishes.
@@ -3420,7 +3517,7 @@ describe('device approval', () => {
       expect(await approverComparisonCode(laptop, account, record)).toBe(
         shown.code
       );
-      await approveDevice(laptop, account, record, { kind: 'compare' }, null);
+      await approveAs(laptop, account, record, { kind: 'compare' }, null);
       expect((await confirmShownApproval(reopened)).step).toBe('done');
     });
 
@@ -3482,7 +3579,7 @@ describe('device approval', () => {
         const { laptop, account, phone, approval } = await respondedFixture();
         const shown = await advanceApprovalAsNewDevice(phone);
         if (shown.step !== 'compare') throw new Error('Expected comparison');
-        await approveDevice(
+        await approveAs(
           laptop,
           account,
           await laptop.api.getApproval(approval.id),
@@ -3553,7 +3650,7 @@ describe('device approval', () => {
       expect(await approverComparisonCode(laptop, account, record)).toBe(
         shown.code
       );
-      await approveDevice(laptop, account, record, { kind: 'compare' }, null);
+      await approveAs(laptop, account, record, { kind: 'compare' }, null);
       expect((await advanceApprovalAsNewDevice(phone)).step).toBe('done');
     });
 
@@ -3693,7 +3790,7 @@ describe('device approval', () => {
             { kind: 'scan', code: scanCode } as const
           ]) {
             await flowRefusal(
-              approveDevice(
+              approveAs(
                 laptop,
                 account,
                 {
@@ -3761,13 +3858,7 @@ describe('device approval', () => {
       expect(await approverComparisonCode(laptop, account, equivalent)).toBe(
         shown.code
       );
-      await approveDevice(
-        laptop,
-        account,
-        equivalent,
-        { kind: 'compare' },
-        null
-      );
+      await approveAs(laptop, account, equivalent, { kind: 'compare' }, null);
       expect((await confirmShownApproval(phone)).step).toBe('done');
     });
 
@@ -3846,13 +3937,7 @@ describe('device approval', () => {
         expect(await approverComparisonCode(laptop, account, revealed)).toBe(
           shown.code
         );
-        await approveDevice(
-          laptop,
-          account,
-          revealed,
-          { kind: 'compare' },
-          null
-        );
+        await approveAs(laptop, account, revealed, { kind: 'compare' }, null);
         expect((await confirmShownApproval(phone)).step).toBe('done');
       }
     );
@@ -3984,13 +4069,7 @@ describe('device approval', () => {
         expect(await approverComparisonCode(laptop, current, revealed)).toBe(
           shown.code
         );
-        await approveDevice(
-          laptop,
-          current,
-          revealed,
-          { kind: 'compare' },
-          null
-        );
+        await approveAs(laptop, current, revealed, { kind: 'compare' }, null);
         const done = await confirmShownApproval(phone);
         if (done.step !== 'done') throw new Error('Expected approval');
         expect(ready(done.state).unlocked).toBe(true);
@@ -4012,7 +4091,7 @@ describe('device approval', () => {
       expect((await laptop.api.getApproval(approval.id)).state).toBe(
         'requested'
       );
-      await approveDevice(
+      await approveAs(
         laptop,
         current,
         await laptop.api.getApproval(approval.id),
@@ -4118,7 +4197,7 @@ describe('device approval', () => {
         expect(await approverComparisonCode(reopened, account, revealed)).toBe(
           shown.code
         );
-        await approveDevice(
+        await approveAs(
           reopened,
           account,
           revealed,
@@ -4142,7 +4221,7 @@ describe('device approval', () => {
         await expect(
           approverComparisonCode(laptop, current, revealed)
         ).rejects.toMatchObject({ name: 'AbortError' });
-        await approveDevice(
+        await approveAs(
           laptop,
           current,
           revealed,
@@ -4216,7 +4295,7 @@ describe('device approval', () => {
         });
         return getAccount();
       };
-      await approveDevice(
+      await approveAs(
         laptop,
         account,
         revealed,
@@ -4243,7 +4322,7 @@ describe('device approval', () => {
         throw new Error('Offline');
       };
       await expect(
-        approveDevice(
+        approveAs(
           laptop,
           account,
           revealed,
@@ -4252,7 +4331,7 @@ describe('device approval', () => {
         )
       ).rejects.toThrow('Offline');
       laptop.api.completeApproval = complete;
-      await approveDevice(
+      await approveAs(
         laptop,
         account,
         revealed,
@@ -4376,7 +4455,7 @@ describe('device approval', () => {
     );
     // Responded but not revealed: completing now would skip the code.
     const skipped = await refusal(
-      approveDevice(
+      approveAs(
         laptop,
         approver,
         await laptop.api.getApproval(approval!.id),
@@ -4435,7 +4514,7 @@ describe('device approval', () => {
     const [approval] = (await laptop.api.listApprovals()).approvals;
     const stranger = await generateSigningKeyPair(false);
     const refused = await refusal(
-      approveDevice(
+      approveAs(
         laptop,
         {
           ...approver,
@@ -5226,7 +5305,7 @@ describe.each(['development', 'browser', 'desktop'] as const)(
                 target = "state = 'revealed'";
               } else if (operation === 'complete') {
                 action = () =>
-                  approveDevice(
+                  approveAs(
                     laptop,
                     account,
                     approval!,
@@ -5265,7 +5344,7 @@ describe.each(['development', 'browser', 'desktop'] as const)(
             if (phase === 'erasing') {
               srv.db
                 .prepare(
-                  'INSERT INTO account_erasure_requests VALUES (?, ?, ?, ?)'
+                  'INSERT INTO account_erasure_requests (user_id, scope, started_at, updated_at) VALUES (?, ?, ?, ?)'
                 )
                 .run(USER, 'profile', 1, 1);
               return;
@@ -5870,7 +5949,7 @@ describe('passkey PRF unlock', () => {
     const phone = device(srv);
     const request = await requestApproval(phone, null, 'Read-only phone');
     if (request.step !== 'waiting') throw new Error('Expected request');
-    await approveDevice(
+    await approveAs(
       laptop,
       account,
       request.approval,
@@ -6435,7 +6514,7 @@ describe('cross-tab pin persistence', () => {
     if (request.step !== 'waiting')
       throw new Error('Expected a waiting approval');
     ready(await loadEncryption(laptop));
-    await approveDevice(
+    await approveAs(
       laptop,
       account,
       request.approval,
@@ -6507,7 +6586,7 @@ describe('cross-tab pin persistence', () => {
     if (request.step !== 'waiting')
       throw new Error('Expected a waiting approval');
     ready(await loadEncryption(laptop));
-    await approveDevice(
+    await approveAs(
       laptop,
       newer,
       request.approval,
@@ -6545,7 +6624,7 @@ describe('cross-tab pin persistence', () => {
     expect(await approverComparisonCode(laptop, approver, revealed)).toBe(
       shown.code
     );
-    await approveDevice(laptop, approver, revealed, { kind: 'compare' }, null);
+    await approveAs(laptop, approver, revealed, { kind: 'compare' }, null);
     lockAccount(USER);
     const completed = await confirmShownApproval(phone.ctx);
     if (completed.step !== 'done')
@@ -6862,5 +6941,110 @@ describe('desktop Keychain device keys', () => {
     expect(await mac.store.loadDevice(USER)).toBeNull();
     mlsStore.mockRestore();
     lockAccount(USER);
+  });
+});
+
+// L11 plan T1 (ADR-024 amendment 2026-11-16): approving a device always
+// certifies it, so an approved device can save. Approval opens the identity
+// key with a passkey or the recovery key; read-only approval is gone.
+describe('approval always certifies', () => {
+  async function waitingPhone(srv: Server) {
+    const phone = device(srv);
+    const request = await requestApproval(phone, null, 'Phone');
+    if (request.step !== 'waiting') throw new Error(`got ${request.step}`);
+    return { phone, scanCode: request.scanCode };
+  }
+
+  it('refuses to approve a new device without a passkey or recovery key', async () => {
+    const srv = server();
+    const { laptop } = await setUp(srv);
+    const { scanCode } = await waitingPhone(srv);
+    const approver = ready(await loadEncryption(laptop));
+    const [approval] = (await laptop.api.listApprovals()).approvals;
+    await expect(
+      approveDevice(
+        laptop,
+        approver,
+        approval!,
+        { kind: 'scan', code: scanCode },
+        null
+      )
+    ).rejects.toMatchObject({ code: 'certification-required' });
+    // Nothing was granted or sealed for the device.
+    expect((await laptop.api.getApproval(approval!.id)).grant).toBeNull();
+    expect(
+      count(
+        srv.db,
+        `SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE purpose = 'account-key-approval'`
+      )
+    ).toBe(0);
+  });
+
+  it('certifies a device whose approval link was scanned, with a passkey touch', async () => {
+    const srv = server();
+    const { laptop, account, passkeys } = await withPasskey(srv);
+    const { phone, scanCode } = await waitingPhone(srv);
+    const [approval] = (await laptop.api.listApprovals()).approvals;
+    const link = deviceApprovalLink(scanCode, 'https://openzcad.example');
+    expect(await approvalMatchesScanCode(approval!, link)).toBe(true);
+    passkeys.get.mockClear();
+    await approveDevice(
+      laptop,
+      account,
+      approval!,
+      { kind: 'scan', code: link },
+      'passkey'
+    );
+    expect(passkeys.get).toHaveBeenCalledOnce();
+    const done = await advanceApprovalAsNewDevice(phone);
+    if (done.step !== 'done') throw new Error(`got ${done.step}`);
+    const approved = ready(done.state);
+    expect(approved.deviceStatus).toBe('certified');
+    expect(approved.unlocked).toBe(true);
+    expect(approved.approvedDevices).toEqual([]);
+    expect(
+      count(
+        srv.db,
+        `SELECT COUNT(*) AS n FROM e2ee_key_wraps WHERE purpose = 'account-key-approval'`
+      )
+    ).toBe(0);
+  });
+
+  it('matches a link only to the device that showed it', async () => {
+    const srv = server();
+    const { laptop } = await setUp(srv);
+    const first = await waitingPhone(srv);
+    await waitingPhone(srv);
+    const approvals = (await laptop.api.listApprovals()).approvals;
+    const link = deviceApprovalLink(first.scanCode, 'https://openzcad.example');
+    const matches = await Promise.all(
+      approvals.map((approval) => approvalMatchesScanCode(approval, link))
+    );
+    expect(matches.filter(Boolean)).toHaveLength(1);
+    expect(await approvalMatchesScanCode(approvals[0]!, 'not a code')).toBe(
+      false
+    );
+  });
+
+  it('adds a second passkey confirmed by the first', async () => {
+    const srv = server();
+    const { laptop, account, passkeys } = await withPasskey(srv);
+    const second = fakePasskey('pk_second', 0x72);
+    const next = ready(
+      await addPasskey(
+        { ...laptop, passkeys: { create: second.create, get: passkeys.get } },
+        account,
+        'passkey'
+      )
+    );
+    expect(
+      next.list.unlockTargets.filter((target) => target.kind === 'passkey')
+    ).toHaveLength(2);
+    // The new passkey unlocks a fresh browser on its own.
+    const fresh = await passkeyDevice(srv, second);
+    const enrolled = ready(
+      await enrollWithPasskey(fresh.ctx, fresh.account, 'Tablet')
+    );
+    expect(enrolled.deviceStatus).toBe('certified');
   });
 });

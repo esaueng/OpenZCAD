@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { StandardView, ViewTarget } from '../types';
-import type { CameraPose } from '../render/scene';
+import type { CameraPose, NdcFrame } from '../render/scene';
 
 export const VIEW_DIRECTIONS: Record<StandardView, THREE.Vector3> = {
   // Direction from the target toward the camera, in the Z-up frame. Top and
@@ -156,6 +156,12 @@ export function faceTrianglesCentroid(
  * screen basis, and the pole nudge leans away from it, so even world up's
  * projection agrees on a horizontal face. Without it the roll is world up's.
  *
+ * `frame` fits the face into that part of the view instead of the whole
+ * canvas, as `computeFitPose` does: the camera keeps its direction and slides
+ * sideways so the face's centre lands on the frame's centre. Re-entering a
+ * sketch with panels docked put both side edges of a small rectangle under
+ * them (I6).
+ *
  * Returns null for incomplete or degenerate derived geometry. Camera commands
  * must fail closed rather than inventing a usable plane from a bad normal.
  */
@@ -164,7 +170,8 @@ export function computeNormalToFacePose(
   facePoints: readonly THREE.Vector3[],
   center: THREE.Vector3,
   outwardNormal: THREE.Vector3,
-  preferredUp?: THREE.Vector3 | null
+  preferredUp?: THREE.Vector3 | null,
+  frame?: NdcFrame
 ): CameraPose | null {
   if (
     facePoints.length === 0 ||
@@ -203,6 +210,11 @@ export function computeNormalToFacePose(
     return null;
   }
 
+  const tanHorizontal = tanHalfFov * aspect;
+  const centerX = frame ? (frame.minX + frame.maxX) / 2 : 0;
+  const centerY = frame ? (frame.minY + frame.maxY) / 2 : 0;
+  const halfX = frame ? Math.max((frame.maxX - frame.minX) / 2, 1e-3) : 1;
+  const halfY = frame ? Math.max((frame.maxY - frame.minY) / 2, 1e-3) : 1;
   let requiredDistance = 0;
   let faceRadius = 0;
   for (const point of facePoints) {
@@ -211,10 +223,19 @@ export function computeNormalToFacePose(
     }
     const offset = point.clone().sub(center);
     const depthTowardCamera = offset.dot(direction);
+    // With the camera slid so the centre lands on the frame's centre, a
+    // point's offset from that centre on screen bounds the distance as in
+    // `computeFitPose`; the whole canvas reduces to the symmetric fit.
     requiredDistance = Math.max(
       requiredDistance,
-      depthTowardCamera + Math.abs(offset.dot(up)) / tanHalfFov,
-      depthTowardCamera + Math.abs(offset.dot(right)) / (tanHalfFov * aspect)
+      depthTowardCamera +
+        Math.abs(offset.dot(up) - centerY * tanHalfFov * depthTowardCamera) /
+          (tanHalfFov * halfY),
+      depthTowardCamera +
+        Math.abs(
+          offset.dot(right) - centerX * tanHorizontal * depthTowardCamera
+        ) /
+          (tanHorizontal * halfX)
     );
     faceRadius = Math.max(faceRadius, offset.length());
   }
@@ -232,9 +253,15 @@ export function computeNormalToFacePose(
     distance / 1_000_000,
     1e-9
   );
+  // Slide the camera and its target together, across the view, so the
+  // face's centre projects onto the frame's centre.
+  const target = center
+    .clone()
+    .addScaledVector(right, -centerX * distance * tanHorizontal)
+    .addScaledVector(up, -centerY * distance * tanHalfFov);
   return {
-    position: center.clone().addScaledVector(direction, distance),
-    target: center.clone(),
+    position: target.clone().addScaledVector(direction, distance),
+    target,
     near,
     // Preserve a farther existing scene range while guaranteeing the selected
     // face remains inside the frustum at every supported model scale.

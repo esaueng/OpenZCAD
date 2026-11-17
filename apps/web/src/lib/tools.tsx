@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import {
   Axis3d,
+  Bolt,
   Box,
   Cog,
   Cone,
@@ -28,8 +29,11 @@ import {
   helicalSweepGlyph,
   linearPatternGlyph,
   loftGlyph,
+  pointPatternGlyph,
   planeGlyph,
   revolveGlyph,
+  bendGlyph,
+  sheetMetalGlyph,
   shellGlyph,
   solidOffsetGlyph,
   sphereGlyph,
@@ -38,6 +42,7 @@ import {
   thickenGlyph,
   threadGlyph
 } from './toolIcons';
+import type { BodyRepresentation } from '@openzcad/shared';
 import { platformShortcutLabel } from './platformShortcut';
 
 export type ToolId =
@@ -71,11 +76,15 @@ export type ToolId =
   | 'gear'
   | 'gear-teeth'
   | 'thread'
+  | 'sheet-metal'
+  | 'bend'
+  | 'standard-part'
   | 'fillet'
   | 'chamfer'
   | 'linear-pattern'
   | 'circular-pattern'
-  | 'grid-pattern';
+  | 'grid-pattern'
+  | 'point-pattern';
 
 /**
  * The five groups of the feature tools, in workflow order: make something,
@@ -184,6 +193,19 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     shortcut: 'E',
     hint: 'Push a sketch into a solid'
   },
+  'sheet-metal': {
+    label: 'Sheet metal',
+    short: 'Sheet',
+    icon: sheetMetalGlyph,
+    group: 'from-sketch',
+    hint: 'Turn sketch cells into a flat sheet to bend'
+  },
+  bend: {
+    label: 'Bend',
+    icon: bendGlyph,
+    group: 'edges-faces',
+    hint: 'Bend a sheet-metal part along lines on it'
+  },
   revolve: {
     label: 'Revolve',
     icon: revolveGlyph,
@@ -233,6 +255,13 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     icon: icon(<Cog size={16} aria-hidden="true" />),
     group: 'create',
     hint: 'Add a gear, rack or worm'
+  },
+  'standard-part': {
+    label: 'Standard part',
+    short: 'Part',
+    icon: icon(<Bolt size={16} aria-hidden="true" />),
+    group: 'create',
+    hint: 'Add a screw, nut, washer, insert, dowel pin or bearing'
   },
   'gear-teeth': {
     label: 'Gear teeth',
@@ -344,6 +373,13 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     icon: gridPatternGlyph,
     group: 'pattern',
     hint: 'Repeat a body along two directions'
+  },
+  'point-pattern': {
+    label: 'Point pattern',
+    short: 'Points',
+    icon: pointPatternGlyph,
+    group: 'pattern',
+    hint: 'Repeat a body or a feature at sketch points'
   }
 };
 
@@ -358,13 +394,21 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
         'datum-axis',
         'reference-image',
         ...PRIMITIVE_TOOLS,
-        'gear'
+        'gear',
+        'standard-part'
       ]
     },
     {
       id: 'from-sketch',
       label: 'From sketch',
-      tools: ['extrude', 'revolve', 'loft', 'sweep', 'helical-sweep']
+      tools: [
+        'extrude',
+        'sheet-metal',
+        'revolve',
+        'loft',
+        'sweep',
+        'helical-sweep'
+      ]
     },
     {
       id: 'edges-faces',
@@ -375,6 +419,7 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
         'hole',
         'thread',
         'gear-teeth',
+        'bend',
         'shell',
         'draft',
         'thicken',
@@ -398,7 +443,12 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
     {
       id: 'pattern',
       label: 'Pattern',
-      tools: ['linear-pattern', 'circular-pattern', 'grid-pattern']
+      tools: [
+        'linear-pattern',
+        'circular-pattern',
+        'grid-pattern',
+        'point-pattern'
+      ]
     }
   ];
 
@@ -410,6 +460,12 @@ export const TOOL_GROUP_IDS: readonly ToolGroup[] = TOOL_GROUPS.map(
 export interface ToolAvailability {
   /** Central collaboration/lease refusal applied to every mutating tool. */
   editDisabledReason?: string | null;
+  /**
+   * The workspace explains `editDisabledReason` in a notice of its own (the
+   * live-session one, design review I10). Tools stay greyed, but their rows
+   * keep their own descriptions instead of 35 copies of the reason.
+   */
+  editDisabledExplained?: boolean;
   sketchCount: number;
   /**
    * Sketches with at least one closed region. A sketch that is only an open
@@ -427,6 +483,79 @@ export interface ToolAvailability {
   exactGeometryReady: boolean;
   /** An exact edge is picked in the viewport (enables fillet/chamfer). */
   hasEdgeSelected: boolean;
+  /**
+   * Whether a live body has a cylindrical face for Thread or Gear teeth to
+   * pick: false only when every live body's faces are known and none is;
+   * undefined while that is not known, which leaves the tools offered.
+   */
+  hasCylindricalFace?: boolean;
+  /**
+   * Whether a live body is a sheet-metal part Bend can work on; undefined
+   * when not known, which leaves Bend offered.
+   */
+  hasSheetMetalBody?: boolean;
+}
+
+/**
+ * Whether a live (not consumed, not hidden) body has a cylindrical face:
+ * true as soon as one does, false only when every live body's faces are all
+ * known and none is, undefined otherwise (topology not built yet).
+ */
+export function liveCylindricalFace(
+  bodies: Readonly<
+    Record<string, Pick<BodyRepresentation, 'bodyId' | 'consumed' | 'topology'>>
+  > | null,
+  hidden: ReadonlySet<string>
+): boolean | undefined {
+  if (!bodies) return undefined;
+  let known = true;
+  for (const body of Object.values(bodies)) {
+    if (body.consumed || hidden.has(body.bodyId)) continue;
+    const faces = body.topology?.faces;
+    if (!faces) {
+      known = false;
+      continue;
+    }
+    for (const face of faces) {
+      const surface = face.geometry?.surfaceType.toLowerCase();
+      if (surface === 'cylinder') return true;
+      if (surface === undefined) known = false;
+    }
+  }
+  return known ? false : undefined;
+}
+
+/**
+ * The availability an edit of a stored feature is judged by: what a new
+ * feature needs on screen (two live bodies for a boolean, closed profiles
+ * for a loft, a sheet-metal body for Bend) the stored feature already names,
+ * even consumed, hidden, or failed with no body to show (M16: History opens
+ * a sheet-metal feature's Bend to repair it).
+ */
+export function editAvailability(avail: ToolAvailability): ToolAvailability {
+  return {
+    ...avail,
+    liveBodyCount: Number.POSITIVE_INFINITY,
+    sketchCount: Number.POSITIVE_INFINITY,
+    closedProfileSketchCount: Number.POSITIVE_INFINITY,
+    hasSheetMetalBody: true
+  };
+}
+
+/**
+ * What a tool's row or tooltip says: why it cannot run, or its own hint
+ * while the workspace explains a shared lock elsewhere.
+ */
+export function toolDescription(
+  tool: ToolId,
+  avail: ToolAvailability,
+  hint: string
+): string {
+  const reason = toolDisabledReason(tool, avail);
+  return reason === null ||
+    (avail.editDisabledExplained && reason === avail.editDisabledReason)
+    ? hint
+    : reason;
 }
 
 /** Why a tool cannot run right now, or null when it can. */
@@ -449,13 +578,17 @@ export function toolDisabledReason(
       tool === 'thicken' ||
       tool === 'hole' ||
       tool === 'thread' ||
-      tool === 'gear-teeth') &&
+      tool === 'gear-teeth' ||
+      tool === 'bend') &&
     !avail.exactGeometryReady
   ) {
     return 'Waiting for exact geometry';
   }
   const closedProfiles = avail.closedProfileSketchCount ?? avail.sketchCount;
-  if ((tool === 'extrude' || tool === 'revolve') && closedProfiles === 0) {
+  if (
+    (tool === 'extrude' || tool === 'revolve' || tool === 'sheet-metal') &&
+    closedProfiles === 0
+  ) {
     return avail.sketchCount === 0
       ? 'Create a sketch first'
       : 'Close a sketch profile first';
@@ -498,10 +631,22 @@ export function toolDisabledReason(
   if ((tool === 'fillet' || tool === 'chamfer') && avail.liveBodyCount < 1) {
     return 'Needs a body';
   }
+  // A box-only model offered both, and neither could succeed: each waits on
+  // a pick that is not there to make.
+  if (
+    (tool === 'thread' || tool === 'gear-teeth') &&
+    avail.hasCylindricalFace === false
+  ) {
+    return 'Needs a cylindrical face';
+  }
+  if (tool === 'bend' && avail.hasSheetMetalBody === false) {
+    return 'Needs a sheet-metal body';
+  }
   if (
     (tool === 'linear-pattern' ||
       tool === 'circular-pattern' ||
-      tool === 'grid-pattern') &&
+      tool === 'grid-pattern' ||
+      tool === 'point-pattern') &&
     avail.liveBodyCount < 1
   ) {
     return 'Needs a body';

@@ -6,7 +6,8 @@ import {
   stubApi,
   expectBodyCount,
   MODEL_ONLY,
-  waitForStillViewport
+  waitForStillViewport,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 const rendered = (canvas: Locator) =>
@@ -118,9 +119,8 @@ test(
     await waitForStillViewport(page);
     await selectTop(canvas);
     const chip = page.getByTestId('direct-manipulation-value');
-    await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
-      /^Total/
-    );
+    // A face starts on Offset; this spec reads and types its Total.
+    await switchFaceOffsetToTotal(page);
     await expect(chip).toContainText('10');
 
     // Drag 10 → 13. This used to plan a local push/pull, which the kernel
@@ -153,6 +153,10 @@ test(
 
     // Typed 13 → 9.
     await selectTop(canvas);
+    // The cap keeps the Total chosen on it through its own commit.
+    await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+      /^Total/
+    );
     await expect(chip).toContainText('13');
     await chip.click();
     const keypad = page.getByRole('dialog', { name: 'Total value' });
@@ -167,6 +171,9 @@ test(
     // A fresh pick reads the committed width.
     await page.keyboard.press('Escape');
     await selectTop(canvas);
+    await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+      /^Total/
+    );
     await expect(chip).toContainText('9');
     await page.keyboard.press('Escape');
 

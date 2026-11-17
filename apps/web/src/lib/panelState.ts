@@ -95,6 +95,12 @@ export interface PanelState {
   workspaceTourDismissed: boolean;
   workspaceTourMinimized: boolean;
   /**
+   * The tour step reached on this device. Kept per project, it began again
+   * at 1/4 in every new empty project until someone skipped it (13 November
+   * review I16). Showing the guide again from Help starts it over.
+   */
+  workspaceTourStep: number;
+  /**
    * Which feature-tool groups are unfolded to named tiles; a folded group
    * shows its tools as one row of icons. Open to begin with — the names are
    * what make the tools learnable — and remembered because folding is how
@@ -176,6 +182,7 @@ export const DEFAULT_PANEL_STATE: PanelState = {
   assistantCollapsed: true,
   workspaceTourDismissed: false,
   workspaceTourMinimized: false,
+  workspaceTourStep: 0,
   toolGroups: {
     create: true,
     'from-sketch': true,
@@ -196,6 +203,12 @@ export const DEFAULT_PANEL_STATE: PanelState = {
   sectionPanelOpen: true
 };
 
+/**
+ * The furthest step index kept; the tour itself clamps to its own steps, so
+ * this only bounds what a hand-edited store can hold.
+ */
+const MAX_WORKSPACE_TOUR_STEP = 16;
+
 /** A saved search longer than any tool name is cut to this. */
 export const TOOL_DRAWER_QUERY_MAX_LENGTH = 64;
 
@@ -211,6 +224,7 @@ function copyDefaults(): PanelState {
     assistantCollapsed: DEFAULT_PANEL_STATE.assistantCollapsed,
     workspaceTourDismissed: DEFAULT_PANEL_STATE.workspaceTourDismissed,
     workspaceTourMinimized: DEFAULT_PANEL_STATE.workspaceTourMinimized,
+    workspaceTourStep: DEFAULT_PANEL_STATE.workspaceTourStep,
     toolGroups: { ...DEFAULT_PANEL_STATE.toolGroups },
     drawerOpen: DEFAULT_PANEL_STATE.drawerOpen,
     commandFoldOpen: DEFAULT_PANEL_STATE.commandFoldOpen,
@@ -240,6 +254,14 @@ export function normalizePanelState(value: unknown): PanelState {
   }
   if (typeof root.workspaceTourMinimized === 'boolean') {
     state.workspaceTourMinimized = root.workspaceTourMinimized;
+  }
+  if (
+    typeof root.workspaceTourStep === 'number' &&
+    Number.isInteger(root.workspaceTourStep) &&
+    root.workspaceTourStep >= 0 &&
+    root.workspaceTourStep <= MAX_WORKSPACE_TOUR_STEP
+  ) {
+    state.workspaceTourStep = root.workspaceTourStep;
   }
   if (
     root.workspaceMode === 'view' ||

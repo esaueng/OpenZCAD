@@ -27,6 +27,7 @@ import {
   type DirectEditOperation,
   type FaceGeometry,
   type RecordedBlendCarrier,
+  type RemovedFaceSnapshot,
   type FaceWitnessV1,
   type FaceTopologyReferenceV5,
   type FeatureId
@@ -120,7 +121,13 @@ import {
   rebuildFaceDistance
 } from './exact-face-distance';
 import { preparedFaceMove } from './exact-prepared-face-move';
+import { curvedCarrierKeys } from './exact-curved-carrier';
 import { offsetFaceRefusalOf } from './exact-offset-face-refusal';
+import { modelingOperationRefusal } from './remus-operation-refusal';
+import {
+  isNonadjacentFaceCollision,
+  sweepFaceIntoBody
+} from './exact-face-sweep-fill';
 import {
   preparedGroupEdit,
   preparedCommitNeedsEvolution,
@@ -135,6 +142,7 @@ import {
   resizeWallThroughBlends,
   sameBlendCarrier
 } from './exact-direct-edit-reblend';
+import { withResizeBlendRefusal } from './exact-resize-blend-refusal';
 
 // The restored drag source is immutable. Exact face digests keep its costly
 // area/domain measurement reusable without trusting recycled handle numbers.
@@ -1400,13 +1408,14 @@ function applyImportedHoleEdit(
  * Remove the feature the selected face belongs to.
  *
  * A through-hole is closed by fusing a plug of its own radius, exactly as
- * OpenCascade does. Anything else goes to Remus's `defeature`, which
- * rebuilds the body from the planes of the faces it keeps and therefore
- * only accepts a body whose every remaining face is planar. That
- * precondition is checked before the call so an unsupported selection is
- * named rather than silently reassembled, and the reassembly itself is held
- * to strict solid validation because its failure mode is a closed-looking
- * body with the wrong walls.
+ * OpenCascade does. Anything else goes to Remus's `defeature`, which extends
+ * the faces around the removed one until they close again. It decides for
+ * itself whether that neighbourhood can be extended exactly and refuses by
+ * name when it cannot, as it does for {@link removeFaces}: a body that also
+ * carries cylinders, cones or fillets elsewhere is no reason to refuse (the
+ * all-planar precondition this path once had predates that kernel). The
+ * result is still held to strict solid validation, because a defeature's
+ * failure mode is a closed-looking body with the wrong walls.
  */
 export function removeFaceFeature(
   kernel: RemusKernel,
@@ -1455,16 +1464,6 @@ export function removeFaceFeature(
   const keptFaces = Array.from(kernel.getSolidFaces(solid)).filter(
     (handle) => handle !== face
   );
-  const nonPlanar = new Set(
-    keptFaces
-      .map((handle) => kernel.getSurfaceType(handle))
-      .filter((surfaceType) => surfaceType !== 'plane')
-  );
-  if (nonPlanar.size > 0) {
-    throw new Error(
-      `Removing a ${geometry.surfaceType} face needs Remus's defeature operation, which only supports bodies whose every remaining face is planar; this body still has ${[...nonPlanar].sort().join(', ')} faces.`
-    );
-  }
   if (keptFaces.length < 4) {
     throw new Error(
       'Removing the selected face would leave too few faces to bound a solid.'
@@ -1487,6 +1486,96 @@ export function removeFaceFeature(
     kernel,
     output,
     'Removing the selected face did not produce a valid solid.'
+  );
+  return output;
+}
+
+/**
+ * The face a removal recorded, re-checked on the rebuilt body: same surface
+ * class, same area and the same vertex centroid, at the tolerances
+ * `removeFaceFeature` uses.
+ */
+function requireRecordedRemovedFace(
+  geometry: FaceGeometry | undefined,
+  snapshot: Pick<
+    RemovedFaceSnapshot,
+    'sourceSurfaceType' | 'sourceArea' | 'sourceCenter'
+  >
+): void {
+  if (!geometry || geometry.surfaceType !== snapshot.sourceSurfaceType) {
+    throw new Error('A selected face no longer matches its recorded surface.');
+  }
+  const areaTolerance = Math.max(snapshot.sourceArea * 1e-5, 1e-9);
+  const centerTolerance = Math.max(
+    DIRECT_EDIT_TOLERANCE,
+    Math.sqrt(Math.max(snapshot.sourceArea, 1)) * 1e-6
+  );
+  if (
+    Math.abs(geometry.area - snapshot.sourceArea) > areaTolerance ||
+    length(subtract(geometry.center, snapshot.sourceCenter)) > centerTolerance
+  ) {
+    throw new Error('A selected face no longer matches its recorded geometry.');
+  }
+}
+
+/**
+ * Delete several faces of one body and heal the gap.
+ *
+ * Remus's `defeature` extends the faces around the removed patch until they
+ * close again, so the four walls of a window through a plate come back as
+ * the plate, and the five faces of a blind pocket as the block it was cut
+ * from. It decides for itself whether the neighbourhood is one it can
+ * extend exactly and refuses by name when it is not (three walls of a
+ * four-walled window, say); the strict validation afterwards is defence in
+ * depth. Unlike the single-face path there is no all-planar precondition:
+ * the kernel heals a planar patch on a body that also carries fillets or
+ * bosses elsewhere, which is the common case for a hole to close.
+ */
+function removeFaces(
+  kernel: RemusKernel,
+  target: ExactShape,
+  solid: number,
+  face: number,
+  operation: Extract<DirectEditOperation, { kind: 'remove-faces' }>
+): number {
+  requireRecordedRemovedFace(measureFaceGeometry(kernel, face), operation);
+  const handles = [face];
+  for (const snapshot of operation.additionalFaces) {
+    const { face: handle } = resolveDirectEditFace(
+      kernel,
+      target,
+      solid,
+      snapshot
+    );
+    requireRecordedRemovedFace(measureFaceGeometry(kernel, handle), snapshot);
+    handles.push(handle);
+  }
+  if (new Set(handles).size !== handles.length) {
+    throw new Error('Two of the selected faces resolve to the same face.');
+  }
+  const facesBefore = kernel.getSolidFaces(solid).length;
+  if (facesBefore - handles.length < 4) {
+    throw new Error(
+      'Removing the selected faces would leave too few faces to bound a solid.'
+    );
+  }
+  let output: number;
+  try {
+    output = kernel.defeature(solid, Uint32Array.from(handles));
+  } catch (error) {
+    const detail =
+      error instanceof Error
+        ? error.message
+        : 'the kernel rejected the defeature';
+    throw new Error(
+      `Removing the ${handles.length} selected faces failed: ${detail}. To close an opening, select every face around it.`,
+      { cause: error }
+    );
+  }
+  unifyAndRequireValidSolid(
+    kernel,
+    output,
+    'Removing the selected faces did not produce a valid solid.'
   );
   return output;
 }
@@ -1537,7 +1626,9 @@ function removeBlends(
     // any member removes them all.
     const region = requireBlendRegion(kernel, output, matches[0]!);
     try {
-      output = kernel.resizeBlend(output, matches[0]!, region.radius, 0);
+      output = withResizeBlendRefusal(() =>
+        kernel.resizeBlend(output, matches[0]!, region.radius, 0)
+      );
     } catch (error) {
       throw new Error(
         `Removing the ${formatBlend(blend)} failed: ${
@@ -1896,6 +1987,7 @@ export function applyDirectEdit(
 
   if (
     operation.kind === 'remove-face-feature' ||
+    operation.kind === 'remove-faces' ||
     operation.kind === 'remove-blends'
   ) {
     // A removal deletes the feature's faces and only re-limits the faces
@@ -1906,7 +1998,9 @@ export function applyDirectEdit(
     const output =
       operation.kind === 'remove-blends'
         ? removeBlends(kernel, solid, face, operation)
-        : removeFaceFeature(kernel, solid, face, geometry, operation);
+        : operation.kind === 'remove-faces'
+          ? removeFaces(kernel, target, solid, face, operation)
+          : removeFaceFeature(kernel, solid, face, geometry, operation);
     return predictedCarrierEdit(
       kernel,
       target,
@@ -1976,7 +2070,9 @@ export function applyDirectEdit(
     // A drag preview moves the same face of the same restored source every
     // frame, so it reuses the kernel's distance-independent analysis.
     const faces = new Uint32Array([face]);
-    const moveFace = () => {
+    // Set when the push was carried past a collision by the exact sweep.
+    let sweptPastCollision = false;
+    const moveFace = (): ReturnType<typeof journaledMove> => {
       try {
         return journaledMove(
           kernel,
@@ -1987,9 +2083,37 @@ export function applyDirectEdit(
           true
         );
       } catch (error) {
+        // Pushed outward into another part of the body — the bottom of a
+        // window up to its top — the move closes what it runs into, which
+        // an in-place move cannot. Where the push is a prism union it is
+        // carried on past the collision; anything else keeps the refusal.
+        if (isNonadjacentFaceCollision(error)) {
+          const swept = sweepFaceIntoBody(
+            kernel,
+            solid,
+            face,
+            operation.sourceNormal,
+            geometry.center,
+            offset
+          );
+          if (swept !== null) {
+            sweptPastCollision = true;
+            return { solid: swept, relation: null };
+          }
+        }
         // A neighbour that would collapse is a limit on the value, not an
-        // internal failure: say so, and how far the face can go.
-        throw offsetFaceRefusalOf(error, offset) ?? error;
+        // internal failure: say so, and how far the face can go. Any other
+        // refusal of the move (a face ringed by a blend loop the pin cannot
+        // carry, esaueng/remus#1741) is typed from the kernel's error.
+        throw (
+          offsetFaceRefusalOf(error, offset) ??
+          modelingOperationRefusal(
+            'offset_face',
+            error,
+            error instanceof Error ? error.message : String(error),
+            'direct-edit'
+          )
+        );
       }
     };
     const moved =
@@ -2006,10 +2130,16 @@ export function applyDirectEdit(
     }
     // Closure and volume checks still accept Remus's triangulated fallback.
     // Preserve the last exact body instead of committing/exporting its facets.
-    const facetFallback = directEditFacetFallbackWarning({
-      operands: sourceCensus,
-      result: censusOfSolids(faceCensus, [output])
-    });
+    // The sweep is exact-only booleans and the kernel's defeature, neither
+    // of which facets; the curvature it removes is the curvature it covers
+    // (a closed window's rounded corners), which this census would misread
+    // as `moveFaces` abandoning its exact surfaces.
+    const facetFallback = sweptPastCollision
+      ? null
+      : directEditFacetFallbackWarning({
+          operands: sourceCensus,
+          result: censusOfSolids(faceCensus, [output])
+        });
     if (facetFallback) {
       throw new Error(facetFallback);
     }
@@ -2155,17 +2285,21 @@ export function applyDirectEdit(
     const evolution =
       (preparedOutput === undefined || needsEvolution) &&
       operation.surfaceClass === 'cylinder'
-        ? kernel.resizeBlendWithEvolution(
-            solid,
-            face,
-            snapshot.radius,
-            newRadius
+        ? withResizeBlendRefusal(() =>
+            kernel.resizeBlendWithEvolution(
+              solid,
+              face,
+              snapshot.radius,
+              newRadius
+            )
           )
         : null;
     const output =
       evolution?.result.solid ??
       preparedOutput ??
-      kernel.resizeBlend(solid, face, snapshot.radius, newRadius);
+      withResizeBlendRefusal(() =>
+        kernel.resizeBlend(solid, face, snapshot.radius, newRadius)
+      );
     requireValidSolid(
       kernel,
       output,
@@ -2606,11 +2740,16 @@ function predictedCarrierLineage(
   producingFeatureId: FeatureId | undefined,
   retiredPlacements?: ReadonlyMap<number, number>
 ): RemusLineageState | undefined {
+  const resultCandidates = topologyCandidatesForSolid(kernel, output);
   const lineage = deriveRemusPredictedCarrierDirectEditLineage({
     source: target.lineage,
     sourceCandidates,
-    resultCandidates: topologyCandidatesForSolid(kernel, output),
+    resultCandidates,
     predicted,
+    curvedCarriers: {
+      source: curvedCarrierKeys(kernel, sourceCandidates),
+      result: curvedCarrierKeys(kernel, resultCandidates)
+    },
     ...(retiredPlacements ? { retiredPlacements } : {})
   });
   return lineage && producingFeatureId
@@ -2703,7 +2842,18 @@ function resizeCylindricalFaceExactly(
       refusal.reason === 'approximate_reblend_not_permitted';
     // Changing the waypoint cannot make an approximate seam exact. Preserve
     // ordinary sleeve-quality retries while respecting this typed policy.
-    if (kernelRefusalCategoryOf(error) === 'unsupported' || exactOnlyReblend)
+    // `cylinder-diameter-unbuildable` is the blend-cluster route's verdict
+    // on the requested size: either the sharp wall would meet another face
+    // there, or the group did not re-fillet in any stage order the kernel
+    // planned. A detour ends on that same size, and each waypoint repeats
+    // the group removal and re-fillet (seconds per call on a filleted boss)
+    // only to be refused the same way. The caller keeps this verdict too,
+    // rather than running its own WS6 ladder.
+    if (
+      kernelRefusalCategoryOf(error) === 'unsupported' ||
+      exactOnlyReblend ||
+      refusal?.code === 'cylinder-diameter-unbuildable'
+    )
       throw error;
     const inward = [0.85, 0.7].map(
       (factor) => factor * Math.min(fromRadius, toRadius)

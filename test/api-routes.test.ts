@@ -226,6 +226,11 @@ function withEnabledDeploymentAssistant<T extends Record<string, unknown>>(
                   expires_at: 4_000_000_000
                 };
               }
+              // A signed-in read is counted against the account's read
+              // budget, which has room.
+              if (query.includes('INSERT INTO auth_rate_limits')) {
+                return { request_count: 1 };
+              }
               return query.includes('FROM user_settings')
                 ? {
                     settings_json: JSON.stringify(settings),
@@ -1430,6 +1435,11 @@ describe('worker api routes', () => {
     custom.viewport.pencilDrawsOnly = false;
     custom.viewport.tangentEdges = 'hide';
     custom.viewport.orbitMode = 'turntable';
+    custom.viewport.spaceMouse = {
+      ...custom.viewport.spaceMouse,
+      rotationSpeed: 60,
+      reversed: ['zoom']
+    };
     let storedSettings = structuredClone(custom);
     let storedRevision = 1;
     const prepare = vi.fn((query: string) => {
@@ -1476,6 +1486,7 @@ describe('worker api routes', () => {
     delete legacy.viewport.pencilDrawsOnly;
     delete legacy.viewport.tangentEdges;
     delete legacy.viewport.orbitMode;
+    delete legacy.viewport.spaceMouse;
     legacy.appearance.theme = 'dark';
     const saved = await worker.fetch(
       patch('/api/settings', { settings: legacy, expectedRevision: 1 }),
@@ -1490,6 +1501,11 @@ describe('worker api routes', () => {
     expect(storedSettings.viewport.pencilDrawsOnly).toBe(false);
     expect(storedSettings.viewport.tangentEdges).toBe('hide');
     expect(storedSettings.viewport.orbitMode).toBe('turntable');
+    // A 3D mouse tuned on the desktop keeps its tuning.
+    expect(storedSettings.viewport.spaceMouse).toMatchObject({
+      rotationSpeed: 60,
+      reversed: ['zoom']
+    });
 
     // A client that sends them is honoured.
     const changed = structuredClone(storedSettings);
@@ -1601,6 +1617,32 @@ describe('worker api routes', () => {
     expect(await response.json()).toMatchObject({
       configured: false,
       provider: 'openrouter'
+    });
+  });
+
+  it('shows a signed-out caller the built-in model, not the personal default', async () => {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/assistant/status', {
+        headers: { 'cf-connecting-ip': '203.0.113.7' }
+      }),
+      {
+        ...env,
+        AUTH_MODE: 'email-code',
+        AI_IDENTITY_PEPPER: 'pepper-test-value',
+        DB: { prepare: () => ({ bind: () => ({ first: async () => null }) }) },
+        OPENROUTER_API_KEY: 'secret-test-value',
+        AI_PROVIDER: 'openrouter',
+        AI_MODEL: 'nvidia/nemotron-3.5-super-vl:free',
+        AI_DEPLOYMENT_FREE_ENABLED: 'true'
+      } as never
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      configured: false,
+      source: 'deployment',
+      provider: 'openrouter',
+      model: 'nvidia/nemotron-3.5-super-vl:free'
     });
   });
 

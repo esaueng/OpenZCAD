@@ -165,7 +165,10 @@ test('Rectangle types and Polygon draw held lines named as one shape', async ({
     'Added center rectangle.'
   );
 
-  // Three points: a collinear third point refuses and places nothing.
+  // Three points: a collinear third point refuses and places nothing. The
+  // type strip folded away at the first canvas press (I37); the tool's
+  // rail button brings it back.
+  await rail.getByRole('button', { name: 'Rectangle', exact: true }).click();
   await shapeType.getByRole('radio', { name: '3 points' }).click();
   const a = at(0.58, 0.8);
   const b = at(0.68, 0.72);

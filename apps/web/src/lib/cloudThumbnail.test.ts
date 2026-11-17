@@ -9,7 +9,7 @@ import {
   thumbnailSourceBlob,
   uploadCloudThumbnail
 } from './cloudThumbnail';
-import { rememberProjectFormats } from './api';
+import { forgetEncryptedProject, rememberProjectFormats } from './api';
 import {
   pageBlobReferences,
   setEncryptedBlobReader
@@ -163,7 +163,7 @@ describe('cloud thumbnails', () => {
     expect(await image.text()).toBe('preview');
     expect(transport.createUploadSession).not.toHaveBeenCalled();
     expect(transport.uploadArtifact).not.toHaveBeenCalled();
-    rememberProjectFormats([{ projectId, storageFormat: 1 }]);
+    forgetEncryptedProject(projectId);
   });
 
   it('reads an encrypted thumbnail through the page’s blob reader', async () => {

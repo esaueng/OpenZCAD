@@ -3,6 +3,7 @@ import {
   test,
   expect,
   WORKSPACE_SESSION_STORAGE_KEY,
+  shareLoadResponse,
   stubAnonymousApi,
   stubApi,
   stubEmailLoginApi,
@@ -91,7 +92,7 @@ for (const fromPublicShare of [false, true]) {
       'Public snapshot',
       toUserId('public_owner')
     );
-    await page.route('**/api/share/*', (route) =>
+    await page.route('**/api/share', (route) =>
       route.fulfill({
         json: {
           document: publicDocument,
@@ -240,7 +241,7 @@ for (const stage of ['accept', 'document', 'public share'] as const) {
     await page.route(`**/api/projects/${latest.projectId}`, (route) =>
       route.fulfill({ json: latest })
     );
-    await page.route('**/api/share/*', (route) =>
+    await page.route('**/api/share', (route) =>
       route.fulfill({
         json: {
           document: latest,
@@ -402,7 +403,7 @@ for (const stage of ['accept', 'document', 'public share'] as const) {
       }
       await route.fulfill({ json: invited });
     });
-    await page.route('**/api/share/*', (route) =>
+    await page.route('**/api/share', (route) =>
       route.fulfill({
         json: {
           document: shared,
@@ -519,7 +520,7 @@ test('allows signed-out invitation sign-in while a superseded share request is p
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  await page.route('**/api/share/*', async (route) => {
+  await page.route('**/api/share', async (route) => {
     requested = true;
     await gate;
     await route.fulfill({
@@ -539,7 +540,7 @@ test('allows signed-out invitation sign-in while a superseded share request is p
   await expect(
     page.getByRole('button', { name: 'Email me a code' })
   ).toBeEnabled();
-  const response = page.waitForResponse(/\/api\/share\//);
+  const response = shareLoadResponse(page);
   release();
   await response;
   await page.waitForTimeout(250);
@@ -570,7 +571,7 @@ test('opens a public link instead of resuming an older retained invitation', asy
     acceptCalls++;
     return route.fulfill({ status: 410, json: { error: 'Expired' } });
   });
-  await page.route('**/api/share/*', (route) =>
+  await page.route('**/api/share', (route) =>
     route.fulfill({
       json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
     })
@@ -599,8 +600,8 @@ test('opens and switches public links in an already-open Settings tab', async ({
     toUserId('owner')
   );
   const tokens = ['a'.repeat(43), 'b'.repeat(43)];
-  await page.route('**/api/share/*', (route) => {
-    const index = tokens.indexOf(route.request().url().split('/').at(-1)!);
+  await page.route('**/api/share', (route) => {
+    const index = tokens.indexOf(route.request().headers()['x-openzcad-share-token']!);
     const document = [first, second][index]!;
     return route.fulfill({
       json: {
@@ -649,7 +650,7 @@ for (const active of [false, true]) {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    await page.route('**/api/share/*', async (route) => {
+    await page.route('**/api/share', async (route) => {
       requested = true;
       await gate;
       await route.fulfill({
@@ -676,7 +677,7 @@ for (const active of [false, true]) {
       { key: PROJECT_INVITATION_SESSION_KEY, token: invitationToken }
     );
     if (!active) {
-      const response = page.waitForResponse(/\/api\/share\//);
+      const response = shareLoadResponse(page);
       release();
       await response;
       await page.waitForTimeout(250);
@@ -707,8 +708,8 @@ for (const status of [404, 503]) {
       'Retained shared model',
       toUserId('owner')
     );
-    await page.route('**/api/share/*', (route) =>
-      route.request().url().endsWith('a'.repeat(43))
+    await page.route('**/api/share', (route) =>
+      route.request().headers()['x-openzcad-share-token'] === 'a'.repeat(43)
         ? route.fulfill({
             json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
           })
@@ -757,19 +758,21 @@ for (const status of [404, 503]) {
     await page.getByTitle('Back to projects').click();
     await expect(page.getByRole('tab', { name: 'Projects 1' })).toBeVisible();
     let shareReads = 0;
-    await page.route('**/api/share/*', (route) => {
+    await page.route('**/api/share', (route) => {
       shareReads += 1;
       return route.fulfill({ status, json: { error: 'Unavailable share' } });
     });
     await page.evaluate(() => {
       window.location.hash = `share=${'f'.repeat(43)}`;
     });
+    // A 5xx says the server had a problem in plain words; the server's own
+    // text is kept under Details, not in the status (#1422).
     await expect(
       page.getByRole('status').filter({
         hasText:
           status === 404
             ? 'It may have expired or been revoked'
-            : 'Unavailable share'
+            : 'server had a problem'
       })
     ).toBeVisible();
     await page.getByRole('button', { name: 'Back to projects', exact: true }).click();
@@ -809,7 +812,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
       const gate = new Promise<void>((resolve) => {
         release = resolve;
       });
-      await page.route('**/api/share/*', async (route) => {
+      await page.route('**/api/share', async (route) => {
         requested = true;
         if (pending) await gate;
         await route.fulfill(
@@ -873,7 +876,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
         await expect(page.locator('.breadcrumb')).toContainText(name);
         expect(new URL(page.url()).hash).toBe('');
         if (pending) {
-          const response = page.waitForResponse(/\/api\/share\//);
+          const response = shareLoadResponse(page);
           release();
           await response;
           await page.waitForTimeout(250);
@@ -898,7 +901,7 @@ test('keeps revoked-link guidance visible after delayed startup completes', asyn
   page
 }) => {
   await stubAnonymousApi(page);
-  await page.route('**/api/share/*', (route) =>
+  await page.route('**/api/share', (route) =>
     route.fulfill({ status: 404, json: { error: 'Unavailable' } })
   );
   await page.route('**/api/session', async (route) => {
@@ -930,7 +933,7 @@ test('cancels a pending share on Back and leaves an active share when its fragme
   });
   let delay = true;
   let requested = false;
-  await page.route('**/api/share/*', async (route) => {
+  await page.route('**/api/share', async (route) => {
     requested = true;
     if (delay) await delayed;
     await route.fulfill({
@@ -944,7 +947,7 @@ test('cancels a pending share on Back and leaves an active share when its fragme
   });
   await expect.poll(() => requested).toBe(true);
   await page.goBack();
-  const response = page.waitForResponse(/\/api\/share\//);
+  const response = shareLoadResponse(page);
   release();
   await response;
   // Let the old loader process its delayed response before checking that it
@@ -995,9 +998,9 @@ for (const departure of ['fragment', 'home'] as const) {
       }
       await route.fulfill({ json: { projects: [] } });
     });
-    await page.route('**/api/share/*', (route) => {
+    await page.route('**/api/share', (route) => {
       const document =
-        documents[route.request().url().endsWith('a'.repeat(43)) ? 0 : 1]!;
+        documents[route.request().headers()['x-openzcad-share-token'] === 'a'.repeat(43) ? 0 : 1]!;
       return route.fulfill({
         json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
       });
@@ -1033,21 +1036,94 @@ for (const departure of ['fragment', 'home'] as const) {
   });
 }
 
-test('makes a durable share copy without storing the owner snapshot', async ({
+// Design review I85: a signed-in visitor of a plaintext link got a device
+// copy unasked, while an encrypted link asked where to put it. Both ask.
+test('asks a signed-in visitor of a plaintext link where to put the copy', async ({
   page
 }) => {
-  await stubAnonymousApi(page);
-  const document = createProjectDocument('Anonymous source', toUserId('owner'));
-  await page.route('**/api/share/*', (route) =>
+  await stubApi(page);
+  const document = createProjectDocument('Signed-in source', toUserId('owner'));
+  await page.route('**/api/share', (route) =>
     route.fulfill({
       json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
     })
   );
   await page.goto(`/#share=${'p'.repeat(43)}`);
   await page.getByRole('button', { name: 'Make a copy', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Make a copy', exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(
+    dialog.getByRole('button', { name: 'Copy to your account' })
+  ).toBeEnabled();
+  await dialog
+    .getByRole('button', { name: 'Keep on this device only' })
+    .click();
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: 'Rename project' })
+  ).toContainText('Signed-in source');
+  await expect(
+    page
+      .getByRole('group', { name: 'Workspace mode' })
+      .getByRole('button', { name: 'Build' })
+  ).toBeEnabled();
+});
+
+test('keeps the share session chip a visible glyph on a phone', async ({
+  page
+}) => {
+  // Below 620px every chip in the bar is its glyph alone; the share
+  // session's chip had none, so it drew as an empty box (re-check of I73).
+  await page.setViewportSize({ width: 390, height: 844 });
+  await stubAnonymousApi(page);
+  const document = createProjectDocument('Phone source', toUserId('owner'));
+  await page.route('**/api/share', (route) =>
+    route.fulfill({
+      json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
+    })
+  );
+  await page.goto(`/#share=${'p'.repeat(43)}`);
+  const chip = page
+    .locator('.topbar')
+    .getByRole('status', { name: 'Shared model · Tweak only' });
+  await expect(chip).toBeVisible();
+  await expect(chip.locator('svg')).toBeVisible();
+  const box = (await chip.locator('svg').boundingBox())!;
+  expect(box.width).toBeGreaterThan(8);
+  await expect(
+    page.locator('.topbar').getByRole('button', { name: 'Make a copy', exact: true })
+  ).toBeVisible();
+});
+
+test('makes a durable share copy without storing the owner snapshot', async ({
+  page
+}) => {
+  await stubAnonymousApi(page);
+  const document = createProjectDocument('Anonymous source', toUserId('owner'));
+  await page.route('**/api/share', (route) =>
+    route.fulfill({
+      json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
+    })
+  );
+  await page.goto(`/#share=${'p'.repeat(43)}`);
+  // Design review I73: the top bar names the session for what it is, not
+  // "Local only", "Signed out" and "Offline", and Make a copy is labelled.
+  const topbar = page.locator('.topbar');
+  await expect(
+    topbar.getByRole('status', { name: 'Shared model · Tweak only' })
+  ).toBeVisible();
+  await expect(topbar).not.toContainText('Local only');
+  await expect(topbar).not.toContainText('Signed out');
+  await expect(
+    topbar.getByRole('button', { name: /Sign in to share/ })
+  ).toHaveCount(0);
+  await topbar
+    .getByRole('button', { name: 'Make a copy', exact: true })
+    .click();
   await expect(
     page.getByRole('button', { name: 'Rename project' })
   ).toContainText('Anonymous source');
+  await expect(topbar.locator('.topbar-share-state')).toHaveCount(0);
   await expect(
     page
       .getByRole('group', { name: 'Workspace mode' })
@@ -1188,7 +1264,7 @@ test('saves incoming member updates through the room without refused account wri
     ).toBeVisible();
     await expect(page.locator('.save-state.is-syncing')).toHaveCount(0);
   }
-  await page.route('**/api/share/*', (route) =>
+  await page.route('**/api/share', (route) =>
     route.fulfill({
       json: { document: incoming, project: summary, mode: 'tweak' }
     })
@@ -1199,9 +1275,13 @@ test('saves incoming member updates through the room without refused account wri
   await expect(
     page.getByRole('button', { name: 'Make a copy', exact: true })
   ).toBeVisible();
+  // A share session names itself rather than claiming "Local only" (I73).
+  await expect(
+    page.getByRole('status', { name: 'Shared model · Tweak only', exact: true })
+  ).toBeVisible();
   await expect(
     page.getByRole('status', { name: 'Local only', exact: true })
-  ).toBeVisible();
+  ).toHaveCount(0);
   expect(accountWrites).toBe(0);
 });
 
@@ -1458,6 +1538,9 @@ test('keeps a shared-project viewer visibly read-only', { tag: '@ci-smoke' }, as
     name: 'Open project sharing'
   });
   await expect(sharingButton).toContainText('Read-only');
+  // Visible in words, not only in the accessible name and tooltip: the wide
+  // bar shows every other room state as its glyph alone (review I77).
+  await expect(sharingButton.getByText('Read-only')).toBeVisible();
   // A viewer is held in View mode — `viewMode` is true whenever there is a
   // buildModeDisabledReason, and being a viewer is one — so the whole Feature
   // tools rail is gone rather than present-but-disabled. This assertion used
@@ -2010,7 +2093,7 @@ test('signs in with an email code only when cloud profile access is requested', 
   await expect(page.getByText('Security check complete.')).toBeVisible();
   await expect(page.getByLabel('Email address')).toHaveAttribute(
     'type',
-    'password'
+    'email'
   );
   await page.getByLabel('Email address').fill('maker@example.com');
   await expect(
@@ -2026,7 +2109,9 @@ test('signs in with an email code only when cloud profile access is requested', 
   await expect(page.getByRole('dialog', { name: 'Settings' })).toContainText(
     'maker@example.com'
   );
-  await page.getByRole('button', { name: 'Hide personal info' }).click();
+  await page
+    .getByRole('button', { name: 'maker@example.com', exact: true })
+    .click();
   await page.getByLabel('Email sign-in code').fill('000000');
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.locator('.settings-save-message')).toContainText(
@@ -2051,8 +2136,11 @@ test('signs in with an email code only when cloud profile access is requested', 
   const signOut = page.getByRole('button', { name: 'Sign out' });
   await expect(signOut).toBeVisible();
   await expect(
-    page.locator('.setting-row', { has: signOut }).locator('.setting-title')
-  ).toHaveText('Name hidden');
+    page
+      .locator('.setting-row', { has: signOut })
+      .locator('.setting-title')
+      .getByRole('button', { name: 'Show personal info' })
+  ).toBeVisible();
   await expect(page.locator('.settings-save-message')).not.toContainText(
     'maker@example.com'
   );
@@ -2099,16 +2187,28 @@ test('explains beta auth and Turnstile readiness failures', async ({
   );
 
   await page.goto('/');
+  // Design review I8: the start screen names the state as the rest of the
+  // app does and offers Retry, not a Sign in that leads to a page saying
+  // sign-in cannot be reached.
+  await expect(
+    page.getByText('Cloud unavailable', { exact: true })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Retry the cloud connection' })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Sign in', exact: true })
+  ).toHaveCount(0);
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Account', exact: true }).click();
   await expect(
     page.getByRole('alert').filter({
-      hasText: 'Sign-in could not be reached'
+      hasText: 'Cloud unavailable: sign-in could not be reached'
     })
   ).toBeVisible();
   await expect(page.getByLabel('Email address')).toHaveCount(0);
   await expect(page.locator('.settings-save-message')).toContainText(
-    'Beta sign-in unavailable'
+    'Cloud unavailable · settings and projects stay on this device.'
   );
 
   await page.unrouteAll({ behavior: 'wait' });

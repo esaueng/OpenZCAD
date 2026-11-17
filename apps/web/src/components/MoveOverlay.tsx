@@ -240,7 +240,10 @@ export function MoveOverlay({
       [group]: { ...values[group], [axis]: next }
     });
   };
-  const title = hideRotation ? 'Move' : 'Move / Rotate';
+  // The command is "Move" wherever it is offered (the rail, the drawer, the
+  // search); the card called itself "Move / Rotate". Rotation is still here,
+  // on the gizmo's rings and under Options.
+  const title = 'Move';
   return (
     <form
       className="in-place-command move-command"
@@ -253,15 +256,23 @@ export function MoveOverlay({
       }}
     >
       <span className="in-place-command-title">{title}</span>
+      {/* The same state pill as every other command's: empty until there is
+          a move to preview. */}
+      <span className="in-place-command-state">{dirty ? 'Preview' : ''}</span>
+      {/* The one place the step is said: it was also a toast, and the
+          toast's guidance (rings, Shift) lives here now. */}
       <span className="in-place-command-hint" title={bodyName}>
         {copy ? 'A copy of ' : ''}
-        <span className="move-target-name">{bodyName}</span> · drag the gizmo
+        <span className="move-target-name">{bodyName}</span> ·{' '}
+        {hideRotation ? 'drag the arrows' : 'drag the arrows or rings'} · Shift
+        moves freely
       </span>
       {/* The gizmo is the Move: its exact numbers, name, body and copy are
           rare enough to sit behind Options, as every in-place command's. */}
       <details className="in-place-command-options">
-        <summary aria-label={`${title} options`}>
+        <summary aria-label={`${title} options`} title="Options">
           <SlidersHorizontal size={14} aria-hidden="true" />
+          <span>Options</span>
         </summary>
         <div className="in-place-command-options-panel move-options">
           {name !== undefined && onName ? (

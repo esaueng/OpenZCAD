@@ -96,8 +96,12 @@ test(
     const canvas = page.locator('.viewer-host canvas');
     await expect(canvas).toBeVisible();
 
+    const summary = page.getByRole('group', { name: 'Workspace status' });
+    await expect(summary).toContainText('orbitFree');
     await page.keyboard.press('Shift+O');
     await expect(page.getByText(/^Turntable orbit/)).toBeVisible();
+    // Assistive tech reads the mode in the workspace status as well.
+    await expect(summary).toContainText('orbitTurntable');
     await dragOverTheTop(page, canvas);
     await expect
       .poll(async () => elevation(await cameraState(canvas)))
@@ -119,6 +123,7 @@ test(
 
     await page.keyboard.press('Shift+O');
     await expect(page.getByText(/^Free orbit/)).toBeVisible();
+    await expect(summary).toContainText('orbitFree');
     await page.getByRole('button', { name: 'Open settings' }).click();
     await settings
       .getByRole('button', { name: 'Controls', exact: true })

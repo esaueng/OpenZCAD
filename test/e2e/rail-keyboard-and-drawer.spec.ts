@@ -114,7 +114,10 @@ test(
     expect(await focusIsIn(page, '.orientation-widget')).toBe(true);
     const facet = await focusedName(page);
     expect(facet).toMatch(/ view$/);
-    await page.keyboard.press('ArrowRight');
+    // The cube's arrows move by where facets sit on screen (I54): the first
+    // stop is the Right face, at the cube's right edge, so step left.
+    expect(facet).toBe('Right view');
+    await page.keyboard.press('ArrowLeft');
     expect(await focusIsIn(page, '.orientation-widget')).toBe(true);
     expect(await focusedName(page)).not.toBe(facet);
 

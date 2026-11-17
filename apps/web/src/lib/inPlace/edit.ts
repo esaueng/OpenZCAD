@@ -27,6 +27,8 @@ import { featureHistory, featureResultBodyIds } from '../featureHistory';
 import { holePositionAxes } from '../holePositionAxes';
 import type { RevolveAxisCandidate } from './revolve';
 import { threadEditOptions } from './thread';
+import { standardPartEditSeed } from './standardPart';
+import { sheetMetalCleared, sheetMetalEditOptions } from './sheetMetal';
 import {
   IN_PLACE_TOOL_SPECS,
   type BodyPick,
@@ -74,6 +76,11 @@ export interface InPlaceEditContext {
   ): FacePick | null;
   /** Any planar face of a body, for a command any face names. */
   anyFace(bodyId: BodyId): FacePick | null;
+  /**
+   * M02: a face of `bodyId` the feature made, standing for that feature in
+   * a feature pattern's picks; null when the body shows none of its faces.
+   */
+  featureFace?(bodyId: BodyId, featureId: FeatureId): FacePick | null;
   /**
    * A body's edge by its stored identity (its lineage name when it has one,
    * else its hash), with where its handles stand.
@@ -183,10 +190,17 @@ export function inPlaceToolForFeature(data: FeatureData): InPlaceToolId | null {
       return data.featureKind;
     case 'gear':
       return data.targetBodyId === undefined ? 'gear' : 'gear-teeth';
+    // M16: Bend edits the whole feature, its rule and its bend table.
+    case 'sheet-metal':
+      return 'bend';
+    case 'standard-part':
+      return 'standard-part';
     case 'boolean':
       return data.operation;
     case 'pattern':
-      return `${data.patternKind}-pattern`;
+      return data.patternKind === 'points'
+        ? 'point-pattern'
+        : `${data.patternKind}-pattern`;
     case 'transform': {
       const { translation, rotationDeg, scale } = data.transform;
       // Only a pure scale or a pure turn about a datum axis is that tool's
@@ -451,6 +465,39 @@ export function inPlaceEditSeed(
       value('positionV', data.position.v);
       seed.options.depthMode = data.depthMode;
       seed.options.style = data.style;
+      // M01 (schema v65): sized by a standard, which reopens as chosen.
+      if (data.standard) {
+        const { system, size, kind, fit } = data.standard;
+        seed.options.standard = system;
+        seed.options[system === 'iso' ? 'isoSize' : 'ansiSize'] = size;
+        seed.options.holeFor = kind;
+        if (kind === 'clearance') {
+          seed.options[system === 'iso' ? 'fit' : 'ansiFit'] = fit ?? 'normal';
+        }
+      }
+      // M01 (schema v66): tapped, its length on the arrow where it has one.
+      if (data.tapped) {
+        seed.options.tap = 'tapped';
+        const clearance = data.tapped.clearance;
+        seed.options.tapFit =
+          clearance === undefined
+            ? 'document'
+            : clearance === 0
+              ? 'exact'
+              : 'stored';
+        value('tapLength', data.tapped.length);
+        seed.options.tapForm = data.tapped.cosmetic ? 'cosmetic' : 'modeled';
+      }
+      // M01 (schema v64): drilled at sketch points, which reopen as picks.
+      if (data.points) {
+        seed.options.place = 'points';
+        for (const pointId of data.points.pointIds) {
+          seed.slots.path.push({
+            sketchId: data.points.sketchId,
+            entityId: pointId
+          });
+        }
+      }
       break;
     }
     case 'gear': {
@@ -535,6 +582,16 @@ export function inPlaceEditSeed(
       }
       break;
     }
+    case 'standard-part': {
+      // M17: the row as options, the length as a value, and the stored
+      // placement as a saved plane, kept as stored until another is picked.
+      const seeded = standardPartEditSeed(data, ctx.evaluate);
+      Object.assign(seed.options, seeded.options);
+      value('length', data.length);
+      if (seeded.plane) seed.slots.plane = seeded.plane;
+      else missing.push('plane');
+      break;
+    }
     case 'thread': {
       const face = ctx.face(
         data.targetBodyId,
@@ -559,6 +616,26 @@ export function inPlaceEditSeed(
       value('offset', data.offset);
       value('phaseDeg', data.phaseDeg);
       value('chamferAngleDeg', data.chamferAngleDeg);
+      break;
+    }
+    case 'sheet-metal': {
+      Object.assign(seed.options, sheetMetalEditOptions(data));
+      value('thickness', data.thickness);
+      value('bendRadius', data.bendRadius);
+      value('kFactor', data.kFactor);
+      value('reliefWidth', data.relief?.width);
+      value('reliefExtension', data.relief?.extension);
+      // Every bend's line, in table order. One whose line is gone stays a
+      // row (its rebuild says so) so it is removed on purpose, not lost.
+      for (const bend of data.bends) {
+        seed.slots.path.push({
+          sketchId: bend.line.sketchId,
+          entityId: bend.line.objectId
+        });
+        if (!ctx.curve(bend.line.sketchId, bend.line.objectId)) {
+          missing.push('bend line');
+        }
+      }
       break;
     }
     case 'shell':
@@ -754,7 +831,38 @@ export function inPlaceEditSeed(
       break;
     }
     case 'pattern': {
-      body(data.targetBodyId);
+      if (data.sourceFeatureIds) {
+        // M02: each repeated feature stands as one of its faces, as a click
+        // picked it; one the body no longer shows is left to pick again.
+        seed.options.repeat = 'features';
+        const unseen: string[] = [];
+        for (const featureId of data.sourceFeatureIds) {
+          const face = ctx.featureFace?.(data.targetBodyId, featureId);
+          if (face) seed.slots.faces.push(face);
+          else unseen.push(featureId);
+        }
+        // One whose faces the model no longer shows (a boss a later cut
+        // removed) cannot be clicked back in or out: it is kept as stored,
+        // never dropped by an edit that only changed the spacing.
+        if (unseen.length > 0) seed.options.keepSources = unseen.join(',');
+      } else {
+        body(data.targetBodyId);
+      }
+      if (data.skippedInstances?.length) {
+        seed.options.skip = data.skippedInstances.join(',');
+      }
+      if (data.patternKind === 'points') {
+        // M02 (schema v63): the picked points, the original's left out: it
+        // stays the reference the edit keeps.
+        for (const pointId of data.points?.pointIds ?? []) {
+          if (pointId === data.points?.referencePointId) continue;
+          seed.slots.path.push({
+            sketchId: data.points!.sketchId,
+            entityId: pointId
+          });
+        }
+        break;
+      }
       value('count', data.count);
       if (data.patternKind === 'linear') {
         value('spacing', data.spacing);
@@ -1057,6 +1165,33 @@ export function inPlaceFeatureUpdate(
         ...(clear.length > 0 ? { clearData: [...clear] } : {})
       };
     }
+    case 'standard-part': {
+      if (saved.featureKind !== 'standard-part') return null;
+      // A screw's head, a length, a hole or a thread go when the edit no
+      // longer sets them.
+      const clear = (
+        ['head', 'length', 'xDirection', 'hole', 'thread'] as const
+      ).filter(
+        (key) => saved[key] !== undefined && request.part[key] === undefined
+      );
+      return {
+        featureId,
+        name,
+        data: { featureKind: 'standard-part', ...request.part },
+        ...(clear.length > 0 ? { clearData: [...clear] } : {})
+      };
+    }
+    case 'sheet-metal': {
+      if (saved.featureKind !== 'sheet-metal') return null;
+      // Optional fields the edit no longer sets go back to their defaults.
+      const clear = sheetMetalCleared(saved, request.sheet);
+      return {
+        featureId,
+        name,
+        data: { featureKind: 'sheet-metal', ...request.sheet },
+        ...(clear.length > 0 ? { clearData: [...clear] } : {})
+      };
+    }
     case 'thread': {
       if (saved.featureKind !== 'thread') return null;
       // Optional fields the edit no longer sets go back to the face or their
@@ -1078,7 +1213,10 @@ export function inPlaceFeatureUpdate(
         'phaseDeg',
         'chamferStart',
         'chamferEnd',
-        'chamferAngleDeg'
+        'chamferAngleDeg',
+        'runoutStart',
+        'runoutEnd',
+        'pipeSize'
       ] as const;
       const clear = optional.filter(
         (key) => saved[key] !== undefined && request.thread[key] === undefined
@@ -1188,12 +1326,31 @@ export function inPlaceFeatureUpdate(
             ? { spacing2: request.spacing2 }
             : {}),
           ...(request.count2 !== undefined ? { count2: request.count2 } : {}),
-          ...(request.axisRef ? { axisRef: request.axisRef } : {})
+          ...(request.axisRef ? { axisRef: request.axisRef } : {}),
+          ...(request.sourceFeatureIds
+            ? { sourceFeatureIds: request.sourceFeatureIds }
+            : {}),
+          ...(request.skippedInstances
+            ? { skippedInstances: request.skippedInstances }
+            : {}),
+          ...(request.points ? { points: request.points } : {})
         },
-        // R01: the world axis is the absent datum axis.
-        ...(request.axisRef || request.patternKind !== 'circular'
-          ? {}
-          : { clearData: ['axisRef'] })
+        // R01: the world axis is the absent datum axis. M02: a pattern turned
+        // back to its body, or with every copy back, stores neither list.
+        ...(() => {
+          const cleared = [
+            ...(request.axisRef || request.patternKind !== 'circular'
+              ? []
+              : ['axisRef']),
+            ...(saved.sourceFeatureIds && !request.sourceFeatureIds
+              ? ['sourceFeatureIds']
+              : []),
+            ...(saved.skippedInstances && !request.skippedInstances
+              ? ['skippedInstances']
+              : [])
+          ];
+          return cleared.length > 0 ? { clearData: cleared } : {};
+        })()
       };
     }
     default:
@@ -1221,9 +1378,22 @@ export function inPlaceEditSourceSketchIds(data: FeatureData): SketchId[] {
       ];
     case 'helical-sweep':
       return [data.profile.sketchId];
+    // M16: the blank's sketch, and each bend line's.
+    case 'sheet-metal':
+      return [
+        ...new Set([
+          data.sketchId,
+          ...data.bends.map((bend) => bend.line.sketchId)
+        ])
+      ];
     // The in-place Extrude edits an extrude (U09): its profile's sketch.
     case 'extrude':
       return [data.sketchId];
+    // M02: a pattern on sketch points shows the sketch its points are on,
+    // and so does an M01 hole drilled at them.
+    case 'pattern':
+    case 'hole':
+      return data.points ? [data.points.sketchId] : [];
     default:
       return [];
   }
@@ -1358,6 +1528,26 @@ export function keptInOrder<T>(entries: readonly (T | null)[]): {
 }
 
 /**
+ * An edit's path picks re-checked against the model. A path or guide is
+ * ordered, so one lost before a kept one clears the list ({@link
+ * keptInOrder}). A bend table is not a path (M16): each row stands alone, so
+ * every row is kept and one whose line is gone stays for the user to remove
+ * (its rebuild refuses until then); `missing` names those.
+ */
+export function recheckedCurvePicks(
+  picks: readonly CurvePick[],
+  exists: (pick: CurvePick) => boolean,
+  rowsStandAlone: boolean
+): { kept: CurvePick[]; cleared: boolean; missing: CurvePick[] } {
+  const missing = picks.filter((pick) => !exists(pick));
+  if (rowsStandAlone) return { kept: [...picks], cleared: false, missing };
+  const { kept, cleared } = keptInOrder(
+    picks.map((pick) => (exists(pick) ? pick : null))
+  );
+  return { kept, cleared, missing };
+}
+
+/**
  * The features after a transform that may act on its body: downstream of
  * it, or for a copy (which never republishes its source) after it in
  * history.
@@ -1487,8 +1677,17 @@ export function keepAbsentHoleSteps(
 ): FeatureUpdateInput {
   if (saved.featureKind !== 'hole') return update;
   const stored = saved as unknown as Record<string, unknown>;
+  // M01: a hole moved off its sketch points, or off a standard size, drops
+  // them, which a patch without the key would keep.
+  const patch = update.data as Record<string, unknown> | undefined;
+  const cleared = (['points', 'standard', 'tapped'] as const).filter(
+    (key) => saved[key] !== undefined && patch?.[key] === undefined
+  );
   return {
     ...update,
+    ...(cleared.length > 0
+      ? { clearData: [...(update.clearData ?? []), ...cleared] }
+      : {}),
     data: Object.fromEntries(
       Object.entries(update.data as Record<string, unknown>).filter(
         ([key]) =>

@@ -24,8 +24,8 @@ interface ProposalCardProps {
   applying?: boolean;
   /**
    * The prompt line's keys act on this card: Enter applies, `p` previews,
-   * Escape rejects. Only the newest open proposal is keyed, and its actions
-   * say so.
+   * and Escape hides the preview. Reject has no key: it cannot be undone.
+   * Only the newest open proposal is keyed, and its actions say so.
    */
   keyed?: boolean;
   onPreview(): void;
@@ -283,7 +283,6 @@ export function ProposalCard({
             </StableLabel>
           </button>
           <button type="button" disabled={busy} onClick={onReject}>
-            {keyed && <kbd aria-hidden="true">esc</kbd>}
             Reject
           </button>
         </div>

@@ -367,7 +367,7 @@ async function linkRecords(
   const snapshots = await db
     .prepare(
       `SELECT share_id, document_version, key_epoch, snapshot_hash,
-              signer_device_id, updated_at
+              signature, signer_device_id, updated_at
        FROM e2ee_share_snapshots WHERE project_id = ?${filter}`
     )
     .bind(...binds)
@@ -392,6 +392,7 @@ async function linkRecords(
             keyEpoch: snapshot.key_epoch,
             snapshotHash: snapshot.snapshot_hash,
             signerDeviceId: snapshot.signer_device_id,
+            signature: snapshot.signature,
             updatedAt: snapshot.updated_at
           }
         : null

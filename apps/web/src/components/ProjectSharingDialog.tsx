@@ -33,19 +33,23 @@ import {
   createProjectSharingClient,
   type ProjectSharingClient
 } from '../lib/projectSharing';
+import { withShareConfiguration } from '../lib/projectShareLink';
 import type { CollaborationStatus } from '../lib/useCollaboration';
 import { useModalFocus } from '../lib/useModalFocus';
 import { StableLabel } from './StableLabel';
+import { ShareLinkRevokeConfirm } from './ShareLinkRevokeConfirm';
 import {
   EncryptedShareLinks,
   type EncryptedShareLinkClient
 } from './EncryptedShareLinks';
-import type { OwnerInvitation } from '../lib/e2ee/invitations';
+import type {
+  InvitableContact,
+  OwnerInvitation
+} from '../lib/e2ee/invitations';
 import { useEncryptionStatus } from '../lib/e2ee/encryptionStatus';
-import {
-  PrivateEmailInput,
-  usePersonalInfoVisible
-} from './PersonalInfoToggle';
+import { describeFailure, type PlainFailure } from '../lib/plainFailure';
+import { FailureDetails } from './FailureDetails';
+import { PrivateEmailInput, usePersonalInfoVisible } from './PersonalInfo';
 
 const defaultClient = createProjectSharingClient();
 const defaultShareLinkClient = createProjectShareLinkClient();
@@ -59,12 +63,35 @@ const defaultShareLinkClient = createProjectShareLinkClient();
 export interface EncryptedSharingClient {
   /** The project's open invitations, after adding every ready invitee. */
   list(projectId: string): Promise<OwnerInvitation[]>;
+  /**
+   * `contact` is the verified contact the owner explicitly picked, by the
+   * identity its contact code showed: the invitation then names them, and
+   * only they are added without asking. Without it, the owner confirms
+   * whoever accepts.
+   */
   invite(
     projectId: string,
     email: string,
-    role: ProjectMemberRole
+    role: ProjectMemberRole,
+    contact?: Pick<InvitableContact, 'userId' | 'identityKeyHash'>
   ): Promise<void>;
+  /**
+   * The verified contacts Contacts lists under `email` (the server's
+   * label), offered by contact code as an explicit choice.
+   */
+  contactsFor?(email: string): Promise<InvitableContact[]>;
+  /** Revokes an invitation, or declines one someone accepted. */
   revoke(projectId: string, invitationId: string): Promise<void>;
+  /**
+   * The owner's explicit confirmation of the contact who accepted
+   * (`confirm-add`, or `confirm-re-add` for someone removed before), by
+   * the identity the confirmation showed: never done in the background.
+   */
+  confirmAdd?(
+    projectId: string,
+    invitationId: string,
+    identityKeyHash: string
+  ): Promise<void>;
   /**
    * The owner's role change of a member (slice 5-4): an MLS Commit the
    * Worker mirrors into the member list.
@@ -101,7 +128,7 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
       ? invitations.projectInvitations(ctx, projectId)
       : listed;
   },
-  async invite(projectId, email, role) {
+  async invite(projectId, email, role, contact) {
     const [{ encryptedInvitations }, { inviteToEncryptedProject }] =
       await Promise.all([
         import('../lib/e2ee/encryptedProjects'),
@@ -111,13 +138,54 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
       await encryptedInvitations(),
       projectId,
       email,
-      role
+      role,
+      contact ? { contact } : {}
     );
   },
+  async contactsFor(email) {
+    const [{ encryptedInvitations }, { invitableContacts }] = await Promise.all(
+      [
+        import('../lib/e2ee/encryptedProjects'),
+        import('../lib/e2ee/invitations')
+      ]
+    );
+    return invitableContacts(await encryptedInvitations(), email);
+  },
   async revoke(projectId, invitationId) {
-    const { encryptedInvitations } =
-      await import('../lib/e2ee/encryptedProjects');
-    await (await encryptedInvitations()).api.revoke(projectId, invitationId);
+    const [{ encryptedInvitations }, { declineInvitation }] = await Promise.all(
+      [
+        import('../lib/e2ee/encryptedProjects'),
+        import('../lib/e2ee/invitations')
+      ]
+    );
+    await declineInvitation(
+      await encryptedInvitations(),
+      projectId,
+      invitationId
+    );
+  },
+  async confirmAdd(projectId, invitationId, identityKeyHash) {
+    const [{ encryptedInvitations }, invitations] = await Promise.all([
+      import('../lib/e2ee/encryptedProjects'),
+      import('../lib/e2ee/invitations')
+    ]);
+    const ctx = await encryptedInvitations();
+    const listed = await invitations.projectInvitations(ctx, projectId);
+    const invitation = listed.find(
+      (entry) => entry.record.invitationId === invitationId
+    );
+    if (
+      !invitation ||
+      !CONFIRMABLE_STATES.has(invitation.state) ||
+      invitation.acceptor?.identityKeyHash !== identityKeyHash
+    ) {
+      throw new Error(
+        'This invitation changed since you reviewed it. Nothing was added; check it again.'
+      );
+    }
+    await invitations.addInvitedMember(ctx, invitation.record, {
+      confirmedIdentity: identityKeyHash
+    });
   },
   async changeRole(projectId, userId, role) {
     const { changeEncryptedMemberRole } =
@@ -138,6 +206,10 @@ const ENCRYPTED_STATE_LABELS: Record<OwnerInvitation['state'], string> = {
   invited: 'Invited',
   'waiting-for-keys': 'Waiting for keys',
   'waiting-for-verification': 'Waiting for you to verify',
+  'needs-acceptance': 'Waiting for them to accept again',
+  'confirm-re-add': 'Removed before: confirm to add back',
+  'confirm-add': 'Accepted: confirm to add',
+  'accepted-by-other': 'Accepted by someone you did not invite',
   ready: 'Adding',
   completed: 'Added',
   revoked: 'Revoked',
@@ -148,7 +220,17 @@ const OPEN_ENCRYPTED_STATES = new Set<OwnerInvitation['state']>([
   'invited',
   'waiting-for-keys',
   'waiting-for-verification',
+  'needs-acceptance',
+  'confirm-re-add',
+  'confirm-add',
+  'accepted-by-other',
   'ready'
+]);
+
+/** Invitations the owner confirms (or declines) before anyone is added. */
+const CONFIRMABLE_STATES = new Set<OwnerInvitation['state']>([
+  'confirm-add',
+  'confirm-re-add'
 ]);
 
 export interface ProjectSharingDialogProps {
@@ -187,6 +269,11 @@ export interface ProjectSharingDialogProps {
   onLeft?(): void;
   /** Shown beside the title so the popover says what it shares. */
   projectName?: string;
+  /**
+   * F06: the model's configurations. A new link can name the one it opens
+   * on; without a choice it opens on the row the model was saved with.
+   */
+  configurations?: readonly { id: string; name: string }[];
   onClose(): void;
 }
 
@@ -212,6 +299,12 @@ const ROLE_LABELS: Record<ProjectAccessRole, string> = {
   viewer: 'Viewer'
 };
 
+/** An invitation's role in a sentence. */
+const ROLE_ARTICLES: Record<'editor' | 'viewer', string> = {
+  editor: 'an editor',
+  viewer: 'a viewer'
+};
+
 const LINK_MODE_LABELS: Record<ProjectShareLinkMode, string> = {
   tweak: 'Tweak',
   view: 'View'
@@ -222,8 +315,10 @@ const PRESENCE_LABELS: Record<CollaborationMember['status'], string> = {
   idle: 'Idle'
 };
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'The sharing request failed.';
+function errorMessage(error: unknown): PlainFailure {
+  // A proxy's HTML page or a dropped connection read as "Unexpected token
+  // '<', "<!doctype "… is not valid JSON"; the raw text is under Details.
+  return describeFailure(error, { fallback: 'The sharing request failed.' });
 }
 
 function initialOf(name: string): string {
@@ -339,6 +434,7 @@ export function ProjectSharingDialog({
   onVerifyContact,
   onLeft,
   projectName,
+  configurations = [],
   onClose
 }: ProjectSharingDialogProps) {
   const encryption = useEncryptionStatus(
@@ -364,10 +460,17 @@ export function ProjectSharingDialog({
   const [email, setEmail] = useState('');
   const personalInfoVisible = usePersonalInfoVisible();
   const [inviteRole, setInviteRole] = useState<ProjectMemberRole>('viewer');
+  // Verified contacts listed under the address typed (the server's label):
+  // offered by contact code, never picked for the owner.
+  const [contactMatches, setContactMatches] = useState<{
+    email: string;
+    contacts: InvitableContact[];
+  } | null>(null);
+  const [pickedContact, setPickedContact] = useState<string | null>(null);
   const [invitationSentTo, setInvitationSentTo] = useState<string | null>(null);
   const [hydrating, setHydrating] = useState(role === 'owner');
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<PlainFailure | null>(null);
   const [anchor, setAnchor] = useState<PopoverAnchor | null>(null);
   const [confirmingLeave, setConfirmingLeave] = useState(false);
   const actionOriginRef = useRef<HTMLElement | null>(null);
@@ -461,6 +564,41 @@ export function ProjectSharingDialog({
     // action-status row after the dialog has already painted.
     void refresh('hydrate');
   }, [refresh]);
+
+  const contactLookup =
+    encrypted &&
+    !localProject &&
+    role === 'owner' &&
+    encryptedClient.contactsFor
+      ? encryptedClient
+      : null;
+  useEffect(() => {
+    setPickedContact(null);
+    const address = email.trim().toLowerCase();
+    if (!contactLookup?.contactsFor || !address.includes('@')) {
+      setContactMatches(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      contactLookup.contactsFor!(address).then(
+        (contacts) => {
+          if (!cancelled) setContactMatches({ email: address, contacts });
+        },
+        () => {
+          if (!cancelled) setContactMatches(null);
+        }
+      );
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [email, contactLookup]);
+  const offeredContacts =
+    contactMatches?.email === email.trim().toLowerCase()
+      ? contactMatches.contacts
+      : [];
 
   const mutate = async (key: string, action: () => Promise<void>) => {
     actionOriginRef.current =
@@ -726,8 +864,9 @@ export function ProjectSharingDialog({
             aria-live="polite"
             role={error ? 'alert' : 'status'}
           >
-            {error ?? (busy ? 'Working…' : null)}
+            {error?.message ?? (busy ? 'Working…' : null)}
           </p>
+          <FailureDetails detail={error?.detail} />
           {localProject ? (
             <section className="sharing-section sharing-local">
               <h3>Save this project to your account</h3>
@@ -761,10 +900,20 @@ export function ProjectSharingDialog({
                   void mutate('invite', async () => {
                     setInvitationSentTo(null);
                     if (encrypted) {
+                      // Only the owner's explicit pick binds a contact.
+                      const contact = offeredContacts.find(
+                        (candidate) => candidate.userId === pickedContact
+                      );
                       await encryptedClient.invite(
                         projectId,
                         email,
-                        inviteRole
+                        inviteRole,
+                        contact
+                          ? {
+                              userId: contact.userId,
+                              identityKeyHash: contact.identityKeyHash
+                            }
+                          : undefined
                       );
                       setInvitationSentTo(email.trim().toLowerCase());
                     } else {
@@ -816,6 +965,53 @@ export function ProjectSharingDialog({
                   Invite
                 </button>
               </form>
+              {offeredContacts.length ? (
+                <div
+                  className="sharing-confirm"
+                  role="radiogroup"
+                  aria-label="Who to add"
+                >
+                  <p className="sharing-confirm-title">
+                    Contacts lists a verified contact under this address.
+                  </p>
+                  <label className="sharing-invite-option">
+                    <input
+                      type="radio"
+                      name="sharing-invite-contact"
+                      checked={pickedContact === null}
+                      disabled={interactionBusy}
+                      onChange={() => setPickedContact(null)}
+                    />
+                    <span>Email only: you confirm whoever accepts</span>
+                  </label>
+                  {offeredContacts.map((contact) => (
+                    <label
+                      key={contact.userId}
+                      className="sharing-invite-option"
+                    >
+                      <input
+                        type="radio"
+                        name="sharing-invite-contact"
+                        checked={pickedContact === contact.userId}
+                        disabled={interactionBusy}
+                        onChange={() => setPickedContact(contact.userId)}
+                      />
+                      <span>
+                        Invite{' '}
+                        {personalInfoVisible && contact.email
+                          ? contact.email
+                          : 'your verified contact'}{' '}
+                        (code{' '}
+                        <code className="encryption-code">{contact.code}</code>)
+                      </span>
+                    </label>
+                  ))}
+                  <p className="sharing-hint">
+                    A contact you pick is added once they accept. Pick them only
+                    if this is the code Contacts shows for them.
+                  </p>
+                </div>
+              ) : null}
               {invitationSentTo && (
                 <p className="sharing-invite-sent" role="status">
                   {personalInfoVisible
@@ -1028,6 +1224,101 @@ export function ProjectSharingDialog({
                             ? invitation.email
                             : `Invitation ${index + 1}`;
                         const invitee = invitation.record.acceptedByUserId;
+                        const acceptor = invitation.acceptor;
+                        const statement = invitation.statement;
+                        if (
+                          CONFIRMABLE_STATES.has(invitation.state) &&
+                          acceptor &&
+                          statement?.projectId === projectId &&
+                          encryptedClient.confirmAdd
+                        ) {
+                          // Named from the verified acceptance and statement
+                          // only: the contact code Contacts shows, the role
+                          // this account signed.
+                          const who =
+                            personalInfoVisible && acceptor.email
+                              ? acceptor.email
+                              : 'Your verified contact';
+                          const id = invitation.record.invitationId;
+                          return (
+                            <li key={id} className="sharing-confirm-row">
+                              <div
+                                className="sharing-confirm"
+                                role="group"
+                                aria-label={`Confirm ${who}`}
+                              >
+                                <p className="sharing-confirm-title">
+                                  {who} accepted your invitation to{' '}
+                                  {projectName ?? 'this project'} as{' '}
+                                  {ROLE_ARTICLES[statement.role]}. Add them?
+                                </p>
+                                <p className="sharing-hint">
+                                  {invitation.state === 'confirm-re-add'
+                                    ? 'You removed them from this project before. '
+                                    : ''}
+                                  Add them only if this is the contact code
+                                  Contacts shows for the person you invited:
+                                </p>
+                                <code
+                                  className="encryption-code"
+                                  aria-label="Their contact code"
+                                >
+                                  {acceptor.code}
+                                </code>
+                                <div className="sharing-confirm-actions">
+                                  {onVerifyContact ? (
+                                    <button
+                                      type="button"
+                                      className="secondary"
+                                      disabled={interactionBusy}
+                                      onClick={() =>
+                                        onVerifyContact(acceptor.userId)
+                                      }
+                                    >
+                                      Open contact
+                                    </button>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    className="secondary"
+                                    disabled={interactionBusy}
+                                    onClick={() =>
+                                      void mutate(`decline:${id}`, async () => {
+                                        await encryptedClient.revoke(
+                                          projectId,
+                                          id
+                                        );
+                                        await refresh();
+                                      })
+                                    }
+                                  >
+                                    Decline
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="primary"
+                                    disabled={interactionBusy}
+                                    onClick={() =>
+                                      void mutate(
+                                        `confirm-add:${id}`,
+                                        async () => {
+                                          await encryptedClient.confirmAdd!(
+                                            projectId,
+                                            id,
+                                            acceptor.identityKeyHash
+                                          );
+                                          await refresh();
+                                        }
+                                      )
+                                    }
+                                  >
+                                    Add
+                                  </button>
+                                </div>
+                              </div>
+                            </li>
+                          );
+                        }
                         return (
                           <li
                             key={invitation.record.invitationId}
@@ -1112,6 +1403,7 @@ export function ProjectSharingDialog({
               disabled={interactionBusy}
               localImportSourceNames={localImportSourceNames}
               urlRef={shareLinkUrlRef}
+              configurations={configurations}
               onCopy={(url) => void copyShareLink(url)}
               onCreate={() =>
                 void mutate('share-link:create', async () => {
@@ -1272,6 +1564,7 @@ interface PlaintextShareLinksProps {
   disabled: boolean;
   localImportSourceNames: readonly string[];
   urlRef: RefObject<HTMLInputElement | null>;
+  configurations: readonly { id: string; name: string }[];
   onCopy(url: string): void;
   onCreate(): void;
   onRename(shareLink: ProjectShareLinkSummary, draft: string): Promise<void>;
@@ -1290,12 +1583,23 @@ function PlaintextShareLinks({
   disabled,
   localImportSourceNames,
   urlRef,
+  configurations,
   onCopy,
   onCreate,
   onRename,
   onRevoke
 }: PlaintextShareLinksProps) {
+  // F06: the row the new link opens on, or '' for the one it was saved with.
+  const [opensOn, setOpensOn] = useState('');
+  const opensOnRow = configurations.some((row) => row.id === opensOn)
+    ? opensOn
+    : '';
+  const createdUrl = created
+    ? withShareConfiguration(created.url, opensOnRow || null)
+    : '';
   const [editingId, setEditingId] = useState<string | null>(null);
+  // The link whose Revoke is waiting for a yes (design review I2).
+  const [revokingId, setRevokingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   // Keyed by link, so a newly created link starts unnamed.
   const [createdDraft, setCreatedDraft] = useState({ id: '', name: '' });
@@ -1395,19 +1699,35 @@ function PlaintextShareLinks({
               }
             }}
           />
+          {configurations.length > 0 && (
+            <label className="sharing-share-configuration">
+              <span>Opens on</span>
+              <select
+                value={opensOnRow}
+                onChange={(event) => setOpensOn(event.target.value)}
+              >
+                <option value="">The saved configuration</option>
+                {configurations.map((row) => (
+                  <option key={row.id} value={row.id}>
+                    {row.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <input
             ref={urlRef}
             className="sharing-share-url"
             type="text"
             readOnly
             aria-label="Share link"
-            value={created.url}
+            value={createdUrl}
             onFocus={(event) => event.target.select()}
           />
           <button
             type="button"
             className="primary sharing-share-copy"
-            onClick={() => onCopy(created.url)}
+            onClick={() => onCopy(createdUrl)}
           >
             <StableLabel reserve={['Copied', 'Copy']} align="center">
               {copied ? 'Copied' : 'Copy'}
@@ -1466,6 +1786,31 @@ function PlaintextShareLinks({
                 </li>
               );
             }
+            if (revokingId === shareLink.shareLinkId) {
+              return (
+                <li key={shareLink.shareLinkId} className="sharing-confirm-row">
+                  <ShareLinkRevokeConfirm
+                    name={name}
+                    disabled={disabled}
+                    onCancel={() => {
+                      setRevokingId(null);
+                      // Back to the row's Revoke, for the keyboard.
+                      requestAnimationFrame(() =>
+                        document
+                          .querySelector<HTMLElement>(
+                            `[data-share-link-revoke="${shareLink.shareLinkId}"]`
+                          )
+                          ?.focus()
+                      );
+                    }}
+                    onRevoke={() => {
+                      setRevokingId(null);
+                      onRevoke(shareLink);
+                    }}
+                  />
+                </li>
+              );
+            }
             return (
               <li key={shareLink.shareLinkId}>
                 <span className="sharing-row-text">
@@ -1495,8 +1840,9 @@ function PlaintextShareLinks({
                       ? `Revoke share link created ${createdLabel(shareLink.createdAt)}`
                       : `Revoke share link ${shareLink.label}`
                   }
+                  data-share-link-revoke={shareLink.shareLinkId}
                   disabled={disabled}
-                  onClick={() => onRevoke(shareLink)}
+                  onClick={() => setRevokingId(shareLink.shareLinkId)}
                 >
                   Revoke
                 </button>

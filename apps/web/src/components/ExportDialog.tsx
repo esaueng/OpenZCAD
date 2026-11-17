@@ -3,6 +3,7 @@ import {
   CircleCheck,
   Download,
   LoaderCircle,
+  Printer,
   ShieldCheck,
   TriangleAlert
 } from 'lucide-react';
@@ -13,8 +14,11 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { countLabel } from '../lib/toasts';
+import { submitOnEnter } from '../lib/submitOnEnter';
 import { useModalFocus } from '../lib/useModalFocus';
 import { StableLabel } from './StableLabel';
+import { describeFailure, type PlainFailure } from '../lib/plainFailure';
+import { FailureDetails } from './FailureDetails';
 
 /** Worker export formats this dialog can request; `stl` is ASCII. */
 export type MeshExportDialogFormat =
@@ -169,6 +173,39 @@ export interface ExportDialogProps {
   exportUnits?: ExportUnits;
   documentUnits?: UnitSystem;
   onExportUnitsChange?(units: ExportUnits): void;
+  /**
+   * L09 "Open in slicer": where a 3MF can be handed to a slicer from here —
+   * the slicers the desktop app can open, or the browser's download. Absent
+   * or empty, the dialog offers no hand-off.
+   */
+  slicerTargets?: readonly SlicerTarget[];
+  /** Hands the 3MF to `target`; the dialog closes as it does for an export. */
+  onOpenInSlicer?(
+    target: string,
+    deflection: number,
+    options?: { angularTolerance?: number }
+  ): void;
+  /**
+   * F06: the model's configurations, when it has more than one, and which
+   * one the export writes. Absent, the dialog writes the model as shown.
+   */
+  configuration?: ExportDialogConfiguration;
+}
+
+/** F06: the configuration picker of an export. */
+export interface ExportDialogConfiguration {
+  rows: readonly { id: string; name: string }[];
+  selectedRowId: string;
+  onSelect(rowId: string): void;
+}
+
+/** One place a 3MF can be handed to a slicer from (L09). */
+export interface SlicerTarget {
+  id: string;
+  /** The slicer's name, or what the route does when it is not one. */
+  label: string;
+  /** One line on what happens, shown under the control. */
+  hint: string;
 }
 
 /**
@@ -185,9 +222,12 @@ export function ExportDialog({
   onCheckQuality,
   exportUnits = 'mm',
   documentUnits = 'mm',
-  onExportUnitsChange
+  onExportUnitsChange,
+  slicerTargets = [],
+  onOpenInSlicer,
+  configuration
 }: ExportDialogProps) {
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLFormElement>(null);
   // Escape must still close the dialog when focus has fallen out of it (a
   // click on the backdrop drops it on the body). The workspace keymap stands
   // down while the dialog is open, so nothing else would take the key.
@@ -202,9 +242,14 @@ export function ExportDialog({
   const [preset, setPreset] = useState<QualityPresetId>('standard');
   const [customDeflection, setCustomDeflection] = useState('0.05');
   const [angle, setAngle] = useState<AngleOption>(20);
+  const [slicerId, setSlicerId] = useState(slicerTargets[0]?.id ?? '');
+  const slicerTarget =
+    slicerTargets.find((target) => target.id === slicerId) ?? slicerTargets[0];
   const [phase, setPhase] = useState<'idle' | 'checking'>('idle');
   const [progress, setProgress] = useState<ExportProgress | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // A failed check is not a failed export: it says so, and keeps the
+  // kernel's own words under Details rather than as the message.
+  const [error, setError] = useState<PlainFailure | null>(null);
   const [report, setReport] = useState<{
     deflection: number;
     angle: AngleOption;
@@ -298,9 +343,11 @@ export function ExportDialog({
     } catch (checkError) {
       setReport(null);
       setError(
-        checkError instanceof Error
-          ? checkError.message
-          : 'The printability check failed.'
+        describeFailure(checkError, {
+          fallback:
+            'The watertightness check could not run on this model. The export is unaffected.',
+          technical: true
+        })
       );
     } finally {
       setPhase('idle');
@@ -308,8 +355,25 @@ export function ExportDialog({
     }
   }
 
+  function runOpenInSlicer() {
+    if (
+      !onOpenInSlicer ||
+      !slicerTarget ||
+      deflection === null ||
+      phase !== 'idle' ||
+      bodies.length === 0
+    ) {
+      return;
+    }
+    const angularTolerance = angularToleranceFor(angle);
+    if (angularTolerance === undefined)
+      onOpenInSlicer(slicerTarget.id, deflection);
+    else onOpenInSlicer(slicerTarget.id, deflection, { angularTolerance });
+    onClose();
+  }
+
   function runExport() {
-    if (deflection === null || phase !== 'idle') {
+    if (deflection === null || phase !== 'idle' || bodies.length === 0) {
       return;
     }
     const angularTolerance = angularToleranceFor(angle);
@@ -324,18 +388,27 @@ export function ExportDialog({
 
   return (
     <div className="modal-backdrop">
-      <div
+      {/* A form, so Enter in any field exports; runExport keeps its guard,
+          and the app's own range message stands in for the browser's. */}
+      <form
         ref={dialogRef}
         className="export-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="export-dialog-title"
         tabIndex={-1}
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          runExport();
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
             onClose();
+            return;
           }
+          submitOnEnter(event);
         }}
       >
         <h2 id="export-dialog-title">
@@ -353,6 +426,22 @@ export function ExportDialog({
                 ? `in ${UNIT_NAMES[writtenUnits]}, declared in the package.`
                 : `in ${UNIT_NAMES[writtenUnits]}. The file does not record its unit.`}
         </p>
+        {configuration && (
+          <label className="export-dialog-configuration">
+            <span>Configuration</span>
+            <select
+              aria-label="Configuration to export"
+              value={configuration.selectedRowId}
+              onChange={(event) => configuration.onSelect(event.target.value)}
+            >
+              {configuration.rows.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <fieldset className="export-dialog-group">
           <legend>Format</legend>
           {stlOnly && (
@@ -547,13 +636,51 @@ export function ExportDialog({
           )}
         </section>
 
+        {format === '3mf' && onOpenInSlicer && slicerTarget ? (
+          <section className="export-dialog-group" aria-label="Open in slicer">
+            <header>
+              <strong>Open in slicer</strong>
+              {slicerTargets.length > 1 ? (
+                <label className="export-dialog-custom">
+                  <span>Slicer</span>
+                  <select
+                    value={slicerTarget.id}
+                    onChange={(event) => setSlicerId(event.target.value)}
+                  >
+                    {slicerTargets.map((target) => (
+                      <option key={target.id} value={target.id}>
+                        {target.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <button
+                type="button"
+                className="secondary"
+                disabled={
+                  deflection === null || phase !== 'idle' || bodies.length === 0
+                }
+                onClick={runOpenInSlicer}
+              >
+                <Printer size={13} aria-hidden="true" />
+                {slicerTargets.length > 1
+                  ? `Open in ${slicerTarget.label}`
+                  : slicerTarget.label}
+              </button>
+            </header>
+            <p className="export-dialog-hint">{slicerTarget.hint}</p>
+          </section>
+        ) : null}
+
         {/* One slot with a reserved line: a progress or error row that
             appeared here pushed the buttons down under the pointer. */}
         <div className="export-dialog-status">
           {error ? (
-            <p className="export-dialog-error" role="alert">
-              {error}
-            </p>
+            <div className="export-dialog-check-failed" role="alert">
+              <p>{error.message}</p>
+              <FailureDetails detail={error.detail} />
+            </div>
           ) : phase !== 'idle' && progress ? (
             <p className="export-dialog-progress" role="status">
               <LoaderCircle size={13} className="spin" aria-hidden="true" />
@@ -567,18 +694,17 @@ export function ExportDialog({
             Cancel
           </button>
           <button
-            type="button"
+            type="submit"
             className="primary"
             disabled={
               deflection === null || phase !== 'idle' || bodies.length === 0
             }
-            onClick={runExport}
           >
             <Download size={13} aria-hidden="true" />
             Export {FORMAT_LABELS[format]}
           </button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

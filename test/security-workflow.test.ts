@@ -1,32 +1,25 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { CI_CHECKS_PATH } from './ci-workflow';
 
 describe('workflow runner policy', () => {
-  it('keeps ordinary workflows hosted with a restricted trusted workflow', () => {
+  it('keeps every workflow on a named hosted runner', () => {
     const workflowDirectory = '.github/workflows';
     const expectedRunners: Record<string, string[]> = {
-      'commit-privacy.yml': ['ubuntu-24.04'],
       'history-privacy.yml': ['ubuntu-24.04'],
       'history-privacy-request.yml': ['ubuntu-24.04'],
       'ci.yml': [],
       'ci-recovery.yml': ['ubuntu-24.04'],
       'public-commit-metadata.yml': ['ubuntu-24.04'],
-      'fleet-ci-v6.yml': Array(6).fill('*fleet-runner'),
-      'fleet-ci-v7.yml': [
-        'ubuntu-24.04',
-        ...Array<string>(8).fill('*fleet-runner')
-      ],
-      'fleet-ci-v8.yml': [
-        'ubuntu-24.04',
-        ...Array<string>(8).fill('*fleet-runner')
-      ],
-      'daily-validation.yml': Array(4).fill('ubuntu-24.04'),
-      'kernel-pin.yml': ['ubuntu-24.04'],
+      'checks.yml': Array<string>(10).fill('ubuntu-24.04'),
+      'daily-validation.yml': Array(5).fill('ubuntu-24.04'),
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
+      'codeql.yml': ['ubuntu-24.04'],
       'macos-desktop.yml': ['macos-26'],
       'desktop-native.yml': ['ubuntu-latest'],
       'mls-wasm.yml': ['ubuntu-latest'],
       'production-health.yml': ['ubuntu-latest'],
+      'promote-stable.yml': ['ubuntu-24.04'],
       'update-remus.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'dependency-audit.yml': Array(3).fill('ubuntu-latest'),
       'dependency-review.yml': ['ubuntu-latest']
@@ -67,7 +60,14 @@ describe('workflow runner policy', () => {
           /pull_request_target|workflow_run|secrets(?:\.|:)|id-token: write|contents: write/
         );
       }
-      if (workflowPath === 'fleet-ci-v6.yml') {
+      if (workflowPath === 'codeql.yml') {
+        // Advisory scanning follows main and must be able to finish there:
+        // cancelling a ten-minute analysis on every merge starves it.
+        expect(workflow).toContain('push:\n    branches: [main]');
+        expect(workflow).not.toMatch(/^ {2}pull_request/m);
+        expect(workflow).toContain('cancel-in-progress: false');
+      }
+      if (`${workflowDirectory}/${workflowPath}` === CI_CHECKS_PATH) {
         // Hosted shards install browser binaries only: the Ubuntu mirror
         // behind `--with-deps` stalled one shard in six for minutes.
         expect(workflow).toContain(

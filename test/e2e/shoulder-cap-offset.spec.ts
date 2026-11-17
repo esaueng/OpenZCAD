@@ -11,7 +11,9 @@ import {
   stubApi,
   MODEL_ONLY,
   clickWorldPoint,
-  setSelectionFilter
+  setSelectionFilter,
+  waitForStillViewport,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 async function importShoulder(
@@ -66,6 +68,8 @@ async function selectPlane(
       { timeout: 30_000 }
     )
     .toBe(true);
+  // A face starts on Offset; this spec reads and types each plane's Total.
+  await switchFaceOffsetToTotal(page);
   await expect
     .poll(async () => parseFloat(await chip.innerText()))
     .toBeCloseTo(height, 2);
@@ -138,6 +142,81 @@ async function verifyExport(
   await menu.locator('summary').click();
 }
 
+// Review of #1533: a Total switch made on the 26 mm shoulder carried to the
+// separate 35 mm cap above it (same body, facing the same way), so the cap
+// read "Total 35 mm" and a typed 5 moved it −30. A switch belongs to the face
+// it was made on; any other face starts on Offset.
+test('a Total switch on the shoulder does not carry to the cap', async ({
+  page
+}) => {
+  test.setTimeout(180_000);
+  await importShoulder(page, { height: 26, capHeight: 35 }, false);
+  await setSelectionFilter(page, 'Face');
+  const chip = page.getByTestId('direct-manipulation-value');
+  const tag = page.getByTestId('direct-manipulation-mode');
+  const pick = async (point: [number, number, number]) => {
+    await page.keyboard.press('Escape');
+    await expect
+      .poll(
+        async () => {
+          await clickWorldPoint(page, point);
+          return chip.isVisible();
+        },
+        { timeout: 30_000 }
+      )
+      .toBe(true);
+  };
+  await pick([20, 14, 26]);
+  await expect(tag).toHaveText(/^Offset/);
+  await switchFaceOffsetToTotal(page);
+  await expect
+    .poll(async () => parseFloat(await chip.innerText()))
+    .toBeCloseTo(26, 2);
+
+  await pick([0, 0, 35]);
+  await expect(tag).toHaveText(/^Offset/);
+  await expect(chip).toHaveText('+0 mm');
+  await chip.click();
+  const pad = page.getByRole('dialog', { name: 'Offset value' });
+  await expect(pad.getByRole('textbox')).toHaveAccessibleDescription(
+    'Offset: how far the face moves, + out, − in'
+  );
+  await page.keyboard.press('Escape');
+  await expect(pad).toBeHidden();
+
+  // The shoulder, picked again, still reads the Total chosen on it.
+  await pick([20, 14, 26]);
+  await expect(tag).toHaveText(/^Total/);
+  await expect
+    .poll(async () => parseFloat(await chip.innerText()))
+    .toBeCloseTo(26, 2);
+
+  // Committed, the moved shoulder keeps its Total; reopening entry and
+  // cancelling it once re-armed the moved face as Offset, so the next typed
+  // value meant a displacement.
+  await chip.click();
+  const total = page.getByRole('dialog', { name: 'Total value' });
+  await total.getByRole('textbox').fill('27');
+  await expect(chip).toHaveAttribute('aria-busy', 'false', { timeout: 60_000 });
+  await total.getByRole('button', { name: 'Apply total' }).click();
+  await featureCount(page, 2);
+  await expect(tag).toHaveText(/^Total/);
+  await expect
+    .poll(async () => parseFloat(await chip.innerText()), { timeout: 30_000 })
+    .toBeCloseTo(27, 2);
+  await chip.click();
+  await expect(total).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(total).toBeHidden();
+  await expect(tag).toHaveText(/^Total/);
+  await expect
+    .poll(async () => parseFloat(await chip.innerText()))
+    .toBeCloseTo(27, 2);
+  await chip.click();
+  await expect(total).toBeVisible();
+  await page.keyboard.press('Escape');
+});
+
 test(
   'R5 fillet and independent shoulder and cap offsets reach the joined rim',
   { tag: '@ci-smoke' },
@@ -151,11 +230,32 @@ test(
       for (const point of [
         [6, 0, 13],
         [18, 0, 26],
-        [0, 6, 13],
         [0, 13, 26]
       ] as [number, number, number][]) {
         await clickWorldPoint(page, point);
       }
+    } finally {
+      await page.keyboard.up('Shift');
+    }
+    await expect(page.getByRole('contentinfo')).toContainText(
+      '4 edges selected'
+    );
+    // The boss's joint with the block's x = 0 face stands behind the boss
+    // from the opening front-right view. Both joints lie in the vertical
+    // plane x + y = 6, and the opening frame can put the camera in it, which
+    // hides that joint exactly behind the y = 0 joint already selected. Take
+    // it from the back left, where it faces the camera. The cube shows only
+    // the corners facing the camera, so it turns there by the front left.
+    for (const name of [
+      'Top front left isometric view',
+      'Top back left isometric view'
+    ]) {
+      await page.getByRole('button', { name, exact: true }).click();
+      await waitForStillViewport(page);
+    }
+    await page.keyboard.down('Shift');
+    try {
+      await clickWorldPoint(page, [0, 6, 13]);
     } finally {
       await page.keyboard.up('Shift');
     }

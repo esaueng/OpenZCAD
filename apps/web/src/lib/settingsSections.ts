@@ -113,7 +113,15 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Orbit',
       'Zoom toward the pointer',
       'Undo with two fingers',
-      'Only Apple Pencil draws'
+      'Only Apple Pencil draws',
+      '3D mouse',
+      'Pan and zoom speed',
+      'Rotation speed',
+      'Dead zone',
+      'One motion at a time',
+      'Rotate around',
+      'Roll',
+      'Reverse'
     ],
     searchTerms: [
       'shortcuts',
@@ -126,6 +134,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'free orbit',
       'rotate',
       'upside down',
+      'spacemouse pro',
+      'space mouse',
+      '3dconnexion',
+      '6dof',
       ...CONTROL_REFERENCE_SEARCH_TERMS,
       // Every remappable command by name, so "fillet" finds where to give
       // Fillet a key, and the words people use for remapping.
@@ -150,6 +162,8 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Geometry snapping',
       'Snap tolerance',
       'Automatic inferencing',
+      'Auto-constrain',
+      'Snap hints',
       'Relation glyphs',
       'Glyph kinds'
     ]
@@ -175,11 +189,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     settings: [
       'Cloud features',
       'Membership',
-      'Personal information',
       'Preference synchronization',
       'Project sharing',
-      'Account storage',
-      'Cloud file storage'
+      'Storage'
     ],
     searchTerms: [
       ...CLOUD_SWITCH_SEARCH_TERMS,
@@ -195,6 +207,12 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'sync preferences',
       'collaboration',
       'storage usage',
+      'storage used',
+      'account storage',
+      'cloud file storage',
+      'imports and exports',
+      'save states',
+      'trash',
       'cloud profile',
       'email sign-in'
     ]
@@ -205,31 +223,16 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     detail: 'Keys, devices, and recovery',
     group: 'Cloud and data',
     settings: [
-      'Your fingerprint',
-      'Enter your recovery key',
-      'Use your passkey',
       'Add a device',
-      'Revoke read-only access',
-      'Revoke read-only devices',
-      'Replace recovery key',
-      'Device key',
-      'Recovery key',
       'Passkeys',
-      'Add a passkey',
-      'Remove passkey',
-      'Scan this code',
+      'Recovery key',
+      'Your fingerprint',
+      'Revoke read-only access',
       'Compare these digits',
       'Continue your approval request',
       'Approve from another device',
-      'Use your recovery key',
-      'Code from the new device',
-      'Compare the codes',
-      'Certify the new device',
-      'Your recovery key',
-      'I saved my recovery key',
-      'Confirm recovery key',
-      'Current recovery key',
-      'Recovery key to confirm'
+      'Use your passkey',
+      'Use your recovery key'
     ],
     searchTerms: [
       'e2ee',
@@ -244,7 +247,12 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'recovery',
       'end-to-end encryption',
       'certify',
-      'approval requests'
+      'approval requests',
+      'requests to join',
+      'new device',
+      'qr code',
+      'scan',
+      'set up encryption'
     ]
   },
   {
@@ -332,6 +340,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     detail: 'Editing mode, diagnostics, and reset',
     settings: [
       'Direct manipulation',
+      'Regenerate project thumbnails',
       'Frame rate overlay',
       'Export diagnostics',
       'Export interaction log',
@@ -344,6 +353,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Reset application settings'
     ],
     searchTerms: [
+      'thumbnails',
+      'previews',
+      'project cards',
+      'missing picture',
       'STEP',
       'STL',
       '3MF',

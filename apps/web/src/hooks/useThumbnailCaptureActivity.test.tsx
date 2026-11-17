@@ -32,19 +32,19 @@ it('defers card rendering during input and regeneration, and removes activity li
     }
   );
   stage(1);
-  await act(() => vi.advanceTimersByTimeAsync(3500));
+  await act(() => vi.advanceTimersByTimeAsync(1500));
   await act(() => window.dispatchEvent(new Event('input')));
-  await act(() => vi.advanceTimersByTimeAsync(3500));
+  await act(() => vi.advanceTimersByTimeAsync(1500));
   expect(render).not.toHaveBeenCalled();
   hook.rerender({ busy: true });
   await act(() => vi.advanceTimersByTimeAsync(10_000));
   expect(render).not.toHaveBeenCalled();
   hook.rerender({ busy: false });
-  await act(() => vi.advanceTimersByTimeAsync(4000));
+  await act(() => vi.advanceTimersByTimeAsync(2000));
   expect(render).toHaveBeenCalledOnce();
   hook.unmount();
   stage(2);
-  await act(() => vi.advanceTimersByTimeAsync(3500));
+  await act(() => vi.advanceTimersByTimeAsync(1500));
   await act(() => window.dispatchEvent(new Event('keydown')));
   await act(() => vi.advanceTimersByTimeAsync(500));
   expect(render).toHaveBeenCalledTimes(2);

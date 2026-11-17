@@ -108,6 +108,25 @@
   gap: 6px;
 }
 
+/* An expression longer than its 64px track grows to show itself, up to
+   about fourteen characters, taking the room from the name: `width / 2`
+   read "width /" in the cell beside a parameter's value. Only where the
+   field can size to its content; elsewhere it scrolls in place as before. */
+@supports (field-sizing: content) {
+  .param-row {
+    grid-template-columns:
+      minmax(0, 1fr) minmax(64px, max-content) minmax(0, max-content)
+      24px 24px;
+  }
+
+  /* Tweak's own row gives the field a whole track to fill. */
+  .param-row .param-expression:not(.tweak-panel *) {
+    field-sizing: content;
+    min-width: 64px;
+    max-width: calc(14ch + 14px);
+  }
+}
+
 /* Name and expression split the add row evenly. A row-width 76px track
    clipped its own "expression" placeholder to "expressio"; a fixed 96px one
    squeezed the name to "na" in a phone-width column. */
@@ -1922,4 +1941,80 @@
 
 .appearance-reset:hover {
   color: var(--color-accent-hi);
+}
+
+/* F06: the variant table under the parameters. Rows are configurations,
+   columns what each decides; it scrolls sideways rather than squeezing a
+   narrow sidebar's cells below a usable width. */
+.configuration-table {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.configuration-header,
+.configuration-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.configuration-actions select {
+  min-width: 0;
+  flex: 1;
+  font-size: var(--fs-xs);
+}
+
+.configuration-scroll {
+  overflow-x: auto;
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+}
+
+.configuration-scroll table {
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+  min-width: 100%;
+}
+
+.configuration-scroll th,
+.configuration-scroll td {
+  padding: 3px 6px;
+  border-bottom: var(--border-thin);
+  text-align: left;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.configuration-scroll thead th {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.configuration-scroll tr.active th[scope='row'] {
+  color: var(--color-accent);
+}
+
+.configuration-column-title,
+.configuration-row-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.configuration-cell-input {
+  width: 9ch;
+  height: 24px;
+  padding: 2px 6px;
+  font-size: var(--fs-xs);
+}
+
+.configuration-row-name .configuration-cell-input {
+  width: 14ch;
+}
+
+.configuration-export {
+  max-width: 9ch;
+  font-size: var(--fs-xs);
 }

@@ -123,7 +123,8 @@ async function plateGizmoX(page: Page): Promise<number> {
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   await expect(move).toBeVisible();
-  await expect(page.getByRole('contentinfo')).toContainText('Move/Rotate');
+  // The Move bar says the step once; it was also a "Move/Rotate: …" toast.
+  await expect(move).toContainText('drag the arrows or rings');
   await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /\d/);
   const x = Number(await canvas.getAttribute('data-e2e-move-gizmo-x'));
   await move.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -145,7 +146,7 @@ test('Move applies to a sketch its extrude has hidden, from the card', async ({
   await page.locator('.feature-row-main', { hasText: /^Profile$/ }).click();
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
   await expect(move).toBeVisible();
-  await expect(status).toContainText('Move sketch');
+  await expect(move).toContainText('drag the arrows · Shift moves freely');
   // The sketch being moved shows for the Move, so it takes the gizmo.
   await expect(canvas).toHaveAttribute('data-e2e-move-gizmo-x', /\d/);
   await openMoveOptions(move);
@@ -181,11 +182,10 @@ test('Move applies to a hidden sketch from the unapplied-Move dialog', async ({
   const move = page.getByRole('form', { name: 'Move controls' });
   const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  const status = page.getByRole('contentinfo');
 
   await page.locator('.feature-row-main', { hasText: /^Profile$/ }).click();
   await page.getByRole('button', { name: /^Move \(M\)/ }).click();
-  await expect(status).toContainText('Move sketch');
+  await expect(move).toContainText('drag the arrows · Shift moves freely');
   await openMoveOptions(move);
   await move.getByLabel('Move X in mm').fill('20');
   await page.locator('.feature-row-main', { hasText: /^Plate$/ }).click();
@@ -234,7 +234,7 @@ test('a pick on the hidden moving sketch preserves Cancel and never replays afte
     await page.keyboard.press('Escape');
     await page.locator('.feature-row-main', { hasText: /^Profile$/ }).click();
     await page.getByRole('button', { name: /^Move \(M\)/ }).click();
-    await expect(status).toContainText('Move sketch');
+    await expect(move).toContainText('drag the arrows · Shift moves freely');
     await openMoveOptions(move);
     await move.getByLabel('Move X in mm').fill('20');
   }

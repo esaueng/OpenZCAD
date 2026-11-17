@@ -21,9 +21,11 @@ import { useAssemblyView } from '../lib/assembly/useAssemblyView';
 import type { ReferenceImageDisplay } from '../lib/referenceImageDisplay';
 import type { AutoFrameRequest } from '../lib/autoFrame';
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type MutableRefObject,
   type ReactNode
 } from 'react';
@@ -32,6 +34,7 @@ import {
   type BodyAppearancePreview,
   type FaceResizeCommit,
   type ModelViewerProps,
+  type ViewportContextMenuOptions,
   type CylinderRadiusHandleTarget,
   type EdgeHandleTarget,
   type OrientationDragControls,
@@ -42,11 +45,13 @@ import {
   type OffsetHandleTarget
 } from './ModelViewer';
 import type {
+  DisplayMode,
   ExactSectionRegionDisplay,
   MovePreview,
   MoveSnap,
   PickDetail,
   ProjectionMode,
+  SectionOverlapPair,
   SectionPlaneId,
   SelectionFilter,
   SketchOverlay,
@@ -57,11 +62,11 @@ import type {
   WheelDevice
 } from '@openzcad/viewport';
 import {
-  SECTION_PLANE_LABELS,
   VIEWER_RAIL_STOPS,
   VIEWER_RAIL_STOPS_EXCEPT,
   ViewerToolbar
 } from './ViewerToolbar';
+import { describeSectionOverlap } from './SectionToolbox';
 import { useRovingToolbar } from '../hooks/useRovingToolbar';
 import type { SavedViewsSectionProps } from './SavedViewsSection';
 import {
@@ -104,6 +109,16 @@ import { ProjectThumbnailSyncAgent } from './ProjectThumbnailSyncAgent';
 import type { ProjectThumbnailRecord } from '../lib/localProjectStore';
 import type { ThumbnailCloudTransport } from '../lib/cloudThumbnail';
 import type { DimensionMode } from '../lib/keypad';
+import { createLazyPanel } from './LazyPanel';
+import type { AnalysisPanel as AnalysisPanelComponent } from './AnalysisPanel';
+import {
+  analysisRuntime,
+  useAnalysisRuntime
+} from '../lib/analysis/analysisRuntime';
+import {
+  useSurfaceAnalysis,
+  type RunSurfaceAnalysis
+} from '../lib/analysis/useSurfaceAnalysis';
 
 type MeasurementCloudSyncState = readonly [
   projectId: string | undefined,
@@ -167,10 +182,14 @@ interface ViewerShellProps {
   fitSignal: number;
   autoFrame?: AutoFrameRequest | null;
   creationFrame?: AutoFrameRequest | null;
+  /** Bumped to keep the model in the clear stage (ModelViewer). */
+  clearStageRequest?: number;
   viewRequest: { view: ViewRequestTarget; nonce: number } | null;
   normalToFaceRequest: NormalToFaceRequest | null;
   units: string;
   editableBodyIds: string[];
+  /** See `ModelViewerProps.dragsHeldByCommand`. */
+  dragsHeldByCommand?: ModelViewerProps['dragsHeldByCommand'];
   movePreview: MovePreview | null;
   /** Committed Move awaiting its rebuild; forwarded to the viewer's pose hold. */
   moveCommitHold: MovePreview | null;
@@ -342,6 +361,7 @@ interface ViewerShellProps {
   onCommandHandlePreview?: ModelViewerProps['onCommandHandlePreview'];
   onCommandHandleRelease?: ModelViewerProps['onCommandHandleRelease'];
   onOpenCommandKeypad?: ModelViewerProps['onOpenCommandKeypad'];
+  onToggleCommandInstance?: ModelViewerProps['onToggleCommandInstance'];
   commandSetterRef?: ModelViewerProps['commandSetterRef'];
   footprintPicker?: ModelViewerProps['footprintPicker'];
   onFootprint?: ModelViewerProps['onFootprint'];
@@ -384,6 +404,8 @@ interface ViewerShellProps {
   modelPanelsHidden?: boolean;
   /** F01: a click picks only a body face (see `ModelViewer`). */
   facePickOnly?: boolean;
+  /** Shift adds faces of this body to a held face set (see `ModelViewer`). */
+  faceSetPickBodyId?: string | null;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   onMovePreviewChange(
@@ -394,7 +416,8 @@ interface ViewerShellProps {
   onContextMenu(
     x: number,
     y: number,
-    selection: TopologySelection | null
+    selection: TopologySelection | null,
+    options?: ViewportContextMenuOptions
   ): void;
   onToggleGrid(): void;
   onFit(): void;
@@ -407,7 +430,8 @@ interface ViewerShellProps {
   onView(view: ViewTarget): void;
   /** The project's saved views, shown in the Standard views panel. */
   savedViews?: SavedViewsSectionProps;
-  onCycleDisplayMode(): void;
+  onDisplayMode(mode: DisplayMode): void;
+  onToggleXray(): void;
   onToggleProjection(): void;
   /** Flips orbiting between Free and Turntable; absent, no rail button. */
   onToggleOrbitMode?(): void;
@@ -419,8 +443,15 @@ interface ViewerShellProps {
   tangentEdges?: TangentEdgeStyle;
   sectionRange: { min: number; max: number } | null;
   onToggleSection(): void;
+  /** No body on screen to cut; Section is greyed. */
+  nothingToSection?: boolean;
   /** Whether the section controls show while the cut is on (remembered). */
   sectionPanelOpen?: boolean;
+  /**
+   * M09: the overlap note for the cut on screen (null when there is none),
+   * for the status line that stands in for the put-away section controls.
+   */
+  onSectionOverlapNote?(note: string | null): void;
   onSectionPanelOpenChange?(open: boolean): void;
   onSectionPlane(plane: SectionPlaneId): void;
   onSectionOffset(offset: number): void;
@@ -433,7 +464,21 @@ interface ViewerShellProps {
    * and the rail's description of it can never disagree.
    */
   sectionOutline: SectionOutlineState;
+  /**
+   * M09: runs the exact surface analysis (the geometry worker's). Absent,
+   * the Display menu's analyses draw nothing.
+   */
+  runSurfaceAnalysis?: RunSurfaceAnalysis;
 }
+
+/** M09's analysis panel, loaded with the first analysis switched on. */
+const AnalysisPanel = createLazyPanel<
+  ComponentProps<typeof AnalysisPanelComponent>
+>('Analysis panel', () =>
+  import('./AnalysisPanel').then((module) => ({
+    default: module.AnalysisPanel
+  }))
+);
 
 export function ViewerShell({
   projectId,
@@ -453,10 +498,12 @@ export function ViewerShell({
   fitSignal,
   autoFrame = null,
   creationFrame = null,
+  clearStageRequest = 0,
   viewRequest,
   normalToFaceRequest,
   units,
   editableBodyIds,
+  dragsHeldByCommand,
   movePreview,
   moveCommitHold,
   appearancePreview,
@@ -551,6 +598,7 @@ export function ViewerShell({
   onCommandHandlePreview,
   onCommandHandleRelease,
   onOpenCommandKeypad,
+  onToggleCommandInstance,
   commandSetterRef,
   footprintPicker = null,
   onFootprint,
@@ -570,6 +618,7 @@ export function ViewerShell({
   regionHandle,
   modelPanelsHidden,
   facePickOnly,
+  faceSetPickBodyId = null,
   onSelectSketchProfile,
   onResizePrimitiveFace,
   onMovePreviewChange,
@@ -580,7 +629,8 @@ export function ViewerShell({
   onMeasure,
   onView,
   savedViews,
-  onCycleDisplayMode,
+  onDisplayMode,
+  onToggleXray,
   onToggleProjection,
   onToggleOrbitMode,
   fieldOfView,
@@ -588,16 +638,69 @@ export function ViewerShell({
   tangentEdges,
   sectionRange,
   onToggleSection,
+  nothingToSection,
   sectionPanelOpen,
+  onSectionOverlapNote,
   onSectionPanelOpenChange,
   onSectionPlane,
   onSectionOffset,
   onSectionCommit,
   onSectionFlip,
   onExportSectionDxf,
-  sectionOutline
+  sectionOutline,
+  runSurfaceAnalysis
 }: ViewerShellProps) {
   const { bodies, standIns: parameterVisualPreview } = view;
+  // M09 analysis overlays: the analysis the Display menu switched on, run on
+  // the bodies drawn as built. A stand-in or a body drawn somewhere else
+  // than the build put it withholds the overlay rather than paint the
+  // build's colours over a shape that is not the build's.
+  const analysisRequest = useAnalysisRuntime((s) => s.request);
+  // Defaults stated in millimetres (thickness's minimum wall) follow the
+  // document's units.
+  useEffect(() => {
+    analysisRuntime.setUnits(units);
+  }, [units]);
+  const analysisBodyIds = useMemo(
+    () => bodies.map((body) => body.bodyId),
+    [bodies]
+  );
+  const analysisPreviewing =
+    (parameterVisualPreview?.length ?? 0) > 0 || view.drawnElsewhere.length > 0;
+  const analysis = useSurfaceAnalysis({
+    request: analysisRequest,
+    document: view.document,
+    bodyIds: analysisBodyIds,
+    previewing: analysisPreviewing,
+    run: runSurfaceAnalysis
+  });
+  const analysisNames = useMemo(
+    () => new Map(bodies.map((body) => [body.bodyId as string, body.name])),
+    [bodies]
+  );
+  // M09: bodies overlapping inside the cut, as the viewport's section pass
+  // found them on the display meshes; named for the section toolbox.
+  const [sectionOverlapIds, setSectionOverlapIds] = useState<
+    SectionOverlapPair[]
+  >([]);
+  const sectionOverlap = useMemo(() => {
+    const names = new Map(bodies.map((body) => [body.bodyId, body.name]));
+    return sectionOverlapIds.map((pair) => ({
+      a: names.get(pair.a as never) ?? 'A body',
+      b: names.get(pair.b as never) ?? 'a body',
+      area: pair.area
+    }));
+  }, [bodies, sectionOverlapIds]);
+  const sectionOverlapText = settings.sectionView
+    ? describeSectionOverlap(sectionOverlap, units)
+    : null;
+  // M09: the overlap note goes up to the status line, which says a cut is
+  // on while its controls are put away (Assemble, View, Build after
+  // Escape) and carries the note in their place.
+  useEffect(() => {
+    onSectionOverlapNote?.(sectionOverlapText);
+    return () => onSectionOverlapNote?.(null);
+  }, [onSectionOverlapNote, sectionOverlapText]);
   // Assemble's posed view of the same document; null outside Assemble.
   const assemblyView = useAssemblyView(view.document);
   /**
@@ -723,11 +826,13 @@ export function ViewerShell({
       {...(onMeasure ? { onMeasure } : {})}
       onView={onView}
       {...(savedViews ? { savedViews } : {})}
-      onCycleDisplayMode={onCycleDisplayMode}
+      onDisplayMode={onDisplayMode}
+      onToggleXray={onToggleXray}
       onToggleProjection={onToggleProjection}
       {...(onToggleOrbitMode ? { onToggleOrbitMode } : {})}
       sectionRange={sectionRange}
       onToggleSection={onToggleSection}
+      {...(nothingToSection ? { nothingToSection } : {})}
       {...(sectionPanelOpen !== undefined ? { sectionPanelOpen } : {})}
       {...(onSectionPanelOpenChange ? { onSectionPanelOpenChange } : {})}
       onSectionPlane={onSectionPlane}
@@ -736,6 +841,7 @@ export function ViewerShell({
       onSectionFlip={onSectionFlip}
       onExportSectionDxf={onExportSectionDxf}
       sectionOutline={drawnSection}
+      sectionOverlap={sectionOverlap}
       units={units}
       roving={!dockLayout}
     />
@@ -792,13 +898,17 @@ export function ViewerShell({
         pickListEnabled={pickListEnabled}
         settings={settings}
         exactSection={exactSection}
+        onSectionOverlap={setSectionOverlapIds}
+        analysisOverlay={analysis.overlay}
         fitSignal={fitSignal}
         autoFrame={autoFrame}
         creationFrame={creationFrame}
+        clearStageRequest={clearStageRequest}
         viewRequest={viewRequest}
         normalToFaceRequest={normalToFaceRequest}
         units={units}
         editableBodyIds={editableBodyIds}
+        dragsHeldByCommand={dragsHeldByCommand}
         movePreview={movePreview}
         moveCommitHold={moveCommitHold}
         appearancePreview={appearancePreview}
@@ -835,8 +945,9 @@ export function ViewerShell({
                 })
             : onOffsetPreview
         }
-        onOffsetCommit={(value) => {
-          if (!datumHandle || !onDatumOffsetDrag) return onOffsetCommit(value);
+        onOffsetCommit={(value, reading) => {
+          if (!datumHandle || !onDatumOffsetDrag)
+            return onOffsetCommit(value, reading);
           setDatumDrag(null);
           setDatumGesture((gesture) => gesture + 1);
           return onDatumOffsetDrag(value * datumHandle.sense)
@@ -906,6 +1017,7 @@ export function ViewerShell({
         onCommandHandlePreview={onCommandHandlePreview}
         onCommandHandleRelease={onCommandHandleRelease}
         onOpenCommandKeypad={onOpenCommandKeypad}
+        onToggleCommandInstance={onToggleCommandInstance}
         commandSetterRef={commandSetterRef}
         footprintPicker={footprintPicker}
         onFootprint={onFootprint}
@@ -947,6 +1059,7 @@ export function ViewerShell({
         regionHandle={regionHandle}
         modelPanelsHidden={modelPanelsHidden}
         {...(facePickOnly ? { facePickOnly } : {})}
+        faceSetPickBodyId={faceSetPickBodyId}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
         onMovePreviewChange={onMovePreviewChange}
@@ -995,6 +1108,7 @@ export function ViewerShell({
           <div className="viewer-rail-stack">
             <OrientationWidget
               orientationRef={orientationRef}
+              orbitMode={settings.orbitMode ?? 'free'}
               onSelectView={onView}
               onDragStart={() => orientationDragRef.current?.begin()}
               onDrag={(deltaX, deltaY) =>
@@ -1002,32 +1116,24 @@ export function ViewerShell({
               }
               onDragEnd={() => orientationDragRef.current?.end()}
             />
-            {/* View has no instrument rail, yet command search can still
-                turn the cut on there. Without this the model stayed clipped
-                with nothing on screen saying so or turning it off. */}
-            {viewMode && settings.sectionView && (
-              <div
-                className="view-mode-section"
-                role="group"
-                aria-label="Section view"
-              >
-                <span className="view-mode-section-label">
-                  Section · {SECTION_PLANE_LABELS[settings.sectionView.plane]}
-                </span>
-                <button
-                  type="button"
-                  className="view-mode-section-off"
-                  onClick={onToggleSection}
-                >
-                  Turn off
-                </button>
-              </div>
-            )}
           </div>
           {!viewMode && !dockLayout && viewerToolbar}
         </>
       )}
       {modeOverlay}
+      {/* M09: the analysis the Display menu switched on, with its legend,
+          provenance and limits; its own island over the stage's foot. */}
+      {!hideViewerToolbar && analysisRequest && analysis.state ? (
+        <AnalysisPanel
+          request={analysisRequest}
+          run={analysis.state}
+          previewing={analysisPreviewing}
+          lengthUnit={units === 'inch' ? 'in' : units}
+          nameOf={(bodyId) => analysisNames.get(bodyId) ?? 'A body'}
+          onChange={analysisRuntime.update}
+          onOff={analysisRuntime.off}
+        />
+      ) : null}
       {/* Upright in the stage's bottom-left corner at every window size. */}
       <ViewportScaleIndicator scaleSinkRef={scaleIndicatorRef} units={units} />
       {frameRateOverlay && (

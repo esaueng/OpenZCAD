@@ -56,3 +56,31 @@ it('samples dense feature/checkpoint status without delaying stage transitions',
   geometryProgress(publish, () => clock)(feature);
   expect(publish).toHaveBeenCalledTimes(5);
 });
+
+it('never samples away a failed feature', () => {
+  const clock = 0;
+  const publish = vi.fn<RebuildProgressListener>();
+  const progress = geometryProgress(publish, () => clock);
+  const feature = {
+    stage: 'feature' as const,
+    status: 'started' as const,
+    name: 'Box',
+    index: 1,
+    total: 3
+  };
+  progress(feature);
+  progress({
+    ...feature,
+    name: 'Subtract',
+    index: 2,
+    status: 'completed',
+    outcome: 'failed'
+  });
+  progress({ ...feature, name: 'Fillet', index: 3 });
+  expect(
+    publish.mock.calls.map(([event]) => [event.name, event.outcome])
+  ).toEqual([
+    ['Box', undefined],
+    ['Subtract', 'failed']
+  ]);
+});

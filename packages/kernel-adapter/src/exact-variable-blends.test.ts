@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
+  booleanBodies,
   chamferEdges,
   createProjectDocument,
   filletEdges,
-  listNodesByKind
+  listNodesByKind,
+  transformBody
 } from '@openzcad/document-core';
 import {
   toUserId,
@@ -17,6 +19,7 @@ import { createExactKernelAdapter } from './exact';
 import { approximateBlendAdvisory } from './exact-edge-modifiers';
 import {
   assertQualifiedVariableFillet,
+  variableBlendRefusal,
   variableBlendRefusalMessage,
   variableFilletRequest
 } from './exact-variable-blends';
@@ -543,6 +546,151 @@ describe('variable blends through the document', { timeout: 120_000 }, () => {
         built.bodyRepresentations[bodyId]!.volume -
         asymmetricDerived.bodyRepresentations[asymmetric.bodyId]!.volume;
       expect(removedAsymmetric / removedSymmetric).toBeCloseTo(3 / 4, 6);
+    } finally {
+      adapter.dispose();
+    }
+  });
+});
+
+describe('variable blend refusals are typed', { timeout: 120_000 }, () => {
+  it('files a kernel report under its blend failure code, and a bare one as blend-failed', () => {
+    const typed = variableBlendRefusal(
+      'fillet',
+      1,
+      'edges-not-blended: blend: 1 of the edges named were not blended'
+    );
+    expect(typed).toMatchObject({
+      family: 'blend',
+      category: 'unsupported',
+      kernelCode: 'edges-not-blended'
+    });
+    expect(typed.message).toMatch(
+      /^Variable-radius fillet could not be created/
+    );
+    for (const reported of [null, 'something the kernel did not prefix']) {
+      expect(variableBlendRefusal('chamfer', 2, reported)).toMatchObject({
+        family: 'blend',
+        category: 'unsupported',
+        kernelCode: 'blend-failed'
+      });
+    }
+  });
+
+  /**
+   * M03 qualification on the 2026.1.138 pin: a variable fillet on any edge
+   * of a box that also carries a cylindrical boss fails the kernel's
+   * postcondition (esaueng/remus#1789: the variable engine rebuilds faces
+   * from their outer polygons and drops inner wires and curved edges). Until
+   * that is fixed it must refuse by type, not ship and not refuse in prose;
+   * the constant fillet and the asymmetric chamfer on the same edge build.
+   */
+  it('refuses a variable fillet on a box that carries a boss by type', async () => {
+    const adapter = await createExactKernelAdapter();
+    try {
+      let document = addPrimitiveFeature(createProjectDocument('Boss', user), {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 60, height: 60, depth: 20 }
+      });
+      const box = document.bodyOrder.at(-1) as BodyId;
+      document = addPrimitiveFeature(document, {
+        name: 'Boss',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 8, height: 20 }
+      });
+      document = transformBody(document, {
+        name: 'Move',
+        targetBodyId: document.bodyOrder.at(-1) as BodyId,
+        translation: { x: 30, y: 30, z: 10 }
+      }).document;
+      document = booleanBodies(document, {
+        name: 'Union',
+        operation: 'union',
+        targetBodyIds: [box, document.bodyOrder.at(-1) as BodyId]
+      }).document;
+      const united = document.bodyOrder.at(-1) as BodyId;
+      const built = await adapter.syncDocument(document);
+      const edge = built.bodyRepresentations[united]!.topology!.edges.find(
+        (candidate) =>
+          candidate.curve?.type === 'LINE' &&
+          Math.abs((candidate.length ?? 0) - 60) < 1e-6
+      )!;
+      const pick = {
+        targetBodyId: united,
+        edgeHashes: [edge.hash],
+        ...(edge.reference ? { edgeReferences: [edge.reference] } : {})
+      };
+      const variable = filletEdges(document, {
+        name: 'Round',
+        ...pick,
+        size: 1,
+        endRadius: 2,
+        radiusLaw: 'linear'
+      });
+      const derived = await adapter.syncDocument(variable.document);
+      const refusal = derived.featureWarnings?.find(
+        (warning) =>
+          warning.kind === 'build-failed' || warning.kind === 'refusal'
+      );
+      expect(refusal?.kernelRefusal).toMatchObject({
+        family: 'blend',
+        code: 'invalid-input'
+      });
+      expect(refusal?.message).toMatch(
+        /Variable-radius fillet could not be created/
+      );
+
+      for (const next of [
+        filletEdges(document, { name: 'Round', ...pick, size: 1.5 }),
+        chamferEdges(document, {
+          name: 'Bevel',
+          ...pick,
+          size: 1,
+          distance2: 2
+        })
+      ]) {
+        const result = await adapter.syncDocument(next.document);
+        expect(
+          result.featureWarnings?.filter(
+            (warning) => warning.kind !== 'advisory'
+          )
+        ).toEqual([]);
+        expect(result.bodyRepresentations[next.bodyId]!.exportableStep).toBe(
+          true
+        );
+      }
+    } finally {
+      adapter.dispose();
+    }
+  });
+
+  it('refuses a variable fillet around a closed rim by type', async () => {
+    const adapter = await createExactKernelAdapter();
+    try {
+      const document = addPrimitiveFeature(createProjectDocument('Rim', user), {
+        name: 'Cylinder',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 10, height: 30 }
+      });
+      const bodyId = document.bodyOrder[0] as BodyId;
+      const built = await adapter.syncDocument(document);
+      const rim = built.bodyRepresentations[bodyId]!.topology!.edges.find(
+        (edge) => edge.curve?.type === 'CIRCLE'
+      )!;
+      const variable = filletEdges(document, {
+        name: 'Round',
+        targetBodyId: bodyId,
+        edgeHashes: [rim.hash],
+        size: 1,
+        endRadius: 2,
+        radiusLaw: 'linear'
+      });
+      const derived = await adapter.syncDocument(variable.document);
+      const refusal = derived.featureWarnings?.find(
+        (warning) =>
+          warning.kind === 'build-failed' || warning.kind === 'refusal'
+      );
+      expect(refusal?.kernelRefusal?.family).toBe('blend');
     } finally {
       adapter.dispose();
     }

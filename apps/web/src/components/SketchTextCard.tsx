@@ -144,7 +144,8 @@ export function SketchTextCard({
           />
           <div className="sketch-entity-fields">
             <ExprInput
-              label="Size (em)"
+              label={`Em size (${document.units === 'inch' ? 'in' : document.units})`}
+              ariaLabel="Em size"
               value={sizeText}
               scope={scope}
               quantity={{ documentUnits: document.units, dimension: 'length' }}

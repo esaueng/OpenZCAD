@@ -16,7 +16,8 @@ const WORKSPACE_PACKAGES = [
   'persistence',
   'cloudflare-adapters',
   'crypto',
-  'mls'
+  'mls',
+  'agent-api'
 ] as const;
 
 const workspaceAliases = Object.fromEntries(
@@ -55,7 +56,6 @@ export default defineConfig({
     // package's own dependencies (`three` is not a root dependency).
     include: unitTestInclude('root'),
     setupFiles: ['test/setup.ts'],
-    globalSetup: ['test/unit-global-setup.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],
@@ -94,6 +94,12 @@ export default defineConfig({
       '@openzcad/kernel-adapter/extrude-inference': fileURLToPath(
         new URL(
           './packages/kernel-adapter/src/extrude-inference.ts',
+          import.meta.url
+        )
+      ),
+      '@openzcad/kernel-adapter/sheet-metal-flat-pattern': fileURLToPath(
+        new URL(
+          './packages/kernel-adapter/src/sheet-metal-flat-pattern.ts',
           import.meta.url
         )
       ),

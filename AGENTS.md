@@ -88,25 +88,26 @@ pnpm test:parity-corpus
 pnpm build
 ```
 
-They run as three parallel jobs: `quality` (lint, typecheck), `unit` (the root
-Vitest project, `pnpm exec vitest run`) and `validation` (the web Vitest
-project via `pnpm test:web`, the parity corpus, the build). Together `unit`
-and `validation` are `pnpm test`. Root and web Vitest use the focused smoke
-selection in CI; local runs remain full. `pnpm test:full` explicitly runs both
+A required `plan` job runs the kernel-pin declaration; beside it `quality`
+(lint, in two partitions), `typecheck`, `unit` (the root Vitest project in
+two partitions) and `validation` (the web Vitest project, the parity corpus,
+the build) run in parallel, each selecting its own tests. Together `unit` and `validation` are `pnpm test`.
+Root and web Vitest run the critical manifest plus the files a change affects;
+unknown inputs, dependency or configuration changes and kernel (Remus)
+updates select the complete suites. Local runs remain full. `pnpm test:full` explicitly runs both
 complete projects even with `CI` set (`test:unit:full` and `test:web:full` run
 either one). See [Unit test suites](docs/unit-test-suites.md) for the manifest,
-coverage tradeoff and pre-worker Git fixture preparation. The separate parity
+coverage tradeoff. The separate parity
 corpus and policy assertions remain required. The tagged Playwright smoke suite
 runs as six shards on pull requests, started beside those jobs (`e2e-tests-pr`); a newer push
 cancels a superseded run's shards, and manual dispatches run the same set
-(`e2e-tests`). Merge-queue candidates run no shards: auto-merge enqueues
-a PR only after `checks / e2e` passed on its head, so a candidate runs only
-`quality`, `unit` and `validation`, and two PRs that break e2e only together
-are caught by the next PR's run rather than before merge. Each shard takes the
+(`e2e-tests`). Merge-queue candidates run five tagged save/history canaries
+against the combined tree (`e2e-queue`), or the full shard set when the plan
+asks for it; prior PR success does not stand in for them. Each shard takes the
 spec files `scripts/e2e-shards.mjs` assigns it (every shard runs
 `pnpm exec playwright install chromium` first, browser binaries only), and an
-`e2e` gate job aggregates the shards for branch protection; on a queue
-candidate it passes with no shard run. Shards are balanced by the
+`e2e` gate job aggregates the shards for branch protection and fails when no
+selected browser set ran and passed. Shards are balanced by the
 per-file seconds in `test/e2e/smoke-shard-weights.json`. CI selects only
 `@ci-smoke` cases; an untagged new regression runs only in the full suite.
 Each shard uploads its Playwright JSON report as an `e2e-report-N` artifact.
@@ -151,11 +152,12 @@ in `.github/workflows/macos-desktop.yml`.
 
 - Root Vitest and web Vitest are separate projects. `pnpm test` runs both;
   invoking root Vitest directly does not cover the web happy-dom suites.
-- Never edit the active fleet workflow (the `fleet-ci*.yml` that `ci.yml`
-  pins) in place, and never pin `ci.yml` to a PR branch commit: GitHub
-  deletes the branch at merge and every `ci` run then fails at startup.
-  Stage a new `fleet-ci-vN.yml`, then activate it from main in a second PR,
-  as [docs/runner-routing.md](docs/runner-routing.md) describes.
+- `ci.yml` calls `.github/workflows/checks.yml` from the same commit, so a
+  PR that edits the checks is validated by its own edit and lands in one
+  step. Keep the call a local path: a repository path pinned to a PR branch
+  commit stops resolving when GitHub deletes the branch at merge, and every
+  `ci` run then fails at startup. Keep the caller's job named `checks`; it
+  is part of both required contexts.
 - Parity files intentionally use `test/parity/**/*.spec.ts`. Renaming one to
   `*.test.ts` silently moves it into the root pool instead of the serial parity
   job configured by `test/parity/vitest.corpus.config.ts`.
@@ -173,6 +175,19 @@ in `.github/workflows/macos-desktop.yml`.
   lockfile update; do not hand-edit the
   resolved SHA. Any kernel update still needs the full CI matrix, especially
   `pnpm test:parity-corpus` and Playwright.
+- Every Vite build (root, filtered web and desktop) checks the installed
+  Remus files against `remus-checksums.json` and fails on any mismatch; dev
+  and preview servers only warn. Building with `REMUS_WASM_PKG` /
+  `REMUS_WASM_IO_PKG` overlays needs `OZ_ALLOW_LOCAL_REMUS=1`, and that
+  `+local` output cannot be deployed: `deploy:beta`, `deploy:selfhost` and
+  Wrangler's custom build step (`pnpm check:release-build`) refuse it. The
+  build stamps `build-meta.json` with each Remus module's emitted path and a
+  digest of every output file, so the check also refuses output changed,
+  removed or added after the build; any edit to `apps/web/dist` after
+  `pnpm build` needs a rebuild before a deploy or `wrangler deploy --dry-run`.
+  Both deploy scripts rebuild before checking. Recording a Remus bump refuses
+  packaging rules beyond a plain `files` list (globs, `bin`, `.npmignore`,
+  unlisted README/LICENSE files and the like) for manual review.
 
 ## Enforced boundaries
 
@@ -220,14 +235,14 @@ unmergeable.
 
 ## Merge gate
 
-Main uses the active `Bounded merge queue` ruleset: two concurrent queue
-builds, `SQUASH`, `ALLGREEN`, one or two PRs per merge, no minimum-group wait,
+Main uses the active `Bounded merge queue` ruleset: five concurrent queue
+builds, `SQUASH`, `ALLGREEN`, one to five PRs per merge, no minimum-group wait,
 a 180-minute check timeout, and no bypass actors. Squash is the only enabled
 merge method; commit titles use the PR title and bodies use its description.
 See [.github/merge-queue.md](.github/merge-queue.md) for the enqueue procedure.
 
 Branch protection requires `checks / validate`, `checks / e2e`,
-`commit-privacy`, `history-privacy`, and Cloudflare `verify` (the `verify` job in the
+`commit-privacy`, `history-privacy`, `dependency-review`, and Cloudflare `verify` (the `verify` job in the
 `Cloudflare version` workflow), with both privacy checks bound to the dedicated Esau History Privacy App and
 the other checks bound to GitHub Actions. Review
 requirements remain unchanged (currently zero required approvals), and
@@ -261,7 +276,7 @@ rerun checks on any changed PR head.
   head; read the individual runs when reporting.
 - **Verify the separate queue run.** Match the `merge_group` run’s head SHA
   to the candidate reported by the queue, not the original PR head. The
-  five required checks, including Cloudflare `verify`, must pass on that
+  six required checks, including Cloudflare `verify`, must pass on that
   candidate before GitHub merges it. A pending or failing `verify` blocks
   the queue merge. Confirm Cloudflare `upload` is skipped. Verify
   the final merged PR and squash commit; do not report enqueueing as a

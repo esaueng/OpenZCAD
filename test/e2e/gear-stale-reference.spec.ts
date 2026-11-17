@@ -12,7 +12,8 @@ import {
   waitForStillViewport,
   revealModelPanel,
   enterCommandValue,
-  finishInPlaceCommand
+  finishInPlaceCommand,
+  switchFaceOffsetToTotal
 } from './openzcad-fixtures';
 
 interface GearReferenceWindow extends Window {
@@ -56,11 +57,27 @@ async function setHeight(page: Page, height: number) {
   // cap and retry instead of waiting forever for that refused keypad.
   await expect(async () => {
     expect(await pickPlanarFace(page, { x: 0, y: 0, z: 1 })).not.toBeNull();
-    await page.getByTestId('direct-manipulation-value').click({ timeout: 5000 });
+    // A keypad that opened late, after the last try gave up, is the one.
+    if (!(await keypad.isVisible())) {
+      // A face starts on Offset; this types the gear's Total height.
+      const tag = page.getByTestId('direct-manipulation-mode');
+      if (/^Offset/.test(await tag.innerText({ timeout: 5000 })))
+        await tag.click({ timeout: 5000 });
+      await expect(tag).toHaveText(/^Total/, { timeout: 1000 });
+      await page
+        .getByTestId('direct-manipulation-value')
+        .click({ timeout: 5000 });
+    }
     await expect(keypad).toBeVisible({ timeout: 1000 });
   }).toPass({ timeout: 30_000 });
   await keypad.getByRole('textbox').fill(String(height));
   await keypad.getByRole('button', { name: 'Apply total' }).click();
+  await expect(keypad).toBeHidden({ timeout: 30_000 });
+  // The cap keeps the Total chosen on it through its own commit.
+  await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
+    /^Total/,
+    { timeout: 30_000 }
+  );
   await expect(page.getByTestId('direct-manipulation-value')).toContainText(
     String(height),
     { timeout: 30_000 }
@@ -173,6 +190,7 @@ test(
       .not.toBeNull();
     // The pick's lineage demand can start one more (warm) rebuild.
     await waitForEditableModel(page);
+    await switchFaceOffsetToTotal(page);
     await expect(page.getByTestId('direct-manipulation-value')).toContainText(
       '56'
     );

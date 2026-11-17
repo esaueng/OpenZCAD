@@ -1,3 +1,4 @@
+import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   BodyRepresentation,
@@ -9,6 +10,7 @@ import type {
 } from '@openzcad/shared';
 import { listFeaturesInOrder } from '@openzcad/document-core';
 import { featureHistory, featureResultBodyIds } from './featureHistory';
+import { resolveSelectionTopology } from './selectionFeature';
 
 /**
  * What the viewport shows for a feature picked in History.
@@ -143,7 +145,7 @@ export function ghostBodiesFor(
     return [];
   }
   return focus.ghostBodyIds.flatMap((bodyId) => {
-    const body = document.derived.bodyRepresentations[bodyId];
+    const body = ownEntry(document.derived.bodyRepresentations, bodyId);
     return body ? [body] : [];
   });
 }
@@ -154,6 +156,11 @@ export interface FaceLineageTrace {
   origin: FeatureId | null;
   /** Every body the face passed through on its way to the final part. */
   bodies: BodyId[];
+  /**
+   * The subtract that cut the face, when it came from a tool operand: the
+   * wall of a hole a cylinder cut, not a face of the part it was cut from.
+   */
+  cutBy?: FeatureId;
 }
 
 const BOOLEAN_SLOT =
@@ -167,6 +174,24 @@ const HEAD_KINDS: Partial<Record<string, readonly string[]>> = {
 
 function inputBodyOf(feature: FeatureNode): BodyId | undefined {
   return (feature.data as { targetBodyId?: BodyId }).targetBodyId;
+}
+
+/**
+ * Whether a selected face was cut into its body by a subtract's tool: the
+ * wall of a hole a cylinder cut. Deleting such a face heals the cut (see
+ * `cutFaceDeletion`) rather than the tool feature it is inferred to.
+ */
+export function isCutFace(
+  document: ProjectDocument,
+  selection: TopologySelection
+): boolean {
+  const body = document.derived.bodyRepresentations[selection.bodyId];
+  const resolved = resolveSelectionTopology(body, selection);
+  if (!body || body.consumed || resolved?.kind !== 'face') return false;
+  const reference = body.topology?.faces.find(
+    (candidate) => candidate.topologyId === resolved.topologyId
+  )?.reference;
+  return Boolean(reference && faceLineageTrace(document, reference)?.cutBy);
 }
 
 /**
@@ -189,6 +214,16 @@ export function faceLineageTrace(
   return lineageTracer(document)(reference);
 }
 
+/**
+ * `faceLineageTrace` for many faces of one document: the feature index is
+ * built once rather than once per face.
+ */
+export function faceLineageTracer(
+  document: ProjectDocument
+): (reference: FaceTopologyReferenceV5) => FaceLineageTrace | null {
+  return lineageTracer(document);
+}
+
 function lineageTracer(document: ProjectDocument) {
   const features = listFeaturesInOrder(document);
   const byId = new Map(
@@ -206,6 +241,12 @@ function lineageTracer(document: ProjectDocument) {
     if (!current) return null;
     let rest = reference.lineageName;
     const bodies: BodyId[] = [];
+    let cutBy: FeatureId | undefined;
+    const traced = (origin: FeatureId | null): FaceLineageTrace => ({
+      origin,
+      bodies,
+      ...(cutBy ? { cutBy } : {})
+    });
     const enter = (bodyId: BodyId | undefined) => {
       if (!bodyId || bodies.includes(bodyId)) return undefined;
       bodies.push(bodyId);
@@ -222,7 +263,7 @@ function lineageTracer(document: ProjectDocument) {
         };
         if (tool && kind === 'extrude') {
           // An add/cut extrude's own sweep: its faces are the extrude's.
-          return { origin: current.featureId, bodies };
+          return traced(current.featureId);
         }
         const next =
           operand !== undefined && kind === 'boolean'
@@ -236,17 +277,26 @@ function lineageTracer(document: ProjectDocument) {
           current = enter(inputBodyOf(current));
           continue;
         }
+        // Operand 0 of a subtract is what is cut; every later one cuts it.
+        if (
+          !cutBy &&
+          current.data.featureKind === 'boolean' &&
+          current.data.operation === 'subtract' &&
+          Number(operand) > 0
+        ) {
+          cutBy = current.featureId;
+        }
         rest = tail!;
         current = enter(next);
         continue;
       }
       const head = rest.split('.', 1)[0] ?? '';
-      const owners = HEAD_KINDS[head];
+      const owners = ownEntry(HEAD_KINDS, head);
       if (!owners || owners.includes(kind)) {
-        return { origin: current.featureId, bodies };
+        return traced(current.featureId);
       }
       current = enter(inputBodyOf(current));
     }
-    return { origin: null, bodies };
+    return traced(null);
   };
 }

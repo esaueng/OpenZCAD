@@ -2,12 +2,14 @@
 
 Main uses squash merges with the PR title as the commit title and the PR
 description as the commit body. The active `Bounded merge queue` ruleset has
-no bypass actors, builds at most two queue entries concurrently, and uses
-`SQUASH` and `ALLGREEN`. It merges one or two passing entries at a time, with
-no minimum-group wait and a 180-minute check timeout, matching Remus.
+no bypass actors, builds at most five queue entries concurrently, and uses
+`SQUASH` and `ALLGREEN`. It merges one to five passing entries at a time, with
+no minimum-group wait and a 180-minute check timeout. Each entry still gets
+its own `merge_group` run on the combined tree; the larger limits only stop a
+burst of ready PRs from waiting two at a time.
 
 Branch protection requires `checks / validate`, `checks / e2e`,
-`commit-privacy`, `history-privacy`, and Cloudflare `verify` (the `verify` job in the
+`commit-privacy`, `history-privacy`, `dependency-review`, and Cloudflare `verify` (the `verify` job in the
 `Cloudflare version` workflow), with both privacy checks bound to the dedicated Esau History Privacy App and
 the other checks bound to GitHub Actions. Existing review
 requirements and conversation resolution are preserved. The queue validates
@@ -23,11 +25,13 @@ not arm unrelated PRs. The queue’s `merge_group` run must pass the required
 checks before GitHub merges it.
 
 CI and Cloudflare verification handle `merge_group: checks_requested` without
-replacing pending queue verdicts. The immutable fleet workflow runs queue
+replacing pending queue verdicts. `checks.yml` runs queue
 candidates on GitHub-hosted runners; its PR-only kernel announcement policy
-is checked before enqueueing. The Playwright shards likewise run on the PR
-head only: a candidate runs `quality`, `unit` and `validation`, and its
-`checks / e2e` gate passes without shards. Commit privacy checks the merge-group base-to-head range. History privacy
+is checked before enqueueing and again in the required `plan` preflight. A
+candidate runs `quality`, `typecheck`, `unit` and `validation`, plus five
+tagged save/history browser canaries against the combined tree (or the full
+browser shards when the plan asks for it); its `checks / e2e` gate fails when
+no selected browser set ran and passed. Commit privacy checks the merge-group base-to-head range. History privacy
 audits that exact candidate through the default-branch `workflow_run` after the
 read-only requester completes; verify the dedicated App verdict on the queue SHA. Cloudflare queue runs perform dry-run verification only;
 version uploads remain limited to main pushes and manual dispatches. Merging
@@ -41,8 +45,8 @@ continues to trigger the repository's existing automatic deployment workflows.
    Classic protection enforces administrators; the active queue ruleset has
    no bypass actors.
 2. Address the PR’s reviews, comments and threads, and confirm the head you
-   are authorizing. The five required contexts are `checks / validate`,
-   `checks / e2e`, `commit-privacy`, `history-privacy`, and `verify`; the
+   are authorizing. The six required contexts are `checks / validate`,
+   `checks / e2e`, `commit-privacy`, `history-privacy`, `dependency-review`, and `verify`; the
    queue waits for them, so pending checks are not a reason to wait before
    arming. Advisory checks (Workers Builds, dependency audits when the PR
    changes a manifest or lockfile, public commit metadata) do not gate the
@@ -66,7 +70,7 @@ continues to trigger the repository's existing automatic deployment workflows.
    pushing a change outside the authorized scope.
 4. Once queued, read the entry’s `headCommit.oid` after it reaches
    `AWAITING_CHECKS` (it can initially be null) and match it to the
-   `merge_group` workflow runs. The queue merges only after all five
+   `merge_group` workflow runs. The queue merges only after all six
    required contexts pass on that candidate. A pending or failing Cloudflare
    `verify` blocks the merge; confirm `upload` is skipped, since queue
    candidates perform dry-run verification only. A manual dispatch or green

@@ -2,7 +2,7 @@
 # .env, or a populated .dev.vars file. Never commit a populated secret file.
 AI_PROVIDER=openrouter
 OPENROUTER_API_KEY=
-AI_MODEL=minimax/minimax-m3.1-flash:free
+AI_MODEL=nvidia/nemotron-3.5-super-vl:free
 AI_DEPLOYMENT_FREE_ENABLED=true
 
 # Required only for encrypted per-user API tokens in Settings. Generate a
@@ -32,11 +32,11 @@ AI_DEPLOYMENT_FREE_ENABLED=true
 # sending binding backed by an onboarded sender domain.
 # Project invitation delivery additionally uses PROJECT_INVITATION_EMAIL_FROM
 # and PUBLIC_APP_ORIGIN; the checked-in beta values are
-# noreply@zcad.esau.app and https://zcad.app.
+# noreply@beta.zcad.app and https://zcad.app.
 # AUTH_LEGACY_OWNER_EMAIL can map historical user_beta_dev projects to one
 # verified owner email without rewriting document ownership.
 
 # Manual Premium grants (server only; use example addresses here).
 # PREMIUM_USER_EMAILS=member@example.com
-# Premium grants hosted AI eligibility and 100 GiB artifact storage by default.
+# Premium grants hosted AI eligibility and one 25 GiB storage allowance by default.
 # See docs/plans/account-tiers.md for Free and Premium account limits.

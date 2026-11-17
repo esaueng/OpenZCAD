@@ -178,3 +178,28 @@ it('passes explicit optional-data choices and disables them during a download', 
   finish({ includedProjects: 0, skippedProjects: [], omittedSections: [] });
   await waitFor(() => expect(originals).toBeEnabled());
 });
+
+it('says the server reply was unreadable, with the parser text under Details', async () => {
+  // 13 November review I3: a proxy's HTML page read as "Unexpected token
+  // '<', "<!doctype "… is not valid JSON".
+  vi.spyOn(exporter, 'downloadAllData').mockRejectedValue(
+    new SyntaxError(`Unexpected token '<', "<!doctype "... is not valid JSON`)
+  );
+  render(
+    <DataDownload
+      settings={DEFAULT_APP_SETTINGS}
+      session={null}
+      cloudFunctionsEnabled={false}
+      busy={false}
+    />
+  );
+  await userEvent
+    .setup()
+    .click(screen.getByRole('button', { name: 'Download all data' }));
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent(
+    /^OpenZCAD’s server sent a reply this page could not read\. Try again in a moment\./
+  );
+  expect(alert.querySelector('summary')).toHaveTextContent('Details');
+  expect(alert.querySelector('code')).toHaveTextContent('is not valid JSON');
+});

@@ -33,6 +33,8 @@ interface FacePoint {
   x: number;
   y: number;
   face: string;
+  /** Another point on the same face, as far from (x, y) as the probe found. */
+  sample: { x: number; y: number };
 }
 
 /**
@@ -43,7 +45,7 @@ interface FacePoint {
 async function twoFacePoints(canvas: Locator): Promise<[FacePoint, FacePoint]> {
   const page = canvas.page();
   const bounds = (await canvas.boundingBox())!;
-  const found: FacePoint[] = [];
+  const hits: { x: number; y: number; face: string }[] = [];
   for (const yRatio of [0.36, 0.44, 0.52, 0.6, 0.68]) {
     for (const xRatio of [0.36, 0.44, 0.52, 0.6, 0.68]) {
       const point = {
@@ -61,15 +63,27 @@ async function twoFacePoints(canvas: Locator): Promise<[FacePoint, FacePoint]> {
       const face = (await canvas.getAttribute('data-e2e-selected-face'))!;
       await page.keyboard.press('Escape');
       await expect(canvas).not.toHaveAttribute('data-e2e-selected-face', /.+/);
-      if (!found.some((candidate) => candidate.face === face)) {
-        found.push({ ...point, face });
-        if (found.length === 2) {
-          return [found[0]!, found[1]!];
-        }
-      }
+      hits.push({ ...point, face });
     }
   }
-  throw new Error(`found ${found.length} of two pickable faces`);
+  // The pick's edit handle stands where it was clicked, so each face is
+  // read away from its click point: at its hit farthest from it.
+  const faces = [...new Set(hits.map((hit) => hit.face))];
+  if (faces.length < 2) {
+    throw new Error(`found ${faces.length} of two pickable faces`);
+  }
+  const [first, second] = faces.slice(0, 2).map((face) => {
+    const onFace = hits.filter((hit) => hit.face === face);
+    const click = onFace[0]!;
+    const sample = onFace.reduce((far, hit) =>
+      Math.hypot(hit.x - click.x, hit.y - click.y) >
+      Math.hypot(far.x - click.x, far.y - click.y)
+        ? hit
+        : far
+    );
+    return { ...click, sample: { x: sample.x, y: sample.y } };
+  });
+  return [first!, second!];
 }
 
 interface ColourReading {
@@ -144,7 +158,7 @@ test('a picked face is drawn brighter than it was, and the rest recedes', async 
   const [picked, other] = await twoFacePoints(canvas);
   await parkPointer(canvas);
   await page.waitForTimeout(400);
-  const idlePicked = await colourAt(page, picked);
+  const idlePicked = await colourAt(page, picked.sample);
   const idleOther = await colourAt(page, other);
 
   await page.mouse.click(picked.x, picked.y);
@@ -159,7 +173,7 @@ test('a picked face is drawn brighter than it was, and the rest recedes', async 
   await expect
     .poll(
       async () => {
-        selectedPicked = await colourAt(page, picked);
+        selectedPicked = await colourAt(page, picked.sample);
         recededOther = await colourAt(page, other);
         return (
           // Lifted, never darkened.

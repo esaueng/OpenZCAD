@@ -18,6 +18,115 @@ import {
   revealModelPanel
 } from './openzcad-fixtures';
 
+for (const scope of ['profile', 'all'] as const) {
+  test(
+    `erases ${scope} despite a failed settings upload`,
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      await stubApi(page);
+      await page.route('**/api/session', (route) =>
+        route.fulfill({
+          json: {
+            userId: 'user_e2e',
+            email: 'reset@example.test',
+            mode: 'email-code'
+          }
+        })
+      );
+      await page.route('**/api/health', (route) =>
+        route.fulfill({
+          json: {
+            status: 'ok',
+            environment: 'beta',
+            time: new Date().toISOString(),
+            accountErasureReady: true,
+            projectErasureReady: true
+          }
+        })
+      );
+      let failedUploads = 0;
+      await page.route('**/api/settings', (route) => {
+        if (route.request().method() !== 'PATCH') return route.fallback();
+        failedUploads++;
+        return route.fulfill({
+          status: 403,
+          json: { error: 'Device is locked' }
+        });
+      });
+      await page.route('**/api/account/deletion-preview?*', (route) =>
+        route.fulfill({
+          json: {
+            confirmationKind: 'email',
+            confirmationText: 'reset@example.test',
+            projectCount: 0,
+            documentBytes: 0,
+            revisionBytes: 0,
+            revisionCount: 0,
+            collaboratorCount: 0
+          }
+        })
+      );
+      const deletions: unknown[] = [];
+      await page.route('**/api/account/delete-data', (route) => {
+        deletions.push(route.request().postDataJSON());
+        return route.fulfill({
+          json: { ok: true, scope, deletedProjectIds: [], signedOut: true }
+        });
+      });
+      await page.goto('/');
+      await page.getByRole('button', { name: 'Open settings' }).click();
+      await page
+        .getByRole('radiogroup', { name: 'Default units', exact: true })
+        .getByRole('radio', { name: 'Inches', exact: true })
+        .check();
+      await expect.poll(() => failedUploads).toBeGreaterThan(0);
+      await page
+        .getByRole('button', { name: 'Privacy & data', exact: true })
+        .click();
+      await page
+        .getByLabel(scope === 'profile' ? 'Profile' : 'Everything', {
+          exact: true
+        })
+        .check();
+      await page
+        .getByRole('button', {
+          name: scope === 'profile' ? 'Delete profile' : 'Delete all data',
+          exact: true
+        })
+        .click();
+      const dialog = page.getByRole('dialog', {
+        name:
+          scope === 'profile'
+            ? 'Delete your cloud profile?'
+            : 'Delete all cloud data?',
+        exact: true
+      });
+      await dialog
+        .getByLabel('Deletion confirmation')
+        .fill('reset@example.test');
+      await dialog
+        .getByRole('button', {
+          name:
+            scope === 'profile'
+              ? 'Delete cloud profile'
+              : 'Delete all cloud data',
+          exact: true
+        })
+        .click();
+      await expect
+        .poll(() => deletions)
+        .toEqual([{ scope, confirmation: 'reset@example.test' }]);
+      await expect(dialog).toHaveCount(0);
+      await page.getByRole('button', { name: 'General', exact: true }).click();
+      await expect(
+        page
+          .getByRole('radiogroup', { name: 'Default units', exact: true })
+          .getByRole('radio', { name: 'Inches', exact: true })
+      ).toBeChecked();
+    }
+  );
+}
+
 test(
   'discloses free built-in AI data use and lets users choose a personal model',
   { tag: '@ci-smoke' },
@@ -51,10 +160,10 @@ test(
     const settings = page.getByRole('dialog', { name: 'Settings' });
     await expect(settings).toContainText('minimax/minimax-m3.1-flash:free');
     await expect(
-      settings.getByText(/Free with no personal API key/)
+      settings.getByText(/Free to use, with usage limits/)
     ).toBeVisible();
     await expect(
-      settings.getByText(/may retain this data or use it for training/)
+      settings.getByText(/may keep them or use them for training/)
     ).toBeVisible();
     await expect(
       settings.getByRole('link', { name: 'OpenRouter data policies' })
@@ -99,22 +208,30 @@ test('hides profile details by default, keeps disclosure across reopen and reset
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Account', exact: true }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
-  await expect(
-    settings.getByText('Name hidden', { exact: true })
-  ).toBeVisible();
+  const profile = settings.locator('.setting-row', {
+    has: page.getByRole('button', { name: 'Sign out' })
+  });
+  const hidden = profile.getByRole('button', { name: 'Show personal info' });
+  // The name and the email, each blurred and each its own switch.
+  await expect(hidden).toHaveCount(2);
   await expect(settings).not.toContainText('Screenshot Person');
   await expect(settings).not.toContainText('screenshot@example.com');
-  await settings.getByRole('button', { name: 'Show personal info' }).click();
+  await hidden.last().click();
   await expect(
-    settings.getByText('Screenshot Person', { exact: true })
+    profile.getByRole('button', { name: 'Screenshot Person', exact: true })
   ).toBeVisible();
   await expect(
-    settings.getByText('screenshot@example.com', { exact: true })
+    profile.getByRole('button', {
+      name: 'screenshot@example.com',
+      exact: true
+    })
   ).toBeVisible();
-  await settings.getByRole('button', { name: 'Hide personal info' }).click();
+  await profile
+    .getByRole('button', { name: 'screenshot@example.com', exact: true })
+    .click();
   await expect(settings).not.toContainText('Screenshot Person');
   await expect(settings).not.toContainText('screenshot@example.com');
-  await settings.getByRole('button', { name: 'Show personal info' }).click();
+  await hidden.first().click();
   await page
     .getByRole('button', {
       name: 'Close settings and go back to projects',
@@ -128,11 +245,12 @@ test('hides profile details by default, keeps disclosure across reopen and reset
   ).toBeVisible();
   await page.reload();
   await expect(
-    settings.getByText('Name hidden', { exact: true })
-  ).toBeVisible();
+    profile.getByRole('button', { name: 'Show personal info' })
+  ).toHaveCount(2);
+  await expect(settings).not.toContainText('Screenshot Person');
 });
 
-test('suggests a part name without focusing it and retains its draft on reload', async ({
+test('suggests a part name without focusing it, a fresh one on reload, and keeps a typed name', async ({
   page
 }) => {
   await page.addInitScript(() => {
@@ -161,10 +279,18 @@ test('suggests a part name without focusing it and retains its draft on reload',
   await expect(projectName).not.toHaveValue('New Part');
   const initialName = await projectName.inputValue();
 
+  // A reload suggests a new name rather than the previous one (#1576).
   await page.reload();
   await expect(projectName).toBeVisible();
   await expect(projectName).not.toBeFocused();
-  await expect(projectName).toHaveValue(initialName);
+  await expect(projectName).not.toHaveValue('New Part');
+  await expect(projectName).not.toHaveValue(initialName);
+
+  // A name the user typed is a draft, and survives the reload.
+  await projectName.fill('Typed Bracket');
+  await page.reload();
+  await expect(projectName).toBeVisible();
+  await expect(projectName).toHaveValue('Typed Bracket');
 });
 
 test('keeps command names visible at the compact desktop breakpoint', async ({
@@ -552,11 +678,24 @@ test('settings name their sections and search individual settings', async ({
   // Leaving the field pulls a refused value to the nearest bound storage
   // keeps, rather than showing it while the default is what gets saved.
   await expect(page.getByLabel('Linear snap increment')).toHaveValue('0.001');
+
+  // I69 (13 November review): field of view 500 became 90 in silence. The
+  // range is printed under the field, and the pull to a bound is announced.
+  await page.getByRole('button', { name: 'Viewport', exact: true }).click();
+  const fieldOfView = page.getByLabel('Perspective field of view');
+  await expect(fieldOfView).toHaveAccessibleDescription(/^\d+° – \d+°$/);
+  await fieldOfView.fill('500');
+  await fieldOfView.press('Tab');
+  await expect(fieldOfView).not.toHaveValue('500');
+  await expect(
+    page.getByRole('status').filter({ hasText: '500° is above the maximum' })
+  ).toBeVisible();
   await page.getByRole('button', { name: 'General', exact: true }).click();
 
-  // The search itself is desktop-only, but below 580px the nav collapses to
-  // icons whose labels are hidden; those buttons used to reach the
-  // accessibility tree with no name at all.
+  // Below 580px the nav narrows to a rail. Its buttons once reached the
+  // accessibility tree with no name; then they showed icons alone, and the
+  // search went with the labels (13 November review, I70). Each section now
+  // reads by name under its icon, and the search stays in the head.
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(
     page.getByRole('button', { name: 'General', exact: true })
@@ -564,6 +703,23 @@ test('settings name their sections and search individual settings', async ({
   await expect(
     page.getByRole('button', { name: 'Viewport', exact: true })
   ).toBeVisible();
+  for (const label of ['Viewport', 'Privacy & data', 'Advanced']) {
+    await expect(
+      page.locator('.settings-nav nav button span', { hasText: label })
+    ).toBeVisible();
+  }
+  await expect(page.getByLabel('Find a setting')).toBeVisible();
+  await page.getByLabel('Find a setting').fill('Default units');
+  await expect(
+    page.getByRole('button', { name: 'Viewport', exact: true })
+  ).toHaveCount(0);
+  await page.getByLabel('Find a setting').fill('');
+  const overflow = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
 
   await page
     .getByRole('button', {
@@ -580,8 +736,9 @@ const DARK_GROUND = 'rgb(16, 18, 21)';
 const LIGHT_GROUND = 'rgb(242, 242, 242)';
 const DARK_SURFACE = 'rgb(24, 27, 31)';
 const LIGHT_SURFACE = 'rgb(250, 250, 250)';
-// The 3D stage behind the canvas turns with the chrome.
-const DARK_STAGE = 'rgb(16, 18, 21)';
+// The 3D stage behind the canvas turns with the chrome. The dark stage is
+// the neutral graphite `--color-viewport-bg` (#18191c, #1293), not the ground.
+const DARK_STAGE = 'rgb(24, 25, 28)';
 const LIGHT_STAGE = 'rgb(238, 238, 238)';
 
 function pageGround(page: Page) {
@@ -1160,8 +1317,9 @@ for (const tier of ['free', 'premium'] as const) {
           entitlements: {
             tier,
             projectLimit: premium ? 10_000 : 100,
-            projectStorageLimitBytes: (premium ? 25 : 1) * 1024 ** 3,
-            artifactLimitBytes: (premium ? 25 : 1) * 1024 ** 3,
+            storageLimitBytes: premium ? 1024 ** 3 : 100 * 1024 ** 2,
+            projectStorageLimitBytes: premium ? 1024 ** 3 : 100 * 1024 ** 2,
+            artifactLimitBytes: premium ? 1024 ** 3 : 100 * 1024 ** 2,
             ai: {
               requestLimit: premium ? 600 : 6,
               costLimitUnits: premium ? 2400 : 24,
@@ -1181,9 +1339,11 @@ for (const tier of ['free', 'premium'] as const) {
       .filter({ hasText: 'Membership' });
     await expect(membership).toContainText(premium ? 'Premium' : 'Free');
     await expect(membership).toContainText(
-      `${premium ? '10,000' : '100'} cloud projects · ${premium ? '25' : '1'} GB project storage · ${premium ? '25' : '1'} GB cloud file storage · ${premium ? 600 : 6} hosted AI requests per 10 minutes`
+      `${premium ? '10,000' : '100'} cloud projects · ${premium ? '1 GB' : '100 MB'} storage · ${premium ? 600 : 6} hosted AI requests per 10 minutes`
     );
-    await expect(membership).toContainText('cloud file storage');
+    // One allowance for everything the account stores, not two.
+    await expect(membership).not.toContainText('cloud file storage');
+    await expect(membership).not.toContainText('project storage');
   });
 }
 
@@ -1290,9 +1450,13 @@ test('reset settings revokes analytics consent and persists the default', async 
     exact: true
   });
   await consent.check();
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'Advanced', exact: true }).click();
   await page
+    .getByRole('button', { name: 'Reset settings', exact: true })
+    .click();
+  // Asked in-page, never with a native confirm.
+  await page
+    .getByRole('alertdialog', { name: 'Reset settings on this device?' })
     .getByRole('button', { name: 'Reset settings', exact: true })
     .click();
   await page

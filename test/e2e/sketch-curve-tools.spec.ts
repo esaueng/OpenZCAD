@@ -135,6 +135,9 @@ test('the curve slot draws ellipses, elliptical arcs and both splines', async ({
   await expect(status).toContainText('Added spline.');
 
   // The Control tile; Enter finishes an open spline through what is placed.
+  // The strip folded at the first canvas press (I37); the rail button
+  // brings it back.
+  await rail.getByRole('button', { name: /^Curve:/ }).click();
   await curveType.getByRole('radio', { name: 'Control' }).click();
   await click(0.55, 0.7);
   await click(0.62, 0.55);

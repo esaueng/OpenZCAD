@@ -138,6 +138,17 @@
   box-shadow: var(--shadow-1);
 }
 
+/* The notice lane stands on the floating timeline, not on its tracks: a
+   toast at the lane's usual foot covered the first track (I7). The
+   timeline measures its own height (MotionStudyTimeline). */
+.workspace.column-layout .viewer-area:has(.motion-timeline-floating) {
+  --lane-base: calc(
+    var(--island-gap) + var(--command-bar-h) +
+      var(--workspace-guidance-h, 0px) + 8px + var(--motion-timeline-h, 0px) +
+      8px
+  );
+}
+
 .motion-timeline-transport {
   display: flex;
   flex-wrap: wrap;
@@ -204,6 +215,18 @@
   color: var(--color-text-muted);
 }
 
+.motion-playback {
+  display: inline-flex;
+  flex: none;
+}
+
+.motion-playback .assembly-select {
+  flex: none;
+  width: auto;
+  height: 24px;
+  font-size: var(--fs-xs);
+}
+
 .motion-speed,
 .motion-toggle {
   flex: none;
@@ -245,6 +268,28 @@
 }
 
 /* Until the study first moves: what to do next. */
+.motion-timeline-recording {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-left: 6px;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A recording light: the shape says "recording" as well as the colour. */
+.motion-recording-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-error);
+}
+
 .motion-timeline-hint {
   min-width: 0;
   margin-left: 6px;

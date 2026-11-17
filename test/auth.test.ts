@@ -1,7 +1,14 @@
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { toUserId } from '@openzcad/shared';
-import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
+import {
+  MAX_ACCOUNT_PROJECTS,
+  MAX_ACCOUNT_STORAGE_BYTES,
+  toUserId
+} from '@openzcad/shared';
+import {
+  accountEntitlements,
+  D1R2PersistenceService
+} from '@openzcad/cloudflare-adapters';
 import { deleteAccountData } from '../apps/web/worker/accountDeletion';
 import { migratedDatabase, sqliteD1 } from './support/sqlite-d1';
 
@@ -13,6 +20,8 @@ import {
   createSessionCookie,
   generateLoginCode,
   getAuthConfig,
+  getBrowserAuthConfig,
+  provisionQaTurnstileCookie,
   hashLoginCode,
   identifyAssistantRequest,
   loginEmail,
@@ -175,18 +184,21 @@ function loginStartD1() {
         return statement;
       },
       async first<T>() {
-        if (query.includes('SELECT request_count')) {
-          return {
-            request_count: rates.get(String(values[0])) ?? 0
-          } as T;
+        // The login limiter counts with RETURNING, and only while the
+        // window has room (`values[2]` is the limit).
+        if (
+          query.includes('INSERT INTO auth_rate_limits') &&
+          query.includes('RETURNING request_count')
+        ) {
+          const bucket = String(values[0]);
+          const count = rates.get(bucket) ?? 0;
+          if (count >= Number(values[2])) return null;
+          rates.set(bucket, count + 1);
+          return { request_count: count + 1 } as T;
         }
         return null;
       },
       async run() {
-        if (query.includes('INSERT INTO auth_rate_limits')) {
-          const bucket = String(values[0]);
-          rates.set(bucket, (rates.get(bucket) ?? 0) + 1);
-        }
         if (query.includes('INSERT INTO auth_email_challenges')) {
           challenge = {
             id: String(values[0]),
@@ -245,10 +257,13 @@ function signInHarness(email = 'person@example.com') {
       })
     )
   );
-  const start = (ip: string) =>
+  const start = (ip: string, cookie?: string) =>
     startEmailLogin(
       new Request('https://example.com/api/auth/email/start', {
-        headers: { 'cf-connecting-ip': ip }
+        headers: {
+          'cf-connecting-ip': ip,
+          ...(cookie === undefined ? {} : { cookie })
+        }
       }),
       { email, turnstileToken: 'turnstile-token' },
       env
@@ -256,6 +271,11 @@ function signInHarness(email = 'person@example.com') {
   const verify = (challengeId: string, code: string) =>
     verifyEmailLogin({ challengeId, code }, env);
   return { env, sent, start, verify };
+}
+
+/** The `name=value` pair a browser sends back for a Set-Cookie line. */
+function cookiePair(setCookie: string): string {
+  return setCookie.split(';')[0]!;
 }
 
 function wrongCode(code: string): string {
@@ -660,7 +680,24 @@ describe('sign-in cannot be denied by someone who only knows the email', () => {
           env
         );
       await startOtherEmail();
-      const { session } = await verify(first.challengeId, firstCode);
+      const { session, knownDeviceCookie } = await verify(
+        first.challengeId,
+        firstCode
+      );
+      // A code to the signed-in browser's own allowance leaves a device
+      // bucket under the email's, which deletion erases too.
+      await start('198.51.100.9', cookiePair(knownDeviceCookie));
+      const deviceBuckets = () =>
+        (
+          env.DB as unknown as {
+            prepare(sql: string): { first(): Promise<{ count: number }> };
+          }
+        )
+          .prepare(
+            "SELECT COUNT(*) AS count FROM auth_rate_limits WHERE bucket GLOB 'email:*:device:*'"
+          )
+          .first();
+      expect(await deviceBuckets()).toEqual({ count: 1 });
       const deletionEnv = {
         ...env,
         PROJECT_STORAGE: {
@@ -678,6 +715,7 @@ describe('sign-in cannot be denied by someone who only knows the email', () => {
           new D1R2PersistenceService(deletionEnv)
         )
       ).resolves.toMatchObject({ ok: true, signedOut: true });
+      expect(await deviceBuckets()).toEqual({ count: 0 });
 
       // Both requesters exhausted three codes before deletion. Neither may
       // retain a silent limiter after its pending challenges have been erased.
@@ -830,6 +868,160 @@ describe('sign-in cannot be denied by someone who only knows the email', () => {
     });
   });
 
+  it('keeps sending codes to a browser that signed in before once other requesters spend the shared allowance', async () => {
+    const { sent, start, verify } = signInHarness();
+    const first = await start('198.51.100.7');
+    const signedIn = await verify(first.challengeId, sent.at(-1)!);
+    expect(signedIn.knownDeviceCookie).toMatch(
+      /^__Host-openzcad_known_device=[A-Za-z0-9_-]{22}\.\d+\.[0-9a-f]{64}; Path=\/; HttpOnly; Secure; SameSite=Strict; Max-Age=15552000$/
+    );
+    const device = cookiePair(signedIn.knownDeviceCookie);
+
+    // Other requesters spend the rest of the shared allowance first.
+    for (let host = 1; host <= 9; host += 1) {
+      const { challengeId } = await start(`203.0.113.${host}`);
+      await expect(
+        verify(challengeId, wrongCode(sent.at(-1)!))
+      ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+    }
+    expect(sent).toHaveLength(10);
+    const sentCount = sent.length;
+    await start('203.0.113.50');
+    await start('198.51.100.8');
+    expect(sent).toHaveLength(sentCount);
+
+    // The owner's browser draws on its own allowance, from any address.
+    const owner = await start('192.0.2.200', device);
+    expect(sent).toHaveLength(sentCount + 1);
+    await expect(
+      verify(owner.challengeId, sent.at(-1)!)
+    ).resolves.toMatchObject({ session: { email: 'person@example.com' } });
+  });
+
+  it('honours a known-device cookie only for its own email, untampered and unexpired', async () => {
+    const owner = signInHarness();
+    const first = await owner.start('198.51.100.7');
+    const { knownDeviceCookie } = await owner.verify(
+      first.challengeId,
+      owner.sent.at(-1)!
+    );
+    const device = cookiePair(knownDeviceCookie);
+    const [name, value] = device.split('=') as [string, string];
+    const [id, expiry, mac] = value.split('.') as [string, string, string];
+
+    const other = signInHarness('someone@example.com');
+    for (let host = 1; host <= 10; host += 1) {
+      await other.start(`203.0.113.${host}`);
+    }
+    expect(other.sent).toHaveLength(10);
+    // Another email's device cookie, or a forged one, earns nothing here.
+    await other.start('192.0.2.200', device);
+    await other.start(
+      '192.0.2.201',
+      `${name}=${id}.${expiry}.${mac.replace(/^./, (c) => (c === '0' ? '1' : '0'))}`
+    );
+    await other.start(
+      '192.0.2.202',
+      `${name}=${id}.${Number(expiry) + 1}.${mac}`
+    );
+    expect(other.sent).toHaveLength(10);
+
+    // An expired cookie earns nothing for its own email either.
+    for (let host = 1; host <= 9; host += 1) {
+      await owner.start(`203.0.113.${host}`);
+    }
+    expect(owner.sent).toHaveLength(10);
+    const now = vi
+      .spyOn(Date, 'now')
+      .mockReturnValue((Number(expiry) + 1) * 1000);
+    try {
+      const sentCount = owner.sent.length;
+      // A new window: spend the shared allowance again, then try the cookie.
+      for (let host = 1; host <= 10; host += 1) {
+        await owner.start(`203.0.113.${100 + host}`);
+      }
+      const shared = owner.sent.length;
+      expect(shared).toBe(sentCount + 10);
+      await owner.start('192.0.2.200', device);
+      expect(owner.sent).toHaveLength(shared);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('cools an email down after a day of wrong codes, still sending codes to a browser that signed in before', async () => {
+    const harness = signInHarness();
+    const { env, sent, start, verify } = harness;
+    let clock = Date.parse('2026-11-13T08:00:00Z');
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const failures = async () =>
+      (await env.DB.prepare(
+        'SELECT COALESCE(SUM(attempts), 0) AS count FROM auth_email_challenges'
+      ).first<{ count: number }>())!.count;
+    try {
+      const first = await start('198.51.100.7');
+      const device = cookiePair(
+        (await verify(first.challengeId, sent.at(-1)!)).knownDeviceCookie
+      );
+      clock += 15 * 60 * 1000;
+
+      // Fifty wrong codes, each code tried until it locks, ten codes a
+      // window from fresh addresses.
+      let host = 0;
+      while ((await failures()) < 50) {
+        for (let code = 0; code < 10 && (await failures()) < 50; code += 1) {
+          host += 1;
+          const { challengeId } = await start(`192.0.2.${host}`);
+          const guess = wrongCode(sent.at(-1)!);
+          for (;;) {
+            const refusal = await verify(challengeId, guess).catch(
+              (error: { code: string }) => error
+            );
+            const code = (refusal as { code?: string }).code;
+            expect(code).toMatch(/^AUTH_CODE_(INVALID|LOCKED)$/);
+            if (code === 'AUTH_CODE_LOCKED') break;
+          }
+        }
+        clock += 15 * 60 * 1000;
+      }
+
+      // A fresh window: the shared allowance sends nothing, to a requester
+      // with wrong codes of its own or to a fresh one asking first.
+      clock += 15 * 60 * 1000;
+      let sentCount = sent.length;
+      await start('192.0.2.1');
+      await start('198.51.100.8');
+      expect(sent).toHaveLength(sentCount);
+
+      // The browser that signed in before still gets its codes.
+      const owner = await start('198.51.100.9', device);
+      expect(sent).toHaveLength(sentCount + 1);
+      await expect(
+        verify(owner.challengeId, sent.at(-1)!)
+      ).resolves.toMatchObject({ session: { email: 'person@example.com' } });
+
+      // Past the failure limit each of its codes allows a single try.
+      clock += 15 * 60 * 1000;
+      const oneTry = await start('198.51.100.9', device);
+      const oneTryCode = sent.at(-1)!;
+      await expect(
+        verify(oneTry.challengeId, wrongCode(oneTryCode))
+      ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+      await expect(
+        verify(oneTry.challengeId, oneTryCode)
+      ).rejects.toMatchObject({ status: 429, code: 'AUTH_CODE_LOCKED' });
+
+      // Once those failures age out of the day, the email cools off.
+      clock += 25 * 60 * 60 * 1000;
+      sentCount = sent.length;
+      await start('192.0.2.1');
+      expect(sent).toHaveLength(sentCount + 1);
+    } finally {
+      now.mockRestore();
+    }
+    // About forty codes and a hundred verifications on SQLite.
+  }, 120_000);
+
   it("cancels every one of the email's pending codes on a successful sign-in", async () => {
     const { sent, start, verify } = signInHarness();
     const first = await start('198.51.100.7');
@@ -840,6 +1032,52 @@ describe('sign-in cannot be denied by someone who only knows the email', () => {
     await expect(verify(second.challengeId, sent[1]!)).rejects.toMatchObject({
       code: 'AUTH_CODE_INVALID'
     });
+  });
+
+  it("writes the tier's storage limits when sign-in creates or claims the account row", async () => {
+    // The quota triggers read these columns. Leaving the 2 GiB defaults
+    // would let a new account outgrow its allowance until a refresh.
+    const readLimits = (env: { DB: D1Database }, email: string) =>
+      env.DB.prepare(
+        `SELECT artifact_limit_bytes, project_limit, project_storage_limit_bytes
+         FROM users WHERE email = ?`
+      )
+        .bind(email)
+        .first();
+
+    const free = signInHarness('free@example.com');
+    const freeStart = await free.start('198.51.100.7');
+    await free.verify(freeStart.challengeId, free.sent[0]!);
+    expect(await readLimits(free.env, 'free@example.com')).toEqual({
+      artifact_limit_bytes: MAX_ACCOUNT_STORAGE_BYTES,
+      project_limit: MAX_ACCOUNT_PROJECTS,
+      project_storage_limit_bytes: MAX_ACCOUNT_STORAGE_BYTES
+    });
+
+    const premium = signInHarness('premium@example.com');
+    const env: typeof premium.env & { PREMIUM_USER_EMAILS?: string } =
+      premium.env;
+    env.PREMIUM_USER_EMAILS = 'premium@example.com';
+    const expected = accountEntitlements(env, 'premium@example.com');
+    // An existing row still carrying the column defaults is brought in line.
+    const first = await premium.start('198.51.100.7');
+    await premium.verify(first.challengeId, premium.sent[0]!);
+    await env.DB.prepare(
+      `UPDATE users SET artifact_limit_bytes = 2147483648,
+         project_storage_limit_bytes = 2147483648 WHERE email = ?`
+    )
+      .bind('premium@example.com')
+      .run();
+    const second = await premium.start('203.0.113.1');
+    await premium.verify(second.challengeId, premium.sent[1]!);
+    expect(await readLimits(env, 'premium@example.com')).toEqual({
+      artifact_limit_bytes: expected.storageLimitBytes,
+      project_limit: expected.projectLimit,
+      project_storage_limit_bytes: expected.storageLimitBytes
+    });
+    expect(expected.storageLimitBytes).toBeGreaterThan(
+      MAX_ACCOUNT_STORAGE_BYTES
+    );
   });
 
   it('permits only one session when sibling verifications overlap', async () => {
@@ -1191,5 +1429,298 @@ describe('assistant request identity', () => {
         AI_IDENTITY_PEPPER: 'identity-test-pepper'
       })
     ).rejects.toThrow('session expired');
+  });
+});
+
+describe('temporary beta QA Turnstile capability', () => {
+  const token = 'Q'.repeat(43);
+  const issuedAt = '2026-11-16T00:00:00Z';
+  const expiry = '2026-11-22T00:00:00Z';
+  const secret = JSON.stringify({ token, issuedAt, expiresAt: expiry });
+  const request = (cookie?: string, origin = 'https://beta.zcad.app') =>
+    new Request(`${origin}/api/auth/qa-turnstile`, {
+      method: 'POST',
+      headers: {
+        origin,
+        authorization: `Bearer ${token}`,
+        ...(cookie ? { cookie } : {})
+      }
+    });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+  function harness() {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-16T12:00:00Z'));
+    const flow = signInHarness('qa@esau.bot');
+    const env = { ...flow.env, QA_TURNSTILE_BYPASS: secret };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ success: false }))
+    );
+    return { ...flow, env };
+  }
+
+  it('provisions a secure cookie, requires the actual email code, and retains requester limits', async () => {
+    const flow = harness();
+    const setCookie = await provisionQaTurnstileCookie(request(), flow.env);
+    expect(setCookie).toContain(
+      'Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age='
+    );
+    expect(setCookie).not.toContain(token);
+    const cookie = cookiePair(setCookie);
+    const req = request(cookie);
+    expect(await getBrowserAuthConfig(req, flow.env)).toMatchObject({
+      qaTurnstileBypassEmail: 'qa@esau.bot'
+    });
+    const input = { email: ' QA@ESAU.BOT ', turnstileToken: '' };
+    const first = await startEmailLogin(req, input, flow.env);
+    expect(flow.sent).toHaveLength(1);
+    await expect(
+      verifyEmailLogin(
+        { challengeId: first.challengeId, code: wrongCode(flow.sent[0]!) },
+        flow.env
+      )
+    ).rejects.toThrow();
+    const verified = await verifyEmailLogin(
+      { challengeId: first.challengeId, code: flow.sent[0]! },
+      flow.env
+    );
+    expect(verified.session.email).toBe('qa@esau.bot');
+    for (let i = 0; i < 3; i++) await startEmailLogin(req, input, flow.env);
+    expect(flow.sent).toHaveLength(3);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('retains the per-IP send limit', async () => {
+    const flow = harness();
+    const cookie = cookiePair(
+      await provisionQaTurnstileCookie(request(), flow.env)
+    );
+    for (let i = 0; i < 10; i++)
+      await startEmailLogin(
+        request(cookie),
+        { email: 'qa@esau.bot', turnstileToken: '' },
+        flow.env
+      );
+    await expect(
+      startEmailLogin(
+        request(cookie),
+        { email: 'qa@esau.bot', turnstileToken: '' },
+        flow.env
+      )
+    ).rejects.toMatchObject({ status: 429 });
+  });
+
+  it('never bypasses another email or publishes the capability without its cookie', async () => {
+    const flow = harness();
+    const cookie = cookiePair(
+      await provisionQaTurnstileCookie(request(), flow.env)
+    );
+    expect(await getBrowserAuthConfig(request(), flow.env)).not.toHaveProperty(
+      'qaTurnstileBypassEmail'
+    );
+    expect(getAuthConfig(flow.env)).not.toHaveProperty(
+      'qaTurnstileBypassEmail'
+    );
+    await expect(
+      startEmailLogin(
+        request(cookie),
+        { email: 'other@example.com', turnstileToken: 'real-token' },
+        flow.env
+      )
+    ).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_INVALID' });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(flow.sent).toHaveLength(0);
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['malformed', '{'],
+    ['missing issuance', JSON.stringify({ token, expiresAt: expiry })],
+    [
+      'seven days plus one second',
+      JSON.stringify({ token, issuedAt, expiresAt: '2026-11-23T00:00:01Z' })
+    ],
+    [
+      'invalid issuance',
+      JSON.stringify({ token, issuedAt: 'invalid', expiresAt: expiry })
+    ],
+    [
+      'future issuance',
+      JSON.stringify({
+        token,
+        issuedAt: '2026-11-17T00:00:00Z',
+        expiresAt: expiry
+      })
+    ],
+    [
+      'short token',
+      JSON.stringify({ token: 'short', issuedAt, expiresAt: expiry })
+    ],
+    [
+      'invalid expiry',
+      JSON.stringify({ token, issuedAt, expiresAt: 'invalid' })
+    ],
+    [
+      'expired',
+      JSON.stringify({ token, issuedAt, expiresAt: '2026-11-15T00:00:00Z' })
+    ],
+    [
+      'longer than seven days',
+      JSON.stringify({ token, issuedAt, expiresAt: '2026-12-01T00:00:00Z' })
+    ]
+  ])('fails closed with %s configuration', async (_label, config) => {
+    const flow = harness();
+    const env = { ...flow.env, QA_TURNSTILE_BYPASS: config };
+    await expect(
+      provisionQaTurnstileCookie(request(), env)
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      startEmailLogin(
+        request('__Host-openzcad_qa_turnstile=forged'),
+        { email: 'qa@esau.bot', turnstileToken: '' },
+        env
+      )
+    ).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_REQUIRED' });
+  });
+
+  it('rejects wrong credentials, cross-origin provisioning, other hosts and development', async () => {
+    const flow = harness();
+    const refusedHeaders: Record<string, string>[] = [
+      { origin: 'https://beta.zcad.app' },
+      { origin: 'https://evil.example', authorization: `Bearer ${token}` },
+      {
+        origin: 'https://beta.zcad.app',
+        authorization: `Bearer ${'X'.repeat(43)}`
+      }
+    ];
+    for (const headers of refusedHeaders) {
+      await expect(
+        provisionQaTurnstileCookie(
+          new Request('https://beta.zcad.app/api/auth/qa-turnstile', {
+            method: 'POST',
+            headers
+          }),
+          flow.env
+        )
+      ).rejects.toMatchObject({ status: 403 });
+    }
+    for (const origin of [
+      'https://zcad.app',
+      'https://preview.dev.zcad.app',
+      'http://beta.zcad.app'
+    ]) {
+      await expect(
+        provisionQaTurnstileCookie(request(undefined, origin), flow.env)
+      ).rejects.toMatchObject({ status: 403 });
+    }
+    await expect(
+      provisionQaTurnstileCookie(request(), {
+        ...flow.env,
+        ENVIRONMENT: 'development'
+      })
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('renews beyond the previous deadline by rotating the secret without code changes', async () => {
+    const flow = harness();
+    const oldCookie = cookiePair(
+      await provisionQaTurnstileCookie(request(), flow.env)
+    );
+    vi.setSystemTime(new Date('2026-11-24T12:00:00Z'));
+    const sameTokenNewDates = {
+      ...flow.env,
+      QA_TURNSTILE_BYPASS: JSON.stringify({
+        token,
+        issuedAt: '2026-11-24T12:00:00Z',
+        expiresAt: '2026-12-01T12:00:00Z'
+      })
+    };
+    expect(
+      await getBrowserAuthConfig(request(oldCookie), sameTokenNewDates)
+    ).not.toHaveProperty('qaTurnstileBypassEmail');
+    const nextToken = 'N'.repeat(43);
+    const renewed = {
+      ...flow.env,
+      QA_TURNSTILE_BYPASS: JSON.stringify({
+        token: nextToken,
+        issuedAt: '2026-11-24T12:00:00Z',
+        expiresAt: '2026-12-01T12:00:00Z'
+      })
+    };
+    expect(
+      await getBrowserAuthConfig(request(oldCookie), renewed)
+    ).not.toHaveProperty('qaTurnstileBypassEmail');
+    const nextRequest = new Request(
+      'https://beta.zcad.app/api/auth/qa-turnstile',
+      {
+        method: 'POST',
+        headers: {
+          origin: 'https://beta.zcad.app',
+          authorization: `Bearer ${nextToken}`
+        }
+      }
+    );
+    const nextCookie = cookiePair(
+      await provisionQaTurnstileCookie(nextRequest, renewed)
+    );
+    expect(
+      await getBrowserAuthConfig(request(nextCookie), renewed)
+    ).toMatchObject({ qaTurnstileBypassEmail: 'qa@esau.bot' });
+    expect(
+      await startEmailLogin(
+        request(nextCookie),
+        { email: 'qa@esau.bot', turnstileToken: '' },
+        renewed
+      )
+    ).toMatchObject({ expiresInSeconds: 600 });
+    expect(fetch).not.toHaveBeenCalled();
+    vi.setSystemTime(new Date('2026-12-01T12:00:00Z'));
+    expect(
+      await getBrowserAuthConfig(request(nextCookie), renewed)
+    ).not.toHaveProperty('qaTurnstileBypassEmail');
+  });
+
+  it('rechecks expiry and secret rotation for an already provisioned cookie', async () => {
+    const flow = harness();
+    const cookie = cookiePair(
+      await provisionQaTurnstileCookie(request(), flow.env)
+    );
+    const rotated = {
+      ...flow.env,
+      QA_TURNSTILE_BYPASS: JSON.stringify({
+        token: 'R'.repeat(43),
+        issuedAt,
+        expiresAt: expiry
+      })
+    };
+    for (const env of [
+      rotated,
+      { ...flow.env, QA_TURNSTILE_BYPASS: undefined }
+    ]) {
+      expect(
+        await getBrowserAuthConfig(request(cookie), env)
+      ).not.toHaveProperty('qaTurnstileBypassEmail');
+      await expect(
+        startEmailLogin(
+          request(cookie),
+          { email: 'qa@esau.bot', turnstileToken: '' },
+          env
+        )
+      ).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_REQUIRED' });
+    }
+    vi.setSystemTime(new Date(expiry));
+    expect(
+      await getBrowserAuthConfig(request(cookie), flow.env)
+    ).not.toHaveProperty('qaTurnstileBypassEmail');
+    await expect(
+      startEmailLogin(
+        request(cookie),
+        { email: 'qa@esau.bot', turnstileToken: '' },
+        flow.env
+      )
+    ).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_REQUIRED' });
   });
 });

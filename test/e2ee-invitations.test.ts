@@ -10,6 +10,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   invitationEmailHash,
+  invitationLinkTokenHash,
   publicKeyHash,
   signProjectInvitation,
   toBase64Url,
@@ -454,6 +455,48 @@ describe('encrypted invitations (slice 5-3a)', () => {
     expect(await json(again.response)).toMatchObject({
       code: 'INVITATION_EXISTS'
     });
+  });
+
+  it('mails exactly the link token a version 2 statement names', async () => {
+    const { srv, mailbox } = server();
+    const { projectId } = await encryptedProject(srv);
+    const token = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
+    const linked = await statement(projectId, {
+      linkTokenHash: await invitationLinkTokenHash(token)
+    });
+    const post = (body: Record<string, unknown>) =>
+      srv.call('POST', invitationsPath(projectId), { body });
+    // No token, another token, or a token beside a version 1 statement.
+    expect((await post(linked.body)).status).toBe(400);
+    const other = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
+    const wrong = await post({ ...linked.body, token: other });
+    expect(wrong.status).toBe(400);
+    expect(await json(wrong)).toMatchObject({
+      code: 'E2EE_INVITATION_INVALID'
+    });
+    const older = await statement(projectId);
+    expect((await post({ ...older.body, token })).status).toBe(400);
+    expect(mailbox.sent).toHaveLength(0);
+    // The token it names: mailed as is, stored as its hash.
+    expect((await post({ ...linked.body, token })).status).toBe(201);
+    expect(tokenOf(mailbox)).toBe(token);
+    expect(
+      rows<{ token_hash: string }>(
+        srv,
+        'SELECT token_hash FROM e2ee_invitations WHERE invitation_id = ?',
+        linked.value.invitationId
+      )[0]!.token_hash
+    ).toBe(await hashProjectInvitationToken(token));
+    // A token is one link: reused for another invitation, it is refused.
+    const reused = await statement(projectId, {
+      inviteeEmailHash: await invitationEmailHash(THIRD_EMAIL),
+      linkTokenHash: await invitationLinkTokenHash(token)
+    });
+    const again = await post({ ...reused.body, email: THIRD_EMAIL, token });
+    expect(again.status).toBe(409);
+    expect(mailbox.sent).toHaveLength(1);
+    // The invitee accepts it by that link.
+    expect((await accept(srv, token)).status).toBe(200);
   });
 
   it('refuses a forged, misdirected, uncertified or expired statement', async () => {

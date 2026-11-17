@@ -427,9 +427,11 @@ test('refuses an extrusion edit that invalidates a downstream fillet without sav
     timeout: 30_000
   });
   await edit.getByRole('button', { name: 'Done' }).click();
-  await expect(edit).toContainText('A selected edge no longer exists', {
-    timeout: 30_000
-  });
+  // The refusal names the feature whose saved pick this edit strands (#1500).
+  await expect(edit).toContainText(
+    '“Base corner fillets” can no longer find an edge or face',
+    { timeout: 30_000 }
+  );
   const options = edit.locator('details.in-place-command-options');
   const distance = edit.getByRole('button', { name: 'Distance', exact: true });
   await options.locator('summary').click();

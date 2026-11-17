@@ -78,7 +78,7 @@ test('T opens the text card, the outline follows the typing, and a click places 
   const field = card.getByLabel('Text', { exact: true });
   await expect(field).toBeFocused();
   await expect(card.getByRole('button', { name: 'Place' })).toBeDisabled();
-  await expect(card.getByLabel('Size (em)')).toHaveValue('10');
+  await expect(card.getByLabel('Em size')).toHaveValue('10');
   expect((await readLiveSketch(canvas)).textPreview).toBeNull();
 
   // Every keystroke lays the outline out again; nothing is written yet.
@@ -138,7 +138,7 @@ test('T opens the text card, the outline follows the typing, and a click places 
   );
   const editor = page.getByRole('form', { name: 'Edit text' });
   await expect(editor.getByLabel('Text', { exact: true })).toHaveValue('Boa');
-  await expect(editor.getByLabel('Size (em)')).toHaveValue('10');
+  await expect(editor.getByLabel('Em size')).toHaveValue('10');
   await editor.getByLabel('Text', { exact: true }).fill('Bob');
   await editor.getByRole('button', { name: 'Apply', exact: true }).click();
   await expect
@@ -267,7 +267,7 @@ for (const [units, mmPerUnit] of [
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     await page.keyboard.press('t');
     const card = page.getByRole('form', { name: 'Place text' });
-    const size = card.getByLabel('Size (em)');
+    const size = card.getByLabel('Em size');
     const place = card.getByRole('button', { name: 'Place', exact: true });
     await card.getByLabel('Text', { exact: true }).fill('Boa');
     const target = {
@@ -321,8 +321,8 @@ for (const [units, mmPerUnit] of [
     expect(Number(placed.y)).toBeCloseTo(preview.origin.y, 6);
     expect((await readLiveSketch(canvas)).textPreview).toBeNull();
     const editor = page.getByRole('form', { name: 'Edit text' });
-    await expect(editor.getByLabel('Size (em)')).toHaveValue('1 in');
-    await expect(editor.getByLabel('Size (em)')).toHaveAccessibleDescription(
+    await expect(editor.getByLabel('Em size')).toHaveValue('1 in');
+    await expect(editor.getByLabel('Em size')).toHaveAccessibleDescription(
       `= ${25.4 / mmPerUnit}`
     );
     await page
@@ -356,11 +356,11 @@ for (const [units, mmPerUnit] of [
     expect(object.data).toMatchObject({ text: 'Boa', size: '1 in' });
     await overview.getByLabel('Selected geometry').selectOption(object.id);
     await expect(editor.getByLabel('Text', { exact: true })).toHaveValue('Boa');
-    await expect(editor.getByLabel('Size (em)')).toHaveValue('1 in');
-    await expect(editor.getByLabel('Size (em)')).not.toHaveAttribute(
+    await expect(editor.getByLabel('Em size')).toHaveValue('1 in');
+    await expect(editor.getByLabel('Em size')).not.toHaveAttribute(
       'aria-invalid'
     );
-    await expect(editor.getByLabel('Size (em)')).toHaveAccessibleDescription(
+    await expect(editor.getByLabel('Em size')).toHaveAccessibleDescription(
       `= ${25.4 / mmPerUnit}`
     );
     await testInfo.attach(`${units}-typed-text-reopened`, {

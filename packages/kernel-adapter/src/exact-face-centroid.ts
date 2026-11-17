@@ -49,10 +49,14 @@ function pointAt(values: ArrayLike<number>, index: number): Vec3 {
 /**
  * One boundary edge as a polyline running from its start vertex to its end
  * vertex. A closed edge repeats its seam point, which the chainer drops.
+ *
+ * `deflection` fixes the chord deflection for a curved edge; absent, it is
+ * {@link CURVE_SAMPLE_RATIO} of the edge's own length.
  */
 function edgePolyline(
   kernel: RemusKernel,
-  edge: number
+  edge: number,
+  deflection?: number
 ): { points: Vec3[]; curved: boolean } | null {
   const curveType = kernel.getEdgeCurveType(edge);
   if (curveType === 'LINE') {
@@ -69,7 +73,10 @@ function edgePolyline(
   if (!Number.isFinite(edgeLength) || edgeLength <= 0) {
     return null;
   }
-  const flat = kernel.sampleEdge(edge, edgeLength * CURVE_SAMPLE_RATIO);
+  const flat = kernel.sampleEdge(
+    edge,
+    deflection ?? edgeLength * CURVE_SAMPLE_RATIO
+  );
   if (flat.length < 6) {
     return null;
   }
@@ -115,9 +122,11 @@ function extentOf(points: readonly Vec3[]): number {
  * repeated edge handle (seam), polylines that do not meet, or a loop that
  * does not close.
  */
-function chainWireLoop(
+export function chainWireLoop(
   kernel: RemusKernel,
-  wire: number
+  wire: number,
+  /** Chord deflection for curved edges; see {@link edgePolyline}. */
+  deflection?: number
 ): { loop: Vec3[]; curved: boolean } | null {
   const edges = Array.from(kernel.getWireEdges(wire));
   if (edges.length === 0) {
@@ -132,7 +141,7 @@ function chainWireLoop(
   const segments: Vec3[][] = [];
   let curved = false;
   for (const edge of edges) {
-    const polyline = edgePolyline(kernel, edge);
+    const polyline = edgePolyline(kernel, edge, deflection);
     if (!polyline) {
       return null;
     }

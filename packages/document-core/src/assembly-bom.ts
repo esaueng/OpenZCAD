@@ -1,6 +1,11 @@
 import {
+  ownEntry,
   isFeatureSuppressed,
+  millimetresPerUnit,
+  standardPartDesignation,
+  standardPartProblem,
   type BodyId,
+  type FeatureData,
   type FeatureNode,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -58,8 +63,50 @@ export function isLiveAssemblyBody(
   document: ProjectDocument,
   bodyId: BodyId
 ): boolean {
-  const body = document.derived.bodyRepresentations[bodyId];
+  const body = ownEntry(document.derived.bodyRepresentations, bodyId);
   return Boolean(body && !body.consumed);
+}
+
+/**
+ * M17: a standard part's row, from its catalogue designation, and how many
+ * parts its body holds (one per bore of a hole it is in). The length is the
+ * one the exact build placed (a hole-matched length included), else a
+ * literal stored one; with neither, the designation names no length. Parts
+ * of one designation are one part, whichever feature placed them.
+ */
+interface StandardPartRow {
+  designation: string;
+  count: number;
+}
+
+function standardPartRow(
+  document: ProjectDocument,
+  feature: FeatureNode & {
+    data: Extract<FeatureData, { featureKind: 'standard-part' }>;
+  }
+): StandardPartRow | null {
+  const data = feature.data;
+  if (standardPartProblem(data) !== null) return null;
+  const built = document.derived.standardParts?.[feature.featureId];
+  const stored =
+    typeof data.length === 'number'
+      ? data.length * millimetresPerUnit(document.units)
+      : null;
+  const lengths = built?.lengthsMm ?? [stored];
+  const distinct = [
+    ...new Set(
+      lengths.map((length) =>
+        length === null ? null : Number(length.toPrecision(9))
+      )
+    )
+  ];
+  const length = distinct.length === 1 ? (distinct[0] ?? undefined) : undefined;
+  const designation = standardPartDesignation(data, length);
+  return {
+    designation:
+      distinct.length > 1 ? `${designation} (mixed lengths)` : designation,
+    count: Math.max(1, lengths.length)
+  };
 }
 
 /**
@@ -71,13 +118,18 @@ export function isLiveAssemblyBody(
  * Expression-backed scales are conservative: only an absent or literal 1
  * proves a rigid placement without evaluating geometry or parameter units.
  */
-function partIdentities(document: ProjectDocument): Map<BodyId, string> {
+function partIdentities(document: ProjectDocument): {
+  identities: Map<BodyId, string>;
+  standard: Map<BodyId, StandardPartRow>;
+} {
   const features = new Map(
     Object.values(document.nodes)
       .filter((node): node is FeatureNode => node.kind === 'feature')
       .map((node) => [node.featureId, node])
   );
   const identities = new Map<BodyId, string>();
+  // M17: the standard part each body shows, which a rigid copy keeps.
+  const standard = new Map<BodyId, StandardPartRow>();
   for (const id of document.featureOrder) {
     const feature = features.get(id);
     if (!feature || isFeatureSuppressed(feature)) continue;
@@ -92,17 +144,28 @@ function partIdentities(document: ProjectDocument): Map<BodyId, string> {
             feature.bodyId,
             (rigid && identities.get(data.targetBodyId)) || own
           );
+          const source = rigid ? standard.get(data.targetBodyId) : undefined;
+          if (source) standard.set(feature.bodyId, source);
         }
       } else if (!rigid) {
         identities.set(data.targetBodyId, own);
+        standard.delete(data.targetBodyId);
       }
+    } else if (data.featureKind === 'standard-part' && feature.bodyId) {
+      const row = standardPartRow(
+        document,
+        feature as FeatureNode & { data: typeof data }
+      );
+      identities.set(feature.bodyId, row ? `standard:${row.designation}` : own);
+      if (row) standard.set(feature.bodyId, row);
     } else if (feature.bodyId) {
       identities.set(feature.bodyId, own);
     } else if (data.featureKind === 'direct-edit') {
       identities.set(data.targetBodyId, own);
+      standard.delete(data.targetBodyId);
     }
   }
-  return identities;
+  return { identities, standard };
 }
 
 export function deriveAssemblyBom(
@@ -113,7 +176,7 @@ export function deriveAssemblyBom(
   const components = document.assembly?.components ?? [];
   if (components.length === 0) return { rows: [], totalQuantity: 0 };
   const resolved = assemblyComponentBodies(document, isLive);
-  const identities = partIdentities(document);
+  const { identities, standard } = partIdentities(document);
   const bodyNames = new Map<BodyId, string>();
   for (const node of Object.values(document.nodes))
     if (node.kind === 'body') bodyNames.set(node.bodyId, node.name);
@@ -126,11 +189,14 @@ export function deriveAssemblyBom(
       status === 'missing'
         ? `missing:${bodyId}`
         : `ready:${identities.get(bodyId) ?? `body:${bodyId}`}`;
+    // M17: a standard part is listed by its designation, once per part.
+    const part = status === 'ready' ? standard.get(bodyId) : undefined;
     let row = rows.get(key);
     if (!row) {
       const name =
+        part?.designation ||
         bodyNames.get(bodyId)?.trim() ||
-        document.derived.bodyRepresentations[bodyId]?.name.trim() ||
+        ownEntry(document.derived.bodyRepresentations, bodyId)?.name.trim() ||
         component.name;
       row = {
         item: rows.size + 1,
@@ -142,7 +208,7 @@ export function deriveAssemblyBom(
       };
       rows.set(key, row);
     }
-    row.quantity += 1;
+    row.quantity += part?.count ?? 1;
     row.instances.push({ componentId: component.id, name: component.name });
   }
   const list = [...rows.values()];
@@ -152,26 +218,100 @@ export function deriveAssemblyBom(
   };
 }
 
-export const ASSEMBLY_BOM_CSV_HEADER =
-  'item,quantity,part,instances,source_body,status';
+/**
+ * The BOM as a table: the one shape every reader of the BOM takes it in.
+ * The Assemble sidebar, the CSV export and later drawing rows (a parts list
+ * on a sheet, balloons pointing at a part's item number) read the same
+ * columns, the same text and the same item numbers, so a part never has one
+ * number on screen and another on paper.
+ *
+ * Cells are plain text, already formatted, with no locale: a table reader
+ * lays them out and never reformats them. Column order is the CSV order;
+ * `key` is the CSV header name and stays stable, `label` is what a person
+ * reads. `numeric` cells align to the end.
+ */
+export type AssemblyBomColumnKey =
+  'item' | 'quantity' | 'part' | 'instances' | 'source_body' | 'status';
+
+export interface AssemblyBomColumn {
+  key: AssemblyBomColumnKey;
+  label: string;
+  numeric: boolean;
+}
+
+export interface AssemblyBomTableRow {
+  item: number;
+  status: AssemblyBomRow['status'];
+  /** Components this row counts, in display order. */
+  componentIds: string[];
+  cells: Record<AssemblyBomColumnKey, string>;
+}
+
+export interface AssemblyBomTable {
+  columns: readonly AssemblyBomColumn[];
+  rows: AssemblyBomTableRow[];
+  totalQuantity: number;
+  /** Item number of each component's row: what a balloon on a part shows. */
+  itemByComponent: ReadonlyMap<string, number>;
+}
+
+export const ASSEMBLY_BOM_COLUMNS: readonly AssemblyBomColumn[] = [
+  { key: 'item', label: 'Item', numeric: true },
+  { key: 'quantity', label: 'Qty', numeric: true },
+  { key: 'part', label: 'Part', numeric: false },
+  { key: 'instances', label: 'Instances', numeric: false },
+  { key: 'source_body', label: 'Source body', numeric: false },
+  { key: 'status', label: 'Status', numeric: false }
+];
+
+export const ASSEMBLY_BOM_CSV_HEADER = ASSEMBLY_BOM_COLUMNS.map(
+  (column) => column.key
+).join(',');
+
+export function assemblyBomTable(bom: AssemblyBom): AssemblyBomTable {
+  const itemByComponent = new Map<string, number>();
+  const rows = bom.rows.map((row) => {
+    for (const instance of row.instances)
+      itemByComponent.set(instance.componentId, row.item);
+    return {
+      item: row.item,
+      status: row.status,
+      componentIds: row.instances.map((instance) => instance.componentId),
+      cells: {
+        item: String(row.item),
+        quantity: String(row.quantity),
+        part: row.name,
+        instances: row.instances.map((instance) => instance.name).join('; '),
+        source_body: row.bodyId,
+        status: row.status
+      }
+    };
+  });
+  return {
+    columns: ASSEMBLY_BOM_COLUMNS,
+    rows,
+    totalQuantity: bom.totalQuantity,
+    itemByComponent
+  };
+}
 
 /**
  * The BOM as CSV, one line per row after the header, `\n` line ends and no
  * trailing newline. Cells that a spreadsheet would read as a formula are
  * prefixed with an apostrophe, the same guard the measurement CSV uses.
  */
-export function assemblyBomToCsv(bom: AssemblyBom): string {
+export function assemblyBomToCsv(bom: AssemblyBom | AssemblyBomTable): string {
+  const table = 'itemByComponent' in bom ? bom : assemblyBomTable(bom);
   return [
     ASSEMBLY_BOM_CSV_HEADER,
-    ...bom.rows.map((row) =>
-      [
-        String(row.item),
-        String(row.quantity),
-        csvCell(row.name),
-        csvCell(row.instances.map((instance) => instance.name).join('; ')),
-        csvCell(row.bodyId),
-        row.status
-      ].join(',')
+    ...table.rows.map((row) =>
+      table.columns
+        .map((column) =>
+          column.numeric || column.key === 'status'
+            ? row.cells[column.key]
+            : csvCell(row.cells[column.key])
+        )
+        .join(',')
     )
   ].join('\n');
 }

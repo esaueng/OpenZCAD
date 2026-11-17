@@ -27,7 +27,7 @@ test('a long list of failed saves stays reachable in the cloud card', async ({
   );
   await page.goto('/');
   // The library has settled (and opened its database) once the card speaks.
-  await expect(page.locator('.start-account')).toHaveText('Signed in');
+  await expect(page.locator('.start-account-text')).toHaveText('Signed in');
   await page.evaluate(async (snapshots) => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
       const open = indexedDB.open('openzcad-v2');
@@ -131,9 +131,12 @@ test(
       return route.fulfill({ status: 204 });
     });
     await page.goto('/');
-    page.on('dialog', (dialog) => dialog.accept());
     await page
       .getByRole('button', { name: 'Reset Heat Sink to the original' })
+      .click();
+    await page
+      .getByRole('alertdialog', { name: 'Reset the Heat Sink sample?' })
+      .getByRole('button', { name: 'Reset sample' })
       .click();
     await expect.poll(() => deleted).toBe(true);
     await expect(

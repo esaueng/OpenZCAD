@@ -245,3 +245,36 @@
     );
   }
 }
+
+/* The first-run tour on a phone held upright (I12, design review 13 Nov).
+   Its 296px card, started from the lane's corner at 116px, ran 22px off a
+   390px screen, cutting its text, Next and Skip, and stood over the lower
+   rails: over Tools at the foot of the tool rail on step one, and over
+   History on step three, the very control it asks for. It keeps to the
+   stage between the two one-column rails, as a pick's guidance card does,
+   the whole of that width, and above the cube's corner. */
+@media (pointer: coarse) and (max-width: 520px) and (min-height: 621px) {
+  .workspace.column-layout .workspace-tour {
+    left: calc(var(--column-w) + var(--island-gap) * 2);
+    right: var(--lane-end);
+    width: auto;
+    max-width: none;
+    bottom: 190px;
+    padding: var(--sp-2) var(--sp-3);
+  }
+
+  /* 44 px controls either side leave the title no room beside the dots,
+     and it broke over two lines; the count says the same as the dots. */
+  .workspace-tour-head {
+    gap: var(--sp-1);
+  }
+
+  .workspace-tour-head > span:not([class]) {
+    flex: 1;
+    white-space: nowrap;
+  }
+
+  .workspace-tour-progress {
+    display: none;
+  }
+}

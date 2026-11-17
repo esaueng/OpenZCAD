@@ -82,9 +82,7 @@ describe('ExportDialog', () => {
       bodies: [{ bodyId: 'mesh', name: 'Mesh reference', meshReference: true }]
     });
     expect(screen.getByRole('radio', { name: 'STL (binary)' })).toBeChecked();
-    expect(
-      screen.getByRole('radio', { name: '3MF' })
-    ).toBeDisabled();
+    expect(screen.getByRole('radio', { name: '3MF' })).toBeDisabled();
     expect(
       screen.getByRole('button', { name: 'Check watertightness' })
     ).toBeDisabled();
@@ -92,9 +90,7 @@ describe('ExportDialog', () => {
       screen.getByText(/Printability checking requires a CAD shell/)
     ).toBeVisible();
     await user.click(screen.getByRole('radio', { name: 'STL (ASCII)' }));
-    await user.click(
-      screen.getByRole('button', { name: 'Export STL' })
-    );
+    await user.click(screen.getByRole('button', { name: 'Export STL' }));
     expect(onExport).toHaveBeenCalledWith('stl', 0.08);
   });
   it('reports the visible scope and refuses an empty export', () => {
@@ -369,6 +365,30 @@ describe('ExportDialog', () => {
     expect(screen.getByRole('combobox', { name: 'Units' })).toBeDisabled();
   });
 
+  it('says a failed check left the export alone, with the kernel text under Details', async () => {
+    // 13 November review I3: "check: distance computation failed: circular
+    // trim ray-event endpoint is unresolved" was the whole message, in red.
+    const user = userEvent.setup();
+    renderDialog({
+      onCheckQuality: vi.fn(async () => {
+        throw new Error(
+          'check: distance computation failed: circular trim ray-event endpoint is unresolved'
+        );
+      })
+    });
+
+    await user.click(
+      screen.getByRole('button', { name: /Check watertightness/ })
+    );
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      'The watertightness check could not run on this model. The export is unaffected.'
+    );
+    expect(screen.getByText('Details')).toBeVisible();
+    expect(alert).toHaveTextContent(/ray-event endpoint is unresolved/);
+    expect(screen.getByRole('button', { name: /^Export / })).toBeEnabled();
+  });
+
   it('marks a report stale when the quality changes', async () => {
     const user = userEvent.setup();
     const props = renderDialog();
@@ -535,5 +555,132 @@ describe('ExportDialog', () => {
     // The visible label fills the width it reserves; a bare "Re-check" sat
     // in a button sized for the longer label.
     expect(check).toHaveTextContent('Re-check watertightness');
+  });
+
+  // I67: the dialog had no form, so Enter exported nothing.
+  it('exports with Enter on the focused format', async () => {
+    const user = userEvent.setup();
+    const props = renderDialog();
+    await user.click(screen.getByRole('radio', { name: 'STL (binary)' }));
+    await user.keyboard('{Enter}');
+    expect(props.onExport).toHaveBeenCalledOnce();
+    expect(props.onExport).toHaveBeenCalledWith('stl-binary', 0.08);
+    expect(props.onClose).toHaveBeenCalled();
+  });
+
+  it('keeps Enter from exporting a custom deviation out of range', async () => {
+    const user = userEvent.setup();
+    const props = renderDialog();
+    await user.click(screen.getByRole('button', { name: 'Custom' }));
+    const input = screen.getByLabelText(/Max chord deviation/);
+    await user.clear(input);
+    await user.type(input, '7{Enter}');
+    expect(props.onExport).not.toHaveBeenCalled();
+
+    await user.clear(input);
+    await user.type(input, '0.5{Enter}');
+    expect(props.onExport).toHaveBeenCalledWith('3mf', 0.5);
+  });
+
+  it('leaves Enter on a quality preset to choose the preset', async () => {
+    const user = userEvent.setup();
+    const props = renderDialog();
+    screen.getByRole('button', { name: /^Fine/ }).focus();
+    await user.keyboard('{Enter}');
+    expect(props.onExport).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole('button', { name: /^Fine/ }).getAttribute('aria-pressed')
+    ).toBe('true');
+  });
+
+  describe('Open in slicer (L09)', () => {
+    const SLICERS = [
+      { id: 'bambu-studio', label: 'Bambu Studio', hint: 'Bambu hint' },
+      { id: 'orcaslicer', label: 'OrcaSlicer', hint: 'Orca hint' }
+    ];
+
+    it('offers no hand-off without a route, or for a format other than 3MF', async () => {
+      const user = userEvent.setup();
+      renderDialog();
+      expect(
+        screen.queryByRole('region', { name: 'Open in slicer' })
+      ).toBeNull();
+      renderDialog({ slicerTargets: SLICERS, onOpenInSlicer: vi.fn() });
+      expect(
+        screen.getByRole('region', { name: 'Open in slicer' })
+      ).toBeInTheDocument();
+      await user.click(screen.getByRole('radio', { name: 'OBJ' }));
+      expect(
+        screen.queryByRole('region', { name: 'Open in slicer' })
+      ).toBeNull();
+    });
+
+    it('hands the 3MF to the chosen slicer at the dialog’s quality and closes', async () => {
+      const user = userEvent.setup();
+      const onOpenInSlicer = vi.fn();
+      const props = renderDialog({ slicerTargets: SLICERS, onOpenInSlicer });
+      const region = screen.getByRole('region', { name: 'Open in slicer' });
+      expect(region).toHaveTextContent('Bambu hint');
+      await user.selectOptions(
+        screen.getByRole('combobox', { name: 'Slicer' }),
+        'orcaslicer'
+      );
+      expect(region).toHaveTextContent('Orca hint');
+      await user.selectOptions(
+        screen.getByRole('combobox', { name: 'Max facet angle' }),
+        '5'
+      );
+      await user.click(
+        screen.getByRole('button', { name: 'Open in OrcaSlicer' })
+      );
+      expect(onOpenInSlicer).toHaveBeenCalledWith('orcaslicer', 0.08, {
+        angularTolerance: (5 * Math.PI) / 180
+      });
+      expect(props.onExport).not.toHaveBeenCalled();
+      expect(props.onClose).toHaveBeenCalledOnce();
+    });
+
+    it('names a lone route by what it does', async () => {
+      const user = userEvent.setup();
+      const onOpenInSlicer = vi.fn();
+      renderDialog({
+        slicerTargets: [
+          { id: 'download', label: 'Download for slicer', hint: 'Downloads' }
+        ],
+        onOpenInSlicer
+      });
+      expect(screen.queryByRole('combobox', { name: 'Slicer' })).toBeNull();
+      await user.click(
+        screen.getByRole('button', { name: 'Download for slicer' })
+      );
+      expect(onOpenInSlicer).toHaveBeenCalledWith('download', 0.08);
+    });
+  });
+
+  it('names the configuration it writes and lets another be picked (F06)', async () => {
+    const onSelect = vi.fn();
+    renderDialog({
+      configuration: {
+        rows: [
+          { id: 'small', name: 'Small' },
+          { id: 'large', name: 'Large' }
+        ],
+        selectedRowId: 'large',
+        onSelect
+      }
+    });
+    const picker = screen.getByRole('combobox', {
+      name: 'Configuration to export'
+    });
+    expect(picker).toHaveValue('large');
+    await userEvent.selectOptions(picker, 'small');
+    expect(onSelect).toHaveBeenCalledWith('small');
+  });
+
+  it('shows no configuration picker for a model without one', () => {
+    renderDialog();
+    expect(
+      screen.queryByRole('combobox', { name: 'Configuration to export' })
+    ).toBeNull();
   });
 });

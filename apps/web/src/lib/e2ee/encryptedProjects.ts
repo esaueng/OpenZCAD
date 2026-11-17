@@ -24,6 +24,7 @@ import type {
   E2eeProjectEnvelopeRecord
 } from '@openzcad/shared';
 import { ApiError } from '../api';
+import { isRateLimitError } from '../rateLimit';
 import type { ArchiveArtifactInput } from '../archiveArtifact';
 import {
   createBlobReferenceRegistry,
@@ -105,10 +106,16 @@ import {
 } from '@openzcad/shared';
 import type { ShareDelegationState, ShareLinksContext } from './shareLinks';
 import type { ShareRemovalNotice } from './shareWorkStore';
-import { contactInvitationPeople, type InvitationContext } from './invitations';
+import {
+  contactInvitationPeople,
+  invitationRemovalChecks,
+  recordRemovedMembers,
+  type InvitationContext
+} from './invitations';
 import { invitationStore } from './invitationStore';
 import {
   encryptionStateChanged,
+  observeEncryptionState,
   subscribeEncryptionState
 } from './encryptionStateEvents';
 import { unlockedAccount } from './unlockedKeys';
@@ -183,6 +190,8 @@ function forgetOpened(keepStateSubscription = false): void {
 
 /** Retire the view; unlocked direct file readers can reopen lazily. */
 function invalidateAccountClients(userId: string, revision: number): void {
+  // A lock, unlock or key rotation asks the server again on the next read.
+  forgetPageSession();
   if (!opened) accountViewRevision += 1;
   forgetOpened(true);
   if (!unlockedAccount(userId)) {
@@ -208,6 +217,7 @@ function invalidateAccountClients(userId: string, revision: number): void {
 }
 
 subscribeKeySession(() => {
+  forgetPageSession();
   forgetOpened();
   decoder?.dispose();
   decoder = null;
@@ -242,10 +252,53 @@ function removalNotifier(
   };
 }
 
-async function pageSession(): Promise<{
-  userId: string;
-  email: string | null;
-}> {
+type PageSession = { userId: string; email: string | null };
+
+/**
+ * How long one answer from `/api/session` serves this page's encrypted
+ * reads. Every blob read checks which account the page holds, and asking
+ * the server each time doubled a shelf's requests (one session read per
+ * thumbnail) until the account's read budget refused the session read
+ * itself. The Worker still authenticates every request, and a key-session
+ * change (sign-out, another account, a notice from another tab) drops the
+ * answer at once.
+ */
+export const PAGE_SESSION_REUSE_MS = 15_000;
+
+let pageSessionAnswer: {
+  revision: number;
+  at: number;
+  session: Promise<PageSession>;
+} | null = null;
+
+function forgetPageSession(): void {
+  pageSessionAnswer = null;
+}
+
+/** One shared, briefly reused session read per key session. */
+function pageSession(): Promise<PageSession> {
+  const revision = getKeySessionRevision();
+  const now = Date.now();
+  if (
+    pageSessionAnswer &&
+    pageSessionAnswer.revision === revision &&
+    now - pageSessionAnswer.at < PAGE_SESSION_REUSE_MS
+  )
+    return pageSessionAnswer.session;
+  const answer = {
+    revision,
+    at: now,
+    session: readPageSession()
+  };
+  pageSessionAnswer = answer;
+  // A failed read is never reused: the next caller asks again.
+  answer.session.catch(() => {
+    if (pageSessionAnswer === answer) pageSessionAnswer = null;
+  });
+  return answer.session;
+}
+
+async function readPageSession(): Promise<PageSession> {
   const response = await desktopFetch('/api/session', {
     credentials: 'same-origin'
   });
@@ -302,6 +355,9 @@ async function openStore(
     }
   };
   requireCurrent();
+  // These clients hold this state: a settings reload that finds the same
+  // has nothing to retire them for.
+  observeEncryptionState(userId, state);
   if (state.kind !== 'ready' || !state.account.unlocked) throw locked();
   const account = state.account;
   let accountRecheck: Promise<void> | null = null;
@@ -313,6 +369,8 @@ async function openStore(
       // An unrecognized leaf alone never authorizes a new device.
       const fresh = await loadEncryption(e2ee);
       requireCurrent();
+      // Either these clients still hold it or they are retired below.
+      observeEncryptionState(userId, fresh);
       if (
         fresh.kind !== 'ready' ||
         fresh.account.unlocked !== account.unlocked ||
@@ -378,7 +436,16 @@ async function openStore(
     }),
     // The share-link reissue hook (slice 5-5, for slice 5-10): the owner's
     // page issues new statements at once, and the dialog offers reissue.
-    onMembersRemoved: (removal: MembersRemoved) => {
+    onMembersRemoved: async (removal: MembersRemoved) => {
+      // Never added back by the invitation sweep: the owner confirms that.
+      // Awaited by the Commit's caller, so an Add built next sees it; a
+      // write that fails leaves the step's removal check open, so no tab
+      // adds anyone to the project automatically.
+      const recorded = recordRemovedMembers(
+        invitationStore(),
+        account.userId,
+        removal
+      );
       const notify = removalNotifier(removal);
       void import('./shareLinks')
         .then(({ shareLinksAfterRemoval }) => {
@@ -388,7 +455,12 @@ async function openStore(
           return null;
         })
         .catch(() => notify());
+      return recorded;
     },
+    // Each Commit that advances an owned project's state here does so
+    // inside a mark every tab of this browser reads, ended once its
+    // removals are recorded (above).
+    removalChecks: invitationRemovalChecks(invitationStore(), account.userId),
     // A co-member's device removal rotated a project (slice 5-7): the
     // owner's page states its share links again without that device.
     onMemberDevicesRemoved: (removal: MemberDevicesRemoved) => {
@@ -849,7 +921,9 @@ export interface EncryptedShelfEntry {
 
 /**
  * Names and thumbnails by project id, from verified project-info
- * envelopes; one that fails to verify is left out. Each thumbnail's
+ * envelopes; one that fails to verify is left out. A rate limit (429)
+ * stops the listing and rejects with it instead: every remaining project
+ * would only spend more of the account's read budget failing the same way. Each thumbnail's
  * reference is registered with this page, so the shelf downloads and
  * decrypts it like any other blob.
  */
@@ -890,7 +964,9 @@ export async function encryptedProjectShelf(
       shelf.set(record.projectId, entry);
       progress?.onEntry(record.projectId, entry);
     },
-    isCurrent
+    isCurrent,
+    // The account's read budget is spent: the rest would only fail too.
+    isRateLimitError
   );
   return isCurrent() ? shelf : new Map();
 }

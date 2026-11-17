@@ -106,7 +106,8 @@ const CONTEXTS: Record<
       'solid-offset',
       'linear-pattern',
       'circular-pattern',
-      'grid-pattern'
+      'grid-pattern',
+      'point-pattern'
     ]
   },
   bodies: {

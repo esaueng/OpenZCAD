@@ -33,7 +33,7 @@ async function savedDocument(page: Page) {
 }
 
 for (const viewport of [
-  { width: 1280, height: 900 },
+  { width: 1280, height: 800 },
   { width: 390, height: 844 }
 ]) {
   test(`properties reports a saved model without opening or modifying it at ${viewport.width}px`, async ({
@@ -99,6 +99,21 @@ for (const viewport of [
     expect(bounds!.x).toBeGreaterThanOrEqual(0);
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
     expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
+    // Everything fits on one screen: nothing inside the dialog scrolls.
+    expect(
+      await dialog.evaluate((element) => {
+        let scrolling = 0;
+        for (const node of [element, ...element.querySelectorAll('*')]) {
+          if (
+            node.scrollHeight > node.clientHeight + 1 &&
+            getComputedStyle(node).overflowY !== 'visible'
+          ) {
+            scrolling += 1;
+          }
+        }
+        return scrolling;
+      })
+    ).toBe(0);
     expect(await savedDocument(page)).toBe(before);
     await page.keyboard.press('Tab');
     expect(
@@ -109,6 +124,14 @@ for (const viewport of [
     await page.keyboard.press('Escape');
     await expect(dialog).not.toBeVisible();
     await expect(actions).toBeFocused();
+    // A press anywhere off the card closes it too.
+    await actions.click();
+    await page
+      .getByRole('menuitem', { name: 'Properties', exact: true })
+      .click();
+    await expect(dialog).toBeVisible();
+    await page.mouse.click(viewport.width - 8, viewport.height - 8);
+    await expect(dialog).not.toBeVisible();
     await expect(page.locator('.start-screen')).toBeVisible();
     expect(errors).toEqual([]);
   });

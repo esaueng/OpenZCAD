@@ -4,6 +4,7 @@ import {
   normalizeDocumentHistory
 } from '@openzcad/document-core';
 import {
+  ownEntry,
   documentNodesWithHistory,
   duplicateProjectName,
   toProjectId,
@@ -49,7 +50,7 @@ export async function localConflictCopy(
   copy.revisions = [];
   copy.checkpoints = [];
   copy.derived.updatedAt = new Date().toISOString();
-  const root = copy.nodes[copy.rootNodeId];
+  const root = ownEntry(copy.nodes, copy.rootNodeId);
   if (root?.kind === 'project') {
     root.projectId = projectId;
     root.name = name;

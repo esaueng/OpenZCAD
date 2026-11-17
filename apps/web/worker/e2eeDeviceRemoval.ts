@@ -54,6 +54,7 @@ import type {
   E2eeRevocationCutoffsResponse
 } from '@openzcad/shared';
 import {
+  isE2eeCommitSignatureStorageReady,
   isE2eeDeviceRemovalStorageReady,
   isE2eeProjectGroupStorageReady,
   isE2eeProjectVersionStorageReady,
@@ -259,7 +260,11 @@ export async function memberRotationFence(
  * sender account's revoked leaves (`withDueRotation`). An External Commit
  * never counts, since the Worker cannot tell which leaf it removed; a
  * rejoin that removed a revoked leaf is followed by a member Commit
- * (`joinProjectGroup`, #908 review).
+ * (`joinProjectGroup`, #908 review). Nor does a Commit without its
+ * sending device's signature (migration 0048): only a Commit a listed
+ * device of the account signed is that account's rotation. One accepted
+ * before the signatures were required is owed again, and the account's
+ * browsers send it on their next open (`ownRotationDue`).
  */
 async function rotationsLanded(
   db: D1Database,
@@ -271,10 +276,15 @@ async function rotationsLanded(
     )
     .bind(projectId)
     .first<{ key_epoch_base: number }>();
+  // Without migration 0048 no Commit can be sequenced, nor counted.
+  const signed = (await isE2eeCommitSignatureStorageReady(db))
+    ? 'sender_signature IS NOT NULL'
+    : '0';
   const { results } = await db
     .prepare(
       `SELECT sender_user_id, MAX(epoch) AS epoch FROM e2ee_mls_commits
        WHERE project_id = ? AND sender_user_id IS NOT NULL AND kind = 'commit'
+         AND ${signed}
        GROUP BY sender_user_id`
     )
     .bind(projectId)

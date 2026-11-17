@@ -1,14 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   cornersWithinFrame,
+  measureClearStage,
   measureCreationFrame,
   measureFitFrame,
   measureOpeningFrame,
   measurePickFrame,
-  OPENING_FRAME_MAX_WIDTH,
   shiftIntoFrame
 } from './fitFrame';
-import { PANEL_LANE_REST_MAX_WIDTH } from './panelLayout';
 
 function placed(
   element: HTMLElement,
@@ -198,12 +197,110 @@ describe('measureOpeningFrame', () => {
     expect(measureOpeningFrame(canvas)?.maxX).toBe(1);
   });
 
-  it('leaves a wider stage its home fit to the whole canvas', () => {
-    expect(measureOpeningFrame(phoneStage({ width: 521 }))).toBeUndefined();
-    expect(measureFitFrame(phoneStage({ width: 521 }))).toBeDefined();
-    // One width for a phone's opening: where the lane rests, the frame is
-    // fitted between the rails.
-    expect(OPENING_FRAME_MAX_WIDTH).toBe(PANEL_LANE_REST_MAX_WIDTH);
+  it('opens a docked tablet’s model clear of its column and rail too', () => {
+    // I6: at 768×1024 the docked column (462–758) and the rail beside it
+    // (418–458) hid the bracket's boss and second hole, because only a
+    // phone opened into the clear stage.
+    const reveal = document.createElement('div');
+    reveal.className = 'workspace-reveal';
+    reveal.style.visibility = 'hidden';
+    reveal.setAttribute('inert', '');
+    const area = document.createElement('div');
+    area.className = 'viewer-area';
+    const canvas = placed(document.createElement('canvas'), 0, 0, 768, 1024);
+    const column = document.createElement('div');
+    column.className = 'panel-column';
+    const layer = document.createElement('div');
+    layer.className = 'panel-dock-layer';
+    layer.append(placed(column, 462, 60, 758, 1014));
+    const rail = document.createElement('div');
+    rail.className = 'instrument-rail';
+    const tools = document.createElement('div');
+    tools.className = 'workspace-column-float';
+    area.append(
+      canvas,
+      layer,
+      placed(rail, 418, 262, 458, 812),
+      placed(tools, 10, 334, 50, 738)
+    );
+    reveal.append(area);
+    document.body.append(reveal);
+    const frame = measureOpeningFrame(canvas)!;
+    expect(frame.minX).toBeCloseTo(((50 + 12) / 768) * 2 - 1, 12);
+    expect(frame.maxX).toBeCloseTo(((418 - 12) / 768) * 2 - 1, 12);
+    // With the Tools drawer open too, 109px are left: the drawer is let
+    // cover the model, never the whole canvas given up.
+    const drawer = document.createElement('div');
+    drawer.className = 'workspace-column-float';
+    canvas.closest('.viewer-area')!.append(placed(drawer, 50, 62, 285, 898));
+    const withDrawer = measureOpeningFrame(canvas)!;
+    expect(withDrawer.minX).toBeCloseTo(((50 + 12) / 768) * 2 - 1, 12);
+    expect(withDrawer.maxX).toBeCloseTo(((418 - 12) / 768) * 2 - 1, 12);
+  });
+});
+
+describe('measureClearStage', () => {
+  function workspaceStage() {
+    const workspace = document.createElement('main');
+    workspace.className = 'workspace';
+    const area = document.createElement('div');
+    area.className = 'viewer-area';
+    const canvas = placed(document.createElement('canvas'), 0, 0, 1440, 900);
+    const rail = document.createElement('div');
+    rail.className = 'instrument-rail';
+    area.append(canvas, placed(rail, 1380, 200, 1420, 700));
+    workspace.append(area);
+    document.body.append(workspace);
+    return { workspace, area, canvas };
+  }
+
+  it('frames above the assistant’s stream, which stands outside the viewer', () => {
+    // I6: the proposal card said "in the viewport" while the stream
+    // (446–993 × 442–890 at 1440) covered most of the preview.
+    const { workspace, canvas } = workspaceStage();
+    const stream = document.createElement('section');
+    stream.className = 'assistant-panel';
+    workspace.append(placed(stream, 446, 442, 993, 890));
+    const stage = measureClearStage(canvas)!;
+    expect(stage.rect.bottom).toBe(442 - 12);
+    expect(stage.rect.right).toBe(1380 - 12);
+    expect(stage.frame!.minY).toBeCloseTo(1 - ((442 - 12) / 900) * 2, 12);
+    // Off screen (a direct-manipulation mode), it covers nothing.
+    stream.classList.add('assistant-off-screen');
+    expect(measureClearStage(canvas)!.rect.bottom).toBe(900);
+  });
+
+  it('frames above View’s measurement sheet across a phone’s foot', () => {
+    const { area, canvas } = workspaceStage();
+    const shell = document.createElement('section');
+    shell.className = 'viewer-shell';
+    const sheet = document.createElement('section');
+    sheet.className = 'measurement-dock';
+    shell.append(placed(sheet, 10, 600, 1430, 860));
+    area.append(shell);
+    expect(measureClearStage(canvas)!.rect.bottom).toBe(600 - 12);
+  });
+
+  it('takes a band off the top for a flyout standing over the middle', () => {
+    const { area, canvas } = workspaceStage();
+    const flyout = document.createElement('div');
+    flyout.setAttribute('data-rail-flyout', '');
+    area.append(placed(flyout, 600, 60, 900, 280));
+    const stage = measureClearStage(canvas)!;
+    expect(stage.rect.top).toBe(280 + 12);
+    expect(stage.rect.left).toBe(0);
+  });
+
+  it('reads a band that would leave a sliver as a side panel', () => {
+    const { area, canvas } = workspaceStage();
+    const flyout = document.createElement('div');
+    flyout.setAttribute('data-rail-flyout', '');
+    // Centred low enough that framing above it would leave under a third.
+    area.append(placed(flyout, 600, 200, 900, 640));
+    const stage = measureClearStage(canvas)!;
+    expect(stage.rect.top).toBe(0);
+    expect(stage.rect.bottom).toBe(900);
+    expect(stage.rect.right).toBe(600 - 12);
   });
 });
 

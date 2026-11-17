@@ -51,6 +51,66 @@ describe('typed cylindrical-face resize', () => {
       });
     }
   });
+
+  const SIZE_LIMIT =
+    'That diameter does not fit the existing supports and fillets. Try a smaller diameter.';
+  const NO_REFILLET =
+    "The fillets around this wall can't be rebuilt at that diameter. Change or remove those fillets in History, then resize the wall.";
+  function diameterRefusal(reason?: string): DirectEditRefusal {
+    const kernel = kernelAnswering({
+      status: 'error',
+      code: 'cylinder-diameter-unbuildable',
+      category: 'internal',
+      value: null,
+      details: {
+        kernelCode: 'cylinder-diameter-unbuildable',
+        ...(reason ? { reason } : {}),
+        requestedDiameter: 60,
+        message: 'opaque kernel detail'
+      }
+    });
+    try {
+      resizeCylindricalFaceTyped(kernel, 1, 2, 30);
+    } catch (error) {
+      expect(error).toBeInstanceOf(DirectEditRefusal);
+      return error as DirectEditRefusal;
+    }
+    throw new Error('Expected refusal');
+  }
+
+  // esaueng/remus#1747 adds `details.reason`; the pinned kernel sends none.
+  it.each([
+    ['an older kernel that sends no cause', undefined, SIZE_LIMIT],
+    ['a wall that would meet another face', 'wall_meets_face', SIZE_LIMIT],
+    [
+      'a blend group that does not re-fillet',
+      'group_reblend_failed',
+      NO_REFILLET
+    ]
+  ])(
+    'words a refused diameter for %s from the typed cause',
+    (_case, reason, sentence) => {
+      const refusal = diameterRefusal(reason);
+      expect(refusal.reason).toBe(sentence);
+      // The kernel's own words stay behind the sentence for "Why?".
+      expect(refusal.message).toBe(`${sentence}\nopaque kernel detail`);
+      expect(refusal.kernelMessage).toBe('opaque kernel detail');
+      expect(kernelRefusalRecordOf(refusal)).toEqual({
+        family: 'direct-edit',
+        operation: 'resize-cylindrical-face',
+        category: 'internal',
+        code: 'cylinder-diameter-unbuildable',
+        ...(reason ? { reason } : {})
+      });
+    }
+  );
+
+  it('does not advise a smaller diameter when the fillets cannot re-fillet', () => {
+    expect(diameterRefusal('group_reblend_failed').message).not.toMatch(
+      /smaller diameter/i
+    );
+  });
+
   it('returns the solid on success', () => {
     const kernel = kernelAnswering({
       status: 'ok',

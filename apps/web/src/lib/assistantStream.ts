@@ -8,9 +8,17 @@ import {
   type AssistantReply,
   type CadDocumentDigest
 } from '@openzcad/ai-contracts';
-import { isEncryptedProject } from './api';
+import {
+  ApiError,
+  E2EE_CUTOVER_UNRESOLVED_CODE,
+  E2EE_PLAINTEXT_REFUSED_CODE,
+  encryptionRequired,
+  isEncryptedProject
+} from './api';
+import { loadLocalAppSettings } from './appSettings';
 import { ENCRYPTED_PROJECT_ASSISTANT_NOTICE } from './assistant/encryptedProject';
 import { desktopFetch } from './desktopBridge';
+import { assistantProjectRequest } from './projectWriteGate';
 
 interface AssistantStreamOptions {
   signal?: AbortSignal;
@@ -76,7 +84,8 @@ export interface AssistantTurnRequest {
   /**
    * Set by the panel once this account's consent for the project verified
    * right before sending (ADR-024 Phase 6). Never sent; without it an
-   * encrypted project's request is refused here.
+   * encrypted project's request is refused here. It lifts nothing for a
+   * project this device holds as encrypted (PR #1418).
    */
   consentedProjectId?: string;
 }
@@ -166,6 +175,31 @@ function eventTextDelta(event: Record<string, unknown>): string | undefined {
     : outputTextFromPart(part);
 }
 
+/**
+ * The status as the panel can rely on it. A Worker that answered only
+ * `{ configured: false }` (an older or stripped-down deployment) left
+ * provider and model undefined, and the consent route's string handling
+ * threw: the whole panel fell over into a 60%-high error. Missing strings
+ * read as empty, and anything but a literal `true` is unconfigured.
+ */
+export function normalizeAssistantStatus(raw: unknown): AssistantStatus {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('Assistant status check returned no status.');
+  }
+  const value = raw as Record<string, unknown>;
+  const text = (field: unknown) => (typeof field === 'string' ? field : '');
+  return {
+    configured: value.configured === true,
+    ...(value.source === 'deployment' || value.source === 'personal'
+      ? { source: value.source }
+      : {}),
+    provider: text(value.provider),
+    model: text(value.model),
+    reasoningEffort: text(value.reasoningEffort),
+    ...(typeof value.endpoint === 'string' ? { endpoint: value.endpoint } : {})
+  };
+}
+
 export async function loadAssistantStatus(
   signal?: AbortSignal
 ): Promise<AssistantStatus> {
@@ -173,7 +207,7 @@ export async function loadAssistantStatus(
   if (!response.ok) {
     throw new Error(`Assistant status check failed (${response.status}).`);
   }
-  return (await response.json()) as AssistantStatus;
+  return normalizeAssistantStatus(await response.json());
 }
 
 export function readAssistantEvent(
@@ -313,28 +347,58 @@ async function streamAssistantReplyAttempt(
 ): Promise<AssistantReply> {
   // ADR-024 D7 and Phase 6: nothing of an encrypted project reaches the
   // assistant, whichever entry point asked, unless its consent verified.
+  // PR #1418: nothing of a project this device holds as encrypted (pinned,
+  // switch unresolved, or carrying an encryption requirement) reaches it at
+  // all, consent or not; the send gate refuses it again at the send.
+  const projectId = request.digest.projectId;
   if (
-    isEncryptedProject(request.digest.projectId) &&
-    request.consentedProjectId !== request.digest.projectId
+    encryptionRequired(projectId) ||
+    (isEncryptedProject(projectId) && request.consentedProjectId !== projectId)
   ) {
     throw new AssistantStreamError(
       'AI_E2EE_PROJECT',
       ENCRYPTED_PROJECT_ASSISTANT_NOTICE
     );
   }
-  const response = await desktopFetch('/api/assistant/proposals', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      prompt: request.prompt,
-      digest: request.digest,
-      history: request.history ?? [],
-      attachments: request.attachments ?? [],
-      retryAttempt,
-      operations: CAD_PATCH_OPERATION_KINDS
-    }),
-    signal: options.signal
-  });
+  let response: Response;
+  try {
+    // The digest, conversation and attachments are the project's content
+    // in plaintext: declared as such, so the gate checks them again
+    // immediately before the send (`projectWriteGate.ts`) whatever was
+    // pinned meanwhile.
+    response = await desktopFetch(
+      '/api/assistant/proposals',
+      assistantProjectRequest(projectId, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          prompt: request.prompt,
+          digest: request.digest,
+          history: request.history ?? [],
+          attachments: request.attachments ?? [],
+          retryAttempt,
+          operations: CAD_PATCH_OPERATION_KINDS,
+          // This device's own: an account whose library is encrypted keeps
+          // them sealed, so the Worker no longer reads them from its settings.
+          customInstructions:
+            loadLocalAppSettings().assistant.customInstructions
+        }),
+        signal: options.signal
+      })
+    );
+  } catch (error) {
+    if (
+      error instanceof ApiError &&
+      (error.code === E2EE_PLAINTEXT_REFUSED_CODE ||
+        error.code === E2EE_CUTOVER_UNRESOLVED_CODE)
+    ) {
+      throw new AssistantStreamError(
+        'AI_E2EE_PROJECT',
+        ENCRYPTED_PROJECT_ASSISTANT_NOTICE
+      );
+    }
+    throw error;
+  }
   const requestId = safeRequestId(response);
   if (!response.ok || !response.body) {
     const error = (await response.json().catch(() => null)) as {

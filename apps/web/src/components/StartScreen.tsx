@@ -1,10 +1,11 @@
 import { ProjectImportButton } from './ProjectImportButton';
+import { TileName } from './TileName';
 import { labelWithKey, useKeymap } from '../lib/keymap';
 import {
   Fragment,
-  lazy,
   Suspense,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -38,6 +39,7 @@ import {
   List,
   LoaderCircle,
   Lock,
+  LockOpen,
   MoreHorizontal,
   Pencil,
   Pin,
@@ -52,18 +54,26 @@ import {
   type LucideIcon
 } from 'lucide-react';
 import { isLibraryModeStatus } from '../lib/libraryStatus';
-import { STALE_CHUNK_MESSAGE } from '../lib/staleChunk';
+import {
+  lazyWithStaleChunkNotice,
+  STALE_CHUNK_MESSAGE
+} from '../lib/staleChunk';
+import { preloadableSlot } from './PreloadableSlot';
+import { prefersSavingData } from '../lib/saveData';
 import {
   daysUntilPurge,
   MAX_PROJECT_NAME_LENGTH,
+  PROJECT_STORAGE_FORMAT_E2EE_V1,
   projectOrganization,
   TRASH_RETENTION_DAYS,
+  type AccountStorageUsage,
   type LibraryCardSize,
   type ProjectStatus,
   type ProjectSummary,
   type UnitSystem
 } from '@openzcad/shared';
 import { generateCutePartName } from '../lib/cutePartName';
+import { projectNameProblem, sameNamedProject } from '../lib/projectNameHints';
 import {
   readLibraryLayout,
   saveLibraryLayout,
@@ -86,7 +96,6 @@ import {
   type LibraryFolder
 } from '../lib/libraryFolders';
 import { useLibraryFolderCloudSync } from '../lib/useLibraryFolderCloudSync';
-import { LibrarySelectionBar } from './LibrarySelectionBar';
 import {
   bucketProjectsByShelf,
   moveItem,
@@ -95,18 +104,50 @@ import {
 } from '../lib/projectShelf';
 import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
 import { useMigrationLockedProjects } from '../lib/migrationStatus';
+import { encryptedPinProblem, encryptionHeldHere } from '../lib/api';
+import { pinProblemText, useEncryptedPins } from './encryptedPinsState';
 import type { DemoDefinition } from '../lib/demoDefinitions';
 import { BrandMark } from './BrandMark';
 import { DemoModelIcon } from './DemoModelIcon';
 import { PartThumbnail } from './PartThumbnail';
 import type { ProjectProperties } from '../lib/projectProperties';
+import { formatBytes } from '../lib/formatBytes';
+import {
+  StorageBar,
+  storageFigure,
+  storageSegments,
+  useAccountStorageUsage,
+  useDeviceStorageEstimate
+} from './storageUsageShared';
+import { storageLevel, storageLimitOf, storedBytes } from '../lib/storageUsage';
 
-const ProjectPropertiesDialog = lazy(async () => ({
+const ProjectPropertiesDialog = lazyWithStaleChunkNotice(async () => ({
   default: (await import('./ProjectPropertiesDialog')).ProjectPropertiesDialog
 }));
-const FolderCoverDialog = lazy(async () => ({
+/** Opened from the storage readout; the readout itself stays eager. */
+const StorageUsagePanel = lazyWithStaleChunkNotice(async () => ({
+  default: (await import('./StorageUsagePanel')).StorageUsagePanel
+}));
+const FileDropTarget = lazyWithStaleChunkNotice(async () => ({
+  default: (await import('./FileDropTarget')).FileDropTarget
+}));
+const FolderCoverDialog = lazyWithStaleChunkNotice(async () => ({
   default: (await import('./FolderCoverDialog')).FolderCoverDialog
 }));
+/**
+ * The bar that acts on several selected projects. Only a multi-select draws
+ * it, so it loads apart from the library; the library warms it once idle, so
+ * the first selection usually shows it in the same frame. A selection that
+ * beats the warm-up (or Save-Data, which skips it) shows the bar once its
+ * chunk arrives, and a chunk that cannot load leaves the library standing
+ * with the bar's own "did not load" line in its place.
+ */
+export const LibrarySelectionBar = preloadableSlot(
+  'Selection actions',
+  async () => ({
+    default: (await import('./LibrarySelectionBar')).LibrarySelectionBar
+  })
+);
 
 interface StartScreenProps {
   projects: ProjectSummary[];
@@ -132,6 +173,11 @@ interface StartScreenProps {
   /** The grid's card size (Settings › Appearance); small is the original. */
   cardSize?: LibraryCardSize;
   onImportProject?(file: File): void;
+  /**
+   * Files dropped on the screen or picked through Import: a backup restores,
+   * CAD files start a new project in the units the form shows.
+   */
+  onImportFiles?(files: File[], units: UnitSystem): void;
   onCreate(name: string, units: UnitSystem): void;
   onOpen(projectId: string): void;
   onOpenDemo(definition: DemoDefinition): void;
@@ -144,6 +190,11 @@ interface StartScreenProps {
   /** Settings at its Account section; falls back to plain Settings. */
   onSignIn?(): void;
   onDuplicate(project: ProjectSummary): void;
+  /**
+   * Renames a project without opening it, from its tile or its Properties;
+   * resolves true once the new name is stored.
+   */
+  onRename?(project: ProjectSummary, name: string): Promise<boolean>;
   loadProperties(project: ProjectSummary): Promise<ProjectProperties | null>;
   /**
    * Projects the account holds. Anything absent lives on this device alone —
@@ -163,6 +214,18 @@ interface StartScreenProps {
    */
   conflictedProjectIds: ReadonlySet<string>;
   signedIn: boolean;
+  /**
+   * Sign-in itself could not be reached. The footer then says the cloud is
+   * unavailable and offers Retry, instead of a Sign in that leads to a page
+   * saying sign-in is unreachable (design review I8, S9).
+   */
+  cloudUnavailable?: boolean;
+  onRetryCloud?(): void;
+  /**
+   * Signed in, but the account's project list could not be read: lists the
+   * shelf again now instead of waiting for the next poll.
+   */
+  onRetryAccountListing?(): void;
   onSaveToAccount(project: ProjectSummary): void;
   onSaveAllToAccount(projects: ProjectSummary[]): void;
   /**
@@ -213,13 +276,44 @@ interface StartScreenProps {
    * Called as tiles approach the viewport, without rebuilding documents.
    */
   publishThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
+  /**
+   * The account's storage report, for the footer's meter and its details.
+   * Absent signed out or without cloud functions: the footer then measures
+   * this device alone.
+   */
+  loadStorageUsage?(): Promise<AccountStorageUsage>;
+  /** Settings at its Account section, where storage is managed. */
+  onOpenAccountSettings?(): void;
 }
 
 const LOADING_PROJECT_TILES = 10;
 
 /** The Projects shelf's narrowing, beside its heading. */
 type ShelfFilter = 'all' | 'pinned' | 'attention' | 'local';
-type ShelfSort = 'custom' | 'edited' | 'name';
+type ShelfSort = 'custom' | 'edited' | 'name' | 'size';
+
+/**
+ * The size sort's order: largest first, and a row with no figure (unmeasured,
+ * or locked) after every row that has one, where its size cannot mislead.
+ */
+function largestFirst(a: number | undefined, b: number | undefined): number {
+  if (a === undefined) return b === undefined ? 0 : 1;
+  if (b === undefined) return -1;
+  return b - a;
+}
+
+/**
+ * The size the list shows for a project: none for one this build cannot open,
+ * or for a figure that is not a number of bytes (the column shows a dash).
+ */
+function shownBytes(project: ProjectSummary): number | undefined {
+  const bytes = project.documentBytes;
+  return projectNeedsUpdate(project) ||
+    bytes === undefined ||
+    !Number.isFinite(bytes)
+    ? undefined
+    : bytes;
+}
 type ShelfLayout = 'grid' | 'list';
 
 const SHELF_FILTERS: ReadonlyArray<{ id: ShelfFilter; label: string }> = [
@@ -250,19 +344,68 @@ function writeShelfLayout(layout: ShelfLayout) {
   }
 }
 
+const EXAMPLES_COLLAPSED_STORAGE_KEY = 'openzcad.start.examplesCollapsed';
+
+/** A per-device convenience: an unreadable store simply means expanded. */
+function readExamplesCollapsed(): boolean {
+  try {
+    return (
+      globalThis.localStorage?.getItem(EXAMPLES_COLLAPSED_STORAGE_KEY) === '1'
+    );
+  } catch {
+    return false;
+  }
+}
+
+function writeExamplesCollapsed(collapsed: boolean) {
+  try {
+    if (collapsed) {
+      globalThis.localStorage?.setItem(EXAMPLES_COLLAPSED_STORAGE_KEY, '1');
+    } else {
+      globalThis.localStorage?.removeItem(EXAMPLES_COLLAPSED_STORAGE_KEY);
+    }
+  } catch {
+    // Private windows and blocked storage keep the choice for this visit.
+  }
+}
+
 const LIBRARY_VIEW_KEY = 'openzcad.start.view';
 const LIBRARY_DRAFT_KEY = 'openzcad.start.draft';
 
-function readLibraryDraft(): { name: string; units: UnitSystem } | null {
+/**
+ * This page load, recorded with the draft. The draft in sessionStorage
+ * outlives a reload but this does not, which is how a remount (back from a
+ * project, same load) tells a suggestion to keep from one to replace.
+ */
+const PAGE_LOAD_ID = `${Date.now().toString(36)}-${Math.random()
+  .toString(36)
+  .slice(2)}`;
+
+/** One empty list, so effects keyed on the projects settle while pending. */
+const NO_PROJECTS: ProjectSummary[] = [];
+
+function readLibraryDraft(): {
+  name: string;
+  units: UnitSystem;
+  /** The name is still the suggestion nobody has typed over. */
+  suggested: boolean;
+  /** The suggestion was made since this page loaded. */
+  thisPage: boolean;
+} | null {
   try {
     const stored: unknown = JSON.parse(
       sessionStorage.getItem(LIBRARY_DRAFT_KEY) ?? 'null'
     );
     if (!stored || typeof stored !== 'object') return null;
-    const { name, units } = stored as Record<string, unknown>;
+    const { name, units, suggested, page } = stored as Record<string, unknown>;
     return typeof name === 'string' &&
       (units === 'mm' || units === 'cm' || units === 'm' || units === 'inch')
-      ? { name, units }
+      ? {
+          name,
+          units,
+          suggested: suggested === true,
+          thisPage: page === PAGE_LOAD_ID
+        }
       : null;
   } catch {
     return null;
@@ -313,7 +456,11 @@ function readLibraryView(): LibraryView {
     ) {
       view.filter = stored.filter;
     }
-    if (stored.sort === 'edited' || stored.sort === 'name') {
+    if (
+      stored.sort === 'edited' ||
+      stored.sort === 'name' ||
+      stored.sort === 'size'
+    ) {
       view.sort = stored.sort;
     }
     if (typeof stored.query === 'string') {
@@ -335,6 +482,9 @@ function writeLibraryView(view: LibraryView) {
     // Forgetting the view is the whole failure mode.
   }
 }
+
+/** The one encryption mark a card carries: the exception, not the norm. */
+const NOT_ENCRYPTED_LABEL = 'Not end-to-end encrypted';
 
 const RECOVERY_SUFFIX = / \((?:Recovery|Local copy)\)(?: \(copy(?: \d+)?\))*$/;
 
@@ -379,6 +529,26 @@ export function formatLastEdited(updatedAt: string): string {
   });
 }
 
+/**
+ * A recovery copy's date, ahead of its time ("Nov 12" · "7:00 AM"). The time
+ * is what tells a part's copies apart, and with the year as well the date
+ * clipped to "Nov 12, …" on a card. The year shows only when it is not this
+ * one, and the tooltip keeps the exact moment.
+ */
+export function formatRecoveryDate(
+  updatedAt: string,
+  now: Date = new Date()
+): string {
+  const date = new Date(updatedAt);
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    ...(date.getFullYear() === now.getFullYear()
+      ? {}
+      : { year: 'numeric' as const })
+  });
+}
+
 const SHELVES: ReadonlyArray<{
   status: ProjectStatus;
   label: string;
@@ -409,9 +579,16 @@ const SHELVES: ReadonlyArray<{
 const LIBRARY_SCROLL_KEY = 'openzcad.start.scroll';
 const LIBRARY_SCROLLERS = ['.start-body'] as const;
 const REORDER_KEYS = 'Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown';
+/** A tile's own keys: its controls, then its menu. */
+const TILE_KEYS = 'ArrowRight ArrowLeft Shift+F10';
 /** How long a project is held over another's middle before they would merge. */
 const MERGE_HOLD_MS = 450;
+const FOLDER_MADE_NOTICE =
+  'Made a folder. Name it, or press Enter to keep the name.';
 const FOLDER_KEY_PREFIX = 'folder:';
+/** The column's folder rows, keyed apart from the shelf's folder tiles. */
+const SIDEBAR_FOLDER_PREFIX = 'sidebar-folder:';
+const SIDEBAR_REORDER_KEYS = 'Alt+ArrowUp Alt+ArrowDown';
 
 /** A folder's tile id, kept apart from project ids on the same shelf. */
 function folderKey(folderId: string) {
@@ -422,6 +599,49 @@ function folderIdOf(tileId: string): string | null {
   return tileId.startsWith(FOLDER_KEY_PREFIX)
     ? tileId.slice(FOLDER_KEY_PREFIX.length)
     : null;
+}
+
+/** Space between the dragged card and the hint it carries, in CSS pixels. */
+const MERGE_HINT_GAP_PX = 6;
+
+/**
+ * The make-a-folder hint, carried by the dragged card: centred on the card
+ * underneath, the dragged card covered it. It rides above the card, clear of
+ * the pointer, and drops below it while the shelf's top edge would cut it
+ * off (a first-row card held near its row).
+ */
+function MergeHint({ armed }: { armed: boolean }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const hint = ref.current;
+    const tile = hint?.parentElement;
+    if (!hint || !tile) return;
+    let frame = 0;
+    // The card follows the pointer outside React, so this checks each frame
+    // for as long as the hint is up.
+    const place = () => {
+      const shelf = hint.closest('.start-body');
+      const edge = shelf ? shelf.getBoundingClientRect().top : 0;
+      const room = tile.getBoundingClientRect().top - edge;
+      hint.classList.toggle(
+        'is-below',
+        room < hint.offsetHeight + MERGE_HINT_GAP_PX
+      );
+      frame = window.requestAnimationFrame(place);
+    };
+    place();
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+  return (
+    <span
+      ref={ref}
+      className={`start-tile-merge-hint${armed ? ' is-armed' : ''}`}
+      aria-hidden="true"
+    >
+      <FolderPlus size={14} aria-hidden="true" />
+      {armed ? 'Release to make a folder' : 'Hold to make a folder'}
+    </span>
+  );
 }
 
 function tileMenuOpener(tile: HTMLElement | undefined) {
@@ -489,6 +709,7 @@ export function StartScreen({
   defaultUnits,
   cardSize = 'small',
   onImportProject,
+  onImportFiles,
   onCreate,
   onOpen,
   onOpenDemo,
@@ -496,11 +717,15 @@ export function StartScreen({
   onOpenSettings,
   onSignIn,
   onDuplicate,
+  onRename,
   loadProperties,
   cloudProjectIds,
   accountProjectListReached,
   conflictedProjectIds,
   signedIn,
+  cloudUnavailable = false,
+  onRetryCloud,
+  onRetryAccountListing,
   onSaveToAccount,
   onSaveAllToAccount,
   syncRun,
@@ -517,23 +742,63 @@ export function StartScreen({
   onEmptyTrash,
   loadThumbnail,
   thumbnailAccountId,
-  publishThumbnail
+  publishThumbnail,
+  loadStorageUsage,
+  onOpenAccountSettings
 }: StartScreenProps) {
-  const projects = scopePending ? [] : discoveredProjects;
+  const projects = scopePending ? NO_PROJECTS : discoveredProjects;
   const settingsKey = useKeymap().label('app-settings');
+  // Prefixes the ids the shelf's tiles describe themselves by.
+  const instanceId = useId();
   const [initialDraft] = useState(readLibraryDraft);
-  const [name, setName] = useState(
-    () => initialDraft?.name ?? generateCutePartName()
-  );
+  // A typed name survives a reload; a suggestion survives only a remount
+  // (back from a project), so each reload suggests a fresh name.
+  const [name, setName] = useState(() => {
+    if (initialDraft && (!initialDraft.suggested || initialDraft.thisPage)) {
+      return initialDraft.name;
+    }
+    // The suggestion from before the reload is avoided too, while any other
+    // name is free.
+    const taken = projects.map((project) => project.name);
+    if (initialDraft) taken.push(initialDraft.name);
+    return generateCutePartName(undefined, taken);
+  });
   const [units, setUnits] = useState<UnitSystem>(
     initialDraft?.units ?? defaultUnits
   );
   const unitsEdited = useRef(initialDraft !== null);
+  // Warm the selection bar once the library is idle; Save-Data asks for
+  // nothing speculative, and there it loads on the first selection.
+  useEffect(() => {
+    if (LibrarySelectionBar.isLoaded() || prefersSavingData()) return;
+    const warm = () =>
+      void LibrarySelectionBar.preload().catch(() => undefined);
+    if (typeof window.requestIdleCallback === 'function') {
+      const idle = window.requestIdleCallback(warm, { timeout: 5_000 });
+      return () => window.cancelIdleCallback(idle);
+    }
+    const timer = window.setTimeout(warm, 2_000);
+    return () => window.clearTimeout(timer);
+  }, []);
+  // The suggested name is selected when the field takes focus, so typing a
+  // real one replaces it rather than landing inside "Lucky Quokka". Once
+  // anything is typed the field behaves as any other, and a click places
+  // the caret.
+  const nameSuggested = useRef(initialDraft?.suggested ?? true);
+  const keepSuggestionSelected = useRef(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  /** Select the replacement suggestion once it is in the focused field. */
+  const reselectSuggestion = useRef(false);
   useEffect(() => {
     try {
       sessionStorage.setItem(
         LIBRARY_DRAFT_KEY,
-        JSON.stringify({ name, units })
+        JSON.stringify({
+          name,
+          units,
+          suggested: nameSuggested.current,
+          page: PAGE_LOAD_ID
+        })
       );
     } catch {
       // Draft persistence is optional when browser storage is unavailable.
@@ -565,6 +830,29 @@ export function StartScreen({
   useLibraryFolderCloudSync(thumbnailAccountId, folderState);
   const [folderMenu, setFolderMenu] = useState<string | null>(null);
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
+  // Read synchronously: Enter and Escape end the field, and the blur that
+  // follows must not name the folder (or bring it back) a second time.
+  const renamingFolderRef = useRef<string | null>(null);
+  renamingFolderRef.current = renamingFolderId;
+  // A folder made a moment ago and not yet named: Escape unmakes it.
+  const justMadeFolderRef = useRef<string | null>(null);
+  // Files dropped on the screen, held while the library is still loading:
+  // a project made before discovery ends would be replaced by its result.
+  const [droppedFiles, setDroppedFiles] = useState<File[] | null>(null);
+  useEffect(() => {
+    if (!droppedFiles || busy || !onImportFiles) return;
+    setDroppedFiles(null);
+    onImportFiles(droppedFiles, units);
+  }, [droppedFiles, busy, onImportFiles, units]);
+  // A project's name being typed in place on its tile, and what is typed.
+  const [renamingProject, setRenamingProject] = useState<{
+    projectId: string;
+    draft: string;
+  } | null>(null);
+  // Which field is still open, synchronously: Enter and Escape move focus
+  // back to the tile, and the blur that follows must not commit again.
+  const renamingProjectRef = useRef<string | null>(null);
+  renamingProjectRef.current = renamingProject?.projectId ?? null;
   const [coverFolderId, setCoverFolderId] = useState<string | null>(null);
   // Projects picked for a bulk action, by id; only those on screen count.
   const [selected, setSelected] = useState<ReadonlySet<string>>(
@@ -580,6 +868,9 @@ export function StartScreen({
     return () => globalThis.clearTimeout(timer);
   }, [notice]);
   const [layout, setLayout] = useState<ShelfLayout>(readShelfLayout);
+  const [examplesCollapsed, setExamplesCollapsed] = useState(
+    readExamplesCollapsed
+  );
   const [previousLayout] = useState(readLibraryLayout);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [propertiesProject, setPropertiesProject] =
@@ -651,7 +942,30 @@ export function StartScreen({
   // it would block names the API accepts (or vice versa).
   const trimmedName = name.trim();
   const nameTooLong = trimmedName.length > MAX_PROJECT_NAME_LENGTH;
+  // Names may repeat; a second "Bracket A" is allowed, but not unannounced.
+  const nameTaken = sameNamedProject(trimmedName, projects);
   const canCreate = !busy && trimmedName.length > 0 && !nameTooLong;
+  // The library may arrive after the first suggestion was made; a suggestion
+  // nobody has typed over moves off a name already in use.
+  useEffect(() => {
+    if (!nameSuggested.current || !nameTaken) return;
+    const fresh = generateCutePartName(
+      undefined,
+      projects.map((project) => project.name)
+    );
+    if (sameNamedProject(fresh, projects)) return;
+    // A focused suggestion stays selected, so the next key still replaces
+    // it rather than appending to the new one.
+    reselectSuggestion.current =
+      nameInputRef.current !== null &&
+      nameInputRef.current === document.activeElement;
+    setName(fresh);
+  }, [nameTaken, projects]);
+  useLayoutEffect(() => {
+    if (!reselectSuggestion.current) return;
+    reselectSuggestion.current = false;
+    nameInputRef.current?.select();
+  }, [name]);
 
   useEffect(() => {
     if (!unitsEdited.current) setUnits(defaultUnits);
@@ -751,12 +1065,15 @@ export function StartScreen({
   // Demos are rebuilt from their definitions on any device, so they are not
   // work to rescue and would only pad the offer. Trashed projects are excluded
   // for the same reason in reverse: uploading something on its way out is not
-  // what "save my work" means.
+  // what "save my work" means. A project this device holds as encrypted is
+  // never device only, whatever the account's listing leaves out (PR #1418):
+  // saving its cached copy would send it to the account as a new project.
   const localOnlyProjects =
     signedIn && accountProjectListReached
       ? userProjects.filter(
           (project) =>
             !cloudProjectIds.has(project.projectId) &&
+            !encryptionHeldHere(project.projectId) &&
             projectOrganization(project).status !== 'deleted'
         )
       : [];
@@ -764,6 +1081,22 @@ export function StartScreen({
   // Being encrypted in this tab, or paused or stopped with its plaintext
   // still locked: badged, and opened read-only (App.tsx).
   const migratingProjectIds = useMigrationLockedProjects();
+  // Held as encrypted on this device while the switch to encryption did
+  // not finish here, or while the account lists it otherwise (PR #1418).
+  useEncryptedPins();
+  // Encryption is opt-in during the beta (ADR-024). Where the account's own
+  // projects are encrypted, encrypted is the norm and goes unmarked; the
+  // exception, an account project still stored as plaintext, is what a card
+  // marks. An account with none encrypted marks nothing: it would be every
+  // card.
+  const accountEncrypts =
+    signedIn &&
+    accountProjectListReached &&
+    projects.some(
+      (project) =>
+        cloudProjectIds.has(project.projectId) &&
+        project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1
+    );
   const syncEntryById = new Map(
     (syncRun ?? []).map((entry) => [entry.projectId, entry] as const)
   );
@@ -844,9 +1177,16 @@ export function StartScreen({
   const filterable = shelf === 'active';
   // "This device only" means something only against an account listing;
   // signed out, or with the listing unreachable, it would hide every project.
+  // Inside a folder, Pinned means nothing of its own: a pinned folder counts
+  // every project in it, so it repeated All, and the folder lists its
+  // projects in its own order with no pinned group. The tab is not offered
+  // there, and a Pinned filter chosen on the shelf waits until the folder
+  // closes.
+  const pinnedFilterShown = !openFolder;
   const activeFilter: ShelfFilter =
     !filterable ||
-    (filter === 'local' && !(signedIn && accountProjectListReached))
+    (filter === 'local' && !(signedIn && accountProjectListReached)) ||
+    (filter === 'pinned' && !pinnedFilterShown)
       ? 'all'
       : filter;
   const filterCounts = Object.fromEntries(
@@ -883,9 +1223,12 @@ export function StartScreen({
             Number(projectOrganization(b).pinned) -
             Number(projectOrganization(a).pinned);
           if (pinned !== 0) return pinned;
-          return sort === 'edited'
-            ? b.updatedAt.localeCompare(a.updatedAt)
-            : a.name.localeCompare(b.name, undefined, { numeric: true });
+          if (sort === 'edited') return b.updatedAt.localeCompare(a.updatedAt);
+          if (sort === 'size') {
+            const bySize = largestFirst(shownBytes(a), shownBytes(b));
+            if (bySize !== 0) return bySize;
+          }
+          return a.name.localeCompare(b.name, undefined, { numeric: true });
         });
   // Folders gather projects only on the unfiltered shelf; a filter or a search
   // looks through them, showing every matching project on its own.
@@ -906,11 +1249,18 @@ export function StartScreen({
     ? []
     : sort === 'custom'
       ? folders
-      : [...folders].sort((a, b) =>
-          sort === 'edited'
-            ? latestEdit(b).localeCompare(latestEdit(a))
-            : a.name.localeCompare(b.name, undefined, { numeric: true })
-        );
+      : [...folders].sort((a, b) => {
+          if (sort === 'edited')
+            return latestEdit(b).localeCompare(latestEdit(a));
+          if (sort === 'size') {
+            const bySize = largestFirst(
+              folderBytes(folderMembers(a)),
+              folderBytes(folderMembers(b))
+            );
+            if (bySize !== 0) return bySize;
+          }
+          return a.name.localeCompare(b.name, undefined, { numeric: true });
+        });
 
   // A project sent to another shelf takes its tile, and the focused control in
   // it, off the page, which would leave focus on nothing. Once it is gone the
@@ -965,6 +1315,11 @@ export function StartScreen({
     ...looseProjects.map((project) => project.projectId)
   ];
   const folderById = new Map(folders.map((folder) => [folder.id, folder]));
+  // An open folder's members as shown. A move starts from the order on
+  // screen: from the stored order, under a sort, Alt+Right on the last card
+  // shown did nothing because it was first in storage. Reordering needs the
+  // whole shelf (no search or filter), so these are all its members.
+  const shownMemberIds = matchingProjects.map((project) => project.projectId);
 
   /**
    * Saves a new order of the tiles on screen, and the tile a drag took into
@@ -1030,15 +1385,10 @@ export function StartScreen({
     });
     if (chosen.length === 0) return;
     setSelected(new Set());
+    // The app answers a move to Trash or Archive with a toast that carries
+    // Undo; a notice here as well said the same thing twice.
     if (onMoveManyToShelf) onMoveManyToShelf(chosen, status);
     else chosen.forEach((project) => onMoveToShelf(project, status));
-    const what =
-      chosen.length === 1 ? chosen[0]!.name : `${chosen.length} projects`;
-    setNotice(
-      status === 'deleted'
-        ? `Moved ${what} to the trash. Restore it from Trash.`
-        : `Archived ${what}.`
-    );
   }
 
   function fileProjects(projectIds: string[], folderId: string | null) {
@@ -1065,13 +1415,12 @@ export function StartScreen({
     setQuery('');
     setMoveMenuOpen(false);
     setRenamingFolderId(id);
+    justMadeFolderRef.current = id;
     return id;
   }
 
   const reorder = useTileReorder({
-    ids: openFolder
-      ? baseProjects.map((project) => project.projectId)
-      : reorderIds,
+    ids: openFolder ? shownMemberIds : reorderIds,
     enabled: canReorder,
     tileRefs,
     // Pinned projects and folders head the shelf as their own group: dragging
@@ -1138,10 +1487,52 @@ export function StartScreen({
         [other, ...moving.filter((id) => id !== other)],
         pinnedIds.has(other)
       );
-      setNotice('Made a folder. Name it, or press Enter to keep the name.');
+      setNotice(FOLDER_MADE_NOTICE);
     },
     onCommit: (ids, moved) => commitOrder(ids, moved)
   });
+  // The column's folder list is dragged on its own, up and down. It saves
+  // the same stored order the shelf shows its folders in under Custom order.
+  const sidebarFolderRefs = useRef(new Map<string, HTMLElement>());
+  const sidebarFolderIds = folders.map(
+    (folder) => `${SIDEBAR_FOLDER_PREFIX}${folder.id}`
+  );
+  const canReorderSidebarFolders = !busy && folders.length > 1;
+  const sidebarReorder = useTileReorder({
+    ids: sidebarFolderIds,
+    enabled: canReorderSidebarFolders,
+    tileRefs: sidebarFolderRefs,
+    groupOf: () => 'folders',
+    axis: 'y',
+    onCommit: (ids) =>
+      updateFolders((state) =>
+        reorderFolders(
+          state,
+          ids.map((id) => id.slice(SIDEBAR_FOLDER_PREFIX.length))
+        )
+      )
+  });
+  // As stored, or as a drag would leave them.
+  const sidebarFolders = sidebarReorder.order
+    ? sidebarReorder.order.flatMap((id) => {
+        const folder = folderById.get(id.slice(SIDEBAR_FOLDER_PREFIX.length));
+        return folder ? [folder] : [];
+      })
+    : folders;
+
+  /** Alt and the up or down arrow move the focused folder row one place. */
+  function nudgeSidebarFolder(folderId: string, event: ReactKeyboardEvent) {
+    if (!canReorderSidebarFolders || !event.altKey) return;
+    const offset =
+      event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+    if (offset === 0) return;
+    event.preventDefault();
+    const ids = folders.map((folder) => folder.id);
+    const from = ids.indexOf(folderId);
+    const reordered = moveItem(ids, from, from + offset);
+    if (reordered === ids) return;
+    updateFolders((state) => reorderFolders(state, reordered));
+  }
   // A project on the move: Archive and Trash show they will take it.
   const draggingPart =
     reorder.draggingId !== null && !folderIdOf(reorder.draggingId);
@@ -1159,9 +1550,7 @@ export function StartScreen({
 
   /** Alt and an arrow key move the focused card one place among its kind. */
   function nudge(id: string, offset: number) {
-    const ids = openFolder
-      ? baseProjects.map((project) => project.projectId)
-      : reorderIds;
+    const ids = openFolder ? shownMemberIds : reorderIds;
     const kind = ids.filter(
       (entry) => Boolean(folderIdOf(entry)) === Boolean(folderIdOf(id))
     );
@@ -1190,6 +1579,45 @@ export function StartScreen({
     }
     event.preventDefault();
     nudge(id, offset);
+  }
+
+  /**
+   * A tile is one Tab stop, its open button (it was four: open, select, pin
+   * and menu, so 50 projects took 200 Tabs). The arrow keys walk its other
+   * controls and back, and Shift+F10 or the context-menu key opens its menu.
+   */
+  function walkTile(event: ReactKeyboardEvent<HTMLElement>, menuId?: string) {
+    if (
+      event.defaultPrevented ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey
+    )
+      return;
+    const tile = event.currentTarget.closest<HTMLElement>('.start-tile');
+    if (!tile) return;
+    if (
+      menuId !== undefined &&
+      (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))
+    ) {
+      event.preventDefault();
+      menuFocusEnd.current = 'first';
+      if (folderIdOf(menuId)) setFolderMenu(folderIdOf(menuId));
+      else setOpenMenu(menuId);
+      return;
+    }
+    if (event.shiftKey) return;
+    if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+    const ring = Array.from(
+      tile.querySelectorAll<HTMLElement>(
+        ':scope > .start-tile-open, :scope > .start-tile-select, :scope > .start-tile-actions > button'
+      )
+    ).filter((control) => !(control as HTMLButtonElement).disabled);
+    const at = ring.indexOf(event.currentTarget);
+    const next = at + (event.key === 'ArrowRight' ? 1 : -1);
+    if (at < 0 || next < 0 || next >= ring.length) return;
+    event.preventDefault();
+    ring[next]!.focus();
   }
 
   function shelfCount(status: ProjectStatus): number {
@@ -1416,17 +1844,102 @@ export function StartScreen({
   }
 
   function commitRename(folderId: string, name: string) {
+    if (renamingFolderRef.current !== folderId) return;
+    renamingFolderRef.current = null;
+    justMadeFolderRef.current = null;
     setRenamingFolderId(null);
+    // Named: the prompt to name it has done its work.
+    setNotice((current) => (current === FOLDER_MADE_NOTICE ? '' : current));
     updateFolders((state) => renameFolder(state, folderId, name));
+  }
+
+  /**
+   * Escape while naming. A folder made a moment ago is unmade, its projects
+   * back where they were: Escape kept a folder called "New folder" the user
+   * had just declined to name. An existing folder keeps its name.
+   */
+  function cancelRename(folder: LibraryFolder) {
+    if (renamingFolderRef.current !== folder.id) return;
+    renamingFolderRef.current = null;
+    setRenamingFolderId(null);
+    if (justMadeFolderRef.current !== folder.id) return;
+    justMadeFolderRef.current = null;
+    updateFolders((state) => deleteFolder(state, folder.id));
+    setNotice(
+      folder.projectIds.length === 0
+        ? 'No folder made.'
+        : 'No folder made; the projects are back on the shelf.'
+    );
+  }
+
+  function commitProjectRename(project: ProjectSummary, name: string) {
+    if (renamingProjectRef.current !== project.projectId) return;
+    renamingProjectRef.current = null;
+    setRenamingProject(null);
+    // Focus goes back to the tile, as it does after a folder is named.
+    tileRefs.current
+      .get(project.projectId)
+      ?.querySelector<HTMLElement>('.start-tile-open')
+      ?.focus({ preventScroll: true });
+    if (!onRename || projectNameProblem(name) || name.trim() === project.name)
+      return;
+    void onRename(project, name);
+  }
+
+  /** The name field a tile's Rename puts in place of its name. */
+  function renderProjectRename(project: ProjectSummary) {
+    if (renamingProject?.projectId !== project.projectId) return null;
+    const { draft } = renamingProject;
+    const problem = projectNameProblem(draft);
+    const taken = problem
+      ? null
+      : sameNamedProject(draft, projects, project.projectId);
+    const hintId = `start-rename-hint-${project.projectId}`;
+    return (
+      <div className="start-folder-rename-field">
+        <input
+          className="start-folder-rename"
+          value={draft}
+          aria-label={`Rename ${project.name}`}
+          aria-invalid={problem ? true : undefined}
+          aria-describedby={problem || taken ? hintId : undefined}
+          maxLength={MAX_PROJECT_NAME_LENGTH}
+          autoFocus
+          onFocus={(event) => event.currentTarget.select()}
+          onChange={(event) =>
+            setRenamingProject({
+              projectId: project.projectId,
+              draft: event.target.value
+            })
+          }
+          onClick={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              commitProjectRename(project, event.currentTarget.value);
+            } else if (event.key === 'Escape') {
+              event.preventDefault();
+              commitProjectRename(project, project.name);
+            }
+          }}
+          onBlur={(event) =>
+            commitProjectRename(project, event.currentTarget.value)
+          }
+        />
+        {(problem || taken) && (
+          <small id={hintId} className="start-rename-hint" role="status">
+            {problem ?? `Another project is already called “${taken}”.`}
+          </small>
+        )}
+      </div>
+    );
   }
 
   function renderFolderName(folder: LibraryFolder) {
     if (renamingFolderId !== folder.id) {
-      return (
-        <strong className="start-tile-name" title={folder.name}>
-          {folder.name}
-        </strong>
-      );
+      return <TileName name={folder.name} />;
     }
     return (
       <input
@@ -1445,11 +1958,56 @@ export function StartScreen({
             commitRename(folder.id, event.currentTarget.value);
           } else if (event.key === 'Escape') {
             event.preventDefault();
-            setRenamingFolderId(null);
+            cancelRename(folder);
           }
         }}
         onBlur={(event) => commitRename(folder.id, event.currentTarget.value)}
       />
+    );
+  }
+
+  /**
+   * A folder's size is its members' total, and only once every member has
+   * one: a partial sum would read as the folder's size and undercount it.
+   */
+  function folderBytes(members: ProjectSummary[]): number | undefined {
+    if (members.length === 0) return undefined;
+    let total = 0;
+    for (const member of members) {
+      const bytes = shownBytes(member);
+      if (bytes === undefined) return undefined;
+      total += bytes;
+    }
+    return total;
+  }
+
+  /**
+   * The list's Size cell: saved document bytes in Project properties' IEC
+   * units, or a dash with the reason there is no figure. formatBytes rather
+   * than formatProjectBytes, which would pull projectProperties (and the
+   * document model it measures with) out of its lazy chunk.
+   */
+  function renderSize(
+    bytes: number | undefined,
+    label: string,
+    unmeasured: string | undefined
+  ) {
+    if (bytes === undefined || !Number.isFinite(bytes)) {
+      return (
+        <span className="start-tile-size" title={unmeasured}>
+          —
+        </span>
+      );
+    }
+    // A <data> element carries the exact byte count behind the rounded label.
+    return (
+      <data
+        className="start-tile-size"
+        value={bytes}
+        title={`${label}: ${formatBytes(bytes, 'iec')}. Saved model data and undo history; imported source files are not included.`}
+      >
+        {formatBytes(bytes, 'iec')}
+      </data>
     );
   }
 
@@ -1462,6 +2020,7 @@ export function StartScreen({
     const pinnedNow = shownFolderPinned(folder);
     const dropping = reorder.dropTarget?.target === key;
     const edited = latestEdit(folder);
+    const editedId = `${instanceId}-edited-${folder.id.replace(/[^\w-]/g, '_')}`;
     const renaming = renamingFolderId === folder.id;
     return (
       <div
@@ -1494,14 +2053,25 @@ export function StartScreen({
           data-tile-drag=""
           disabled={busy}
           aria-label={`Open folder ${folder.name}, ${members.length} ${members.length === 1 ? 'project' : 'projects'}`}
-          aria-keyshortcuts={canReorder ? REORDER_KEYS : undefined}
+          aria-describedby={edited ? editedId : undefined}
+          aria-keyshortcuts={
+            canReorder ? `${TILE_KEYS} ${REORDER_KEYS}` : TILE_KEYS
+          }
           onClick={() => {
             if (!renaming) showFolder(folder.id);
           }}
-          onKeyDown={(event) => nudgeFromKey(key, event)}
+          onKeyDown={(event) => {
+            nudgeFromKey(key, event);
+            walkTile(event, key);
+          }}
         >
           <span className="start-tile-thumb start-folder-thumb">
-            {cover ? (
+            {/* A row's 52px thumb says "folder" rather than shrinking the
+                cover. A card's cover carries no count: the line under its
+                name says how many projects it holds. */}
+            {layout === 'list' ? (
+              <Folder className="start-folder-empty-icon" aria-hidden="true" />
+            ) : cover ? (
               <PartThumbnail
                 project={cover}
                 accountId={thumbnailAccountId}
@@ -1509,28 +2079,75 @@ export function StartScreen({
                 publishThumbnail={publishThumbnail}
               />
             ) : (
-              <FolderOpen
-                className="start-folder-empty-icon"
-                aria-hidden="true"
-              />
+              <>
+                <FolderOpen
+                  className="start-folder-empty-icon"
+                  size={48}
+                  strokeWidth={1.25}
+                  absoluteStrokeWidth
+                  aria-hidden="true"
+                />
+                <span className="start-tile-thumb-empty" aria-hidden="true">
+                  Drop projects here
+                </span>
+              </>
             )}
-            <span className="start-folder-count" aria-hidden="true">
-              <Folder size={11} aria-hidden="true" />
-              {members.length}
-            </span>
           </span>
           <span className="start-tile-body">
             {!renaming && renderFolderName(folder)}
             {renaming && <span className="start-folder-rename-slot" />}
-            <small className="start-tile-meta">
-              <span className="start-tile-when">
-                {members.length === 0
-                  ? 'Empty — drop projects here'
-                  : `${members.length} ${members.length === 1 ? 'project' : 'projects'}${
-                      edited ? ` · ${formatLastEdited(edited)}` : ''
-                    }`}
+            {layout === 'list' ? (
+              // The row's own columns: nothing under Status, the newest
+              // member's date under Edited, the count where a project's
+              // saves go. One sentence in Status wrapped and left the rest
+              // of the row empty.
+              <>
+                <span className="start-tile-flags" />
+                <small className="start-tile-meta">
+                  <span className="start-tile-when">
+                    {edited ? formatLastEdited(edited) : '—'}
+                  </span>
+                  {renderSize(
+                    folderBytes(members),
+                    'Projects in this folder',
+                    members.length === 0
+                      ? undefined
+                      : 'Shown once every project in this folder has a size.'
+                  )}
+                  <span className="start-tile-rev">
+                    {members.length === 0
+                      ? 'Empty'
+                      : `${members.length} ${members.length === 1 ? 'project' : 'projects'}`}
+                  </span>
+                </small>
+              </>
+            ) : (
+              // One short line, like a project card's date: the count with
+              // the newest edit as well wrapped to two or three lines. The
+              // empty folder's drop hint sits on its cover.
+              <small className="start-tile-meta">
+                <span
+                  className="start-tile-when"
+                  title={
+                    edited
+                      ? `Last edited ${formatLastEditedExact(edited)}`
+                      : undefined
+                  }
+                >
+                  {members.length === 0
+                    ? 'Empty'
+                    : `${members.length} ${members.length === 1 ? 'project' : 'projects'}`}
+                </span>
+              </small>
+            )}
+            {/* The newest edit left the card's line, so the button
+                describes it to a keyboard or screen reader; touch has the
+                list's Edited column. */}
+            {edited && (
+              <span id={editedId} className="visually-hidden">
+                {`Last edited ${formatLastEdited(edited)}`}
               </span>
-            </small>
+            )}
           </span>
         </button>
         {/* The name field is a sibling of the open button: a field inside a
@@ -1553,6 +2170,8 @@ export function StartScreen({
             }
             title={pinnedNow ? 'Unpin' : 'Pin to the front'}
             disabled={busy}
+            tabIndex={-1}
+            onKeyDown={walkTile}
             onClick={() =>
               updateFolders((state) =>
                 setFolderPinned(state, folder.id, !pinnedNow)
@@ -1572,6 +2191,8 @@ export function StartScreen({
             aria-expanded={menuOpen}
             aria-label={`Actions for folder ${folder.name}`}
             disabled={busy}
+            tabIndex={-1}
+            onKeyDown={walkTile}
             onClick={() => setFolderMenu(menuOpen ? null : folder.id)}
           >
             <MoreHorizontal size={12} aria-hidden="true" />
@@ -1642,7 +2263,6 @@ export function StartScreen({
               type="button"
               role="menuitem"
               tabIndex={-1}
-              className="is-destructive"
               onClick={() => ungroupFolder(folder)}
             >
               <FolderMinus size={13} aria-hidden="true" />
@@ -1669,7 +2289,8 @@ export function StartScreen({
     const localOnly =
       signedIn &&
       accountProjectListReached &&
-      !cloudProjectIds.has(project.projectId);
+      !cloudProjectIds.has(project.projectId) &&
+      !encryptionHeldHere(project.projectId);
     const conflicted = conflictedProjectIds.has(project.projectId);
     const syncEntry = syncEntryById.get(project.projectId);
     const recoveryOf = recoveryCopyOf(project.name);
@@ -1680,9 +2301,18 @@ export function StartScreen({
     const locked = projectNeedsUpdate(project);
     // An encrypted project this build opens (ADR-024 Phase 4); it is
     // duplicated in the browser like any other (slice 4-8).
-    const encrypted = project.storageFormat === 2;
+    const encrypted = project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1;
     // Being encrypted in this tab (ADR-024 Phase 7): it opens read-only.
     const migrating = migratingProjectIds.has(project.projectId);
+    const pinProblem = encryptedPinProblem(project.projectId);
+    // In an account whose projects are encrypted, one that is not.
+    const plaintext =
+      accountEncrypts &&
+      !trashed &&
+      cloudProjectIds.has(project.projectId) &&
+      !encrypted &&
+      !locked &&
+      !migrating;
 
     const preview = (
       <>
@@ -1706,9 +2336,11 @@ export function StartScreen({
         <span className="start-tile-body">
           {/* Clipped names differ only in their ends ("…-Profiles" and
               "…-Profiles copy"), so the whole name is a hover away. */}
-          <strong className="start-tile-name" title={project.name}>
-            {project.name}
-          </strong>
+          {renamingProject?.projectId === project.projectId ? (
+            <span className="start-folder-rename-slot" />
+          ) : (
+            <TileName name={project.name} />
+          )}
           <small className="start-tile-meta">
             {/* Quiet marks for the project's standing traits, ahead of the date
                 they qualify: how it is stored, where it lives, what it is. */}
@@ -1723,20 +2355,33 @@ export function StartScreen({
                   <LoaderCircle size={11} className="spin" aria-hidden="true" />
                 </span>
               ) : (
-                (locked || encrypted) && (
+                // 14 Nov 2026: a lock on every encrypted card marked the
+                // norm. A locked card says so over its preview and under
+                // its name.
+                plaintext && (
                   <span
-                    className="start-tile-mark"
+                    className="start-tile-mark is-plaintext"
                     role="img"
-                    aria-label="End-to-end encrypted"
-                    title={
-                      locked
-                        ? 'End-to-end encrypted. Update OpenZCAD to open this project.'
-                        : 'End-to-end encrypted.'
-                    }
+                    aria-label={NOT_ENCRYPTED_LABEL}
+                    title={`${NOT_ENCRYPTED_LABEL}. It is stored in your account as plaintext.`}
                   >
-                    <Lock size={11} aria-hidden="true" />
+                    <LockOpen size={11} aria-hidden="true" />
                   </span>
                 )
+              )}
+              {pinProblem && !migrating && !trashed && (
+                <span
+                  className="start-tile-mark"
+                  role="img"
+                  aria-label={
+                    pinProblem === 'unresolved'
+                      ? 'Encryption didn’t finish on this device'
+                      : 'Kept encrypted on this device'
+                  }
+                  title={`${pinProblemText(pinProblem)} See Settings › Encryption.`}
+                >
+                  <TriangleAlert size={11} aria-hidden="true" />
+                </span>
               )}
               {recoveryOf !== null && !trashed && (
                 <span
@@ -1764,7 +2409,9 @@ export function StartScreen({
                   project.revisionCount
                 } ${project.revisionCount === 1 ? 'save' : 'saves'}`}
               >
-                {formatLastEdited(project.updatedAt)}
+                {recoveryOf === null
+                  ? formatLastEdited(project.updatedAt)
+                  : formatRecoveryDate(project.updatedAt)}
               </time>
               {/* The time is what tells a part's recovery copies apart, so
                   the date clips before it does. */}
@@ -1774,7 +2421,15 @@ export function StartScreen({
                 </span>
               )}
             </span>
-            {/* The list has a Saves column; a card leaves the count out. */}
+            {/* The list has Size and Saves columns; a card leaves both out. */}
+            {layout === 'list' &&
+              renderSize(
+                shownBytes(project),
+                'Document size',
+                locked
+                  ? undefined
+                  : 'Not measured yet. Recorded the next time this project is saved.'
+              )}
             {layout === 'list' && (
               <span className="start-tile-rev">
                 {project.revisionCount}{' '}
@@ -1858,9 +2513,49 @@ export function StartScreen({
     // As the shelf shows it: a drop into or out of Pinned counts before its
     // save lands, so the pin button never offers the opposite action.
     const pinnedNow = shownPinned(project);
+    // What a screen reader hears for the card: its name, when it was last
+    // edited, and whatever the corner marks say, in words.
+    const tileName = [
+      project.name,
+      `edited ${formatLastEdited(project.updatedAt)}`,
+      locked
+        ? PROJECT_UPDATE_REQUIRED_LABEL
+        : migrating && !encrypted
+          ? 'being encrypted'
+          : plaintext
+            ? NOT_ENCRYPTED_LABEL.toLowerCase()
+            : null,
+      recoveryOf !== null && !trashed ? `recovery copy of ${recoveryOf}` : null,
+      localOnly && !trashed && !syncEntry && !conflicted
+        ? 'on this device only'
+        : null,
+      syncEntry && !trashed
+        ? {
+            pending: 'waiting to save to your account',
+            syncing: 'saving to your account',
+            synced: 'saved to your account',
+            failed: 'could not be saved to your account'
+          }[syncEntry.state]
+        : conflicted && !trashed
+          ? 'changed in two places'
+          : null,
+      pinnedNow && shelf === 'active' ? 'pinned' : null,
+      trashed
+        ? daysLeft === 0
+          ? 'deleting shortly'
+          : `deletes in ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'}`
+        : null
+    ]
+      .filter(Boolean)
+      .join(', ');
     const isSelected = selected.has(project.projectId);
     const mergeTarget =
       reorder.dropTarget?.target === `merge:${project.projectId}`
+        ? reorder.dropTarget
+        : null;
+    // The make-a-folder hint rides on the dragged card (see MergeHint).
+    const carriedMerge =
+      dragging && reorder.dropTarget?.target.startsWith('merge:')
         ? reorder.dropTarget
         : null;
     // While anything is selected, a click picks rather than opens; ⌘/Ctrl
@@ -1895,9 +2590,10 @@ export function StartScreen({
         ]
           .filter(Boolean)
           .join(' ')}
-        onPointerDown={(event) =>
-          reorder.onPointerDown(project.projectId, event)
-        }
+        onPointerDown={(event) => {
+          if (renamingProject?.projectId !== project.projectId)
+            reorder.onPointerDown(project.projectId, event);
+        }}
         // The preview picture is an image, which the browser would otherwise
         // drag out on its own instead of moving the card.
         onDragStart={(event) => event.preventDefault()}
@@ -1914,14 +2610,18 @@ export function StartScreen({
               if (picks(event))
                 toggleSelected(project.projectId, event.shiftKey);
             }}
-            {...(canReorder && {
-              tabIndex: 0,
-              role: 'group',
-              'aria-label': project.name,
-              'aria-keyshortcuts': REORDER_KEYS,
-              onKeyDown: (event: ReactKeyboardEvent) =>
-                nudgeFromKey(project.projectId, event)
-            })}
+            // The tile's one Tab stop, here as on an openable card: its
+            // select and menu are reached from it with the arrow keys.
+            tabIndex={0}
+            role="group"
+            aria-label={tileName}
+            aria-keyshortcuts={
+              canReorder ? `${TILE_KEYS} ${REORDER_KEYS}` : TILE_KEYS
+            }
+            onKeyDown={(event: ReactKeyboardEvent<HTMLElement>) => {
+              nudgeFromKey(project.projectId, event);
+              walkTile(event, project.projectId);
+            }}
           >
             {preview}
           </div>
@@ -1933,8 +2633,14 @@ export function StartScreen({
             disabled={busy}
             onPointerEnter={onOpenIntent}
             onFocus={onOpenIntent}
-            aria-keyshortcuts={canReorder ? REORDER_KEYS : undefined}
+            // Its name and standing, once: the preview's "No geometry" and
+            // the marks ran together into "No geometryLidNov 13, 2026".
+            aria-label={tileName}
+            aria-keyshortcuts={
+              canReorder ? `${TILE_KEYS} ${REORDER_KEYS}` : TILE_KEYS
+            }
             onClick={(event) => {
+              if (renamingProject?.projectId === project.projectId) return;
               if (picks(event)) {
                 event.preventDefault();
                 toggleSelected(project.projectId, event.shiftKey);
@@ -1942,11 +2648,17 @@ export function StartScreen({
                 onOpen(project.projectId);
               }
             }}
-            onKeyDown={(event) => nudgeFromKey(project.projectId, event)}
+            onKeyDown={(event) => {
+              nudgeFromKey(project.projectId, event);
+              walkTile(event, project.projectId);
+            }}
           >
             {preview}
           </button>
         )}
+        {/* A sibling of the open button, as a folder's name field is: a
+            field inside the button would open the project on each key. */}
+        {renderProjectRename(project)}
 
         {/* Picks the project for a bulk action. Shown on hover, and on every
             card once anything is picked. */}
@@ -1956,20 +2668,15 @@ export function StartScreen({
           className="start-tile-select"
           aria-checked={isSelected}
           aria-label={`Select ${project.name}`}
+          tabIndex={-1}
+          onKeyDown={walkTile}
           title={isSelected ? 'Deselect' : 'Select (Shift picks a range)'}
           onClick={(event) => toggleSelected(project.projectId, event.shiftKey)}
         >
           {isSelected && <Check size={12} aria-hidden="true" />}
         </button>
 
-        {mergeTarget && (
-          <span className="start-tile-merge-hint" aria-hidden="true">
-            <FolderPlus size={14} aria-hidden="true" />
-            {mergeTarget.armed
-              ? 'Release to make a folder'
-              : 'Hold to make a folder'}
-          </span>
-        )}
+        {carriedMerge && <MergeHint armed={carriedMerge.armed} />}
 
         <div className="start-tile-actions">
           {shelf === 'active' && (
@@ -1982,6 +2689,8 @@ export function StartScreen({
               }
               title={pinnedNow ? 'Unpin' : 'Pin to the front'}
               disabled={busy}
+              tabIndex={-1}
+              onKeyDown={walkTile}
               onClick={() => onTogglePin(project)}
             >
               {/* Filled when pinned: the marker stays on a pinned tile, and a
@@ -2001,9 +2710,11 @@ export function StartScreen({
             aria-expanded={menuOpen}
             aria-label={`Actions for ${project.name}`}
             disabled={busy}
+            tabIndex={-1}
             onClick={() => setOpenMenu(menuOpen ? null : project.projectId)}
             onKeyDown={(event) => {
               if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') {
+                walkTile(event);
                 return;
               }
               event.preventDefault();
@@ -2131,6 +2842,23 @@ export function StartScreen({
                     Duplicate
                   </button>
                 )}
+                {!locked && onRename && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    tabIndex={-1}
+                    onClick={() => {
+                      closeMenu(project.projectId);
+                      setRenamingProject({
+                        projectId: project.projectId,
+                        draft: project.name
+                      });
+                    }}
+                  >
+                    <Pencil size={13} aria-hidden="true" />
+                    Rename
+                  </button>
+                )}
                 {shelf === 'active' && (
                   <button
                     type="button"
@@ -2255,8 +2983,10 @@ export function StartScreen({
         )}
 
         {trashed && (
-          // The visible labels are short for the narrow footer; the names
-          // say which project, and match the menu's "Delete forever".
+          // Restore takes the row and Delete forever is an icon beside it,
+          // like New project and Import: two labelled buttons overflowed a
+          // narrow card. The names say which project, and match the menu's
+          // "Delete forever".
           <div className="start-tile-footer">
             <button
               type="button"
@@ -2271,15 +3001,15 @@ export function StartScreen({
             </button>
             <button
               type="button"
-              className="is-destructive"
+              className="start-tile-delete is-destructive"
               aria-label={`Delete ${project.name} forever`}
+              title="Delete forever"
               disabled={busy}
               onClick={() =>
                 leaveShelf(project, () => onDeleteForever(project))
               }
             >
               <Trash2 size={13} aria-hidden="true" />
-              Delete
             </button>
           </div>
         )}
@@ -2289,7 +3019,20 @@ export function StartScreen({
 
   const layoutCounts =
     loading && previousLayout ? previousLayout : filterCounts;
-  const showFilters = filterable && (loading || shelfProjects.length > 0);
+  const shownFilters = SHELF_FILTERS.filter(
+    (entry) =>
+      entry.id === 'all' ||
+      entry.id === activeFilter ||
+      (layoutCounts[entry.id] > 0 &&
+        (entry.id !== 'pinned' || pinnedFilterShown))
+  );
+  // 14 Nov 2026: a folder with nothing pinned showed one "All 2" tab beside
+  // its name, a control with nothing to choose; the note says the count
+  // instead. The shelf itself keeps its tabs, which hold the toolbar's line.
+  const showFilters =
+    filterable &&
+    (loading || shelfProjects.length > 0) &&
+    (!openFolder || shownFilters.length > 1);
   // Pinned projects and folders head the shelf as their own group when the
   // whole shelf is on screen. Partitioned by the flag, not sliced by count: a
   // project created this session is prepended to the listing ahead of pinned
@@ -2336,7 +3079,9 @@ export function StartScreen({
             items: orderedItems.filter(itemPinned)
           },
           {
-            label: 'Projects',
+            // Not "Projects": the shelf's heading already says that, so the
+            // page read Projects, Pinned, Projects.
+            label: 'Others',
             group: 'parts',
             items: orderedItems.filter((item) => !itemPinned(item))
           }
@@ -2403,7 +3148,7 @@ export function StartScreen({
       ? [
           { label: 'Pinned', count: previousLayout.pinned, offset: 0 },
           {
-            label: 'Projects',
+            label: 'Others',
             count: previousLayout.all - previousLayout.pinned,
             offset: previousLayout.pinned
           }
@@ -2442,6 +3187,7 @@ export function StartScreen({
   // With nothing saved yet the demos are the most useful thing on the page,
   // so they take the stage as full cards instead of a list in the column.
   const fresh = !loading && userProjects.length === 0;
+  const showExamples = fresh || !examplesCollapsed;
   // An empty Projects shelf is not an empty library when every project was
   // archived or trashed: the shelf says where they went instead of
   // "nothing saved yet". Null when the library really is empty.
@@ -2463,6 +3209,34 @@ export function StartScreen({
     partsElsewhere === null;
 
   const cloud = describeCloud();
+
+  // The footer's storage meter, and the details it opens. Asked again when
+  // what the account holds changes — not during a save run, only once it ends.
+  const [storageOpen, setStorageOpen] = useState(false);
+  const storageButtonRef = useRef<HTMLButtonElement>(null);
+  const storagePanelId = useId();
+  const storage = useAccountStorageUsage(
+    signedIn ? loadStorageUsage : undefined,
+    thumbnailAccountId ?? folderAccountId,
+    syncTotals?.active
+      ? null
+      : `${savedToAccountCount}:${shelves.archived.length}:${shelves.deleted.length}`
+  );
+  const deviceStorage = useDeviceStorageEstimate(storageOpen);
+  const storageUsed = storage.usage ? storedBytes(storage.usage) : 0;
+  const storageLimit = storageLimitOf(storage.usage);
+  const storageMeter =
+    storage.usage && storageLimit && !cloud.progress
+      ? {
+          segments: storageSegments(storage.usage),
+          level: storageLevel(storageUsed, storageLimit),
+          figure: storageFigure(storageUsed, storageLimit)
+        }
+      : null;
+  const refreshStorage = storage.refresh;
+  useEffect(() => {
+    if (storageOpen) refreshStorage();
+  }, [storageOpen, refreshStorage]);
   // A run's outcome is in the sentence, and the startup mode texts restate
   // what the sentence already says; anything else is news worth a line.
   const statusLine =
@@ -2523,6 +3297,24 @@ export function StartScreen({
     if (loading) {
       return { tone: 'idle', Icon: Cloud, text: 'Checking account…' };
     }
+    if (!signedIn && cloudUnavailable) {
+      return {
+        tone: 'warning',
+        Icon: CloudAlert,
+        text: 'Cloud unavailable',
+        title:
+          'Sign-in could not be reached. Projects keep saving on this device.',
+        ...(onRetryCloud
+          ? {
+              action: {
+                text: 'Retry',
+                label: 'Retry the cloud connection',
+                run: onRetryCloud
+              }
+            }
+          : {})
+      };
+    }
     if (!signedIn) {
       return {
         tone: 'idle',
@@ -2543,7 +3335,16 @@ export function StartScreen({
         Icon: CloudAlert,
         text: 'Account unavailable',
         title:
-          'Cloud project status is temporarily unavailable. Your projects remain saved on this device.'
+          'Cloud project status is temporarily unavailable. Your projects remain saved on this device.',
+        ...(onRetryAccountListing
+          ? {
+              action: {
+                text: 'Retry',
+                label: 'Retry reaching the account',
+                run: onRetryAccountListing
+              }
+            }
+          : {})
       };
     }
     if (localOnlyProjects.length > 0) {
@@ -2616,19 +3417,6 @@ export function StartScreen({
           OpenZCAD <span className="beta-tag">Beta</span>
         </h1>
       </header>
-      {/* Settings on the shelf line's end, on the workspace Settings
-          button's line; Settings puts its way back in the same place. */}
-      <div className="corner-slot">
-        <button
-          className="corner-action start-settings-button"
-          type="button"
-          aria-label="Open settings"
-          title={labelWithKey('Settings', settingsKey)}
-          onClick={onOpenSettings}
-        >
-          <Settings size={15} aria-hidden="true" />
-        </button>
-      </div>
 
       <section className="start-launch" aria-label="New project">
         <form
@@ -2672,39 +3460,73 @@ export function StartScreen({
             {onImportProject && (
               <ProjectImportButton
                 onImport={onImportProject}
+                {...(onImportFiles && {
+                  onImportFiles: (files: File[]) => onImportFiles(files, units)
+                })}
                 disabled={busy}
                 className="start-launch-import"
                 shortLabel="Import"
-                title="Import an .openzcad project backup"
+                title={
+                  onImportFiles
+                    ? 'Import an .openzcad project backup, or CAD files as a new project'
+                    : 'Import an .openzcad project backup'
+                }
               />
             )}
           </div>
-          <label className="start-field start-field-name">
-            <span className="start-field-label">Name</span>
-            <input
-              value={name}
-              aria-label="Project name"
-              aria-invalid={nameTooLong || undefined}
-              aria-describedby={nameTooLong ? 'project-name-error' : undefined}
-              onChange={(event) => setName(event.target.value)}
-            />
-          </label>
-          <label className="start-field start-field-units">
-            <span className="start-field-label">Units</span>
-            <select
-              value={units}
-              aria-label="Units"
-              onChange={(event) => {
-                unitsEdited.current = true;
-                setUnits(event.target.value as UnitSystem);
-              }}
-            >
-              <option value="mm">mm</option>
-              <option value="cm">cm</option>
-              <option value="m">m</option>
-              <option value="inch">in</option>
-            </select>
-          </label>
+          {/* No visible Name and Units captions: the fields sit under New
+              project, and "mm" names its own field. The captions read as
+              form chrome over a one-click action. Name and units share one
+              box, the units as its suffix: two boxes side by side read as
+              two separate questions. */}
+          <div className="start-launch-field">
+            <label className="start-field start-field-name">
+              <input
+                ref={nameInputRef}
+                value={name}
+                aria-label="Project name"
+                placeholder="Project name"
+                aria-invalid={nameTooLong || undefined}
+                aria-describedby={
+                  nameTooLong ? 'project-name-error' : undefined
+                }
+                onFocus={(event) => {
+                  if (!nameSuggested.current) return;
+                  event.currentTarget.select();
+                  keepSuggestionSelected.current = true;
+                }}
+                // The click that focused the field would otherwise collapse
+                // the selection to a caret where it landed.
+                onMouseUp={(event) => {
+                  if (keepSuggestionSelected.current) event.preventDefault();
+                  keepSuggestionSelected.current = false;
+                }}
+                onBlur={() => {
+                  keepSuggestionSelected.current = false;
+                }}
+                onChange={(event) => {
+                  nameSuggested.current = false;
+                  keepSuggestionSelected.current = false;
+                  setName(event.target.value);
+                }}
+              />
+            </label>
+            <label className="start-field start-field-units">
+              <select
+                value={units}
+                aria-label="Units"
+                onChange={(event) => {
+                  unitsEdited.current = true;
+                  setUnits(event.target.value as UnitSystem);
+                }}
+              >
+                <option value="mm">mm</option>
+                <option value="cm">cm</option>
+                <option value="m">m</option>
+                <option value="inch">in</option>
+              </select>
+            </label>
+          </div>
           {nameTooLong ? (
             <small
               id="project-name-error"
@@ -2712,6 +3534,11 @@ export function StartScreen({
               role="alert"
             >
               Project name must be at most {MAX_PROJECT_NAME_LENGTH} characters.
+            </small>
+          ) : nameTaken ? (
+            <small className="start-launch-hint is-taken" role="status">
+              You already have a project called “{nameTaken}”. The new one is
+              kept separately.
             </small>
           ) : (
             <small className="start-launch-hint">
@@ -2742,7 +3569,14 @@ export function StartScreen({
               }
               className={
                 [
-                  shelf === entry.status ? 'is-active' : '',
+                  // An open folder is the place shown, so its row wears the
+                  // highlight; the shelf holding it steps back (is-parent),
+                  // lit again only where the folder list is not shown.
+                  shelf === entry.status
+                    ? openFolder
+                      ? 'is-parent'
+                      : 'is-active'
+                    : '',
                   reorder.dropTarget?.target === `shelf:${entry.status}`
                     ? 'is-drop-target'
                     : '',
@@ -2814,11 +3648,35 @@ export function StartScreen({
                 Drag one project onto another to group them.
               </p>
             ) : (
-              <ul className="start-folders-list">
-                {folders.map((folder) => {
+              <ul
+                className={
+                  sidebarReorder.draggingId
+                    ? 'start-folders-list is-reordering'
+                    : 'start-folders-list'
+                }
+              >
+                {sidebarFolders.map((folder) => {
                   const open = openFolder?.id === folder.id;
+                  const key = `${SIDEBAR_FOLDER_PREFIX}${folder.id}`;
                   return (
-                    <li key={folder.id}>
+                    <li
+                      key={folder.id}
+                      ref={(element) => {
+                        if (element)
+                          sidebarFolderRefs.current.set(key, element);
+                        else sidebarFolderRefs.current.delete(key);
+                      }}
+                      data-tile-id={key}
+                      className={
+                        sidebarReorder.draggingId === key
+                          ? 'start-folder-row is-dragging'
+                          : 'start-folder-row'
+                      }
+                      onPointerDown={(event) =>
+                        sidebarReorder.onPointerDown(key, event)
+                      }
+                      onDragStart={(event) => event.preventDefault()}
+                    >
                       <button
                         type="button"
                         className={
@@ -2827,9 +3685,18 @@ export function StartScreen({
                             : 'start-folder-link'
                         }
                         aria-current={open ? 'page' : undefined}
+                        aria-keyshortcuts={
+                          canReorderSidebarFolders
+                            ? SIDEBAR_REORDER_KEYS
+                            : undefined
+                        }
                         data-drop-folder={folder.id}
+                        data-tile-drag=""
                         title={folder.name}
                         onClick={() => showFolder(folder.id)}
+                        onKeyDown={(event) =>
+                          nudgeSidebarFolder(folder.id, event)
+                        }
                       >
                         {open ? (
                           <FolderOpen size={14} aria-hidden="true" />
@@ -2931,12 +3798,7 @@ export function StartScreen({
                 role="group"
                 aria-label="Show projects"
               >
-                {SHELF_FILTERS.filter(
-                  (entry) =>
-                    entry.id === 'all' ||
-                    entry.id === activeFilter ||
-                    layoutCounts[entry.id] > 0
-                ).map((entry) => (
+                {shownFilters.map((entry) => (
                   <button
                     key={entry.id}
                     type="button"
@@ -2983,7 +3845,10 @@ export function StartScreen({
                     value={query}
                     type="text"
                     aria-label="Search projects"
-                    placeholder="Search projects…"
+                    // Short enough for a phone's half-width field, which
+                    // cut "Search projects…" to "Search proje"; the label
+                    // still says what it searches.
+                    placeholder="Search…"
                     onChange={(event) => setQuery(event.target.value)}
                     onKeyDown={(event) => {
                       if (event.key === 'Escape' && query) {
@@ -3007,7 +3872,7 @@ export function StartScreen({
                   )}
                 </div>
 
-                {(layoutCounts.all > 1 || (loading && !previousLayout)) && (
+                {layoutCounts.all > 1 || (loading && !previousLayout) ? (
                   <label className="start-sort">
                     <span className="visually-hidden">Sort projects</span>
                     <select
@@ -3020,8 +3885,26 @@ export function StartScreen({
                       <option value="custom">Custom order</option>
                       <option value="edited">Last edited</option>
                       <option value="name">Name</option>
+                      <option value="size">Size</option>
                     </select>
                   </label>
+                ) : (
+                  // Its room, held: with one project there is nothing to
+                  // sort, and without the slot the search jumped 128px
+                  // between Projects and Archive.
+                  <span className="start-sort is-reserved" aria-hidden="true">
+                    <select
+                      tabIndex={-1}
+                      disabled
+                      value={sort}
+                      onChange={() => {}}
+                    >
+                      <option value="custom">Custom order</option>
+                      <option value="edited">Last edited</option>
+                      <option value="name">Name</option>
+                      <option value="size">Size</option>
+                    </select>
+                  </span>
                 )}
                 <div className="start-layout" role="group" aria-label="Layout">
                   <button
@@ -3080,20 +3963,22 @@ export function StartScreen({
             )}
             {loading && userProjects.length === 0 && (
               <>
-                {layout === 'list' && (
-                  <div className="start-list-head" aria-hidden="true">
-                    <span>Name</span>
-                    <span>Status</span>
-                    <span>Edited</span>
-                    <span>Saves</span>
-                  </div>
-                )}
-                {loadingGroups.map((group) => (
+                {loadingGroups.map((group, groupIndex) => (
                   <Fragment key={group.label ?? 'all'}>
                     {group.label && (
                       <h3 className="start-group-label" aria-hidden="true">
                         {group.label}
                       </h3>
+                    )}
+                    {/* Where the loaded list puts it: under the first label. */}
+                    {layout === 'list' && groupIndex === 0 && (
+                      <div className="start-list-head" aria-hidden="true">
+                        <span>Name</span>
+                        <span>Status</span>
+                        <span>Edited</span>
+                        <span className="start-list-head-size">Size</span>
+                        <span>Saves</span>
+                      </div>
                     )}
                     <div
                       className={`start-tile-grid ${layout === 'list' ? 'is-list' : `is-${cardSize}`}`}
@@ -3116,7 +4001,14 @@ export function StartScreen({
                                   <time>&nbsp;</time>
                                 </span>
                                 {layout === 'list' && (
-                                  <span className="start-tile-rev">&nbsp;</span>
+                                  <>
+                                    <span className="start-tile-size">
+                                      &nbsp;
+                                    </span>
+                                    <span className="start-tile-rev">
+                                      &nbsp;
+                                    </span>
+                                  </>
                                 )}
                               </small>
                             </span>
@@ -3155,14 +4047,6 @@ export function StartScreen({
 
             {items.length > 0 && (
               <>
-                {layout === 'list' && (
-                  <div className="start-list-head" aria-hidden="true">
-                    <span>Name</span>
-                    <span>Status</span>
-                    <span>Edited</span>
-                    <span>Saves</span>
-                  </div>
-                )}
                 {shelfGroups.map((group) =>
                   // An empty group only shows as a drop target mid-drag.
                   group.items.length === 0 && !reorder.draggingId ? null : (
@@ -3172,8 +4056,34 @@ export function StartScreen({
                       {group.label && (
                         <h3 className="start-group-label">{group.label}</h3>
                       )}
+                      {/* Under the first group's label, over the rows it
+                          names: above the label it headed "Pinned" instead. */}
+                      {layout === 'list' &&
+                        group ===
+                          shelfGroups.find(
+                            (candidate) =>
+                              candidate.items.length > 0 || reorder.draggingId
+                          ) && (
+                          <div className="start-list-head" aria-hidden="true">
+                            <span>Name</span>
+                            <span>Status</span>
+                            <span>Edited</span>
+                            <span className="start-list-head-size">Size</span>
+                            <span>Saves</span>
+                          </div>
+                        )}
                       <div
-                        className={`start-tile-grid ${layout === 'list' ? 'is-list' : `is-${cardSize}`}`}
+                        className={[
+                          'start-tile-grid',
+                          layout === 'list' ? 'is-list' : `is-${cardSize}`,
+                          // Every card here is pinned, and the label or the
+                          // filter already says so: no pin on each card.
+                          group.group === 'pinned' || activeFilter === 'pinned'
+                            ? 'is-all-pinned'
+                            : ''
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
                         data-tile-group={canReorder ? group.group : undefined}
                       >
                         {group.items.map((item) =>
@@ -3311,14 +4221,48 @@ export function StartScreen({
         )}
       </div>
 
-      <section className="start-learn" aria-labelledby="start-demos-title">
+      <section
+        className={showExamples ? 'start-learn' : 'start-learn is-collapsed'}
+        aria-labelledby="start-demos-title"
+      >
         <div className="start-learn-head">
-          <h2 id="start-demos-title">Learn by example</h2>
-          <span className="start-section-note">
-            explore editable parts, design revisions and assemblies
-          </span>
+          {/* Collapsible in the column; on the first run the examples are
+              the way in, so they always show. */}
+          {fresh ? (
+            <h2 id="start-demos-title">Example projects</h2>
+          ) : (
+            <h2 id="start-demos-title">
+              <button
+                type="button"
+                className="start-learn-toggle"
+                aria-expanded={showExamples}
+                aria-controls={`${instanceId}-demo-list`}
+                onClick={() => {
+                  const next = !examplesCollapsed;
+                  setExamplesCollapsed(next);
+                  writeExamplesCollapsed(next);
+                }}
+              >
+                <ChevronRight
+                  size={12}
+                  className="start-learn-chevron"
+                  aria-hidden="true"
+                />
+                Example projects
+              </button>
+            </h2>
+          )}
+          {showExamples && (
+            <span className="start-section-note">
+              explore editable parts, design revisions and assemblies
+            </span>
+          )}
         </div>
-        <div className="demo-list">
+        <div
+          id={`${instanceId}-demo-list`}
+          className="demo-list"
+          hidden={!showExamples}
+        >
           {demos.map((demo) => {
             // Opened before: this device holds an edited copy, which the
             // sample opens as until it is reset.
@@ -3447,54 +4391,97 @@ export function StartScreen({
             </span>
           ) : null}
           <div
-            className={`start-account is-${cloud.tone}`}
+            className={`start-account is-${cloud.tone}${storageOpen ? ' is-open' : ''}`}
             role="status"
             aria-live="polite"
           >
-            <div className="start-account-row">
-              <cloud.Icon
-                size={14}
-                aria-hidden="true"
-                className={cloud.spin ? 'spin' : undefined}
+            {/* The whole readout opens the storage details: one button
+                drawn under the line and its meter, with the line's own
+                actions standing above it. */}
+            <div className="start-account-head">
+              <button
+                ref={storageButtonRef}
+                type="button"
+                className="start-account-open"
+                aria-label={
+                  storageMeter
+                    ? `Storage details, ${storageMeter.figure} used`
+                    : 'Storage details'
+                }
+                title={cloud.title}
+                aria-haspopup="dialog"
+                aria-expanded={storageOpen}
+                aria-controls={storageOpen ? storagePanelId : undefined}
+                onClick={() => setStorageOpen((open) => !open)}
               />
-              <span className="start-account-text" title={cloud.title}>
-                {cloud.text}
-              </span>
-              {cloud.action && (
-                <button
-                  type="button"
-                  className="start-account-action"
-                  aria-label={cloud.action.label}
-                  title={cloud.action.label}
-                  disabled={cloud.action.needsIdle && busy}
-                  onClick={cloud.action.run}
-                >
-                  {cloud.action.text}
-                </button>
+              <div className="start-account-row">
+                <cloud.Icon
+                  size={14}
+                  aria-hidden="true"
+                  className={cloud.spin ? 'spin' : undefined}
+                />
+                <span className="start-account-text" title={cloud.title}>
+                  {cloud.text}
+                </span>
+                {storageMeter && !cloud.action && (
+                  <span className="start-account-figure" aria-hidden="true">
+                    {storageMeter.figure}
+                  </span>
+                )}
+                {cloud.action && (
+                  <button
+                    type="button"
+                    className="start-account-action"
+                    aria-label={cloud.action.label}
+                    title={cloud.action.label}
+                    disabled={cloud.action.needsIdle && busy}
+                    onClick={cloud.action.run}
+                  >
+                    {cloud.action.text}
+                  </button>
+                )}
+                {syncTotals && !syncTotals.active && (
+                  <button
+                    type="button"
+                    className="start-account-dismiss"
+                    aria-label="Dismiss sync results"
+                    onClick={onDismissSyncRun}
+                  >
+                    <X size={12} aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+              {cloud.progress && (
+                <div className="start-account-track" aria-hidden="true">
+                  <span
+                    className="start-account-fill"
+                    style={{ width: `${cloud.progress.saved * 100}%` }}
+                  />
+                  <span
+                    className="start-account-fill is-failed"
+                    style={{ width: `${cloud.progress.failed * 100}%` }}
+                  />
+                </div>
               )}
-              {syncTotals && !syncTotals.active && (
-                <button
-                  type="button"
-                  className="start-account-dismiss"
-                  aria-label="Dismiss sync results"
-                  onClick={onDismissSyncRun}
-                >
-                  <X size={12} aria-hidden="true" />
-                </button>
+              {storageMeter ? (
+                <StorageBar
+                  segments={storageMeter.segments}
+                  limit={storageLimit}
+                  level={storageMeter.level}
+                  label="Account storage used"
+                  valueText={storageMeter.figure}
+                />
+              ) : cloud.progress ? null : (
+                // The meter's place, kept while the account is checked and
+                // its first figure loads (and when there is none), so the
+                // library below never jumps when the meter lands. A save
+                // run's own track stands in that place instead.
+                <span
+                  className="storage-bar is-small is-placeholder"
+                  aria-hidden="true"
+                />
               )}
             </div>
-            {cloud.progress && (
-              <div className="start-account-track" aria-hidden="true">
-                <span
-                  className="start-account-fill"
-                  style={{ width: `${cloud.progress.saved * 100}%` }}
-                />
-                <span
-                  className="start-account-fill is-failed"
-                  style={{ width: `${cloud.progress.failed * 100}%` }}
-                />
-              </div>
-            )}
             {/* What the one-line readout cannot hold hangs below it. */}
             {(syncFailures.length > 0 || statusLine) && (
               <div className="start-account-details">
@@ -3530,6 +4517,36 @@ export function StartScreen({
               </div>
             )}
           </div>
+          {storageOpen && (
+            <Suspense fallback={null}>
+              <StorageUsagePanel
+                id={storagePanelId}
+                signedIn={signedIn}
+                usage={storage.usage}
+                usageState={
+                  signedIn && !loadStorageUsage ? 'failed' : storage.state
+                }
+                onRetryUsage={storage.refresh}
+                device={deviceStorage}
+                deviceProjectCount={userProjects.length}
+                localOnlyCount={localOnlyProjects.length}
+                anchorRef={storageButtonRef}
+                onClose={() => setStorageOpen(false)}
+                onShowTrash={() => {
+                  selectShelf('deleted');
+                  // The panel that held focus is going away; the Trash tab
+                  // it led to takes it, as a click on the tab would.
+                  globalThis.document
+                    .getElementById('start-shelf-tab-deleted')
+                    ?.focus();
+                }}
+                {...((onOpenAccountSettings ?? onSignIn) && {
+                  onOpenAccountSettings: onOpenAccountSettings ?? onSignIn
+                })}
+                {...(onSignIn && { onSignIn })}
+              />
+            </Suspense>
+          )}
         </aside>
       </section>
 
@@ -3554,6 +4571,21 @@ export function StartScreen({
           />
         </Suspense>
       )}
+      {/* Settings on the shelf line's end, on the workspace Settings
+          button's line; Settings puts its way back in the same place. Last
+          in the page's order, though drawn at its top: Tab started there,
+          ahead of New project. */}
+      <div className="corner-slot">
+        <button
+          className="corner-action start-settings-button"
+          type="button"
+          aria-label="Open settings"
+          title={labelWithKey('Settings', settingsKey)}
+          onClick={onOpenSettings}
+        >
+          <Settings size={15} aria-hidden="true" />
+        </button>
+      </div>
       {propertiesProject && (
         <Suspense fallback={null}>
           <ProjectPropertiesDialog
@@ -3568,7 +4600,45 @@ export function StartScreen({
                     ? 'This device only'
                     : 'Unknown — account listing unavailable'
             }
+            // Facts only: the dialog's lazy chunk words them, which keeps
+            // the status text out of the start screen's entry bundle. The
+            // format comes from the current listing: `propertiesProject` is
+            // the summary as it was when the dialog opened, and a migration
+            // can change it while the dialog is still open.
+            encryptionFacts={{
+              storageFormat: (
+                projects.find(
+                  (candidate) =>
+                    candidate.projectId === propertiesProject.projectId
+                ) ?? propertiesProject
+              ).storageFormat,
+              inAccount: cloudProjectIds.has(propertiesProject.projectId)
+            }}
+            {...(onRename &&
+              !projectNeedsUpdate(propertiesProject) && {
+                // The listed project, whose name a rename here has moved on.
+                onRename: (name: string) =>
+                  onRename(
+                    projects.find(
+                      (candidate) =>
+                        candidate.projectId === propertiesProject.projectId
+                    ) ?? propertiesProject,
+                    name
+                  ),
+                projects
+              })}
             onClose={() => setPropertiesProject(null)}
+          />
+        </Suspense>
+      )}
+      {onImportFiles && (
+        // Without a target here the browser took a dropped file and opened
+        // or downloaded it in place of the library.
+        <Suspense fallback={null}>
+          <FileDropTarget
+            title="Drop to make a project"
+            hint="STEP, DXF or a mesh file starts a new project; an .openzcad backup restores one"
+            onDrop={setDroppedFiles}
           />
         </Suspense>
       )}

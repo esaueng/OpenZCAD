@@ -1,54 +1,9 @@
-import { useEffect, useId, useRef, useState, type ComponentType } from 'react';
+import { useId, useRef, useState } from 'react';
 import type { FieldQuantity } from '@openzcad/document-core';
 import { formatNumber, previewExpression } from '../lib/model';
-import type { DefineParameterPrompt as DefineParameterPromptComponent } from './DefineParameterPrompt';
 import { useFieldAutoFocus } from './forms/fieldAutoFocus';
 import { useParameterDefinition } from './forms/parameterDefinition';
-
-// The define prompt is off the entry chunk: the field is in it, and the prompt
-// only appears once someone types a name that is not a parameter yet. It is
-// fetched when a field that could offer it mounts, and rendered only once
-// loaded — never behind a Suspense fallback, which Tab would skip past, and
-// never by swapping a lazy wrapper for the loaded component, which would
-// remount it and drop a value being typed. Until then, or if the chunk will
-// not load, the field shows the plain error it always did.
-let loadedPrompt: ComponentType<
-  Parameters<typeof DefineParameterPromptComponent>[0]
-> | null = null;
-let promptLoad: Promise<void> | null = null;
-
-function loadDefineParameterPrompt(): Promise<void> {
-  promptLoad ??= import('./DefineParameterPrompt').then(
-    (module) => {
-      loadedPrompt = module.DefineParameterPrompt;
-    },
-    () => {
-      // A field mounted later tries again.
-      promptLoad = null;
-    }
-  );
-  return promptLoad;
-}
-
-/**
- * The loaded prompt component while `wanted`. Loading starts as soon as a
- * field that could offer it mounts (`available`): a card's fields mount when
- * it opens, well before a name can be typed into one and Tab pressed after it.
- */
-function useDefineParameterPrompt(available: boolean, wanted: boolean) {
-  const [, setLoaded] = useState(false);
-  useEffect(() => {
-    if (!available || loadedPrompt) return;
-    let live = true;
-    void loadDefineParameterPrompt().then(() => {
-      if (live && loadedPrompt) setLoaded(true);
-    });
-    return () => {
-      live = false;
-    };
-  }, [available]);
-  return wanted ? loadedPrompt : null;
-}
+import { useDefineParameterPrompt } from './forms/defineParameterPrompt';
 
 interface ExprInputProps {
   label: string;

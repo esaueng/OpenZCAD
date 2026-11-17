@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { ImageDown } from 'lucide-react';
 import type { UnitSystem } from '@openzcad/shared';
 import { imageSizeProblem, IMAGE_EXPORT_MAX_SIDE } from '../lib/imageExport';
+import { submitOnEnter } from '../lib/submitOnEnter';
 import { useModalFocus } from '../lib/useModalFocus';
 
-export type ImageExportKind = 'png' | 'svg';
+/** D04: `dxf` writes one sketch as a DXF R12 drawing. */
+export type ImageExportKind = 'png' | 'svg' | 'dxf';
 
 export interface ImageExportSketch {
   sketchId: string;
@@ -21,6 +23,8 @@ export interface PngExportOptions {
 export interface SvgExportOptions {
   sketchId: string;
   transparent: boolean;
+  /** D04: write the sketch as a DXF drawing instead; absent is SVG. */
+  format?: 'dxf';
 }
 
 export interface ImageExportDialogProps {
@@ -44,6 +48,7 @@ export interface ImageExportDialogProps {
   onClose(): void;
   /** Starts the export; the dialog closes and the host reports the outcome. */
   onExportPng(options: PngExportOptions): void;
+  /** One sketch as an SVG, or with `format: 'dxf'` a DXF drawing (D04). */
   onExportSvg(options: SvgExportOptions): void;
 }
 
@@ -80,7 +85,7 @@ export function ImageExportDialog({
   onExportPng,
   onExportSvg
 }: ImageExportDialogProps) {
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLFormElement>(null);
   useModalFocus(dialogRef, { autoFocus: true });
 
   const viewWidth = Math.max(1, Math.round(viewSize.width));
@@ -158,6 +163,8 @@ export function ImageExportDialog({
         transparent,
         showGrid
       });
+    } else if (kind === 'dxf') {
+      onExportSvg({ sketchId, transparent: false, format: 'dxf' });
     } else {
       onExportSvg({ sketchId, transparent });
     }
@@ -166,18 +173,27 @@ export function ImageExportDialog({
 
   return (
     <div className="modal-backdrop">
-      <div
+      {/* A form, so Enter in Width or Height exports; runExport keeps the
+          size guard, whose message stands in for the browser's. */}
+      <form
         ref={dialogRef}
         className="export-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="image-export-title"
         tabIndex={-1}
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          runExport();
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
             onClose();
+            return;
           }
+          submitOnEnter(event);
         }}
       >
         <h2 id="image-export-title">
@@ -220,6 +236,23 @@ export function ImageExportDialog({
                 : 'One sketch, exact curves at 1:1'}
             </small>
           </label>
+          {sketches.length > 0 ? (
+            <label className="export-dialog-option">
+              <input
+                type="radio"
+                name="image-export-format"
+                value="dxf"
+                aria-label="DXF"
+                aria-describedby="image-export-hint-dxf"
+                checked={kind === 'dxf'}
+                onChange={() => setKind('dxf')}
+              />
+              <span aria-hidden="true">DXF</span>
+              <small id="image-export-hint-dxf">
+                One sketch for CAD and CAM, exact lines, arcs and circles
+              </small>
+            </label>
+          ) : null}
         </fieldset>
 
         {kind === 'png' ? (
@@ -253,28 +286,30 @@ export function ImageExportDialog({
                   </button>
                 ))}
               </div>
-              <label className="export-dialog-custom">
-                <span>Width (px)</span>
-                <input
-                  type="number"
-                  min={16}
-                  max={maxSide}
-                  step={1}
-                  value={width}
-                  onChange={(event) => setWidth(event.target.value)}
-                />
-              </label>
-              <label className="export-dialog-custom">
-                <span>Height (px)</span>
-                <input
-                  type="number"
-                  min={16}
-                  max={maxSide}
-                  step={1}
-                  value={height}
-                  onChange={(event) => setHeight(event.target.value)}
-                />
-              </label>
+              <div className="export-dialog-size">
+                <label>
+                  <span>Width (px)</span>
+                  <input
+                    type="number"
+                    min={16}
+                    max={maxSide}
+                    step={1}
+                    value={width}
+                    onChange={(event) => setWidth(event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>Height (px)</span>
+                  <input
+                    type="number"
+                    min={16}
+                    max={maxSide}
+                    step={1}
+                    value={height}
+                    onChange={(event) => setHeight(event.target.value)}
+                  />
+                </label>
+              </div>
               {sizeProblem ? (
                 <p className="export-dialog-error" role="alert">
                   {sizeProblem}
@@ -298,8 +333,9 @@ export function ImageExportDialog({
         ) : (
           <>
             <p className="export-dialog-scope">
-              Draws the sketch&apos;s lines, arcs and circles exactly, at 1:1 in{' '}
-              {UNIT_NAMES[units]}. Construction geometry is left out.
+              {kind === 'dxf'
+                ? 'Writes the sketch’s lines, arcs and circles exactly in its plane as a DXF R12 drawing in millimeters; rectangles and polygons become their edge lines. Construction geometry, text, ellipses and splines are left out or refused by name.'
+                : `Draws the sketch’s lines, arcs and circles exactly, at 1:1 in ${UNIT_NAMES[units]}. Construction geometry is left out.`}
             </p>
             <label className="export-dialog-custom">
               <span>Sketch</span>
@@ -316,14 +352,16 @@ export function ImageExportDialog({
             </label>
           </>
         )}
-        <label className="export-dialog-custom">
-          <input
-            type="checkbox"
-            checked={transparent}
-            onChange={(event) => setTransparent(event.target.checked)}
-          />
-          Transparent background
-        </label>
+        {kind !== 'dxf' ? (
+          <label className="export-dialog-custom">
+            <input
+              type="checkbox"
+              checked={transparent}
+              onChange={(event) => setTransparent(event.target.checked)}
+            />
+            Transparent background
+          </label>
+        ) : null}
 
         <div className="export-dialog-status">
           {kind === 'png' && pngUnavailable ? (
@@ -337,17 +375,12 @@ export function ImageExportDialog({
           <button type="button" className="secondary" onClick={onClose}>
             Cancel
           </button>
-          <button
-            type="button"
-            className="primary"
-            disabled={blocked}
-            onClick={runExport}
-          >
+          <button type="submit" className="primary" disabled={blocked}>
             <ImageDown size={13} aria-hidden="true" />
-            Export {kind === 'png' ? 'PNG' : 'SVG'}
+            Export {kind === 'png' ? 'PNG' : kind === 'dxf' ? 'DXF' : 'SVG'}
           </button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

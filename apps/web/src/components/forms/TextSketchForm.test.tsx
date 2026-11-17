@@ -42,7 +42,7 @@ describe('TextSketchForm', () => {
     expect(screen.getByLabelText('Text')).toHaveValue('Hello');
     expect(screen.getByLabelText('Font')).toBeTruthy();
     expect(screen.getByRole('group', { name: 'Font style' })).toBeTruthy();
-    expect(screen.getByLabelText('Size (em)')).toBeTruthy();
+    expect(screen.getByLabelText('Em size')).toBeTruthy();
     expect(screen.getByLabelText('Rotation')).toBeTruthy();
     expect(screen.getByLabelText('X')).toBeTruthy();
     expect(screen.getByLabelText('Y')).toBeTruthy();
@@ -130,7 +130,7 @@ describe('history text sketch unit context', () => {
           onSubmit={onSubmit}
         />
       );
-      expect(screen.getByLabelText('Size (em)')).toHaveAccessibleDescription(
+      expect(screen.getByLabelText('Em size')).toHaveAccessibleDescription(
         size
       );
       expect(screen.getByLabelText('Rotation')).toHaveAccessibleDescription(
@@ -150,7 +150,7 @@ describe('history text sketch unit context', () => {
   );
 
   it.each([
-    { label: 'Size (em)', expression: '30 deg', expected: /expected a length/ },
+    { label: 'Em size', expression: '30 deg', expected: /expected a length/ },
     { label: 'Rotation', expression: '5 mm', expected: /expected an angle/ },
     { label: 'X', expression: '2 mm * 3 mm', expected: /expected a length/ }
   ])(
@@ -187,7 +187,7 @@ describe('history text sketch unit context', () => {
           onSubmit={onSubmit}
         />
       );
-      const size = screen.getByLabelText('Size (em)');
+      const size = screen.getByLabelText('Em size');
       fireEvent.change(size, { target: { value: expression } });
       expect(size).toHaveAccessibleDescription('Must be greater than zero.');
       expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();

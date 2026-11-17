@@ -1,0 +1,326 @@
+import { useEffect, useRef, type RefObject } from 'react';
+import type { AccountStorageUsage } from '@openzcad/shared';
+import { ArrowRight, HardDrive, RotateCw, Trash2, X } from 'lucide-react';
+import { formatBytes } from '../lib/formatBytes';
+import { countLabel } from '../lib/toasts';
+import {
+  storageLevel,
+  formatUsedBytes,
+  storageLimitOf,
+  storedBytes
+} from '../lib/storageUsage';
+import {
+  StorageBar,
+  storageFigure,
+  storageSegments,
+  type DeviceStorageEstimate,
+  type StorageSegment,
+  type StorageUsageState
+} from './storageUsageShared';
+
+// Its helpers stay importable from here, as they always were.
+export * from './storageUsageShared';
+
+interface StorageUsagePanelProps {
+  id: string;
+  signedIn: boolean;
+  usage: AccountStorageUsage | null;
+  usageState: StorageUsageState;
+  onRetryUsage(): void;
+  device: DeviceStorageEstimate | null;
+  /** Signed out, every listed project is this browser's; shown then only. */
+  deviceProjectCount: number;
+  /** Signed in, the projects the account does not have yet. */
+  localOnlyCount: number;
+  /** The control that opened the panel: it gets focus back, and its clicks toggle. */
+  anchorRef: RefObject<HTMLElement | null>;
+  onClose(): void;
+  onShowTrash?(): void;
+  onOpenAccountSettings?(): void;
+  onSignIn?(): void;
+}
+
+/**
+ * Where the library's bytes are: the account's allowance and what fills it,
+ * then what this browser holds. A light popover above the footer readout —
+ * Escape, a click elsewhere or the close button put it away and give focus
+ * back to the readout.
+ */
+export function StorageUsagePanel({
+  id,
+  signedIn,
+  usage,
+  usageState,
+  onRetryUsage,
+  device,
+  deviceProjectCount,
+  localOnlyCount,
+  anchorRef,
+  onClose,
+  onShowTrash,
+  onOpenAccountSettings,
+  onSignIn
+}: StorageUsagePanelProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  useEffect(() => {
+    panelRef.current?.focus();
+    const anchor = anchorRef.current;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        closeRef.current();
+        anchor?.focus();
+      }
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) return;
+      // The opener toggles on its own click; the panel keeps its own.
+      if (panelRef.current?.contains(target) || anchor?.contains(target)) {
+        return;
+      }
+      closeRef.current();
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true);
+      document.removeEventListener('pointerdown', onPointerDown, true);
+    };
+  }, [anchorRef]);
+
+  const close = () => {
+    onClose();
+    anchorRef.current?.focus();
+  };
+
+  const used = usage ? storedBytes(usage) : 0;
+  const limit = storageLimitOf(usage);
+  const level = storageLevel(used, limit);
+  const segments = usage ? storageSegments(usage) : [];
+  const trashed = usage?.trashedProjectCount ?? 0;
+
+  return (
+    <div
+      ref={panelRef}
+      id={id}
+      className="storage-panel"
+      role="dialog"
+      aria-label="Storage"
+      tabIndex={-1}
+    >
+      <div className="storage-panel-head">
+        <h2 className="storage-panel-title">Storage</h2>
+        <button
+          type="button"
+          className="storage-panel-close"
+          aria-label="Close storage details"
+          onClick={close}
+        >
+          <X size={14} aria-hidden="true" />
+        </button>
+      </div>
+
+      {signedIn ? (
+        <section className="storage-panel-section" aria-label="Your account">
+          {usage ? (
+            <>
+              <div className="storage-panel-hero">
+                <span className="storage-panel-used">
+                  {limit ? formatUsedBytes(used, limit) : formatBytes(used)}
+                </span>
+                {limit ? (
+                  <span className="storage-panel-limit">
+                    of {formatBytes(limit)}
+                  </span>
+                ) : null}
+                {limit ? (
+                  <span className={`storage-panel-percent is-${level}`}>
+                    {percentLabel(used, limit)}
+                  </span>
+                ) : null}
+              </div>
+              <StorageBar
+                segments={segments}
+                limit={limit}
+                level={level}
+                size="large"
+                label="Account storage used"
+                valueText={storageFigure(used, limit)}
+              />
+              {limit ? (
+                <p className={`storage-panel-caption is-${level}`}>
+                  {level === 'over'
+                    ? `${formatBytes(used - limit)} over your allowance`
+                    : `${formatBytes(limit - used)} free`}
+                </p>
+              ) : null}
+              <ul className={`storage-panel-parts is-${level}`}>
+                {segments.map((part) => (
+                  <li key={part.key} className="storage-panel-part">
+                    <span
+                      className={`storage-panel-swatch is-${part.key}`}
+                      aria-hidden="true"
+                    />
+                    <span className="storage-panel-part-text">
+                      <span className="storage-panel-part-name">
+                        {part.label}
+                      </span>
+                      <span className="storage-panel-part-note">
+                        {partNote(part.key, usage)}
+                      </span>
+                    </span>
+                    <span className="storage-panel-part-bytes">
+                      {formatBytes(part.bytes)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {trashed > 0 && (
+                <div className="storage-panel-note">
+                  <Trash2 size={13} aria-hidden="true" />
+                  <span>
+                    {trashed === 1
+                      ? 'One project in the trash still counts.'
+                      : `${trashed.toLocaleString()} projects in the trash still count.`}
+                  </span>
+                  {onShowTrash && (
+                    <button
+                      type="button"
+                      className="storage-panel-link"
+                      onClick={() => {
+                        onClose();
+                        onShowTrash();
+                      }}
+                    >
+                      View trash
+                    </button>
+                  )}
+                </div>
+              )}
+            </>
+          ) : usageState === 'failed' ? (
+            <div className="storage-panel-note is-failed">
+              <span>Storage usage could not be loaded.</span>
+              <button
+                type="button"
+                className="storage-panel-link"
+                onClick={onRetryUsage}
+              >
+                <RotateCw size={12} aria-hidden="true" />
+                Retry
+              </button>
+            </div>
+          ) : (
+            <div className="storage-panel-loading" role="status">
+              <span className="storage-panel-skeleton is-hero" />
+              <span className="storage-panel-skeleton is-bar" />
+              <span className="visually-hidden">Checking storage…</span>
+            </div>
+          )}
+        </section>
+      ) : (
+        <div className="storage-panel-note">
+          <span>
+            Projects are kept in this browser. Sign in to keep them in your
+            account, on every device.
+          </span>
+        </div>
+      )}
+
+      <section className="storage-panel-section" aria-label="This device">
+        <h3 className="storage-panel-subtitle">
+          <HardDrive size={12} aria-hidden="true" />
+          This device
+        </h3>
+        <dl className="storage-panel-facts">
+          {signedIn ? (
+            <div>
+              <dt>Only on this device</dt>
+              <dd className={localOnlyCount > 0 ? 'is-warning' : undefined}>
+                {localOnlyCount > 0
+                  ? countLabel(localOnlyCount, 'project', 'projects')
+                  : 'None'}
+              </dd>
+            </div>
+          ) : (
+            <div>
+              <dt>Projects</dt>
+              <dd>{deviceProjectCount.toLocaleString()}</dd>
+            </div>
+          )}
+          {device?.usage != null && (
+            <div>
+              <dt>Browser storage</dt>
+              <dd>{formatBytes(device.usage)}</dd>
+            </div>
+          )}
+          {device?.persisted != null && (
+            <div>
+              <dt>Kept</dt>
+              <dd>
+                {device.persisted
+                  ? 'Until you clear it'
+                  : 'May be cleared if space runs low'}
+              </dd>
+            </div>
+          )}
+        </dl>
+      </section>
+
+      {signedIn
+        ? onOpenAccountSettings && (
+            <button
+              type="button"
+              className="storage-panel-footer"
+              onClick={() => {
+                onClose();
+                onOpenAccountSettings();
+              }}
+            >
+              Account and storage settings
+              <ArrowRight size={13} aria-hidden="true" />
+            </button>
+          )
+        : onSignIn && (
+            <button
+              type="button"
+              className="storage-panel-footer is-primary"
+              onClick={() => {
+                onClose();
+                onSignIn();
+              }}
+            >
+              Sign in
+              <ArrowRight size={13} aria-hidden="true" />
+            </button>
+          )}
+    </div>
+  );
+}
+
+function percentLabel(used: number, limit: number): string {
+  const percent = (used / limit) * 100;
+  if (used > 0 && percent < 1) return '<1%';
+  return `${Math.round(percent).toLocaleString()}%`;
+}
+
+function partNote(
+  key: StorageSegment['key'],
+  usage: AccountStorageUsage
+): string {
+  if (key === 'projects') {
+    return [
+      countLabel(usage.projectCount, 'project', 'projects'),
+      countLabel(usage.revisionCount, 'save state', 'save states')
+    ].join(' · ');
+  }
+  if (key === 'files') {
+    return countLabel(usage.artifactCount ?? 0, 'file', 'files');
+  }
+  return 'Held until the upload finishes';
+}

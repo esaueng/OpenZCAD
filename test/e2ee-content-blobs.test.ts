@@ -886,7 +886,8 @@ describe('accounting', () => {
     // The storage report reconciles blobs with the durable total.
     const storage = await srv.call('GET', '/api/account/storage');
     expect(storage.status).toBe(200);
-    // Fill the account to just below its limit with a plaintext artifact.
+    // Fill the account to just below its one storage allowance (files and
+    // projects, migration 0049) with a plaintext artifact.
     const created = await srv.call('POST', '/api/projects', {
       body: { name: 'Plain', initialDocument: initialDocument('Plain') }
     });
@@ -900,7 +901,17 @@ describe('accounting', () => {
          VALUES ('artifact_big', ?, 'step-import', 'big.step', 'big',
                  'model/step', '{}', 'now', ?)`
       )
-      .run(plain.projectId, MAX_ACCOUNT_ARTIFACT_BYTES - bytes - 100);
+      .run(
+        plain.projectId,
+        MAX_ACCOUNT_ARTIFACT_BYTES -
+          bytes -
+          100 -
+          rows<{ bytes: number }>(
+            srv,
+            'SELECT bytes FROM account_project_storage WHERE user_id = ?',
+            OWNER
+          )[0]!.bytes
+      );
     await refusedWith(
       laptop.blobs.archive(projectId, stepInput(stepBytes('over', 400))),
       413,

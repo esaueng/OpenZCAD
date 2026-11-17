@@ -1,4 +1,8 @@
-import type { WorkspaceSaveState } from './cloudProjectAutosave';
+import { ApiError } from './api';
+import type {
+  CloudProjectSyncState,
+  WorkspaceSaveState
+} from './cloudProjectAutosave';
 import type { ProjectDocument } from '@openzcad/shared';
 import { checkpointRoomCoversDocument } from './collaborationCheckpointFallback';
 
@@ -25,6 +29,21 @@ export function presentedWorkspaceSaveState(
 }
 
 /**
+ * The save state an autosave report stands for. The controller reports any
+ * failed write it will retry as `offline`; a server that answered with an
+ * error is reachable, though, and calling that "Offline" sent people to check
+ * a connection that was fine (design review I8).
+ */
+export function autosaveReportedSaveState(
+  state: CloudProjectSyncState,
+  error?: unknown
+): WorkspaceSaveState {
+  return state === 'offline' && error instanceof ApiError && error.status >= 500
+    ? 'server-error'
+    : state;
+}
+
+/**
  * One presentation source for every workspace sync indicator. The compact
  * footer and the actionable top bar may use different wording, but they can no
  * longer disagree about whether a project is local, syncing, or in the account.
@@ -48,9 +67,11 @@ export const WORKSPACE_SAVE_STATE_PRESENTATION: Record<
     statusBarLabel: 'Syncing',
     title: 'Saved on this device · copying to your account…'
   },
+  // "Saved" in both places: the status bar said "Synced" for the state the
+  // top bar called "Saved" (I8).
   synced: {
     topBarLabel: 'Saved',
-    statusBarLabel: 'Synced',
+    statusBarLabel: 'Saved',
     title: 'Saved on this device and in your account.'
   },
   'local-source': {
@@ -63,6 +84,12 @@ export const WORKSPACE_SAVE_STATE_PRESENTATION: Record<
     topBarLabel: 'Offline',
     statusBarLabel: 'Offline',
     title: 'Saved on this device · your account is unreachable right now.'
+  },
+  'server-error': {
+    topBarLabel: 'Not synced',
+    statusBarLabel: 'Not synced',
+    title:
+      'Saved on this device · the server could not take the save. It retries automatically; the activity log has the details.'
   },
   conflict: {
     topBarLabel: 'Conflict',

@@ -28,6 +28,11 @@ import {
 } from '../lib/extrudeDraft';
 import type { ExtrudeChoice, ResolvedExtrude } from '../lib/extrudeInference';
 import { formatNumber, paramValueText } from '../lib/model';
+import {
+  extrudeShownValues,
+  type ExtrudeCommandExtent,
+  type ExtrudeValueId
+} from '../lib/extrudeShownValues';
 import { InPlaceCommandBar, type InPlaceOption } from './InPlaceCommandBar';
 
 /**
@@ -38,13 +43,12 @@ import { InPlaceCommandBar, type InPlaceOption } from './InPlaceCommandBar';
  * refused by the same rules the History editor's card applies.
  */
 
-/** The numbers the bar, its keypad and the model's handles edit. */
-export type ExtrudeValueId = 'distance' | 'backDistance' | 'draftAngle';
+export { extrudeShownValues, type ExtrudeValueId };
 
 /** The draft as numbers, for the handles the model draws. */
 export interface ExtrudeCommandState {
   value: ExtrudeFormValue;
-  extent: 'blind' | 'to-face' | 'through-all';
+  extent: ExtrudeCommandExtent;
   symmetric: boolean;
   /** NaN while a field's text does not evaluate. */
   distance: number;
@@ -130,22 +134,6 @@ const VALUE_LABELS: Record<ExtrudeValueId, string> = {
   backDistance: 'Back distance',
   draftAngle: 'Draft angle'
 };
-
-/**
- * The values an extrude in this extent offers to type: Distance only for a
- * blind one, Back distance only one-sided, a draft except through all.
- */
-export function extrudeShownValues(state: {
-  extent: ExtrudeCommandState['extent'];
-  symmetric: boolean;
-}): ExtrudeValueId[] {
-  const blind = state.extent === 'blind';
-  return [
-    ...(blind ? (['distance'] as const) : []),
-    ...(blind && !state.symmetric ? (['backDistance'] as const) : []),
-    ...(state.extent !== 'through-all' ? (['draftAngle'] as const) : [])
-  ];
-}
 
 export function ExtrudeCommand({
   scope,

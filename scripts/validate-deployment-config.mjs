@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import process from 'node:process';
 import ts from 'typescript';
 
@@ -17,9 +18,11 @@ export const REQUIRED_SECRETS = [
   'AI_IDENTITY_PEPPER'
 ];
 
+/** wrangler.jsonc's build step: refuses an unverified or +local web build. */
+export const RELEASE_BUILD_CHECK = 'pnpm -w run check:release-build';
 export const OFFICIAL = Object.freeze({
   repository: 'esaueng/OpenZCAD',
-  workerName: 'openzcad',
+  workerName: 'openzcad-beta',
   databaseBinding: 'DB',
   databaseName: 'openzcad-beta',
   databaseId: '7263c6f1-8781-40d1-a0fa-ea03ce874ef2',
@@ -29,8 +32,31 @@ export const OFFICIAL = Object.freeze({
   durableObjectBinding: 'PROJECT_ROOM',
   assetBinding: 'ASSETS',
   turnstileSiteKey: '0x4AAAAAAD_j6Y7NvXKtcxNX',
-  publicOrigin: 'https://zcad.app',
-  sender: 'noreply@zcad.esau.app'
+  publicOrigin: 'https://beta.zcad.app',
+  sender: 'noreply@beta.zcad.app'
+});
+
+/**
+ * The stable (production) channel, wrangler.stable.jsonc: its own Worker,
+ * database and bucket, deployed from the `stable` branch. Everything not
+ * listed here (asset binding, Turnstile key, bindings) matches OFFICIAL.
+ * It serves zcad.app (and stable.zcad.app); beta serves beta.zcad.app
+ * (docs/release-channels.md).
+ */
+/** The sender both channels used before each got its own domain. */
+const LEGACY_SENDER = 'noreply@zcad.esau.app';
+
+export const OFFICIAL_STABLE = Object.freeze({
+  workerName: 'openzcad-stable',
+  databaseName: 'openzcad-stable',
+  databaseId: '3b5fb65e-0af0-46a8-a50c-b7b5bd69c56b',
+  bucketName: 'openzcad-stable-artifacts',
+  sender: 'noreply@zcad.app',
+  // The one origin stable's invitation links may use, and every address it
+  // serves: Previews, dev and self-host configs must not send links to any.
+  publicOrigins: Object.freeze(['https://zcad.app']),
+  servedOrigins: Object.freeze(['https://zcad.app', 'https://stable.zcad.app']),
+  branch: 'stable'
 });
 
 // End-to-end encryption flags (ADR-024), each with the flag the Worker also
@@ -142,7 +168,12 @@ function validateE2eeFlags(config, { canaryAllowed }) {
   }
   for (const [flag, prerequisite] of E2EE_FLAG_PREREQUISITES) {
     if (!flagEnabled(vars[flag]) || flagEnabled(vars[prerequisite])) continue;
-    if (canaryAllowed && prerequisite === 'E2EE_KEYS_ENABLED' && flag !== 'E2EE_PLAINTEXT_FROZEN') continue;
+    if (
+      canaryAllowed &&
+      prerequisite === 'E2EE_KEYS_ENABLED' &&
+      flag !== 'E2EE_PLAINTEXT_FROZEN'
+    )
+      continue;
     errors.push(`vars.${flag} requires vars.${prerequisite} to be "true"`);
   }
   if (
@@ -340,6 +371,136 @@ function validateCommon(config, { allowPlaceholders }) {
   return errors;
 }
 
+function sameOrigin(value, origin) {
+  if (typeof value !== 'string') return false;
+  try {
+    return new URL(value.trim()).origin === new URL(origin).origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Worker Previews (`previews` in wrangler.jsonc) inherit no bindings or vars,
+ * so the official config must declare them, and they must never reach
+ * production data, analytics or rate-limit budgets. Preview vars may differ
+ * from production's on purpose (a flag tried in a Preview first), so only the
+ * safety-relevant ones are pinned.
+ */
+function validateOfficialPreviews(config) {
+  const previews = config.previews;
+  if (!previews || typeof previews !== 'object') {
+    return [
+      'previews is required: without it Worker Previews run with no D1, R2 or Durable Object bindings'
+    ];
+  }
+  const errors = [];
+  const db = binding(previews, 'd1_databases', 'DB');
+  if (!db?.database_name || !db?.database_id || !db?.migrations_dir) {
+    errors.push(
+      'previews D1 binding DB requires database_name, database_id, and migrations_dir'
+    );
+  } else if (!D1_DATABASE_ID.test(db.database_id)) {
+    errors.push('previews D1 binding DB has an invalid database_id');
+  }
+  for (const item of previews.d1_databases ?? []) {
+    if (
+      item?.database_id === OFFICIAL.databaseId ||
+      item?.database_name === OFFICIAL.databaseName
+    ) {
+      errors.push(
+        `previews D1 binding ${item.binding} uses the production database`
+      );
+    }
+  }
+  if (!binding(previews, 'r2_buckets', 'ARTIFACTS')?.bucket_name) {
+    errors.push('previews R2 binding ARTIFACTS requires bucket_name');
+  }
+  for (const item of previews.r2_buckets ?? []) {
+    if (item?.bucket_name === OFFICIAL.bucketName) {
+      errors.push(
+        `previews R2 binding ${item.binding} uses the production bucket`
+      );
+    }
+  }
+  const room = (previews.durable_objects?.bindings ?? []).find(
+    (item) => item?.name === 'PROJECT_ROOM'
+  );
+  if (room?.class_name !== 'ProjectCollaborationRoom') {
+    errors.push(
+      'previews Durable Object binding PROJECT_ROOM must use ProjectCollaborationRoom'
+    );
+  }
+  // A script_name points the binding at another Worker's objects (production's
+  // own name included); only same-Worker classes get per-Preview isolation.
+  for (const item of previews.durable_objects?.bindings ?? []) {
+    if (item?.script_name) {
+      errors.push(
+        `previews Durable Object binding ${item.name} must not set script_name`
+      );
+    }
+  }
+  if (!binding(previews, 'send_email', 'EMAIL', 'name')) {
+    errors.push('previews email binding EMAIL is required for sign-in codes');
+  }
+  // A Preview's service binding calls the bound Worker's production deployment.
+  for (const item of previews.services ?? []) {
+    errors.push(
+      `previews service binding ${item?.binding} would call a production Worker`
+    );
+  }
+
+  const vars = previews.vars ?? {};
+  if (vars.ENVIRONMENT !== 'beta') {
+    errors.push('previews.vars.ENVIRONMENT must be beta');
+  }
+  if (vars.AUTH_MODE !== 'email-code') {
+    errors.push('previews.vars.AUTH_MODE must be email-code');
+  }
+  if (vars.PRODUCTION_GUARD !== 'enabled') {
+    errors.push('previews.vars.PRODUCTION_GUARD must be enabled');
+  }
+  // Invitation links from a Preview must reach neither channel's users.
+  if (
+    [OFFICIAL.publicOrigin, ...OFFICIAL_STABLE.servedOrigins].some((origin) =>
+      sameOrigin(vars.PUBLIC_APP_ORIGIN, origin)
+    )
+  ) {
+    errors.push(
+      'previews.vars.PUBLIC_APP_ORIGIN must not send invitation links to production'
+    );
+  }
+  for (const flag of ['GLIMPSE_BASIC_ENABLED', 'GLIMPSE_USAGE_ENABLED']) {
+    if (flagEnabled(vars[flag]) || vars[flag] === true) {
+      errors.push(`previews.vars.${flag} must be off`);
+    }
+  }
+  for (const secret of REQUIRED_SECRETS) {
+    if (Object.hasOwn(vars, secret)) {
+      errors.push(
+        `previews.vars.${secret} must not contain a secret; set it with wrangler preview base-config secret put`
+      );
+    }
+  }
+  errors.push(
+    ...validateE2eeFlags({ vars }, { canaryAllowed: true }).map((error) =>
+      error.replaceAll('vars.', 'previews.vars.')
+    )
+  );
+
+  const productionNamespaces = new Set(
+    (config.ratelimits ?? []).map((limit) => limit?.namespace_id)
+  );
+  for (const limit of previews.ratelimits ?? []) {
+    if (productionNamespaces.has(limit?.namespace_id)) {
+      errors.push(
+        `previews rate limit ${limit.name} shares production namespace ${limit.namespace_id}`
+      );
+    }
+  }
+  return errors;
+}
+
 function officialOriginUrl(originUrl) {
   return /(?:github\.com[/:])esaueng\/OpenZCAD(?:\.git)?$/i.test(
     originUrl.trim()
@@ -348,7 +509,13 @@ function officialOriginUrl(originUrl) {
 
 export function validateDeploymentConfig(
   config,
-  { target, originUrl = '', environment = {}, configOnly = false }
+  {
+    target,
+    originUrl = '',
+    environment = {},
+    configOnly = false,
+    betaConfig = undefined
+  }
 ) {
   if (target === 'dev') {
     const errors = [];
@@ -357,9 +524,16 @@ export function validateDeploymentConfig(
       OFFICIAL.databaseName,
       OFFICIAL.databaseId,
       OFFICIAL.bucketName,
+      OFFICIAL_STABLE.workerName,
+      OFFICIAL_STABLE.databaseName,
+      OFFICIAL_STABLE.databaseId,
+      OFFICIAL_STABLE.bucketName,
       OFFICIAL.publicOrigin,
+      ...OFFICIAL_STABLE.servedOrigins,
       OFFICIAL.turnstileSiteKey,
-      OFFICIAL.sender
+      OFFICIAL.sender,
+      OFFICIAL_STABLE.sender,
+      LEGACY_SENDER
     ];
     const values = [
       config.name,
@@ -390,15 +564,18 @@ export function validateDeploymentConfig(
     (item) => item?.name === 'PROJECT_ROOM'
   );
 
-  if (target === 'official') {
+  if (target === 'official' || target === 'stable') {
+    const stable = target === 'stable';
+    const resources = stable ? OFFICIAL_STABLE : OFFICIAL;
     const checks = [
-      [config.name, OFFICIAL.workerName, 'Worker name'],
+      [config.name, resources.workerName, 'Worker name'],
       [config.assets?.binding, OFFICIAL.assetBinding, 'asset binding'],
+      [config.build?.command, RELEASE_BUILD_CHECK, 'release build check'],
       [db?.binding, OFFICIAL.databaseBinding, 'D1 binding'],
-      [db?.database_name, OFFICIAL.databaseName, 'D1 database name'],
-      [db?.database_id, OFFICIAL.databaseId, 'D1 database ID'],
+      [db?.database_name, resources.databaseName, 'D1 database name'],
+      [db?.database_id, resources.databaseId, 'D1 database ID'],
       [bucket?.binding, OFFICIAL.bucketBinding, 'R2 binding'],
-      [bucket?.bucket_name, OFFICIAL.bucketName, 'R2 bucket name'],
+      [bucket?.bucket_name, resources.bucketName, 'R2 bucket name'],
       [email?.name, OFFICIAL.emailBinding, 'email binding'],
       [room?.name, OFFICIAL.durableObjectBinding, 'Durable Object binding'],
       [
@@ -406,18 +583,104 @@ export function validateDeploymentConfig(
         OFFICIAL.turnstileSiteKey,
         'Turnstile site key'
       ],
-      [config.vars?.PUBLIC_APP_ORIGIN, OFFICIAL.publicOrigin, 'public origin'],
-      [config.vars?.AUTH_EMAIL_FROM, OFFICIAL.sender, 'authentication sender'],
+      ...(stable
+        ? []
+        : [
+            [
+              config.vars?.PUBLIC_APP_ORIGIN,
+              OFFICIAL.publicOrigin,
+              'public origin'
+            ]
+          ]),
+      // Each channel mails from its own domain: noreply@beta.zcad.app for
+      // beta, noreply@zcad.app for stable.
+      [config.vars?.AUTH_EMAIL_FROM, resources.sender, 'authentication sender'],
       [
         config.vars?.PROJECT_INVITATION_EMAIL_FROM,
-        OFFICIAL.sender,
+        resources.sender,
         'invitation sender'
+      ],
+      [
+        JSON.stringify(email?.allowed_sender_addresses),
+        JSON.stringify([resources.sender]),
+        'allowed email sender'
       ]
     ];
     for (const [actual, expected, label] of checks) {
       if (actual !== expected) {
         errors.push(`${label} changed from the official deployment value`);
       }
+    }
+    if (stable) {
+      if (
+        !OFFICIAL_STABLE.publicOrigins.includes(config.vars?.PUBLIC_APP_ORIGIN)
+      ) {
+        errors.push(
+          `public origin must be one of ${OFFICIAL_STABLE.publicOrigins.join(', ')}`
+        );
+      }
+      // Stable shares nothing with beta: not its data, its Previews or the
+      // Glimpse collector beta reports to.
+      if (config.previews !== undefined) {
+        errors.push('stable must not define previews; Previews belong to beta');
+      }
+      const betaValues = [
+        OFFICIAL.workerName,
+        OFFICIAL.databaseName,
+        OFFICIAL.databaseId,
+        OFFICIAL.bucketName
+      ];
+      const values = [
+        ...(config.d1_databases ?? []).flatMap((item) => [
+          item?.database_name,
+          item?.database_id
+        ]),
+        ...(config.r2_buckets ?? []).map((item) => item?.bucket_name),
+        ...(config.durable_objects?.bindings ?? []).map(
+          (item) => item?.script_name
+        )
+      ];
+      if (values.some((value) => betaValues.includes(value))) {
+        errors.push('stable references a beta resource');
+      }
+      // Service bindings reach another Worker's production deployment (the
+      // Glimpse collector beta reports to); stable has none until the
+      // cutover decides which channel reports.
+      for (const item of config.services ?? []) {
+        errors.push(
+          `stable service binding ${item?.binding} would share beta's`
+        );
+      }
+      for (const flag of ['GLIMPSE_BASIC_ENABLED', 'GLIMPSE_USAGE_ENABLED']) {
+        const value = config.vars?.[flag];
+        if (flagEnabled(value) || value === true) {
+          errors.push(`vars.${flag} must be off on stable until the cutover`);
+        }
+      }
+      // Rate-limit namespaces are account-wide budgets: one shared with beta
+      // lets beta traffic spend stable's limit. They can only be compared
+      // against beta's actual config.
+      if (!betaConfig) {
+        errors.push(
+          'stable validation needs the beta config (wrangler.jsonc) to compare rate-limit namespaces'
+        );
+      } else {
+        const betaNamespaces = new Set(
+          [
+            ...(betaConfig.ratelimits ?? []),
+            ...(betaConfig.previews?.ratelimits ?? [])
+          ].map((limit) => limit?.namespace_id)
+        );
+        for (const limit of config.ratelimits ?? []) {
+          if (betaNamespaces.has(limit?.namespace_id)) {
+            errors.push(
+              `stable rate limit ${limit.name} shares beta namespace ${limit.namespace_id}`
+            );
+          }
+        }
+      }
+    } else {
+      errors.push(...validateOfficialPreviews(config));
     }
     if (originUrl && !officialOriginUrl(originUrl)) {
       errors.push(
@@ -435,7 +698,8 @@ export function validateDeploymentConfig(
     if (
       !configOnly &&
       environment.GITHUB_ACTIONS === 'true' &&
-      environment.GITHUB_REF !== 'refs/heads/main'
+      environment.GITHUB_REF !==
+        `refs/heads/${stable ? OFFICIAL_STABLE.branch : 'main'}`
     ) {
       errors.push(
         `official deployment is not allowed from GitHub ref ${environment.GITHUB_REF || '(unknown)'}`
@@ -447,13 +711,25 @@ export function validateDeploymentConfig(
     }
     const checks = [
       [config.name, OFFICIAL.workerName],
+      [config.name, OFFICIAL_STABLE.workerName],
+      [db?.database_name, OFFICIAL_STABLE.databaseName],
+      [db?.database_id, OFFICIAL_STABLE.databaseId],
+      [bucket?.bucket_name, OFFICIAL_STABLE.bucketName],
       [db?.database_name, OFFICIAL.databaseName],
       [db?.database_id, OFFICIAL.databaseId],
       [bucket?.bucket_name, OFFICIAL.bucketName],
       [config.vars?.TURNSTILE_SITE_KEY, OFFICIAL.turnstileSiteKey],
       [config.vars?.PUBLIC_APP_ORIGIN, OFFICIAL.publicOrigin],
-      [config.vars?.AUTH_EMAIL_FROM, OFFICIAL.sender],
-      [config.vars?.PROJECT_INVITATION_EMAIL_FROM, OFFICIAL.sender]
+      ...OFFICIAL_STABLE.servedOrigins.map((origin) => [
+        config.vars?.PUBLIC_APP_ORIGIN,
+        origin
+      ]),
+      ...[OFFICIAL.sender, OFFICIAL_STABLE.sender, LEGACY_SENDER].flatMap(
+        (sender) => [
+          [config.vars?.AUTH_EMAIL_FROM, sender],
+          [config.vars?.PROJECT_INVITATION_EMAIL_FROM, sender]
+        ]
+      )
     ];
     for (const [actual, value] of checks) {
       if (actual === value) {
@@ -496,15 +772,21 @@ if (process.argv[1]?.endsWith('validate-deployment-config.mjs')) {
   const target = argument('--target');
   if (!configPath || !target) {
     console.error(
-      'Usage: node scripts/validate-deployment-config.mjs --config <path> --target <official|selfhost|example|dev> [--config-only]'
+      'Usage: node scripts/validate-deployment-config.mjs --config <path> --target <official|stable|selfhost|example|dev> [--config-only]'
     );
     process.exit(2);
   }
 
   try {
     const config = parseConfig(configPath);
+    // Stable is checked against the beta config beside it (wrangler.jsonc).
+    const betaConfig =
+      target === 'stable'
+        ? parseConfig(join(dirname(configPath), 'wrangler.jsonc'))
+        : undefined;
     const errors = validateDeploymentConfig(config, {
       target,
+      betaConfig,
       originUrl: readOriginUrl(),
       environment: process.env,
       configOnly: process.argv.includes('--config-only')
