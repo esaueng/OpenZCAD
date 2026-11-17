@@ -41,6 +41,11 @@
  * middle of every boundary edge has to lie ON the solid. A chord's does not,
  * and a section holding one is reported as `approximate`, with how far its
  * chords stray, rather than as exact.
+ *
+ * "How far" is measured in the cutting plane, to a point of the true section
+ * curve, not as the distance to the surface: where the surface leans away
+ * from the plane the two differ by the sine of the angle between them, and
+ * the short one would understate both the deviation and the area it costs.
  */
 
 import type { DxfEntity } from '@openzcad/io-dxf';
@@ -160,16 +165,21 @@ export type SectionBoundaryFidelity = 'exact' | 'approximate';
 export interface SectionBoundaryCheck {
   readonly boundary: SectionBoundaryFidelity;
   /**
-   * The farthest a boundary edge's midpoint lies from the solid, in document
-   * units: 0 for an exact boundary, the largest chord sagitta for an
-   * approximate one, and null where an edge could not be measured at all.
+   * The farthest a boundary edge's midpoint lies from the true section
+   * curve, measured WITHIN the cutting plane, in document units: 0 for an
+   * exact boundary and the largest chord sagitta for an approximate one. It
+   * is the distance to a point found on the solid and in the plane, so it
+   * can overstate the gap and never understates it. Null where that point
+   * could not be found for some edge, or an edge was not measured at all.
    */
   readonly boundaryDeviation: number | null;
   /**
    * How far the reported area can be from the true one, in document units
-   * squared: each stray edge's deviation times its length. An estimate from
-   * one sample per edge — the segment between a chord and a shallow arc holds
-   * two thirds of that product — and null where an edge was not measured.
+   * squared: each stray edge's in-plane deviation times its length. The
+   * segment between a chord and a shallow arc holds two thirds of that
+   * product, so the sum covers the polygon's error with half again to spare
+   * for an arc that is not symmetric about its chord. Null wherever
+   * `boundaryDeviation` is.
    */
   readonly areaUncertainty: number | null;
 }
@@ -221,25 +231,49 @@ export interface ExactSectionOptions {
 const DEFAULT_AREA_EPSILON = 1e-6;
 
 /**
- * Distances below this fraction of the body extent count as "on the plane" —
- * and, for a boundary edge's midpoint, as "on the solid". A true edge's
- * midpoint measures 1e-15 of the extent from the solid (rounding); the chords
- * the kernel cuts a circle into miss by 1.2e-3 of its radius at 64 to the
- * turn and 4.7e-6 at 1024, so this separates the two for any radius above a
- * few thousandths of the body's size, in whatever unit the document uses.
+ * Distances below this fraction of the body extent count as "on the plane".
+ * The plane test floors the extent at one document unit; see
+ * {@link ON_SOLID_RATIO} for why the boundary check may not.
  */
 const GRAZE_RATIO = 1e-9;
 
 /**
+ * A boundary edge's midpoint within this fraction of the body's largest
+ * extent of the solid counts as "on the solid".
+ *
+ * Purely relative, with no floor in document units. A floor of one unit
+ * made the tolerance 1e-9 of whatever the unit was, so the same 0.5 mm
+ * sphere was approximate modelled in millimetres and exact modelled in
+ * metres, where its chords' 5.9e-10 sagitta fell under the floor. A fraction
+ * of the extent gives one verdict for one shape in any unit.
+ *
+ * A true edge's midpoint measures about 1e-16 of the extent from the solid
+ * (rounding, at every scale tried); the chords the kernel cuts a circle into
+ * miss by 1.2e-3 of its radius at 64 to the turn and 1.2e-6 at 2048. So this
+ * separates the two for any radius above a thousandth of the body's size.
+ */
+const ON_SOLID_RATIO = 1e-9;
+
+/**
  * How many boundary edges are measured for the deviation and uncertainty
  * FIGURES once a section is known to be approximate. A point-to-solid query
- * visits the solid's faces (about 0.1 to 0.5 ms each), and a chorded section
- * has 64 to 1024 edges per curve, so a cut through hundreds of round
- * features would otherwise spend seconds refining a number. Past the budget
- * the figures are reported as unmeasured; the verdict itself is never
- * sampled.
+ * visits the solid's faces (about 0.1 to 0.5 ms each), a stray edge takes
+ * two or three of them, and a chorded section has 64 to 2048 edges per
+ * curve, so a cut through hundreds of round features would otherwise spend
+ * seconds refining a number. Past the budget the figures are reported as
+ * unmeasured; the verdict itself is never sampled.
  */
 const BOUNDARY_PROBE_BUDGET = 2048;
+
+/** Newton steps allowed to carry a stray midpoint onto the section curve. */
+const IN_PLANE_STEPS = 8;
+
+/**
+ * Below this, the direction to the nearest surface point is all but along
+ * the plane normal: the surface lies nearly flat on the plane there, and no
+ * step within the plane is known to reach it.
+ */
+const MIN_IN_PLANE_SLOPE = 1e-6;
 
 const UNCHECKED_BOUNDARY: SectionBoundaryCheck = {
   boundary: 'approximate',
@@ -486,6 +520,97 @@ function edgeProbe(
   return { point: at(Math.floor(count / 2)), length };
 }
 
+type SolidDistance = { distance: number; closest: SectionPoint3 } | null;
+
+/** Distance from a point to the solid, and where on it; null if unknown. */
+function solidDistance(
+  kernel: ExactSectionKernel,
+  solid: number,
+  point: SectionPoint3
+): SolidDistance {
+  let hit: Float64Array | number[];
+  try {
+    hit = kernel.pointToSolidDistance(point[0], point[1], point[2], solid);
+  } catch {
+    return null;
+  }
+  const values = [hit[0], hit[1], hit[2], hit[3]];
+  if (!values.every((value) => Number.isFinite(value))) {
+    return null;
+  }
+  return { distance: hit[0]!, closest: [hit[1]!, hit[2]!, hit[3]!] };
+}
+
+/**
+ * How far a stray boundary point lies from the true section curve, measured
+ * within the cutting plane — or null when that cannot be certified.
+ *
+ * The distance to the solid is not that figure. It runs along the surface
+ * normal, and where the surface leans away from the plane the gap in the
+ * plane is longer by the sine of the angle between them: at z = 9.5 on a
+ * radius-10 sphere, a chord 0.0012 from the sphere is 0.0038 from the circle
+ * it stands in for.
+ *
+ * So the point is walked, in the plane, toward the nearest surface point
+ * until the kernel says it is ON the solid: Newton's method on the distance,
+ * whose slope along the walk is the in-plane share of the direction to the
+ * closest point. Where it lands is in the plane and on the solid, hence on
+ * the true section curve, and the length walked is a distance from the
+ * probe to that curve. A walk that does not land answers null — never the
+ * shorter figure it started from.
+ */
+function inPlaneDeviation(
+  kernel: ExactSectionKernel,
+  solid: number,
+  normal: SectionPoint3,
+  point: SectionPoint3,
+  first: { distance: number; closest: SectionPoint3 },
+  tolerance: number
+): number | null {
+  const toward = sub(first.closest, point);
+  const lift = dot(toward, normal);
+  const flat: SectionPoint3 = [
+    toward[0] - normal[0] * lift,
+    toward[1] - normal[1] * lift,
+    toward[2] - normal[2] * lift
+  ];
+  const flatLength = norm(flat);
+  if (!(flatLength > 0)) {
+    return null;
+  }
+  const along: SectionPoint3 = [
+    flat[0] / flatLength,
+    flat[1] / flatLength,
+    flat[2] / flatLength
+  ];
+  let travelled = 0;
+  let distance = first.distance;
+  let slope = flatLength / first.distance;
+  for (let step = 0; step < IN_PLANE_STEPS; step += 1) {
+    if (!(Math.abs(slope) > MIN_IN_PLANE_SLOPE)) {
+      break;
+    }
+    travelled += distance / slope;
+    const at: SectionPoint3 = [
+      point[0] + along[0] * travelled,
+      point[1] + along[1] * travelled,
+      point[2] + along[2] * travelled
+    ];
+    const hit = solidDistance(kernel, solid, at);
+    if (!hit) {
+      break;
+    }
+    if (hit.distance <= tolerance) {
+      return Math.abs(travelled);
+    }
+    distance = hit.distance;
+    // Negative once the walk has stepped past the surface: the next step
+    // then comes back.
+    slope = dot(sub(hit.closest, at), along) / hit.distance;
+  }
+  return null;
+}
+
 /**
  * Whether the section's boundary is the solid's own intersection curves, or
  * chords across them.
@@ -499,6 +624,9 @@ function edgeProbe(
  * so no chord tolerance can hide it. `tolerance` is how far from the solid
  * still counts as on it, in document units.
  *
+ * The figures for a stray edge are in-plane ones ({@link inPlaneDeviation}),
+ * and are withheld for the whole section if any edge's cannot be certified.
+ *
  * It reads what the kernel RETURNED rather than assuming how it sections a
  * curved face: a kernel that hands back circle edges for the same cut passes
  * this unchanged, and its section is exact.
@@ -507,9 +635,11 @@ export function sectionBoundaryCheck(
   kernel: ExactSectionKernel,
   solid: number,
   faces: readonly number[],
+  plane: ExactSectionPlane,
   deflection: number,
   tolerance: number
 ): SectionBoundaryCheck {
+  const normal = unitNormal(plane.normal);
   // Planes meet planes in straight lines, so a solid with no curved face has
   // no curve for a chord to stand in for. (Cavity shells are listed too.)
   const curved = Array.from(kernel.getSolidFaces(solid)).some(
@@ -542,27 +672,30 @@ export function sectionBoundaryCheck(
       continue;
     }
     probes += 1;
-    let distance: number;
-    try {
-      distance = kernel.pointToSolidDistance(
-        probe.point[0],
-        probe.point[1],
-        probe.point[2],
-        solid
-      )[0]!;
-    } catch {
-      distance = Number.NaN;
-    }
-    if (!Number.isFinite(distance)) {
+    const hit = solidDistance(kernel, solid, probe.point);
+    if (!hit) {
       // An edge that cannot be shown to lie on the solid is not exact, and
       // with it unmeasured there is no figure left to refine.
       unmeasured = true;
       break;
     }
-    if (distance > tolerance) {
+    if (hit.distance > tolerance) {
       stray = true;
-      deviation = Math.max(deviation, distance);
-      uncertainty += distance * probe.length;
+      const inPlane = inPlaneDeviation(
+        kernel,
+        solid,
+        normal,
+        probe.point,
+        hit,
+        tolerance
+      );
+      if (inPlane === null) {
+        // The verdict stands; a figure that might understate does not.
+        unmeasured = true;
+        break;
+      }
+      deviation = Math.max(deviation, inPlane);
+      uncertainty += inPlane * probe.length;
     }
   }
   if (unmeasured) {
@@ -719,7 +852,16 @@ export function exactSolidSection(
     areaTolerance,
     ...(options.skipBoundaryCheck
       ? UNCHECKED_BOUNDARY
-      : sectionBoundaryCheck(kernel, solid, faces, deflection, grazeTolerance)),
+      : sectionBoundaryCheck(
+          kernel,
+          solid,
+          faces,
+          plane,
+          deflection,
+          // The body's own size, in its own units — not `grazeTolerance`,
+          // whose one-unit floor would make this verdict depend on them.
+          Math.max(...extents.map(Math.abs)) * ON_SOLID_RATIO
+        )),
     loops,
     positions: new Float32Array(positions),
     indices: new Uint32Array(indices)

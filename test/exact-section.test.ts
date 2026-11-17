@@ -234,6 +234,101 @@ describe('a through hole in the section', () => {
     }
   });
 
+  it("measures a chord's miss in the cutting plane, not to the surface", () => {
+    // Review of #1695: near the top of a sphere the surface leans well away
+    // from the plane, so a chord 0.0012 from the SPHERE is 0.0038 from the
+    // CIRCLE it stands in for. Reported as the former, the uncertainty was
+    // +-0.0230 mm^2 on an area 0.0492 mm^2 out.
+    const ball = kernel.makeSphere(10, 64);
+    const cut = plane([0, 0, 9.5], [0, 0, 1]);
+    const section = expectOk(exactSolidSection(kernel, ball, cut));
+    const radius = Math.sqrt(10 ** 2 - 9.5 ** 2);
+    const analytic = Math.PI * radius ** 2;
+    const error = Math.abs(section.area - analytic);
+    expect(section.boundary).toBe('approximate');
+    expect(error).toBeGreaterThan(analytic * 1e-4);
+    // A figure is quoted here, and it covers the error it is quoted for.
+    expect(section.areaUncertainty).not.toBeNull();
+    expect(error).toBeLessThanOrEqual(section.areaUncertainty!);
+    expect(section.areaUncertainty!).toBeLessThan(error * 2);
+    // The deviation is the chord's sagitta in the circle of the cut — more
+    // than three times its distance to the sphere.
+    const chords = section.loops[0]!.points.length;
+    const sagitta = radius * (1 - Math.cos(Math.PI / chords));
+    expect(section.boundaryDeviation).toBeCloseTo(sagitta, 6);
+    expect(section.boundaryDeviation!).toBeGreaterThan(
+      3 * sagitta * (radius / 10)
+    );
+  });
+
+  it('withholds the figures when the miss cannot be measured in the plane', () => {
+    const bar = boredBar();
+    const real = kernel.pointToSolidDistance.bind(kernel);
+    // A kernel that reports every nearest surface point straight along the
+    // plane normal: the distance is right, and it says nothing about which
+    // way, in the plane, the true curve lies.
+    const distance = vi
+      .spyOn(kernel, 'pointToSolidDistance')
+      .mockImplementation((x, y, z, solid) => {
+        const gap = real(x, y, z, solid)[0]!;
+        return Float64Array.of(gap, x, y, z + gap);
+      });
+    try {
+      const section = expectOk(
+        exactSolidSection(kernel, bar, plane([0, 0, 3], [0, 0, 1]))
+      );
+      // Still not exact — and no number that might understate.
+      expect(section.boundary).toBe('approximate');
+      expect(section.boundaryDeviation).toBeNull();
+      expect(section.areaUncertainty).toBeNull();
+    } finally {
+      distance.mockRestore();
+    }
+  });
+
+  it('gives one sphere one verdict, whatever unit it is modelled in', () => {
+    // Review of #1695: a 0.5 mm sphere cut through its centre. Its chords
+    // miss the circle by 5.9e-7 mm — 5.9e-10 in a metre document, which a
+    // tolerance floored at 1e-9 of one unit called exact.
+    const measured = [
+      ['mm', 1],
+      ['inch', 25.4],
+      ['m', 1000]
+    ].map(([unit, mmPerUnit]) => {
+      const scale = mmPerUnit as number;
+      const ball = kernel.makeSphere(0.5 / scale, 64);
+      const section = expectOk(
+        exactSolidSection(kernel, ball, plane([0, 0, 0], [0, 0, 1]))
+      );
+      return {
+        unit,
+        boundary: section.boundary,
+        chords: section.loops[0]!.points.length,
+        deviationMm: section.boundaryDeviation! * scale,
+        uncertaintyMm2: section.areaUncertainty! * scale ** 2,
+        errorMm2: Math.abs(section.area * scale ** 2 - Math.PI * 0.25)
+      };
+    });
+    expect(measured.map((result) => result.boundary)).toEqual([
+      'approximate',
+      'approximate',
+      'approximate'
+    ]);
+    const [mm] = measured;
+    const sagitta = 0.5 * (1 - Math.cos(Math.PI / mm!.chords));
+    for (const result of measured) {
+      expect(result.chords).toBe(mm!.chords);
+      // The same physical figures, to parts in a million.
+      expect(Math.abs(result.deviationMm - sagitta)).toBeLessThan(
+        sagitta * 1e-6
+      );
+      expect(Math.abs(result.uncertaintyMm2 - mm!.uncertaintyMm2)).toBeLessThan(
+        mm!.uncertaintyMm2 * 1e-6
+      );
+      expect(result.errorMm2).toBeLessThanOrEqual(result.uncertaintyMm2);
+    }
+  }, 120_000);
+
   it('reports an unchecked boundary as approximate, at no cost', () => {
     const bar = kernel.makeBox(20, 10, 6);
     const distance = vi.spyOn(kernel, 'pointToSolidDistance');
@@ -270,7 +365,9 @@ describe('a through hole in the section', () => {
       expect(section.boundary).toBe('approximate');
       expect(section.boundaryDeviation).toBeNull();
       expect(section.areaUncertainty).toBeNull();
-      expect(distance.mock.calls.length).toBeLessThanOrEqual(2048);
+      // 2048 edges at most, two queries for a chord square to the plane:
+      // one to find it off the solid, one to find the curve it missed.
+      expect(distance.mock.calls.length).toBeLessThanOrEqual(2048 * 2);
     } finally {
       distance.mockRestore();
     }
