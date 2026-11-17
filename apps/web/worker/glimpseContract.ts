@@ -53,6 +53,8 @@ export const CAD_OPERATIONS = [
   'feature.split',
   'feature.datum-plane',
   'feature.datum-axis',
+  'feature.datum-point',
+  'feature.datum-csys',
   'feature.hole',
   'feature.gear',
   'feature.sheet-metal',
@@ -167,6 +169,8 @@ export const REFUSAL_OPERATIONS = [
   'imported-mesh',
   'datum-plane',
   'datum-axis',
+  'datum-point',
+  'datum-csys',
   ...REFUSAL_DIRECT_EDIT_OPERATIONS.map((kind) => `direct-edit.${kind}`),
   'other'
 ] as const;
