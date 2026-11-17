@@ -1,9 +1,9 @@
 {
-  "commit": "6b52a8b3a6b02c71bb9e33c03b8cf43646d6d169",
+  "commit": "db3344beee56ebedd098acfbc9055050a78b06a2",
   "files": {
     "remus-wasm-io/LICENSE-APACHE": "0d0b4758c49693abcfba91cc5914bb46eb0d839b",
     "remus-wasm-io/NOTICE": "8b965bfdd5b46ad20e8d9fcf1bf5f555e10a3fcb",
-    "remus-wasm-io/package.json": "e91b5253c03ce3ac7296eb78b41ea79b0d3eed0b",
+    "remus-wasm-io/package.json": "c445b0999109fa299d2cc8b25567d7cf2fd66e09",
     "remus-wasm-io/remus_wasm_io.d.ts": "b88b6a583c02db5be37af53dbc193aa82c36f2a0",
     "remus-wasm-io/remus_wasm_io.js": "c40261f4cf521a3b1c84ef6c1da16cf133eea114",
     "remus-wasm-io/remus_wasm_io_bg.js": "f0886d0ccc05b31d49b3b2bf14ac75305ce5a153",
@@ -11,17 +11,17 @@
     "remus-wasm-io/remus_wasm_io_node.cjs": "141f4f4af891f9dc1501df7f857a279a66042460",
     "remus-wasm/LICENSE-APACHE": "0d0b4758c49693abcfba91cc5914bb46eb0d839b",
     "remus-wasm/NOTICE": "8b965bfdd5b46ad20e8d9fcf1bf5f555e10a3fcb",
-    "remus-wasm/package.json": "3db617fca1d290667e6fd43cee93a7b7fbdf18de",
-    "remus-wasm/remus_wasm.d.ts": "32b62f358f67275da2aab3a2572609420df8db92",
+    "remus-wasm/package.json": "41b0aae60d061f6041fa854a382a0ef79f47052a",
+    "remus-wasm/remus_wasm.d.ts": "219b0f06dc24551ee935e3f2791619602386cb83",
     "remus-wasm/remus_wasm.js": "25aa30d9a74dd4291ff650fc6199b48a949a68ab",
-    "remus-wasm/remus_wasm_bg.js": "6e816870aebc48ea8ecdf65bc42e79e947ac966d",
-    "remus-wasm/remus_wasm_bg.wasm": "eb180c02198a01a8d9decd43ce27ac6d5173c00b",
-    "remus-wasm/remus_wasm_node.cjs": "0a3d459c6ea0be4e4f35bdf6c57a36f606795aa7"
+    "remus-wasm/remus_wasm_bg.js": "187706fc0ffc8656be92ce7365d180fc35497ad3",
+    "remus-wasm/remus_wasm_bg.wasm": "f49ba1b7d198ae77c6d676d3daa7449e4f98cea1",
+    "remus-wasm/remus_wasm_node.cjs": "77a5531897811dba76aff9ec44583a1b52fd7735"
   },
   "sha256": {
     "remus-wasm-io/LICENSE-APACHE": "ca32932d4cb0f8984fb45747f40757ccc76cb2d8efc022b4fe59bf530406f811",
     "remus-wasm-io/NOTICE": "83ea83b08e2a6489954c9e179bbf68dfdfc1a2145a210f8e9376ce0357bbf7c9",
-    "remus-wasm-io/package.json": "4dd0bf70706d434932efb2a4316dd97c68d2c6de80ddd4ee66860f218c93439e",
+    "remus-wasm-io/package.json": "8cefe734d21aede855145af66cc75f1eedb78735ec4398db91548ea7950da52e",
     "remus-wasm-io/remus_wasm_io.d.ts": "9bc4c4d144dfd5c813949b2a3c149afe6c3fafa01f5b7184ca60cebcd149ab15",
     "remus-wasm-io/remus_wasm_io.js": "b53f4e5976e654eef7a2b2c261dd397076f2e5a148fff72ce811ce3ca8df0b81",
     "remus-wasm-io/remus_wasm_io_bg.js": "f07a3536b725dcafcc3fb35336b2e778624fdc2fbc8007601d59c2419e281e1a",
@@ -29,11 +29,11 @@
     "remus-wasm-io/remus_wasm_io_node.cjs": "0a3316733f7500604875b1b8c55565fa4e9a79dbea27dbbcd804eb9298691cb0",
     "remus-wasm/LICENSE-APACHE": "ca32932d4cb0f8984fb45747f40757ccc76cb2d8efc022b4fe59bf530406f811",
     "remus-wasm/NOTICE": "83ea83b08e2a6489954c9e179bbf68dfdfc1a2145a210f8e9376ce0357bbf7c9",
-    "remus-wasm/package.json": "8253410c19798738095334966e2737aa4157e05ec9f91557533b461415886b21",
-    "remus-wasm/remus_wasm.d.ts": "97b2e3e5b5b5abd466c7f44f665c6c89239555bcc1af3ee17a33570d6ae75f70",
+    "remus-wasm/package.json": "c12c183ad4123cfb4d3f7e4ca3dce36ad8fa2660f46cb81b56f1e57376dd6525",
+    "remus-wasm/remus_wasm.d.ts": "b6d394fddfeb58ad16e169c41dfdfc4905e5c884f67cd614c284fdd35b1079f3",
     "remus-wasm/remus_wasm.js": "c14291da6c40f49b2f1b58653414ef87238eb72862156ce6c5122b3b4f5df04e",
-    "remus-wasm/remus_wasm_bg.js": "37f65fe5302a14f15a2a3ef8f265fee2fc0994c6818c947279fac4086f00e14c",
-    "remus-wasm/remus_wasm_bg.wasm": "0bfb3b76fbd2bb14275fc498d66702699bc3442257f9ca152baf31f6b97d5037",
-    "remus-wasm/remus_wasm_node.cjs": "fea6bc3becdaeba9509975731b5ce12f36c5abd8fa43e054e6fdc21efa8a536b"
+    "remus-wasm/remus_wasm_bg.js": "f36d2b952333712bbb9c79a13c172b87f427938307b4b7cae17f789b699e0726",
+    "remus-wasm/remus_wasm_bg.wasm": "c4254336ef61429ab32302543681db72c30a5f4e69c05c2710de7e2ddcfb905d",
+    "remus-wasm/remus_wasm_node.cjs": "ac94bb4715a1257208e6b04f72b25b0bb69ec20eee9bc4a9927075ee18eddc25"
   }
 }
