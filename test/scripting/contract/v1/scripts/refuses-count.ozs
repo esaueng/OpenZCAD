@@ -1,0 +1,4 @@
+script "openzcad.contract/refuses-count" "1.0.0" api 1 {
+  pick corners: edges 3 = edges().type("line").axis("z")
+  step fillet { edges: #corners, radius: `1 mm` }
+}

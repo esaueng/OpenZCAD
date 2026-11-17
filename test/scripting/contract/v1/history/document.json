@@ -1,0 +1,322 @@
+{
+  "schemaVersion": 110,
+  "projectId": "proj_63e27962-3530-4fef-aa2f-ead683cd17e9",
+  "ownerUserId": "user_contract",
+  "rootNodeId": "ent_febc7d8b-6906-42ef-9ddd-6b74d8d1ee11",
+  "rootAssemblyId": "ent_9dbf95b0-c4d1-4662-9981-e784feb8695a",
+  "activePartId": "ent_534a7218-664d-43d8-8e16-065167b8f3a1",
+  "name": "Contract history",
+  "units": "mm",
+  "version": 9,
+  "nodes": {
+    "ent_febc7d8b-6906-42ef-9ddd-6b74d8d1ee11": {
+      "id": "ent_febc7d8b-6906-42ef-9ddd-6b74d8d1ee11",
+      "kind": "project",
+      "name": "Contract history",
+      "parentId": null,
+      "revisionId": null,
+      "projectId": "proj_63e27962-3530-4fef-aa2f-ead683cd17e9",
+      "units": "mm",
+      "activePartId": "ent_534a7218-664d-43d8-8e16-065167b8f3a1"
+    },
+    "ent_9dbf95b0-c4d1-4662-9981-e784feb8695a": {
+      "id": "ent_9dbf95b0-c4d1-4662-9981-e784feb8695a",
+      "kind": "assembly",
+      "name": "Root Assembly",
+      "parentId": "ent_febc7d8b-6906-42ef-9ddd-6b74d8d1ee11",
+      "revisionId": null,
+      "childIds": [
+        "ent_534a7218-664d-43d8-8e16-065167b8f3a1"
+      ]
+    },
+    "ent_534a7218-664d-43d8-8e16-065167b8f3a1": {
+      "id": "ent_534a7218-664d-43d8-8e16-065167b8f3a1",
+      "kind": "part",
+      "name": "Part 1",
+      "parentId": "ent_9dbf95b0-c4d1-4662-9981-e784feb8695a",
+      "revisionId": null,
+      "childIds": [
+        "ent_8fc7f688-47ce-4813-8a48-5039262c9659",
+        "ent_25d22b5a-2c18-4402-8ab2-5ebd4b7044b8",
+        "ent_ebd57312-08d7-4c2b-99c3-e3b8872ad589",
+        "ent_fbd16206-0955-488e-9205-ea62eb42757c",
+        "ent_7b22e2e1-6d1b-4eba-a098-822f4361cb96",
+        "ent_27d69270-0c69-4dc6-9279-61a36073bf30",
+        "ent_67babb4b-33b5-4d03-ba68-7b28a80d0ce4",
+        "ent_58fdb6b6-8e8a-4988-9be9-431b8bb22d27",
+        "ent_34d56f9f-602f-4b86-9d2f-efb6aea7e416",
+        "ent_c22e330f-e03b-4170-9f22-620728390936"
+      ]
+    },
+    "ent_226b3fae-e070-439d-b48a-d3f96de7fbd6": {
+      "id": "ent_226b3fae-e070-439d-b48a-d3f96de7fbd6",
+      "kind": "parameter",
+      "name": "width",
+      "parentId": "ent_febc7d8b-6906-42ef-9ddd-6b74d8d1ee11",
+      "revisionId": null,
+      "parameterId": "param_4480ae75-e573-49c1-a764-44fe51c1c01d",
+      "expression": "40 mm",
+      "value": 40,
+      "quantity": "length"
+    },
+    "ent_d36c2b11-8196-4336-8b97-0a71d21ef20a": {
+      "id": "ent_d36c2b11-8196-4336-8b97-0a71d21ef20a",
+      "kind": "parameter",
+      "name": "count",
+      "parentId": "ent_febc7d8b-6906-42ef-9ddd-6b74d8d1ee11",
+      "revisionId": null,
+      "parameterId": "param_1eb8df7b-e80f-45b5-b98e-c8f232bfa958",
+      "expression": "4",
+      "value": 4
+    },
+    "ent_8fc7f688-47ce-4813-8a48-5039262c9659": {
+      "id": "ent_8fc7f688-47ce-4813-8a48-5039262c9659",
+      "kind": "feature",
+      "name": "Block",
+      "parentId": "ent_534a7218-664d-43d8-8e16-065167b8f3a1",
+      "revisionId": null,
+      "featureId": "feat_8fffa88c-0402-486a-9f41-7f0be3600cfb",
+      "bodyId": "body_5c167992-21de-40dd-b800-50e2414f095b",
+      "featureKind": "primitive",
+      "data": {
+        "featureKind": "primitive",
+        "primitiveKind": "box",
+        "dimensions": {
+          "width": "width",
+          "height": 30,
+          "depth": 20
+        }
+      }
+    },
+    "ent_25d22b5a-2c18-4402-8ab2-5ebd4b7044b8": {
+      "id": "ent_25d22b5a-2c18-4402-8ab2-5ebd4b7044b8",
+      "kind": "body",
+      "name": "Block Body",
+      "parentId": "ent_534a7218-664d-43d8-8e16-065167b8f3a1",
+      "revisionId": null,
+      "bodyId": "body_5c167992-21de-40dd-b800-50e2414f095b",
+      "featureId": "feat_8fffa88c-0402-486a-9f41-7f0be3600cfb",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#e1a948"
+      }
+    },
+    "ent_f252580a-7bc4-49b4-8260-485e181e1cb7": {
+      "id": "ent_f252580a-7bc4-49b4-8260-485e181e1cb7",
+      "kind": "sketch-object",
+      "name": "circle profile",
+      "parentId": "ent_fbd16206-0955-488e-9205-ea62eb42757c",
+      "revisionId": null,
+      "objectKind": "circle",
+      "data": {
+        "objectKind": "circle",
+        "centerX": 10,
+        "centerY": 10,
+        "radius": "width / 10"
+      }
+    },
+    "ent_fbd16206-0955-488e-9205-ea62eb42757c": {
+      "id": "ent_fbd16206-0955-488e-9205-ea62eb42757c",
+      "kind": "sketch",
+      "name": "Profile",
+      "parentId": "ent_534a7218-664d-43d8-8e16-065167b8f3a1",
+      "revisionId": null,
+      "sketchId": "sketch_213093d3-4f47-4c46-b361-843b5905c088",
+      "planeRef": {
+        "type": "canonical",
+        "plane": "XY",
+        "offset": 25
+      },
+      "objectIds": [
+        "ent_f252580a-7bc4-49b4-8260-485e181e1cb7"
+      ]
+    },
+    "ent_ebd57312-08d7-4c2b-99c3-e3b8872ad589": {
+      "id": "ent_ebd57312-08d7-4c2b-99c3-e3b8872ad589",
+      "kind": "feature",
+      "name": "Profile",
+      "parentId": "ent_534a7218-664d-43d8-8e16-065167b8f3a1",
+      "revisionId": null,
+      "featureId": "feat_04cd674a-1380-4d88-b9f5-56d4831a7f92",
+      "featureKind": "sketch",
+      "data": {
+        "featureKind": "sketch",
+        "sketchId": "sketch_213093d3-4f47-4c46-b361-843b5905c088"
+      }
+    },
+    "ent_7b22e2e1-6d1b-4eba-a098-822f4361cb96": {
+      "id": "ent_7b22e2e1-6d1b-4eba-a098-822f4361cb96",
+      "kind": "feature",
+      "name": "Pin",
+      "parentId": "ent_534a7218-664d-43d8-8e16-065167b8f3a1",
+      "revisionId": null,
+      "featureId": "feat_0f0d4874-0c5f-4b9e-9d90-b6ae14536a11",
+      "bodyId": "body_9fd7780c-77d7-4c8f-ab7c-3219a4896e80",
+      "featureKind": "extrude",
+      "data": {
+        "featureKind": "extrude",
+        "sketchId": "sketch_213093d3-4f47-4c46-b361-843b5905c088",
+        "distance": "width / 4"
+      }
+    },
+    "ent_27d69270-0c69-4dc6-9279-61a36073bf30": {
+      "id": "ent_27d69270-0c69-4dc6-9279-61a36073bf30",
+      "kind": "body",
+      "name": "Pin Body",
+      "parentId": "ent_534a7218-664d-43d8-8e16-065167b8f3a1",
+      "revisionId": null,
+      "bodyId": "body_9fd7780c-77d7-4c8f-ab7c-3219a4896e80",
+      "featureId": "feat_0f0d4874-0c5f-4b9e-9d90-b6ae14536a11",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#4bb7a7"
+      }
+    },
+    "ent_67babb4b-33b5-4d03-ba68-7b28a80d0ce4": {
+      "id": "ent_67babb4b-33b5-4d03-ba68-7b28a80d0ce4",
+      "kind": "feature",
+      "name": "Round pin",
+      "parentId": "ent_534a7218-664d-43d8-8e16-065167b8f3a1",
+      "revisionId": null,
+      "featureId": "feat_2e8afcc8-2bbd-4e95-93bf-18ab70ce7f18",
+      "bodyId": "body_ec31b391-e89d-43d4-a551-7620be015f68",
+      "featureKind": "fillet",
+      "data": {
+        "featureKind": "fillet",
+        "targetBodyId": "body_9fd7780c-77d7-4c8f-ab7c-3219a4896e80",
+        "edgeHashes": [
+          309342307
+        ],
+        "edgeReferences": [
+          {
+            "kind": "edge",
+            "producingFeatureId": "feat_0f0d4874-0c5f-4b9e-9d90-b6ae14536a11",
+            "lineageName": "sweep.edge.cap.start.ent_f252580a-7bc4-49b4-8260-485e181e1cb7.circle",
+            "currentHash": 309342307,
+            "witnessVersion": 1,
+            "witness": {
+              "curveType": "CIRCLE",
+              "length": 25132741,
+              "closed": true,
+              "center": [
+                10000000,
+                10000000,
+                25000000
+              ],
+              "axis": [
+                0,
+                0,
+                1000000000
+              ]
+            }
+          }
+        ],
+        "radius": 1
+      }
+    },
+    "ent_58fdb6b6-8e8a-4988-9be9-431b8bb22d27": {
+      "id": "ent_58fdb6b6-8e8a-4988-9be9-431b8bb22d27",
+      "kind": "body",
+      "name": "Pin Body",
+      "parentId": "ent_534a7218-664d-43d8-8e16-065167b8f3a1",
+      "revisionId": null,
+      "bodyId": "body_ec31b391-e89d-43d4-a551-7620be015f68",
+      "featureId": "feat_2e8afcc8-2bbd-4e95-93bf-18ab70ce7f18",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#f59e0b"
+      }
+    },
+    "ent_34d56f9f-602f-4b86-9d2f-efb6aea7e416": {
+      "id": "ent_34d56f9f-602f-4b86-9d2f-efb6aea7e416",
+      "kind": "feature",
+      "name": "Tray",
+      "parentId": "ent_534a7218-664d-43d8-8e16-065167b8f3a1",
+      "revisionId": null,
+      "featureId": "feat_0cbe0d39-a92b-48c7-b249-5132abe448cc",
+      "bodyId": "body_be6b742b-677c-419f-8ef9-6ee6f4348e41",
+      "featureKind": "custom-feature",
+      "data": {
+        "featureKind": "custom-feature",
+        "targetBodyId": "body_5c167992-21de-40dd-b800-50e2414f095b",
+        "script": {
+          "id": "openzcad.contract/rounded-tray",
+          "version": "1.0.0",
+          "api": 1,
+          "source": "script \"openzcad.contract/rounded-tray\" \"1.0.0\" api 1 {\n  input round: length = `5 mm`\n  input wall: length = `2 mm`\n  pick corners: edges 4 = edges().type(\"line\").axis(\"z\")\n  step fillet { edges: #corners, radius: `round` }\n  pick top: face = faces().normal(\"z\").max(\"z\")\n  step shell { faces: #top, thickness: `wall` }\n}\n",
+          "digest": "6cb4fb393128347dfd69e6a9ad374412238ed3d6f2ca035c0f909339ee133f61"
+        },
+        "inputs": {
+          "wall": "width / 20"
+        }
+      }
+    },
+    "ent_c22e330f-e03b-4170-9f22-620728390936": {
+      "id": "ent_c22e330f-e03b-4170-9f22-620728390936",
+      "kind": "body",
+      "name": "Block Body",
+      "parentId": "ent_534a7218-664d-43d8-8e16-065167b8f3a1",
+      "revisionId": null,
+      "bodyId": "body_be6b742b-677c-419f-8ef9-6ee6f4348e41",
+      "featureId": "feat_0cbe0d39-a92b-48c7-b249-5132abe448cc",
+      "bodyType": "solid",
+      "representationSource": "brep",
+      "exportableStep": true,
+      "metadata": {
+        "color": "#a78bfa"
+      }
+    }
+  },
+  "featureOrder": [
+    "feat_8fffa88c-0402-486a-9f41-7f0be3600cfb",
+    "feat_04cd674a-1380-4d88-b9f5-56d4831a7f92",
+    "feat_0f0d4874-0c5f-4b9e-9d90-b6ae14536a11",
+    "feat_2e8afcc8-2bbd-4e95-93bf-18ab70ce7f18",
+    "feat_0cbe0d39-a92b-48c7-b249-5132abe448cc"
+  ],
+  "bodyOrder": [
+    "body_5c167992-21de-40dd-b800-50e2414f095b",
+    "body_9fd7780c-77d7-4c8f-ab7c-3219a4896e80",
+    "body_ec31b391-e89d-43d4-a551-7620be015f68",
+    "body_be6b742b-677c-419f-8ef9-6ee6f4348e41"
+  ],
+  "sketchOrder": [
+    "sketch_213093d3-4f47-4c46-b361-843b5905c088"
+  ],
+  "parameterOrder": [
+    "param_4480ae75-e573-49c1-a764-44fe51c1c01d",
+    "param_1eb8df7b-e80f-45b5-b98e-c8f232bfa958"
+  ],
+  "revisions": [
+    {
+      "revisionId": "rev_dca3b924-ba0c-4a72-80aa-a1a49dd18573",
+      "createdAt": "2026-11-17T13:16:32.993Z",
+      "reason": "Initial document",
+      "commandCount": 0
+    },
+    {
+      "revisionId": "rev_885a04f5-e83b-40c8-8432-bf2f85283a12",
+      "createdAt": "2026-11-17T13:16:33.005Z",
+      "reason": "Add Tray",
+      "commandCount": 1
+    }
+  ],
+  "checkpoints": [
+    {
+      "checkpointId": "checkpoint_874c1011-9c86-4ae7-9e0b-a11190e57a0c",
+      "revisionId": "rev_dca3b924-ba0c-4a72-80aa-a1a49dd18573",
+      "documentVersion": 1,
+      "createdAt": "2026-11-17T13:16:32.993Z",
+      "reason": "Initial document"
+    }
+  ],
+  "assets": {},
+  "shaprImports": {},
+  "shaprImportOrder": []
+}
