@@ -869,6 +869,8 @@ export function sectionLineOnPage(
   from: [number, number];
   to: [number, number];
   sight: [number, number];
+  /** D03 (v93): a stepped line's corners, from `from` to `to`. */
+  points?: [number, number][];
 } | null {
   const bounds = source.projection.bounds;
   if (!section.section || !bounds) return null;
@@ -916,6 +918,49 @@ export function sectionLineOnPage(
   if (!line) return null;
   const toPage = viewPageTransform(source.view, bounds, sheet, units);
   const overrun = SECTION_LINE_OVERRUN_MM;
+  const steps = section.section.steps ?? [];
+  if (steps.length > 0) {
+    // D03 (v93): the line runs at each segment's depth and jogs at each
+    // step, on the source at ±depth (one sign for every segment).
+    const sign = drawingSectionLine(
+      source.view.orientation,
+      section.orientation,
+      1
+    )!.at;
+    const across = (depth: number) => (depth === 0 ? 0 : sign * depth);
+    const horizontal = line.axis === 'horizontal';
+    const [low, high] = horizontal
+      ? [bounds.minU, bounds.maxU]
+      : [bounds.minV, bounds.maxV];
+    const model: [number, number][] = [];
+    const point = (along: number, at: number): [number, number] =>
+      horizontal ? [along, at] : [at, along];
+    let depth = section.section.depth;
+    model.push(point(low, across(depth)));
+    for (const step of steps) {
+      model.push(point(step.at, across(depth)));
+      depth = step.depth;
+      model.push(point(step.at, across(depth)));
+    }
+    model.push(point(high, across(depth)));
+    const points = model.map(([u, v]) => toPage(u, v));
+    const unit = horizontal ? [1, 0] : [0, 1];
+    points[0] = [
+      points[0]![0] - unit[0]! * overrun,
+      points[0]![1] - unit[1]! * overrun
+    ];
+    const last = points.length - 1;
+    points[last] = [
+      points[last]![0] + unit[0]! * overrun,
+      points[last]![1] + unit[1]! * overrun
+    ];
+    return {
+      from: points[0],
+      to: points[last],
+      sight: line.sight,
+      points
+    };
+  }
   if (line.axis === 'horizontal') {
     const [x0, y] = toPage(bounds.minU, line.at);
     const [x1] = toPage(bounds.maxU, line.at);
@@ -951,16 +996,42 @@ export function composeSectionMarks(
     const line = source && sectionLineOnPage(sheet, view, source, units);
     if (line) {
       const { from, to, sight } = line;
-      strokes.push({ kind: 'chain', points: [...from, ...to] });
+      const path = line.points ?? [from, to];
+      strokes.push({ kind: 'chain', points: path.flat() });
+      const direction = (a: [number, number], b: [number, number]) => {
+        const length = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+        return [(b[0] - a[0]) / length, (b[1] - a[1]) / length] as [
+          number,
+          number
+        ];
+      };
       const length = Math.hypot(to[0] - from[0], to[1] - from[1]);
-      const along: [number, number] = [
-        (to[0] - from[0]) / length,
-        (to[1] - from[1]) / length
-      ];
       const end = Math.min(SECTION_END_MM, length / 3);
+      // D03 (v93): a stepped line is thick where it changes direction too.
+      for (let i = 1; i + 1 < path.length; i += 1) {
+        const corner = path[i]!;
+        for (const neighbour of [path[i - 1]!, path[i + 1]!]) {
+          const span = Math.hypot(
+            neighbour[0] - corner[0],
+            neighbour[1] - corner[1]
+          );
+          if (span === 0) continue;
+          const toward = direction(corner, neighbour);
+          const reach = Math.min(end / 2, span / 2);
+          strokes.push({
+            kind: 'cutting',
+            points: [
+              corner[0],
+              corner[1],
+              corner[0] + toward[0] * reach,
+              corner[1] + toward[1] * reach
+            ]
+          });
+        }
+      }
       for (const [point, inward] of [
-        [from, along],
-        [to, [-along[0], -along[1]] as [number, number]]
+        [from, direction(path[0]!, path[1]!)],
+        [to, direction(path[path.length - 1]!, path[path.length - 2]!)]
       ] as const) {
         strokes.push({
           kind: 'cutting',

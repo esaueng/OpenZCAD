@@ -793,7 +793,35 @@ principal view. Detail views remain open.
   and a click on one side places the section seen from that side in third
   angle (the other in first angle), as an auxiliary view is.
 - **Schema.** v91, built on v90 (F06 slice 4a), gated below it.
-- **Open.** Stepped section lines, and lineage for cut edges.
+- **Open.** Lineage for cut edges (stepped lines followed in v93).
+
+## Stepped sections (D03, schema v93)
+
+- **Shape.** `DrawingSectionCut.steps` on an aligned section: ascending
+  `{ at, depth }` pairs, at most eight. The line runs at `depth` and, from
+  each step's `at` along it (the source's u for a horizontal line, v for a
+  vertical one, model units), at that step's own `depth`. A free section
+  takes none; validation refuses unordered, non-finite or too many steps.
+- **Cut.** The geometry worker removes one strip per segment: an
+  axis-aligned box over the part in front of the segment's depth, between
+  its steps along the line. At a step the shallower strip's box runs on
+  past it (what it removes there the deeper one removes too), so only the
+  deeper box makes the jog face and no two tool faces meet on the part. Cut
+  faces are those in any segment's plane, all hatched. A cut the kernel
+  refuses refuses the view by name: a stepped section has no single plane
+  for the tessellation fallback.
+- **Drawing.** The section view draws no line where the cut steps (ISO
+  128-44: the jog faces are seen edge-on): edges lying wholly in a step's
+  plane are left out of the drawn edges, while the cut body's edge topology
+  keeps them for dimensions (the jog's height can be dimensioned).
+- **Page.** On the source, the cutting-plane line jogs at each step, thick
+  at its ends and at every change of direction, with its arrows and letters
+  at the ends as before.
+- **Editing.** The section's Properties list its steps (where each starts,
+  its own cut); Add step puts one half-way along the rest of the line at the
+  last depth, ready to edit; Remove takes one away.
+- **Schema.** v93, built on v92,
+  gated below it.
 
 ### Drawing entry and visibility (2026-11-01)
 

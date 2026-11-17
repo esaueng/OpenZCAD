@@ -447,6 +447,72 @@ export interface DrawingSectionCut {
    * to a principal direction and the view stays aligned with its source.
    */
   frame?: DrawingSectionFrame;
+  /**
+   * D03 (schema v93): a stepped (offset) section of an aligned one. The
+   * cutting line on the source runs at `depth` and steps, at each `at`
+   * along it (the source's u for a horizontal line, v for a vertical one,
+   * model units, ascending), to that step's own `depth`; each segment cuts
+   * its own strip. Absent or empty: one plane. A free section takes none.
+   */
+  steps?: DrawingSectionStep[];
+}
+
+/** One step of a stepped section (D03, schema v93). */
+export interface DrawingSectionStep {
+  at: number;
+  depth: number;
+}
+
+export const MAX_DRAWING_SECTION_STEPS = 8;
+
+/**
+ * D03 (v93): the world axis a stepped section's line runs along on its
+ * source (the source's page-right for a horizontal line, page-up for a
+ * vertical one), so each step's `at` is a coordinate on it. Null when the
+ * two views do not fold.
+ */
+export function drawingSectionStepAxis(
+  source: DrawingViewOrientation,
+  section: DrawingViewOrientation
+): Vector3 | null {
+  const alignment = drawingViewAlignment(source, section);
+  if (alignment === null) return null;
+  const frame = DRAWING_VIEW_FRAMES[source];
+  // A column pair shares page-up, so the line across it is horizontal.
+  return { ...(alignment === 'column' ? frame.x : frame.up) };
+}
+
+/**
+ * A section view's whole cut for the geometry worker: its plane, and
+ * (v93) its steps with the axis they are measured along. `source` is the
+ * view it is cut from (its orientation places the steps).
+ */
+export function drawingSectionCut(
+  view: Pick<DrawingView, 'orientation'> & {
+    section: Pick<DrawingSectionCut, 'depth' | 'frame' | 'steps'>;
+  },
+  source: DrawingViewOrientation | undefined
+): {
+  normal: Vector3;
+  depth: number;
+  steps?: { along: Vector3; at: number; depth: number }[];
+} {
+  const plane = drawingSectionPlane(view);
+  const steps = view.section.steps ?? [];
+  const along =
+    steps.length > 0 && source && !view.section.frame
+      ? drawingSectionStepAxis(source, view.orientation)
+      : null;
+  return along
+    ? {
+        ...plane,
+        steps: steps.map((step) => ({
+          along: { ...along },
+          at: step.at,
+          depth: step.depth
+        }))
+      }
+    : plane;
 }
 
 /** A free section's frame (D03, schema v91), unit and square. */
@@ -746,10 +812,35 @@ function drawingViewError(view: unknown, where: string): string | null {
       !Number.isFinite(section.depth) ||
       Math.abs(section.depth) > MAX_DRAWING_SECTION_DEPTH ||
       Object.keys(section).some(
-        (key) => !['sourceViewId', 'label', 'depth', 'frame'].includes(key)
+        (key) =>
+          !['sourceViewId', 'label', 'depth', 'frame', 'steps'].includes(key)
       )
     )
       return `${where} has an invalid section.`;
+    if (section.steps !== undefined) {
+      const steps = section.steps;
+      if (
+        !Array.isArray(steps) ||
+        steps.length > MAX_DRAWING_SECTION_STEPS ||
+        !steps.every(
+          (step) =>
+            isRecord(step) &&
+            Object.keys(step).length === 2 &&
+            [step.at, step.depth].every(
+              (value) =>
+                typeof value === 'number' &&
+                Number.isFinite(value) &&
+                Math.abs(value) <= MAX_DRAWING_SECTION_DEPTH
+            )
+        )
+      )
+        return `${where} has invalid section steps (at most ${MAX_DRAWING_SECTION_STEPS}).`;
+      const ats = (steps as DrawingSectionStep[]).map((step) => step.at);
+      if (ats.some((at, index) => index > 0 && !(at > ats[index - 1]!)))
+        return `${where} has section steps out of order along the line.`;
+      if (section.frame !== undefined && steps.length > 0)
+        return `${where} is a free section, which takes no steps.`;
+    }
     if (section.frame !== undefined) {
       const frame = section.frame;
       const unit = (value: unknown) =>

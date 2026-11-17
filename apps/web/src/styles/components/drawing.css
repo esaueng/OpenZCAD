@@ -465,6 +465,13 @@
   pointer-events: none;
 }
 
+/* D03 (v93): a stepped section's steps, one row each. */
+.drawing-section-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 /* D02 (v92): a sheet image, and its box while its picture loads. */
 .drawing-sheet-image {
   pointer-events: none;
