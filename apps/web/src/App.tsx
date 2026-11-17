@@ -35569,6 +35569,7 @@ export function App() {
       failedFeatureIds={failedHistoryFeatureIds}
       geometryPending={panelGeometryPending}
       geometryPendingShown={panelGeometryPendingShown}
+      previewPending={!currentGeometrySnapshot}
       relatedFeatureIds={historyRelatedFeatureIds}
       selectedFeatureNodeId={selectedFeatureNodeId}
       localAppend={

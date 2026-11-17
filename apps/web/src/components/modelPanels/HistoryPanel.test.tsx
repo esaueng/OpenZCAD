@@ -94,6 +94,20 @@ describe('HistoryPanel', () => {
     expect(screen.getByText('Selected step details')).toBeInTheDocument();
   });
 
+  it('marks no row preparing for an uncommitted live preview (#1598)', () => {
+    const { container, rerender } = render(
+      <Harness geometryPending geometryPendingShown previewPending />
+    );
+    // A held face preview cannot change history: no spinner joins the
+    // rows' tails, so no value is cut short for it.
+    expect(container.querySelectorAll('.history-row-spinner')).toHaveLength(0);
+    rerender(<Harness geometryPending geometryPendingShown />);
+    // Committed geometry still being analysed says so on every row.
+    expect(
+      container.querySelectorAll('.history-row-spinner').length
+    ).toBeGreaterThan(0);
+  });
+
   it('opens Find from the header toggle and hands focus back on Escape', async () => {
     const user = userEvent.setup();
     render(<Harness />);

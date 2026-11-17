@@ -70,11 +70,28 @@ function ParametersFrame(props: ModelPanelProps) {
 }
 
 function ObjectsFrame(props: ModelPanelProps) {
+  // `geometryPendingShown` defaults to `geometryPending`.
+  const preparing =
+    props.geometryPending && props.geometryPendingShown !== false;
   return (
     <PanelFrame
       id="bodies"
       count={objectCount(props)}
       controls={props.controls}
+      actions={
+        // In the header's fixed row, not above the list: in-flow there it
+        // pushed every row (and the panel docked below) down a line and
+        // back as a held preview's analysis came and went (#1598).
+        preparing ? (
+          <span
+            className="model-panel-status"
+            role="status"
+            aria-label="Preparing model details…"
+          >
+            Preparing…
+          </span>
+        ) : undefined
+      }
     >
       <ObjectsPanel {...props} view={props.views.objects} />
     </PanelFrame>
