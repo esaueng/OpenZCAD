@@ -160,6 +160,40 @@ describe('shared scissors sample', () => {
     const set = seed.document.assembly!;
     const joint = set.joints[0]!;
     const { min, max } = joint.limits[0]!;
+    // The clearances the sweep relies on, read from the modelled meshes:
+    // the exact check's "clear" alone may leave contact unknown.
+    function zRange(componentId: string, outside = 0) {
+      const component = set.components.find((c) => c.id === componentId)!;
+      const { vertices } =
+        seed.document.derived.bodyRepresentations[component.bodyId]!.mesh;
+      const below: number[] = [];
+      const above: number[] = [];
+      let low = Infinity;
+      let high = -Infinity;
+      for (let i = 0; i < vertices.length; i += 3) {
+        const z = vertices[i + 2]!;
+        if (Math.hypot(vertices[i]!, vertices[i + 1]!) <= outside) continue;
+        low = Math.min(low, z);
+        high = Math.max(high, z);
+        (z < 2.4 ? below : above).push(z);
+      }
+      return { low, high, below, above };
+    }
+    const lower = zRange(joint.parent.componentId);
+    const upper = zRange(joint.child.componentId);
+    const pin = set.components.find(
+      (c) =>
+        c.id !== joint.parent.componentId && c.id !== joint.child.componentId
+    )!;
+    // The pin's head and cap: wider than the Ø6.2 bores they retain.
+    const collars = zRange(pin.id, 3.2);
+    expect(upper.low - lower.high).toBeGreaterThanOrEqual(0.05 - 1e-6);
+    expect(lower.low - Math.max(...collars.below)).toBeGreaterThanOrEqual(
+      0.6 - 1e-6
+    );
+    expect(Math.min(...collars.above) - upper.high).toBeGreaterThanOrEqual(
+      0.2 - 1e-6
+    );
     const angles = [min, 12, 30, 42, max];
     for (const angle of angles) {
       const posed: ProjectDocument = {
