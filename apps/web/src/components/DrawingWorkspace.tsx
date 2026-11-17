@@ -670,6 +670,16 @@ function useViewProjections(
           sections: new Map()
         };
       const known = tessellations.current;
+      // F06: a row's meshes and cuts are kept only while a view still draws
+      // that row at that model content; a row edit replaces, not adds.
+      const rowKeys = new Set(
+        sheet.views.flatMap((view) => projectionViewCacheKey(view) ?? [])
+      );
+      for (const cache of [known.bodies, known.sections])
+        for (const key of [...cache.keys()]) {
+          const cut = key.lastIndexOf(ROW_SEPARATOR);
+          if (cut >= 0 && !rowKeys.has(key.slice(0, cut))) cache.delete(key);
+        }
       const missing = [...bodyIds].filter((id) => !known.bodies.has(id));
       const {
         document: current,
@@ -2845,13 +2855,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     return new Map(
       sheets.map((entry) => {
         if (geometryPending) return [entry.sheetId, null];
-        // F06: bodies drawn from the active row only (`activeRowSheet`). A
-        // sheet whose every view draws another row reads nothing of the
-        // active build, so it stays as current as it was made.
+        // F06: a sheet whose every view draws another row reads nothing of
+        // the active build, so it stays as current as it was made. Otherwise
+        // the fingerprint covers the sheet's bodies as it was made, leaving
+        // out only a body that just views on other rows draw and that the
+        // active build does not have; moving a view to a row with its body
+        // still built leaves the fingerprint as it was.
         const rows = viewConfigurationRows(entry, document);
-        const ids = sheetBodyIds(activeRowSheet(entry, rows));
-        if (rows.size > 0 && ids.length === 0)
+        if (rows.size > 0 && rows.size === entry.views.length)
           return [entry.sheetId, entry.source.fingerprint];
+        const activeIds = new Set(sheetBodyIds(activeRowSheet(entry, rows)));
+        const ids = sheetBodyIds(entry).filter(
+          (id) => activeIds.has(id) || (!!bodies[id] && !bodies[id].consumed)
+        );
         const key = [...ids].sort().join(',');
         if (!byBodySet.has(key))
           byBodySet.set(key, drawingSourceFingerprint(bodies, ids));
