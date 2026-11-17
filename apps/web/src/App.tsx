@@ -18859,7 +18859,7 @@ export function App() {
       return;
     }
 
-    if (!/\.(?:step|stp)$/i.test(file.name)) {
+    if (!/\.(?:step|stp|igs|iges)$/i.test(file.name)) {
       // 3MF, OBJ, glTF binary and PLY. The kernel's own translators read them
       // into the same triangles an STL import produces, in a worker that is
       // terminated with the import, and the result becomes the same

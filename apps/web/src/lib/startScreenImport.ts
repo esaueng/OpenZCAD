@@ -3,7 +3,7 @@ import { countLabel } from './toasts';
 import { unsupportedImportMessage } from './plainFailure';
 
 /** The formats Import CAD files takes, by extension. */
-const CAD_FILE = /\.(?:step|stp|stl|3mf|obj|glb|ply|dxf|shapr)$/i;
+const CAD_FILE = /\.(?:step|stp|igs|iges|stl|3mf|obj|glb|ply|dxf|shapr)$/i;
 const BACKUP_FILE = /\.openzcad$/i;
 
 /**

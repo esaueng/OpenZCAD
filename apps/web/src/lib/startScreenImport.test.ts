@@ -21,6 +21,15 @@ describe('planStartScreenImport', () => {
     });
   });
 
+  it('makes a project for an IGES file (I06)', () => {
+    const iges = file('cavity.IGS');
+    expect(planStartScreenImport([iges])).toEqual({
+      kind: 'cad',
+      name: 'cavity',
+      files: [iges]
+    });
+  });
+
   it('names a Shapr3D pair for the .shapr file', () => {
     const plan = planStartScreenImport([
       file('export.step'),
