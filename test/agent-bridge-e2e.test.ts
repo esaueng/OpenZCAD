@@ -198,7 +198,10 @@ describe('openzcad-mcp over stdio', { timeout: 180_000 }, () => {
         'get_digest',
         'get_patch_schema',
         'preflight_patch',
-        'apply_patch'
+        'apply_patch',
+        'get_history_text',
+        'preflight_history_text',
+        'apply_history_text'
       ]);
 
       const listed = await client.call('list_projects', {});
