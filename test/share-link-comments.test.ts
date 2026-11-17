@@ -171,6 +171,30 @@ describe('L08 commenter links (migration 0059)', () => {
     expect((await visit()).status).toBe(404);
   });
 
+  it('answers the opaque 404 before migration 0059', async () => {
+    const { db, document, env } = database();
+    // A database with 0058 applied but not 0059.
+    db.exec('ALTER TABLE project_comments DROP COLUMN share_link_id');
+    db.exec('ALTER TABLE project_share_links DROP COLUMN allow_comments');
+    db.prepare(
+      `INSERT INTO project_share_links
+         (id, project_id, mode, token_hash, created_by_user_id, created_at)
+       VALUES ('share_c', ?, 'tweak', ?, ?, ?)`
+    ).run(
+      document.projectId,
+      await hashProjectInvitationToken(token('c')),
+      document.ownerUserId,
+      Math.floor(Date.now() / 1000)
+    );
+    const response = await worker.fetch(
+      new Request('https://example.com/api/share/comments', {
+        headers: { 'x-openzcad-share-token': token('c') }
+      }),
+      env
+    );
+    expect(response.status).toBe(404);
+  });
+
   it('needs a name of 1 to 60 characters', () => {
     expect(
       parseLinkCommentRequest({ name: 'Sam', parentId: 'cmt_x', text: 'Hi' })

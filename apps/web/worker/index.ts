@@ -63,6 +63,7 @@ import {
   accountEntitlements,
   drainPendingObjects,
   PENDING_OBJECT_GRACE_MS,
+  isShareLinkCommentsReady,
   syncStoredAccountLimits
 } from '@openzcad/cloudflare-adapters';
 import {
@@ -1247,7 +1248,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       await enforceRequestLimit(env, 'SHARE_LINK_LIMITER', address);
     }
     const token = parseShareLinkToken(sharedCommentsMatch[1]!);
-    if (!token || !(await isProjectCommentStorageReady(env.DB)))
+    // Comments need migration 0058, and commenter links 0059; before
+    // either, every link is one that takes no comments.
+    if (
+      !token ||
+      !(await isProjectCommentStorageReady(env.DB)) ||
+      !(await isShareLinkCommentsReady(env.DB!))
+    )
       return notFound();
     const link = await commentLinkProject(
       env.DB!,
