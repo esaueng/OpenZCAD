@@ -333,8 +333,14 @@ export async function plaintextCommentCount(
   if (!response.ok) {
     throw new Error('This project’s comments could not be counted.');
   }
-  const body = (await response.json()) as ListProjectCommentsResponse;
-  return Array.isArray(body.comments) ? body.comments.length : 0;
+  // An answer that names no list is not a count of none: stop instead.
+  const body = (await response
+    .json()
+    .catch(() => null)) as Partial<ListProjectCommentsResponse> | null;
+  if (!body || !Array.isArray(body.comments)) {
+    throw new Error('This project’s comments could not be counted.');
+  }
+  return body.comments.length;
 }
 
 /** Code of {@link MigrationCommentsConfirmationError}. */
@@ -871,6 +877,9 @@ export function createProjectMigrationEngine(
     await check('comments');
     const comments = (await deps.commentCount?.(projectId)) ?? 0;
     if (comments > approvedCommentDeletion) {
+      // A resumed staging still holds the plaintext locked while it waits,
+      // so the row keeps offering Cancel.
+      if (status?.state === 'staging') report({ plaintextLocked: true });
       throw new MigrationCommentsConfirmationError(comments);
     }
     // A staging left over (resumed, or another device's) holds it locked;

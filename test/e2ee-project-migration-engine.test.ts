@@ -861,12 +861,55 @@ describe('encrypting an existing project', () => {
     expect(formatOf(srv, projectId)).toBe(1);
     expect(count(srv, 'project_comments', projectId)).toBe(3);
 
+    // Resumed while it still waits, the staging reads as locked, so its
+    // row keeps offering Cancel.
+    expect(
+      await laptop.engine
+        .migrate(await laptop.summary(projectId), undefined, {
+          approvedCommentDeletion: 2
+        })
+        .catch((error: unknown) => error)
+    ).toBeInstanceOf(MigrationCommentsConfirmationError);
+    expect(laptop.progress.at(-1)).toMatchObject({
+      phase: 'comments',
+      commentCount: 3,
+      plaintextLocked: true
+    });
+
     // The same browser resumes its staging once the owner confirms three.
     await laptop.engine.migrate(await laptop.summary(projectId), undefined, {
       approvedCommentDeletion: 3
     });
     expect(formatOf(srv, projectId)).toBe(2);
     expect(count(srv, 'project_comments', projectId)).toBe(0);
+  });
+
+  it('stops rather than count none when the comments answer names no list', async () => {
+    const answering =
+      (status: number, body: unknown): typeof fetch =>
+      async () =>
+        new Response(JSON.stringify(body), { status });
+    for (const body of [{}, { comments: 'many' }, null]) {
+      await expect(
+        plaintextCommentCount(answering(200, body), 'proj_1')
+      ).rejects.toThrow('could not be counted');
+    }
+    await expect(
+      plaintextCommentCount(answering(500, { error: 'down' }), 'proj_1')
+    ).rejects.toThrow('could not be counted');
+    // Only a server without comment storage has none.
+    await expect(
+      plaintextCommentCount(
+        answering(503, { code: 'COMMENTS_UNAVAILABLE' }),
+        'proj_1'
+      )
+    ).resolves.toBe(0);
+    await expect(
+      plaintextCommentCount(answering(503, { code: 'OTHER' }), 'proj_1')
+    ).rejects.toThrow('could not be counted');
+    await expect(
+      plaintextCommentCount(answering(200, { comments: [{}, {}] }), 'proj_1')
+    ).resolves.toBe(2);
   });
 
   it('does not cut over when this device could not then save that the project is encrypted', async () => {
