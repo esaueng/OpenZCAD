@@ -7,9 +7,19 @@
  * link set, so older builds still open the project.
  */
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { signShareDelegation } from '@openzcad/crypto';
+import {
+  exportPublicKey,
+  generateSigningKeyPair,
+  publicKeyHash,
+  shareKeyHash,
+  signShareCommentGrant,
+  signShareDelegation,
+  toBase64Url
+} from '@openzcad/crypto';
 import { createE2eeShareLinksApi } from '@openzcad/shared';
 import worker from '../apps/web/worker/index';
+import { handleEncryptedLinkComments } from '../apps/web/worker/e2eeShareComments';
+import { shareLinkTokenHash } from '../apps/web/worker/e2eeShareLinks';
 import {
   decodeContentBlobJob,
   decodeProjectEnvelopeJob
@@ -17,6 +27,7 @@ import {
 import {
   listLinkComments,
   postLinkComment,
+  sealShareComment,
   type LinkCommentsAccess
 } from '../apps/web/src/lib/e2ee/shareComments';
 import {
@@ -25,6 +36,8 @@ import {
 } from '../apps/web/src/lib/e2ee/sharedSnapshotLoader';
 import {
   allowShareLinkComments,
+  allowShareLinkCommentsById,
+  commentingShareLinks,
   createShareLink,
   listShareLinkComments,
   publishShareSnapshots,
@@ -33,6 +46,10 @@ import {
 } from '../apps/web/src/lib/e2ee/shareLinks';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
 import { shareLinkFromHash } from '../apps/web/src/lib/projectShareLink';
+import {
+  createEncryptedComments,
+  createEncryptedCommentsApi
+} from '../apps/web/src/lib/e2ee/encryptedComments';
 import {
   OTHER,
   OWNER,
@@ -149,11 +166,7 @@ describe(
       });
       const opened = await openLink(srv, link.url);
       expect(opened!.comments).not.toBeNull();
-      const access: LinkCommentsAccess = {
-        projectId,
-        shareId: link.shareId,
-        ...opened!.comments!
-      };
+      const access: LinkCommentsAccess = opened!.comments!;
       const threadId = await postLinkComment(
         visitorApi as never,
         access,
@@ -182,6 +195,28 @@ describe(
         'Secret follow-up'
       ]);
       expect(read.comments.every((c) => c.authorUserId === null)).toBe(true);
+
+      // A member replies to the visitor's thread in their own signed log,
+      // and the merged view hangs the reply under it.
+      const editorComments = createEncryptedComments({
+        userId: member.account.userId,
+        kit: editor.store.replaced,
+        pins: editor.pins,
+        api: createEncryptedCommentsApi((path, init) =>
+          editor.fetcher(path, init)
+        )
+      });
+      await editorComments.create(projectId, OWNER, 'Editor', {
+        parentId: threadId,
+        text: 'Member reply'
+      });
+      const merged = await editorComments.list(projectId, OWNER, read.comments);
+      expect(
+        merged.comments.find((c) => c.text === 'Member reply')
+      ).toMatchObject({
+        parentId: threadId,
+        authorUserId: member.account.userId
+      });
 
       // The account holds ciphertext only.
       const stored = JSON.stringify(
@@ -215,6 +250,62 @@ describe(
       expect(rows(srv, 'SELECT * FROM e2ee_share_comment_grants')).toEqual([]);
     });
 
+    it('drops a grant no current owner device signed, until the owner signs again', async () => {
+      const { srv, laptop, member, projectId, link } = await sharedWithLink();
+      await allowShareLinkComments(laptop.shareLinks, projectId, {
+        shareId: link.shareId,
+        shareKey: link.fragment.shareKey
+      });
+      const opened = await openLink(srv, link.url);
+      const visitorApi = createE2eeShareLinksApi(visitorFetch(srv));
+      await postLinkComment(visitorApi as never, opened!.comments!, 'Ada', {
+        anchor: PIN,
+        text: 'Before the device went'
+      });
+      // The grant's signer is no longer one of the owner's devices (removed):
+      // stand in for that with a grant by a key the owner never listed.
+      const gone = await generateSigningKeyPair(false);
+      const goneRaw = await exportPublicKey(gone.publicKey);
+      const stale = await signShareCommentGrant(gone.privateKey, {
+        projectId,
+        shareId: link.shareId,
+        shareKeyHash: await shareKeyHash(link.fragment.shareKey),
+        issuedAt: Date.now(),
+        signerKeyHash: await publicKeyHash(goneRaw)
+      });
+      srv.db
+        .prepare(
+          'UPDATE e2ee_share_comment_grants SET grant_statement = ?, grant_signature = ? WHERE share_id = ?'
+        )
+        .run(
+          toBase64Url(stale.statement),
+          toBase64Url(stale.signature),
+          link.shareId
+        );
+      const editor = page(srv, member);
+      expect([
+        ...(await commentingShareLinks(editor.shareLinks, projectId))
+      ]).toEqual([]);
+      expect(
+        (await listShareLinkComments(editor.shareLinks, projectId)).leftOut
+      ).toBe(1);
+
+      // The owner allows comments again: the new grant replaces the old one.
+      await allowShareLinkCommentsById(
+        laptop.shareLinks,
+        projectId,
+        link.shareId
+      );
+      expect([
+        ...(await commentingShareLinks(editor.shareLinks, projectId))
+      ]).toEqual([link.shareId]);
+      expect(
+        (
+          await listShareLinkComments(editor.shareLinks, projectId)
+        ).comments.map((c) => c.text)
+      ).toEqual(['Before the device went']);
+    });
+
     it('lets the owner hide a comment, and ends with the link', async () => {
       const { srv, laptop, projectId, link } = await sharedWithLink();
       await allowShareLinkComments(laptop.shareLinks, projectId, {
@@ -223,11 +314,7 @@ describe(
       });
       const opened = await openLink(srv, link.url);
       const visitorApi = createE2eeShareLinksApi(visitorFetch(srv));
-      const access: LinkCommentsAccess = {
-        projectId,
-        shareId: link.shareId,
-        ...opened!.comments!
-      };
+      const access: LinkCommentsAccess = opened!.comments!;
       const hidden = await postLinkComment(
         visitorApi as never,
         access,
@@ -265,6 +352,58 @@ describe(
         srv.env
       );
       expect(bogus.status).toBe(400);
+
+      // A post let in just before the link's comments end (a forget that
+      // finishes meanwhile) inserts nothing: the insert checks again.
+      const sealed = await sealShareComment({
+        projectId,
+        shareId: link.shareId,
+        shareKey: link.fragment.shareKey,
+        keyEpoch: access.keyEpoch,
+        epochBindingHash: access.epochBindingHash,
+        schemaVersion: access.schemaVersion,
+        authorName: 'Late',
+        comment: { anchor: PIN, text: 'Racing the forget' },
+        now: Date.now()
+      });
+      const db = srv.env.DB as D1Database;
+      const racing = new Proxy(db, {
+        get(target, key, receiver) {
+          if (key !== 'prepare') return Reflect.get(target, key, receiver);
+          return (sql: string) => {
+            if (sql.includes('INSERT INTO e2ee_share_comments')) {
+              srv.db
+                .prepare(
+                  'DELETE FROM e2ee_share_comment_grants WHERE share_id = ?'
+                )
+                .run(link.shareId);
+            }
+            return target.prepare(sql);
+          };
+        }
+      });
+      const before = rows(
+        srv,
+        'SELECT comment_id FROM e2ee_share_comments'
+      ).length;
+      const raced = await handleEncryptedLinkComments(
+        new Request(
+          `https://example.com/api/e2ee/share/${link.fragment.token}/comments`,
+          {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(sealed)
+          }
+        ),
+        `/api/e2ee/share/${link.fragment.token}/comments`,
+        racing,
+        true,
+        shareLinkTokenHash
+      );
+      expect(raced.status).toBe(404);
+      expect(
+        rows(srv, 'SELECT comment_id FROM e2ee_share_comments')
+      ).toHaveLength(before);
 
       // Revoked, the link takes no more comments and serves none.
       await revokeShareLinks(laptop.shareLinks, projectId, [link.shareId]);

@@ -130,8 +130,9 @@ const commentRecord = (row: CommentRow): E2eeShareCommentRecord => ({
  * Stores the owner's comment grant for a live link of the owner's
  * encrypted project. The grant names that link (project, id and share-key
  * hash) and is signed by a device the owner's current device list
- * certifies; visitors and members check it again themselves. A link keeps
- * its first grant.
+ * certifies; visitors and members check it again themselves. A newer
+ * grant replaces the link's: the owner signs again when the device that
+ * signed it was removed, since members check it against current devices.
  */
 export async function putShareCommentGrant(
   request: Request,
@@ -194,7 +195,10 @@ export async function putShareCommentGrant(
        SELECT ?, ?, ?, ?, ?
        WHERE EXISTS (SELECT 1 FROM e2ee_share_links
                      WHERE project_id = ? AND share_id = ? AND revoked_at IS NULL)
-       ON CONFLICT (project_id, share_id) DO NOTHING`
+       ON CONFLICT (project_id, share_id) DO UPDATE SET
+         grant_statement = excluded.grant_statement,
+         grant_signature = excluded.grant_signature,
+         created_at = excluded.created_at`
     )
     .bind(
       projectId,
@@ -396,6 +400,14 @@ export async function handleEncryptedLinkComments(
          SELECT ?, ?, ?, ?, ?, ?
          WHERE (SELECT COUNT(*) FROM e2ee_share_comments
                 WHERE project_id = ? AND share_id = ?) < ?
+           -- Still live and granted as the insert lands: a revoke or forget
+           -- that finished after this request was let in takes nothing.
+           AND EXISTS (
+             SELECT 1 FROM e2ee_share_links l
+             JOIN e2ee_share_comment_grants g
+               ON g.project_id = l.project_id AND g.share_id = l.share_id
+             WHERE l.project_id = ? AND l.share_id = ?
+               AND l.revoked_at IS NULL AND l.authority IS NOT NULL)
          ON CONFLICT (project_id, comment_id) DO NOTHING`
       )
       .bind(
@@ -407,10 +419,23 @@ export async function handleEncryptedLinkComments(
         new Date().toISOString(),
         link.project_id,
         link.share_id,
-        MAX_E2EE_LINK_COMMENTS
+        MAX_E2EE_LINK_COMMENTS,
+        link.project_id,
+        link.share_id
       )
       .run();
     if (!inserted.meta?.changes) {
+      const live = await db
+        .prepare(
+          `SELECT 1 AS found FROM e2ee_share_links l
+           JOIN e2ee_share_comment_grants g
+             ON g.project_id = l.project_id AND g.share_id = l.share_id
+           WHERE l.project_id = ? AND l.share_id = ?
+             AND l.revoked_at IS NULL AND l.authority IS NOT NULL`
+        )
+        .bind(link.project_id, link.share_id)
+        .first<{ found: number }>();
+      if (!live) return notFound();
       const exists = await db
         .prepare(
           'SELECT 1 AS found FROM e2ee_share_comments WHERE project_id = ? AND comment_id = ?'

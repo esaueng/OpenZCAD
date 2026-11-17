@@ -19,6 +19,7 @@ function fakeClient(states: EncryptedShareLinksState[]) {
     list: vi.fn(async () => states[Math.min(index++, states.length - 1)]!),
     create: vi.fn(async () => ({ url: URL_A })),
     revoke: vi.fn(async () => undefined),
+    allowComments: vi.fn(async () => undefined),
     confirm: vi.fn(async () => undefined),
     reissue: vi.fn(async () => undefined),
     subscribeRemovals: vi.fn(
@@ -264,6 +265,29 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     expect(client.create).toHaveBeenCalledWith('proj_x', 'view', {
       comments: true
     });
+  });
+
+  it('lets the owner allow comments on a link that does not take them (L08)', async () => {
+    const commenting: EncryptedShareLinksState = {
+      links: [
+        { ...active.links[0]!, comments: false },
+        { ...active.links[0]!, shareId: 'shr_c', mode: 'tweak', comments: true }
+      ],
+      needsConfirmation: false,
+      retired: []
+    };
+    const client = fakeClient([commenting, commenting]);
+    const user = userEvent.setup();
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    expect(await screen.findByText(/· Visitors can comment/)).toBeVisible();
+    // Only the link that takes none offers it.
+    expect(
+      screen.queryByRole('button', { name: 'Allow comments on Tweak link' })
+    ).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole('button', { name: 'Allow comments on View only link' })
+    );
+    expect(client.allowComments).toHaveBeenCalledWith('proj_x', 'shr_a');
   });
 
   it('creates, copies and revokes links, with each one’s status', async () => {

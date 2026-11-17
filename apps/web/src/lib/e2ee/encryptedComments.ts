@@ -378,16 +378,18 @@ export function createEncryptedComments(deps: CommentDeps): EncryptedComments {
           400,
           'A comment needs 1 to 2000 characters of text.'
         );
-      // A reply to a commenter-link visitor's thread (L08, decision 2):
-      // that thread is not in the members' logs; the merge drops the reply
-      // if the thread is gone.
-      if (input.parentId !== undefined && !input.parentId.startsWith('lcm_')) {
-        const { comments } = await this.list(projectId, ownerUserId);
-        const thread = comments.find(
-          (comment) => comment.commentId === input.parentId
-        );
-        if (!thread || thread.parentId !== null)
-          throw new ApiError(400, 'Reply to a thread of this project.');
+      if (input.parentId !== undefined) {
+        // A reply to a commenter-link visitor's thread (L08, decision 2):
+        // that thread is not in the members' logs, so it is not looked up
+        // here; the merge drops the reply if the thread is gone.
+        if (!input.parentId.startsWith('lcm_')) {
+          const { comments } = await this.list(projectId, ownerUserId);
+          const thread = comments.find(
+            (comment) => comment.commentId === input.parentId
+          );
+          if (!thread || thread.parentId !== null)
+            throw new ApiError(400, 'Reply to a thread of this project.');
+        }
       } else if (!input.anchor) {
         throw new ApiError(400, 'A new thread needs a point on the model.');
       }

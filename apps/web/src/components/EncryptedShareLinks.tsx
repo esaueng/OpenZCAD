@@ -32,6 +32,11 @@ export interface EncryptedShareLinkRow {
   readonly status:
     'active' | 'needs-confirming' | 'not-published' | 'revocation-pending';
   readonly expiresAt: number | null;
+  /**
+   * L08: whether the link's visitors may comment, by a grant one of the
+   * owner's current devices signed; absent where that is not known.
+   */
+  readonly comments?: boolean;
 }
 
 export interface EncryptedShareLinksState {
@@ -72,6 +77,11 @@ export interface EncryptedShareLinkClient {
     options?: { readonly comments?: boolean }
   ): Promise<{ url: string }>;
   revoke(projectId: string, shareId: string): Promise<void>;
+  /**
+   * L08: lets an existing link's visitors comment, or signs its grant again
+   * once the device that signed it was removed.
+   */
+  allowComments?(projectId: string, shareId: string): Promise<void>;
   /** Confirms sharing with the identity key, then states every link. */
   confirm(projectId: string, confirmation: ShareConfirmation): Promise<void>;
   /** New links (ids and keys) in place of these, of the same modes. */
@@ -114,13 +124,18 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       projectId,
       upkeep?.head ?? undefined
     );
+    // L08: which links take comments; unknown when that cannot be read.
+    const commenting = await Promise.resolve()
+      .then(() => links.commentingShareLinks(ctx, projectId))
+      .catch(() => null);
     return {
       links: view.links.map((link) => ({
         shareId: link.shareId,
         mode: link.mode,
         url: link.url,
         status: link.status,
-        expiresAt: link.expiresAt
+        expiresAt: link.expiresAt,
+        ...(commenting ? { comments: commenting.has(link.shareId) } : {})
       })),
       needsConfirmation:
         view.isOwner && links.delegationNeedsRenewal(view.delegation),
@@ -151,6 +166,17 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       });
     }
     return { url: created.url };
+  },
+  async allowComments(projectId, shareId) {
+    const [{ encryptedShareLinks }, links] = await Promise.all([
+      import('../lib/e2ee/encryptedProjects'),
+      import('../lib/e2ee/shareLinks')
+    ]);
+    await links.allowShareLinkCommentsById(
+      (await encryptedShareLinks()).ctx,
+      projectId,
+      shareId
+    );
   },
   async revoke(projectId, shareId) {
     const [{ encryptedShareLinks }, { revokeShareLink }] = await Promise.all([
@@ -674,8 +700,26 @@ export function EncryptedShareLinks({
                   </span>
                   <span className="sharing-row-detail" data-status={row.status}>
                     {expiryText(row)}
+                    {row.comments ? ' · Visitors can comment' : ''}
                   </span>
                 </span>
+                {row.comments === false &&
+                row.status === 'active' &&
+                client.allowComments ? (
+                  <button
+                    type="button"
+                    className="sharing-row-action"
+                    disabled={busy !== null}
+                    aria-label={`Allow comments on ${MODE_LABEL[row.mode]} link`}
+                    onClick={() =>
+                      void run(`comments:${row.shareId}`, () =>
+                        client.allowComments!(projectId, row.shareId)
+                      )
+                    }
+                  >
+                    Allow comments
+                  </button>
+                ) : null}
                 {row.url ? (
                   <button
                     type="button"
