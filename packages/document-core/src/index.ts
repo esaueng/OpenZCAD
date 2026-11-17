@@ -2,6 +2,13 @@ import { listFeaturesInOrder } from './feature-order';
 export { listFeaturesInOrder } from './feature-order';
 export { withoutDerivedProjection } from './document-projection';
 export { sharedProjectSnapshotDocument } from './shared-snapshot';
+import { isShareLinkSheetIds, withShareLinkSheets } from './share-link-sheets';
+export {
+  MAX_SHARE_LINK_SHEETS,
+  isShareLinkSheetIds,
+  shareLinkSheets,
+  withShareLinkSheets
+} from './share-link-sheets';
 export {
   diffSaveStates,
   type SaveStateDiff,
@@ -1173,8 +1180,15 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // Schema v16 -> v17 allows reference-form mesh payloads. Keep existing
   // embedded triangles and pre-release references as written; the version
   // boundary prevents older clients from accepting meshes they cannot rebuild.
+  // L08: a malformed share-link sheet list shares nothing rather than
+  // failing the document.
+  const { shareLinkSheetIds, ...unshared } = document;
+  const sheetChoice =
+    shareLinkSheetIds === undefined || isShareLinkSheetIds(shareLinkSheetIds)
+      ? document
+      : unshared;
   return {
-    ...document,
+    ...sheetChoice,
     schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
     ...(persistedDerived !== document.derived
       ? { derived: persistedDerived }
@@ -6085,6 +6099,21 @@ export function withEchoedSavePoints(
       )
     ].slice(-MAX_PROJECT_CHECKPOINTS)
   };
+}
+
+/**
+ * L08: chooses the drawing sheets this project's share links show. A forward
+ * write like a save point: one revision, the version advanced, no undo entry,
+ * so it syncs like any edit and the next snapshot a link serves carries it.
+ */
+export function setShareLinkSheets(
+  document: ProjectDocument,
+  sheetIds: readonly string[]
+): ProjectDocument {
+  const next = withShareLinkSheets(document, sheetIds);
+  return next === document
+    ? document
+    : appendRevision(next, 'Choose drawings for share links');
 }
 
 /**

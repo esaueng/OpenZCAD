@@ -42,6 +42,7 @@ import {
   EncryptedShareLinks,
   type EncryptedShareLinkClient
 } from './EncryptedShareLinks';
+import { ShareLinkDrawings } from './ShareLinkDrawings';
 import type {
   InvitableContact,
   OwnerInvitation
@@ -274,6 +275,12 @@ export interface ProjectSharingDialogProps {
    * on; without a choice it opens on the row the model was saved with.
    */
   configurations?: readonly { id: string; name: string }[];
+  /** L08: the project's drawing sheets, for choosing which links show. */
+  drawingSheets?: readonly { id: string; name: string }[];
+  /** The sheets links show now. */
+  sharedSheetIds?: readonly string[];
+  /** Changes that choice; absent where the project cannot be edited. */
+  onSharedSheetsChange?(sheetIds: string[]): void;
   onClose(): void;
 }
 
@@ -435,6 +442,9 @@ export function ProjectSharingDialog({
   onLeft,
   projectName,
   configurations = [],
+  drawingSheets,
+  sharedSheetIds,
+  onSharedSheetsChange,
   onClose
 }: ProjectSharingDialogProps) {
   const encryption = useEncryptionStatus(
@@ -1459,6 +1469,16 @@ export function ProjectSharingDialog({
                   }
                 )
               }
+            />
+          ) : null}
+
+          {isOwner && drawingSheets && drawingSheets.length > 0 ? (
+            <ShareLinkDrawings
+              sheets={drawingSheets}
+              sharedSheetIds={sharedSheetIds ?? []}
+              {...(onSharedSheetsChange
+                ? { onChange: onSharedSheetsChange }
+                : {})}
             />
           ) : null}
 
