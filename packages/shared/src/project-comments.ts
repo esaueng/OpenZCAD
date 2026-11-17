@@ -151,15 +151,16 @@ export interface CommentLogRecord {
   /** The owner's log only: other members' comments the owner removed. */
   hidden: string[];
   /**
-   * The version hashes (lowercase hex) of this log's earlier versions,
-   * oldest first, at most `MAX_COMMENT_LOG_ANCESTORS`: signed with the log,
+   * The version hashes (lowercase hex) of this log's earlier versions in
+   * sequence order, every one or the last `MAX_COMMENT_LOG_ANCESTORS`:
+   * signed with the log,
    * so a reader pinned at an earlier version can check that a newer one
    * descends from it rather than from a fork.
    */
   ancestors: string[];
 }
 
-export const MAX_COMMENT_LOG_ANCESTORS = 200;
+export const MAX_COMMENT_LOG_ANCESTORS = 2000;
 
 /** A log as the account serves it: whose, and its signed envelope. */
 export interface E2eeCommentLogRecord {

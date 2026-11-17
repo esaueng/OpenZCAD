@@ -83,6 +83,33 @@ export function createEncryptedCommentsApi(
   };
 }
 
+/**
+ * Whether a log at `sequence`, whose signed body lists `ancestors` (the
+ * hashes of its earlier versions, in order, the last at `sequence - 1`) and
+ * whose header names `previous`, descends from the version this browser
+ * pinned. `ancestors` must cover every earlier version, or the last
+ * `MAX_COMMENT_LOG_ANCESTORS` of them, and the pinned hash must sit at the
+ * pinned sequence: a device served a stale history that wrote on top of it
+ * cannot list the version it never saw there. A pin older than the window
+ * cannot be checked (`beyond-window`); the caller says so.
+ */
+export function commentLogFollows(
+  pin: { sequence: number; hash: string | null } | null,
+  sequence: number,
+  ancestors: readonly string[],
+  previous: string | null
+): 'ok' | 'broken' | 'fork' | 'beyond-window' {
+  if (ancestors.length !== Math.min(sequence - 1, MAX_COMMENT_LOG_ANCESTORS))
+    return 'broken';
+  if ((ancestors.at(-1) ?? null) !== previous) return 'broken';
+  if (!pin || pin.sequence <= 0 || sequence <= pin.sequence) return 'ok';
+  // ancestors[i] is the version at sequence `first + i`.
+  const first = sequence - ancestors.length;
+  const at = pin.sequence - first;
+  if (at < 0) return 'beyond-window';
+  return ancestors[at] === pin.hash ? 'ok' : 'fork';
+}
+
 /** A comment log this browser cannot trust; nothing is written over it. */
 export class EncryptedCommentsIntegrityError extends ApiError {
   constructor(what: string) {
@@ -227,24 +254,29 @@ export function createEncryptedComments(deps: CommentDeps): EncryptedComments {
           refuse(log.userId, 'their comment log does not verify.');
         continue;
       }
-      // The signed chain: the log names its previous version, and every
-      // version before it, so a newer log must descend from the pinned one.
-      if ((record.ancestors.at(-1) ?? null) !== previous) {
+      // The signed chain: the log lists its earlier versions by position,
+      // so a newer log must hold the pinned version at its own sequence.
+      const follows = commentLogFollows(
+        pin,
+        log.sequence,
+        record.ancestors,
+        previous
+      );
+      if (follows === 'broken') {
         refuse(log.userId, 'their comment log names a broken history.');
         continue;
       }
-      if (
-        pin &&
-        pin.sequence > 0 &&
-        log.sequence > pin.sequence &&
-        !record.ancestors.includes(pin.hash ?? '')
-      ) {
+      if (follows === 'fork') {
         refuse(
           log.userId,
           'their comment log forks from the one this browser saw.'
         );
         continue;
       }
+      if (follows === 'beyond-window')
+        warnings.push(
+          `A comment log moved more than ${MAX_COMMENT_LOG_ANCESTORS} versions since this browser last read it, so its history could not be checked back that far.`
+        );
       if (log.userId === userId) own = { sequence: log.sequence, hash, record };
       await pins.advanceEnvelope(userId, projectId, pinKey(log.userId), {
         sequence: log.sequence,

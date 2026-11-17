@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { commentLogFollows } from '../apps/web/src/lib/e2ee/encryptedComments';
 import {
+  MAX_COMMENT_LOG_ANCESTORS,
   mergeCommentLogs,
   parseCommentLog,
   type CommentLogRecord
@@ -178,5 +180,59 @@ describe('L08 encrypted comment logs', () => {
     };
     const merged = mergeCommentLogs([viewer, copier, owner], 'user_owner');
     expect(merged.map((c) => [c.text, c.authorName])).toEqual([['Kept', 'Vi']]);
+  });
+});
+
+describe('commentLogFollows (L08 encrypted comment log ancestry)', () => {
+  const h = (n: number) => n.toString(16).padStart(64, '0');
+  const chain = (to: number) => Array.from({ length: to }, (_, i) => h(i + 1));
+
+  it('accepts a log that lists every earlier version, the pinned one in its place', () => {
+    // Version 4 lists versions 1–3; this browser pinned version 2.
+    expect(
+      commentLogFollows({ sequence: 2, hash: h(2) }, 4, chain(3), h(3))
+    ).toBe('ok');
+    expect(commentLogFollows(null, 1, [], null)).toBe('ok');
+  });
+
+  it('calls a log that never saw the pinned version a fork', () => {
+    // A device served version 1 only wrote its own version 2 (h(20)), then 3.
+    expect(
+      commentLogFollows({ sequence: 2, hash: h(2) }, 3, [h(1), h(20)], h(20))
+    ).toBe('fork');
+    // The pinned hash present, but at another position, is still a fork.
+    expect(
+      commentLogFollows(
+        { sequence: 2, hash: h(2) },
+        4,
+        [h(1), h(20), h(2)],
+        h(2)
+      )
+    ).toBe('fork');
+  });
+
+  it('refuses an ancestry that skips versions or names another previous one', () => {
+    expect(commentLogFollows(null, 4, [h(1), h(3)], h(3))).toBe('broken');
+    expect(commentLogFollows(null, 3, [h(1), h(2)], h(9))).toBe('broken');
+  });
+
+  it('checks a long history within its window and says when it cannot', () => {
+    const sequence = MAX_COMMENT_LOG_ANCESTORS + 300;
+    const window = Array.from({ length: MAX_COMMENT_LOG_ANCESTORS }, (_, i) =>
+      h(sequence - MAX_COMMENT_LOG_ANCESTORS + i)
+    );
+    const previous = window.at(-1)!;
+    const inside = sequence - 10;
+    expect(
+      commentLogFollows(
+        { sequence: inside, hash: h(inside) },
+        sequence,
+        window,
+        previous
+      )
+    ).toBe('ok');
+    expect(
+      commentLogFollows({ sequence: 5, hash: h(5) }, sequence, window, previous)
+    ).toBe('beyond-window');
   });
 });
