@@ -91,7 +91,7 @@ function boredCylinder(boreDepth = 18): ProjectDocument {
   document = transformBody(document, {
     name: 'Bore position',
     targetBodyId: tool,
-    translation: { x: 0, y: 0, z: 30 - boreDepth }
+    translation: { x: 0, y: 0, z: '30 - bore' }
   }).document;
   return booleanBodies(document, {
     name: 'Bore',
@@ -451,7 +451,10 @@ describe('a section down a blind bore', () => {
       edges
     );
     const floorRef = edgeRefFor(bodies, bodyId, floor[0]!, section)!;
-    expect(floorRef).toEqual({ bodyId, hash: floor[0]!.hash });
+    // The floor is the plane's trace on the bore's named floor face, so it
+    // carries a section lineage name (D03 cut-edge lineage).
+    expect(floorRef).toMatchObject({ bodyId, hash: floor[0]!.hash });
+    expect(floorRef.reference?.lineageName).toMatch(/^section\.edge\..+@0$/);
     const width: DrawingLinearDimension = {
       annotationId: 'dann_floor' as DrawingLinearDimension['annotationId'],
       kind: 'linear',
@@ -495,7 +498,64 @@ describe('a section down a blind bore', () => {
     ).toBe(false);
   });
 
-  it('breaks a dimension whose floor moved, never rebinding it', async () => {
+  it('follows a picked floor that moved, by its section lineage', async () => {
+    const document = boredCylinder();
+    const bodyId = liveBody(document);
+    const sheet = sectionSheet(bodyId);
+    const section = sheet.views[1]!;
+    const edges = sectionEdges(await sectionInputs(document, section), bodyId);
+    const floor = lineAt(edges, 12)[0]!;
+    const synced = await adapter.syncDocument(document);
+    const picked = edgeRefFor(
+      sectionBodies(document, synced.bodyRepresentations, section, edges),
+      bodyId,
+      floor,
+      section
+    )!;
+    expect(picked.reference).toBeDefined();
+    // The plane crosses the outer cylinder twice (y = ±10): one face, two
+    // traces, so neither is named, and neither can be mistaken for the other.
+    const sides = edges.filter((edge) => {
+      const p = edge.points;
+      for (let i = 0; i + 2 < p.length; i += 3)
+        if (
+          Math.abs(p[i]!) > 1e-9 ||
+          Math.abs(Math.abs(p[1]!) - 10) > 1e-9 ||
+          Math.abs(p[i + 1]! - p[1]!) > 1e-9
+        )
+          return false;
+      return true;
+    });
+    expect(sides).toHaveLength(2);
+    expect(sides.every((edge) => edge.reference === undefined)).toBe(true);
+    const dimension: DrawingLinearDimension = {
+      annotationId: 'dann_floor' as DrawingLinearDimension['annotationId'],
+      kind: 'linear',
+      viewId: sectionId,
+      direction: 'horizontal',
+      from: { edge: picked, anchor: 'first' },
+      to: { edge: picked, anchor: 'second' },
+      placementMm: { x: 0, y: -30 }
+    };
+    // The same document bored 22 deep: its floor is at z = 8, a new edge
+    // with a new hash, found again by its name.
+    const deeper = setParameter(document, { name: 'bore', expression: '22' });
+    const after = sectionEdges(await sectionInputs(deeper, section), bodyId);
+    expect(after.some((edge) => edge.hash === floor.hash)).toBe(false);
+    const bodies = {
+      [bodyId]: { id: bodyId } as never,
+      [sectionBodyKey(sectionId, bodyId)]: {
+        id: bodyId,
+        topology: { faces: [], edges: after }
+      } as never
+    } as AnnotationBodies;
+    const resolved = resolveDrawingAnnotation(dimension, section, bodies, 'mm');
+    expect(resolved.ok).toBe(true);
+    if (resolved.ok && resolved.resolved.kind === 'linear')
+      expect(resolved.resolved.value).toBeCloseTo(8, 9);
+  });
+
+  it('breaks a hash-only dimension whose floor moved, never rebinding it', async () => {
     const document = boredCylinder();
     const bodyId = liveBody(document);
     const section = sectionSheet(bodyId).views[1]!;

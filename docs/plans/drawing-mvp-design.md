@@ -812,7 +812,29 @@ principal view. Detail views remain open.
   and a click on one side places the section seen from that side in third
   angle (the other in first angle), as an auxiliary view is.
 - **Schema.** v91, built on v90 (F06 slice 4a), gated below it.
-- **Open.** Lineage for cut edges (stepped lines followed in v93).
+- **Open.** Nothing on the drawing side: stepped lines followed in v93 and cut-edge lineage after them.
+
+## Cut-edge lineage (D03)
+
+A section's edges are published with ADR-013 references where they can be
+verified, so a dimension on one follows a model edit through the sheet's
+Update the way one on the model does, and never by proximity. No schema
+change: references are derived each time the section is cut.
+
+- **Unchanged edges.** An edge the cut leaves exactly as it was — its
+  witness equal to exactly one source edge's — carries that source edge's
+  verified reference.
+- **Cut edges.** An edge lying wholly in one of the section's planes is the
+  plane's trace on the one model face beside it. The cut solid's faces are
+  named from the source's by the boolean carrier rule; when exactly one of
+  the edge's two faces is named, the edge is named
+  `section.edge.<face name>@<plane index>` under that face's producing
+  feature.
+- **Fail closed.** A name two edges would share (a plane crossing one
+  cylinder twice) is given to neither, and a body with no source lineage
+  names nothing: those edges stay hash-only, broken by an edit that moves
+  them, as before. References written before this change are hash-only and
+  behave as they did.
 
 ## Stepped sections (D03, schema v93)
 

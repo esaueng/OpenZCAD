@@ -39,6 +39,7 @@
   "drawing-distances.spec.ts": 14,
   "drawing-free-sections.spec.ts": 14,
   "drawing-properties.spec.ts": 12,
+  "drawing-section-lineage.spec.ts": 18,
   "drawing-sections.spec.ts": 25,
   "drawing-sheet-images.spec.ts": 16,
   "drawing-stepped-sections.spec.ts": 14,
