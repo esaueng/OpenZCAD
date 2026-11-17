@@ -81,6 +81,21 @@ function hasDrawingViewConfiguration(drawings: unknown): boolean {
   );
 }
 
+/**
+ * F06 per-instance configurations (schema v90): an assembly component's
+ * `configurationId`. An older reader would show the component as the
+ * active row.
+ */
+export const COMPONENT_CONFIGURATION_SCHEMA_VERSION = 90;
+
+export function assertComponentConfigurationSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    COMPONENT_CONFIGURATION_SCHEMA_VERSION,
+    'Component configurations'
+  );
+}
+
 export function assertConfigurationSchema(version: unknown): void {
   assertMinimumProjectSchema(
     version,
@@ -436,6 +451,18 @@ function hasExplode(assembly: unknown): boolean {
   return record(assembly) && assembly.explode !== undefined;
 }
 
+/** F06: any component of an assembly section names a configuration. */
+function hasComponentConfiguration(assembly: unknown): boolean {
+  return (
+    record(assembly) &&
+    Array.isArray(assembly.components) &&
+    assembly.components.some(
+      (component) =>
+        record(component) && component.configurationId !== undefined
+    )
+  );
+}
+
 export function assertSketchObjectContentSchema(
   data: SketchObjectData,
   version: unknown,
@@ -507,6 +534,12 @@ export function assertDocumentContentCommandSchema(
       assertAssemblyCouplingSchema(document.schemaVersion);
     if (command.kind === 'assembly.explode.set')
       assertAssemblyExplodeSchema(document.schemaVersion);
+    if (
+      command.kind === 'assembly.component.update' &&
+      record(command.payload) &&
+      command.payload.configurationId !== undefined
+    )
+      assertComponentConfigurationSchema(document.schemaVersion);
     if (command.kind === 'feature.sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
     if (command.kind === 'feature.standard-part')
@@ -695,6 +728,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
     assertAssemblyCouplingSchema(document.schemaVersion);
   if (hasExplode(document.assembly))
     assertAssemblyExplodeSchema(document.schemaVersion);
+  if (hasComponentConfiguration(document.assembly))
+    assertComponentConfigurationSchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
     for (const change of entry.changes)
       if (change.field === 'assembly') {
@@ -704,6 +739,11 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
           assertAssemblyCouplingSchema(document.schemaVersion);
         if (hasExplode(change.before) || hasExplode(change.after))
           assertAssemblyExplodeSchema(document.schemaVersion);
+        if (
+          hasComponentConfiguration(change.before) ||
+          hasComponentConfiguration(change.after)
+        )
+          assertComponentConfigurationSchema(document.schemaVersion);
       }
   if (hasDrawingDimensionFormat(document.drawings))
     assertDrawingDimensionFormatSchema(document.schemaVersion);

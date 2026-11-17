@@ -380,6 +380,47 @@ describe('AssemblyPanel (one left sidebar)', () => {
     });
   });
 
+  it('lets a part show another configuration, or the active one (F06)', () => {
+    const fixture = scissorsManager({ joint: true });
+    fixture.manager.execute(
+      commandFactories.createConfigurations({ rowId: 'short', name: 'Short' })
+    );
+    fixture.manager.execute(
+      commandFactories.addConfigurationRow({ rowId: 'long', name: 'Long' })
+    );
+    select(() => assemblyRuntime.selectComponent('comp_b'));
+    const { commands } = renderPanel(fixture);
+    const details = screen.getByLabelText('Blade B details');
+    const picker = within(details).getByRole('combobox', {
+      name: 'Configuration'
+    });
+    expect(picker).toHaveValue('');
+    expect(
+      within(picker).getByRole('option', { name: 'Active (Short)' })
+    ).toBeInTheDocument();
+    fireEvent.change(picker, { target: { value: 'long' } });
+    expect(commands.at(-1)).toEqual({
+      kind: 'assembly.component.update',
+      payload: { componentId: 'comp_b', configurationId: 'long' }
+    });
+    fireEvent.change(picker, { target: { value: '' } });
+    expect(commands.at(-1)).toEqual({
+      kind: 'assembly.component.update',
+      payload: { componentId: 'comp_b', configurationId: null }
+    });
+  });
+
+  it('shows no configuration choice without a table (F06)', () => {
+    const fixture = scissorsManager({ joint: true });
+    select(() => assemblyRuntime.selectComponent('comp_b'));
+    renderPanel(fixture);
+    expect(
+      within(screen.getByLabelText('Blade B details')).queryByRole('combobox', {
+        name: 'Configuration'
+      })
+    ).not.toBeInTheDocument();
+  });
+
   it('warns when nothing is fixed and fixes the first part', () => {
     const fixture = scissorsManager({ components: true });
     fixture.manager.execute(

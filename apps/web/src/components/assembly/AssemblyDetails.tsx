@@ -448,6 +448,33 @@ export function ComponentDetails({
       ) : bodyName !== component.name ? (
         <p className="assembly-muted">Body: {bodyName}</p>
       ) : null}
+      {document.configurations ? (
+        <label className="assembly-configuration">
+          <span>Configuration</span>
+          <select
+            value={component.configurationId ?? ''}
+            onChange={(event) =>
+              execute(
+                commandFactories.updateAssemblyComponent({
+                  componentId: component.id,
+                  configurationId: event.target.value || null
+                })
+              )
+            }
+          >
+            <option value="">{`Active (${
+              document.configurations.rows.find(
+                (row) => row.id === document.configurations!.activeRowId
+              )?.name ?? 'none'
+            })`}</option>
+            {document.configurations.rows.map((row) => (
+              <option key={row.id} value={row.id}>
+                {row.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       <div className="assembly-detail-actions">
         <button
           type="button"

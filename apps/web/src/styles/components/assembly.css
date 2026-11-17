@@ -132,6 +132,22 @@
   line-height: var(--lh-normal);
 }
 
+/* F06: which configuration a part shows; the active row unless chosen. */
+.assembly-configuration {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.assembly-configuration select {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  font-size: var(--fs-xs);
+}
+
 .assembly-actions {
   display: flex;
   justify-content: flex-end;

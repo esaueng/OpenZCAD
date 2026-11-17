@@ -3442,7 +3442,9 @@ export const commandFactories = {
         ? 'Unground component'
         : payload.placement
           ? 'Move component'
-          : 'Edit component'
+          : payload.configurationId !== undefined
+            ? 'Set component configuration'
+            : 'Edit component'
   ): CommandDefinition<AssemblyComponentUpdateInput> {
     return makeCommand(
       'assembly.component.update',

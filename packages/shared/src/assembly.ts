@@ -117,6 +117,12 @@ export interface AssemblyComponent {
    * component placed through joints has it recomputed from its joints.
    */
   placement: AssemblyPlacement;
+  /**
+   * F06 (schema v90): the configuration row this component shows its body
+   * as, built on its own while the document's active row stays the model
+   * being edited. Absent: the active row.
+   */
+  configurationId?: string;
 }
 
 /** A saved set of joint values ("Open", "Closed"). */
@@ -554,6 +560,11 @@ export function assemblySetError(value: unknown): string | null {
       return `Component ${id} has no grounded state.`;
     const placement = placementError(component.placement);
     if (placement) return `Component ${id} ${placement}`;
+    if (
+      component.configurationId !== undefined &&
+      !isId(component.configurationId)
+    )
+      return `Component ${id} names no usable configuration.`;
   }
 
   const joints = new Map<string, AssemblyJointKind>();

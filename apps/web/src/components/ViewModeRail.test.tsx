@@ -152,4 +152,50 @@ describe('ViewModeRail', () => {
     });
     expect(leaks).toEqual([]);
   });
+
+  it('shows another configuration in this view without changing the model (F06)', () => {
+    const onShow = vi.fn();
+    const rail = (shownRowId: string | null, extra = {}) => (
+      <ViewModeRail
+        bodies={[body('b1', 'Plate')]}
+        hiddenBodyIds={new Set()}
+        selectedBodyIds={[]}
+        open
+        onOpenChange={vi.fn()}
+        onSelectBody={vi.fn()}
+        onToggleVisibility={vi.fn()}
+        onIsolate={vi.fn()}
+        onShowAll={vi.fn()}
+        configuration={{
+          rows: [
+            { id: 'small', name: 'Small' },
+            { id: 'large', name: 'Large' }
+          ],
+          activeRowId: 'small',
+          shownRowId,
+          onShow,
+          ...extra
+        }}
+      />
+    );
+    const view = render(rail(null));
+    const picker = screen.getByRole('combobox', { name: 'Configuration' });
+    expect(picker).toHaveValue('');
+    // The active row is the first choice, named once.
+    expect(
+      within(picker)
+        .getAllByRole('option')
+        .map((option) => option.textContent)
+    ).toEqual(['Active (Small)', 'Large']);
+    fireEvent.change(picker, { target: { value: 'large' } });
+    expect(onShow).toHaveBeenCalledWith('large');
+    view.rerender(rail('large', { building: true }));
+    expect(screen.getByRole('status')).toHaveTextContent('Building…');
+    view.rerender(rail('large', { error: 'Large could not be built.' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Large could not be built.'
+    );
+    fireEvent.change(picker, { target: { value: '' } });
+    expect(onShow).toHaveBeenLastCalledWith(null);
+  });
 });
