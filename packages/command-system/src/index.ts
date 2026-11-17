@@ -5755,8 +5755,25 @@ export function isParameterRetype(command: {
   );
 }
 
+/**
+ * Tweak's vocabulary: setting a parameter's value, and (F06) switching to
+ * another configuration row the model's author defined. Both turn the
+ * model's published knobs; neither edits its features.
+ */
+export function isTweakCommandKind(kind: string): boolean {
+  return kind === 'parameter.set' || kind === 'configuration.activate';
+}
+
+/** Whether a command is one Tweak runs: a value edit or a row switch. */
+export function isTweakCommand(command: {
+  kind: string;
+  payload?: unknown;
+}): boolean {
+  return isTweakCommandKind(command.kind) && !isParameterRetype(command);
+}
+
 function parameterOnly(kinds: string[] | null): boolean {
-  return !!kinds?.length && kinds.every((kind) => kind === 'parameter.set');
+  return !!kinds?.length && kinds.every(isTweakCommandKind);
 }
 
 /** D01: a command that edits drawing sheets and never the model. */

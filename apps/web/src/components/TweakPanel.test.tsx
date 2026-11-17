@@ -216,4 +216,55 @@ describe('TweakPanel refusals', () => {
       'width must be at most 90 mm.'
     );
   });
+
+  it('switches configurations from a picker above the parameters (F06)', async () => {
+    const onActivate = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <TweakPanel
+        parameters={[width]}
+        parameterValues={{ width: 80 }}
+        canExport
+        exportScope={null}
+        onSetParameter={vi.fn()}
+        onViewActivityLog={vi.fn()}
+        onExportStep={vi.fn()}
+        onOpenMeshExport={vi.fn()}
+        share={null}
+        configuration={{
+          rows: [
+            { id: 'small', name: 'Small' },
+            { id: 'large', name: 'Large' }
+          ],
+          activeRowId: 'small',
+          onActivate
+        }}
+        panelOpen
+        onTogglePanel={vi.fn()}
+      />
+    );
+    const picker = screen.getByRole('combobox', { name: 'Configuration' });
+    expect(picker).toHaveValue('small');
+    await user.selectOptions(picker, 'Large');
+    expect(onActivate).toHaveBeenCalledWith('large');
+    // No table: no picker.
+    rerender(
+      <TweakPanel
+        parameters={[width]}
+        parameterValues={{ width: 80 }}
+        canExport
+        exportScope={null}
+        onSetParameter={vi.fn()}
+        onViewActivityLog={vi.fn()}
+        onExportStep={vi.fn()}
+        onOpenMeshExport={vi.fn()}
+        share={null}
+        panelOpen
+        onTogglePanel={vi.fn()}
+      />
+    );
+    expect(
+      screen.queryByRole('combobox', { name: 'Configuration' })
+    ).not.toBeInTheDocument();
+  });
 });

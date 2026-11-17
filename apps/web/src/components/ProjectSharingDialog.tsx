@@ -33,6 +33,7 @@ import {
   createProjectSharingClient,
   type ProjectSharingClient
 } from '../lib/projectSharing';
+import { withShareConfiguration } from '../lib/projectShareLink';
 import type { CollaborationStatus } from '../lib/useCollaboration';
 import { useModalFocus } from '../lib/useModalFocus';
 import { StableLabel } from './StableLabel';
@@ -48,10 +49,7 @@ import type {
 import { useEncryptionStatus } from '../lib/e2ee/encryptionStatus';
 import { describeFailure, type PlainFailure } from '../lib/plainFailure';
 import { FailureDetails } from './FailureDetails';
-import {
-  PrivateEmailInput,
-  usePersonalInfoVisible
-} from './PersonalInfo';
+import { PrivateEmailInput, usePersonalInfoVisible } from './PersonalInfo';
 
 const defaultClient = createProjectSharingClient();
 const defaultShareLinkClient = createProjectShareLinkClient();
@@ -271,6 +269,11 @@ export interface ProjectSharingDialogProps {
   onLeft?(): void;
   /** Shown beside the title so the popover says what it shares. */
   projectName?: string;
+  /**
+   * F06: the model's configurations. A new link can name the one it opens
+   * on; without a choice it opens on the row the model was saved with.
+   */
+  configurations?: readonly { id: string; name: string }[];
   onClose(): void;
 }
 
@@ -431,6 +434,7 @@ export function ProjectSharingDialog({
   onVerifyContact,
   onLeft,
   projectName,
+  configurations = [],
   onClose
 }: ProjectSharingDialogProps) {
   const encryption = useEncryptionStatus(
@@ -1399,6 +1403,7 @@ export function ProjectSharingDialog({
               disabled={interactionBusy}
               localImportSourceNames={localImportSourceNames}
               urlRef={shareLinkUrlRef}
+              configurations={configurations}
               onCopy={(url) => void copyShareLink(url)}
               onCreate={() =>
                 void mutate('share-link:create', async () => {
@@ -1559,6 +1564,7 @@ interface PlaintextShareLinksProps {
   disabled: boolean;
   localImportSourceNames: readonly string[];
   urlRef: RefObject<HTMLInputElement | null>;
+  configurations: readonly { id: string; name: string }[];
   onCopy(url: string): void;
   onCreate(): void;
   onRename(shareLink: ProjectShareLinkSummary, draft: string): Promise<void>;
@@ -1577,11 +1583,20 @@ function PlaintextShareLinks({
   disabled,
   localImportSourceNames,
   urlRef,
+  configurations,
   onCopy,
   onCreate,
   onRename,
   onRevoke
 }: PlaintextShareLinksProps) {
+  // F06: the row the new link opens on, or '' for the one it was saved with.
+  const [opensOn, setOpensOn] = useState('');
+  const opensOnRow = configurations.some((row) => row.id === opensOn)
+    ? opensOn
+    : '';
+  const createdUrl = created
+    ? withShareConfiguration(created.url, opensOnRow || null)
+    : '';
   const [editingId, setEditingId] = useState<string | null>(null);
   // The link whose Revoke is waiting for a yes (design review I2).
   const [revokingId, setRevokingId] = useState<string | null>(null);
@@ -1684,19 +1699,35 @@ function PlaintextShareLinks({
               }
             }}
           />
+          {configurations.length > 0 && (
+            <label className="sharing-share-configuration">
+              <span>Opens on</span>
+              <select
+                value={opensOnRow}
+                onChange={(event) => setOpensOn(event.target.value)}
+              >
+                <option value="">The saved configuration</option>
+                {configurations.map((row) => (
+                  <option key={row.id} value={row.id}>
+                    {row.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <input
             ref={urlRef}
             className="sharing-share-url"
             type="text"
             readOnly
             aria-label="Share link"
-            value={created.url}
+            value={createdUrl}
             onFocus={(event) => event.target.select()}
           />
           <button
             type="button"
             className="primary sharing-share-copy"
-            onClick={() => onCopy(created.url)}
+            onClick={() => onCopy(createdUrl)}
           >
             <StableLabel reserve={['Copied', 'Copy']} align="center">
               {copied ? 'Copied' : 'Copy'}

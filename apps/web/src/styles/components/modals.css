@@ -1945,6 +1945,22 @@
   font-family: var(--font-mono);
 }
 
+/* F06: which configuration the new link opens on; it rewrites the URL. */
+.sharing-share-configuration {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  font-size: var(--fs-xs);
+}
+
+.sharing-share-configuration select {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  font-size: var(--fs-xs);
+}
+
 .sharing-share-once {
   grid-column: 1 / -1;
   margin: 0;

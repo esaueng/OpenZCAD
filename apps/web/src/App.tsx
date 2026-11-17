@@ -208,6 +208,7 @@ import {
   duplicateFeatureCommands,
   duplicateFeatureRefusal,
   isParameterRetype,
+  isTweakCommand,
   isAssemblyOnlyCommand,
   isConfigurationTableOnlyCommand,
   isDrawingCommand,
@@ -715,11 +716,13 @@ import {
 } from './lib/projectInvitationLink';
 import {
   captureProjectShareRequest,
+  captureShareConfiguration,
   isEncryptedShareLink,
   shareLinkFromHash,
   projectLinkPath,
   clearProjectShareFragment
 } from './lib/projectShareLink';
+import { sharedDocumentOnRow } from './lib/sharedConfiguration';
 import type {
   ExportProgress,
   MeshExportDialogFormat,
@@ -7038,11 +7041,7 @@ export function App() {
       return ensureCanEditAssembly(action);
     }
     const parametersOnly =
-      commands.length > 0 &&
-      commands.every(
-        (command) =>
-          command.kind === 'parameter.set' && !isParameterRetype(command)
-      );
+      commands.length > 0 && commands.every(isTweakCommand);
     return parametersOnly
       ? ensureCanEditParameters(action)
       : ensureCanEdit(action);
@@ -15392,6 +15391,9 @@ export function App() {
       return;
     }
     shareOpenAttemptRef.current = pendingShareToken;
+    // F06: the configuration the link opens on, read before the fragment
+    // can be tidied away.
+    const shareRowId = captureShareConfiguration();
     updateSettingsViewState({ open: false });
     setSettingsOpen(false);
     setSharingOpen(false);
@@ -15470,6 +15472,14 @@ export function App() {
         // a safe device copy may leave without their network response.
         if (!accountSavePendingRef.current) await draining;
         if (!isCurrent()) return;
+        // F06: a link naming a configuration opens on it once that row is
+        // known to build; otherwise the model opens as saved.
+        const opening = await sharedDocumentOnRow(
+          shared.document,
+          shareRowId,
+          (candidate) => geometryRef.current.previewGeometry(candidate)
+        );
+        if (!isCurrent()) return;
         // Before the document lands: the collaboration hook and the cloud
         // autosave controller must treat this project as not account-backed,
         // whatever this browser knew about the account before.
@@ -15480,13 +15490,15 @@ export function App() {
         setShareSession(opened);
         shareSessionRef.current = opened;
         setSharePage(null);
-        hydrateSharedDocumentRef.current(shared.document, {
+        hydrateSharedDocumentRef.current(opening.document, {
           rememberProject: false
         });
         setStatus(
-          shared.encryptedMode === 'view'
-            ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
-            : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
+          `${
+            shared.encryptedMode === 'view'
+              ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
+              : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
+          }${opening.note ? ` ${opening.note}` : ''}`
         );
       } catch (error) {
         if (isCurrent()) {
@@ -35290,6 +35302,20 @@ export function App() {
             onOpenMeshExport={() => setMeshExportOpen(true)}
             // Make a copy is the top bar's labelled button now (I73).
             share={null}
+            configuration={
+              doc?.configurations
+                ? {
+                    rows: doc.configurations.rows,
+                    activeRowId: doc.configurations.activeRowId,
+                    onActivate: (rowId) =>
+                      void Promise.resolve(
+                        configurationActions.activate(rowId)
+                      ).then((refused) => {
+                        if (refused) setStatus(refused);
+                      })
+                  }
+                : null
+            }
             panelOpen={panelState.tweakPanelOpen}
             onTogglePanel={() =>
               setPanelState((current) => ({
@@ -37602,6 +37628,7 @@ export function App() {
               <ProjectSharingDialog
                 projectId={doc.projectId}
                 projectName={doc.name}
+                configurations={doc.configurations?.rows ?? []}
                 localProject={!activeProjectIsCloud}
                 localImportSourceNames={localOnlySources.map(
                   (source) => source.sourceName
