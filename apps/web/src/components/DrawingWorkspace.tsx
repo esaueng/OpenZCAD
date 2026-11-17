@@ -2289,10 +2289,11 @@ function ToleranceAnnotationFields(props: {
             const others = datums
               .filter((_, other) => other !== index)
               .map((entry) => entry.letter);
-            const required =
-              DRAWING_DATUM_REQUIRED_CHARACTERISTICS.includes(
-                frame.characteristic
-              ) && datums.length === 1;
+            // Clearing the primary clears every datum, which a
+            // characteristic that needs one cannot take.
+            const required = DRAWING_DATUM_REQUIRED_CHARACTERISTICS.includes(
+              frame.characteristic
+            );
             return (
               <div key={index} className="drawing-field-row">
                 <label className="drawing-field">
@@ -4924,6 +4925,15 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   };
   const pickTolerance = (pxPerMm: number) => Math.max(0.8, 8 / pxPerMm);
 
+  /**
+   * v98: a new datum symbol takes the drawing's next free letter, and a new
+   * frame about a tenth of a millimetre in the sheet's printed units.
+   */
+  const toleranceDefaults = () => ({
+    letter: nextDatumLetter(datumLetters.keys()),
+    amount:
+      DEFAULT_FRAME_AMOUNT[sheetNumberFormat(sheet ?? {}, document.units).units]
+  });
   const commitAnnotation = (finished: AnnotationTool, at: [number, number]) => {
     if (!sheet) return;
     const view = finished.viewId
@@ -4955,19 +4965,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       finished.kind === 'image' && !finished.pictureId
         ? { ...finished, pictureId: [...pictures.keys()].at(-1) }
         : finished;
-    // v98: a new datum symbol takes the drawing's next free letter, and a
-    // new frame a tenth of a millimetre in the sheet's printed units.
     const annotation = draftAnnotation(
       placed,
       createDrawingAnnotationId(),
       placementMm,
       undefined,
       componentId,
-      {
-        letter: nextDatumLetter(datumLetters.keys()),
-        amount:
-          DEFAULT_FRAME_AMOUNT[sheetNumberFormat(sheet, document.units).units]
-      }
+      toleranceDefaults()
     );
     if (!annotation) return;
     const refusal = draftRefusal(
@@ -5814,10 +5818,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           y: hover.point[1] - view.centerMm.y
         }
       : { x: hover.point[0], y: hover.point[1] };
+    // The same defaults the placement commits, so the preview shows it.
     const draft = draftAnnotation(
       tool,
       'dann_preview' as DrawingAnnotationId,
-      placementMm
+      placementMm,
+      undefined,
+      undefined,
+      toleranceDefaults()
     );
     if (!draft) return null;
     return previewAnnotationLayer(

@@ -2829,6 +2829,126 @@ describe('DrawingWorkspace geometry annotations (D02 v73)', () => {
   });
 });
 
+describe('DrawingWorkspace geometric tolerancing (D07 v98)', () => {
+  it('previews a datum symbol with the letter it commits', async () => {
+    resetRetainedProjections();
+    const starterSheet = starter(
+      drawingSourceFingerprint({ [bodyId]: straightCube() }, [bodyId])!
+    );
+    const front = starterSheet.views.find(
+      (view) => view.orientation === 'front'
+    )!;
+    // Datum A is declared already (on an edge this cube need not have).
+    const sheet: DrawingSheet = {
+      ...starterSheet,
+      annotations: [
+        {
+          annotationId: 'dann_a' as DrawingAnnotationId,
+          kind: 'datum-feature',
+          viewId: front.viewId,
+          leader: { bodyId, hash: 999_999 },
+          letter: 'A',
+          placementMm: { x: 0, y: -40 }
+        }
+      ]
+    };
+    const { onCommand } = setup({ sheet, straightEdges: true });
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    Object.defineProperty(canvas, 'getScreenCTM', {
+      configurable: true,
+      value: () => ({
+        a: 1,
+        b: 0,
+        c: 0,
+        d: 1,
+        e: 0,
+        f: 0,
+        inverse: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 })
+      })
+    });
+    await userEvent.keyboard('q');
+    const surface = canvas.querySelector('.drawing-pick-surface')!;
+    const k = drawingPaperPerModelUnit(sheet.scale, 'mm');
+    const client = (u: number, v: number) => ({
+      clientX: front.centerMm.x + (u - 5) * k,
+      clientY: 297 - (front.centerMm.y + (v - 5) * k),
+      button: 0,
+      pointerId: 1
+    });
+    const letters = () =>
+      [...canvas.querySelectorAll('text')].filter(
+        (text) => text.textContent === 'B'
+      ).length;
+    expect(letters()).toBe(0);
+    // The top edge, then the pointer above it: the preview says B.
+    fireEvent.pointerDown(surface, client(5, 10));
+    fireEvent.pointerMove(surface, client(5, 10 + 20 / k));
+    expect(letters()).toBe(1);
+    fireEvent.pointerDown(surface, client(5, 10 + 20 / k));
+    const added = onCommand.mock.calls
+      .map(([command]) => command)
+      .find((command) => command.kind === 'drawing.annotation.add');
+    expect(
+      (added!.payload as { annotation: DrawingAnnotation }).annotation
+    ).toMatchObject({ kind: 'datum-feature', letter: 'B' });
+  });
+
+  it('never offers to clear the primary datum a characteristic needs', async () => {
+    const sheet = starter(
+      drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!
+    );
+    const front = sheet.views.find((view) => view.orientation === 'front')!;
+    const edge = { bodyId, hash: 210 };
+    sheet.annotations = [
+      ...(['A', 'B'] as const).map((letter, index): DrawingAnnotation => ({
+        annotationId: `dann_${letter}` as DrawingAnnotationId,
+        kind: 'datum-feature',
+        viewId: front.viewId,
+        leader: edge,
+        letter,
+        placementMm: { x: 20 * index, y: -30 }
+      })),
+      {
+        annotationId: 'dann_f' as DrawingAnnotationId,
+        kind: 'feature-control-frame',
+        viewId: front.viewId,
+        leader: edge,
+        characteristic: 'parallelism',
+        amount: 0.1,
+        datums: [{ letter: 'A' }, { letter: 'B' }],
+        placementMm: { x: 30, y: 0 }
+      }
+    ];
+    setup({ sheet });
+    const canvas = screen.getByRole('application', {
+      name: 'Sheet Sheet 1'
+    });
+    await userEvent.click(
+      await within(canvas).findByRole('button', {
+        name: 'Feature control frame Parallelism | 0.1 | A | B'
+      })
+    );
+    const primary = screen.getByRole<HTMLSelectElement>('combobox', {
+      name: 'Primary'
+    });
+    expect(
+      [...primary.options].find((option) => option.value === '')!.disabled
+    ).toBe(true);
+    // A later datum may still be cleared.
+    const secondary = screen.getByRole<HTMLSelectElement>('combobox', {
+      name: 'Secondary'
+    });
+    expect(
+      [...secondary.options].find((option) => option.value === '')!.disabled
+    ).toBe(false);
+  });
+});
+
 describe('DrawingWorkspace dimension check (D06)', () => {
   const exactCube = () => cube(10, true);
   const sheetWith = (annotations: DrawingAnnotation[]) => {
