@@ -58,6 +58,28 @@ export const CURVATURE_COLORS = {
   unevaluated: '#8f8f8f'
 } as const;
 
+/** Thickness bands, sRGB: below the minimum, under twice it, ample. */
+export const THICKNESS_COLORS = {
+  thin: '#d64545',
+  marginal: '#e2b100',
+  ample: '#2f9e5c',
+  unevaluated: '#8f8f8f'
+} as const;
+
+export type ThicknessBand = keyof typeof THICKNESS_COLORS;
+
+/**
+ * The band one wall thickness falls in. "Marginal" is under twice the
+ * minimum: a wall that a coarser sample or the resolution could put below
+ * it should read as worth a look, not as fine.
+ */
+export function thicknessBandOf(value: number, minimum: number): ThicknessBand {
+  if (!Number.isFinite(value)) return 'unevaluated';
+  if (value < minimum) return 'thin';
+  if (value < minimum * 2) return 'marginal';
+  return 'ample';
+}
+
 /** Zebra stripes are untinted; an unevaluated sample is drawn grey. */
 const ZEBRA_EVALUATED = '#ffffff';
 
@@ -143,6 +165,17 @@ export function analysisColors(
     const signed = request.measure !== 'maximum';
     for (let index = 0; index < values.length; index += 1)
       put(index, curvatureColor(values[index]!, scale, signed));
+    return colors;
+  }
+  if (request.kind === 'thickness') {
+    const palette = {
+      thin: linear(THICKNESS_COLORS.thin),
+      marginal: linear(THICKNESS_COLORS.marginal),
+      ample: linear(THICKNESS_COLORS.ample),
+      unevaluated: linear(THICKNESS_COLORS.unevaluated)
+    };
+    for (let index = 0; index < values.length; index += 1)
+      put(index, palette[thicknessBandOf(values[index]!, request.minimum)]);
     return colors;
   }
   const evaluated = linear(ZEBRA_EVALUATED);
@@ -231,6 +264,8 @@ export function analysisProvenance(kind: SurfaceAnalysisKind): string {
       return 'Exact principal curvatures from the kernel at sample points on each face’s own surface. Colours between samples are interpolated: planes, cylinders and spheres are exact (constant), cones, tori and freeform faces are sampled. The smallest radius is the kernel’s over the whole face: closed-form on analytic faces, approximate on freeform ones.';
     case 'zebra':
       return 'Stripes reflected from the kernel’s exact outward normals at sample points on each face’s own surface; between samples the normals, and so the stripes, are interpolated by the display.';
+    case 'thickness':
+      return 'Approximate: the distance through the material along the inward normal from the centre of each sample triangle, to the first wall the ray meets. Planes, cylinders and spheres are crossed in closed form and other surfaces traced on the kernel’s exact distances, to the stated resolution. A flat wall facing a parallel flat wall at every sample reads exact, as their separation.';
   }
 }
 
@@ -243,6 +278,8 @@ export function analysisLimits(kind: SurfaceAnalysisKind): string {
       return 'Not covered: curvature along edges and at points where it is undefined (a cone’s apex, a freeform pole), which are left grey; the colour scale spans the largest value found, so one tight face mutes the rest.';
     case 'zebra':
       return 'Not covered: a certified continuity check. Stripes that run on smoothly across an edge suggest tangency (G1) and matching bends suggest curvature continuity (G2), read by eye at the sample density; faces the kernel cannot evaluate are grey.';
+    case 'thickness':
+      return 'Not covered: a thin spot between samples, thickness measured any way but along the normal (the ray method reads a sharp inside corner thick), and samples the ray cannot start or finish (a knife edge), shown grey and listed below. A guide for printing and moulding, not a slicer’s or a simulation’s check.';
   }
 }
 
@@ -399,4 +436,80 @@ export function formatCurvature(value: number): string {
   return magnitude >= 0.001 && magnitude < 1000
     ? String(Number(value.toPrecision(3)))
     : value.toExponential(2);
+}
+
+export interface ThicknessSummary {
+  thinnest: {
+    value: number;
+    exact: boolean;
+    bodyId: string;
+    face: number;
+  } | null;
+  /** Faces whose thinnest sample is below the minimum. */
+  belowMinimum: number;
+  faces: Record<Exclude<ThicknessBand, 'unevaluated'>, number>;
+  exactFaces: number;
+  totalFaces: number;
+  /** The coarsest resolution among the bodies measured. */
+  resolution: number | null;
+}
+
+export function summarizeThickness(
+  report: SurfaceAnalysisReport,
+  minimum: number
+): ThicknessSummary {
+  let thinnest: ThicknessSummary['thinnest'] = null;
+  const faces = { thin: 0, marginal: 0, ample: 0 };
+  let exactFaces = 0;
+  let totalFaces = 0;
+  let resolution: number | null = null;
+  for (const body of report.bodies) {
+    if (typeof body.resolution === 'number') {
+      resolution = Math.max(resolution ?? 0, body.resolution);
+    }
+    for (const face of body.faces) {
+      totalFaces += 1;
+      if (face.exact) exactFaces += 1;
+      const band = thicknessBandOf(face.min, minimum);
+      if (band !== 'unevaluated') faces[band] += 1;
+      if (thinnest === null || face.min < thinnest.value) {
+        thinnest = {
+          value: face.min,
+          exact: face.exact,
+          bodyId: body.bodyId,
+          face: face.face
+        };
+      }
+    }
+  }
+  return {
+    thinnest,
+    belowMinimum: faces.thin,
+    faces,
+    exactFaces,
+    totalFaces,
+    resolution
+  };
+}
+
+export function formatLength(value: number, lengthUnit: string): string {
+  return `${String(Number(value.toPrecision(4)))} ${lengthUnit}`;
+}
+
+export function describeThicknessSummary(
+  summary: ThicknessSummary,
+  minimum: number,
+  lengthUnit: string,
+  nameOf: (bodyId: string) => string
+): string {
+  if (!summary.thinnest) return 'No faces measured.';
+  const { value, exact, bodyId, face } = summary.thinnest;
+  const thinnest = `Thinnest wall ${formatLength(value, lengthUnit)} (${
+    exact ? 'exact' : 'approximate'
+  }) on ${nameOf(bodyId)}, face ${face + 1}.`;
+  const below =
+    summary.belowMinimum > 0
+      ? ` ${plural(summary.belowMinimum, 'face')} below the ${formatLength(minimum, lengthUnit)} minimum.`
+      : ` Every face at least ${formatLength(minimum, lengthUnit)}.`;
+  return thinnest + below;
 }

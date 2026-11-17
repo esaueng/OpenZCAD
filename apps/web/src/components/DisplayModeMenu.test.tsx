@@ -71,13 +71,15 @@ describe('the Display menu (I52)', () => {
       expect.stringMatching(/^X-ray/),
       'Draft',
       'Curvature',
-      'Zebra'
+      'Zebra',
+      'Thickness'
     ]);
     expect(items.map((item) => item.getAttribute('aria-pressed'))).toEqual([
       'false',
       'true',
       'false',
       'true',
+      'false',
       'false',
       'false',
       'false'

@@ -296,3 +296,80 @@ describe('the Gaussian curvature legend (M09)', () => {
     ]);
   });
 });
+
+describe('the analysis panel for thickness (M09)', () => {
+  it('states the thinnest wall, the resolution, the minimum and the limits', () => {
+    const onChange = vi.fn();
+    const report: SurfaceAnalysisReport = {
+      request: { kind: 'thickness', minimum: 3 },
+      bodies: [
+        {
+          bodyId: 'body_a',
+          positions: new Float32Array(),
+          normals: new Float32Array(),
+          indices: new Uint32Array(),
+          values: new Float32Array(),
+          faces: [
+            {
+              face: 0,
+              surface: 'plane',
+              min: 2,
+              max: 2,
+              samples: 40,
+              exact: true
+            },
+            {
+              face: 1,
+              surface: 'plane',
+              min: 40,
+              max: 40,
+              samples: 40,
+              exact: true
+            }
+          ],
+          resolution: 0.004
+        }
+      ],
+      unsupported: [],
+      missing: []
+    };
+    render(
+      <AnalysisPanel
+        request={{ kind: 'thickness', minimum: 3 }}
+        run={{ kind: 'done', report }}
+        lengthUnit="mm"
+        nameOf={() => 'Plate'}
+        onChange={onChange}
+        onOff={vi.fn()}
+      />
+    );
+    const panel = screen.getByRole('region', { name: 'Thickness analysis' });
+    expect(within(panel).getByRole('status')).toHaveTextContent(
+      'Thinnest wall 2 mm (exact) on Plate, face 1. 1 face below the 3 mm minimum.'
+    );
+    expect(
+      within(within(panel).getByRole('list', { name: 'Legend' }))
+        .getAllByRole('listitem')
+        .map((item) => item.textContent)
+    ).toEqual([
+      'Under 3 mm · 1',
+      '3 mm to 6 mm · 0',
+      '6 mm or more · 1',
+      'Not measured'
+    ]);
+    expect(within(panel).getByRole('note')).toHaveTextContent(
+      /^Approximate: .* Resolution 0\.004 mm\. 2 of 2 face ranges exact\.$/
+    );
+    const minimum = within(panel).getByRole('spinbutton', {
+      name: 'Minimum wall (mm)'
+    });
+    fireEvent.change(minimum, { target: { value: '0.8' } });
+    expect(onChange).toHaveBeenLastCalledWith({
+      kind: 'thickness',
+      minimum: 0.8
+    });
+    onChange.mockClear();
+    fireEvent.change(minimum, { target: { value: '0' } });
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});

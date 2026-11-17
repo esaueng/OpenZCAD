@@ -32,8 +32,26 @@ export type DraftPullId = keyof typeof DRAFT_PULL_DIRECTIONS;
 export const ANALYSIS_LABELS: Record<SurfaceAnalysisKind, string> = {
   draft: 'Draft',
   curvature: 'Curvature',
-  zebra: 'Zebra'
+  zebra: 'Zebra',
+  thickness: 'Thickness'
 };
+
+/** Millimetres per document unit, for defaults stated in millimetres. */
+const MM_PER_UNIT: Record<string, number> = {
+  mm: 1,
+  cm: 10,
+  m: 1000,
+  inch: 25.4
+};
+
+/**
+ * The default thinnest wall: 1 mm, a common floor for printed and moulded
+ * walls, in the document's units (rounded to a value a field shows).
+ */
+export function defaultThicknessMinimum(units: string): number {
+  const perUnit = MM_PER_UNIT[units] ?? 1;
+  return Number((1 / perUnit).toPrecision(2));
+}
 
 export const DEFAULT_DRAFT_MINIMUM_DEGREES = 1;
 export const DEFAULT_ZEBRA_STRIPES = 12;
@@ -53,8 +71,16 @@ export function defaultAnalysisRequest(
       return { kind: 'curvature', measure: 'mean' };
     case 'zebra':
       return { kind: 'zebra', stripes: DEFAULT_ZEBRA_STRIPES };
+    case 'thickness':
+      return {
+        kind: 'thickness',
+        minimum: defaultThicknessMinimum(documentUnits)
+      };
   }
 }
+
+/** The document's units, as the viewer shell last reported them. */
+let documentUnits = 'mm';
 
 const INITIAL: AnalysisRuntimeState = { request: null };
 let state: AnalysisRuntimeState = INITIAL;
@@ -95,6 +121,10 @@ export const analysisRuntime = {
   update(request: SurfaceAnalysisRequest): void {
     if (state.request?.kind !== request.kind) return;
     emit({ request });
+  },
+  /** The viewer shell reports the document's units for the defaults. */
+  setUnits(units: string): void {
+    documentUnits = units;
   },
   off(): void {
     if (state.request) emit({ request: null });

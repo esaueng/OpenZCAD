@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Check, Rows3, ScanEye, Spline, Triangle } from 'lucide-react';
+import { Check, Layers2, Rows3, ScanEye, Spline, Triangle } from 'lucide-react';
 import type { DisplayMode, ViewerSettings } from '@openzcad/viewport';
 import { DisplayModeIcon } from './ViewerRailIcons';
 import { DISPLAY_MODE_LABELS, DISPLAY_MODE_ORDER } from '../lib/displayMode';
@@ -17,7 +17,8 @@ import type { SurfaceAnalysisKind } from '@openzcad/shared';
 const ANALYSIS_ITEMS: { kind: SurfaceAnalysisKind; icon: typeof Triangle }[] = [
   { kind: 'draft', icon: Triangle },
   { kind: 'curvature', icon: Spline },
-  { kind: 'zebra', icon: Rows3 }
+  { kind: 'zebra', icon: Rows3 },
+  { kind: 'thickness', icon: Layers2 }
 ];
 
 /**

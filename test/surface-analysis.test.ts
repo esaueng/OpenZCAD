@@ -393,3 +393,98 @@ describe('zebra analysis', () => {
     }
   });
 });
+
+const thickness = (minimum = 1): SurfaceAnalysisRequest => ({
+  kind: 'thickness',
+  minimum
+});
+
+describe('wall thickness analysis', () => {
+  it('reads parallel planar walls as their exact separation', async () => {
+    const document = documentWith({
+      kind: 'box',
+      dimensions: { width: 40, height: 30, depth: 2 }
+    });
+    const report = await analyse(document, thickness());
+    expect(report.unsupported).toEqual([]);
+    const body = report.bodies[0]!;
+    expect(body.resolution).toBeGreaterThan(0);
+    expect(
+      body.faces
+        .map((face) => [face.min, face.max, face.exact])
+        .sort((a, b) => (a[0] as number) - (b[0] as number))
+    ).toEqual([
+      [2, 2, true],
+      [2, 2, true],
+      [30, 30, true],
+      [30, 30, true],
+      [40, 40, true],
+      [40, 40, true]
+    ]);
+    // One value per overlay vertex, and the overlay is flat per triangle.
+    expect(body.values).toHaveLength(body.positions.length / 3);
+    expect(body.indices).toHaveLength(body.positions.length / 3);
+    for (const face of body.faces) expect(face.thinnestAt).toBeDefined();
+  });
+
+  it('samples a cylinder wall across its diameter, its ends exactly', async () => {
+    const document = documentWith({
+      kind: 'cylinder',
+      dimensions: { radius: 5, height: 20 }
+    });
+    const report = await analyse(document, thickness());
+    const body = report.bodies[0]!;
+    const wall = body.faces.find((face) => face.surface === 'cylinder')!;
+    // Approximate: through the axis, to within the resolution.
+    expect(wall.exact).toBe(false);
+    expect(wall.min).toBeGreaterThan(10 - 4 * body.resolution!);
+    expect(wall.max).toBeLessThan(10 + 4 * body.resolution!);
+    const ends = body.faces.filter((face) => face.surface === 'plane');
+    expect(ends.map((face) => [face.min, face.exact])).toEqual([
+      [20, true],
+      [20, true]
+    ]);
+  });
+
+  it('finds the thin wall beside a bore, approximate, and never calls it exact', async () => {
+    const report = await analyse(boredPlate(), thickness(4));
+    expect(report.bodies).toHaveLength(1);
+    const body = report.bodies[0]!;
+    const thinnest = Math.min(...body.faces.map((face) => face.min));
+    // The bore (r 6 at y 9) leaves 3 mm to the 18 mm plate's faces; samples
+    // sit at triangle centres, so the reading may be a little over.
+    expect(thinnest).toBeGreaterThan(3 - 2 * body.resolution!);
+    expect(thinnest).toBeLessThan(3.4);
+    const thin = body.faces.find((face) => face.min === thinnest)!;
+    expect(thin.exact).toBe(false);
+    expect(thin.thinnestAt).toBeDefined();
+    // The bore wall itself reads the same 3 mm outward to the plate faces.
+    const bore = body.faces.find((face) => face.surface === 'cylinder')!;
+    expect(bore.min).toBeLessThan(3.4);
+    expect(bore.exact).toBe(false);
+  });
+});
+
+describe('wall thickness on traced surfaces', () => {
+  it('traces a torus tube to its diameter, approximate', async () => {
+    const document = documentWith({
+      kind: 'torus',
+      dimensions: { majorRadius: 10, minorRadius: 3 }
+    });
+    const report = await analyse(document, thickness());
+    const body = report.bodies[0]!;
+    const tube = body.faces.filter((face) => face.surface === 'torus');
+    expect(tube.length).toBeGreaterThan(0);
+    const measured = report.unsupported.filter(
+      (entry) => entry.reason !== 'partly-evaluated'
+    );
+    expect(measured).toEqual([]);
+    for (const face of tube) {
+      expect(face.exact).toBe(false);
+      // Through the tube's centre: its 6 mm diameter, to the resolution.
+      expect(face.min).toBeGreaterThan(6 - 4 * body.resolution!);
+      expect(face.max).toBeLessThan(6 + 4 * body.resolution!);
+      expect(face.samples).toBeGreaterThan(0);
+    }
+  });
+});
