@@ -6052,6 +6052,9 @@ export function withEchoedSavePoints(
   const checkpointIds = new Set(
     echo.checkpoints.map((checkpoint) => checkpoint.checkpointId)
   );
+  const liveCheckpoints = new Map(
+    live.checkpoints.map((checkpoint) => [checkpoint.checkpointId, checkpoint])
+  );
   return {
     ...live,
     revisions: [
@@ -6060,8 +6063,13 @@ export function withEchoedSavePoints(
         (revision) => !revisionIds.has(revision.revisionId)
       )
     ].slice(-MAX_PROJECT_REVISION_RECORDS),
+    // A save point both hold keeps the live copy: it is the newer one, and
+    // may have been renamed (L03) while the save was in flight.
     checkpoints: [
-      ...echo.checkpoints,
+      ...echo.checkpoints.map(
+        (checkpoint) =>
+          liveCheckpoints.get(checkpoint.checkpointId) ?? checkpoint
+      ),
       ...live.checkpoints.filter(
         (checkpoint) => !checkpointIds.has(checkpoint.checkpointId)
       )

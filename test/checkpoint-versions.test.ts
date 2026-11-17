@@ -7,7 +7,8 @@ import {
   createSavePoint,
   createSavedRevision,
   normalizeDocument,
-  renameCheckpoint
+  renameCheckpoint,
+  withEchoedSavePoints
 } from '@openzcad/document-core';
 import { assertClientSavePoint } from '@openzcad/persistence';
 import {
@@ -169,5 +170,25 @@ describe('L03 save-point names and authors', () => {
         reason: 'Manual save'
       })
     ).not.toThrow();
+  });
+  it('keeps a rename made while an account save was in flight', () => {
+    // The save is sent; the account mints its point and echoes it back.
+    const sent = saved();
+    const older = sent.checkpoints.at(-1)!;
+    const echo = createSavedRevision(sent, 'Account save', author);
+    // Meanwhile the user renamed the older save point.
+    const live = renameCheckpoint(
+      sent,
+      older.checkpointId,
+      'Before fillets v2'
+    );
+    const merged = withEchoedSavePoints(live, echo);
+    expect(
+      merged.checkpoints.find(
+        (point) => point.checkpointId === older.checkpointId
+      )?.name
+    ).toBe('Before fillets v2');
+    // The echo's new save point is taken along.
+    expect(merged.checkpoints.at(-1)?.reason).toBe('Account save');
   });
 });
