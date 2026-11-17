@@ -278,7 +278,7 @@ export function assertImportedStepContentSchema(
 }
 
 /** L15: custom features need the schema that declares them. */
-export const CUSTOM_FEATURE_SCHEMA_VERSION = 107;
+export const CUSTOM_FEATURE_SCHEMA_VERSION = 110;
 
 export function assertCustomFeatureSchema(version: unknown): void {
   assertMinimumProjectSchema(
