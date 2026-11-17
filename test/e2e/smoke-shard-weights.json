@@ -46,6 +46,7 @@
   "drawing-title-block-layouts.spec.ts": 10,
   "drawing-tolerances.spec.ts": 14,
   "drawings.spec.ts": 16,
+  "dxf-curve-import.spec.ts": 12,
   "edge-form-preview.spec.ts": 9,
   "edge-overlay-growth.spec.ts": 8,
   "encrypted-migration.spec.ts": 30,

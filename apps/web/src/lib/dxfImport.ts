@@ -4,16 +4,19 @@ import {
   newCanonicalPlaneRef
 } from '@openzcad/geometry';
 import {
+  MAX_SKETCH_SPLINE_POINTS,
   millimetresPerUnit,
   type ProjectDocument,
   type SketchObjectData,
+  type SketchSplineDegree,
   type UnitSystem
 } from '@openzcad/shared';
 import { sketchObjectsExtent } from './importUnits';
 
 /**
  * DXF sketch import (D04): an ASCII DXF's 2D geometry becomes one sketch's
- * lines, arcs and circles, scaled into the document's units. What a sketch
+ * lines, arcs, circles, ellipses and splines, scaled into the document's
+ * units. What a sketch
  * cannot hold is reported by entity type, never approximated: annotations and
  * blocks are dropped, curves the sketch has no object for are refused.
  *
@@ -686,6 +689,320 @@ function lwVertices(entity: DxfEntity): Vertex[] {
   return vertices;
 }
 
+/** Every value of a repeated group (knots, weights), in file order. */
+function numberList(entity: DxfEntity, code: number): number[] {
+  return entity.groups
+    .filter((pair) => pair.code === code)
+    .map((pair) => {
+      const value = dxfNumber(pair.value);
+      if (!Number.isFinite(value)) {
+        throw new DxfImportError(
+          `This DXF is malformed: a ${entity.type} has an unusable group ${code} value.`
+        );
+      }
+      return value;
+    });
+}
+
+/**
+ * A repeated point group (SPLINE control points 10/20, fit points 11/21),
+ * each X paired with the Y that follows it, as LWPOLYLINE vertices are.
+ */
+function pointList(
+  entity: DxfEntity,
+  xCode: number,
+  yCode: number
+): { x: number; y: number }[] {
+  const malformed = () =>
+    new DxfImportError(
+      `This DXF is malformed: a ${entity.type} has an incomplete point list (groups ${xCode}/${yCode}).`
+    );
+  const points: { x: number; y: number }[] = [];
+  let pendingX: number | null = null;
+  for (const pair of entity.groups) {
+    if (pair.code === xCode) {
+      if (pendingX !== null) throw malformed();
+      pendingX = dxfNumber(pair.value);
+    } else if (pair.code === yCode) {
+      if (pendingX === null) throw malformed();
+      points.push({ x: pendingX, y: dxfNumber(pair.value) });
+      pendingX = null;
+    }
+  }
+  if (pendingX !== null || points.some((p) => !Number.isFinite(p.x + p.y))) {
+    throw malformed();
+  }
+  return points;
+}
+
+/** A declared list length (SPLINE 72/73/74) must match what was read. */
+function requireDeclaredCount(
+  entity: DxfEntity,
+  code: number,
+  read: number,
+  what: string
+): void {
+  const declared = singleGroup(entity, code);
+  if (declared && dxfNumber(declared.value) !== read) {
+    throw new DxfImportError(
+      `This DXF is malformed: a SPLINE declares ${declared.value.trim()} ${what} but lists ${read}.`
+    );
+  }
+}
+
+const TWO_PI = 2 * Math.PI;
+
+/**
+ * An ELLIPSE as the sketch's ellipse or elliptical arc. Its centre and
+ * major-axis end are world coordinates, its parameters run counter-clockwise
+ * about its extrusion: seen from +Z, a -Z ellipse runs the other way, so the
+ * sketch parameter is the file's negated (s = −t), and its arc runs from −end
+ * to −start. A parameter range within 1e-9 rad of a whole turn is the full
+ * ellipse (writers store 2π rounded), as the sketch reads a sweep that close
+ * to a turn as closed anyway.
+ */
+function ellipseObject(entity: DxfEntity, sense: 1 | -1): SketchObjectData {
+  const centerX = number(entity, 10);
+  const centerY = number(entity, 20);
+  const majorX = number(entity, 11);
+  const majorY = number(entity, 21);
+  const ratio = number(entity, 40);
+  const major = Math.hypot(majorX, majorY);
+  if (!(major > 0) || !Number.isFinite(major)) {
+    throw new DxfImportError(
+      'This DXF is malformed: an ELLIPSE has no usable major axis.'
+    );
+  }
+  if (!(ratio > 0)) {
+    throw new DxfImportError(
+      `This DXF is malformed: an ELLIPSE has an axis ratio of ${ratio}.`
+    );
+  }
+  const rotationDeg = (Math.atan2(majorY, majorX) * 180) / Math.PI;
+  const ellipse = {
+    objectKind: 'ellipse' as const,
+    centerX,
+    centerY,
+    radiusX: major,
+    radiusY: ratio * major,
+    rotationDeg
+  };
+  const start = number(entity, 41, 0);
+  const end = number(entity, 42, TWO_PI);
+  let sweep = (end - start) % TWO_PI;
+  if (sweep < 0) sweep += TWO_PI;
+  // Full only when the range itself is about a whole turn (or more): a
+  // tiny range is a tiny arc, refused below, never a closed ellipse.
+  const turn = Math.abs(end - start) >= TWO_PI - 1e-9;
+  if (sweep > TWO_PI - 1e-9 || (turn && sweep < 1e-9)) {
+    return ellipse;
+  }
+  if (!(sweep >= 1e-9)) {
+    throw new DxfImportError(
+      'This DXF has an elliptical arc too short to represent: its sweep rounds to zero.'
+    );
+  }
+  const from = sense === 1 ? start : -end;
+  let startDeg = ((from * 180) / Math.PI) % 360;
+  if (startDeg < 0) startDeg += 360;
+  const sweepDeg = (sweep * 180) / Math.PI;
+  return {
+    ...ellipse,
+    startParamDeg: startDeg,
+    endParamDeg: startDeg + sweepDeg
+  };
+}
+
+/** Knots evenly spaced from `knots[from]` to `knots[to]`, within 1e-9 of the range. */
+function evenlySpaced(knots: number[], from: number, to: number): boolean {
+  const low = knots[from]!;
+  const high = knots[to]!;
+  if (!(high > low)) return false;
+  const tolerance = 1e-9 * (high - low);
+  for (let index = from + 1; index < to; index += 1) {
+    const expected = low + ((high - low) * (index - from)) / (to - from);
+    if (!(Math.abs(knots[index]! - expected) <= tolerance)) return false;
+  }
+  return true;
+}
+
+/**
+ * A clamped uniform B-spline that starts where it ends, as two clamped
+ * uniform B-splines of the same curve: split at its middle interior knot
+ * (or, with none, at the middle of its one span) by knot insertion to full
+ * multiplicity, which changes the representation, not the curve. Both
+ * halves keep evenly spaced knots, so each is a sketch control spline; the
+ * new control points carry only the insertion's floating-point rounding,
+ * and the halves share their meeting points exactly.
+ */
+function splitClampedLoop(
+  degree: number,
+  knots: readonly number[],
+  controls: readonly { x: number; y: number }[]
+): { x: number; y: number }[][] {
+  const spans = controls.length - degree;
+  const at =
+    spans >= 2
+      ? knots[degree + Math.floor(spans / 2)]!
+      : (knots[0]! + knots[knots.length - 1]!) / 2;
+  let k = [...knots];
+  let q = controls.map((point) => ({ ...point }));
+  for (;;) {
+    const multiplicity = k.filter((knot) => knot === at).length;
+    if (multiplicity >= degree) break;
+    // Boehm insertion of `at` into span `span` (k[span] ≤ at < k[span + 1]).
+    let span = degree;
+    while (k[span + 1]! <= at) span += 1;
+    const next: { x: number; y: number }[] = [];
+    for (let i = 0; i <= q.length; i += 1) {
+      if (i <= span - degree) next.push(q[i]!);
+      else if (i > span) next.push(q[i - 1]!);
+      else {
+        const alpha = (at - k[i]!) / (k[i + degree]! - k[i]!);
+        next.push({
+          x: alpha * q[i]!.x + (1 - alpha) * q[i - 1]!.x,
+          y: alpha * q[i]!.y + (1 - alpha) * q[i - 1]!.y
+        });
+      }
+    }
+    k = [...k.slice(0, span + 1), at, ...k.slice(span + 1)];
+    q = next;
+  }
+  // With `at` of multiplicity `degree` from index f, the curve passes
+  // through control point f − 1: the left half ends there, the right
+  // half starts there.
+  const f = k.indexOf(at);
+  return [q.slice(0, f), q.slice(f - 1)];
+}
+
+/**
+ * A SPLINE as sketch geometry, or the reason it has none. The sketch holds
+ * exactly the clamped uniform B-spline of degree 2 or 3 over its control
+ * points, and the uniform periodic one over a closed list, so a SPLINE maps
+ * when its knots are those (an affine change of parameter does not change
+ * the curve; interior knots are matched within 1e-9 of the knot range, the
+ * rounding a writer's decimal knots carry). A degree-1 SPLINE is the
+ * polyline through its control points. Rational splines with unequal
+ * weights, other knot vectors, higher degrees and fit-point-only splines
+ * (whose curve is the writer's own interpolation) are refused by name.
+ * Control points are world coordinates, so a -Z normal mirrors nothing.
+ */
+function splineObjects(
+  entity: DxfEntity,
+  add: (object: SketchObjectData) => void
+): string | null {
+  const degree = integerFlags(entity, 71);
+  const knots = numberList(entity, 40);
+  const weights = numberList(entity, 41);
+  const controls = pointList(entity, 10, 20);
+  const fits = pointList(entity, 11, 21);
+  requireDeclaredCount(entity, 72, knots.length, 'knots');
+  requireDeclaredCount(entity, 73, controls.length, 'control points');
+  requireDeclaredCount(entity, 74, fits.length, 'fit points');
+  if (controls.length === 0) {
+    if (fits.length > 0) return 'SPLINE (fit points only)';
+    throw new DxfImportError(
+      'This DXF is malformed: a SPLINE has no control points.'
+    );
+  }
+  const n = controls.length;
+  if (degree < 1 || n < degree + 1 || knots.length !== n + degree + 1) {
+    throw new DxfImportError(
+      `This DXF is malformed: a SPLINE of degree ${degree} has ${n} control points and ${knots.length} knots.`
+    );
+  }
+  if (knots.some((knot, index) => index > 0 && knot < knots[index - 1]!)) {
+    throw new DxfImportError(
+      'This DXF is malformed: a SPLINE has decreasing knots.'
+    );
+  }
+  if (weights.length > 0) {
+    if (weights.length !== n || weights.some((weight) => !(weight > 0))) {
+      throw new DxfImportError(
+        'This DXF is malformed: a SPLINE has unusable weights.'
+      );
+    }
+    // Equal weights cancel out of the rational form: the curve is the
+    // non-rational one.
+    if (weights.some((weight) => weight !== weights[0])) {
+      return 'SPLINE (rational)';
+    }
+  }
+  if (degree === 1) {
+    // A degree-1 B-spline with simple interior knots is the polyline
+    // through its control points, whatever the spacing.
+    if (
+      knots
+        .slice(1, -1)
+        .some((knot, index, inner) => index > 0 && knot === inner[index - 1])
+    ) {
+      return 'SPLINE (repeated knots)';
+    }
+    polylineObjects(
+      controls.map((point) => ({ ...point, bulge: 0 })),
+      false,
+      add
+    );
+    return null;
+  }
+  if (degree > 3) return `SPLINE (degree ${degree})`;
+  // Degree 1 and above 3 have returned: what is left is a sketch degree.
+  const sketchDegree: SketchSplineDegree = degree === 2 ? 2 : 3;
+  const clamped =
+    knots.slice(0, degree + 1).every((knot) => knot === knots[0]) &&
+    knots.slice(n).every((knot) => knot === knots[n]);
+  if (clamped) {
+    if (!evenlySpaced(knots, degree, n)) return 'SPLINE (non-uniform knots)';
+    if (n > MAX_SKETCH_SPLINE_POINTS) {
+      return `SPLINE (more than ${MAX_SKETCH_SPLINE_POINTS} control points)`;
+    }
+    const first = controls[0]!;
+    const last = controls[n - 1]!;
+    // A sketch fills a single curve that returns to its start only when it
+    // is periodic, so a clamped loop is split in two that meet at both ends.
+    const halves =
+      first.x === last.x && first.y === last.y
+        ? splitClampedLoop(degree, knots, controls)
+        : [controls];
+    for (const points of halves) {
+      add({
+        objectKind: 'spline',
+        method: 'control',
+        degree: sketchDegree,
+        points: points.map((point) => ({ ...point }))
+      });
+    }
+    return null;
+  }
+  // Periodic: evenly spaced throughout, its last `degree` control points the
+  // first ones again (how writers store a closed periodic spline).
+  const distinct = n - degree;
+  if (
+    !evenlySpaced(knots, 0, knots.length - 1) ||
+    !controls
+      .slice(distinct)
+      .every(
+        (point, index) =>
+          point.x === controls[index]!.x && point.y === controls[index]!.y
+      )
+  ) {
+    return 'SPLINE (non-uniform knots)';
+  }
+  // The sketch lowers a closed spline's degree below `distinct - 1` points.
+  if (distinct < degree + 1) return 'SPLINE (too few control points)';
+  if (distinct > MAX_SKETCH_SPLINE_POINTS) {
+    return `SPLINE (more than ${MAX_SKETCH_SPLINE_POINTS} control points)`;
+  }
+  add({
+    objectKind: 'spline',
+    method: 'control',
+    degree: sketchDegree,
+    points: controls.slice(0, distinct).map((point) => ({ ...point })),
+    closed: true
+  });
+  return null;
+}
+
 /**
  * Reads an ASCII DXF and lowers its 2D geometry to sketch objects in the
  * document's units. `unitless` is how a file that declares no units is read
@@ -934,8 +1251,16 @@ export function importDxfSketch(
         );
         break;
       }
+      case 'ELLIPSE':
+        add(ellipseObject(entity, sense));
+        break;
+      case 'SPLINE': {
+        const refusal = splineObjects(entity, add);
+        if (refusal) count(refused, refusal);
+        break;
+      }
       default:
-        // ELLIPSE, SPLINE, 3DFACE, REGION, … have no exact sketch object.
+        // 3DFACE, REGION, HELIX, … have no exact sketch object.
         count(refused, entity.type);
     }
   }
@@ -1018,6 +1343,37 @@ function scaleObject(s: (value: number) => number) {
         }
         return curve;
       }
+      case 'ellipse': {
+        const ellipse = {
+          ...object,
+          centerX: s(Number(object.centerX)),
+          centerY: s(Number(object.centerY)),
+          radiusX: s(Number(object.radiusX)),
+          radiusY: s(Number(object.radiusY))
+        };
+        const { centerX: cx, centerY: cy } = ellipse;
+        const r = Math.min(ellipse.radiusX, ellipse.radiusY);
+        // As for a circle: the smaller radius must survive the conversion
+        // and the centre's precision.
+        if (
+          !(r > 0) ||
+          cx + r === cx ||
+          cx - r === cx ||
+          cy + r === cy ||
+          cy - r === cy
+        ) {
+          throw degenerate();
+        }
+        return ellipse;
+      }
+      case 'spline':
+        return {
+          ...object,
+          points: object.points.map((point) => ({
+            x: s(Number(point.x)),
+            y: s(Number(point.y))
+          }))
+        };
       default:
         return object;
     }
@@ -1085,7 +1441,7 @@ export function dxfSketchImportPlan(
     .join(', ');
   if (result.objects.length === 0) {
     throw new DxfImportError(
-      `${fileName} has no lines, arcs, circles or polylines to sketch${left ? ` (only ${left})` : ''}.`
+      `${fileName} has no lines, arcs, circles, polylines, ellipses or splines to sketch${left ? ` (only ${left})` : ''}.`
     );
   }
   const name = nameFeature(fileName.replace(/\.dxf$/i, '') || 'DXF sketch');
