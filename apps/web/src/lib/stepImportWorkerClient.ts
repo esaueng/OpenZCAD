@@ -1,12 +1,30 @@
 import { observeWorker } from './diagnosticSignal';
+import type { StepStructure } from '@openzcad/kernel-adapter/exact';
 import type { StepImportInspectionResult } from '../worker/stepImportWorker';
 import { describeWorkerFailure } from './workerFailure';
 
-/** A disposable worker makes even a synchronous WASM parse cancellable. */
-export function inspectStepSolidsInWorker(
+/** What an inspection found: the accepted solids and, if read, the structure. */
+export interface StepInspection {
+  solidIndices: number[];
+  structure?: StepStructure;
+  structureRefusal?: string;
+}
+
+/** The accepted solids, by the flat reader every guided import uses. */
+export async function inspectStepSolidsInWorker(
   file: File,
   signal?: AbortSignal
 ): Promise<number[]> {
+  return (await inspectStepInWorker(file, { structure: false }, signal))
+    .solidIndices;
+}
+
+/** A disposable worker makes even a synchronous WASM parse cancellable. */
+export function inspectStepInWorker(
+  file: File,
+  options: { structure: boolean },
+  signal?: AbortSignal
+): Promise<StepInspection> {
   const cancelled = () =>
     new DOMException('STEP inspection was cancelled.', 'AbortError');
   if (signal?.aborted) return Promise.reject(cancelled());
@@ -49,7 +67,14 @@ export function inspectStepSolidsInWorker(
     worker.onmessage = (event: MessageEvent<StepImportInspectionResult>) => {
       const result = event.data;
       finish(() => {
-        if (result.ok) resolve(result.solidIndices);
+        if (result.ok)
+          resolve({
+            solidIndices: result.solidIndices,
+            ...(result.structure ? { structure: result.structure } : {}),
+            ...(result.structureRefusal !== undefined
+              ? { structureRefusal: result.structureRefusal }
+              : {})
+          });
         else
           void describeWorkerFailure(result.error).then(({ message }) =>
             reject(new Error(message))
@@ -57,7 +82,7 @@ export function inspectStepSolidsInWorker(
       });
     };
     try {
-      worker.postMessage(file);
+      worker.postMessage({ file, structure: options.structure });
     } catch (error) {
       finish(() =>
         reject(error instanceof Error ? error : new Error(String(error)))

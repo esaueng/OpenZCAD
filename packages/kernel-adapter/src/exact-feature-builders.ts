@@ -152,6 +152,8 @@ import {
   resolveParametricPoint
 } from './exact-shape-utils';
 import {
+  importedStepCacheKey,
+  importStepStructureWithOwnBudget,
   importStepWithOwnBudget,
   stepImportEmptyReason
 } from './kernel-step-import';
@@ -488,9 +490,10 @@ function buildImportedStepFeature(
     importedSteps
   } = ctx;
   if (feature.bodyId) {
+    const structured = data.stepReader === 'structure';
     const checksum =
-      data.stepText === undefined
-        ? data.stepSourceRef?.checksumSha256
+      data.stepText === undefined && data.stepSourceRef
+        ? importedStepCacheKey(data.stepSourceRef.checksumSha256, data)
         : undefined;
     const cached = checksum ? importedSteps?.lookup(checksum) : undefined;
     let solids: number[];
@@ -519,7 +522,10 @@ function buildImportedStepFeature(
         }
         sourceBytes = resolved;
       }
-      const imported = importStepWithOwnBudget(kernel, sourceBytes);
+      // I02: a structured import numbers its solids by placed occurrence.
+      const imported = structured
+        ? importStepStructureWithOwnBudget(kernel, sourceBytes)
+        : importStepWithOwnBudget(kernel, sourceBytes);
       const declared = Array.from(imported.solids);
       if (declared.length === 0) {
         // The reader's report, not a guess from the byte count: a file whose

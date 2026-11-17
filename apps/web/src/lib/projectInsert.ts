@@ -38,7 +38,7 @@ export interface ProjectInsertLayout extends StepImportLayout {
  * Names not yet taken in `document`, numbering a repeat the way new
  * features are numbered: "Bracket", then "Bracket 2".
  */
-function freeNames(
+export function freeNames(
   document: ProjectDocument | null,
   wanted: readonly string[]
 ): string[] {

@@ -153,6 +153,21 @@ export function assertPatternContentSchema(
  * reader would drill one hole at the stored position, or drop the size, in
  * their place.
  */
+export const STEP_STRUCTURE_SCHEMA_VERSION = 96;
+
+/** I02: an import numbered by the product-structure reader needs v96. */
+export function assertImportedStepContentSchema(
+  data: unknown,
+  version: unknown
+): void {
+  if (record(data) && data.stepReader !== undefined)
+    assertMinimumProjectSchema(
+      version,
+      STEP_STRUCTURE_SCHEMA_VERSION,
+      'Structured STEP imports'
+    );
+}
+
 export function assertHoleContentSchema(data: unknown, version: unknown): void {
   if (!record(data)) return;
   if (data.points !== undefined)
@@ -769,6 +784,8 @@ export function assertDocumentContentCommandSchema(
       assertSlotSchema(document.schemaVersion);
     if (command.kind === 'feature.thread')
       assertThreadContentSchema(command.payload, document.schemaVersion);
+    if (command.kind === 'import.step')
+      assertImportedStepContentSchema(command.payload, document.schemaVersion);
     if (command.kind === 'feature.pattern')
       assertPatternContentSchema(command.payload, document.schemaVersion);
     if (command.kind === 'feature.hole')
@@ -1022,6 +1039,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       );
     if (node.kind === 'feature' && node.data.featureKind === 'thread')
       assertThreadContentSchema(node.data, document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'imported-step')
+      assertImportedStepContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'pattern')
       assertPatternContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'hole')

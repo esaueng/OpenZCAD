@@ -49,12 +49,14 @@ import {
   type StepImportResult,
   type StepImportSourceStore
 } from '../lib/stepImportRun';
-import { inspectStepSolidsInWorker } from '../lib/stepImportWorkerClient';
+import { inspectStepInWorker } from '../lib/stepImportWorkerClient';
 
 // Orchestration tests supply geometry verdicts; real worker discovery is covered
 // by the browser import regression and the exact adapter tests.
 vi.mock('../lib/stepImportWorkerClient', () => ({
-  inspectStepSolidsInWorker: vi.fn(async () => [0])
+  inspectStepSolidsInWorker: vi.fn(async () => [0]),
+  // I02: an ordinary import discovers its solids through the structure reader.
+  inspectStepInWorker: vi.fn(async () => ({ solidIndices: [0] }))
 }));
 
 const TANGENT_BOSS_DIAGNOSTIC =
@@ -3389,7 +3391,7 @@ describe('what an import reports while it runs', () => {
   });
 
   it('also presents a STEP parse failure during initial solid discovery without adding history', async () => {
-    vi.mocked(inspectStepSolidsInWorker).mockRejectedValueOnce(
+    vi.mocked(inspectStepInWorker).mockRejectedValueOnce(
       new Error(DANGLING_REFERENCE_PARSE_ERROR)
     );
     const device = createDevice();

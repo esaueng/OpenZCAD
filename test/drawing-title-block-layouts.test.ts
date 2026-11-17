@@ -7,7 +7,6 @@ import {
 } from '@openzcad/document-core';
 import {
   DRAWING_TITLE_BLOCK_SHOP_FIELDS,
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   drawingSetError,
   toUserId,
   type DrawingSheet,
@@ -24,6 +23,9 @@ import {
   sheetPageToPdf,
   sheetPageToSvg
 } from '../apps/web/src/lib/drawing/sheetExport';
+
+/** D02: title-block layouts need project schema v94. */
+const TITLE_BLOCK_LAYOUT_SCHEMA_VERSION = 94;
 
 /**
  * D02 title-block layouts (schema v94): the compact block, unchanged, and a
@@ -181,7 +183,8 @@ describe('title-block layouts', () => {
     expect(() =>
       assertStorableDocument({
         ...shop,
-        schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
+        // One below the gate, so a later schema bump keeps testing it.
+        schemaVersion: TITLE_BLOCK_LAYOUT_SCHEMA_VERSION - 1
       })
     ).toThrow(/Title-block layouts require project schema v94/);
     const compact = updateDrawingSheet(shop, {

@@ -65,6 +65,27 @@ export interface StepExportMetadata {
   solids: readonly StepSolidLabel[];
   /** The application protocol the file states; AP214 when unset. */
   protocol?: StepProtocol;
+  /**
+   * I02: the Objects folders to write as an assembly. Absent, or with no
+   * folder, the file is one product holding every solid, as before.
+   */
+  assembly?: StepExportAssembly;
+}
+
+/** Objects folders as a STEP product tree (I02). */
+export interface StepExportAssembly {
+  /** Folders, parents before children; `parent` indexes this list. */
+  folders: readonly { name: string; parent: number | null }[];
+  /**
+   * The written bodies in writer order: each takes `solidCount` consecutive
+   * solids of {@link StepExportMetadata.solids} and sits in `folder` (an
+   * index into `folders`) or at the top level.
+   */
+  bodies: readonly {
+    name: string;
+    solidCount: number;
+    folder: number | null;
+  }[];
 }
 
 /**
@@ -171,6 +192,8 @@ const STRING_LITERAL = /'(?:[^']|'')*'/g;
 const REAL = /(?<![\w#.$])[+-]?\d+\.\d*(?:[eE][+-]?\d+)?(?![\w.])/g;
 const ENTITY_LINE = /^#(\d+)\s*=\s*([A-Z][A-Z0-9_]*)\(/;
 const ENTITY_ID = /^#(\d+)\s*=/;
+/** A written entity line: its id and everything after `= `. */
+const ENTITY_TEXT = /^#(\d+) = (.*);$/;
 const SOLID_ENTITY =
   /^(#\d+) = (MANIFOLD_SOLID_BREP|BREP_WITH_VOIDS)\('(?:[^']|'')*', /;
 const SNAPPED_ENTITIES = new Set(['CARTESIAN_POINT', 'DIRECTION']);
@@ -231,6 +254,145 @@ function colourChannels(color: string): string {
     .slice(1)
     .map((hex) => formatStepReal(Number.parseInt(hex, 16) / 255))
     .join(',');
+}
+
+type StepProductRef = {
+  definition: string;
+  representation: string;
+  frame: string;
+};
+
+/**
+ * I02: restates the one-product file as an assembly. The root product keeps
+ * the document's name over a placement-only shape; every folder becomes a
+ * geometry-free sub-assembly and every body a part whose shape holds its
+ * solids, each placed in its parent by an identity
+ * `ITEM_DEFINED_TRANSFORMATION` between two distinct frames (schema order:
+ * the component's frame, then the assembly's). Geometry, solid names and
+ * presentation are untouched, so a reader that ignores products still reads
+ * the same solids in the same order.
+ */
+function writeAssembly(
+  data: string[],
+  entity: (text: string) => string,
+  assembly: StepExportAssembly,
+  breps: readonly string[],
+  representation: RegExpExecArray
+): void {
+  const total = assembly.bodies.reduce((sum, body) => sum + body.solidCount, 0);
+  if (total !== breps.length) {
+    throw new Error(
+      `The STEP assembly names ${total} solids for ${breps.length} written; export refused.`
+    );
+  }
+  const definition = replaceOnly(
+    data,
+    /^#(\d+) = PRODUCT_DEFINITION\('design', '', #\d+, #(\d+)\);$/,
+    'product definition',
+    (match) => match[0]
+  );
+  const productContext = replaceOnly(
+    data,
+    /^#(\d+) = PRODUCT_CONTEXT\('', #\d+, 'mechanical'\);$/,
+    'product context',
+    (match) => match[0]
+  );
+  // ISO 10303-43: the two sides of a transformed relationship have their
+  // own contexts. Each new shape takes a copy of the writer's (same units
+  // and uncertainty).
+  const contextText = data
+    .map((line) => ENTITY_TEXT.exec(line))
+    .find((match) => match?.[1] === representation[4])?.[2];
+  if (!contextText?.includes('GEOMETRIC_REPRESENTATION_CONTEXT')) {
+    throw new Error(
+      "The STEP writer's representation context was not in its known form; export refused."
+    );
+  }
+  const origin = entity("CARTESIAN_POINT('', (0., 0., 0.))");
+  const z = entity("DIRECTION('', (0., 0., 1.))");
+  const x = entity("DIRECTION('', (1., 0., 0.))");
+  const frame = () => entity(`AXIS2_PLACEMENT_3D('', ${origin}, ${z}, ${x})`);
+  // The root keeps the document's product over a placement-only shape.
+  const rootFrame = frame();
+  const rootShape = replaceOnly(
+    data,
+    /^(#\d+) = ADVANCED_BREP_SHAPE_REPRESENTATION\(('(?:[^']|'')*'), \((#\d+(?:, #\d+)*)\), (#\d+)\);$/,
+    'shape representation',
+    (match) =>
+      `${match[1]} = SHAPE_REPRESENTATION(${match[2]}, (${rootFrame}), ${match[4]});`
+  );
+  const root: StepProductRef = {
+    definition: `#${definition[1]}`,
+    representation: rootShape[1]!,
+    frame: rootFrame
+  };
+  const product = (
+    name: string,
+    category: 'part' | 'assembly',
+    items: readonly string[]
+  ): StepProductRef => {
+    const literal = stepStringLiteral(name);
+    const id = entity(
+      `PRODUCT(${literal}, ${literal}, '', (#${productContext[1]}))`
+    );
+    entity(`PRODUCT_RELATED_PRODUCT_CATEGORY('${category}', $, (${id}))`);
+    const formation = entity(`PRODUCT_DEFINITION_FORMATION('', '', ${id})`);
+    const definitionId = entity(
+      `PRODUCT_DEFINITION('design', '', ${formation}, #${definition[2]})`
+    );
+    const shape = entity(`PRODUCT_DEFINITION_SHAPE('', '', ${definitionId})`);
+    const placement = frame();
+    const kind =
+      category === 'part'
+        ? 'ADVANCED_BREP_SHAPE_REPRESENTATION'
+        : 'SHAPE_REPRESENTATION';
+    const context = entity(contextText);
+    const shapeRepresentation = entity(
+      `${kind}(${literal}, (${[...items, placement].join(', ')}), ${context})`
+    );
+    entity(`SHAPE_DEFINITION_REPRESENTATION(${shape}, ${shapeRepresentation})`);
+    return {
+      definition: definitionId,
+      representation: shapeRepresentation,
+      frame: placement
+    };
+  };
+  let occurrences = 0;
+  const place = (
+    child: StepProductRef,
+    parent: StepProductRef,
+    name: string
+  ) => {
+    occurrences += 1;
+    const usage = entity(
+      `NEXT_ASSEMBLY_USAGE_OCCURRENCE('${occurrences}', ${stepStringLiteral(name)}, '', ${parent.definition}, ${child.definition}, $)`
+    );
+    const shape = entity(`PRODUCT_DEFINITION_SHAPE('', '', ${usage})`);
+    const transformation = entity(
+      `ITEM_DEFINED_TRANSFORMATION('', '', ${child.frame}, ${parent.frame})`
+    );
+    const relation = entity(
+      `( REPRESENTATION_RELATIONSHIP('', '', ${child.representation}, ${parent.representation}) REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(${transformation}) SHAPE_REPRESENTATION_RELATIONSHIP() )`
+    );
+    entity(`CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(${relation}, ${shape})`);
+  };
+  const folders: StepProductRef[] = [];
+  for (const folder of assembly.folders) {
+    const made = product(folder.name, 'assembly', []);
+    folders.push(made);
+    place(
+      made,
+      folder.parent === null ? root : folders[folder.parent]!,
+      folder.name
+    );
+  }
+  let next = 0;
+  for (const body of assembly.bodies) {
+    const solids = breps.slice(next, next + body.solidCount);
+    next += body.solidCount;
+    const made = product(body.name, 'part', solids);
+    place(made, body.folder === null ? root : folders[body.folder]!, body.name);
+  }
 }
 
 /**
@@ -365,6 +527,9 @@ export function finishStepExport(
   entity(
     `MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION('', (${styled.join(', ')}), #${representation[4]})`
   );
+  if (metadata.assembly && metadata.assembly.folders.length > 0) {
+    writeAssembly(data, entity, metadata.assembly, breps, representation);
+  }
 
   return [
     header.join('\n'),

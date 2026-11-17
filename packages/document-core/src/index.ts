@@ -792,6 +792,8 @@ export interface ImportedStepInput {
   stepSourceRef?: ImportedSourceReference;
   /** Partial import: declared-order solid indices to keep; absent = all. */
   solidIndices?: number[];
+  /** I02: number `solidIndices` by the product-structure reader. */
+  stepReader?: 'structure';
   planarEmboss?: Extract<
     FeatureData,
     { featureKind: 'imported-step' }
@@ -4318,6 +4320,7 @@ export function importStepBody(
       ...(input.solidIndices !== undefined
         ? { solidIndices: [...input.solidIndices] }
         : {}),
+      ...(input.stepReader ? { stepReader: input.stepReader } : {}),
       ...(input.planarEmboss
         ? { planarEmboss: deepClone(input.planarEmboss) }
         : {})
@@ -5200,6 +5203,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'stepText',
     'stepSourceRef',
     'solidIndices',
+    'stepReader',
     'planarEmboss'
   ],
   'imported-mesh': [

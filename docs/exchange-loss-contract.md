@@ -57,8 +57,21 @@ disabled. Show a body in the viewport to include it in the file.
 | PLY (binary) | Bounds, volume, a closed surface                                                                                                                                         | Body separation, exact faces, unit, names, colours                                              |
 | glTF (GLB)   | Bounds, volume, a closed surface; metres and +Y up through its root node; one node and mesh per body, named after it, in a material of its display colour                | Body separation **on reimport** (the import merges the meshes), exact faces, export unit        |
 
-STEP body names and colours are in the file for other CAD to read; OpenZCAD's
-own STEP import does not yet apply them to the bodies it creates (I02).
+**STEP structure (I02).** Export writes Objects folders as an assembly: the
+project is the root product, each folder a sub-assembly and each body a part
+named after it, every one placed with an identity transform, so a reader that
+ignores products still reads the same solids. Import reads a file's product
+structure: every placed occurrence of a part becomes its own body, where the
+assembly places it, named after its part (or after its solid, when the file
+names it), coloured as the file colours it, and filed in folders that follow
+the assembly tree (a file with one product stays at the top level). An
+OpenZCAD project exported and imported again comes back with the same body
+names, colours and folders, inside one folder named after the project.
+Repeated parts become independent bodies (no shared definition), occurrence
+names and per-occurrence colour overrides are not read, and a face coloured
+differently from its body keeps only the body's colour. A file whose structure
+cannot be read (mapped-item assemblies, for one) is still imported with the
+flat reader, at each part's own origin, and the import says so.
 
 **STEP protocol:** Settings → General → _STEP protocol_ picks what File ›
 STEP states: AP214 (automotive design, the default and what every STEP export
