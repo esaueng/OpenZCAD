@@ -7581,7 +7581,8 @@ export function App() {
           autosaveReportedSaveState(
             status.state,
             status.error,
-            status.projectId !== null &&
+            sessionRef.current !== null &&
+              status.projectId !== null &&
               status.projectId === accountUnreachableProjectIdRef.current
           )
         );
@@ -14441,6 +14442,7 @@ export function App() {
         'Could not clear this account’s sync baselines. Check which copy you keep if this project is opened again on this device.'
       );
     });
+    accountUnreachableProjectIdRef.current = null;
     sessionRef.current = null;
     accountSettingsRef.current = null;
     setSession(null);
