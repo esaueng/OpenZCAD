@@ -1994,7 +1994,8 @@ export function createEncryptedProjectStore(
             candidate.userId,
             record.signerDeviceId,
             record.keyEpoch,
-            kind === 'view-state',
+            // L08: any member, viewers included, keeps its own comments.
+            kind === 'view-state' || kind === 'comments',
             kind === 'view-state' ? undefined : lists
           ))
         ) {
@@ -2077,7 +2078,8 @@ export function createEncryptedProjectStore(
       header: result.header,
       value: result.value,
       hash,
-      signedAt: signed.signedAt
+      signedAt: signed.signedAt,
+      signerUserId: signed.userId
     };
   }
 
@@ -2095,7 +2097,8 @@ export function createEncryptedProjectStore(
     const device = writableDevice();
     const material = await currentMaterial(device, projectId);
     // Any member keeps its own view state; the rest is an editor's.
-    if (init.kind !== 'view-state') {
+    // View state and (L08) one's own comment log are any member's to write.
+    if (init.kind !== 'view-state' && init.kind !== 'comments') {
       await requireOwnEditingRole(projectId, material);
     }
     const header: ProjectEnvelopeHeaderInit = {

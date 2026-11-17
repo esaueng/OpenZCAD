@@ -655,6 +655,7 @@ import {
 } from './components/LiveSessionNotice';
 import type { CommentPin } from './components/ModelViewer';
 import { ENCRYPTED_COMMENTS_UNAVAILABLE } from './lib/commentsAvailability';
+import type { MemberCommentContext } from './lib/memberComments';
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
   ActivityLogButton,
@@ -1499,7 +1500,7 @@ const LazySharedLinkCopyDialog = lazyWithStaleChunkNotice(() =>
 // The comment client and the save-state preview notice load on the gesture
 // that needs them (opening Comments, previewing a save state), not with the
 // workspace.
-const loadCommentsApi = () => import('./lib/projectCommentsApi');
+const loadCommentsApi = () => import('./lib/memberComments');
 const LazySaveStatePreviewNotice = lazyWithStaleChunkNotice(() =>
   import('./components/SaveStatePreviewNotice').then((module) => ({
     default: module.SaveStatePreviewNotice
@@ -20682,13 +20683,29 @@ export function App() {
         ? null
         : 'This link does not take comments.'
       : isEncryptedProject(doc.projectId)
-        ? ENCRYPTED_COMMENTS_UNAVAILABLE
+        ? // L08 encrypted comments (held, #1667): signed, encrypted logs.
+          session
+          ? null
+          : ENCRYPTED_COMMENTS_UNAVAILABLE
         : !session || !activeProjectIsCloud
           ? 'Save this project to your account to comment on it.'
           : null;
   const commentRole: ProjectAccessRole =
-    collaboration.role ??
-    (session && doc?.ownerUserId === session.userId ? 'owner' : 'viewer');
+    doc && isEncryptedProject(doc.projectId)
+      ? // An encrypted thread is resolved by its author or the owner
+        // (`mergeCommentLogs`), so the panel offers no more.
+        session && doc.ownerUserId === session.userId
+        ? 'owner'
+        : 'viewer'
+      : (collaboration.role ??
+        (session && doc?.ownerUserId === session.userId ? 'owner' : 'viewer'));
+  /** Who a member's comment change acts for (L08 slice 8). */
+  function commentContext(): MemberCommentContext {
+    return {
+      ownerUserId: managerRef.current?.document.ownerUserId ?? '',
+      authorName: sessionRef.current?.displayName || 'A member'
+    };
+  }
   const shownComments =
     doc && projectComments?.projectId === doc.projectId
       ? projectComments.comments
@@ -20716,10 +20733,10 @@ export function App() {
   const loadComments = useCallback(async (projectId: string) => {
     try {
       const link = shareSessionRef.current;
-      const { linkCommentsApi, projectCommentsApi } = await loadCommentsApi();
+      const { linkCommentsApi, memberComments } = await loadCommentsApi();
       const comments = link?.comments
         ? await linkCommentsApi.list(link.token)
-        : await projectCommentsApi.list(projectId);
+        : await memberComments.list(projectId, commentContext());
       if (managerRef.current?.document.projectId !== projectId) return;
       setProjectComments({ projectId, comments });
       setCommentsError(null);
@@ -38394,7 +38411,7 @@ export function App() {
                   ? runCommentAction(
                       async (
                         projectId,
-                        { linkCommentsApi, projectCommentsApi }
+                        { linkCommentsApi, memberComments }
                       ) => {
                         const input = { anchor: commentDraft, text };
                         const created = shareSession
@@ -38403,9 +38420,13 @@ export function App() {
                               commentVisitorName,
                               input
                             )
-                          : await projectCommentsApi.create(projectId, input);
+                          : await memberComments.create(
+                              projectId,
+                              commentContext(),
+                              input
+                            );
                         setCommentDraft(null);
-                        setActiveCommentId(created.commentId);
+                        setActiveCommentId(created?.commentId ?? null);
                       }
                     )
                   : Promise.resolve(false)
@@ -38413,14 +38434,14 @@ export function App() {
               onCancelDraft={() => setCommentDraft(null)}
               onReply={(threadId, text) =>
                 runCommentAction(
-                  (projectId, { linkCommentsApi, projectCommentsApi }) =>
+                  (projectId, { linkCommentsApi, memberComments }) =>
                     (shareSession
                       ? linkCommentsApi.create(
                           shareSession.token,
                           commentVisitorName,
                           { parentId: threadId, text }
                         )
-                      : projectCommentsApi.create(projectId, {
+                      : memberComments.create(projectId, commentContext(), {
                           parentId: threadId,
                           text
                         })
@@ -38428,15 +38449,18 @@ export function App() {
                 )
               }
               onResolve={(threadId, resolved) =>
-                void runCommentAction((projectId, { projectCommentsApi }) =>
-                  projectCommentsApi
-                    .resolve(projectId, threadId, resolved)
-                    .then(() => undefined)
+                void runCommentAction((projectId, { memberComments }) =>
+                  memberComments.resolve(
+                    projectId,
+                    commentContext(),
+                    threadId,
+                    resolved
+                  )
                 )
               }
               onDelete={(commentId) =>
-                void runCommentAction((projectId, { projectCommentsApi }) =>
-                  projectCommentsApi.remove(projectId, commentId)
+                void runCommentAction((projectId, { memberComments }) =>
+                  memberComments.remove(projectId, commentContext(), commentId)
                 )
               }
               onClose={() => {

@@ -661,6 +661,24 @@ export async function deleteAccountData(
         // Library folders are profile data (migration 0045), when the
         // table exists.
         ...(await libraryFolderErasureStatements(db, session.userId)),
+        // L08 encrypted comment logs this account wrote (migration 0060),
+        // when the table exists.
+        ...(input.scope === 'all' &&
+        (await db
+          .prepare(
+            `SELECT 1 AS ready FROM sqlite_master
+             WHERE type = 'table' AND name = 'e2ee_project_comment_logs'`
+          )
+          .first<{ ready: number }>()
+          .then((row) => row?.ready === 1))
+          ? [
+              db
+                .prepare(
+                  'DELETE FROM e2ee_project_comment_logs WHERE user_id = ?'
+                )
+                .bind(session.userId)
+            ]
+          : []),
         // L08 comments this account wrote in other people's projects
         // (migration 0058), when the table exists; its own projects'
         // comments go with them.

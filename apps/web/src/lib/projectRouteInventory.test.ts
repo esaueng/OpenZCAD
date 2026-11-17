@@ -151,8 +151,9 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
       `${E}/key-packages`,
       `${E}/welcome`
     ].map((path) => [path, 'none'] as const),
-  [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(measurements|view-states|view-states\/[^/]+)$/`]:
-    [`${E}/measurements`, `${E}/view-states`].map(
+  // L08 encrypted comment logs travel as signed ciphertext, like these.
+  [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(measurements|view-states|view-states\/[^/]+|comments)$/`]:
+    [`${E}/measurements`, `${E}/view-states`, `${E}/comments`].map(
       (path) => [path, 'none'] as const
     ),
   [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(mls\/commits|mls\/group-info|mls\/leaves|mls\/proposals|keys|keys\/archives|authority)$/`]:
