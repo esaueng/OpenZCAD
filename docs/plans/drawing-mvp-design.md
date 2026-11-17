@@ -725,6 +725,41 @@ principal view. Detail views remain open.
   it from (third angle; the opposite side in first angle) to place it.
 - **Schema.** v81, built on v80, gated below it.
 
+## Free section planes (D03, schema v91)
+
+- **Shape.** `DrawingSectionCut.frame`: a free section's frame, stored like
+  an auxiliary view's — a unit `direction` of sight, the cutting plane's
+  normal, square to the source's direction of sight, and page-right `x`
+  square to it (page-up is the source's sight). `depth` stays the plane's
+  offset along that normal. The view keeps its source's orientation, is
+  placed freely (moving its source does not carry it, and switching the
+  projection angle does not mirror it), and validation refuses a frame that
+  is not unit and square, one seen along the source's own sight, an
+  isometric source or a different orientation. Absent, a section is the
+  principal, aligned one of v47.
+- **Cut.** The exact half-space boolean takes any unit normal: for an
+  inclined plane the box over the removed side is built axis-aligned and
+  turned into the plane's frame (normal, e1, normal × e1, so the turn is
+  proper), a margin past the solid's bounding box. Cut faces are those lying
+  in the plane, as before; the tessellation fallback already clips by any
+  plane. A principal plane keeps its axis-aligned box, so existing sections
+  cut and hash exactly as before.
+- **Frames.** `drawingViewFrame(view)` returns a free section's frame, and
+  `drawingViewHasOwnFrame(view)` (auxiliary or free section) keeps it out of
+  auto-dimensioning and the dimension check, whose axes are model axes. The
+  projection cache key and the section-plane key carry the frame.
+- **Page.** The cutting-plane line runs at its angle across the source's
+  footprint and 4 mm past it (chain, thick ends, arrows along the direction
+  of sight, letters), and the view is captioned `SECTION A-A`, through the
+  one page model to preview, PDF, SVG and DXF.
+- **Tool.** Section view: a drag within 10° of horizontal or vertical snaps
+  square, as before; a drag further off draws a free line through the press
+  point (snapped to the view's middle or a circle's centre within 2 mm),
+  and a click on one side places the section seen from that side in third
+  angle (the other in first angle), as an auxiliary view is.
+- **Schema.** v91, built on v90 (F06 slice 4a), gated below it.
+- **Open.** Stepped section lines, and lineage for cut edges.
+
 ### Drawing entry and visibility (2026-11-01)
 
 Entering Draw without a retained sheet choice prefers the unique saved sheet

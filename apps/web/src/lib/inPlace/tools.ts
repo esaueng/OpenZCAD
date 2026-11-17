@@ -4922,6 +4922,33 @@ const axisRotate: InPlaceToolSpec = {
   }
 };
 
+const BOOLEAN_OPERATIONS: readonly BooleanOperation[] = [
+  'union',
+  'subtract',
+  'intersect'
+];
+
+function isBooleanOperation(tool: string | null): tool is BooleanOperation {
+  return (BOOLEAN_OPERATIONS as readonly (string | null)[]).includes(tool);
+}
+
+/**
+ * The operation a boolean tool's launch switches the running boolean command
+ * to, or null when it is no such switch. U, X and I over a running Union,
+ * Subtract or Intersect change its Operation option, as its Options menu
+ * does, and keep the bodies it holds: opening the tool afresh counted the
+ * bodies left on screen, and a saved boolean being edited has consumed its
+ * sources into one result, so the shortcut refused it (#1654).
+ */
+export function booleanOperationSwitch(
+  running: InPlaceToolId | null,
+  launched: string
+): BooleanOperation | null {
+  return isBooleanOperation(running) && isBooleanOperation(launched)
+    ? launched
+    : null;
+}
+
 function booleanSpec(
   id: 'union' | 'subtract' | 'intersect',
   title: string

@@ -60,6 +60,11 @@ export interface CommentsPanelProps {
   onResolve(threadId: string, resolved: boolean): void;
   onDelete(commentId: string): void;
   onClose(): void;
+  /**
+   * L08 commenter link: the visitor has no account, signs with a typed name,
+   * and can neither resolve nor delete. Absent for a member.
+   */
+  visitor?: { name: string; onNameChange(name: string): void };
 }
 
 function when(createdAt: string): string {
@@ -144,10 +149,14 @@ export function CommentsPanel(props: CommentsPanelProps) {
   const threads = comments ? commentThreads(comments) : [];
   const open = threads.filter((thread) => !thread.comment.resolvedAt);
   const resolved = threads.filter((thread) => thread.comment.resolvedAt);
+  const visitor = props.visitor;
+  const signed = !visitor || visitor.name.trim().length > 0;
+  const own = (comment: ProjectComment) =>
+    currentUserId !== null && comment.authorUserId === currentUserId;
   const canResolve = (comment: ProjectComment) =>
-    role !== 'viewer' || comment.authorUserId === currentUserId;
+    !visitor && (role !== 'viewer' || own(comment));
   const canDelete = (comment: ProjectComment) =>
-    role === 'owner' || comment.authorUserId === currentUserId;
+    !visitor && (role === 'owner' || own(comment));
 
   const renderThread = ({ number, comment, replies }: CommentThread) => {
     const active = activeId === comment.commentId;
@@ -200,7 +209,7 @@ export function CommentsPanel(props: CommentsPanelProps) {
                 ))}
               </ul>
             ) : null}
-            {!comment.resolvedAt ? (
+            {!comment.resolvedAt && signed ? (
               <Composer
                 label={`Reply to comment ${number}`}
                 submitLabel="Reply"
@@ -265,7 +274,21 @@ export function CommentsPanel(props: CommentsPanelProps) {
         <p className="comments-note">{unavailableReason}</p>
       ) : (
         <>
-          {hasDraft ? (
+          {visitor ? (
+            <label className="comments-visitor-name">
+              <span>Your name</span>
+              <input
+                type="text"
+                value={visitor.name}
+                maxLength={60}
+                placeholder="Shown with your comments"
+                onChange={(event) => visitor.onNameChange(event.target.value)}
+              />
+            </label>
+          ) : null}
+          {!signed ? (
+            <p className="comments-note">Type your name to comment.</p>
+          ) : hasDraft ? (
             <Composer
               label="New comment"
               submitLabel="Post"

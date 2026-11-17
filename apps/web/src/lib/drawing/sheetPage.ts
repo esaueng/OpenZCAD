@@ -5,6 +5,7 @@ import {
   DRAWING_VIEW_ORIENTATIONS,
   drawingPaperMm,
   drawingPaperPerModelUnit,
+  drawingFreeSectionLine,
   drawingSectionLine,
   drawingViewAlignment,
   formatDrawingScale,
@@ -840,6 +841,42 @@ export function sectionLineOnPage(
 } | null {
   const bounds = source.projection.bounds;
   if (!section.section || !bounds) return null;
+  if (section.section.frame) {
+    // D03 (v91): a free section's line, at an angle, across the source's
+    // footprint and a little past it.
+    const { sight, depth } = drawingFreeSectionLine(
+      source.view.orientation,
+      section.section.frame,
+      section.section.depth
+    );
+    const t: [number, number] = [-sight[1], sight[0]];
+    const origin: [number, number] = [sight[0] * depth, sight[1] * depth];
+    let low = -Infinity;
+    let high = Infinity;
+    for (const [axis, min, max] of [
+      [0, bounds.minU, bounds.maxU],
+      [1, bounds.minV, bounds.maxV]
+    ] as const) {
+      if (Math.abs(t[axis]) < 1e-12) {
+        if (origin[axis] < min || origin[axis] > max) return null;
+        continue;
+      }
+      const a = (min - origin[axis]) / t[axis];
+      const b = (max - origin[axis]) / t[axis];
+      low = Math.max(low, Math.min(a, b));
+      high = Math.min(high, Math.max(a, b));
+    }
+    if (!(high >= low)) return null;
+    const toPage = viewPageTransform(source.view, bounds, sheet, units);
+    const from = toPage(origin[0] + t[0] * low, origin[1] + t[1] * low);
+    const to = toPage(origin[0] + t[0] * high, origin[1] + t[1] * high);
+    const overrun = SECTION_LINE_OVERRUN_MM;
+    return {
+      from: [from[0] - t[0] * overrun, from[1] - t[1] * overrun],
+      to: [to[0] + t[0] * overrun, to[1] + t[1] * overrun],
+      sight
+    };
+  }
   const line = drawingSectionLine(
     source.view.orientation,
     section.orientation,

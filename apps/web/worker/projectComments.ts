@@ -216,7 +216,8 @@ export async function createProjectComment(
       id,
       projectId,
       input.parentId ?? null,
-      actor.userId,
+      // A link visitor has no account (L08 commenter links).
+      actor.userId || null,
       boundedName(actor.name),
       input.text,
       input.anchor ? JSON.stringify(input.anchor) : null,
@@ -284,4 +285,105 @@ export async function deleteProjectComment(
     .prepare('DELETE FROM project_comments WHERE id = ? AND project_id = ?')
     .bind(commentId, projectId)
     .run();
+}
+
+/** Longest name a link visitor signs a comment with. */
+export const MAX_LINK_COMMENTER_NAME = 60;
+
+/**
+ * The project a commenter link (L08, migration 0059) lets its visitor
+ * comment on, or null. The same rules as the link's read: not revoked,
+ * within its lifetime, the project not trashed and plaintext, the owner's
+ * sharing switched on, and the link made with comments.
+ */
+export async function commentLinkProject(
+  db: D1Database,
+  tokenHash: string,
+  oldestValidCreation: number
+): Promise<{ projectId: string; shareLinkId: string } | null> {
+  const row = await db
+    .prepare(
+      `SELECT l.id AS share_link_id, l.project_id
+       FROM project_share_links l
+       INNER JOIN projects p ON p.id = l.project_id
+       LEFT JOIN user_settings owner_settings
+         ON owner_settings.user_id = p.user_id
+       WHERE l.token_hash = ?
+         AND l.revoked_at IS NULL
+         AND l.created_at > ?
+         AND l.allow_comments = 1
+         AND p.status != 'deleted'
+         AND COALESCE(p.storage_format, 1) = 1
+         AND COALESCE(
+           CASE WHEN json_valid(owner_settings.settings_json)
+             THEN json_extract(
+               owner_settings.settings_json,
+               '$.collaboration.enabled'
+             )
+           END,
+           1
+         ) = 1`
+    )
+    .bind(tokenHash, oldestValidCreation)
+    .first<{ share_link_id: string; project_id: string }>();
+  return row
+    ? { projectId: row.project_id, shareLinkId: row.share_link_id }
+    : null;
+}
+
+/** A link visitor's comment request: the text, its pin or thread, and a name. */
+export function parseLinkCommentRequest(body: unknown): {
+  name: string;
+  input: CreateProjectCommentRequest;
+} {
+  if (!body || typeof body !== 'object' || Array.isArray(body))
+    throw new ProjectCommentRequestError(
+      400,
+      'Request body must be an object.'
+    );
+  const { name, ...rest } = body as Record<string, unknown>;
+  // Control characters never belong in a name shown beside a comment.
+  // eslint-disable-next-line no-control-regex
+  const controls = /[\u0000-\u001f\u007f-\u009f]/g;
+  const signed =
+    typeof name === 'string'
+      ? name.replace(controls, '').replace(/\s+/g, ' ').trim()
+      : '';
+  if (!signed || [...signed].length > MAX_LINK_COMMENTER_NAME)
+    throw new ProjectCommentRequestError(
+      400,
+      `Sign your comment with a name of 1 to ${MAX_LINK_COMMENTER_NAME} characters.`
+    );
+  return { name: signed, input: parseCreateProjectCommentRequest(rest) };
+}
+
+/** A visitor's comment: no account, signed with the name typed, via its link. */
+export async function createLinkComment(
+  db: D1Database,
+  link: { projectId: string; shareLinkId: string },
+  name: string,
+  input: CreateProjectCommentRequest
+): Promise<ProjectComment> {
+  const comment = await createProjectComment(
+    db,
+    link.projectId,
+    { userId: '', name: `${name} (via link)`, role: 'viewer' },
+    input
+  );
+  await db
+    .prepare('UPDATE project_comments SET share_link_id = ? WHERE id = ?')
+    .bind(link.shareLinkId, comment.commentId)
+    .run();
+  return { ...comment, authorUserId: null };
+}
+
+/** What a link visitor sees: every comment, with no member's account id. */
+export async function listLinkComments(
+  db: D1Database,
+  projectId: string
+): Promise<ProjectComment[]> {
+  return (await listProjectComments(db, projectId)).map((comment) => ({
+    ...comment,
+    authorUserId: null
+  }));
 }

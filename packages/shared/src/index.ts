@@ -385,7 +385,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // as the active row and drop the choice on its next save, so it must refuse.
 // Builds on v89 (F06 first claimed v79 and then v86, which v80, v81 and v89
 // overtook).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 90 as const;
+// save, so it must refuse. Builds on v83.
+// v91 adds D03 free section planes (`frame` on a drawing view's `section`):
+// a section cut by a plane at any angle across its source, seen square to
+// it and placed freely. An older client would cut a principal plane at the
+// stored depth instead, so it must refuse. Builds on v90 (F06 slice 4a).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 91 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -5685,6 +5690,8 @@ export interface ProjectShareLinkSummary {
   revokedAt: number | null;
   /** The owner's name for the link; null when unnamed. Never sent to visitors. */
   label: string | null;
+  /** L08: visitors may read and write comments (migration 0059). */
+  comments?: boolean;
 }
 
 /** Longest share-link label, in Unicode code points (SQLite's `length`). */
@@ -5717,6 +5724,8 @@ export interface CreateProjectShareLinkRequest {
   mode: ProjectShareLinkMode;
   /** Optional owner's name for the link. */
   label?: string | null;
+  /** L08: a commenter link; visitors may read and write comments. */
+  comments?: boolean;
 }
 
 export interface UpdateProjectShareLinkRequest {
@@ -5740,6 +5749,8 @@ export interface SharedProjectResponse {
     projectId: string;
     name: string;
     mode: ProjectShareLinkMode;
+    /** L08: a commenter link; absent or false is view or tweak only. */
+    comments?: boolean;
   };
   document: ProjectDocument;
 }

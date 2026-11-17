@@ -244,6 +244,7 @@ import { saveCadBinaryFile, saveCadTextFile } from '../lib/desktopBridge';
 import {
   sectionLineFromDrag,
   sectionPlacement,
+  sectionSnapPoints,
   sectionSnapTargets,
   sectionSourceAt,
   type SectionLine
@@ -412,7 +413,16 @@ function sheetStatus(
 
 /** What a view draws, independent of the model state it draws it from. */
 function viewIntentKey(view: DrawingView): string {
-  const cut = view.section ? `|section:${view.section.depth}` : '';
+  const cut = view.section
+    ? `|section:${view.section.depth}${
+        // D03 (v91): a free section projects in its own frame.
+        view.section.frame
+          ? `|frame:${[view.section.frame.direction, view.section.frame.x]
+              .map((v) => `${v.x},${v.y},${v.z}`)
+              .join('|')}`
+          : ''
+      }`
+    : '';
   // D03 (v81): an auxiliary view projects in its own frame.
   const aux = view.auxiliary
     ? `|aux:${[view.auxiliary.direction, view.auxiliary.x]
@@ -815,6 +825,7 @@ function useViewProjections(
             views.push({
               key,
               orientation: view.orientation,
+              ...(view.section?.frame ? { frame: drawingViewFrame(view) } : {}),
               hiddenLines: view.hiddenLines,
               bodyIds: ids
             });
@@ -3897,7 +3908,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               bodies,
               view.bodyIds,
               view.orientation,
-              view.auxiliary ? drawingViewFrame(view) : undefined
+              view.auxiliary || view.section?.frame
+                ? drawingViewFrame(view)
+                : undefined
             );
       if (extent) extents.set(view.viewId, extent);
     }
@@ -4556,7 +4569,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
    * of each view's extent across the line, and a gap.
    */
   const sectionReach = (source: DrawingView, line: SectionLine): number => {
-    if (!shownSheet) return 0;
+    // A free section (v91) is placed where the pointer is.
+    if (!shownSheet || line.axis === 'free') return 0;
     const k = drawingPaperPerModelUnit(shownSheet.scale, document.units);
     const across = (extent: ViewExtent | null | undefined) =>
       extent
@@ -4667,7 +4681,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         sectionTool.drag.start,
         end,
         document.units,
-        sectionSnapTargets(source, drawBodies, axis)
+        sectionSnapTargets(source, drawBodies, axis),
+        3,
+        sectionSnapPoints(source, drawBodies)
       );
     if (!line) {
       setSectionTool({ drag: null, line: null, pointer: null });
@@ -4675,8 +4691,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return;
     }
     if (
+      line.axis !== 'free' &&
       drawingSectionOrientations(source.view.orientation, line.axis).length ===
-      0
+        0
     ) {
       setSectionTool({ drag: null, line: null, pointer: null });
       props.onStatus(
@@ -5405,7 +5422,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                       bodies,
                       view.bodyIds,
                       view.orientation,
-                      view.auxiliary ? drawingViewFrame(view) : undefined
+                      view.auxiliary || view.section?.frame
+                        ? drawingViewFrame(view)
+                        : undefined
                     ));
               if (!extent) return null;
               const box = viewPageBox(view, extent, shownSheet, document.units);
@@ -5617,7 +5636,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 const extent = estimateViewExtent(
                   bodies,
                   sectionDraft.bodyIds,
-                  sectionDraft.orientation
+                  sectionDraft.orientation,
+                  sectionDraft.section?.frame
+                    ? drawingViewFrame(sectionDraft)
+                    : undefined
                 );
                 const k = drawingPaperPerModelUnit(
                   shownSheet.scale,
@@ -5833,8 +5855,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             <div className="drawing-tool-hint" role="status">
               <span>
                 {sectionTool.line
-                  ? 'Move the section view into place along its arrows, then click.'
-                  : 'Drag across a view to draw the section line.'}
+                  ? sectionTool.line.axis === 'free'
+                    ? 'Click on a side of the line to place the section seen from there.'
+                    : 'Move the section view into place along its arrows, then click.'
+                  : 'Drag across a view to draw the section line; at an angle for a free section.'}
               </span>
               <button
                 type="button"
@@ -5924,7 +5948,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                     : Math.abs(normal.y) === 1
                       ? 'y'
                       : 'z';
-                const sign = normal[axis];
+                // D03 (v91): a free section's plane is inclined: its offset
+                // is along its own normal, from the model origin.
+                const free = section.frame !== undefined;
+                const sign = free ? 1 : normal[axis];
                 const drawn = projections.get(selectedView.viewId);
                 const approximate =
                   drawn?.state === 'ready'
@@ -5933,7 +5960,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 return (
                   <>
                     <NumberField
-                      label={`Cut at ${axis.toUpperCase()} (${document.units})`}
+                      label={
+                        free
+                          ? `Plane offset (${document.units})`
+                          : `Cut at ${axis.toUpperCase()} (${document.units})`
+                      }
                       value={section.depth * sign}
                       disabled={!editable}
                       onCommit={(value) =>
@@ -5954,8 +5985,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                       {source
                         ? DRAWING_VIEW_LABELS[source.orientation].toLowerCase()
                         : 'source'}{' '}
-                      view along its line {section.label}-{section.label}: it
-                      stays aligned with it. Cut faces are hatched.
+                      view along its line {section.label}-{section.label}
+                      {free
+                        ? ', at an angle: it is placed freely.'
+                        : ': it stays aligned with it.'}{' '}
+                      Cut faces are hatched.
                     </p>
                     {approximate ? (
                       <p className="drawing-hint" role="note">
