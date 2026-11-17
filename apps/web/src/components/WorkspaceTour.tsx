@@ -17,6 +17,7 @@ import { useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import { StableLabel } from './StableLabel';
 import { TOUCH_ONLY_QUERY, useMediaQuery } from '../hooks/useMediaQuery';
+import { useStageFootClaim } from '../hooks/useStageFootClaim';
 
 interface WorkspaceTourProps extends WorkspaceTourSignals {
   /** Fired on skip AND on finishing the last step — either way it is over. */
@@ -174,6 +175,10 @@ export function WorkspaceTour({
       for (const element of outlined) element.classList.remove('tour-target');
     };
   }, [target]);
+
+  // A phone's panel shares the card's corner of the stage; it ends above
+  // the card rather than over its Next and Finish (UX-001).
+  useStageFootClaim(cardRef, '--workspace-tour-claim', !finished && !!step);
 
   if (finished || !step) {
     return null;

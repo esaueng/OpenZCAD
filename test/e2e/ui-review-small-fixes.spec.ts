@@ -4,7 +4,7 @@ import {
   extrudeSketch
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import {
   createProject,
   expect,
@@ -119,6 +119,65 @@ test.describe('UX-002: the first-model guide in a narrow mouse window', () => {
       }
     });
   }
+
+  /**
+   * Between the rails is the phone panel lane too: at the same layer, the
+   * Objects panel opened from the desktop's default layout stood over the
+   * card and took the minimized guide's Expand. The panel ends above it.
+   */
+  test('stays unobstructed by an open panel, expanded and minimized', async ({
+    page
+  }) => {
+    const unobstructed = (control: Locator) =>
+      expect
+        .poll(() =>
+          control.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            if (box.width < 1 || box.right > innerWidth) return false;
+            return [0.15, 0.5, 0.85].every((x) =>
+              [0.15, 0.5, 0.85].every((y) => {
+                const hit = document.elementFromPoint(
+                  box.x + box.width * x,
+                  box.y + box.height * y
+                );
+                return hit !== null && element.contains(hit);
+              })
+            );
+          })
+        )
+        .toBe(true);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await stubApi(page, {
+      workspaceTour: true,
+      panelLayout: null,
+      commandFoldClosed: true
+    });
+    await createProject(page, 'Guide over panels');
+    const guide = page.getByRole('region', {
+      name: 'Modeling guide',
+      exact: true
+    });
+    await expect(guide).toBeVisible();
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      await expect(page.locator('.panel-lane-float')).toBeVisible();
+      await unobstructed(guide.getByRole('button', { name: 'Next' }));
+      await unobstructed(guide.getByRole('button', { name: /^Skip/ }));
+      await guide
+        .getByRole('button', { name: 'Minimize modeling guide' })
+        .click();
+      const expand = guide.getByRole('button', {
+        name: 'Expand modeling guide'
+      });
+      await unobstructed(expand);
+      // The panel stays whole above it, not cut to nothing.
+      const panel = (await page.locator('.panel-lane-float').boundingBox())!;
+      const card = (await guide.boundingBox())!;
+      expect(panel.y + panel.height).toBeLessThanOrEqual(card.y);
+      expect(panel.height).toBeGreaterThan(100);
+      await expand.click();
+    }
+  });
 
   test('keeps its desktop width and corner', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });

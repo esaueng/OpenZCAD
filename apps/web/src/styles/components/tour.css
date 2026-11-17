@@ -167,4 +167,23 @@
     width: auto;
     max-width: none;
   }
+
+  /* That stage is the phone panel lane too (quiet-stage.css), and at the
+     same layer the open panel stood over the card: Objects took the
+     minimized guide's Expand. The panel ends above the card instead, by
+     the height the card publishes (useStageFootClaim), expanded or
+     minimized, so neither covers the other. The selector outranks the
+     lane's own rule, which loads later. */
+  .viewer-area:has(.workspace-tour) .stage-right:has(> .panel-lane-float) {
+    --tour-lane-bottom: max(
+      calc(var(--lane-base) + 40px),
+      calc(var(--workspace-tour-claim, 0px) + var(--island-gap))
+    );
+
+    bottom: var(--tour-lane-bottom);
+    max-height: min(
+      40dvh,
+      calc(100% - var(--stage-top) - var(--tour-lane-bottom))
+    );
+  }
 }
