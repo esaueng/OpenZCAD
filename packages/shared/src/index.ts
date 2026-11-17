@@ -442,6 +442,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // client cannot build it, so it must refuse the document. Builds on v108
 // (v109 is claimed by #1741; v104 and v107 were L15's earlier claims, left
 // unused when other lanes landed first).
+// v110 adds L15 custom features (`featureKind: 'custom-feature'`): a step
+// that runs an embedded, versioned script on its target body. An older
+// client cannot build it, so it must refuse the document. Builds on v108
+// (v109 is claimed by #1741; v104 and v107 were L15's earlier claims, left
+// unused when other lanes landed first).
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 110 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
