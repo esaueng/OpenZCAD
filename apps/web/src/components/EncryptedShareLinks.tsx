@@ -136,19 +136,16 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
     };
   },
   async create(projectId, mode, options) {
-    const [
-      { encryptedShareLinks },
-      { allowShareLinkComments, createShareLink }
-    ] = await Promise.all([
+    const [{ encryptedShareLinks }, links] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
     const ctx = (await encryptedShareLinks()).ctx;
-    const created = await createShareLink(ctx, projectId, mode);
+    const created = await links.createShareLink(ctx, projectId, mode);
     const problem = shareLinkCreationProblem(created);
     if (problem) throw new Error(problem);
     if (options?.comments) {
-      await allowShareLinkComments(ctx, projectId, {
+      await links.allowShareLinkComments(ctx, projectId, {
         shareId: created.shareId,
         shareKey: created.fragment.shareKey
       });
@@ -364,12 +361,9 @@ export function EncryptedShareLinks({
     setCreated(null);
     setCopied(null);
     setCreated(
-      (
-        await client.create(
-          projectId,
-          'view',
-          withComments ? { comments: true } : undefined
-        )
+      (withComments
+        ? await client.create(projectId, 'view', { comments: true })
+        : await client.create(projectId, 'view')
       ).url
     );
   };

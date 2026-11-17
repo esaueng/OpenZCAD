@@ -245,6 +245,27 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     expect(await screen.findByText(/Someone lost access/)).toBeVisible();
   });
 
+  it('signs a comment grant for the new link when its visitors may comment (L08)', async () => {
+    const empty: EncryptedShareLinksState = {
+      links: [],
+      needsConfirmation: false,
+      retired: []
+    };
+    const client = fakeClient([empty, active]);
+    const user = userEvent.setup();
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    expect(await screen.findByText('Only invited people')).toBeVisible();
+    const comments = screen.getByRole('checkbox', {
+      name: /^Visitors can comment/
+    });
+    expect(comments).not.toBeChecked();
+    await user.click(comments);
+    await user.click(screen.getByRole('button', { name: 'Create link' }));
+    expect(client.create).toHaveBeenCalledWith('proj_x', 'view', {
+      comments: true
+    });
+  });
+
   it('creates, copies and revokes links, with each one’s status', async () => {
     const empty: EncryptedShareLinksState = {
       links: [],
