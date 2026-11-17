@@ -5413,8 +5413,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           bodyId,
           area: outcome.area,
           boundary: outcome.boundary,
-          boundaryDeviation: outcome.boundaryDeviation,
-          areaUncertainty: outcome.areaUncertainty,
           loops: outcome.loops,
           positions: outcome.positions,
           indices: outcome.indices

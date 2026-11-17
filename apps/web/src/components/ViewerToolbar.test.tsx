@@ -152,8 +152,6 @@ describe('the section panel', () => {
         regions: [],
         area: 187.4538,
         boundary: 'exact',
-        boundaryDeviation: 0,
-        areaUncertainty: 0,
         missed: 0,
         unsectioned: 0
       },
@@ -167,7 +165,7 @@ describe('the section panel', () => {
     expect(onExportSectionDxf).toHaveBeenCalledOnce();
   });
 
-  it('names a chorded section approximate, with its tolerance, and still exports it', () => {
+  it('names a chorded section approximate, quotes no tolerance, and still exports it', () => {
     const onExportSectionDxf = vi.fn();
     renderToolbar(
       {
@@ -175,8 +173,6 @@ describe('the section panel', () => {
         regions: [],
         area: 3143.5421,
         boundary: 'approximate',
-        boundaryDeviation: 0.0036136,
-        areaUncertainty: 0.1362,
         missed: 0,
         unsectioned: 0
       },
@@ -187,7 +183,7 @@ describe('the section panel', () => {
     expect(screen.getByText('Approximate')).toBeTruthy();
     expect(
       screen.getByText(
-        'About 3143.54 mm² of material (±0.136 mm²). Curved edges are cut as straight segments, within 0.00361 mm of the curve.'
+        'About 3143.54 mm² of material. Curved edges are cut as straight segments.'
       )
     ).toBeTruthy();
     const button = screen.getByLabelText('Export the section as DXF');
@@ -202,8 +198,6 @@ describe('the section panel', () => {
       regions: [],
       area: 540,
       boundary: 'exact',
-      boundaryDeviation: 0,
-      areaUncertainty: 0,
       missed: 1,
       unsectioned: 0
     });
@@ -226,8 +220,6 @@ describe('the section panel', () => {
         regions: [],
         area: 540,
         boundary: 'exact',
-        boundaryDeviation: 0,
-        areaUncertainty: 0,
         missed: 0,
         unsectioned: 1
       },

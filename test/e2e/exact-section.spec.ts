@@ -425,7 +425,8 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
   // UX-013: the bore's circle is 64 chords in this section, so the rail may
-  // not call it exact, and has to say how far off the polygon can be.
+  // not call it exact. It says why, and quotes no tolerance: none of the
+  // figures tried for one could be certified.
   await openExactSection(page, 'Approximate');
   const exactState = await sectionState(page);
   expect(exactState.sectionCaps).toEqual([]);
@@ -434,7 +435,7 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
     .locator('.rail-section-state-detail')
     .textContent();
   expect(sectionDetail).toMatch(
-    /^About [0-9.]+ mm² of material \(±[0-9.]+ mm²\)\. Curved edges are cut as straight segments, within [0-9.]+ mm of the curve\.$/
+    /^About [0-9.]+ mm² of material\. Curved edges are cut as straight segments\.$/
   );
   const measuredArea = Number(sectionDetail?.match(/([0-9.]+) mm²/)?.[1]);
   expect(measuredArea).toBeCloseTo(1200 - Math.PI * 36, 0);

@@ -173,13 +173,9 @@ describe('sectionOutline', () => {
     // The verdict on the boundary crosses out of the build with the region:
     // the bore is chords here, and the report says so.
     expect(region.boundary).toBe('approximate');
-    expect(region.boundaryDeviation).toBeCloseTo(
-      2 * (1 - Math.cos(Math.PI / 64)),
-      9
-    );
-    expect(Math.abs(region.area - (200 - Math.PI * 4))).toBeLessThanOrEqual(
-      region.areaUncertainty!
-    );
+    // A verdict only: no figure for how far off the polygon is.
+    expect(region).not.toHaveProperty('boundaryDeviation');
+    expect(region).not.toHaveProperty('areaUncertainty');
     expect(region.loops.map((loop) => loop.kind)).toEqual(['outer', 'inner']);
     for (const loop of region.loops) {
       for (const point of loop.points) {
@@ -349,12 +345,9 @@ describe('the demo bracket cut at 4 mm (UX-013)', () => {
     );
     expect(region.boundary).toBe(analyticSection ? 'exact' : 'approximate');
     expect(status.kind).toBe(analyticSection ? 'exact' : 'approximate');
-    // Whatever it says, the area it quotes is within the slack it admits.
-    expect(region.areaUncertainty).not.toBeNull();
-    expect(areaError).toBeLessThanOrEqual(
-      region.areaUncertainty! + analytic * 1e-6
-    );
+    // An approximate area is quoted as "about", with no tolerance beside it.
     expect(status.detail.startsWith('About ')).toBe(!analyticSection);
+    expect(status.detail).not.toMatch(/±|within/);
   }, 240_000);
 });
 

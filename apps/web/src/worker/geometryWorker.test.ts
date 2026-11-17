@@ -1993,8 +1993,6 @@ describe('geometry worker rebuild coordination', () => {
           bodyId: 'body_1',
           area: 200,
           boundary: 'exact',
-          boundaryDeviation: 0,
-          areaUncertainty: 0,
           loops: [{ kind: 'outer', points: [[0, 0, 3]] }],
           positions: new Float32Array([0, 0, 3]),
           indices: new Uint32Array([0])
