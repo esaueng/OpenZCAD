@@ -8,7 +8,7 @@ import {
 import { Info, Magnet, ScrollText } from 'lucide-react';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from '../hooks/useDelayedUnmount';
-import { usePacedStatus } from '../hooks/usePacedStatus';
+import { retiresGeometryPhase, usePacedStatus } from '../hooks/usePacedStatus';
 import {
   advanceStatusClock,
   STATUS_CLOCK_STEP_MS,
@@ -338,12 +338,17 @@ export function WorkspaceReadout({
   // The log keeps every message; the toast holds each long enough to read.
   // The cut's line is a state coming back, not news to read: held behind a
   // retired message's dwell, the spent message came back with no Turn off.
+  // Live geometry state is not news to pace: the rebuild finishing (or
+  // failing) shows at once, while the message it rode on keeps its dwell
+  // (#1632). A failed rebuild is a warning while the geometry line is up.
+  const geometryFailed = geometryStatus !== null && tone === 'warning';
   const paced = usePacedStatus(
     line,
     sectionShown ? 'ready' : tone,
     shown,
     isNotableStatus,
-    statusImmediate || sectionShown
+    statusImmediate || sectionShown || geometryFailed,
+    retiresGeometryPhase
   );
   const undoShown =
     shown && !sectionShown && Boolean(onUndo) && paced.status === line;

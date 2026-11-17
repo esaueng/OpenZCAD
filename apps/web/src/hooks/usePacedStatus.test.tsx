@@ -1,6 +1,10 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { STATUS_MIN_DWELL_MS, usePacedStatus } from './usePacedStatus';
+import {
+  STATUS_MIN_DWELL_MS,
+  retiresGeometryPhase,
+  usePacedStatus
+} from './usePacedStatus';
 
 type Tone = 'ready' | 'warning' | 'running';
 
@@ -49,6 +53,40 @@ describe('usePacedStatus', () => {
     );
     rerender({ status: 'Note added.', immediate: true });
     expect(result.current.status).toBe('Note added.');
+  });
+
+  it('retires a live phase at once and keeps pacing new messages (#1632)', () => {
+    const { result, rerender } = renderHook(
+      ({ status }) =>
+        usePacedStatus<Tone>(
+          status,
+          'ready',
+          true,
+          undefined,
+          false,
+          retiresGeometryPhase
+        ),
+      { initialProps: { status: 'Added box. · Rebuilding geometry…' } }
+    );
+    rerender({ status: 'Added box.' });
+    expect(result.current.status).toBe('Added box.');
+    rerender({ status: 'Added cylinder.' });
+    expect(result.current.status).toBe('Added box.');
+    act(() => {
+      vi.advanceTimersByTime(STATUS_MIN_DWELL_MS);
+    });
+    expect(result.current.status).toBe('Added cylinder.');
+  });
+
+  it('knows a retired phase from a new message', () => {
+    expect(
+      retiresGeometryPhase('Added box. · Rebuilding geometry…', 'Added box.')
+    ).toBe(true);
+    expect(
+      retiresGeometryPhase('Added box. · Rebuilding geometry…', 'Added cyl.')
+    ).toBe(false);
+    expect(retiresGeometryPhase('Added box.', 'Added box.')).toBe(false);
+    expect(retiresGeometryPhase('Rebuilding geometry… · x', '')).toBe(false);
   });
 
   it('shows a message at once when the last one has had its dwell', () => {
