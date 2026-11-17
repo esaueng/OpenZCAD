@@ -21,6 +21,7 @@ import {
   type ShelfEdit
 } from './libraryFolderSync';
 import { unlockedAccount } from './e2ee/unlockedKeys';
+import { getKeySessionRevision, isCurrentKeySession } from './e2ee/keySession';
 import {
   agreedShelfState,
   confirmShelfSealed,
@@ -416,32 +417,88 @@ export async function syncAccountLibraryFolders(
   accountId: string,
   cancelled: () => boolean
 ): Promise<boolean> {
+  const revision = getKeySessionRevision();
+  const current = () => !cancelled() && isCurrentKeySession(revision);
+  const requireCurrent = () => {
+    if (!current())
+      throw new DOMException(
+        'The library account session ended.',
+        'AbortError'
+      );
+  };
+  let accountKey: Uint8Array | undefined;
   try {
+    requireCurrent();
     const { api, encryptsAccountLibrary } = await import('./api');
+    requireCurrent();
     // Rows still holding readable shelf state, as this account's listing
     // noted them: once the sealed record holds them they are reset.
     const legacy = legacyShelfRows(accountId);
     const agreedBefore = JSON.stringify(agreedShelfState(accountId));
     let sealed = false;
     const host: FolderSyncHost = {
-      ...browserFolderSyncHost(accountId, api, async () => {
-        // Asked only after the first read answered: a yes holds for the
-        // visit, a no is asked again next round. An unanswerable check
-        // counts as encrypting, so plaintext names never leave the device
-        // on a guess.
-        if (!(await shelfSealedOrSafe(accountId, encryptsAccountLibrary)))
-          return plaintextFolderCodec;
-        const account = unlockedAccount(accountId);
-        if (!account || cancelled()) return null;
-        const { sealedFolderCodec } =
-          await import('./e2ee/sealedLibraryFolders');
-        sealed = true;
-        return sealedFolderCodec({
-          accountKey: account.accountKey,
-          userId: accountId,
-          pins: localStorageFolderSequencePins(accountId)
-        });
-      }),
+      ...browserFolderSyncHost(
+        accountId,
+        {
+          async getLibraryFolders() {
+            requireCurrent();
+            const result = await api.getLibraryFolders();
+            requireCurrent();
+            return result;
+          },
+          async saveLibraryFolders(request) {
+            requireCurrent();
+            const result = await api.saveLibraryFolders(request);
+            requireCurrent();
+            return result;
+          }
+        },
+        async () => {
+          // Asked only after the first read answered: a yes holds for the
+          // visit, a no is asked again next round. An unanswerable check
+          // counts as encrypting, so plaintext names never leave the device
+          // on a guess.
+          const encrypted = await shelfSealedOrSafe(
+            accountId,
+            encryptsAccountLibrary
+          );
+          requireCurrent();
+          if (!encrypted) return plaintextFolderCodec;
+          // A page listing only plaintext projects never opens the encrypted
+          // project store. Unlock an already trusted device here too, instead
+          // of waiting forever for a project or Settings to populate the cache.
+          if (!unlockedAccount(accountId)) {
+            const [keys, devices, encryptionApi] = await Promise.all([
+              import('./e2ee/accountKeys'),
+              import('./e2ee/keychainDeviceKeys'),
+              import('./e2ee/e2eeApi')
+            ]);
+            requireCurrent();
+            const state = await keys.loadEncryption({
+              userId: accountId,
+              api: encryptionApi.createE2eeApi(),
+              store: devices.deviceKeyStore(),
+              isCurrent: current
+            });
+            requireCurrent();
+            if (state.kind !== 'ready' || !state.account.unlocked) return null;
+          }
+          const { sealedFolderCodec } =
+            await import('./e2ee/sealedLibraryFolders');
+          requireCurrent();
+          const account = unlockedAccount(accountId);
+          if (!account) return null;
+          // A simultaneous account read may replace and zero the cache entry.
+          // This round owns its key until its asynchronous codec has finished.
+          accountKey = account.accountKey.slice();
+          sealed = true;
+          return sealedFolderCodec({
+            accountKey,
+            userId: accountId,
+            pins: localStorageFolderSequencePins(accountId)
+          });
+        }
+      ),
       readShelfEdits: () => readShelfEdits(accountId),
       consumeShelfEdits: (recorded) => consumeShelfEdits(accountId, recorded),
       readShelfSeeds: () =>
@@ -453,6 +510,7 @@ export async function syncAccountLibraryFolders(
         )
     };
     const outcome = await syncLibraryFolders(host);
+    requireCurrent();
     // The listing lays the agreed set over the account's rows: re-list when
     // this round changed what it holds.
     if (JSON.stringify(agreedShelfState(accountId)) !== agreedBefore)
@@ -470,5 +528,7 @@ export async function syncAccountLibraryFolders(
       return false;
     }
     return STOP_CODES.has(errorCode(error) ?? '');
+  } finally {
+    accountKey?.fill(0);
   }
 }

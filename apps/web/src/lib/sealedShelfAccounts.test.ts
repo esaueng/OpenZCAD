@@ -63,7 +63,9 @@ vi.mock('./api', () => ({
 }));
 
 vi.mock('./e2ee/unlockedKeys', () => ({
-  unlockedAccount: (userId: string) => ({ accountKey: `key-${userId}` })
+  unlockedAccount: (userId: string) => ({
+    accountKey: new TextEncoder().encode(`key-${userId}`)
+  })
 }));
 
 // The sealed format without the crypto: the set as JSON, tagged format 2.
