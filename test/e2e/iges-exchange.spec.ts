@@ -26,9 +26,11 @@ test(
       mimeType: 'model/iges',
       buffer: fixture('holed-plate-faces-mm.igs')
     });
-    await expect(
-      page.getByText(/IGES surface model \(7 trimmed surfaces/)
-    ).toBeVisible();
+    // The refusal shows in the status bar and on the import card; read the
+    // status bar, as import-formats.spec.ts does.
+    await expect(page.getByRole('contentinfo')).toContainText(
+      /IGES surface model \(7 trimmed surfaces/
+    );
     await expectBodyCount(page, 0);
     await input.setInputFiles({
       name: 'cavity.igs',
