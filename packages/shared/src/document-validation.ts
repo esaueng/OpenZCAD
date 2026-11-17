@@ -355,6 +355,17 @@ const FEATURE_ENUM_FIELDS = {
       smooth: true
     })
   },
+  rib: {
+    thicknessSide: valuesOf<FeatureDataOf<'rib'>['thicknessSide']>({
+      symmetric: true,
+      first: true,
+      second: true
+    }),
+    direction: valuesOf<FeatureDataOf<'rib'>['direction']>({
+      parallel: true,
+      normal: true
+    })
+  },
   'helical-sweep': {
     construction: valuesOf<
       NonNullable<FeatureDataOf<'helical-sweep'>['construction']>
@@ -530,6 +541,7 @@ const FEATURE_KINDS = valuesOf<FeatureKind>({
   mirror: true,
   shell: true,
   'solid-offset': true,
+  rib: true,
   draft: true,
   thicken: true,
   fillet: true,
@@ -582,6 +594,7 @@ export const COMMAND_FEATURE_KINDS = {
   'feature.standard-part': 'standard-part',
   'feature.shell': 'shell',
   'feature.solid-offset': 'solid-offset',
+  'feature.rib': 'rib',
   'feature.draft': 'draft',
   'feature.thicken': 'thicken',
   'feature.direct-edit': 'direct-edit',
@@ -632,7 +645,7 @@ const FEATURE_UPDATE_FALLBACK_ENUMS: ReadonlyMap<
  */
 const FEATURE_UPDATE_NON_STRING_FIELDS = valuesOf<
   Extract<NonStringFields<FeatureData>, FeatureEnumField>
->({ axis: true, operation: true, profile: true });
+>({ axis: true, direction: true, operation: true, profile: true });
 
 /** The enums the document itself defines. */
 const DOCUMENT_ENUMS = enumsOf<ProjectDocument>({ units: UNIT_SYSTEMS });

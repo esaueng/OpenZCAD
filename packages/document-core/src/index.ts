@@ -72,6 +72,7 @@ import {
   assertDocumentContentSchema,
   assertSheetMetalSchema,
   assertDatumPointCsysSchema,
+  assertRibSchema,
   assertStandardPartSchema,
   assertPatternContentSchema,
   assertHoleContentSchema,
@@ -701,6 +702,18 @@ export interface ShellInput {
   openingFaceHashes: number[];
   openingFaceReferences?: FaceTopologyReferenceV5[];
   thickness: ParamValue;
+  ids?: BodyFeatureIds;
+}
+
+/** M06 (schema v101): a rib from an open profile, joined to its body. */
+export interface RibInput {
+  name: string;
+  targetBodyId: BodyId;
+  profile: SketchPathReference;
+  thickness: ParamValue;
+  thicknessSide: 'symmetric' | 'first' | 'second';
+  direction: 'parallel' | 'normal';
+  flip?: boolean;
   ids?: BodyFeatureIds;
 }
 
@@ -3958,6 +3971,7 @@ function addBodyResultFeature(
     | 'standard-part'
     | 'shell'
     | 'solid-offset'
+    | 'rib'
     | 'loft'
     | 'sweep'
     | 'helical-sweep'
@@ -3978,6 +3992,7 @@ function addBodyResultFeature(
         | 'standard-part'
         | 'shell'
         | 'solid-offset'
+        | 'rib'
         | 'loft'
         | 'sweep'
         | 'helical-sweep'
@@ -4256,6 +4271,32 @@ export function shellBody(
         ? { openingFaceReferences: deepClone(input.openingFaceReferences) }
         : {}),
       thickness: input.thickness
+    },
+    suppliedIds(input.ids)
+  );
+}
+
+/** Adds an M06 rib (schema v101); it replaces the body it braces. */
+export function ribBody(
+  document: ProjectDocument,
+  input: RibInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  assertRibSchema(document.schemaVersion);
+  if (input.profile.entityIds.length === 0) {
+    throw new Error('A rib needs a profile of at least one sketch curve.');
+  }
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'rib',
+    {
+      featureKind: 'rib',
+      targetBodyId: input.targetBodyId,
+      profile: deepClone(input.profile),
+      thickness: input.thickness,
+      thicknessSide: input.thicknessSide,
+      direction: input.direction,
+      ...(input.flip ? { flip: true } : {})
     },
     suppliedIds(input.ids)
   );
@@ -5471,6 +5512,14 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'thickness'
   ],
   'solid-offset': ['targetBodyId', 'distance'],
+  rib: [
+    'targetBodyId',
+    'profile',
+    'thickness',
+    'thicknessSide',
+    'direction',
+    'flip'
+  ],
   draft: [
     'targetBodyId',
     'faceHashes',

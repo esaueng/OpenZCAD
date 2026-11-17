@@ -203,6 +203,7 @@ export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   thread: 'Thread',
   shell: 'Shell',
   'solid-offset': 'Solid offset',
+  rib: 'Rib',
   draft: 'Draft',
   thicken: 'Thicken',
   fillet: 'Fillet',

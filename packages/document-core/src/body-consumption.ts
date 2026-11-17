@@ -52,6 +52,7 @@ export function replacedInputBodyId(data: FeatureData): BodyId | null {
     case 'hole':
     case 'shell':
     case 'solid-offset':
+    case 'rib':
     case 'draft':
     case 'fillet':
     case 'chamfer':

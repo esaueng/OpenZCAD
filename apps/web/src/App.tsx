@@ -1978,6 +1978,7 @@ import {
   parseCurveCandidateId,
   sketchCurveCandidates,
   sketchPointCandidates,
+  sketchCurveMiddle,
   sketchPointSpots
 } from './lib/inPlace/curves';
 import { datumAxisChoices } from './lib/datumAxisChoices';
@@ -25494,6 +25495,19 @@ export function App() {
               }
             : {})
         });
+      case 'rib':
+        return commandFactories.ribBody({
+          name,
+          targetBodyId: request.targetBodyId,
+          profile: {
+            sketchId: request.profile.sketchId,
+            entityIds: request.profile.entityIds as EntityId[]
+          },
+          thickness: request.thickness,
+          thicknessSide: request.thicknessSide,
+          direction: request.direction,
+          ...(request.flip ? { flip: true } : {})
+        });
       case 'helical-sweep':
         return commandFactories.helicalSweepProfile({
           name,
@@ -25876,6 +25890,16 @@ export function App() {
             sketchValueResolver(parameterScope.scope, doc.units)
           )
         : [],
+    curveMiddle: (sketchId, entityId) =>
+      doc
+        ? sketchCurveMiddle(
+            doc,
+            availableSketchViews,
+            sketchId,
+            entityId,
+            sketchValueResolver(parameterScope.scope, doc.units)
+          )
+        : null,
     bodyBounds: (bodyId) => inPlaceBodyPick(bodyId),
     // M17 (schema v71): the hole a standard part is inserted into.
     holeFeature: (featureId) =>

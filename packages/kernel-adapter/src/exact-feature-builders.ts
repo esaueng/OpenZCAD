@@ -279,6 +279,7 @@ import {
   resolvePlaneRefAtHistory,
   resolveSketchBasisAtHistory
 } from './exact-profile-builders';
+import { buildRibSolid } from './exact-rib';
 import { applyDirectEdit } from './exact-direct-edit-ops';
 import { resolveSketchProjectionsAtHistory } from './exact-sketch-projection';
 import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
@@ -2256,6 +2257,52 @@ function buildShellFeature(
           'shell',
           `No kept, rim or inner face passed the exact carrier and uniqueness checks, or a body has more than ${SHELL_DRAFT_LINEAGE_FACE_LIMIT} faces.`
         )
+  });
+  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+}
+
+/**
+ * M06 (schema v101): the rib's exact material (see `exact-rib.ts`), united
+ * with the body it braces through the same checked union a Boolean takes.
+ */
+function buildRibFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'rib'>
+): void {
+  const { kernel, result } = ctx;
+  if (!feature.bodyId) throw new Error('Rib has no result body.');
+  const target = result.shapes.get(data.targetBodyId);
+  if (!target || target.solids.length !== 1) {
+    throw new Error('Rib target body is unavailable.');
+  }
+  const basis = result.sketchBases.get(data.profile.sketchId);
+  if (!basis) {
+    throw new Error(
+      'The rib profile sketch plane did not resolve at its history position.'
+    );
+  }
+  const rib = buildRibSolid(
+    kernel,
+    ctx.document,
+    data,
+    target.solids[0]!,
+    basis,
+    ctx.scope,
+    (message) => raiseFeatureWarning(result, feature, message, 'advisory')
+  );
+  const { solid } = fuseUniformSolidChecked(
+    kernel,
+    [target.solids[0]!, rib],
+    [`body of "${feature.name}"`, `rib "${feature.name}"`]
+  );
+  result.consumed.add(data.targetBodyId);
+  result.shapes.set(feature.bodyId, {
+    solids: [solid],
+    lineage: remusHashOnlyLineage(
+      'rib',
+      'Rib topology has no verified output evolution relation.'
+    )
   });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
@@ -4472,6 +4519,9 @@ function buildFeatureByKind(
       break;
     case 'solid-offset':
       buildSolidOffsetFeature(ctx, feature, feature.data);
+      break;
+    case 'rib':
+      buildRibFeature(ctx, feature, feature.data);
       break;
     case 'draft':
       buildDraftFeature(ctx, feature, feature.data);
