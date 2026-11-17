@@ -240,4 +240,22 @@ test('U and X switch an edited boolean whose sources it consumed', async ({
   );
   await finishInPlaceCommand(page, 'Edit Subtract');
   await expectFeatureMeasurement(page, featureRow, '750');
+
+  // The command palette offers the same switch rather than refusing it
+  // for the one result body on screen.
+  await row.click();
+  await expect(editBar).toBeVisible();
+  await page.keyboard.press('ControlOrMeta+k');
+  await page
+    .getByRole('combobox', { name: 'Search commands', exact: true })
+    .fill('intersect');
+  const option = page.getByRole('option', { name: /^Intersect/ }).first();
+  await expect(option).not.toContainText('Needs at least two bodies');
+  await page.keyboard.press('Enter');
+  await expect(barChoice(editBar, 'Operation', 'Intersect')).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
+  await finishInPlaceCommand(page, 'Edit Subtract');
+  await expectFeatureMeasurement(page, featureRow, '250');
 });
