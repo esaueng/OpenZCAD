@@ -133,7 +133,17 @@ fragment in `docs/roadmap-evidence/`.
 3. **Grant mode `comment`.** Adding a value to the owner-signed link grant's
    mode; older browsers refuse a grant with an unknown mode (fail closed), so
    a commenter link opens only on an updated build. **Approved by the owner
-   on 2026-11-17.**
+   on 2026-11-17.** **Open follow-up (3a):** the fail-closed reaches further
+   than the link. Every member's browser checks the project's link set,
+   grants included, each time it opens the encrypted document. An older
+   build therefore refuses the whole project as malformed, not just the
+   link, from the moment one commenter link exists. That covers stale tabs
+   and older desktop builds until they update. The alternative keeps the
+   grant's mode `view` and records the comment permission in a separate,
+   optional owner-signed record that older builds ignore. Older members
+   then still open the project, and only the visitor's comment box needs an
+   updated build. Confirm the grant mode as approved, or choose the
+   separate record.
 4. **Drawing sheets on links.** Per-sheet opt-in by an editor, rather than
    per-link by the owner. An editor can already put any text in the model a
    link serves. **Approved by the owner on 2026-11-17**, as built in #1670.
