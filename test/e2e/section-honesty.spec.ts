@@ -37,7 +37,7 @@ test('the bracket says which faces stop the exact cut, and Build shows a cut lef
     { timeout: 30_000 }
   );
   await expect(
-    panel.getByRole('button', { name: 'Export the exact section as DXF' })
+    panel.getByRole('button', { name: 'Export the section as DXF' })
   ).toBeDisabled();
 
   // The slider steps on a round grid, never 1% of the range (I54).

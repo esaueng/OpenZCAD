@@ -54,10 +54,19 @@ function region(bodyId: string, area: number) {
   return {
     bodyId,
     area,
+    boundary: 'exact' as 'exact' | 'approximate',
     loops: [{ kind: 'outer' as const, points: [[0, 0, 3] as const] }],
     positions: new Float32Array([0, 0, 3]),
     indices: new Uint32Array([0])
   };
+}
+
+/**
+ * A region whose round edges the kernel cut into chords: the demo bracket's
+ * base plate at 4 mm, two 3 mm holes as 64-sided polygons.
+ */
+function chorded(bodyId: string, area = 3143.5421) {
+  return { ...region(bodyId, area), boundary: 'approximate' as const };
 }
 
 /** The one state the drawing may be written from. */
@@ -189,6 +198,23 @@ describe('the exact section asks about the bodies on screen', () => {
     );
     expect(announced.at(-1)).toBe(
       'Exported the XY section to part-section.dxf.'
+    );
+  });
+
+  it('says so when the drawing it wrote has chords for curves', async () => {
+    const exportModel = vi.fn(async () => ({ text: '0\r\nEOF\r\n' }));
+    const announced: string[] = [];
+    await writeSectionDxf(
+      { exportModel } as never,
+      onScreen(document, [toBodyId('body_a')]),
+      plane,
+      sectionOutlineFromReport(report([chorded('body_a')])),
+      async () => true,
+      'part',
+      (message: string) => announced.push(message)
+    );
+    expect(announced.at(-1)).toBe(
+      'Exported the XY section to part-section.dxf. Curved edges are written as straight segments.'
     );
   });
 
@@ -492,6 +518,72 @@ describe('what the section rail may offer to export', () => {
     reason: 'area-mismatch',
     message: "The kernel's cross-section area (720.8013) disagrees…"
   };
+
+  it('never reports a chorded section as exact', () => {
+    // UX-013: the rail said "Exact" and 3143.54 mm² over two holes the
+    // kernel had cut into 64-sided polygons; the true area is 3143.45.
+    const state = sectionOutlineFromReport(report([chorded('body_a')]));
+    expect(state).toMatchObject({ kind: 'exact', boundary: 'approximate' });
+    const status = describeSectionOutline(state, 'mm');
+    expect(status.kind).toBe('approximate');
+    expect(status.detail).toBe(
+      'About 3143.54 mm² of material. Curved edges are cut as straight segments.'
+    );
+    // The kernel's polygon is still a drawing of the whole cut.
+    expect(sectionOutlineExportable(state)).toBe(true);
+  });
+
+  it('is approximate as soon as one region of several is', () => {
+    const state = sectionOutlineFromReport(
+      report([region('body_a', 100), chorded('body_b', 50)])
+    );
+    expect(state).toMatchObject({ boundary: 'approximate', area: 150 });
+    expect(describeSectionOutline(state, 'mm').kind).toBe('approximate');
+  });
+
+  it('quotes no tolerance for an approximate area, even one it is handed', () => {
+    // Review of #1695: every figure tried for "how far off" could understate
+    // it, so none is carried. A report that still holds some — an older
+    // worker's — gets no "±" and no "within" out of them.
+    const state = sectionOutlineFromReport(
+      report([
+        {
+          ...chorded('body_a', 600),
+          boundaryDeviation: 0.0036136,
+          areaUncertainty: 0.1362
+        } as ReturnType<typeof region>
+      ])
+    );
+    expect(state).not.toHaveProperty('boundaryDeviation');
+    expect(state).not.toHaveProperty('areaUncertainty');
+    const status = describeSectionOutline(state, 'mm');
+    expect(status).toEqual({
+      kind: 'approximate',
+      detail:
+        'About 600 mm² of material. Curved edges are cut as straight segments.'
+    });
+    expect(status.detail).not.toMatch(/±|within/);
+  });
+
+  it('takes a region that does not say it is exact for approximate', () => {
+    // A report from an adapter that never checked carries no verdict. That
+    // is not evidence of an exact boundary.
+    const { boundary: _unsaid, ...unchecked } = region('body_a', 540);
+    const state = sectionOutlineFromReport(
+      report([unchecked as ReturnType<typeof region>])
+    );
+    expect(state).toMatchObject({ kind: 'exact', boundary: 'approximate' });
+    expect(describeSectionOutline(state, 'mm').kind).toBe('approximate');
+  });
+
+  it('keeps the notes about other bodies beside an approximate area', () => {
+    const state = sectionOutlineFromReport(
+      report([chorded('body_a', 540)], [missed])
+    );
+    expect(describeSectionOutline(state, 'mm').detail).toBe(
+      'About 540 mm² of material, 1 body is not cut here. Curved edges are cut as straight segments.'
+    );
+  });
 
   it('counts a plane that misses a body apart from one it cannot section', () => {
     const state = sectionOutlineFromReport(

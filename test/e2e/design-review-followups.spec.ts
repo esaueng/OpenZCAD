@@ -830,7 +830,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
           });
           expect(sameFrameMove).toBeCloseTo(1, 5);
           const dxf = section.getByRole('button', {
-            name: 'Export the exact section as DXF'
+            name: 'Export the section as DXF'
           });
           await expect
             .poll(() =>
@@ -917,7 +917,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
         });
         await reachable(section.getByRole('switch', { name: 'Section cut' }));
         const dxf = section.getByRole('button', {
-          name: 'Export the exact section as DXF'
+          name: 'Export the section as DXF'
         });
         // Keep it open through Computing → Exact, when the result changes
         // its height and another placement pass must preserve the clamp.

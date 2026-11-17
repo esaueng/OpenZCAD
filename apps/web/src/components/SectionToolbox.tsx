@@ -31,6 +31,9 @@ const STATUS_LABELS = {
   clipping: 'Preview',
   computing: 'Computing…',
   exact: 'Exact',
+  // The kernel's section with chords where curves belong: not the display
+  // preview, and not exact.
+  approximate: 'Approximate',
   refused: 'Preview'
 } as const;
 
@@ -500,9 +503,11 @@ export function SectionToolbox({
         <Tooltip
           label="Export section"
           description={
-            exportable
-              ? 'Writes the exact section curves as DXF'
-              : 'Needs an exact section of every body the plane cuts'
+            !exportable
+              ? 'Needs an exact section of every body the plane cuts'
+              : status.kind === 'exact'
+                ? 'Writes the exact section curves as DXF'
+                : 'Writes the section as DXF, curved edges as straight segments'
           }
         >
           <button
@@ -510,7 +515,7 @@ export function SectionToolbox({
             className="rail-section-export"
             onClick={onExport}
             disabled={!exportable}
-            aria-label="Export the exact section as DXF"
+            aria-label="Export the section as DXF"
           >
             <Download size={14} aria-hidden="true" />
             DXF
