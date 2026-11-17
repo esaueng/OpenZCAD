@@ -1921,6 +1921,7 @@ import {
   keypadText,
   profileRegionLoops,
   isInPlacePatternTool,
+  booleanOperationSwitch,
   inPlaceBodyMode,
   inPlaceFaceMode,
   takesFeatureFaces,
@@ -10318,12 +10319,16 @@ export function App() {
         : undefined,
     [liveBodyRepresentations, hiddenBodyIds]
   );
+  // Whether a Union, Subtract or Intersect runs in place; mirrored from the
+  // in-place command below, which is declared after this.
+  const [booleanCommandRunning, setBooleanCommandRunning] = useState(false);
   const availability: ToolAvailability = {
     editDisabledReason,
     editDisabledExplained: liveSessionConnecting,
     sketchCount: sketchOptions.length,
     closedProfileSketchCount,
     liveBodyCount: committedBodyCount,
+    ...(booleanCommandRunning ? { booleanCommandRunning } : {}),
     exactGeometryReady: displayedGeometryComplete,
     hasEdgeSelected: selectedEdges.length > 0,
     ...(hasCylindricalFace !== undefined ? { hasCylindricalFace } : {}),
@@ -11577,6 +11582,19 @@ export function App() {
     const holdReason = selectionRailToolHoldReason(railPick, nextTool);
     if (holdReason) {
       setStatus(holdReason, { unlogged: true });
+      return;
+    }
+    // Over a running boolean, another boolean switches its operation as the
+    // Options menu does, keeping the bodies it holds (#1654).
+    const operation = modelingFeature
+      ? null
+      : booleanOperationSwitch(inPlaceRef.current.tool, nextTool);
+    if (operation) {
+      // Retires any launch still waiting on a chunk (a Move asked for just
+      // before): it would otherwise open over the switched command later.
+      ++toolLaunchRef.current;
+      if (operation !== inPlaceRef.current.tool)
+        inPlaceRef.current.setOption('operation', operation);
       return;
     }
     const launch = ++toolLaunchRef.current;
@@ -25884,6 +25902,12 @@ export function App() {
   }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
+  // Mirrored before paint for the tool availability computed above it.
+  const inPlaceBooleanRunning =
+    booleanOperationSwitch(inPlace.tool, 'union') !== null;
+  useLayoutEffect(() => {
+    setBooleanCommandRunning(inPlaceBooleanRunning);
+  }, [inPlaceBooleanRunning]);
   const prepareResponsiveFrame = useResponsiveFraming({
     projectId: doc?.projectId ?? null,
     mode: resolvedWorkspaceMode,
