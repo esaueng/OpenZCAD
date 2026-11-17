@@ -378,7 +378,8 @@ test('Linear pattern repeats along a picked face normal', async ({ page }) => {
   );
   const bar = await startTool(page, /^Linear pattern/, 'Linear pattern');
   await pickObjectsBody(page, 'Block');
-  await expect(bar).toContainText('aim it');
+  // The body is taken: the hint moves on to the spacing (#1599).
+  await expect(bar).toContainText('Drag the spacing');
   // The front face: its normal points down −Y, which no world axis is.
   await setSelectionFilter(page, 'Face');
   await clickWorldPoint(page, [5, 0, 5]);
