@@ -354,9 +354,10 @@ const PROJECT_DOCUMENT_ROUTE = /^\/api\/projects\/([^/]+)\/document$/;
 const WORKSPACE_SESSIONS_ROUTE =
   /^\/api\/projects\/([^/]+)\/workspace-sessions$/;
 const PROJECT_MEASUREMENTS_ROUTE = /^\/api\/projects\/([^/]+)\/measurements$/;
-/** L08 review comments (migration 0058): a project's threads, or one comment. */
-const PROJECT_COMMENTS_ROUTE =
-  /^\/api\/projects\/([^/]+)\/comments(?:\/(cmt_[0-9a-f-]{36}))?$/;
+/** L08 review comments (migration 0058): a project's threads. */
+const PROJECT_COMMENTS_ROUTE = /^\/api\/projects\/([^/]+)\/comments$/;
+/** One comment of a project, to resolve or delete. */
+const PROJECT_COMMENT_ROUTE = /^\/api\/projects\/([^/]+)\/comments\/([^/]+)$/;
 const PROJECT_COLLABORATION_ROUTE = /^\/api\/projects\/([^/]+)\/collaboration$/;
 const PROJECT_COLLABORATION_TICKET_ROUTE =
   /^\/api\/projects\/([^/]+)\/collaboration\/ticket$/;
@@ -2622,10 +2623,14 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return new Response(null, { status: 204 });
   }
 
-  const commentsMatch = PROJECT_COMMENTS_ROUTE.exec(pathname);
+  const commentsMatch =
+    PROJECT_COMMENTS_ROUTE.exec(pathname) ??
+    PROJECT_COMMENT_ROUTE.exec(pathname);
   if (commentsMatch) {
     const projectId = commentsMatch[1]!;
     const commentId = commentsMatch[2];
+    if (commentId !== undefined && !/^cmt_[0-9a-f-]{36}$/.test(commentId))
+      return json({ error: 'That comment does not exist.' }, 404);
     // Members of every role read and write; an encrypted project's comments
     // are never stored here (assertPlaintextProject refuses the route).
     const access = await persistence.requireProjectRead(userId, projectId);
