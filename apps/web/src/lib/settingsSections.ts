@@ -50,10 +50,20 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Default units',
       'Unitless imports',
       'Export units',
+      'STEP protocol',
       'Reopen the last project',
       'Confirm destructive actions'
     ],
-    searchTerms: ['import', 'export', 'stl', 'inches', 'millimeters']
+    searchTerms: [
+      'import',
+      'export',
+      'stl',
+      'inches',
+      'millimeters',
+      'step',
+      'ap214',
+      'ap242'
+    ]
   },
   {
     id: 'appearance',
