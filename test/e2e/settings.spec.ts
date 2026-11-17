@@ -18,6 +18,115 @@ import {
   revealModelPanel
 } from './openzcad-fixtures';
 
+for (const scope of ['profile', 'all'] as const) {
+  test(
+    `erases ${scope} despite a failed settings upload`,
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      await stubApi(page);
+      await page.route('**/api/session', (route) =>
+        route.fulfill({
+          json: {
+            userId: 'user_e2e',
+            email: 'reset@example.test',
+            mode: 'email-code'
+          }
+        })
+      );
+      await page.route('**/api/health', (route) =>
+        route.fulfill({
+          json: {
+            status: 'ok',
+            environment: 'beta',
+            time: new Date().toISOString(),
+            accountErasureReady: true,
+            projectErasureReady: true
+          }
+        })
+      );
+      let failedUploads = 0;
+      await page.route('**/api/settings', (route) => {
+        if (route.request().method() !== 'PATCH') return route.fallback();
+        failedUploads++;
+        return route.fulfill({
+          status: 403,
+          json: { error: 'Device is locked' }
+        });
+      });
+      await page.route('**/api/account/deletion-preview?*', (route) =>
+        route.fulfill({
+          json: {
+            confirmationKind: 'email',
+            confirmationText: 'reset@example.test',
+            projectCount: 0,
+            documentBytes: 0,
+            revisionBytes: 0,
+            revisionCount: 0,
+            collaboratorCount: 0
+          }
+        })
+      );
+      const deletions: unknown[] = [];
+      await page.route('**/api/account/delete-data', (route) => {
+        deletions.push(route.request().postDataJSON());
+        return route.fulfill({
+          json: { ok: true, scope, deletedProjectIds: [], signedOut: true }
+        });
+      });
+      await page.goto('/');
+      await page.getByRole('button', { name: 'Open settings' }).click();
+      await page
+        .getByRole('radiogroup', { name: 'Default units', exact: true })
+        .getByRole('radio', { name: 'Inches', exact: true })
+        .check();
+      await expect.poll(() => failedUploads).toBeGreaterThan(0);
+      await page
+        .getByRole('button', { name: 'Privacy & data', exact: true })
+        .click();
+      await page
+        .getByLabel(scope === 'profile' ? 'Profile' : 'Everything', {
+          exact: true
+        })
+        .check();
+      await page
+        .getByRole('button', {
+          name: scope === 'profile' ? 'Delete profile' : 'Delete all data',
+          exact: true
+        })
+        .click();
+      const dialog = page.getByRole('dialog', {
+        name:
+          scope === 'profile'
+            ? 'Delete your cloud profile?'
+            : 'Delete all cloud data?',
+        exact: true
+      });
+      await dialog
+        .getByLabel('Deletion confirmation')
+        .fill('reset@example.test');
+      await dialog
+        .getByRole('button', {
+          name:
+            scope === 'profile'
+              ? 'Delete cloud profile'
+              : 'Delete all cloud data',
+          exact: true
+        })
+        .click();
+      await expect
+        .poll(() => deletions)
+        .toEqual([{ scope, confirmation: 'reset@example.test' }]);
+      await expect(dialog).toHaveCount(0);
+      await page.getByRole('button', { name: 'General', exact: true }).click();
+      await expect(
+        page
+          .getByRole('radiogroup', { name: 'Default units', exact: true })
+          .getByRole('radio', { name: 'Inches', exact: true })
+      ).toBeChecked();
+    }
+  );
+}
+
 test(
   'discloses free built-in AI data use and lets users choose a personal model',
   { tag: '@ci-smoke' },
