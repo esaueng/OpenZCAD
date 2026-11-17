@@ -65,6 +65,61 @@ export function assertRibSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 101, 'Ribs');
 }
 
+/** R01 reference constructors (schema v108). */
+export function assertDatumReferenceConstructorSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    108,
+    'Datum planes square to an edge or at an angle, and axes square to a face,'
+  );
+}
+
+/**
+ * Whether a datum plane or axis definition is an R01 v108 constructor: a
+ * plane square to an edge, a plane through an edge at an angle, or an axis
+ * square to a face. An older client cannot resolve them.
+ */
+export function hasDatumReferenceConstructorContent(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const data = value as { featureKind?: unknown; definition?: unknown };
+  const kind =
+    typeof data.definition === 'object' && data.definition !== null
+      ? (data.definition as { kind?: unknown }).kind
+      : undefined;
+  return (
+    (data.featureKind === 'datum-plane' &&
+      (kind === 'normal-to-edge' || kind === 'edge-angle')) ||
+    (data.featureKind === 'datum-axis' && kind === 'face-normal')
+  );
+}
+
+/**
+ * Whether a command payload (a new datum or an edit) holds a v108 datum
+ * definition anywhere. The three kind names are used by nothing else.
+ */
+export function hasDatumReferenceConstructorKind(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const item = pending.pop();
+    if (typeof item !== 'object' || item === null || seen.has(item)) continue;
+    seen.add(item);
+    if (Array.isArray(item)) {
+      for (const child of item as unknown[]) pending.push(child);
+      continue;
+    }
+    const entry = item as Record<string, unknown>;
+    if (
+      entry.kind === 'normal-to-edge' ||
+      entry.kind === 'edge-angle' ||
+      entry.kind === 'face-normal'
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
 /** I01 (schema v59): slot composites, wherever a document or command holds one. */
 export function assertSlotSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 59, 'Sketch slots');
@@ -809,6 +864,12 @@ export function assertDocumentContentCommandSchema(
     )
       assertDatumPointCsysSchema(document.schemaVersion);
     if (command.kind === 'feature.rib') assertRibSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('feature.') &&
+      hasDatumReferenceConstructorKind(command.payload)
+    )
+      assertDatumReferenceConstructorSchema(document.schemaVersion);
     if (command.kind === 'feature.standard-part')
       assertStandardPartSchema(document.schemaVersion, command.payload);
     if (command.kind === 'printClearance.set')
@@ -1213,6 +1274,11 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       assertDatumPointCsysSchema(document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'rib')
       assertRibSchema(document.schemaVersion);
+    if (
+      node.kind === 'feature' &&
+      hasDatumReferenceConstructorContent(node.data)
+    )
+      assertDatumReferenceConstructorSchema(document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'standard-part')
       assertStandardPartSchema(document.schemaVersion, node.data);
     if (

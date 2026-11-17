@@ -431,7 +431,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // control frames stored on the model's faces. An older client would drop
 // the unknown section on save, so it must refuse the document. Builds on
 // v105.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 106 as const;
+// v108 adds the R01 reference constructors: a datum plane square to an edge
+// (at a fraction along it, or through a point), a plane through a straight
+// edge at an angle to a reference plane, and a datum axis square to a face
+// at a point. An older client cannot resolve them, so it must refuse.
+// Builds on v106 (v102 was left unused when D07 landed first; v107 is
+// claimed by #1732).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 108 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -1198,10 +1204,7 @@ export interface CsysPlaneSource {
 }
 
 export type DatumPlaneSource =
-  | CanonicalPlaneSource
-  | DatumPlaneRef
-  | FacePlaneSource
-  | CsysPlaneSource;
+  CanonicalPlaneSource | DatumPlaneRef | FacePlaneSource | CsysPlaneSource;
 
 /**
  * Schema v25: a model vertex, named as one end of an open edge whose
@@ -1263,7 +1266,41 @@ export type DatumPlaneDefinition =
       source: DatumPlaneSource;
       point: DatumPointSource;
       reverseNormal?: boolean;
+    }
+  | {
+      /**
+       * Schema v108: the plane square to an edge. Its normal is the edge's
+       * tangent, in the sense from the edge's end 0 toward its end 1.
+       *
+       * - `at: { fraction }` places it on the edge (a curve or a line) at
+       *   that fraction from end 0: of the length for a line or arc, of the
+       *   parameter span for any other curve. The plane's u runs toward the
+       *   centre of an arc and is canonical otherwise.
+       * - `at: { point }` passes it through a point; the edge must then be
+       *   straight, its direction the normal.
+       */
+      kind: 'normal-to-edge';
+      edge: DatumAxisEdgeSource;
+      at: DatumEdgePosition;
+      reverseNormal?: boolean;
+    }
+  | {
+      /**
+       * Schema v108: the plane through a straight edge, turned `angleDeg`
+       * about it (right hand about end 0 → end 1) from the plane through the
+       * edge parallel to `reference`. The edge must be parallel to the
+       * reference plane. Its origin is the edge's end 0 and its u the edge.
+       */
+      kind: 'edge-angle';
+      edge: DatumAxisEdgeSource;
+      reference: DatumPlaneSource;
+      angleDeg: ParamValue;
+      reverseNormal?: boolean;
     };
+
+/** Schema v108: where on (or through) an edge a datum is placed. */
+export type DatumEdgePosition =
+  { fraction: ParamValue } | { point: DatumPointSource };
 
 /**
  * Schema v28: a straight model edge, by its schema-v5 lineage, that a datum
@@ -1335,6 +1372,19 @@ export type DatumAxisDefinition =
       kind: 'csys-axis';
       csys: DatumCsysRef;
       axis: CsysAxisName;
+      reverseDirection?: boolean;
+    }
+  | {
+      /**
+       * Schema v108: the axis square to a face where a point drops onto it.
+       * The point is carried to the nearest point of the face's surface;
+       * the axis starts there and runs along the face's outward normal. A
+       * point whose foot falls off the face, or at a point with no normal
+       * (a cone's apex), is refused.
+       */
+      kind: 'face-normal';
+      source: DatumAxisFaceSource;
+      point: DatumPointSource;
       reverseDirection?: boolean;
     };
 
@@ -1479,6 +1529,7 @@ export function datumAxisPlaneSources(
 export function datumAxisPointSources(
   definition: DatumAxisDefinition
 ): DatumPointSource[] {
+  if (definition.kind === 'face-normal') return [definition.point];
   return definition.kind === 'two-point' ? [...definition.points] : [];
 }
 
@@ -1487,7 +1538,11 @@ export function datumAxisSourceBodyIds(
   definition: DatumAxisDefinition
 ): BodyId[] {
   const bodies = new Set<BodyId>();
-  if (definition.kind === 'edge' || definition.kind === 'cylinder')
+  if (
+    definition.kind === 'edge' ||
+    definition.kind === 'cylinder' ||
+    definition.kind === 'face-normal'
+  )
     bodies.add(definition.source.bodyId);
   for (const source of datumAxisPlaneSources(definition))
     if (source.type === 'face') bodies.add(source.bodyId);
@@ -1591,7 +1646,10 @@ export function datumPlaneSources(
       return [definition.source];
     case 'midplane':
       return [...definition.sources];
+    case 'edge-angle':
+      return [definition.reference];
     case 'three-point':
+    case 'normal-to-edge':
       return [];
   }
 }
@@ -1605,9 +1663,21 @@ export function datumPointSources(
       return [...definition.points];
     case 'parallel-point':
       return [definition.point];
+    case 'normal-to-edge':
+      return 'point' in definition.at ? [definition.at.point] : [];
     default:
       return [];
   }
+}
+
+/** Schema v108: the edge a datum plane definition reads, if any. */
+export function datumPlaneEdgeSource(
+  definition: DatumPlaneDefinition
+): DatumAxisEdgeSource | undefined {
+  return definition.kind === 'normal-to-edge' ||
+    definition.kind === 'edge-angle'
+    ? definition.edge
+    : undefined;
 }
 
 /**
@@ -1621,6 +1691,8 @@ export function datumSourceBodyIds(definition: DatumPlaneDefinition): BodyId[] {
     if (source.type === 'face') bodies.add(source.bodyId);
   for (const point of datumPointSources(definition))
     if (point.type === 'edge-vertex') bodies.add(point.bodyId);
+  const edge = datumPlaneEdgeSource(definition);
+  if (edge) bodies.add(edge.bodyId);
   return [...bodies];
 }
 

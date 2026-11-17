@@ -412,6 +412,12 @@ export function featureValueSummary(
       if (data.definition.kind === 'three-point') return `3 points${flip}`;
       if (data.definition.kind === 'parallel-point')
         return `through point${flip}`;
+      if (data.definition.kind === 'normal-to-edge')
+        return `square to edge${flip}`;
+      if (data.definition.kind === 'edge-angle') {
+        const angle = evalParamValue(data.definition.angleDeg, scope);
+        return `${angle === null ? String(data.definition.angleDeg) : formatNumber(angle)}° to edge${flip}`;
+      }
       // A length, so a unit-bearing offset ("1 in") still summarises.
       const offset = lengthValue(data.definition.offset);
       return offset === null ? null : `${offset} ${unit}${flip}`;
@@ -424,7 +430,8 @@ export function featureValueSummary(
           edge: 'along edge',
           cylinder: 'cylinder axis',
           'plane-intersection': 'planes meet',
-          'csys-axis': `${data.definition.kind === 'csys-axis' ? data.definition.axis : ''} axis`
+          'csys-axis': `${data.definition.kind === 'csys-axis' ? data.definition.axis : ''} axis`,
+          'face-normal': 'square to face'
         }[data.definition.kind]
       }${reversed}`;
     }

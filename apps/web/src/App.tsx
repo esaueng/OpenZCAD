@@ -64,6 +64,7 @@ import { exactWarningBaseline } from './lib/exactWarnings';
 import {
   beginDatumVertexRepair,
   datumAxisSourceFailed,
+  datumPlaneEdgeFailed,
   datumFaceAttachFailed,
   datumVertexRepairSlots,
   datumVertexSourceFailed,
@@ -3544,6 +3545,8 @@ export function App() {
     first?: TopologySelection;
     /** Requested vertex roles are staged without touching the document. */
     vertices?: DatumVertexRepairSession;
+    /** Schema v108: the edge of a plane on an edge is re-picked. */
+    edge?: true;
   } | null>(null);
   /** Null means the active tool decides what picking is narrowed to. */
   const [manualSelectionFilter, setManualSelectionFilter] =
@@ -3676,14 +3679,15 @@ export function App() {
   // left over from a fillet silently swallowed every face click while the
   // prompt still said "click a planar face". The manual choice survives and
   // takes over again once the sketch has a plane.
-  const selectionFilter = datumRepair?.vertices
-    ? 'edge'
-    : tool === 'sketch' || (inPlaceFeaturePick && !manualSelectionFilter)
-      ? 'face'
-      : effectiveSelectionFilter(
-          manualSelectionFilter,
-          tool ?? inPlaceEdgeTool
-        );
+  const selectionFilter =
+    datumRepair?.vertices || datumRepair?.edge
+      ? 'edge'
+      : tool === 'sketch' || (inPlaceFeaturePick && !manualSelectionFilter)
+        ? 'face'
+        : effectiveSelectionFilter(
+            manualSelectionFilter,
+            tool ?? inPlaceEdgeTool
+          );
   const [statusEntry, setStatusEntry] = useState<StatusEntry>(() => ({
     text: cloudFunctionsEnabled
       ? LIBRARY_MODE_STATUS.checking
@@ -11843,7 +11847,7 @@ export function App() {
         if (!seed || !document || inPlaceRef.current.tool !== tool) return;
         const ref =
           seed.kind === 'face'
-            ? picks.faceRef(document, seed, kinds)
+            ? picks.faceRef(document, seed, kinds, at)
             : picks.edgeRef(document, seed, at, kinds, 0);
         if (!('reason' in ref)) inPlaceRef.current.pickRef(ref);
       });
@@ -20933,7 +20937,7 @@ export function App() {
             : 0;
         return pickDatumRef((picks, document) =>
           picked.kind === 'face'
-            ? picks.faceRef(document, picked, kinds)
+            ? picks.faceRef(document, picked, kinds, at)
             : picks.edgeRef(document, picked, at, kinds, points)
         );
       }
@@ -21229,6 +21233,34 @@ export function App() {
                   'That pick cannot replace this datum vertex.'
                 ),
                 { sticky: true }
+              );
+            }
+          }
+        );
+        return;
+      }
+      if (datumRepair.edge) {
+        void import('./lib/datumPlanes').then(
+          ({ datumPlaneEdgeRepairEdit }) => {
+            if (withdrawn()) return;
+            try {
+              const edit = datumPlaneEdgeRepairEdit(
+                base,
+                repair.featureId,
+                selection
+              );
+              void validatedFeature.runTransaction([edit.command], {
+                label: edit.label,
+                cancelled: withdrawn,
+                targets: affectedFeatureTargets(base, repair.featureId),
+                validateDerived: edit.validateDerived,
+                successMessage: `"${repair.name}" follows the re-picked edge.`,
+                onSuccess: () => setDatumRepair(null),
+                onFailure: (message) => setStatus(message)
+              });
+            } catch (error) {
+              setStatus(
+                errorMessage(error, 'That pick cannot carry this plane.')
               );
             }
           }
@@ -32913,10 +32945,43 @@ export function App() {
             ];
           })()
         : []),
+      // Schema v108: a plane on an edge whose edge was lost or cannot carry it.
+      ...(feature.data.featureKind === 'datum-plane' &&
+      (feature.data.definition.kind === 'normal-to-edge' ||
+        feature.data.definition.kind === 'edge-angle') &&
+      !isFeatureSuppressed(feature) &&
+      !doc?.derived.datumFrames?.[feature.featureId] &&
+      datumPlaneEdgeFailed(
+        feature,
+        doc && featureAttribution?.derived === doc.derived
+          ? featureAttribution.featureWarnings
+          : []
+      )
+        ? [
+            {
+              item: {
+                id: 'repair-datum-plane-edge',
+                label: 'Re-pick source edge…',
+                icon: <Crosshair size={13} aria-hidden="true" />
+              },
+              run: () => {
+                if (!ensureCanEdit('repair a feature')) return;
+                setTool(null);
+                clearSelection();
+                setFaceRepair(null);
+                setDatumRepair({ feature, slot: 0, edge: true });
+                setStatus(
+                  `Re-pick the edge for "${feature.name}": click an edge · Esc cancels.`
+                );
+              }
+            }
+          ]
+        : []),
       // R01: an axis along an edge or a cylinder whose source was lost.
       ...(feature.data.featureKind === 'datum-axis' &&
       (feature.data.definition.kind === 'edge' ||
-        feature.data.definition.kind === 'cylinder') &&
+        feature.data.definition.kind === 'cylinder' ||
+        feature.data.definition.kind === 'face-normal') &&
       !isFeatureSuppressed(feature) &&
       !doc?.derived.datumAxes?.[feature.featureId] &&
       datumAxisSourceFailed(
@@ -32942,7 +33007,7 @@ export function App() {
                 setFaceRepair(null);
                 setDatumRepair({ feature, slot: 0 });
                 setStatus(
-                  `Re-pick the source for "${feature.name}": click ${feature.data.featureKind === 'datum-axis' && feature.data.definition.kind === 'edge' ? 'a straight edge' : 'a cylindrical or conical face'} · Esc cancels.`
+                  `Re-pick the source for "${feature.name}": click ${feature.data.featureKind === 'datum-axis' && feature.data.definition.kind === 'edge' ? 'a straight edge' : feature.data.featureKind === 'datum-axis' && feature.data.definition.kind === 'face-normal' ? 'a face' : 'a cylindrical or conical face'} · Esc cancels.`
                 );
               }
             }

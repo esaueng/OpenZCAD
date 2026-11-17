@@ -23,6 +23,7 @@ import {
   featureDatumPointRefs,
   isFeatureSuppressed,
   type BodyId,
+  type DatumAxisEdgeSource,
   type DatumPlaneDefinition,
   type DatumPlaneSource,
   type DatumPointRef,
@@ -93,6 +94,17 @@ export interface DatumPlaneFormState {
    */
   points: DatumPointDrafts;
   reverseNormal: boolean;
+  /**
+   * Schema v108: the edge a plane stands square to, or turns about. Picked
+   * in place; a reopened card keeps the stored one.
+   */
+  edge?: DatumAxisEdgeSource | null;
+  /** Square to an edge: at a fraction along it, or through the first point. */
+  edgeAt?: 'fraction' | 'point';
+  /** The fraction along the edge from its end 0, as typed. */
+  position?: string;
+  /** The angle about the edge from the plane parallel to source A, as typed. */
+  angle?: string;
 }
 
 /** A vertex the card can offer for a point slot. */
@@ -449,6 +461,27 @@ export function datumFormStateFromFeature(
         sourceA: definition.source,
         points: [pointDraft(definition.point), null, null]
       };
+    case 'normal-to-edge':
+      return 'point' in definition.at
+        ? {
+            ...base,
+            edge: definition.edge,
+            edgeAt: 'point',
+            points: [pointDraft(definition.at.point), null, null]
+          }
+        : {
+            ...base,
+            edge: definition.edge,
+            edgeAt: 'fraction',
+            position: String(definition.at.fraction)
+          };
+    case 'edge-angle':
+      return {
+        ...base,
+        edge: definition.edge,
+        sourceA: definition.reference,
+        angle: String(definition.angleDeg)
+      };
   }
 }
 
@@ -504,6 +537,56 @@ export function datumFormValidation(
 ): { kind: 'missing' | 'invalid'; reason: string } | null {
   if (!state.name.trim()) {
     return { kind: 'invalid', reason: 'Name the plane.' };
+  }
+  if (state.mode === 'normal-to-edge' || state.mode === 'edge-angle') {
+    if (!state.edge) {
+      return {
+        kind: 'missing',
+        reason: 'Pick the edge with the Plane tool in the viewport.'
+      };
+    }
+    if (state.mode === 'normal-to-edge') {
+      if (state.edgeAt === 'point')
+        return pointValidation(state.points[0], 'through', scope, units);
+      const preview = previewExpression(state.position ?? '', scope);
+      if (!preview.ok || preview.value === undefined) {
+        return {
+          kind: 'invalid',
+          reason:
+            preview.text === 'required'
+              ? 'Enter a position along the edge.'
+              : `Position: ${preview.text}`
+        };
+      }
+      if (!(preview.value >= 0 && preview.value <= 1)) {
+        return {
+          kind: 'invalid',
+          reason: 'The position is a fraction of the edge, from 0 to 1.'
+        };
+      }
+      return null;
+    }
+    if (!state.sourceA) {
+      return {
+        kind: 'missing',
+        reason: 'Choose the plane the angle is measured from.'
+      };
+    }
+    const preview = previewExpression(
+      state.angle ?? '',
+      scope,
+      units ? { documentUnits: units, dimension: 'angle' } : undefined
+    );
+    if (!preview.ok || preview.value === undefined) {
+      return {
+        kind: 'invalid',
+        reason:
+          preview.text === 'required'
+            ? 'Enter an angle.'
+            : `Angle: ${preview.text}`
+      };
+    }
+    return null;
   }
   if (state.mode === 'three-point') {
     for (let index = 0; index < 3; index += 1) {
@@ -570,6 +653,39 @@ export function buildDatumPlaneDefinition(
   state: DatumPlaneFormState
 ): DatumPlaneDefinition {
   const reverse = state.reverseNormal ? { reverseNormal: true } : {};
+  if (state.mode === 'normal-to-edge') {
+    if (!state.edge)
+      throw new Error('A plane square to an edge needs the edge.');
+    if (state.edgeAt === 'point') {
+      if (!state.points[0])
+        throw new Error('A plane square to an edge through a point needs it.');
+      return {
+        kind: 'normal-to-edge',
+        edge: state.edge,
+        at: { point: pointSource(state.points[0]) },
+        ...reverse
+      };
+    }
+    return {
+      kind: 'normal-to-edge',
+      edge: state.edge,
+      at: { fraction: coerceParamValue((state.position ?? '0.5').trim()) },
+      ...reverse
+    };
+  }
+  if (state.mode === 'edge-angle') {
+    if (!state.edge || !state.sourceA)
+      throw new Error(
+        'A plane through an edge at an angle needs the edge and a plane.'
+      );
+    return {
+      kind: 'edge-angle',
+      edge: state.edge,
+      reference: state.sourceA,
+      angleDeg: coerceParamValue((state.angle ?? '0').trim()),
+      ...reverse
+    };
+  }
   if (state.mode === 'three-point') {
     if (state.points.some((point) => !point))
       throw new Error('A three-point plane needs three points.');
@@ -635,6 +751,26 @@ export function datumPlaneDescription(
     const [a, b] = definition.sources;
     return `Midway between ${datumSourceLabel(document, a)} and ${datumSourceLabel(document, b)}${flipped}`;
   }
+  if (definition.kind === 'normal-to-edge') {
+    const edge = datumEdgeSourceLabel(document, definition.edge);
+    if ('point' in definition.at)
+      return `Square to ${edge} through ${datumPointLabel(document, definition.at.point, scope, units)}${flipped}`;
+    const fraction = evalParamValue(definition.at.fraction, scope);
+    const at =
+      fraction === null
+        ? String(definition.at.fraction)
+        : `${formatNumber(fraction * 100)}%`;
+    return `Square to ${edge}, ${at} along it${flipped}`;
+  }
+  if (definition.kind === 'edge-angle') {
+    const angle = evalParamValue(definition.angleDeg, scope, {
+      documentUnits: units,
+      dimension: 'angle'
+    });
+    const turned =
+      angle === null ? String(definition.angleDeg) : `${formatNumber(angle)}°`;
+    return `Through ${datumEdgeSourceLabel(document, definition.edge)} at ${turned} to ${datumSourceLabel(document, definition.reference)}${flipped}`;
+  }
   const value = evalParamValue(definition.offset, scope, {
     documentUnits: units,
     dimension: 'length'
@@ -644,6 +780,16 @@ export function datumPlaneDescription(
       ? String(definition.offset)
       : `${formatNumber(value)} ${units === 'inch' ? 'in' : units}`;
   return `${distance} from ${datumSourceLabel(document, definition.source)}${flipped}`;
+}
+
+/** Schema v108: an edge source in words, by its body. */
+export function datumEdgeSourceLabel(
+  document: ProjectDocument,
+  source: DatumAxisEdgeSource
+): string {
+  const body = ownEntry(document.derived.bodyRepresentations, source.bodyId);
+  const curve = source.edgeReference.witness.curveType.toLowerCase();
+  return `${curve === 'line' ? 'an edge' : `a ${curve} edge`} of ${body?.name ?? 'a missing body'}`;
 }
 
 export interface DatumPlaneRow {
@@ -738,10 +884,7 @@ export function datumPlaneCommand(
  */
 /** R01: every kind of datum feature. */
 export type DatumFeatureKind =
-  | 'datum-plane'
-  | 'datum-axis'
-  | 'datum-point'
-  | 'datum-csys';
+  'datum-plane' | 'datum-axis' | 'datum-point' | 'datum-csys';
 
 export function requireResolvedDatum(
   derived: ProjectDocument['derived'],
@@ -931,6 +1074,80 @@ export function datumFaceSourceFromPick(
   return ref as FacePlaneSource;
 }
 
+/**
+ * Schema v108: the edit that re-attaches a plane square to an edge, or turned
+ * about one, to the edge picked now. Only the edge changes. A plane at an
+ * angle needs a straight edge; the edge must be open and carry an identity a
+ * rebuild can find again.
+ */
+export function datumPlaneEdgeRepairEdit(
+  document: ProjectDocument,
+  featureId: FeatureId,
+  selection: TopologySelection
+): {
+  command: AnyCommand;
+  label: string;
+  validateDerived(derived: ProjectDocument['derived']): void;
+} {
+  const feature = listFeaturesInOrder(document).find(
+    (candidate) => candidate.featureId === featureId
+  );
+  if (
+    feature?.data.featureKind !== 'datum-plane' ||
+    (feature.data.definition.kind !== 'normal-to-edge' &&
+      feature.data.definition.kind !== 'edge-angle')
+  ) {
+    throw new Error('Only a plane on an edge can have its edge re-picked.');
+  }
+  if (selection.kind !== 'edge') {
+    throw new Error(`Click an edge for "${feature.name}".`);
+  }
+  const reference = ownEntry(
+    document.derived.bodyRepresentations,
+    selection.bodyId
+  )?.topology?.edges.find(
+    (candidate) => candidate.hash === selection.hash
+  )?.reference;
+  if (!reference) {
+    throw new Error(
+      'This edge has no identity a rebuild can find again, so a plane cannot follow it.'
+    );
+  }
+  if (reference.witness.closed) {
+    throw new Error(
+      'A plane on an edge needs an open edge; this one is closed.'
+    );
+  }
+  const { definition } = feature.data;
+  const straight = /^line$/i.test(reference.witness.curveType);
+  const needsStraight =
+    definition.kind === 'edge-angle' || 'point' in definition.at;
+  if (needsStraight && !straight) {
+    throw new Error(
+      `"${feature.name}" needs a straight edge; this edge is curved.`
+    );
+  }
+  const edge = {
+    type: 'edge' as const,
+    bodyId: selection.bodyId,
+    edgeReference: reference
+  };
+  const repaired: DatumPlaneDefinition = { ...definition, edge };
+  const label = `Re-pick edge for ${feature.name}`;
+  return {
+    label,
+    command: commandFactories.updateFeature(
+      {
+        featureId,
+        data: { featureKind: 'datum-plane', definition: repaired }
+      },
+      label
+    ),
+    validateDerived: (derived) =>
+      requireResolvedDatums(document, derived, featureId, feature.name)
+  };
+}
+
 export function datumFaceRepairEdit(
   document: ProjectDocument,
   featureId: FeatureId,
@@ -953,6 +1170,7 @@ export function datumFaceRepairEdit(
   if (
     feature?.data.featureKind !== 'datum-plane' ||
     feature.data.definition.kind === 'three-point' ||
+    feature.data.definition.kind === 'normal-to-edge' ||
     (feature.data.definition.kind !== 'midplane' &&
       (slot !== 0 || otherSelection !== undefined))
   ) {
@@ -965,15 +1183,19 @@ export function datumFaceRepairEdit(
   const label = `Re-pick face for ${feature.name}`;
   const { definition } = feature.data;
   const repaired: DatumPlaneDefinition =
-    definition.kind !== 'midplane'
-      ? { ...definition, source }
-      : {
-          ...definition,
-          sources:
-            slot === 0
-              ? [source, other ?? definition.sources[1]]
-              : [other ?? definition.sources[0], source]
-        };
+    definition.kind === 'edge-angle'
+      ? { ...definition, reference: source }
+      : definition.kind === 'offset' || definition.kind === 'parallel-point'
+        ? { ...definition, source }
+        : definition.kind !== 'midplane'
+          ? definition
+          : {
+              ...definition,
+              sources:
+                slot === 0
+                  ? [source, other ?? definition.sources[1]]
+                  : [other ?? definition.sources[0], source]
+            };
   return {
     label,
     command: commandFactories.updateFeature(
