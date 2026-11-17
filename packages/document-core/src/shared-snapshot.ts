@@ -1,5 +1,6 @@
-import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import { deepClone, toUserId, type ProjectDocument } from '@openzcad/shared';
 import { withoutDerivedProjection } from './document-projection';
+import { shareLinkSheets } from './share-link-sheets';
 
 /** The owner a share-link visitor sees in place of the real account id. */
 const SHARED_PROJECT_OWNER_USER_ID = toUserId('user_shared');
@@ -25,8 +26,9 @@ const SHARED_PROJECT_OWNER_USER_ID = toUserId('user_shared');
 export function sharedProjectSnapshotDocument(
   document: ProjectDocument
 ): ProjectDocument {
-  // Drawing sheets stay with the owner: their title blocks carry author,
-  // date and drawing-number text, and a share link opens no Draw workspace.
+  // Drawing sheets stay with the owner unless chosen for links (L08): their
+  // title blocks carry author, date and drawing-number text. The chosen ones
+  // travel whole, and a visitor opens them read only in Draw.
   // Objects folders (U06) are shared: they only organize bodies whose names
   // the visitor already sees, and carry no author, date or history.
   // Reference images stay with the owner too: a share link serves import
@@ -36,10 +38,13 @@ export function sharedProjectSnapshotDocument(
     branchedFrom: _branchedFrom,
     drawings: _drawings,
     referenceImages: _referenceImages,
+    shareLinkSheetIds: _shareLinkSheetIds,
     ...current
   } = withoutDerivedProjection(document);
+  const sheets = shareLinkSheets(document);
   return {
     ...current,
+    ...(sheets.length ? { drawings: { sheets: deepClone(sheets) } } : {}),
     ownerUserId: SHARED_PROJECT_OWNER_USER_ID,
     revisions: [],
     checkpoints: [],

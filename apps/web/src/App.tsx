@@ -6693,8 +6693,12 @@ export function App() {
   // D01: drawings read the account's document, which a shared link does not
   // carry as an editable copy; read-only seats may still open and export
   // sheets, with sheet edits refused by the project guard.
+  // L08: a link shows the sheets its project chose for links, read only;
+  // a link that carries none has no Draw workspace to open.
   const drawingModeDisabledReason = shareSession
-    ? 'Drawings are not available on a shared link'
+    ? doc?.drawings?.sheets.length
+      ? null
+      : 'This link shares no drawings'
     : null;
   // AS01: Assemble edits the document's assembly section, so whatever locks
   // Build locks it too; a shared link carries no assembly to edit.
@@ -6702,9 +6706,12 @@ export function App() {
     ? 'Assemblies are not available on a shared link'
     : buildModeDisabledReason;
   const resolvedWorkspaceMode: WorkspaceMode = shareSession
-    ? panelState.workspaceMode === 'view' || shareLinkViewOnly
-      ? 'view'
-      : 'tweak'
+    ? panelState.workspaceMode === 'drawing' &&
+      drawingModeDisabledReason === null
+      ? 'drawing'
+      : panelState.workspaceMode === 'view' || shareLinkViewOnly
+        ? 'view'
+        : 'tweak'
     : buildModeDisabledReason !== null
       ? panelState.workspaceMode === 'drawing'
         ? 'drawing'
@@ -6865,8 +6872,11 @@ export function App() {
   // read-only seat or a second tab refuses them), and to the reading
   // workspaces' locks in View and Tweak, where a drawing-only undo or redo
   // must not edit sheets either.
-  const drawingEditDisabledReason =
-    !projectOpenElsewhere && (viewMode || tweakMode || assembleMode)
+  const drawingEditDisabledReason = shareSession
+    ? // L08: the sheets a link shows are the project's, read only here;
+      // exporting them needs no edit.
+      'Drawings on a shared link are read only — Make a copy to edit them'
+    : !projectOpenElsewhere && (viewMode || tweakMode || assembleMode)
       ? editDisabledReason
       : projectEditDisabledReason;
   // AS01 assembly edits answer to the project's own locks in Assemble and
@@ -6934,6 +6944,8 @@ export function App() {
   drawingEditDisabledReasonRef.current = drawingEditDisabledReason;
   const assemblyEditDisabledReasonRef = useRef(assemblyEditDisabledReason);
   assemblyEditDisabledReasonRef.current = assemblyEditDisabledReason;
+  const projectEditDisabledReasonRef = useRef(projectEditDisabledReason);
+  projectEditDisabledReasonRef.current = projectEditDisabledReason;
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
   // An import into a project that is still empty and still wears its
@@ -16618,6 +16630,27 @@ export function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  /**
+   * L08: chooses the drawing sheets share links show. A forward write (no
+   * undo entry) that syncs like any edit; the next snapshot a link serves
+   * carries the chosen sheets.
+   */
+  function handleShareLinkSheets(sheetIds: string[]) {
+    const manager = managerRef.current;
+    if (!manager || projectEditDisabledReasonRef.current !== null) return;
+    const before = manager.document;
+    const next = manager.setShareLinkSheets(sheetIds);
+    if (next === before) return;
+    geometry.retainReadyGeometry(next);
+    setDoc(next);
+    const count = next.shareLinkSheetIds?.length ?? 0;
+    setStatus(
+      count === 0
+        ? 'Share links show no drawings.'
+        : `Share links show ${count} drawing ${count === 1 ? 'sheet' : 'sheets'}.`
+    );
   }
 
   /** Branches the open project's save state into a project of its own. */
@@ -37640,6 +37673,14 @@ export function App() {
                 projectId={doc.projectId}
                 projectName={doc.name}
                 configurations={doc.configurations?.rows ?? []}
+                drawingSheets={(doc.drawings?.sheets ?? []).map((sheet) => ({
+                  id: sheet.sheetId,
+                  name: sheet.name
+                }))}
+                sharedSheetIds={doc.shareLinkSheetIds ?? []}
+                {...(projectEditDisabledReason === null
+                  ? { onSharedSheetsChange: handleShareLinkSheets }
+                  : {})}
                 localProject={!activeProjectIsCloud}
                 localImportSourceNames={localOnlySources.map(
                   (source) => source.sourceName

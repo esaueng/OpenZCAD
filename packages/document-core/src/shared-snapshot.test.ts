@@ -3,7 +3,7 @@ import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import { createProjectDocument, sharedProjectSnapshotDocument } from './index';
 
 describe('sharedProjectSnapshotDocument', () => {
-  it('keeps the current model and drops its history, owner and private sheets', () => {
+  it('keeps the current model and drops its history, owner and unshared sheets', () => {
     const base = createProjectDocument('Bracket', toUserId('user_owner'));
     const document = {
       ...base,

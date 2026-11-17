@@ -4029,6 +4029,13 @@ export interface ProjectDocument {
    * `configurations.ts`. Absent means the document has no configurations.
    */
   configurations?: ConfigurationSet;
+  /**
+   * L08: the drawing sheets this project's share links show, by sheet id.
+   * Absent shows none, as before. Not a schema change: an older client keeps
+   * the list and shares no sheets. See `share-link-sheets.ts` in
+   * document-core.
+   */
+  shareLinkSheetIds?: string[];
 }
 
 export interface SerializedCommand<TPayload = unknown> {
