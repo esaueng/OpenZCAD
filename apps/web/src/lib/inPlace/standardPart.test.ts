@@ -358,3 +358,101 @@ describe('M17 Standard part into a hole (schema v77)', () => {
     ).toMatchObject({ clearData: ['hole'] });
   });
 });
+
+describe('M17 Standard part thread display (schema v83)', () => {
+  const slots = { ...SLOTS, plane: TOP };
+  const sized = {
+    ...SCREW,
+    [standardPartSizeOptionId('screw', 'iso', 'socket')]: 'M6'
+  };
+
+  it('offers Simplified by default on threaded parts only', () => {
+    const thread = standardPartSpec.options!.find(
+      (option) => option.id === 'thread'
+    )!;
+    expect(thread.initial).toBe('simplified');
+    const shown = (options: Record<string, string>) =>
+      thread.when!({ options, numbers: {} });
+    expect(shown(SCREW)).toBe(true);
+    expect(shown({ partKind: 'nut', system: 'iso' })).toBe(true);
+    expect(shown({ partKind: 'insert', system: 'iso' })).toBe(true);
+    expect(shown({ partKind: 'washer', system: 'iso' })).toBe(false);
+    expect(shown({ partKind: 'dowel', system: 'iso' })).toBe(false);
+    expect(shown({ partKind: 'bearing', system: 'iso' })).toBe(false);
+  });
+
+  it('stores a simplified thread, and nothing for a modeled one', () => {
+    const simplified = standardPartSpec.request(
+      slots,
+      { length: 20 },
+      { ...sized, thread: 'simplified' },
+      CTX
+    ) as StandardPartUpdateRequest;
+    expect(simplified.part.thread).toBe('simplified');
+    const modeled = standardPartSpec.request(
+      slots,
+      { length: 20 },
+      { ...sized, thread: 'modeled' },
+      CTX
+    ) as StandardPartUpdateRequest;
+    expect(modeled.part).not.toHaveProperty('thread');
+    // A washer has no thread to simplify.
+    const washer = standardPartSpec.request(
+      slots,
+      {},
+      { partKind: 'washer', system: 'iso', thread: 'simplified' },
+      CTX
+    ) as StandardPartUpdateRequest;
+    expect(washer.part).not.toHaveProperty('thread');
+  });
+
+  it('reopens a part with its thread and clears it when modeled again', () => {
+    const data: Extract<FeatureData, { featureKind: 'standard-part' }> = {
+      featureKind: 'standard-part',
+      partKind: 'screw',
+      system: 'iso',
+      size: 'M6',
+      head: 'socket',
+      length: 20,
+      origin: { x: 20, y: 15, z: 20 },
+      axis: { x: 0, y: 0, z: -1 },
+      thread: 'simplified'
+    };
+    const feature = {
+      id: 'node_part',
+      kind: 'feature',
+      featureId: 'feat_part' as FeatureId,
+      name: 'Screw 1',
+      bodyId: 'body_part' as BodyId,
+      data
+    } as FeatureNode;
+    const ctx = {
+      evaluate: (value: unknown) => (typeof value === 'number' ? value : null),
+      profile: () => null,
+      firstRegion: () => null,
+      face: () => null,
+      anyFace: () => null,
+      edge: () => null,
+      curve: () => true,
+      body: () => null
+    } as InPlaceEditContext;
+    const armed = inPlaceEditSeed(feature, ctx)!;
+    expect(armed.seed.options.thread).toBe('simplified');
+    // A part stored before v83 reopens as modeled, as it was built.
+    const { thread: _dropped, ...older } = data;
+    const old = inPlaceEditSeed({ ...feature, data: older }, ctx)!;
+    expect(old.seed.options.thread).toBe('modeled');
+    const request = standardPartSpec.request(
+      { ...SLOTS, plane: armed.seed.slots.plane },
+      { length: 20 },
+      { ...armed.seed.options, thread: 'modeled' },
+      { ...CTX, saved: data }
+    )!;
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: feature.featureId, name: feature.name, data },
+        request as StandardPartUpdateRequest
+      )
+    ).toMatchObject({ clearData: ['thread'] });
+  });
+});

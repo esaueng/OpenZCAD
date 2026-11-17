@@ -1167,8 +1167,11 @@ export function inPlaceFeatureUpdate(
     }
     case 'standard-part': {
       if (saved.featureKind !== 'standard-part') return null;
-      // A screw's head, a length or a hole go when the edit no longer sets them.
-      const clear = (['head', 'length', 'xDirection', 'hole'] as const).filter(
+      // A screw's head, a length, a hole or a thread go when the edit no
+      // longer sets them.
+      const clear = (
+        ['head', 'length', 'xDirection', 'hole', 'thread'] as const
+      ).filter(
         (key) => saved[key] !== undefined && request.part[key] === undefined
       );
       return {

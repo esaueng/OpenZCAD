@@ -45,6 +45,7 @@ import type { PipeThreadSize } from './pipe-threads';
 import type {
   StandardPartBuild,
   StandardPartKind,
+  StandardPartThread,
   StandardPartSize,
   StandardPartSystem,
   StandardScrewHead
@@ -363,7 +364,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // to an edge its source draws true length, so an inclined face is drawn
 // true size. An older client would draw the source's view instead, so it
 // must refuse. Builds on v80.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 81 as const;
+// v82 is claimed by D02 arc angles (#1662).
+// v83 adds M17 simplified threads (`thread: 'simplified'` on a standard
+// part): the part is drawn as its plain envelope, with no thread cut. An
+// older client would cut it, so it must refuse. Builds on v81.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 83 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2423,6 +2428,14 @@ export type FeatureData =
        * and must take the part's size (`standardPartForHole`).
        */
       hole?: { featureId: FeatureId };
+      /**
+       * M17 (schema v72), screws, nuts and threaded inserts: how the thread
+       * is built. `'simplified'` leaves it uncut, the shank or bore the plain
+       * cylinder a drawing shows (and an insert without its knurl), so many
+       * fasteners stay light to build and draw; the designation still names
+       * the thread. Absent is `'modeled'`, the M15 thread.
+       */
+      thread?: StandardPartThread;
     }
   /**
    * M16 (schema v58): a sheet-metal part. The sketch cells in `profiles`

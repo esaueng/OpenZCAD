@@ -188,6 +188,8 @@ test(
     await choose(bar, 'Head', 'Socket head');
     await choose(bar, 'Standard', 'ISO metric');
     await choose(bar, 'Size', 'M6');
+    // Simplified is the default (schema v72); this screw is cut.
+    await choose(bar, 'Thread', 'Modeled');
     await bar.locator('summary').click();
     await expect(bar).toContainText('ISO 4762 M6×1 × 16 socket head cap screw');
 
@@ -230,6 +232,7 @@ test(
       origin: { x: ENTRY[0], y: ENTRY[1], z: ENTRY[2] },
       axis: { x: 0, y: 0, z: -1 }
     });
+    expect(part?.data).not.toHaveProperty('thread');
     expect((part!.data as { length?: number }).length).toBeCloseTo(length, 6);
     await revealModelPanel(page, 'History');
     await expect(
