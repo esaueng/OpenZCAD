@@ -13,6 +13,11 @@ import {
 import { lockAccount, rememberUnlockedAccount } from './e2ee/unlockedKeys';
 import { agreedShelfState, journalShelfEdit } from './sealedShelfState';
 import { syncAccountLibraryFolders } from './libraryFolderCloudSync';
+import {
+  allowKeySession,
+  blockKeySession,
+  getKeySessionRevision
+} from './e2ee/keySession';
 
 const USER = 'library-unlock-account';
 const KEY = new Uint8Array(32).fill(42);
@@ -66,7 +71,10 @@ beforeEach(() => {
     return { kind: 'ready', account: { unlocked: state.trusted } };
   });
 });
-afterEach(() => lockAccount(USER));
+afterEach(() => {
+  lockAccount(USER);
+  allowKeySession(getKeySessionRevision());
+});
 
 describe('library sync on a trusted device after reload', () => {
   it('uploads folders and pins, then opens them on another cold device without opening a project', async () => {
@@ -124,5 +132,20 @@ describe('library sync on a trusted device after reload', () => {
     await syncAccountLibraryFolders(USER, () => cancelled);
     expect(state.load).toHaveBeenCalledTimes(1);
     expect(state.save).not.toHaveBeenCalled();
+  });
+
+  it('does not publish a round invalidated by a key-session change during unlock', async () => {
+    state.load.mockImplementation(async () => {
+      blockKeySession();
+      return { kind: 'ready', account: { unlocked: true } };
+    });
+    writeLibraryFolders(
+      folderStorageKey(USER),
+      createFolder({ folders: [] }, { id: 'parts', name: 'Parts' })
+    );
+    await syncAccountLibraryFolders(USER, () => false);
+    expect(state.load).toHaveBeenCalledTimes(1);
+    expect(state.save).not.toHaveBeenCalled();
+    expect(agreedShelfState(USER)).toBeNull();
   });
 });
