@@ -208,6 +208,34 @@
     grid-template-columns: repeat(2, 44px);
   }
 
+  /* A measurement's Hide, Copy, Edit and Delete at 44 px are 182 px, and
+     the 108 px track beside the value held two of them: Edit and Delete
+     stood past the workbench's edge and the list scrolled sideways
+     (UX-010). They take their own line under the value instead, flat, on
+     every row, since nothing waits for hover here; the value has the
+     row's width. A workbench narrower than the four (a 360px phone with
+     the view tools open) wraps them to a second line rather than cutting
+     one off. */
+  .measurement-row-main {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .measurement-row-actions {
+    position: static;
+    justify-self: end;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    width: auto;
+    max-width: 100%;
+    margin: -4px 0 4px;
+    padding: 0;
+    background: none;
+    border: 0;
+    box-shadow: none;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
   /* The field inside the bar's 1px border is the 44 px target. */
   .workspace.column-layout {
     --command-bar-h: 46px;
