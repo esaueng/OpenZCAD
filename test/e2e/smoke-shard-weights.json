@@ -40,6 +40,7 @@
   "drawing-free-sections.spec.ts": 14,
   "drawing-properties.spec.ts": 12,
   "drawing-sections.spec.ts": 25,
+  "drawing-sheet-images.spec.ts": 16,
   "drawing-tolerances.spec.ts": 14,
   "drawings.spec.ts": 16,
   "edge-form-preview.spec.ts": 9,

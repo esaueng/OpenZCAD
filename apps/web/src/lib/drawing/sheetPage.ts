@@ -64,11 +64,28 @@ export interface SheetText {
   angleDeg?: number;
 }
 
+/**
+ * D02 (v92): a picture on the page, its lower-left corner at (x, y) in paper
+ * millimetres (y up), stretched to `width` × `height` (the picture's own
+ * aspect). The pixels are the reference image's bytes, by checksum: a writer
+ * is handed them, the page model never holds them.
+ */
+export interface SheetImage {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  checksumSha256: string;
+  contentType: 'image/png' | 'image/jpeg';
+}
+
 export interface SheetPage {
   widthMm: number;
   heightMm: number;
   strokes: SheetStroke[];
   texts: SheetText[];
+  /** D02 (v92): pictures, drawn beneath every stroke and text. */
+  images?: SheetImage[];
   /**
    * D02 (schema v70): the sheet's own print weights, by stroke kind; absent
    * kinds (and a page without any) use {@link SHEET_STROKE_WIDTH_MM}.
@@ -631,7 +648,11 @@ export function composeSheetPage(
   views: readonly ComposedView[],
   context: SheetPageContext,
   /** D02 dimensions and notes, already laid out on this page. */
-  annotations?: { strokes: SheetStroke[]; texts: SheetText[] }
+  annotations?: {
+    strokes: SheetStroke[];
+    texts: SheetText[];
+    images?: SheetImage[];
+  }
 ): SheetPage {
   const marks = composeSectionMarks(sheet, views, context.units);
   const details = composeDetailMarks(sheet, views, context.units);
@@ -684,12 +705,22 @@ export function composeSheetPage(
     maxY: paper.height
   };
   const weights = sheet.format?.lineWidthsMm;
+  // D02 (v92): a picture is kept whole while any of it is on the paper (the
+  // writers clip to the page); one wholly off it is not drawn.
+  const images = (annotations?.images ?? []).filter(
+    (image) =>
+      image.x < paper.width &&
+      image.y < paper.height &&
+      image.x + image.width > 0 &&
+      image.y + image.height > 0
+  );
   return {
     widthMm: paper.width,
     heightMm: paper.height,
     ...(weights && Object.keys(weights).length > 0
       ? { strokeWidthsMm: { ...weights } }
       : {}),
+    ...(images.length > 0 ? { images } : {}),
     strokes: [
       ...strokes,
       ...marks.strokes,
