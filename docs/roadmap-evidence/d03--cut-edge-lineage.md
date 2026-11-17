@@ -1,6 +1,0 @@
----
-row: D03
-state: Complete
----
-
-Cut-edge lineage ([design](docs/plans/drawing-mvp-design.md#cut-edge-lineage-d03)): a section's edges carry ADR-013 references where they verify — an edge the cut left unchanged keeps its model edge's reference, and an edge the cut made, lying in a section plane beside exactly one named model face, is named `section.edge.<face>@<plane>` — so a dimension on a section's own edge follows a model edit through the sheet's Update instead of breaking, while ambiguous traces (a plane crossing one cylinder twice) and bodies without lineage stay hash-only and break as before. No schema change. With auxiliary views (v81), free and stepped section planes (v91, v93) and detail views (v78), the row's contract is delivered; cuts the pinned kernel refuses still fall back to the labelled approximate tessellation cut, a kernel limit the drawing names on the view. Evidence: `test/drawing-sections.test.ts` (the bored cylinder's floor named by its section lineage, a dimension picked on it following the bore deepened from 18 to 22 to read 8 at the new floor, the two traces on the one cylindrical face left unnamed, hash-only references still breaking) and `test/e2e/drawing-section-lineage.spec.ts` (a horizontal dimension on a box section's own top edge reads 30, the box is widened to 45, and after the Update it reads 45).
