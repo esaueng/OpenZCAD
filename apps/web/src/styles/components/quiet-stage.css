@@ -314,7 +314,9 @@
    card or a tool's create card there is what the user is working in, so the
    section panel steps aside while one is up and returns when it closes; the
    cut itself stays on. It used to draw over the Shell, Mirror and Pattern
-   cards opened after it. */
+   cards opened after it. The section button reads the same classes
+   (SECTION_LANE_HELD in ViewerToolbar) so its aria-expanded stays true to
+   what is on screen; keep the two in step. */
 .viewer-area:is(.has-command, .inspector-owns-lane)
   .instrument-rail
   .rail-section-panel {
@@ -1310,11 +1312,12 @@
   --lane-status: 40px;
 }
 
-/* Tracks --activity-pill-h in activity-pill.css, plus the 12px row gap.
+/* Tracks --activity-pill-h in activity-pill.css, plus the 12px row gap; an
+   ending that wraps publishes its real height (ActivityPill) instead.
    The lane in the selector matches the specificity of the two rules above,
    which stay in the DOM while the pill is up; source order then wins. */
 .viewer-area:has(.activity-lane > .activity-pill) .toast {
-  --lane-status: 70px;
+  --lane-status: calc(var(--activity-pill-live-h, 58px) + 12px);
 }
 
 /* The pill has the status row while it is up; the hint waits. */

@@ -55,6 +55,29 @@ export function elapsedLabel(ms: number): string {
     : `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
+/**
+ * The ending's detail without the file name it may open with.
+ *
+ * Failure messages are written to stand alone in the status line
+ * ("Bracket.openzcad is not a readable OpenZCAD project backup…"), but the
+ * card already names the file in its title, so repeating it spent the
+ * detail's width on the one thing the user could already read (UX-004).
+ * "Name is not …" becomes "Not …"; any other opening keeps its words.
+ */
+export function outcomeDetailText(message: string, fileName: string): string {
+  if (!fileName || !message.startsWith(`${fileName} `)) {
+    return message;
+  }
+  const rest = message
+    .slice(fileName.length)
+    .trimStart()
+    .replace(/^is\s+(?=not\b)/, '');
+  if (!rest) {
+    return message;
+  }
+  return rest.charAt(0).toUpperCase() + rest.slice(1);
+}
+
 const OUTCOME_ICON: Record<ImportOutcomeTone, typeof Check> = {
   ok: Check,
   warning: TriangleAlert,
@@ -134,6 +157,38 @@ export function ActivityPill({
     return () => window.clearTimeout(timer);
   }, [runId, outcome, delayPassed, onDismiss]);
 
+  // An ending that needs reading wraps instead of clipping, so the card can
+  // grow past its running height. The rows stacked above it in the notice
+  // lane (the Undo toast) lift by the card's real height, published on the
+  // viewer the way the in-place command row publishes its own.
+  const pillRef = useRef<HTMLElement | null>(null);
+  const attention = outcome !== null && !importOutcomeIsQuiet(outcome);
+  const visible = runId !== null && (delayPassed || attention);
+  useEffect(() => {
+    const pill = pillRef.current;
+    const viewer = pill?.closest<HTMLElement>('.viewer-area');
+    if (!visible || !pill || !viewer) return;
+    const measure = () => {
+      const height = pill.getBoundingClientRect().height;
+      if (height > 0) {
+        viewer.style.setProperty(
+          '--activity-pill-live-h',
+          `${Math.ceil(height)}px`
+        );
+      }
+    };
+    measure();
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(pill);
+    return () => {
+      observer?.disconnect();
+      viewer.style.removeProperty('--activity-pill-live-h');
+    };
+  }, [visible, attention]);
+
   if (!run) {
     return null;
   }
@@ -141,7 +196,7 @@ export function ActivityPill({
   // A run that fails or degrades inside the delay window still has something
   // the user needs; a quiet ending — a success, or a cancel the user asked
   // for — is allowed to pass in silence.
-  const needsAttention = outcome !== null && !importOutcomeIsQuiet(outcome);
+  const needsAttention = attention;
   if (!delayPassed && !needsAttention) {
     return null;
   }
@@ -165,7 +220,7 @@ export function ActivityPill({
         ? words.done
         : words.refused;
   const detail = outcome
-    ? outcome.message
+    ? outcomeDetailText(outcome.message, run.fileName)
     : cancelling
       ? 'Cancelling…'
       : IMPORT_PHASE_LABEL[run.progress.phase];
@@ -182,7 +237,8 @@ export function ActivityPill({
 
   return (
     <section
-      className={`activity-pill${toneClass}`}
+      ref={pillRef}
+      className={`activity-pill${toneClass}${needsAttention ? ' needs-attention' : ''}`}
       aria-label={`File ${run.kind}`}
     >
       <span className={`activity-pill-glyph${toneClass}`} aria-hidden="true">
