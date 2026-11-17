@@ -441,10 +441,6 @@ import {
   pendingDeviceApproval
 } from './lib/e2ee/deviceApprovalLink';
 import { requestContactVerification } from './lib/e2ee/contactFocus';
-import {
-  encryptedImportSourceArtifacts,
-  withEncryptedImportSources
-} from './lib/e2ee/encryptedImportSources';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import {
   commandOutcomeMessage,
@@ -8679,16 +8675,38 @@ export function App() {
   // An encrypted project's archived STEP sources are content blobs its
   // document names, never artifact records, so the listing above leaves them
   // out and an import that said "source archived" showed none (#1649).
-  const storedFiles = useMemo(
-    () =>
-      doc && isEncryptedProject(doc.projectId)
-        ? withEncryptedImportSources(
+  // Loaded only for an encrypted project, off the entry chunk.
+  const [encryptedStoredFiles, setEncryptedStoredFiles] = useState<{
+    artifacts: ArtifactRecord[];
+    merged: ArtifactRecord[];
+  } | null>(null);
+  useEffect(() => {
+    if (!doc || !isEncryptedProject(doc.projectId)) {
+      setEncryptedStoredFiles(null);
+      return;
+    }
+    let cancelled = false;
+    void import('./lib/e2ee/encryptedImportSources').then(
+      ({ encryptedImportSourceArtifacts, withEncryptedImportSources }) => {
+        if (cancelled) return;
+        setEncryptedStoredFiles({
+          artifacts,
+          merged: withEncryptedImportSources(
             artifacts,
             encryptedImportSourceArtifacts(doc)
           )
-        : artifacts,
-    [artifacts, doc]
-  );
+        });
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [artifacts, doc]);
+  // Never a list built from an earlier listing of another project.
+  const storedFiles =
+    encryptedStoredFiles?.artifacts === artifacts
+      ? encryptedStoredFiles.merged
+      : artifacts;
 
   // K05 on-demand boolean probe: sticky per open document, cleared on
   // project switch. A face/edge/vertex pick on B — or a command started on
