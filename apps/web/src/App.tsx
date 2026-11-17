@@ -20734,12 +20734,13 @@ export function App() {
     try {
       const link = shareSessionRef.current;
       const { linkCommentsApi, memberComments } = await loadCommentsApi();
-      const comments = link?.comments
-        ? await linkCommentsApi.list(link.token)
+      const { comments, warning } = link?.comments
+        ? { comments: await linkCommentsApi.list(link.token), warning: null }
         : await memberComments.list(projectId, commentContext());
       if (managerRef.current?.document.projectId !== projectId) return;
       setProjectComments({ projectId, comments });
-      setCommentsError(null);
+      // An encrypted project's member log left out is said, not hidden.
+      setCommentsError(warning);
     } catch (error) {
       setCommentsError(errorMessage(error, 'Comments could not be loaded.'));
     }

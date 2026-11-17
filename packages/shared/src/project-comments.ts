@@ -150,7 +150,16 @@ export interface CommentLogRecord {
   resolutions: CommentLogResolution[];
   /** The owner's log only: other members' comments the owner removed. */
   hidden: string[];
+  /**
+   * The version hashes (lowercase hex) of this log's earlier versions,
+   * oldest first, at most `MAX_COMMENT_LOG_ANCESTORS`: signed with the log,
+   * so a reader pinned at an earlier version can check that a newer one
+   * descends from it rather than from a fork.
+   */
+  ancestors: string[];
 }
+
+export const MAX_COMMENT_LOG_ANCESTORS = 200;
 
 /** A log as the account serves it: whose, and its signed envelope. */
 export interface E2eeCommentLogRecord {
@@ -261,12 +270,22 @@ export function parseCommentLog(
   const hidden = record.hidden as unknown[];
   if (!hidden.every((id) => typeof id === 'string' && COMMENT_ID.test(id)))
     return null;
+  const ancestors = record.ancestors ?? [];
+  if (
+    !Array.isArray(ancestors) ||
+    ancestors.length > MAX_COMMENT_LOG_ANCESTORS ||
+    !ancestors.every(
+      (hash) => typeof hash === 'string' && /^[0-9a-f]{64}$/.test(hash)
+    )
+  )
+    return null;
   return {
     projectId,
     name: record.name.trim(),
     comments,
     resolutions,
-    hidden: hidden as string[]
+    hidden: hidden as string[],
+    ancestors: ancestors as string[]
   };
 }
 

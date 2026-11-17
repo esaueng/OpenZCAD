@@ -24,13 +24,14 @@ const encrypted = async () =>
  * comment client when the panel first needs it, not with the workspace.
  */
 export const memberComments = {
+  /** The comments, and a warning when a member's log was left out. */
   async list(
     projectId: string,
     context: MemberCommentContext
-  ): Promise<ProjectComment[]> {
+  ): Promise<{ comments: ProjectComment[]; warning: string | null }> {
     return isEncryptedProject(projectId)
       ? (await encrypted()).list(projectId, context.ownerUserId)
-      : projectCommentsApi.list(projectId);
+      : { comments: await projectCommentsApi.list(projectId), warning: null };
   },
   async create(
     projectId: string,

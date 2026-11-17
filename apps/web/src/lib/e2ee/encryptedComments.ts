@@ -1,6 +1,7 @@
-import { encodeCommentsBody, type CommentsBody } from '@openzcad/crypto';
+import { encodeCommentsBody, toHex, type CommentsBody } from '@openzcad/crypto';
 import {
   E2EE_COMMENTS_CONFLICT_CODE,
+  MAX_COMMENT_LOG_ANCESTORS,
   MAX_PROJECT_COMMENTS,
   mergeCommentLogs,
   normalizeProjectCommentText,
@@ -82,8 +83,24 @@ export function createEncryptedCommentsApi(
   };
 }
 
+/** A comment log this browser cannot trust; nothing is written over it. */
+export class EncryptedCommentsIntegrityError extends ApiError {
+  constructor(what: string) {
+    super(
+      502,
+      `Your comments on this project cannot be verified: ${what} Nothing was changed.`,
+      'E2EE_COMMENTS_INTEGRITY'
+    );
+    this.name = 'EncryptedCommentsIntegrityError';
+  }
+}
+
 export interface EncryptedComments {
-  list(projectId: string, ownerUserId: string): Promise<ProjectComment[]>;
+  /** The merged comments, and a warning when a member's log was left out. */
+  list(
+    projectId: string,
+    ownerUserId: string
+  ): Promise<{ comments: ProjectComment[]; warning: string | null }>;
   create(
     projectId: string,
     ownerUserId: string,
@@ -137,7 +154,17 @@ export function createEncryptedComments(deps: CommentDeps): EncryptedComments {
   const now = deps.now ?? (() => new Date().toISOString());
   const newId = deps.newId ?? (() => `cmt_${crypto.randomUUID()}`);
 
-  /** Every verified log, and this account's own with its chain position. */
+  /**
+   * Every log that verifies and follows what this browser saw, this
+   * account's own with its chain position, and what the account hid.
+   *
+   * A writer's log is accepted only when it is the version this browser
+   * pinned, or a later one whose signed `ancestors` name the pinned version
+   * (so a fork is caught when its branches meet). This account's own log
+   * that is behind, forked, missing or unverifiable stops every write: a
+   * write would replace it. Another member's is left out and reported in
+   * `warnings`, never shown as if nothing happened.
+   */
   async function read(projectId: string): Promise<{
     logs: { userId: string; record: CommentLogRecord }[];
     own: {
@@ -145,57 +172,99 @@ export function createEncryptedComments(deps: CommentDeps): EncryptedComments {
       hash: string | null;
       record: CommentLogRecord | null;
     };
+    warnings: string[];
   }> {
     const { logs } = await api.logs(projectId);
     const pinned = (await pins.read(userId, projectId))?.envelopes ?? {};
     const opened: { userId: string; record: CommentLogRecord }[] = [];
+    const warnings: string[] = [];
     let own: {
       sequence: number;
       hash: string | null;
       record: CommentLogRecord | null;
     } = { sequence: 0, hash: null, record: null };
     const seen = new Set<string>();
+    const refuse = (writer: string, what: string): void => {
+      if (writer === userId) throw new EncryptedCommentsIntegrityError(what);
+      warnings.push(
+        `A member's comments were left out: ${what} The account may be withholding them.`
+      );
+    };
     for (const log of logs) {
       if (log.projectId !== projectId || seen.has(log.userId)) continue;
       seen.add(log.userId);
       const hash = await storedEnvelopeHash(log.envelope);
-      if (
-        !envelopeMayFollow(
-          pinned[pinKey(log.userId)] ?? null,
-          log.sequence,
-          hash
-        )
-      ) {
-        // Older than a log this browser already accepted: never shown, and
-        // for this account's own log, never written over.
+      const pin = pinned[pinKey(log.userId)] ?? null;
+      if (!envelopeMayFollow(pin, log.sequence, hash)) {
         if (log.userId === userId)
           throw new ReplacedEnvelopeRollbackError('comments');
+        refuse(
+          log.userId,
+          'the account served an older version than this browser saw.'
+        );
         continue;
       }
       let record: CommentLogRecord | null = null;
+      let previous: string | null = null;
       try {
         const result = await kit.open(asEnvelopeRecord(log), 'comments');
         // The log must be signed by the member the account says wrote it.
-        if (result.signerUserId === log.userId)
+        if (result.signerUserId === log.userId) {
           record = parseCommentLog(
             (result.value as CommentsBody).record,
             projectId
           );
+          previous = result.header.previousVersionHash
+            ? toHex(result.header.previousVersionHash)
+            : null;
+        }
       } catch {
         record = null;
       }
+      if (!record) {
+        // Never trusted, and for this account never written over.
+        if (log.userId === userId || pin)
+          refuse(log.userId, 'their comment log does not verify.');
+        continue;
+      }
+      // The signed chain: the log names its previous version, and every
+      // version before it, so a newer log must descend from the pinned one.
+      if ((record.ancestors.at(-1) ?? null) !== previous) {
+        refuse(log.userId, 'their comment log names a broken history.');
+        continue;
+      }
+      if (
+        pin &&
+        pin.sequence > 0 &&
+        log.sequence > pin.sequence &&
+        !record.ancestors.includes(pin.hash ?? '')
+      ) {
+        refuse(
+          log.userId,
+          'their comment log forks from the one this browser saw.'
+        );
+        continue;
+      }
       if (log.userId === userId) own = { sequence: log.sequence, hash, record };
-      if (!record) continue;
       await pins.advanceEnvelope(userId, projectId, pinKey(log.userId), {
         sequence: log.sequence,
         hash
       });
       opened.push({ userId: log.userId, record });
     }
-    // Pinned logs the account no longer serves are a rollback for our own.
-    if ((pinned[pinKey(userId)]?.sequence ?? 0) > 0 && own.sequence === 0)
-      throw new ReplacedEnvelopeRollbackError('comments');
-    return { logs: opened, own };
+    // A pinned log the account no longer serves was withdrawn.
+    for (const [key, pin] of Object.entries(pinned)) {
+      if (!key.startsWith('comments:') || (pin?.sequence ?? 0) === 0) continue;
+      const writer = key.slice('comments:'.length);
+      if (seen.has(writer)) continue;
+      if (writer === userId)
+        throw new ReplacedEnvelopeRollbackError('comments');
+      refuse(
+        writer,
+        'the account no longer serves a comment log this browser saw.'
+      );
+    }
+    return { logs: opened, own, warnings };
   }
 
   /** Replaces this account's log with `change` applied, retrying a race. */
@@ -211,9 +280,16 @@ export function createEncryptedComments(deps: CommentDeps): EncryptedComments {
         name,
         comments: [],
         resolutions: [],
-        hidden: []
+        hidden: [],
+        ancestors: []
       };
-      const next = change({ ...base, name: name.trim() || base.name });
+      const changed = change({ ...base, name: name.trim() || base.name });
+      const next: CommentLogRecord = {
+        ...changed,
+        ancestors: own.hash
+          ? [...base.ancestors, own.hash].slice(-MAX_COMMENT_LOG_ANCESTORS)
+          : base.ancestors
+      };
       const sequence = own.sequence + 1;
       const sealed = await kit.seal(
         projectId,
@@ -255,7 +331,11 @@ export function createEncryptedComments(deps: CommentDeps): EncryptedComments {
 
   return {
     async list(projectId, ownerUserId) {
-      return mergeCommentLogs((await read(projectId)).logs, ownerUserId);
+      const { logs, warnings } = await read(projectId);
+      return {
+        comments: mergeCommentLogs(logs, ownerUserId),
+        warning: warnings.length ? warnings.join(' ') : null
+      };
     },
     async create(projectId, ownerUserId, name, input) {
       const text = normalizeProjectCommentText(input.text);
@@ -265,7 +345,7 @@ export function createEncryptedComments(deps: CommentDeps): EncryptedComments {
           'A comment needs 1 to 2000 characters of text.'
         );
       if (input.parentId !== undefined) {
-        const comments = await this.list(projectId, ownerUserId);
+        const { comments } = await this.list(projectId, ownerUserId);
         const thread = comments.find(
           (comment) => comment.commentId === input.parentId
         );

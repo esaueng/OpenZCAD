@@ -8,6 +8,7 @@
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
 import {
+  EncryptedCommentsIntegrityError,
   createEncryptedComments,
   createEncryptedCommentsApi,
   type EncryptedComments
@@ -75,7 +76,7 @@ describe('encrypted comments (L08)', () => {
       anchor,
       text: 'Secret wall question'
     });
-    const [thread] = await mine.list(projectId, OWNER);
+    const [thread] = (await mine.list(projectId, OWNER)).comments;
     expect(thread).toMatchObject({
       text: 'Secret wall question',
       authorUserId: OTHER,
@@ -87,7 +88,7 @@ describe('encrypted comments (L08)', () => {
       text: 'Secret owner reply'
     });
     await mine.resolve(projectId, OWNER, 'Olive', thread!.commentId, true);
-    const seen = await theirs.list(projectId, OWNER);
+    const seen = (await theirs.list(projectId, OWNER)).comments;
     expect(seen.map((c) => [c.text, c.authorName])).toEqual([
       ['Secret wall question', 'Vi'],
       ['Secret owner reply', 'Olive']
@@ -127,16 +128,18 @@ describe('encrypted comments (L08)', () => {
       text: 'Owner thread'
     });
     await theirs.create(projectId, OWNER, 'Vi', { anchor, text: 'Spam' });
-    const [ownerThread, spam] = await mine.list(projectId, OWNER);
+    const [ownerThread, spam] = (await mine.list(projectId, OWNER)).comments;
     await theirs.resolve(projectId, OWNER, 'Vi', ownerThread!.commentId, true);
-    expect((await mine.list(projectId, OWNER))[0]?.resolvedAt).toBeNull();
+    expect(
+      (await mine.list(projectId, OWNER)).comments[0]?.resolvedAt
+    ).toBeNull();
     await mine.remove(projectId, OWNER, 'Olive', spam!.commentId);
-    expect((await theirs.list(projectId, OWNER)).map((c) => c.text)).toEqual([
-      'Owner thread'
-    ]);
+    expect(
+      (await theirs.list(projectId, OWNER)).comments.map((c) => c.text)
+    ).toEqual(['Owner thread']);
   });
 
-  it('refuses a log the account rolled back or moved to another member', async () => {
+  it('never trusts or overwrites an own log that does not verify', async () => {
     const { srv, laptop, member, projectId } = await sharedProject(
       [owner, other],
       owner,
@@ -144,46 +147,134 @@ describe('encrypted comments (L08)', () => {
       'viewer'
     );
     const mine = comments(laptop);
-    await mine.create(projectId, OWNER, 'Olive', { anchor, text: 'First' });
-    const first = rows<Record<string, unknown>>(
+    const theirs = comments(member);
+    await mine.create(projectId, OWNER, 'Olive', {
+      anchor,
+      text: 'Owner thread'
+    });
+    await theirs.create(projectId, OWNER, 'Vi', {
+      anchor,
+      text: 'Viewer thread'
+    });
+    expect((await theirs.list(projectId, OWNER)).comments).toHaveLength(2);
+    expect((await mine.list(projectId, OWNER)).comments).toHaveLength(2);
+    srv.db.exec('DROP TRIGGER e2ee_comment_log_forward');
+    // The genuine envelope with a corrupted signature: the hash matches what
+    // the viewer pinned, but it does not verify, so nothing is written over it.
+    const viewerLog = rows<{ signature: string }>(
+      srv,
+      'SELECT signature FROM e2ee_project_comment_logs WHERE user_id = ?',
+      OTHER
+    )[0]!;
+    const flipped = `${viewerLog.signature.slice(0, -2)}${viewerLog.signature.endsWith('AA') ? 'AB' : 'AA'}`;
+    srv.db
+      .prepare(
+        'UPDATE e2ee_project_comment_logs SET signature = ? WHERE user_id = ?'
+      )
+      .run(flipped, OTHER);
+    await expect(
+      theirs.create(projectId, OWNER, 'Vi', { anchor, text: 'Overwrite?' })
+    ).rejects.toBeInstanceOf(EncryptedCommentsIntegrityError);
+    expect(
+      rows(
+        srv,
+        'SELECT sequence FROM e2ee_project_comment_logs WHERE user_id = ?',
+        OTHER
+      )
+    ).toEqual([{ sequence: 1 }]);
+    srv.db
+      .prepare(
+        'UPDATE e2ee_project_comment_logs SET signature = ? WHERE user_id = ?'
+      )
+      .run(viewerLog.signature, OTHER);
+    // The account serves the owner's envelope as the viewer's own log.
+    const ownerLog = rows<Record<string, unknown>>(
       srv,
       'SELECT * FROM e2ee_project_comment_logs WHERE user_id = ?',
       OWNER
     )[0]!;
-    await mine.create(projectId, OWNER, 'Olive', { anchor, text: 'Second' });
-    // The account serves the owner's log as the viewer's: signed by the
-    // owner's device, so it is left out rather than attributed to them.
-    srv.db
-      .prepare(
-        `INSERT INTO e2ee_project_comment_logs
-           (project_id, user_id, sequence, key_epoch, envelope,
-            wrapped_version_key, signature, signer_device_id, updated_at)
-         VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        projectId,
-        OTHER,
-        first.key_epoch as number,
-        first.envelope as string,
-        first.wrapped_version_key as string,
-        first.signature as string,
-        first.signer_device_id as string,
-        first.updated_at as string
-      );
-    const theirs = comments(member);
-    expect(
-      (await theirs.list(projectId, OWNER)).map((c) => c.authorUserId)
-    ).toEqual([OWNER, OWNER]);
-    // The account rolls the owner's log back to its first version.
-    srv.db.exec('DROP TRIGGER e2ee_comment_log_forward');
     srv.db
       .prepare(
         `UPDATE e2ee_project_comment_logs
-         SET envelope = ?, signature = ?, sequence = 1
+         SET envelope = ?, signature = ?, signer_device_id = ?
          WHERE user_id = ?`
       )
-      .run(first.envelope as string, first.signature as string, OWNER);
-    await expect(mine.list(projectId, OWNER)).rejects.toBeInstanceOf(
+      .run(
+        ownerLog.envelope as string,
+        ownerLog.signature as string,
+        ownerLog.signer_device_id as string,
+        OTHER
+      );
+    // The viewer's own log is not the one it saw: refused, and nothing is
+    // written over it.
+    await expect(theirs.list(projectId, OWNER)).rejects.toThrow();
+    await expect(
+      theirs.create(projectId, OWNER, 'Vi', { anchor, text: 'Lost?' })
+    ).rejects.toThrow();
+    expect(
+      rows<{ envelope: string }>(
+        srv,
+        'SELECT envelope FROM e2ee_project_comment_logs WHERE user_id = ?',
+        OTHER
+      )[0]?.envelope
+    ).toBe(ownerLog.envelope);
+    // The owner, who saw the viewer's log, is told it was left out.
+    const seenByOwner = await mine.list(projectId, OWNER);
+    expect(seenByOwner.comments.map((c) => c.text)).toEqual(['Owner thread']);
+    expect(seenByOwner.warning).toContain('left out');
+  });
+
+  it('reports a member log rolled back, forked or withdrawn, and refuses its own', async () => {
+    const { srv, laptop, member, projectId } = await sharedProject(
+      [owner, other],
+      owner,
+      other,
+      'viewer'
+    );
+    const mine = comments(laptop);
+    const theirs = comments(member);
+    await theirs.create(projectId, OWNER, 'Vi', { anchor, text: 'One' });
+    const firstViewerLog = rows<Record<string, unknown>>(
+      srv,
+      'SELECT * FROM e2ee_project_comment_logs WHERE user_id = ?',
+      OTHER
+    )[0]!;
+    await theirs.create(projectId, OWNER, 'Vi', { anchor, text: 'Two' });
+    // The owner sees the viewer's log at sequence 2.
+    expect((await mine.list(projectId, OWNER)).comments).toHaveLength(2);
+    srv.db.exec('DROP TRIGGER e2ee_comment_log_forward');
+    // Rolled back to sequence 1: left out and reported, not hidden.
+    srv.db
+      .prepare(
+        `UPDATE e2ee_project_comment_logs
+         SET envelope = ?, signature = ?, sequence = 1 WHERE user_id = ?`
+      )
+      .run(
+        firstViewerLog.envelope as string,
+        firstViewerLog.signature as string,
+        OTHER
+      );
+    const rolledBack = await mine.list(projectId, OWNER);
+    expect(rolledBack.comments).toEqual([]);
+    expect(rolledBack.warning).toContain('older version');
+    // Served at a higher sequence without descending from what was seen:
+    // the version-1 envelope relabelled 3 names no ancestor, so it forks.
+    srv.db
+      .prepare(
+        'UPDATE e2ee_project_comment_logs SET sequence = 3 WHERE user_id = ?'
+      )
+      .run(OTHER);
+    const forked = await mine.list(projectId, OWNER);
+    expect(forked.comments).toEqual([]);
+    expect(forked.warning).toBeTruthy();
+    // Withdrawn altogether: reported too.
+    srv.db
+      .prepare('DELETE FROM e2ee_project_comment_logs WHERE user_id = ?')
+      .run(OTHER);
+    const withdrawn = await mine.list(projectId, OWNER);
+    expect(withdrawn.warning).toContain('no longer serves');
+    // The viewer's own browser refuses its own log rolled back or withdrawn.
+    await expect(theirs.list(projectId, OWNER)).rejects.toBeInstanceOf(
       ReplacedEnvelopeRollbackError
     );
   });

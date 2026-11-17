@@ -22,6 +22,7 @@ function log(
     comments: [],
     resolutions: [],
     hidden: [],
+    ancestors: [],
     ...overrides
   };
 }
