@@ -151,13 +151,17 @@ export function resolveWrapFrame(
     scale(axis, offset)
   );
   // Which side the material is on: the face's outward normal points away
-  // from the axis on a post or a cup's outside, toward it in a bore.
-  const projected = kernel.projectPointOnSurface(
-    face.value,
-    basis.origin.x,
-    basis.origin.y,
-    basis.origin.z
+  // from the axis on a post or a cup's outside, toward it in a bore. It is
+  // read at a point of the face's own surface, beside the face's centre:
+  // never projected from elsewhere, which on a cone could land on its
+  // continuation past the apex, where the normal turns over.
+  const probe = wrapOrientationProbe(
+    axisPoint,
+    axis,
+    geometry?.center ?? axisPoint,
+    shape.kind === 'cylinder' ? { radius: shape.radius } : { halfAngle: shape.halfAngle }
   );
+  const projected = kernel.projectPointOnSurface(face.value, probe.x, probe.y, probe.z);
   const at = { x: projected[2]!, y: projected[3]!, z: projected[4]! };
   const raw = kernel.evaluateSurfaceNormal(face.value, projected[0]!, projected[1]!);
   const toAxis = sub(at, add(axisPoint, scale(axis, dot(sub(at, axisPoint), axis))));
@@ -173,6 +177,32 @@ export function resolveWrapFrame(
         halfAngle: shape.halfAngle,
         bore
       };
+}
+
+/**
+ * A point on a wrap face's own surface at the height of `center`, where its
+ * outward normal is read: on a cylinder at its radius, on a cone at the
+ * radius its half-angle gives there (`axisPoint` is the apex and `axis`
+ * runs into the cone, toward the face), never on the cone's continuation
+ * past the apex.
+ */
+export function wrapOrientationProbe(
+  axisPoint: V3,
+  axis: V3,
+  center: V3,
+  shape: { radius: number } | { halfAngle: number }
+): V3 {
+  const level = dot(sub(center, axisPoint), axis);
+  const side = unit(
+    Math.abs(axis.x) < 0.9
+      ? cross(axis, { x: 1, y: 0, z: 0 })
+      : cross(axis, { x: 0, y: 1, z: 0 })
+  );
+  const reach =
+    'radius' in shape
+      ? shape.radius
+      : (level * Math.cos(shape.halfAngle)) / Math.sin(shape.halfAngle);
+  return add(add(axisPoint, scale(axis, level)), scale(side, reach));
 }
 
 /** The wrap's material, one solid per connected region group. */

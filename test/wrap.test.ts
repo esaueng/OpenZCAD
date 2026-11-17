@@ -10,6 +10,7 @@ import {
 } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
+  wrapOrientationProbe,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import { computeSketchProfileAnalysis } from '@openzcad/geometry';
@@ -261,6 +262,33 @@ describe('wraps in the exact build', { timeout: 180_000 }, () => {
         6
       );
     }
+  });
+
+  it('reads which side of a cone is outside on the face itself, never past the apex', () => {
+    // The next case's frustum: apex at z = 40, the axis running down into
+    // the cone, half-angle atan(40 / 10) from the radial plane, its face's
+    // centre 8⅓ up. A sketch origin on the axis at z = 50 projects onto the
+    // cone's continuation past the apex, where its normal turns over; the
+    // probe stands on the face itself instead.
+    const beta = Math.atan2(40, 10);
+    const probe = wrapOrientationProbe(
+      { x: 0, y: 0, z: 40 },
+      { x: 0, y: 0, z: -1 },
+      { x: 0, y: 0, z: 25 / 3 },
+      { halfAngle: beta }
+    );
+    expect(probe.z).toBeCloseTo(25 / 3, 12);
+    // On the cone there: radius 10 at z = 0 to 5 at z = 20.
+    expect(Math.hypot(probe.x, probe.y)).toBeCloseTo(10 - (25 / 3) / 4, 12);
+    // On a post, at its radius beside the centre.
+    const post = wrapOrientationProbe(
+      { x: 0, y: 0, z: 0 },
+      { x: 0, y: 0, z: 1 },
+      { x: 0, y: 0, z: 10 },
+      { radius: 10 }
+    );
+    expect(post.z).toBeCloseTo(10, 12);
+    expect(Math.hypot(post.x, post.y)).toBeCloseTo(10, 12);
   });
 
   it('embosses and engraves a label on a cone through its development, one body each', async () => {
