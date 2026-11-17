@@ -1015,6 +1015,104 @@ export function regionSideSources(
   return sources;
 }
 
+/**
+ * Names the edges of a selected-region extrusion that its faces identify.
+ *
+ * The faces are named by what draws them: the two caps, and one side per
+ * sketch entity (`addRegionSideRoles`). An edge that is the only boundary
+ * between two of those faces has a construction role of its own, the pair,
+ * and that role survives any edit that keeps both faces: a driving
+ * dimension that moves the edge leaves it between the same cap and the same
+ * entity's side. Without a name, an edge picked for a fillet or chamfer is
+ * stored as a geometry hash, which stops matching as soon as the sketch is
+ * resized (issue #1663). The single-profile path names its edges
+ * (`buildExtrudeLineage`); this is its counterpart for regions.
+ *
+ * Fail closed, like every semantic role: an edge is named only when it lies
+ * between exactly two faces, both named once and differently, and no other
+ * edge lies between the same two. A seam, an edge on a side that stayed
+ * unnamed, and a boundary a cap shares with one side in several pieces all
+ * stay hash-only.
+ */
+function addRegionBoundaryEdgeRoles(
+  kernel: RemusKernel,
+  solid: number,
+  candidates: ReturnType<typeof topologyCandidatesForSolid>,
+  token: string,
+  assignments: RemusSemanticAssignment[]
+) {
+  // The publisher keeps a face role only when the name and the face are
+  // one-to-one, so only those faces can vouch for an edge.
+  const nameUses = new Map<string, number>();
+  const handleUses = new Map<number, number>();
+  for (const assignment of assignments) {
+    if (assignment.kind !== 'face') continue;
+    nameUses.set(
+      assignment.lineageName,
+      (nameUses.get(assignment.lineageName) ?? 0) + 1
+    );
+    handleUses.set(
+      assignment.handle,
+      (handleUses.get(assignment.handle) ?? 0) + 1
+    );
+  }
+  const faceRole = new Map<number, string>();
+  const capPrefix = 'sweep.face.cap.';
+  const sidePrefix = `sweep.face.side.region.${token}.`;
+  for (const assignment of assignments) {
+    if (
+      assignment.kind !== 'face' ||
+      nameUses.get(assignment.lineageName) !== 1 ||
+      handleUses.get(assignment.handle) !== 1
+    )
+      continue;
+    const name = assignment.lineageName;
+    // `cap.start`, `cap.end`, or `side.<entity>.<piece>`: what tells this
+    // region's faces apart, without the region token every one repeats.
+    const role = name.startsWith(sidePrefix)
+      ? `side.${name.slice(sidePrefix.length)}`
+      : name.startsWith(`${capPrefix}start.`)
+        ? 'cap.start'
+        : name.startsWith(`${capPrefix}end.`)
+          ? 'cap.end'
+          : null;
+    if (role !== null) faceRole.set(assignment.handle, role);
+  }
+  // The two caps never meet, so with no named side there is no edge to
+  // name: a flattened text outline, whose sides stay unnamed, stops here
+  // without reading its topology.
+  if (![...faceRole.values()].some((role) => role.startsWith('side.'))) return;
+  const facesByEdge = new Map<number, number[]>();
+  for (const face of kernel.getSolidFaces(solid)) {
+    for (const edge of new Set(kernel.getFaceEdges(face))) {
+      const faces = facesByEdge.get(edge);
+      if (faces) faces.push(face);
+      else facesByEdge.set(edge, [face]);
+    }
+  }
+  const byPair = new Map<string, (typeof candidates)[number][]>();
+  for (const candidate of candidates) {
+    if (candidate.kind !== 'edge') continue;
+    const faces = facesByEdge.get(candidate.handle);
+    if (faces?.length !== 2) continue;
+    const first = faceRole.get(faces[0]!);
+    const second = faceRole.get(faces[1]!);
+    if (first === undefined || second === undefined || first === second)
+      continue;
+    const pair = [first, second].sort().join('|');
+    const edges = byPair.get(pair);
+    if (edges) edges.push(candidate);
+    else byPair.set(pair, [candidate]);
+  }
+  for (const [pair, edges] of byPair) {
+    if (edges.length !== 1) continue;
+    assignments.push({
+      ...edges[0]!,
+      lineageName: `sweep.edge.region.${token}.${pair}`
+    });
+  }
+}
+
 /** Extrude one or more explicitly selected bounded sketch cells. */
 export function buildRegionExtrude(
   kernel: RemusKernel,
@@ -1129,6 +1227,7 @@ export function buildRegionExtrude(
         assignments,
         diagnostics
       });
+      addRegionBoundaryEdgeRoles(kernel, solid, candidates, token, assignments);
     }
     lineages.push(
       mergeRemusLineageStates([
