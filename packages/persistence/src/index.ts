@@ -182,7 +182,8 @@ export type ProjectSharingErrorCode =
   | 'OWNER_IMMUTABLE'
   | 'SHARE_LINK_NOT_FOUND'
   | 'SHARE_LINK_LIMIT'
-  | 'SHARE_LINK_LABEL_UNAVAILABLE';
+  | 'SHARE_LINK_LABEL_UNAVAILABLE'
+  | 'SHARE_LINK_COMMENTS_UNAVAILABLE';
 
 export class ProjectSharingError extends Error {
   constructor(
@@ -210,6 +211,8 @@ export interface CreateProjectShareLinkInput {
   createdAt: number;
   /** Already normalized (normalizeShareLinkLabel); absent or null when unnamed. */
   label?: string | null;
+  /** L08: a commenter link. */
+  comments?: boolean;
 }
 
 /**
@@ -221,6 +224,8 @@ export interface SharedProjectSnapshot {
   projectId: string;
   name: string;
   mode: ProjectShareLinkMode;
+  /** L08: a commenter link. */
+  comments?: boolean;
   document: ProjectDocument;
 }
 
@@ -1142,7 +1147,8 @@ export class InMemoryPersistenceService implements PersistenceService {
       mode: input.mode,
       createdAt: input.createdAt,
       revokedAt: null,
-      label: input.label ?? null
+      label: input.label ?? null,
+      ...(input.comments ? { comments: true } : {})
     };
   }
 
@@ -1160,7 +1166,8 @@ export class InMemoryPersistenceService implements PersistenceService {
         mode: link.mode,
         createdAt: link.createdAt,
         revokedAt: link.revokedAt,
-        label: link.label ?? null
+        label: link.label ?? null,
+        ...(link.comments ? { comments: true } : {})
       }));
   }
 
@@ -1243,6 +1250,7 @@ export class InMemoryPersistenceService implements PersistenceService {
       projectId: link.projectId,
       name: document.name,
       mode: link.mode,
+      ...(link.comments ? { comments: true } : {}),
       document: sharedProjectSnapshotDocument(
         reconcileCopiedImportSources(
           normalizedForLoad(document),

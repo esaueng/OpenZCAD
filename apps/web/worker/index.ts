@@ -216,8 +216,12 @@ import {
   saveProjectMeasurements
 } from './projectMeasurements';
 import {
+  commentLinkProject,
+  createLinkComment,
   createProjectComment,
   deleteProjectComment,
+  listLinkComments,
+  parseLinkCommentRequest,
   isProjectCommentStorageReady,
   listProjectComments,
   parseCreateProjectCommentRequest,
@@ -250,6 +254,7 @@ import {
   MAX_CLOUD_PROJECT_WRITE_BYTES,
   LEGACY_PROJECT_FRAME_CONTENT_TYPE,
   importedSourceReferenceOf,
+  PROJECT_SHARE_LINK_TTL_SECONDS,
   toUserId,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -370,6 +375,8 @@ const PROJECT_SHARE_LINKS_ROUTE = /^\/api\/projects\/([^/]+)\/share-links$/;
 const PROJECT_SHARE_LINK_ROUTE =
   /^\/api\/projects\/([^/]+)\/share-links\/([^/]+)$/;
 const SHARED_PROJECT_ROUTE = /^\/api\/share\/([^/]+)$/;
+/** L08: a commenter link's comments, read and written by its visitor. */
+const SHARED_PROJECT_COMMENTS_ROUTE = /^\/api\/share\/([^/]+)\/comments$/;
 const SHARED_PROJECT_ASSET_ROUTE = /^\/api\/share\/([^/]+)\/assets\/([^/]+)$/;
 const SHARED_PROJECT_SOURCE_ROUTE = /^\/api\/share\/([^/]+)\/sources\/([^/]+)$/;
 /**
@@ -1212,12 +1219,54 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         project: {
           projectId: shared.projectId,
           name: shared.name,
-          mode: shared.mode
+          mode: shared.mode,
+          ...(shared.comments ? { comments: true } : {})
         },
         document: shared.document
       },
       200,
       { 'cache-control': 'no-store' }
+    );
+  }
+
+  // L08 commenter links: the link's visitor reads and writes the project's
+  // comments. The token is the whole authorization, as for the read above;
+  // a link made without comments, an unknown, revoked or expired token, and
+  // an encrypted project's link all answer the same opaque 404. Rate limited
+  // per client address like every public share route.
+  const sharedCommentsMatch = SHARED_PROJECT_COMMENTS_ROUTE.exec(pathname);
+  if (
+    sharedCommentsMatch &&
+    (request.method === 'GET' || request.method === 'POST')
+  ) {
+    const notFound = () => json({ error: 'Share link not found.' }, 404);
+    if (!projectCollaborationRollout(env).sharingEnabled) return notFound();
+    if (env.ENVIRONMENT !== 'development') {
+      const address = await publicRequestBucket(request, env, 'share');
+      await enforceWorkersCeiling(env, 'SHARE_READ_CEILING_LIMITER', address);
+      await enforceRequestLimit(env, 'SHARE_LINK_LIMITER', address);
+    }
+    const token = parseShareLinkToken(sharedCommentsMatch[1]!);
+    if (!token || !(await isProjectCommentStorageReady(env.DB)))
+      return notFound();
+    const link = await commentLinkProject(
+      env.DB!,
+      await hashProjectInvitationToken(token),
+      Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS
+    );
+    if (!link) return notFound();
+    if (request.method === 'GET')
+      return json(
+        { comments: await listLinkComments(env.DB!, link.projectId) },
+        200,
+        { 'cache-control': 'no-store' }
+      );
+    const { name, input } = parseLinkCommentRequest(
+      await readJsonBody(request, 8 * 1024)
+    );
+    return json(
+      { comment: await createLinkComment(env.DB!, link, name, input) },
+      201
     );
   }
 
