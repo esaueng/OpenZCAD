@@ -1,5 +1,6 @@
 import {
   createModelPmiId,
+  DRAWING_CHARACTERISTIC_LABELS,
   drawingFaceRefError,
   type GeometryBodyRepresentation,
   DRAWING_DATUM_REQUIRED_CHARACTERISTICS,
@@ -14,13 +15,22 @@ import {
 } from '@openzcad/shared';
 import { resolveFace, topologyResolutionMessage } from '../topologyResolution';
 
-import {
-  CHARACTERISTIC_LABELS,
+import type {
   datumFeatureLayout,
   featureControlFrameLayout,
-  type FrameCells,
-  type FrameLayout
+  FrameCells,
+  FrameLayout
 } from '../drawing/toleranceFrames';
+
+/**
+ * The drawing's frame and datum geometry, handed in by the caller (it loads
+ * them with the drawing workspace's chunk), so this module shares no chunk
+ * with the drawing code.
+ */
+export interface PmiFrameLayouts {
+  datumFeatureLayout: typeof datumFeatureLayout;
+  featureControlFrameLayout: typeof featureControlFrameLayout;
+}
 
 /**
  * D07 slice C: the model's PMI as the workspace shows it — each entry
@@ -119,7 +129,7 @@ export function modelPmiName(annotation: ModelPmiAnnotation): string {
   const modifier = (material?: string) =>
     material === 'mmc' ? ' (M)' : material === 'lmc' ? ' (L)' : '';
   return [
-    CHARACTERISTIC_LABELS[annotation.characteristic],
+    DRAWING_CHARACTERISTIC_LABELS[annotation.characteristic],
     `${cells.diameterZone ? 'Ø' : ''}${cells.tolerance}${modifier(cells.material)}`,
     ...cells.datums.map((datum) => `${datum.letter}${modifier(datum.material)}`)
   ].join(' | ');
@@ -256,11 +266,14 @@ function layoutSvg(layout: FrameLayout): string {
 }
 
 /** An entry's frame or datum symbol, drawn as on a drawing. */
-export function modelPmiSvg(annotation: ModelPmiAnnotation): string {
+export function modelPmiSvg(
+  annotation: ModelPmiAnnotation,
+  layouts: PmiFrameLayouts
+): string {
   return layoutSvg(
     annotation.kind === 'datum-feature'
-      ? datumFeatureLayout(annotation.letter, [0, 0], null)
-      : featureControlFrameLayout(modelFrameCells(annotation), [0, 0])
+      ? layouts.datumFeatureLayout(annotation.letter, [0, 0], null)
+      : layouts.featureControlFrameLayout(modelFrameCells(annotation), [0, 0])
   );
 }
 
@@ -362,7 +375,8 @@ export function pmiAnchorOnFace(
 export function pmiViewportLabels(
   pmi: ModelPmiSet | undefined,
   bodies: Bodies,
-  selectedPmiId: string | null
+  selectedPmiId: string | null,
+  layouts: PmiFrameLayouts
 ): PmiViewportLabel[] {
   const resolutions = resolveModelPmi(pmi, bodies);
   return (pmi?.annotations ?? []).map((annotation) => {
@@ -376,7 +390,7 @@ export function pmiViewportLabels(
             annotation.anchor
           )
         : annotation.anchor,
-      svg: modelPmiSvg(annotation),
+      svg: modelPmiSvg(annotation, layouts),
       name: modelPmiName(annotation),
       broken: !resolution?.ok,
       selected: annotation.pmiId === selectedPmiId

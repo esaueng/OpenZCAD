@@ -576,6 +576,26 @@ export const DRAWING_GEOMETRIC_CHARACTERISTICS = [
 export type DrawingGeometricCharacteristic =
   (typeof DRAWING_GEOMETRIC_CHARACTERISTICS)[number];
 
+/** v98: each characteristic's name, for lists, labels and STEP. */
+export const DRAWING_CHARACTERISTIC_LABELS: Readonly<
+  Record<DrawingGeometricCharacteristic, string>
+> = {
+  straightness: 'Straightness',
+  flatness: 'Flatness',
+  circularity: 'Circularity',
+  cylindricity: 'Cylindricity',
+  'profile-line': 'Profile of a line',
+  'profile-surface': 'Profile of a surface',
+  parallelism: 'Parallelism',
+  perpendicularity: 'Perpendicularity',
+  angularity: 'Angularity',
+  position: 'Position',
+  concentricity: 'Concentricity',
+  symmetry: 'Symmetry',
+  'circular-runout': 'Circular runout',
+  'total-runout': 'Total runout'
+};
+
 /** v98: form tolerances, which control a feature alone and take no datum. */
 export const DRAWING_FORM_CHARACTERISTICS: readonly DrawingGeometricCharacteristic[] =
   ['straightness', 'flatness', 'circularity', 'cylindricity'];

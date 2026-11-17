@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Anchor, Columns3, Crosshair, Trash2 } from 'lucide-react';
 import {
+  DRAWING_CHARACTERISTIC_LABELS,
   DRAWING_DATUM_MATERIAL_CHARACTERISTICS,
   DRAWING_DATUM_REQUIRED_CHARACTERISTICS,
   DRAWING_DIAMETER_ZONE_CHARACTERISTICS,
@@ -11,12 +12,27 @@ import {
   type DrawingGeometricCharacteristic,
   type DrawingMaterialCondition,
   type GeometryBodyRepresentation,
+  type BodyId,
   type ModelPmiAnnotation,
-  type ModelPmiSet
+  type ModelPmiId,
+  type ProjectDocument,
+  type UnitSystem
 } from '@openzcad/shared';
-import { CHARACTERISTIC_LABELS } from '../../lib/drawing/toleranceFrames';
-import { modelPmiName, resolveModelPmi } from '../../lib/pmi/modelPmi';
-import type { PmiActions } from './modelPanelProps';
+import { commandFactories } from '@openzcad/command-system';
+import {
+  draftModelPmi,
+  faceAnchor,
+  modelPmiName,
+  pmiFaceRef,
+  resolveModelPmi
+} from '../../lib/pmi/modelPmi';
+import type { AnyCommand } from '@openzcad/command-system';
+import {
+  setSelectedPmiId,
+  usePmiSelection,
+  type PmiFacePick,
+  type PmiSelectionState
+} from '../../lib/pmi/pmiSelection';
 
 const DATUM_LETTERS = [...'ABCDEFGHJKLMNPRSTUVWXYZ'];
 const PRECEDENCE = ['Primary', 'Secondary', 'Tertiary'] as const;
@@ -29,13 +45,129 @@ type Frame = Extract<ModelPmiAnnotation, { kind: 'feature-control-frame' }>;
  * under it with its state (broken when its face no longer resolves), and
  * the selected one opens its fields. Every change is one undoable command.
  */
+/** The workspace's command runner, and where the rows say what happened. */
+interface PmiWorkspace {
+  execute(command: AnyCommand): boolean;
+  status(message: string): void;
+}
+
+/** What the rows and their editor read and do. */
+interface PmiRowActions {
+  selectedFace: PmiFacePick | null;
+  selectedPmiId: string | null;
+  /** The document's units, which a frame's tolerance is written in. */
+  units: UnitSystem;
+  /** False where the model cannot be edited: rows list, nothing changes. */
+  editable: boolean;
+  onSelect(pmiId: string | null): void;
+  onAdd(kind: ModelPmiAnnotation['kind']): void;
+  onUpdate(annotation: ModelPmiAnnotation, label: string): void;
+  onDelete(pmiId: string): void;
+  /** Re-points an entry at the selected face, keeping the rest. */
+  onRepick(pmiId: string): void;
+}
+
+/**
+ * The selected face as a stored reference, and where its leader lands: the
+ * point it was clicked at, or its centre. Null (and said) when the face
+ * cannot be told apart from another.
+ */
+function pickedFace(
+  document: ProjectDocument | undefined,
+  selected: PmiFacePick | null,
+  workspace: PmiWorkspace
+) {
+  if (!document || !selected) return null;
+  const bodies = document.derived.bodyRepresentations;
+  const face = pmiFaceRef(bodies, selected.bodyId as BodyId, selected.hash);
+  const topology = bodies[selected.bodyId as BodyId]?.topology?.faces.find(
+    (candidate) => candidate.hash === selected.hash
+  );
+  const anchor = selected.point ?? (topology ? faceAnchor(topology) : null);
+  if (!face || !anchor) {
+    workspace.status(
+      'That face cannot be told apart from another one in the model. Pick a different face.'
+    );
+    return null;
+  }
+  return { face, anchor };
+}
+
+function rowActions(
+  document: ProjectDocument | undefined,
+  selection: PmiSelectionState,
+  editable: boolean,
+  workspace: PmiWorkspace
+): PmiRowActions {
+  return {
+    selectedFace: selection.face,
+    selectedPmiId: selection.selectedPmiId,
+    units: document?.units ?? 'mm',
+    editable,
+    onSelect: setSelectedPmiId,
+    onAdd(kind) {
+      const pick = pickedFace(document, selection.face, workspace);
+      if (!pick || !document) return;
+      const annotation = draftModelPmi(
+        kind,
+        pick.face,
+        pick.anchor,
+        document.pmi,
+        document.units
+      );
+      if (workspace.execute(commandFactories.addModelPmi({ annotation }))) {
+        setSelectedPmiId(annotation.pmiId);
+        workspace.status(
+          annotation.kind === 'datum-feature'
+            ? `Datum ${annotation.letter} added to the face.`
+            : 'Feature control frame added. Choose its characteristic, tolerance and datums in Objects.'
+        );
+      }
+    },
+    onUpdate(annotation, label) {
+      workspace.execute(commandFactories.updateModelPmi({ annotation }, label));
+    },
+    onDelete(pmiId) {
+      if (
+        workspace.execute(
+          commandFactories.deleteModelPmi({ pmiId: pmiId as ModelPmiId })
+        ) &&
+        selection.selectedPmiId === pmiId
+      )
+        setSelectedPmiId(null);
+    },
+    onRepick(pmiId) {
+      const pick = pickedFace(document, selection.face, workspace);
+      const previous = document?.pmi?.annotations.find(
+        (entry) => entry.pmiId === pmiId
+      );
+      if (!pick || !previous) return;
+      workspace.execute(
+        commandFactories.updateModelPmi(
+          {
+            annotation: { ...previous, face: pick.face, anchor: pick.anchor }
+          },
+          'Re-pick PMI face'
+        )
+      );
+    }
+  };
+}
+
 export function PmiRows(props: {
-  pmi: ModelPmiSet | undefined;
+  document: ProjectDocument | undefined;
   representations: Readonly<Record<string, GeometryBodyRepresentation>>;
   bodyNames: ReadonlyMap<string, string>;
-  actions: PmiActions;
+  editable: boolean;
+  onCommand(command: AnyCommand): boolean;
 }) {
-  const { pmi, actions } = props;
+  const pmi = props.document?.pmi;
+  const selection = usePmiSelection();
+  const [message, setMessage] = useState<string | null>(null);
+  const actions = rowActions(props.document, selection, props.editable, {
+    execute: props.onCommand,
+    status: setMessage
+  });
   const annotations = pmi?.annotations ?? [];
   const resolutions = useMemo(
     () => resolveModelPmi(pmi, props.representations),
@@ -46,6 +178,11 @@ export function PmiRows(props: {
   );
   return (
     <>
+      {message ? (
+        <p className="pmi-hint pmi-message" role="status">
+          {message}
+        </p>
+      ) : null}
       {actions.selectedFace && actions.editable ? (
         <div className="object-row pmi-add" role="listitem">
           <span className="pmi-add-label">Selected face:</span>
@@ -128,7 +265,7 @@ function PmiEditor(props: {
   annotation: ModelPmiAnnotation;
   letters: string[];
   broken: string | null;
-  actions: PmiActions;
+  actions: PmiRowActions;
 }) {
   const { annotation, actions } = props;
   const disabled = !actions.editable;
@@ -268,7 +405,7 @@ function FrameFields(props: {
                 DRAWING_DATUM_REQUIRED_CHARACTERISTICS.includes(characteristic)
               }
             >
-              {CHARACTERISTIC_LABELS[characteristic]}
+              {DRAWING_CHARACTERISTIC_LABELS[characteristic]}
               {characteristic === 'concentricity' ||
               characteristic === 'symmetry'
                 ? ' (ISO 1101)'

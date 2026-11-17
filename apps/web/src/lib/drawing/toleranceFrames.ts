@@ -1,6 +1,7 @@
-import type {
-  DrawingGeometricCharacteristic,
-  DrawingMaterialCondition
+import {
+  DRAWING_CHARACTERISTIC_LABELS,
+  type DrawingGeometricCharacteristic,
+  type DrawingMaterialCondition
 } from '@openzcad/shared';
 import {
   sheetSafeText,
@@ -60,24 +61,8 @@ const LEADER_ARROW_HALF_MM = 0.5;
 const DATUM_TRIANGLE_MM = 2.6;
 const DATUM_TRIANGLE_HALF_MM = DATUM_TRIANGLE_MM / Math.sqrt(3);
 
-export const CHARACTERISTIC_LABELS: Readonly<
-  Record<DrawingGeometricCharacteristic, string>
-> = {
-  straightness: 'Straightness',
-  flatness: 'Flatness',
-  circularity: 'Circularity',
-  cylindricity: 'Cylindricity',
-  'profile-line': 'Profile of a line',
-  'profile-surface': 'Profile of a surface',
-  parallelism: 'Parallelism',
-  perpendicularity: 'Perpendicularity',
-  angularity: 'Angularity',
-  position: 'Position',
-  concentricity: 'Concentricity',
-  symmetry: 'Symmetry',
-  'circular-runout': 'Circular runout',
-  'total-runout': 'Total runout'
-};
+/** The characteristics' names, for lists and labels (shared with PMI). */
+export const CHARACTERISTIC_LABELS = DRAWING_CHARACTERISTIC_LABELS;
 
 function stroke(points: number[], closed = false): SheetStroke {
   return { kind: 'dimension', points, ...(closed ? { closed: true } : {}) };

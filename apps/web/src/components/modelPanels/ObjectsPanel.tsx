@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useState,
   useRef,
   type CSSProperties,
@@ -59,7 +61,11 @@ import type { ModelPanelSource } from './modelPanelProps';
 import type { ObjectsView } from './panelViews';
 import { ObjectRenameField } from './ObjectRenameField';
 import { BodyAppearanceEditor } from './BodyAppearanceEditor';
-import { PmiRows } from './PmiRows';
+// D07: the PMI rows and their modules load on first use, off every
+// eagerly loaded chunk.
+const PmiRows = lazy(() =>
+  import('./PmiRows').then((module) => ({ default: module.PmiRows }))
+);
 
 /** What the Objects list is built from, and all its header count needs. */
 export type ObjectsSource = Pick<
@@ -82,7 +88,7 @@ export type ObjectsPanelProps = ObjectsSource &
     | 'onHiddenReferenceImageIdsChange'
     | 'selectedReferenceImageId'
     | 'onSelectReferenceImage'
-    | 'pmiActions'
+    | 'onPmiCommand'
     | 'onSelectFeature'
     | 'onSelectBody'
     | 'onToggleBodyVisibility'
@@ -312,7 +318,7 @@ export function ObjectsPanel({
   onHiddenReferenceImageIdsChange,
   selectedReferenceImageId = null,
   onSelectReferenceImage,
-  pmiActions,
+  onPmiCommand,
   onSelectFeature,
   onSelectBody,
   onToggleBodyVisibility,
@@ -1151,19 +1157,22 @@ export function ObjectsPanel({
             </div>
           );
         })}
-        {pmiActions && objectFilter === 'all' ? (
-          <PmiRows
-            pmi={document?.pmi}
-            representations={representations}
-            bodyNames={
-              new Map(
-                Object.values(document?.nodes ?? {}).flatMap((node) =>
-                  node.kind === 'body' ? [[node.bodyId, node.name]] : []
+        {onPmiCommand && objectFilter === 'all' ? (
+          <Suspense fallback={null}>
+            <PmiRows
+              document={document}
+              editable={foldersEditable}
+              representations={representations}
+              bodyNames={
+                new Map(
+                  Object.values(document?.nodes ?? {}).flatMap((node) =>
+                    node.kind === 'body' ? [[node.bodyId, node.name]] : []
+                  )
                 )
-              )
-            }
-            actions={pmiActions}
-          />
+              }
+              onCommand={onPmiCommand}
+            />
+          </Suspense>
         ) : null}
         {showBodies && consumedBodies.length > 0 && (
           <div role="listitem">

@@ -559,6 +559,13 @@ function keptDrawingsFor(
 }
 
 /** Forgets the retained projections and kept drawings; for tests. */
+// D07: the PMI labels draw frames with the drawing's own geometry, loaded
+// with this chunk rather than shared out of it.
+export {
+  datumFeatureLayout,
+  featureControlFrameLayout
+} from '../lib/drawing/toleranceFrames';
+
 export function resetRetainedProjections(): void {
   retainedProjections = null;
 }

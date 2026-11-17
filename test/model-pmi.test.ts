@@ -30,6 +30,12 @@ import {
   pmiViewportLabels,
   resolveModelPmi
 } from '../apps/web/src/lib/pmi/modelPmi';
+import {
+  datumFeatureLayout,
+  featureControlFrameLayout
+} from '../apps/web/src/lib/drawing/toleranceFrames';
+
+const layouts = { datumFeatureLayout, featureControlFrameLayout };
 
 /**
  * D07 slice C (schema v106): model-based definition. Datum features and
@@ -204,7 +210,7 @@ describe('D07 model PMI (schema v106)', () => {
     expect(perp.ok && perp.face).toBe(wide.side);
     // Its label follows the face: the stored point (x = 20) lands on the
     // widened side (x = 30), not where the side used to be.
-    const moved = pmiViewportLabels(pmi, wide.bodies, null).find(
+    const moved = pmiViewportLabels(pmi, wide.bodies, null, layouts).find(
       (label) => label.pmiId === id('perp')
     )!;
     expect(moved.anchor.x).toBeCloseTo(30, 6);
@@ -226,7 +232,7 @@ describe('D07 model PMI (schema v106)', () => {
       reason: 'body-missing'
     });
     // The viewport says so.
-    const labels = pmiViewportLabels(pmi, {}, id('a'));
+    const labels = pmiViewportLabels(pmi, {}, id('a'), layouts);
     expect(
       labels.map((label) => [label.name, label.broken, label.selected])
     ).toEqual([
@@ -260,15 +266,18 @@ describe('D07 model PMI (schema v106)', () => {
     expect(
       modelPmiSetError({ annotations: [...pmi.annotations, datum, frame] })
     ).toBeNull();
-    const svg = modelPmiSvg({
-      ...(bracket(m)[1] as Extract<
-        ModelPmiAnnotation,
-        { kind: 'feature-control-frame' }
-      >),
-      characteristic: 'position',
-      diameterZone: true,
-      material: 'mmc'
-    });
+    const svg = modelPmiSvg(
+      {
+        ...(bracket(m)[1] as Extract<
+          ModelPmiAnnotation,
+          { kind: 'feature-control-frame' }
+        >),
+        characteristic: 'position',
+        diameterZone: true,
+        material: 'mmc'
+      },
+      layouts
+    );
     expect(svg.startsWith('<svg')).toBe(true);
     expect(svg).toContain('>Ø0.05</text>');
     expect(svg).toContain('>M</text>');

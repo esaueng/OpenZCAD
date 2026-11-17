@@ -6055,6 +6055,14 @@ function modelPmiOnly(entry: DocumentHistoryEntry | undefined): boolean {
   return sectionOnly(entry, isModelPmiCommandKind, 'pmi');
 }
 
+/**
+ * A command that edits reference images (I05) or the model's PMI (D07),
+ * never the geometry: the workspace keeps its ready geometry for it.
+ */
+export function isGeometryFreeCommandKind(kind: string): boolean {
+  return isReferenceImageCommandKind(kind) || isModelPmiCommandKind(kind);
+}
+
 /** Whether a history entry edits reference images and nothing else. */
 function referenceImageOnly(entry: DocumentHistoryEntry | undefined): boolean {
   return sectionOnly(entry, isReferenceImageCommandKind, 'referenceImages');
@@ -6257,6 +6265,16 @@ export class CommandManager {
   }
   get redoIsReferenceImageOnly(): boolean {
     return referenceImageOnly(this.history?.entries[this.history.cursor]);
+  }
+  /**
+   * Whether undo would revert reference-image or PMI edits only, which
+   * leave the model's geometry alone.
+   */
+  get undoIsGeometryFree(): boolean {
+    return this.undoIsReferenceImageOnly || this.undoIsModelPmiOnly;
+  }
+  get redoIsGeometryFree(): boolean {
+    return this.redoIsReferenceImageOnly || this.redoIsModelPmiOnly;
   }
   /** D07: whether undo would revert PMI edits only, leaving the geometry. */
   get undoIsModelPmiOnly(): boolean {
