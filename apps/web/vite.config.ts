@@ -55,7 +55,8 @@ const WORKSPACE_PACKAGES = [
   'cloudflare-adapters',
   'persistence',
   'crypto',
-  'mls'
+  'mls',
+  'scripting'
 ] as const;
 
 const workspaceAliases = {

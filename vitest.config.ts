@@ -17,7 +17,8 @@ const WORKSPACE_PACKAGES = [
   'cloudflare-adapters',
   'crypto',
   'mls',
-  'agent-api'
+  'agent-api',
+  'scripting'
 ] as const;
 
 const workspaceAliases = Object.fromEntries(
