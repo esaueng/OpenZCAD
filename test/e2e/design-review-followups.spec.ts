@@ -694,6 +694,22 @@ for (const colorScheme of ['light', 'dark'] as const) {
               )
             )
             .toBe(true);
+          // The overflow has to be one a person can scroll: a clipped body
+          // (overflow hidden) still lets a programmatic scroll reach the
+          // last control, but not a wheel or a finger.
+          expect(
+            await body.evaluate(
+              (element) => getComputedStyle(element).overflowY
+            )
+          ).toMatch(/^(auto|scroll)$/);
+          await body.evaluate((element) => {
+            element.scrollTop = 0;
+          });
+          await body.hover();
+          await page.mouse.wheel(0, 1000);
+          await expect
+            .poll(() => body.evaluate((element) => element.scrollTop))
+            .toBeGreaterThan(0);
           const last = body.getByRole('button', {
             name: 'Add configurations'
           });
