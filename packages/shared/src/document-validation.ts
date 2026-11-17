@@ -545,7 +545,9 @@ const FEATURE_KINDS = valuesOf<FeatureKind>({
   'imported-step': true,
   'imported-mesh': true,
   'datum-plane': true,
-  'datum-axis': true
+  'datum-axis': true,
+  'datum-point': true,
+  'datum-csys': true
 });
 
 /**
@@ -571,6 +573,8 @@ export const COMMAND_FEATURE_KINDS = {
   'feature.split': 'split',
   'feature.datum-plane': 'datum-plane',
   'feature.datum-axis': 'datum-axis',
+  'feature.datum-point': 'datum-point',
+  'feature.datum-csys': 'datum-csys',
   'feature.hole': 'hole',
   'feature.gear': 'gear',
   'feature.thread': 'thread',
@@ -784,6 +788,8 @@ const FIELD_POSITIONS: Readonly<
     bodyRepresentations: ID_MAP,
     datumFrames: ID_MAP,
     datumAxes: ID_MAP,
+    datumPoints: ID_MAP,
+    datumCsys: ID_MAP,
     sketchProjections: ID_MAP,
     sketchGeometry: { shape: 'sketchGeometry' }
   },

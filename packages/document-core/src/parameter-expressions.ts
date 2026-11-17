@@ -8,6 +8,10 @@ import type {
 import {
   datumAxisPlaneSources,
   datumAxisPointSources,
+  datumCsysPlaneSources,
+  datumCsysPointSources,
+  datumPointDefinitionPlaneSources,
+  datumPointDefinitionPointSources,
   datumPlaneSources,
   datumPointSources
 } from '@openzcad/shared';
@@ -293,6 +297,28 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       for (const point of datumAxisPointSources(data.definition))
         if (point.type === 'point') vector(point.point, rewrite, 'length');
       return;
+    case 'datum-point': {
+      const definition = data.definition;
+      if (definition.kind === 'offset')
+        vector(definition.offset, rewrite, 'length');
+      for (const source of datumPointDefinitionPlaneSources(definition))
+        if (source.type === 'canonical')
+          fields(source, ['offset'], rewrite, 'length');
+      for (const point of datumPointDefinitionPointSources(definition))
+        if (point.type === 'point') vector(point.point, rewrite, 'length');
+      return;
+    }
+    case 'datum-csys': {
+      const definition = data.definition;
+      if (definition.kind === 'placement')
+        vector(definition.rotationDeg, rewrite, 'angle');
+      for (const source of datumCsysPlaneSources(definition))
+        if (source.type === 'canonical')
+          fields(source, ['offset'], rewrite, 'length');
+      for (const point of datumCsysPointSources(definition))
+        if (point.type === 'point') vector(point.point, rewrite, 'length');
+      return;
+    }
     case 'standard-part':
       fields(data, ['length'], rewrite, 'length');
       vector(data.origin, rewrite, 'length');

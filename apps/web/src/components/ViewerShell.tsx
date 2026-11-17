@@ -16,7 +16,10 @@ import {
   datumPlaneDisplays,
   shiftedDatumFrame
 } from '../lib/datumPlaneDisplay';
-import { datumAxisDisplays } from '../lib/datumAxisDisplay';
+import {
+  datumAxisDisplays,
+  datumMarkerDisplays
+} from '../lib/datumAxisDisplay';
 import { commentPinsOf } from '../lib/commentPins';
 import type { ProjectComment } from '@openzcad/shared';
 import { useAssemblyView } from '../lib/assembly/useAssemblyView';
@@ -1067,6 +1070,15 @@ export function ViewerShell({
                 selectedFeatureId
               )
             : []
+        }
+        datumMarkers={
+          datumDocument
+            ? datumMarkerDisplays(
+                datumDocument,
+                hiddenDatumIds ?? new Set(),
+                selectedFeatureId
+              )
+            : { points: [], systems: [] }
         }
         {...(referenceImages ? { referenceImages } : {})}
         {...(loadReferenceImage ? { loadReferenceImage } : {})}

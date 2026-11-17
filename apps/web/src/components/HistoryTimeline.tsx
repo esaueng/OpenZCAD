@@ -27,6 +27,7 @@ import {
   CirclePlay,
   Cog,
   Cone,
+  Crosshair,
   Cylinder,
   Diameter,
   Drill,
@@ -37,6 +38,7 @@ import {
   Globe,
   GripVertical,
   History,
+  LocateFixed,
   MoreHorizontal,
   Move3d,
   PenLine,
@@ -128,7 +130,9 @@ const KIND_ICONS: Partial<Record<FeatureNode['featureKind'], ReactNode>> = {
   fillet: FILLET_ICON,
   chamfer: chamferGlyph,
   'datum-plane': planeGlyph,
-  'datum-axis': <Axis3d size={14} aria-hidden="true" />
+  'datum-axis': <Axis3d size={14} aria-hidden="true" />,
+  'datum-point': <Crosshair size={14} aria-hidden="true" />,
+  'datum-csys': <LocateFixed size={14} aria-hidden="true" />
 };
 const BOOLEAN_ICONS: Record<string, ReactNode> = {
   union: <SquaresUnite size={14} aria-hidden="true" />,

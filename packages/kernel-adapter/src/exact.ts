@@ -5040,6 +5040,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ...(build.datumAxes.size > 0
           ? { datumAxes: Object.fromEntries(build.datumAxes) }
           : {}),
+        ...(build.datumPoints?.size
+          ? { datumPoints: Object.fromEntries(build.datumPoints) }
+          : {}),
+        ...(build.datumCsys?.size
+          ? { datumCsys: Object.fromEntries(build.datumCsys) }
+          : {}),
         ...(build.sketchProjections?.size
           ? { sketchProjections: Object.fromEntries(build.sketchProjections) }
           : {}),

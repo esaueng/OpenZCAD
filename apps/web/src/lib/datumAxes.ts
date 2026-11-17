@@ -53,6 +53,9 @@ export interface DatumAxisFormState {
   /** Planes A and B of an axis where two planes meet. */
   sourceA: DatumPlaneSource | null;
   sourceB: DatumPlaneSource | null;
+  /** R01 (schema v99): the coordinate system and axis it runs along. */
+  csys: FeatureId | null;
+  csysAxis: 'X' | 'Y' | 'Z';
   reverseDirection: boolean;
 }
 
@@ -60,7 +63,8 @@ export const DATUM_AXIS_MODE_LABELS: Record<DatumAxisMode, string> = {
   'two-point': 'Two points',
   edge: 'Along edge',
   cylinder: 'Cylinder axis',
-  'plane-intersection': 'Two planes'
+  'plane-intersection': 'Two planes',
+  'csys-axis': 'System axis'
 };
 
 export function newDatumAxisFormState(name: string): DatumAxisFormState {
@@ -72,6 +76,8 @@ export function newDatumAxisFormState(name: string): DatumAxisFormState {
     face: null,
     sourceA: null,
     sourceB: null,
+    csys: null,
+    csysAxis: 'X',
     reverseDirection: false
   };
 }
@@ -107,6 +113,12 @@ export function datumAxisFormStateFromFeature(
         ...base,
         sourceA: definition.sources[0],
         sourceB: definition.sources[1]
+      };
+    case 'csys-axis':
+      return {
+        ...base,
+        csys: definition.csys.datumFeatureId,
+        csysAxis: definition.axis
       };
   }
 }
@@ -160,6 +172,10 @@ export function datumAxisFormValidation(
             kind: 'missing',
             reason: 'Pick a cylindrical or conical face in the viewport.'
           };
+    case 'csys-axis':
+      return state.csys
+        ? null
+        : { kind: 'missing', reason: 'Choose a coordinate system.' };
     case 'plane-intersection':
       if (!state.sourceA) return { kind: 'missing', reason: 'Choose plane A.' };
       if (!state.sourceB) return { kind: 'missing', reason: 'Choose plane B.' };
@@ -202,6 +218,15 @@ export function buildDatumAxisDefinition(
       return {
         kind: 'plane-intersection',
         sources: [state.sourceA, state.sourceB],
+        ...reverse
+      };
+    case 'csys-axis':
+      if (!state.csys)
+        throw new Error('An axis along a coordinate system needs the system.');
+      return {
+        kind: 'csys-axis',
+        csys: { type: 'datum-csys', datumFeatureId: state.csys },
+        axis: state.csysAxis,
         ...reverse
       };
   }
@@ -324,6 +349,13 @@ export function datumAxisDescription(
     case 'plane-intersection': {
       const [a, b] = definition.sources;
       return `Where ${datumSourceLabel(document, a)} meets ${datumSourceLabel(document, b)}${reversed}`;
+    }
+    case 'csys-axis': {
+      const system = listFeaturesInOrder(document).find(
+        (candidate) =>
+          candidate.featureId === definition.csys.datumFeatureId
+      );
+      return `The ${definition.axis} axis of ${system ? `"${system.name}"` : 'a missing coordinate system'}${reversed}`;
     }
   }
 }

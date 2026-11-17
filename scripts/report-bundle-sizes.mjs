@@ -63,7 +63,14 @@ const CHECK = process.argv.includes('--check');
 // shown writes); the Tweak link, per-instance rows and per-view rows add
 // a few more KB of App wiring. Export diagnostics now loads on its gesture
 // beside it. The tripwire stays a tripwire.
-const DEFAULT_RAW_BUDGET = (1024 + 24) * 1024;
+//
+// 2026-11-17: raised by 24 KiB at the maintainer's direction for the R01,
+// M06 and M12 modeling features. Main stood at 1,073,121 bytes, 31 under the
+// edge; datum points and coordinate systems add about 4.8 KB of in-place tool
+// and App wiring, and the rib and wrap tools follow with a few KB each. The
+// remaining large entry code is the in-place tool system, which App reads
+// synchronously. The tripwire stays a tripwire.
+const DEFAULT_RAW_BUDGET = (1024 + 48) * 1024;
 const APPROVED_LAZY_ASSETS = [
   {
     pattern: /^assets\/three-.*\.js$/,

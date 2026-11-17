@@ -86,6 +86,8 @@ export function replacedInputBodyId(data: FeatureData): BodyId | null {
     case 'imported-step':
     case 'datum-plane':
     case 'datum-axis':
+    case 'datum-point':
+    case 'datum-csys':
       return null;
     default: {
       const unhandled: never = data;

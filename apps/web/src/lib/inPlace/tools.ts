@@ -16,6 +16,8 @@ import {
   type BooleanKeepOriginals,
   type BooleanOperation,
   type DatumAxisDefinition,
+  type DatumCsysDefinition,
+  type DatumPointDefinition,
   type DatumAxisLine,
   type DatumAxisRef,
   type EdgeTopologyReferenceV5,
@@ -64,7 +66,14 @@ import {
   primitiveBuild,
   type PlacementPick
 } from './primitives';
-import { datumAxis, datumPlane, type RefKind, type RefPick } from './datums';
+import {
+  datumAxis,
+  datumCsys,
+  datumPlane,
+  datumPoint,
+  type RefKind,
+  type RefPick
+} from './datums';
 import { faceSpan, threadSpec, type ThreadRequest } from './thread';
 import { referenceImage, type ImageSlot } from './image';
 import { bendSpec, sheetMetalSpec, type SheetMetalRequest } from './sheetMetal';
@@ -118,6 +127,8 @@ export type InPlaceToolId =
   | PrimitiveKind
   | 'datum-plane'
   | 'datum-axis'
+  | 'datum-point'
+  | 'datum-csys'
   | 'reference-image';
 
 export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
@@ -156,6 +167,8 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'torus',
   'datum-plane',
   'datum-axis',
+  'datum-point',
+  'datum-csys',
   'reference-image'
 ];
 
@@ -635,6 +648,8 @@ export type InPlaceRequest =
     }
   | { tool: 'datum-plane'; definition: DatumPlaneDefinition }
   | { tool: 'datum-axis'; definition: DatumAxisDefinition }
+  | { tool: 'datum-point'; definition: DatumPointDefinition }
+  | { tool: 'datum-csys'; definition: DatumCsysDefinition }
   | {
       /** The picture as Done adds it: placed, scaled, turned. */
       tool: 'reference-image';
@@ -6436,6 +6451,8 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   torus: primitiveSpec('torus'),
   'datum-plane': datumPlane,
   'datum-axis': datumAxis,
+  'datum-point': datumPoint,
+  'datum-csys': datumCsys,
   'reference-image': referenceImage
 };
 

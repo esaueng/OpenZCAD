@@ -58,7 +58,7 @@ export function supportsIdleLineageView(
     (data.featureKind === 'sketch' &&
       findSketch(document, data.sketchId)?.planeRef.type === 'canonical') ||
     data.featureKind === 'boolean' ||
-    (data.featureKind === 'transform' && !data.axisRotation)
+    (data.featureKind === 'transform' && !data.axisRotation && !data.csysAlign)
   );
 }
 

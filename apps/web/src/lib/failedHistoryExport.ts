@@ -64,6 +64,8 @@ function inputBodyIds(feature: FeatureNode): BodyId[] {
     case 'imported-mesh':
     case 'datum-plane':
     case 'datum-axis':
+    case 'datum-point':
+    case 'datum-csys':
       return [];
   }
 }

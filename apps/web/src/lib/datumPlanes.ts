@@ -14,10 +14,18 @@ import {
   datumAxisSourceBodyIds,
   datumPlaneSources,
   datumSourceBodyIds,
+  datumCsysPlaneSources,
+  datumCsysSourceBodyIds,
+  datumPointDefinitionPlaneSources,
+  datumPointSourceBodyIds,
+  featureDatumAxisRefs,
+  featureDatumCsysRefs,
+  featureDatumPointRefs,
   isFeatureSuppressed,
   type BodyId,
   type DatumPlaneDefinition,
   type DatumPlaneSource,
+  type DatumPointRef,
   type DatumPointSource,
   type EdgeVertexPointSource,
   type FacePlaneSource,
@@ -57,7 +65,8 @@ export type DatumPlaneMode = DatumPlaneDefinition['kind'];
  * as three expressions (lengths in document units).
  */
 export type DatumPointDraft =
-  | { type: 'vertex'; source: EdgeVertexPointSource }
+  /** A model vertex, or (schema v99) an earlier datum point. */
+  | { type: 'vertex'; source: EdgeVertexPointSource | DatumPointRef }
   | { type: 'typed'; x: string; y: string; z: string };
 
 export type DatumPointDrafts = [
@@ -90,13 +99,17 @@ export interface DatumPlaneFormState {
 export interface DatumPointOption {
   key: string;
   label: string;
-  source: EdgeVertexPointSource;
+  source: EdgeVertexPointSource | DatumPointRef;
 }
 
 const NO_POINTS: DatumPointDrafts = [null, null, null];
 
 /** A stable identity for a vertex source, so a select can hold it. */
-export function datumVertexKey(source: EdgeVertexPointSource): string {
+export function datumVertexKey(
+  source: EdgeVertexPointSource | DatumPointRef
+): string {
+  if (source.type === 'datum-point')
+    return `datum-point:${source.datumFeatureId}`;
   const { producingFeatureId, lineageName } = source.edgeReference;
   return `vertex:${source.bodyId}:${producingFeatureId}:${lineageName}:${source.end}`;
 }
@@ -176,9 +189,16 @@ export function datumVertexFromEdgePick(
 /** The option for a vertex source, labelled with where it is. */
 export function datumVertexOption(
   document: ProjectDocument,
-  source: EdgeVertexPointSource,
+  source: EdgeVertexPointSource | DatumPointRef,
   label = 'Vertex'
 ): DatumPointOption {
+  if (source.type === 'datum-point') {
+    return {
+      key: datumVertexKey(source),
+      label: datumPointLabel(document, source),
+      source
+    };
+  }
   const end = edgeEnds(source.edgeReference.witness)?.[source.end];
   const body = ownEntry(
     document.derived.bodyRepresentations,
@@ -193,7 +213,7 @@ export function datumVertexOption(
 
 /** The draft a stored point source reopens as. */
 function pointDraft(source: DatumPointSource): DatumPointDraft {
-  return source.type === 'edge-vertex'
+  return source.type !== 'point'
     ? { type: 'vertex', source }
     : {
         type: 'typed',
@@ -228,6 +248,12 @@ export function datumPointLabel(
     const body = ownEntry(document.derived.bodyRepresentations, source.bodyId);
     return `a vertex of ${body?.name ?? 'a missing body'}`;
   }
+  if (source.type === 'datum-point') {
+    const point = listFeaturesInOrder(document).find(
+      (feature) => feature.featureId === source.datumFeatureId
+    );
+    return point ? `point "${point.name}"` : 'a missing datum point';
+  }
   const axis = (value: string | number) => {
     const resolved = evalParamValue(value, scope, {
       documentUnits: units,
@@ -255,7 +281,34 @@ export function datumSourceKey(source: DatumPlaneSource): string {
       return `datum:${source.datumFeatureId}`;
     case 'face':
       return `face:${source.bodyId}:${source.faceHash}`;
+    case 'datum-csys':
+      return `datum-csys:${source.datumFeatureId}:${source.plane}`;
   }
+}
+
+/**
+ * R01 (schema v99): the datum points defined before `beforeFeatureId` (all
+ * of them for a new feature), as point-slot options.
+ */
+export function datumPointOptions(
+  document: ProjectDocument,
+  beforeFeatureId: FeatureId | null
+): DatumPointOption[] {
+  const options: DatumPointOption[] = [];
+  for (const feature of listFeaturesInOrder(document)) {
+    if (feature.featureId === beforeFeatureId) break;
+    if (feature.data.featureKind !== 'datum-point') continue;
+    const source: DatumPointRef = {
+      type: 'datum-point',
+      datumFeatureId: feature.featureId
+    };
+    options.push({
+      key: datumVertexKey(source),
+      label: `Point "${feature.name}"`,
+      source
+    });
+  }
+  return options;
 }
 
 function datumFeature(
@@ -287,6 +340,12 @@ export function datumSourceLabel(
         source.bodyId
       );
       return `a face of ${body?.name ?? 'a missing body'}`;
+    }
+    case 'datum-csys': {
+      const system = listFeaturesInOrder(document).find(
+        (feature) => feature.featureId === source.datumFeatureId
+      );
+      return `the ${source.plane} plane of ${system ? `"${system.name}"` : 'a missing coordinate system'}`;
     }
   }
 }
@@ -677,12 +736,19 @@ export function datumPlaneCommand(
  * no body to prove it built, so its published frame is the proof. A failure
  * the build attributed to it is reported in the build's own words.
  */
+/** R01: every kind of datum feature. */
+export type DatumFeatureKind =
+  | 'datum-plane'
+  | 'datum-axis'
+  | 'datum-point'
+  | 'datum-csys';
+
 export function requireResolvedDatum(
   derived: ProjectDocument['derived'],
   featureId: FeatureId,
   name: string,
-  /** R01 axes publish a line, not a frame. */
-  kind: 'datum-plane' | 'datum-axis' = 'datum-plane'
+  /** R01 axes publish a line, points a position, systems a frame. */
+  kind: DatumFeatureKind = 'datum-plane'
 ): void {
   const failure = derived.featureWarnings?.find(
     (warning) =>
@@ -693,6 +759,18 @@ export function requireResolvedDatum(
   if (kind === 'datum-axis') {
     if (!derived.datumAxes?.[featureId]) {
       throw new Error(`${name} did not resolve to an axis.`);
+    }
+    return;
+  }
+  if (kind === 'datum-point') {
+    if (!derived.datumPoints?.[featureId]) {
+      throw new Error(`${name} did not resolve to a point.`);
+    }
+    return;
+  }
+  if (kind === 'datum-csys') {
+    if (!derived.datumCsys?.[featureId]) {
+      throw new Error(`${name} did not resolve to a coordinate system.`);
     }
     return;
   }
@@ -727,24 +805,41 @@ export function downstreamDatumIds(
     }
     if (!after) continue;
     const data = feature.data;
-    const planeSources =
-      data.featureKind === 'datum-plane'
-        ? datumPlaneSources(data.definition)
-        : data.featureKind === 'datum-axis'
-          ? datumAxisPlaneSources(data.definition)
-          : null;
-    if (!planeSources) continue;
-    const bodyIds =
-      data.featureKind === 'datum-plane'
-        ? datumSourceBodyIds(data.definition)
-        : data.featureKind === 'datum-axis'
-          ? datumAxisSourceBodyIds(data.definition)
-          : [];
+    let planeSources: DatumPlaneSource[];
+    let bodyIds: BodyId[];
+    switch (data.featureKind) {
+      case 'datum-plane':
+        planeSources = datumPlaneSources(data.definition);
+        bodyIds = datumSourceBodyIds(data.definition);
+        break;
+      case 'datum-axis':
+        planeSources = datumAxisPlaneSources(data.definition);
+        bodyIds = datumAxisSourceBodyIds(data.definition);
+        break;
+      case 'datum-point':
+        planeSources = datumPointDefinitionPlaneSources(data.definition);
+        bodyIds = datumPointSourceBodyIds(data.definition);
+        break;
+      case 'datum-csys':
+        planeSources = datumCsysPlaneSources(data.definition);
+        bodyIds = datumCsysSourceBodyIds(data.definition);
+        break;
+      default:
+        continue;
+    }
+    // Points, systems and axes read by reference move with them too.
+    const refs = [
+      ...featureDatumPointRefs(data),
+      ...featureDatumCsysRefs(data),
+      ...featureDatumAxisRefs(data).map((ref) => ref.datumFeatureId)
+    ];
     if (
       planeSources.some(
         (source) =>
-          source.type === 'datum' && affected.has(source.datumFeatureId)
+          (source.type === 'datum' || source.type === 'datum-csys') &&
+          affected.has(source.datumFeatureId)
       ) ||
+      refs.some((id) => affected.has(id)) ||
       bodyIds.some((bodyId) => affected.has(bodyId))
     ) {
       affected.add(feature.featureId);
@@ -765,16 +860,26 @@ export function requireResolvedDatums(
   featureId: FeatureId,
   name: string,
   /** What `featureId` is; read from `before` when absent (a new datum is not there). */
-  kind?: 'datum-plane' | 'datum-axis'
+  kind?: DatumFeatureKind
 ): void {
-  const kindOf = (id: FeatureId) =>
-    listFeaturesInOrder(before).find((feature) => feature.featureId === id)
-      ?.data.featureKind === 'datum-axis'
-      ? ('datum-axis' as const)
-      : ('datum-plane' as const);
+  const kindOf = (id: FeatureId): DatumFeatureKind => {
+    const featureKind = listFeaturesInOrder(before).find(
+      (feature) => feature.featureId === id
+    )?.data.featureKind;
+    return featureKind === 'datum-axis' ||
+      featureKind === 'datum-point' ||
+      featureKind === 'datum-csys'
+      ? featureKind
+      : 'datum-plane';
+  };
   requireResolvedDatum(derived, featureId, name, kind ?? kindOf(featureId));
   for (const id of downstreamDatumIds(before, featureId)) {
-    if (!before.derived.datumFrames?.[id] && !before.derived.datumAxes?.[id])
+    if (
+      !before.derived.datumFrames?.[id] &&
+      !before.derived.datumAxes?.[id] &&
+      !before.derived.datumPoints?.[id] &&
+      !before.derived.datumCsys?.[id]
+    )
       continue;
     const datum = listFeaturesInOrder(before).find(
       (feature) => feature.featureId === id

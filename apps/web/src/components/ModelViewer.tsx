@@ -478,7 +478,17 @@ import {
   ReferenceTextureCache,
   type ReferenceTextureRequest
 } from './viewer/referenceImageRig';
-import type { DatumAxisDisplay } from '../lib/datumAxisDisplay';
+import type {
+  DatumAxisDisplay,
+  DatumCsysDisplay,
+  DatumPointDisplay
+} from '../lib/datumAxisDisplay';
+import {
+  buildDatumMarkerRig,
+  type DatumCsysRigInput,
+  type DatumMarkerRig,
+  type DatumPointRigInput
+} from './viewer/datumMarkerRig';
 import {
   requiredValueResolver,
   sketchValueResolver
@@ -1458,6 +1468,14 @@ export interface ModelViewerProps {
    * resolved. Hidden, suppressed and unresolved axes are simply absent.
    */
   datumAxes?: readonly DatumAxisDisplay[];
+  /**
+   * Committed R01 (schema v99) datum points and coordinate systems, at the
+   * positions and frames the exact build resolved.
+   */
+  datumMarkers?: {
+    points: readonly DatumPointDisplay[];
+    systems: readonly DatumCsysDisplay[];
+  };
   /**
    * I05 reference images, laid on their planes. Hidden images and images
    * whose plane has not resolved are simply absent.
@@ -2499,6 +2517,7 @@ export function ModelViewer({
   onFootprint,
   datumPlanes,
   datumAxes,
+  datumMarkers,
   referenceImages,
   loadReferenceImage,
   planePickerOffset,
@@ -2921,6 +2940,7 @@ export function ModelViewer({
   planePickerOffsetRef.current = planePickerOffset;
   const datumPlaneRigRef = useRef<DatumPlaneRig | null>(null);
   const datumAxisRigRef = useRef<DatumAxisRig | null>(null);
+  const datumMarkerRigRef = useRef<DatumMarkerRig | null>(null);
   const planePickerRigRef = useRef<ReturnType<
     typeof buildPlanePickerRig
   > | null>(null);
@@ -3469,6 +3489,7 @@ export function ModelViewer({
       const datumColor = readDatumColor(host);
       datumPlaneRigRef.current?.setColor(datumColor);
       datumAxisRigRef.current?.setColor(datumColor);
+      datumMarkerRigRef.current?.setColor(datumColor);
       planePickerRigRef.current?.setBackdrop(
         readStagePalette(host).backdropMiddle
       );
@@ -12906,6 +12927,7 @@ export function ModelViewer({
       // than a backdrop as the camera dollies.
       datumPlaneRigRef.current?.setScale(worldPerPixelAtDepth);
       datumAxisRigRef.current?.setScale(worldPerPixelAtDepth);
+      datumMarkerRigRef.current?.setScale(worldPerPixelAtDepth);
       const planePicker = planePickerRigRef.current;
       if (planePicker) {
         // Scale first: the offset is expressed in world units and has to be
@@ -16283,6 +16305,52 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [datumAxisKey]);
+
+  // Committed datum points and coordinate systems (viewer/datumMarkerRig),
+  // rebuilt when the set, a position or frame, or the selection changes.
+  const datumMarkerKey = JSON.stringify({
+    points: (datumMarkers?.points ?? []).map(
+      ({ featureId, point, selected }) => ({ featureId, point, selected })
+    ),
+    systems: (datumMarkers?.systems ?? []).map(
+      ({ featureId, frame, selected }) => ({ featureId, frame, selected })
+    )
+  });
+  useEffect(() => {
+    const context = contextRef.current;
+    const { points, systems } = JSON.parse(datumMarkerKey) as {
+      points: DatumPointRigInput[];
+      systems: DatumCsysRigInput[];
+    };
+    if (!context || (points.length === 0 && systems.length === 0)) {
+      return;
+    }
+    const canvas = context.renderer.domElement;
+    const rig = buildDatumMarkerRig(points, systems, {
+      color: readDatumColor(canvas),
+      resolution: context.fatLineResolution()
+    });
+    rig.setScale(() => 0.05);
+    context.scene.add(rig.group);
+    datumMarkerRigRef.current = rig;
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      canvas.dataset.e2eDatumPoints = JSON.stringify(
+        points.map(({ featureId, point }) => ({ featureId, ...point }))
+      );
+      canvas.dataset.e2eDatumCsys = JSON.stringify(
+        systems.map(({ featureId, frame }) => ({ featureId, ...frame }))
+      );
+    }
+    context.requestRender();
+    return () => {
+      context.scene.remove(rig.group);
+      rig.dispose();
+      if (datumMarkerRigRef.current === rig) datumMarkerRigRef.current = null;
+      delete canvas.dataset.e2eDatumPoints;
+      delete canvas.dataset.e2eDatumCsys;
+      context.requestRender();
+    };
+  }, [datumMarkerKey]);
 
   // A footprint drag outlives no command: one canceled under the pointer,
   // or replaced by another (even of the same tool, in the same render),

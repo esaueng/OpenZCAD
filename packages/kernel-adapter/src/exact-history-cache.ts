@@ -490,6 +490,8 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
       ? { standardParts: new Map(result.standardParts) }
       : {}),
     datumAxes: new Map(result.datumAxes),
+    datumPoints: new Map(result.datumPoints ?? []),
+    datumCsys: new Map(result.datumCsys ?? []),
     consumed: new Set(result.consumed),
     importedStepDiagnostics: new Map(result.importedStepDiagnostics),
     meshBodies: new Set(result.meshBodies),

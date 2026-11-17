@@ -3,8 +3,14 @@ import {
   datumAxisPlaneSources,
   datumAxisPointSources,
   datumPlaneSources,
+  datumCsysPlaneSources,
+  datumCsysPointSources,
+  datumPointDefinitionPlaneSources,
+  datumPointDefinitionPointSources,
   datumPointSources,
   featureDatumAxisRefs,
+  featureDatumCsysRefs,
+  featureDatumPointRefs,
   isDatumPlaneRef,
   isInPlaceTransform
 } from '@openzcad/shared';
@@ -62,9 +68,17 @@ export function featureHistory(document: ProjectDocument) {
       else missingInputs.add('datum');
     };
     const planeSource = (source: DatumPlaneSource | SketchPlaneRef) => {
-      if (source.type === 'datum') datum(source.datumFeatureId);
+      if (source.type === 'datum' || source.type === 'datum-csys')
+        datum(source.datumFeatureId);
       else if (source.type === 'face') body(source.bodyId);
     };
+    // R01 (schema v99): datum points and coordinate systems read by
+    // reference, whatever feature holds them.
+    for (const id of [
+      ...featureDatumPointRefs(feature.data),
+      ...featureDatumCsysRefs(feature.data)
+    ])
+      datum(id);
     const data = feature.data;
     switch (data.featureKind) {
       case 'sketch': {
@@ -88,6 +102,25 @@ export function featureHistory(document: ProjectDocument) {
           data.definition.kind === 'cylinder'
         )
           body(data.definition.source.bodyId);
+        datumOwners.add(feature.featureId);
+        break;
+      case 'datum-point':
+        datumPointDefinitionPlaneSources(data.definition).forEach(planeSource);
+        for (const point of datumPointDefinitionPointSources(data.definition))
+          if (point.type === 'edge-vertex') body(point.bodyId);
+        if (
+          data.definition.kind === 'edge-midpoint' ||
+          data.definition.kind === 'arc-center'
+        )
+          body(data.definition.source.bodyId);
+        if (data.definition.kind === 'axis-plane')
+          datum(data.definition.axis.datumFeatureId);
+        datumOwners.add(feature.featureId);
+        break;
+      case 'datum-csys':
+        datumCsysPlaneSources(data.definition).forEach(planeSource);
+        for (const point of datumCsysPointSources(data.definition))
+          if (point.type === 'edge-vertex') body(point.bodyId);
         datumOwners.add(feature.featureId);
         break;
       case 'sheet-metal':

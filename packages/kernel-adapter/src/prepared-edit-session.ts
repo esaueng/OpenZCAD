@@ -202,6 +202,8 @@ export class PreparedEditSession {
         before.standardParts ?? new Map()
       ) ||
       !sameMap(result.datumAxes, before.datumAxes) ||
+      !sameMap(result.datumPoints ?? new Map(), before.datumPoints ?? new Map()) ||
+      !sameMap(result.datumCsys ?? new Map(), before.datumCsys ?? new Map()) ||
       !sameMap(
         result.sketchProjections ?? new Map(),
         before.sketchProjections ?? new Map()

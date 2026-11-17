@@ -5,6 +5,14 @@ import {
   datumAxisPointSources,
   datumPlaneSources,
   datumPointSources,
+  datumCsysPlaneSources,
+  datumCsysPointSources,
+  datumPointDefinitionPlaneSources,
+  datumPointDefinitionPointSources,
+  featureDatumCsysRefs,
+  featureDatumPointRefs,
+  type DatumPointSource,
+  type FeatureData,
   featureDatumAxisRefs,
   isDatumPlaneRef,
   isFeatureSuppressed,
@@ -54,7 +62,9 @@ const HANDLED_FEATURE_KINDS: ReadonlySet<FeatureKind> = new Set<FeatureKind>([
   'imported-step',
   'imported-mesh',
   'datum-plane',
-  'datum-axis'
+  'datum-axis',
+  'datum-point',
+  'datum-csys'
 ]);
 
 function assertAllFeatureKindsHandled(kind: FeatureKind): void {
@@ -119,7 +129,9 @@ export function affectedFeatureTargets(
   // revolve, pattern and Move turning about a datum axis.
   const sourceDatumId =
     source?.data.featureKind === 'datum-plane' ||
-    source?.data.featureKind === 'datum-axis'
+    source?.data.featureKind === 'datum-axis' ||
+    source?.data.featureKind === 'datum-point' ||
+    source?.data.featureKind === 'datum-csys'
       ? source.featureId
       : undefined;
   if (
@@ -148,9 +160,18 @@ export function affectedFeatureTargets(
     sourceDatumId ? [sourceDatumId] : []
   );
   const planeAffected = (plane: DatumPlaneSource) =>
-    plane.type === 'datum'
+    plane.type === 'datum' || plane.type === 'datum-csys'
       ? affectedDatums.has(plane.datumFeatureId)
       : plane.type === 'face' && affectedBodies.has(plane.bodyId);
+  // R01 (schema v99): whatever a feature reads by datum-point or
+  // coordinate-system reference moves when that datum does.
+  const datumRefsAffected = (data: FeatureData) =>
+    [...featureDatumPointRefs(data), ...featureDatumCsysRefs(data)].some(
+      (id) => affectedDatums.has(id)
+    );
+  const pointAffected = (point: DatumPointSource) =>
+    (point.type === 'edge-vertex' && affectedBodies.has(point.bodyId)) ||
+    (point.type === 'datum-point' && affectedDatums.has(point.datumFeatureId));
   const targets: AffectedFeatureTarget[] = sourceBodyId
     ? [
         {
@@ -184,10 +205,8 @@ export function affectedFeatureTargets(
         const { definition } = data;
         if (
           datumPlaneSources(definition).some(planeAffected) ||
-          datumPointSources(definition).some(
-            (point) =>
-              point.type === 'edge-vertex' && affectedBodies.has(point.bodyId)
-          )
+          datumPointSources(definition).some(pointAffected) ||
+          datumRefsAffected(data)
         )
           affectedDatums.add(feature.featureId);
         continue;
@@ -196,12 +215,35 @@ export function affectedFeatureTargets(
         const { definition } = data;
         if (
           datumAxisPlaneSources(definition).some(planeAffected) ||
-          datumAxisPointSources(definition).some(
-            (point) =>
-              point.type === 'edge-vertex' && affectedBodies.has(point.bodyId)
-          ) ||
+          datumAxisPointSources(definition).some(pointAffected) ||
+          datumRefsAffected(data) ||
           ((definition.kind === 'edge' || definition.kind === 'cylinder') &&
             affectedBodies.has(definition.source.bodyId))
+        )
+          affectedDatums.add(feature.featureId);
+        continue;
+      }
+      case 'datum-point': {
+        const { definition } = data;
+        if (
+          datumPointDefinitionPlaneSources(definition).some(planeAffected) ||
+          datumPointDefinitionPointSources(definition).some(pointAffected) ||
+          datumRefsAffected(data) ||
+          (definition.kind === 'axis-plane' &&
+            affectedDatums.has(definition.axis.datumFeatureId)) ||
+          ((definition.kind === 'edge-midpoint' ||
+            definition.kind === 'arc-center') &&
+            affectedBodies.has(definition.source.bodyId))
+        )
+          affectedDatums.add(feature.featureId);
+        continue;
+      }
+      case 'datum-csys': {
+        const { definition } = data;
+        if (
+          datumCsysPlaneSources(definition).some(planeAffected) ||
+          datumCsysPointSources(definition).some(pointAffected) ||
+          datumRefsAffected(data)
         )
           affectedDatums.add(feature.featureId);
         continue;
@@ -268,6 +310,7 @@ export function affectedFeatureTargets(
           featureDatumAxisRefs(data).some((ref) =>
             affectedDatums.has(ref.datumFeatureId)
           ) ||
+          datumRefsAffected(data) ||
           // M02: a pattern on sketch points moves with its sketch, and so
           // does an M01 hole drilled at them.
           ((data.featureKind === 'pattern' || data.featureKind === 'hole') &&
