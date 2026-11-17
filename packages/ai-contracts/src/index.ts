@@ -24,6 +24,7 @@ import type {
   EditAnalysisRequest,
   FaceGeometry,
   FaceTopologyReferenceV5,
+  CustomFeatureScript,
   FeatureId,
   ParameterKind,
   PatternKind,
@@ -316,6 +317,18 @@ export type CadPatchOperation =
       featureId: FeatureId;
       data: Record<string, unknown>;
       clearData: string[];
+    }
+  | {
+      /**
+       * L15, app- and agent-compiled: a custom feature on one body, running
+       * an embedded script pinned by its SHA-256 digest.
+       */
+      kind: 'add_custom_feature';
+      name: string;
+      localId?: LocalBodyId;
+      targetBodyId: BodyRef;
+      script: CustomFeatureScript;
+      inputs: Record<string, ParamValue>;
     }
   | {
       /** L15, app- and agent-compiled: `feature.reorder` to a 0-based index. */
@@ -4682,6 +4695,26 @@ export function parseCadPatchProposal(
           throw new Error('Invalid update_feature operation.');
         }
         break;
+      case 'add_custom_feature': {
+        const script = record(operation.script);
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.targetBodyId !== 'string' ||
+          typeof script.id !== 'string' ||
+          typeof script.version !== 'string' ||
+          script.api !== 1 ||
+          typeof script.source !== 'string' ||
+          typeof script.digest !== 'string' ||
+          !operation.inputs ||
+          typeof operation.inputs !== 'object' ||
+          Array.isArray(operation.inputs) ||
+          !Object.values(operation.inputs).every(isScalar)
+        ) {
+          throw new Error('Invalid add_custom_feature operation.');
+        }
+        declareBodyLocalId(operation, declared, declaredBodies);
+        break;
+      }
       case 'reorder_feature':
         if (
           typeof operation.featureId !== 'string' ||
@@ -6546,6 +6579,8 @@ export function describeCadPatchOperation(
       return `Edit ${[...Object.keys(operation.data), ...operation.clearData].join(', ')} on feature ${operation.featureId}`;
     case 'reorder_feature':
       return `Move feature ${operation.featureId} to step ${operation.toIndex + 1}`;
+    case 'add_custom_feature':
+      return `Create ${operation.name} from ${operation.script.id} ${operation.script.version}`;
     case 'update_sketch_object':
       return `Edit sketch object ${operation.objectId}`;
     case 'rename_feature':

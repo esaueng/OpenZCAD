@@ -164,6 +164,7 @@ import {
   draftBody,
   type DraftInput,
   type EdgeModifierInput,
+  type CustomFeatureInput,
   evaluateExpression,
   type ExtrudeInput,
   extrudeSketch,
@@ -171,6 +172,7 @@ import {
   type FeatureMoveInput,
   type FeatureUpdateInput,
   filletEdges,
+  customFeatureBody,
   findFeature,
   findParameterReferences,
   findSketch,
@@ -378,6 +380,7 @@ import {
   type CadDatumAxisDefinition,
   type CadPatchProposal
 } from '@openzcad/ai-contracts';
+import { compileScript, customFeatureScriptError } from '@openzcad/scripting';
 import {
   computeSketchProfileAnalysis,
   computeSketchRegions,
@@ -431,6 +434,7 @@ export type CommandKind =
   | 'feature.fillet'
   | 'feature.chamfer'
   | 'feature.pattern'
+  | 'feature.custom-feature'
   | 'feature.update'
   | 'feature.delete'
   | 'feature.reorder'
@@ -1006,6 +1010,46 @@ function validateFeatureHistoryPosition(
         `"${feature.name}" would run before the sketch it uses exists.`
       );
     }
+  }
+}
+
+/**
+ * L15: a custom feature's script must match its pin, compile, and take the
+ * inputs given; and a published version is immutable, so every other
+ * instance of the same id and version in the document carries the same
+ * source. `featureId` is the instance being edited, or null for a new one.
+ */
+function validateCustomFeature(
+  document: ProjectDocument,
+  input: Pick<CustomFeatureInput, 'script' | 'inputs'>,
+  featureId: FeatureId | null
+): void {
+  const problem = customFeatureScriptError(input.script);
+  if (problem) throw new Error(problem);
+  const compiled = compileScript(input.script.source).script!;
+  const declared = new Set(compiled.inputs.map((entry) => entry.name));
+  for (const name of Object.keys(input.inputs)) {
+    if (!declared.has(name))
+      throw new Error(`Script ${input.script.id} has no input \`${name}\`.`);
+  }
+  for (const entry of compiled.inputs) {
+    if (entry.defaultValue === null && !Object.hasOwn(input.inputs, entry.name))
+      throw new Error(
+        `Input \`${entry.name}\` of ${input.script.id} has no default; give it a value.`
+      );
+  }
+  for (const node of Object.values(document.nodes)) {
+    if (
+      node.kind === 'feature' &&
+      node.featureId !== featureId &&
+      node.data.featureKind === 'custom-feature' &&
+      node.data.script.id === input.script.id &&
+      node.data.script.version === input.script.version &&
+      node.data.script.digest !== input.script.digest
+    )
+      throw new Error(
+        `${input.script.id} ${input.script.version} is already published in this project with other source; publish the change as a new version.`
+      );
   }
 }
 
@@ -2500,6 +2544,10 @@ function validateModelingFeatureUpdate(
       validateStandardPartInput(preview, { name: feature.name, ...part });
       break;
     }
+    case 'custom-feature':
+      validateBodyTarget(preview, feature.data.targetBodyId);
+      validateCustomFeature(preview, feature.data, feature.featureId);
+      break;
     case 'shell':
       validateShellInput(preview, {
         name: feature.name,
@@ -3283,6 +3331,22 @@ export const commandFactories = {
         validateBodyTarget(document, payload.targetBodyId);
         validateEdgeReferences(payload);
         validateEdgeModifierBlend(document, 'chamfer', payload);
+      }
+    );
+  },
+  /** L15: a custom feature running an embedded, pinned script. */
+  customFeature(
+    payload: CustomFeatureInput
+  ): CommandDefinition<CustomFeatureInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.custom-feature',
+      `Add ${payload.name}`,
+      withIds,
+      (document) => customFeatureBody(document, withIds).document,
+      (document) => {
+        validateBodyTarget(document, payload.targetBodyId);
+        validateCustomFeature(document, payload, null);
       }
     );
   },
@@ -5682,6 +5746,19 @@ export function commandsForCadPatch(
           ids
         });
       }
+      case 'add_custom_feature': {
+        const ids = createBodyFeatureIds();
+        const targetBodyId = resolveBody(operation.targetBodyId);
+        scope.declare(operation.localId, ids.bodyId);
+        scope.consume([targetBodyId], 'custom-feature');
+        return commandFactories.customFeature({
+          name: operation.name,
+          targetBodyId,
+          script: deepClone(operation.script),
+          inputs: { ...operation.inputs },
+          ids
+        });
+      }
       case 'add_solid_offset': {
         const ids = createBodyFeatureIds();
         const targetBodyId = resolveBody(operation.targetBodyId);
@@ -6738,6 +6815,12 @@ export function replayCommands(
         break;
       case 'feature.pattern':
         next = patternBody(next, command.payload as PatternInput).document;
+        break;
+      case 'feature.custom-feature':
+        next = customFeatureBody(
+          next,
+          command.payload as CustomFeatureInput
+        ).document;
         break;
       case 'feature.update':
         next = updateFeature(next, command.payload as FeatureUpdateInput);

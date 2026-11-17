@@ -562,7 +562,8 @@ const FEATURE_KINDS = valuesOf<FeatureKind>({
   'datum-plane': true,
   'datum-axis': true,
   'datum-point': true,
-  'datum-csys': true
+  'datum-csys': true,
+  'custom-feature': true
 });
 
 /**
@@ -604,6 +605,7 @@ export const COMMAND_FEATURE_KINDS = {
   'feature.fillet': 'fillet',
   'feature.chamfer': 'chamfer',
   'feature.pattern': 'pattern',
+  'feature.custom-feature': 'custom-feature',
   'import.mesh': 'imported-mesh',
   'import.step': 'imported-step'
 } as const satisfies Readonly<Record<string, FeatureKind>>;

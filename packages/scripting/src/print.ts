@@ -56,9 +56,16 @@ function printExpression(value: string): string {
 }
 
 function printString(value: string, context: PrintContext): string {
-  return context.ids.has(value) && ID_PATTERN.test(value)
-    ? `#${value}`
-    : JSON.stringify(value);
+  if (context.ids.has(value) && ID_PATTERN.test(value)) return `#${value}`;
+  // Multi-line text (a script's source) reads as a raw block when it can.
+  if (
+    value.includes('\n') &&
+    !value.includes('"""') &&
+    !value.endsWith('"') &&
+    !value.includes('\r')
+  )
+    return `"""${value}"""`;
+  return JSON.stringify(value);
 }
 
 /** Record entries to print: drops `undefined` and hash fields its references imply. */

@@ -58,6 +58,7 @@ export function replacedInputBodyId(data: FeatureData): BodyId | null {
     case 'chamfer':
     case 'pattern':
     case 'thread':
+    case 'custom-feature':
       return data.targetBodyId;
     case 'gear':
       // Teeth cut into a body replace it; a new gear has no input body.

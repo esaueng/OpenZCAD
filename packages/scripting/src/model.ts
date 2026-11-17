@@ -56,7 +56,8 @@ export const HISTORY_FEATURE_KINDS = {
   'datum-axis': true,
   'datum-point': true,
   'datum-csys': true,
-  rib: true
+  rib: true,
+  'custom-feature': true
 } as const satisfies Record<FeatureKind, true>;
 
 export const HISTORY_SKETCH_OBJECT_KINDS = {

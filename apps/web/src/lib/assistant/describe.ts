@@ -135,6 +135,8 @@ export function describeOperation(operation: CadPatchOperation): string {
       return `Edit ${[...Object.keys(operation.data), ...operation.clearData.map((key) => `no ${key}`)].join(', ')} on ${operation.featureId}`;
     case 'reorder_feature':
       return `Move ${operation.featureId} to step ${operation.toIndex + 1}`;
+    case 'add_custom_feature':
+      return `${operation.name} — ${operation.script.id} ${operation.script.version} on ${describeBodyRef(operation.targetBodyId)}`;
     case 'update_sketch_object':
       return `Edit sketch object ${operation.objectId}`;
     case 'add_sketch':

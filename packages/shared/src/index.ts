@@ -437,7 +437,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // at a point. An older client cannot resolve them, so it must refuse.
 // Builds on v106 (v102 was left unused when D07 landed first; v107 is
 // claimed by #1732).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 108 as const;
+// v110 adds L15 custom features (`featureKind: 'custom-feature'`): a step
+// that runs an embedded, versioned script on its target body. An older
+// client cannot build it, so it must refuse the document. Builds on v108
+// (v109 is claimed by #1741; v104 and v107 were L15's earlier claims, left
+// unused when other lanes landed first).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 110 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -514,7 +519,8 @@ export type FeatureKind =
   | 'datum-plane'
   | 'datum-axis'
   | 'datum-point'
-  | 'datum-csys';
+  | 'datum-csys'
+  | 'custom-feature';
 export type SketchObjectKind =
   | 'rectangle'
   | 'circle'
@@ -2228,6 +2234,22 @@ export function isTransformCopy(data: FeatureData): data is Extract<
   return data.featureKind === 'transform' && data.copy === true;
 }
 
+/**
+ * L15: a published custom-feature script, embedded in each instance so a
+ * project is self-contained. A version is immutable: every instance of the
+ * same `id` and `version` in a document carries the same `source`, and
+ * `digest` is the SHA-256 of `source` (UTF-8, lower-case hex).
+ */
+export interface CustomFeatureScript {
+  id: string;
+  /** Semantic version, `major.minor.patch`. */
+  version: string;
+  /** The scripting contract the source is written against. */
+  api: 1;
+  source: string;
+  digest: string;
+}
+
 export type FeatureData =
   | {
       /**
@@ -2237,6 +2259,20 @@ export type FeatureData =
        */
       featureKind: 'datum-plane';
       definition: DatumPlaneDefinition;
+    }
+  | {
+      /**
+       * L15 (schema v98): a custom feature. It runs the embedded script on
+       * its target body, in the kernel worker, as the script's steps would
+       * run one after another, and replaces the target with the result. The
+       * script's picks are queries evaluated on every build; nothing here is
+       * a face index or hash.
+       */
+      featureKind: 'custom-feature';
+      targetBodyId: BodyId;
+      script: CustomFeatureScript;
+      /** The script's inputs this instance sets; the rest take defaults. */
+      inputs: Record<string, ParamValue>;
     }
   | {
       /**
@@ -6633,6 +6669,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   thicken: '#0891b2',
   fillet: '#f59e0b',
   chamfer: '#fb7185',
+  'custom-feature': '#a78bfa',
   pattern: '#38bdf8',
   split: '#f472b6',
   hole: '#fb923c',

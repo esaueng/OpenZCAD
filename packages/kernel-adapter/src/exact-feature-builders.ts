@@ -4,6 +4,7 @@ import {
 } from './exact-reference-resolution';
 import { edgeSelectionKey } from './exact-edge-selection-transport';
 import { upstreamSnapshot } from './exact-carry-edit-gate';
+import { buildCustomFeature } from './exact-custom-feature';
 import { buildGearFeature } from './exact-gear';
 import { buildSheetMetalFeature } from './exact-sheet-metal';
 import { buildStandardPartFeature } from './exact-standard-part';
@@ -4610,5 +4611,12 @@ function buildFeatureByKind(
     case 'datum-csys':
       buildDatumCsysFeature(ctx, feature, feature.data);
       break;
+    case 'custom-feature':
+      buildCustomFeature(ctx, feature, feature.data, buildFeature);
+      break;
+    default:
+      // A new feature kind must say how it builds; one that fell through
+      // here would publish no body and no refusal.
+      feature.data satisfies never;
   }
 }

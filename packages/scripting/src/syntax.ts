@@ -60,7 +60,7 @@ export class HistoryTextSyntaxError extends Error {
   }
 }
 
-type TokenType =
+export type TokenType =
   | 'ident'
   | 'id'
   | 'string'
@@ -70,7 +70,7 @@ type TokenType =
   | 'punct'
   | 'eof';
 
-interface Token {
+export interface Token {
   type: TokenType;
   /** Decoded value: the string's contents, the id without `#`, the punct. */
   text: string;
@@ -84,7 +84,7 @@ export const ID_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.:-]*$/;
 const ID_PART = /[A-Za-z0-9_.:-]/;
 const NUMBER_PATTERN = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/y;
 
-function tokenize(source: string): Token[] {
+export function tokenize(source: string): Token[] {
   const tokens: Token[] = [];
   let offset = 0;
   let line = 1;
@@ -124,8 +124,16 @@ function tokenize(source: string): Token[] {
       push('punct', '->', 2);
       continue;
     }
-    if ('{}[]():,='.includes(char)) {
+    if ('{}[]():,=.'.includes(char)) {
       push('punct', char, 1);
+      continue;
+    }
+    if (source.startsWith('"""', offset)) {
+      // A raw text block: no escapes, may span lines (script sources).
+      const end = source.indexOf('"""', offset + 3);
+      if (end < 0)
+        fail('Unterminated text block: a closing """ is missing.', start);
+      push('string', source.slice(offset + 3, end), end + 3 - offset);
       continue;
     }
     if (char === '"') {
@@ -274,6 +282,57 @@ export interface HistoryTextTree {
   statements: Statement[];
 }
 
+/** One call in a pick query: `plane()`, `normal("z")`, `max("z")`. */
+export interface QueryCall {
+  name: string;
+  args: ValueNode[];
+  span: TextSpan;
+}
+
+export interface QueryNode {
+  /** `faces` or `edges` (or anything else, refused by the checker). */
+  source: QueryCall;
+  filters: QueryCall[];
+  span: TextSpan;
+}
+
+export type ScriptItem =
+  | {
+      type: 'input';
+      name: string;
+      quantity: string;
+      quantitySpan: TextSpan;
+      defaultValue: ValueNode | null;
+      span: TextSpan;
+    }
+  | {
+      type: 'pick';
+      name: string;
+      entity: string;
+      entitySpan: TextSpan;
+      count: number | null;
+      query: QueryNode;
+      span: TextSpan;
+    }
+  | {
+      type: 'step';
+      kind: string;
+      kindSpan: TextSpan;
+      body: RecordNode;
+      span: TextSpan;
+    };
+
+/** A custom-feature script's syntax tree (L15, `api 1`). */
+export interface ScriptTree {
+  id: string;
+  idSpan: TextSpan;
+  version: string;
+  versionSpan: TextSpan;
+  api: number;
+  apiSpan: TextSpan;
+  items: ScriptItem[];
+}
+
 /** Deeper nesting than any stored document holds is refused, not recursed. */
 export const MAX_HISTORY_TEXT_DEPTH = 64;
 
@@ -331,6 +390,144 @@ class Parser {
 
   private isPunct(text: string): boolean {
     return this.current.type === 'punct' && this.current.text === text;
+  }
+
+  /**
+   * ```text
+   * script := 'script' STRING STRING 'api' INT '{' item* '}'
+   * item   := 'input' IDENT ':' IDENT ['=' value]
+   *         | 'pick' IDENT ':' IDENT [INT] '=' query
+   *         | 'step' IDENT record
+   * query  := IDENT '(' ')' ('.' IDENT '(' [value (',' value)*] ')')*
+   * ```
+   */
+  parseScript(): ScriptTree {
+    this.expectWord('script');
+    const id = this.expect('string', 'the script id in quotes');
+    const version = this.expect('string', 'the script version in quotes');
+    this.expectWord('api');
+    const api = this.expect('number', 'the scripting api version');
+    this.expectPunct('{');
+    const items: ScriptItem[] = [];
+    while (!this.isPunct('}')) {
+      if (this.current.type === 'eof')
+        this.fail('Expected `}` to close the script.');
+      items.push(this.parseScriptItem());
+    }
+    this.next();
+    if (this.current.type !== 'eof') {
+      this.fail(
+        `Expected the end of the script but found ${this.describe(this.current)}.`
+      );
+    }
+    return {
+      id: id.text,
+      idSpan: id.span,
+      version: version.text,
+      versionSpan: version.span,
+      api: Number(api.text),
+      apiSpan: api.span,
+      items
+    };
+  }
+
+  private parseScriptItem(): ScriptItem {
+    const head = this.expect('ident', '`input`, `pick` or `step`');
+    if (head.text === 'input') {
+      const name = this.expect('ident', 'the input name');
+      this.expectPunct(':');
+      const quantity = this.expect('ident', 'the input quantity');
+      let defaultValue: ValueNode | null = null;
+      if (this.isPunct('=')) {
+        this.next();
+        defaultValue = this.parseValue();
+      }
+      return {
+        type: 'input',
+        name: name.text,
+        quantity: quantity.text,
+        quantitySpan: quantity.span,
+        defaultValue,
+        span: { start: head.span.start, end: this.previousEnd() }
+      };
+    }
+    if (head.text === 'pick') {
+      const name = this.expect('ident', 'the pick name');
+      this.expectPunct(':');
+      const entity = this.expect('ident', '`face`, `faces`, `edge` or `edges`');
+      let count: number | null = null;
+      if (this.current.type === 'number') {
+        const token = this.next();
+        count = Number(token.text);
+        if (!Number.isSafeInteger(count) || count < 1) {
+          this.fail('A pick count is a whole number of at least 1.', token);
+        }
+      }
+      this.expectPunct('=');
+      const query = this.parseQuery();
+      return {
+        type: 'pick',
+        name: name.text,
+        entity: entity.text,
+        entitySpan: entity.span,
+        count,
+        query,
+        span: { start: head.span.start, end: query.span.end }
+      };
+    }
+    if (head.text === 'step') {
+      const kind = this.expect('ident', 'the step kind');
+      const body = this.parseRecord();
+      return {
+        type: 'step',
+        kind: kind.text,
+        kindSpan: kind.span,
+        body,
+        span: { start: head.span.start, end: body.span.end }
+      };
+    }
+    return this.fail(
+      `\`${head.text}\` is not a script item; use input, pick or step.`,
+      head
+    );
+  }
+
+  private parseQueryCall(): QueryCall {
+    const name = this.expect('ident', 'a query call such as `faces()`');
+    this.expectPunct('(');
+    const args: ValueNode[] = [];
+    while (!this.isPunct(')')) {
+      args.push(this.parseValue());
+      if (this.isPunct(',')) this.next();
+      else if (!this.isPunct(')')) {
+        this.fail(
+          `Expected \`,\` or \`)\` but found ${this.describe(this.current)}.`
+        );
+      }
+    }
+    const close = this.next();
+    return {
+      name: name.text,
+      args,
+      span: { start: name.span.start, end: close.span.end }
+    };
+  }
+
+  private parseQuery(): QueryNode {
+    const source = this.parseQueryCall();
+    const filters: QueryCall[] = [];
+    while (this.isPunct('.')) {
+      this.next();
+      filters.push(this.parseQueryCall());
+    }
+    return {
+      source,
+      filters,
+      span: {
+        start: source.span.start,
+        end: (filters.at(-1) ?? source).span.end
+      }
+    };
   }
 
   parseDocument(): HistoryTextTree {
@@ -565,6 +762,11 @@ class Parser {
       token
     );
   }
+}
+
+/** Parses a custom-feature script. Throws `HistoryTextSyntaxError`. */
+export function parseScriptText(source: string): ScriptTree {
+  return new Parser(tokenize(source)).parseScript();
 }
 
 /** Parses a history text into its syntax tree. Throws `HistoryTextSyntaxError`. */

@@ -51,6 +51,7 @@ function inputBodyIds(feature: FeatureNode): BodyId[] {
     case 'chamfer':
     case 'pattern':
     case 'direct-edit':
+    case 'custom-feature':
       return [data.targetBodyId];
     case 'mirror':
     case 'primitive':

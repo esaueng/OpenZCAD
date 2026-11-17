@@ -263,6 +263,9 @@ importers:
       '@openzcad/geometry':
         specifier: workspace:*
         version: link:../geometry
+      '@openzcad/scripting':
+        specifier: workspace:*
+        version: link:../scripting
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../shared
@@ -323,6 +326,9 @@ importers:
       '@openzcad/io-stl':
         specifier: workspace:*
         version: link:../io-stl
+      '@openzcad/scripting':
+        specifier: workspace:*
+        version: link:../scripting
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../shared

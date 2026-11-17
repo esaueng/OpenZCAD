@@ -34,6 +34,7 @@ import {
   type HistorySketchFields,
   type HistorySketchObject
 } from './model';
+import { compileScript } from './script';
 import {
   HistoryTextSyntaxError,
   parseHistoryText,
@@ -571,7 +572,21 @@ class Reader {
       return null;
     }
     if (stored) {
-      this.checkAgainstStored(statement.body, stored.data, STATEMENT_KEYS);
+      const custom = stored.data.featureKind === 'custom-feature';
+      // A custom feature's inputs are the script's to name: an input the
+      // instance did not set before may be set now, so only values are typed.
+      this.checkAgainstStored(
+        statement.body,
+        stored.data,
+        custom ? new Set([...STATEMENT_KEYS, 'inputs']) : STATEMENT_KEYS
+      );
+      if (custom) {
+        const inputs = entryOf(statement.body, 'inputs');
+        if (inputs) this.checkInputValues(inputs.value);
+        const script = entryOf(statement.body, 'script');
+        if (script?.value.type === 'record')
+          this.checkScriptRecord(script.value);
+      }
     } else if (!this.checkNewFeature(statement)) {
       // A kind the text cannot create: its fields are not worth typing.
       return null;
@@ -850,9 +865,11 @@ class Reader {
    * created from text, so only a primitive is accepted, field by field.
    */
   private checkNewFeature(statement: FeatureStatement): boolean {
+    if (statement.kind === 'custom-feature')
+      return this.checkNewCustomFeature(statement);
     if (statement.kind !== 'primitive') {
       this.error(
-        `#${statement.id} is not a step of this document. Create a ${statement.kind} step in the app, then edit it here; the text adds primitives.`,
+        `#${statement.id} is not a step of this document. Create a ${statement.kind} step in the app, then edit it here; the text adds primitives and custom features.`,
         statement.idSpan
       );
       return false;
@@ -913,6 +930,106 @@ class Reader {
       }
     }
     return true;
+  }
+
+  /** A new custom feature: a target, a script that compiles, and inputs. */
+  private checkNewCustomFeature(statement: FeatureStatement): boolean {
+    let ok = true;
+    for (const entry of statement.body.entries) {
+      if (STATEMENT_KEYS.has(entry.key)) continue;
+      if (!['targetBodyId', 'script', 'inputs'].includes(entry.key)) {
+        this.error(
+          `A custom feature takes \`targetBodyId\`, \`script\` and \`inputs\`, not \`${entry.key}\`.`,
+          entry.keySpan
+        );
+        ok = false;
+      }
+    }
+    const target = entryOf(statement.body, 'targetBodyId');
+    if (!target || target.value.type !== 'id') {
+      this.error(
+        'A custom feature needs `targetBodyId: #body`.',
+        target?.value.span ?? statement.idSpan
+      );
+      ok = false;
+    }
+    const inputs = entryOf(statement.body, 'inputs');
+    if (inputs) {
+      const before = this.diagnostics.length;
+      this.checkInputValues(inputs.value);
+      if (this.diagnostics.length > before) ok = false;
+    }
+    const script = entryOf(statement.body, 'script');
+    if (!script || script.value.type !== 'record') {
+      this.error(
+        'A custom feature needs `script: { id, version, source }`.',
+        script?.value.span ?? statement.idSpan
+      );
+      return false;
+    }
+    return this.checkScriptRecord(script.value) && ok;
+  }
+
+  /** A custom feature's inputs: a record of numbers and expressions. */
+  private checkInputValues(node: ValueNode): void {
+    if (node.type !== 'record') {
+      this.error('`inputs` is a record of values.', node.span);
+      return;
+    }
+    for (const entry of node.entries) {
+      if (entry.value.type !== 'number' && entry.value.type !== 'expression') {
+        this.error(
+          `Input \`${entry.key}\` takes a number or an expression in backticks.`,
+          entry.value.span
+        );
+      }
+    }
+  }
+
+  /** A script record's fields, and its source compiled to the diagnostics' lines. */
+  checkScriptRecord(record: RecordNode): boolean {
+    let ok = true;
+    for (const entry of record.entries) {
+      if (!['id', 'version', 'api', 'source', 'digest'].includes(entry.key)) {
+        this.error(`A script has no field \`${entry.key}\`.`, entry.keySpan);
+        ok = false;
+      }
+    }
+    const source = entryOf(record, 'source');
+    if (!source || source.value.type !== 'string') {
+      this.error(
+        'A script needs its `source` as text.',
+        source?.value.span ?? record.span
+      );
+      return false;
+    }
+    const compiled = compileScript(source.value.value);
+    for (const diagnostic of compiled.diagnostics) {
+      if (diagnostic.severity !== 'error') continue;
+      this.error(
+        `Script line ${diagnostic.span.start.line}, column ${diagnostic.span.start.column}: ${diagnostic.message}`,
+        source.value.span
+      );
+      ok = false;
+    }
+    if (!compiled.script) return false;
+    for (const key of ['id', 'version'] as const) {
+      const entry = entryOf(record, key);
+      if (
+        entry &&
+        !(
+          entry.value.type === 'string' &&
+          entry.value.value === compiled.script[key]
+        )
+      ) {
+        this.error(
+          `The script's ${key} is ${JSON.stringify(compiled.script[key])}, as its source says.`,
+          entry.value.span
+        );
+        ok = false;
+      }
+    }
+    return ok;
   }
 
   /**
