@@ -839,4 +839,29 @@ describe('fat line depth bias', () => {
       plain.vertexShader.indexOf('vec4 clipStart')
     );
   });
+
+  it('clips fat lines with a hard discard, not the alpha-to-coverage fade (#1626)', () => {
+    // LineMaterial writes its own alpha, so the fade the A2C clipping
+    // branch applies to diffuseColor.a never reached the screen: pieces of
+    // edges past a section plane drew as dots.
+    const plain = createFatLineMaterial({ color: 0xffffff, linewidth: 1 });
+    const biased = createFatLineMaterial({
+      color: 0xffffff,
+      linewidth: 1,
+      depthBias: 0.18
+    });
+    expect(plain.alphaToCoverage).toBe(true);
+    expect(biased.fragmentShader).toBe(plain.fragmentShader);
+    const shader = plain.fragmentShader;
+    const undef = shader.indexOf('#undef ALPHA_TO_COVERAGE');
+    const include = shader.indexOf('#include <clipping_planes_fragment>');
+    expect(undef).toBeGreaterThan(-1);
+    expect(include).toBeGreaterThan(undef);
+    // Restored after the include, so nothing later sees it changed.
+    expect(shader.indexOf('#define ALPHA_TO_COVERAGE')).toBeGreaterThan(
+      include
+    );
+    // Still before the colour is written.
+    expect(include).toBeLessThan(shader.indexOf('gl_FragColor'));
+  });
 });
