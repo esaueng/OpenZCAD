@@ -474,6 +474,36 @@ export function hasDrawingTolerance(value: unknown): boolean {
   return false;
 }
 
+/** D07 fit and thread classes and general-tolerance blocks (schema v105). */
+export function assertDrawingFitSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 105, 'Fits and general tolerances');
+}
+
+/** Whether `value` holds a v105 fit, thread class or general-tolerance block. */
+export function hasDrawingFit(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (
+      typeof entry.annotationId === 'string' &&
+      (entry.kind === 'general-tolerance' ||
+        entry.fit !== undefined ||
+        entry.threadClass !== undefined)
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
 /** D03 auxiliary views (schema v81). */
 export function assertDrawingAuxiliarySchema(version: unknown): void {
   assertMinimumProjectSchema(version, 81, 'Auxiliary views');
@@ -861,6 +891,12 @@ export function assertDocumentContentCommandSchema(
     if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('drawing.') &&
+      hasDrawingFit(command.payload)
+    )
+      assertDrawingFitSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
       hasDrawingAuxiliary(command.payload)
     )
       assertDrawingAuxiliarySchema(document.schemaVersion);
@@ -1076,6 +1112,15 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
           hasDrawingTolerance(change.after))
       )
         assertDrawingToleranceSchema(document.schemaVersion);
+  if (hasDrawingFit(document.drawings))
+    assertDrawingFitSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingFit(change.before) || hasDrawingFit(change.after))
+      )
+        assertDrawingFitSchema(document.schemaVersion);
   if (hasDrawingAuxiliary(document.drawings))
     assertDrawingAuxiliarySchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])

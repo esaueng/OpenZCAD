@@ -40,6 +40,7 @@ import {
   drawingAnnotationHost,
   drawingToleranceHostAllowed,
   type DrawingToleranceAnnotation,
+  type DrawingTolerance,
   type DrawingSheetFormat,
   millimetresPerUnit,
   MAX_DRAWING_DIMENSION_DECIMALS,
@@ -97,6 +98,14 @@ import {
   FRAME_HEIGHT_MM,
   type FrameCells
 } from './toleranceFrames';
+import {
+  fitDeviations,
+  formatArcMinutes,
+  ISO_2768_ANGULAR,
+  ISO_2768_ANGULAR_RANGES,
+  ISO_2768_LINEAR,
+  ISO_2768_LINEAR_RANGES
+} from './isoTolerances';
 
 /**
  * D02 annotation geometry: from a stored annotation to what it measures in
@@ -219,7 +228,13 @@ export type AnnotationBreak =
   /** v98: a frame names a datum no datum feature symbol declares. */
   | 'datum-undefined'
   /** v98: two datum feature symbols on the drawing share a letter. */
-  | 'datum-duplicate';
+  | 'datum-duplicate'
+  /** v105: a fit's size is outside the ISO 286 tables (0 to 500 mm). */
+  | 'fit-out-of-range'
+  /** v105: a thread class on a bore that is not a tapped hole's. */
+  | 'not-threaded'
+  /** v105: a metric class on an inch thread, or the other way round. */
+  | 'thread-class-mismatch';
 
 type UV = [number, number];
 
@@ -299,6 +314,14 @@ export type ResolvedAnnotation =
       heightMm: number;
       checksumSha256: string;
       contentType: 'image/png' | 'image/jpeg';
+    }
+  | {
+      /** v105: a general-tolerance block's header and rows, as a ruled table. */
+      kind: 'general-tolerance';
+      header: string[];
+      numeric: boolean[];
+      rows: string[][];
+      label: string;
     }
   | {
       /** v80: a parts list's header and rows, cells as the BOM table wrote them. */
@@ -480,6 +503,12 @@ export function annotationBreakMessage(reason: AnnotationBreak): string {
       return 'This frame names a datum that no datum feature symbol on the drawing declares.';
     case 'datum-duplicate':
       return 'Another datum feature symbol on the drawing has the same letter; each datum is declared once.';
+    case 'fit-out-of-range':
+      return 'This diameter is outside the ISO 286 fit tables (over 0 up to 500 mm), so its fit has no stated limits.';
+    case 'not-threaded':
+      return 'This diameter is not the bore of a tapped hole, so it has no thread to class.';
+    case 'thread-class-mismatch':
+      return 'This thread class is for the other thread system: ISO 965 classes (6H) for metric threads, UN classes (2B) for inch ones.';
   }
 }
 
@@ -523,6 +552,10 @@ interface Measured {
   value: number;
   decimals: number;
   kind: 'length' | 'angle';
+  /** v105: an ISO 286 fit class, written after the value ("Ø10 H7"). */
+  designation?: string;
+  /** v105: the fit's limit deviations, in the printed units. */
+  fitTolerance?: DrawingTolerance;
 }
 
 /**
@@ -644,7 +677,9 @@ export function formatDimension(
   const head = `${count}${annotation.prefix ? `${annotation.prefix} ` : ''}`;
   const tail = annotation.suffix ? ` ${annotation.suffix}` : '';
   const tolerance =
-    typeof measured === 'string' ? undefined : annotation.tolerance;
+    typeof measured === 'string'
+      ? undefined
+      : (measured.fitTolerance ?? annotation.tolerance);
   let lead: string;
   let stack: [string, string] | undefined;
   let gap = '';
@@ -653,7 +688,7 @@ export function formatDimension(
     const { symbol, value, decimals, kind } = measured;
     const write = (n: number, d: number, trim: boolean) =>
       writeNumber(n, d, kind, format, trim);
-    const nominal = `${symbol}${write(value, decimals, true)}`;
+    const nominal = `${symbol}${write(value, decimals, true)}${measured.designation ? ` ${measured.designation}` : ''}`;
     // A tolerance keeps the decimals it needs, so a stored one never prints
     // as zero: a length's or decimal degree's own, a D°M'S" amount's in
     // seconds (0.000001° is 0.0036").
@@ -1244,6 +1279,65 @@ export function drawingDatumLetters(
   return counts;
 }
 
+/**
+ * D07 v105: a general-tolerance block as a ruled table. ISO 2768-1 prints its
+ * linear and angular tables for the class, in millimetres as the standard
+ * states them (the header names the class, "ISO 2768-mK"); a stated block
+ * lists ± per number of decimals written ("X.XX ±0.05") and on angles, in
+ * the sheet's units.
+ */
+export function generalToleranceTable(
+  annotation: Extract<DrawingAnnotation, { kind: 'general-tolerance' }>,
+  format: DrawingNumberFormat
+): Extract<ResolvedAnnotation, { kind: 'general-tolerance' }> {
+  const write = (value: number, decimals = significantDecimals(value)) =>
+    writeNumber(value, decimals, 'length', format, true);
+  if (annotation.scheme === 'iso-2768') {
+    const name = `ISO 2768-${annotation.linearClass}${annotation.geometricClass ?? ''}`;
+    const rows: string[][] = [];
+    ISO_2768_LINEAR_RANGES.forEach(([over, upTo], index) => {
+      const amount = ISO_2768_LINEAR[annotation.linearClass][index];
+      if (amount === null || amount === undefined) return;
+      rows.push([`over ${write(over)} to ${write(upTo)}`, `±${write(amount)}`]);
+    });
+    ISO_2768_ANGULAR_RANGES.forEach(([over, upTo], index) => {
+      const minutes = ISO_2768_ANGULAR[annotation.linearClass][index]!;
+      const range =
+        over === null
+          ? `angles, side to ${write(upTo!)}`
+          : upTo === null
+            ? `angles, side over ${write(over)}`
+            : `angles, side over ${write(over)} to ${write(upTo)}`;
+      rows.push([range, `±${formatArcMinutes(minutes)}`]);
+    });
+    return {
+      kind: 'general-tolerance',
+      label: name,
+      header: [`${name} (mm)`, 'Tolerance'],
+      numeric: [false, true],
+      rows
+    };
+  }
+  const units = format.units === 'inch' ? 'in' : format.units;
+  const rows = [...annotation.places]
+    .sort((a, b) => a.decimals - b.decimals)
+    .map((place) => [
+      place.decimals === 0
+        ? 'X'
+        : `X${format.comma ? ',' : '.'}${'X'.repeat(place.decimals)}`,
+      `±${write(place.amount)}`
+    ]);
+  if (annotation.angle !== undefined)
+    rows.push(['Angles', `±${write(annotation.angle)}°`]);
+  return {
+    kind: 'general-tolerance',
+    label: 'General tolerances',
+    header: [`Unless stated (${units})`, 'Tolerance'],
+    numeric: [false, true],
+    rows
+  };
+}
+
 /** D07 v98: a frame's tolerance amount in the sheet's number format. */
 export function formatFrameTolerance(
   value: number,
@@ -1778,6 +1872,11 @@ export function resolveDrawingAnnotation(
       }
     };
   }
+  if (annotation.kind === 'general-tolerance')
+    return {
+      ok: true,
+      resolved: generalToleranceTable(annotation, format)
+    };
   if (annotation.kind === 'bom-table') {
     if (!bom || bom.rows.length === 0) return failure('no-bom');
     const columns = (annotation.columns ?? DEFAULT_BOM_COLUMNS).map((key) =>
@@ -2132,7 +2231,43 @@ export function resolveDrawingAnnotation(
       // callout (its standard, its thread, cosmetic or cut), where the hole
       // says more than its diameter. A toleranced diameter states the
       // diameter it tolerances instead (v68).
-      const callout =
+      // v105: an ISO 286 fit is the diameter's tolerance, its limits read
+      // from the tables for the size the model has now.
+      if (annotation.kind === 'diameter' && annotation.fit) {
+        const deviations = fitDeviations(
+          annotation.fit,
+          value * millimetresPerUnit(units)
+        );
+        if (!deviations) return failure('fit-out-of-range');
+        const printed = (mm: number) =>
+          Number((mm / millimetresPerUnit(format.units)).toFixed(6));
+        return {
+          ok: true,
+          resolved: {
+            kind: 'diameter',
+            center: circle.center,
+            radius: circle.radius,
+            ...(isClosed(found.edge)
+              ? {}
+              : { arc: projectedPolyline(view, found.edge) }),
+            value,
+            ...formatDimension(
+              annotation,
+              {
+                ...measuredLength('Ø', value),
+                designation: annotation.fit,
+                fitTolerance: {
+                  kind: 'deviation',
+                  upper: printed(deviations.upper),
+                  lower: printed(deviations.lower)
+                }
+              },
+              format
+            )
+          }
+        };
+      }
+      let callout =
         annotation.kind === 'diameter' && holes && !annotation.tolerance
           ? boreCallout(
               annotationBody(bodies, view, annotation.edge.bodyId),
@@ -2141,6 +2276,22 @@ export function resolveDrawingAnnotation(
               holes
             )
           : null;
+      // v105: a thread class follows the tapped hole's designation, in its
+      // own system: ISO 965 for metric threads, UN for inch ones.
+      if (annotation.kind === 'diameter' && annotation.threadClass) {
+        const thread = callout?.thread;
+        if (!callout || !thread) return failure('not-threaded');
+        const inch = annotation.threadClass.endsWith('B');
+        if (inch !== !thread.designation.startsWith('M'))
+          return failure('thread-class-mismatch');
+        callout = {
+          ...callout,
+          thread: {
+            ...thread,
+            designation: `${thread.designation}-${annotation.threadClass}`
+          }
+        };
+      }
       return {
         ok: true,
         resolved: {
@@ -2583,6 +2734,7 @@ export function annotationModelReading(
     annotation.kind === 'bom-table' ||
     annotation.kind === 'balloon' ||
     annotation.kind === 'image' ||
+    annotation.kind === 'general-tolerance' ||
     isDrawingToleranceAnnotation(annotation) ||
     isDrawingGeometryAnnotation(annotation)
   )
@@ -3448,7 +3600,8 @@ export function layoutAnnotation(
     resolved.kind === 'feature-control-frame'
   )
     return toleranceLayout(resolved, toPage, anchor, host);
-  if (resolved.kind === 'bom-table') return bomTableLayout(resolved, anchor);
+  if (resolved.kind === 'bom-table' || resolved.kind === 'general-tolerance')
+    return bomTableLayout(resolved, anchor);
   if (resolved.kind === 'image') {
     // Centred on its placement, its picture's own aspect.
     const x = anchor[0] - resolved.widthMm / 2;
@@ -3506,7 +3659,10 @@ const BOM_MAX_CELL_MM = 70;
  * aligned to their end. Thin rules, as a title block's.
  */
 function bomTableLayout(
-  resolved: Extract<ResolvedAnnotation, { kind: 'bom-table' }>,
+  resolved: Extract<
+    ResolvedAnnotation,
+    { kind: 'bom-table' | 'general-tolerance' }
+  >,
   anchor: XY
 ): AnnotationLayout {
   const size = ANNOTATION_TEXT_MM;

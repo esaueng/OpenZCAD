@@ -1801,6 +1801,61 @@ describe('DrawingWorkspace', () => {
       expect(command.payload).toMatchObject({ annotation: { amount: 0.05 } });
     });
 
+    it('prints a general-tolerance block and switches its scheme (D07 v105)', async () => {
+      const sheet = dimensioned();
+      sheet.annotations = [
+        ...sheet.annotations!,
+        {
+          annotationId: 'dann_g' as DrawingAnnotationId,
+          kind: 'general-tolerance',
+          scheme: 'iso-2768',
+          linearClass: 'm',
+          placementMm: { x: 20, y: 120 }
+        }
+      ];
+      const { onCommand } = setup({ sheet });
+      const canvas = screen.getByRole('application', {
+        name: 'Sheet Sheet 1'
+      });
+      const block = await within(canvas).findByRole('button', {
+        name: 'General tolerances ISO 2768-m'
+      });
+      expect(
+        [...canvas.querySelectorAll('text')].map((text) => text.textContent)
+      ).toEqual(
+        expect.arrayContaining(['ISO 2768-m (mm)', 'over 0.5 to 3', '±0.1'])
+      );
+      await userEvent.click(block);
+      await userEvent.selectOptions(
+        screen.getByRole('combobox', { name: 'Linear and angular class' }),
+        'f'
+      );
+      let command = onCommand.mock.calls.at(-1)![0];
+      expect(command.kind).toBe('drawing.annotation.update');
+      expect(command.payload).toMatchObject({
+        annotation: { scheme: 'iso-2768', linearClass: 'f' }
+      });
+      await userEvent.selectOptions(
+        screen.getByRole('combobox', { name: 'Scheme' }),
+        'decimal'
+      );
+      command = onCommand.mock.calls.at(-1)![0];
+      expect(command.payload).toEqual({
+        sheetId: sheet.sheetId,
+        annotation: {
+          annotationId: 'dann_g',
+          kind: 'general-tolerance',
+          placementMm: { x: 20, y: 120 },
+          scheme: 'decimal',
+          places: [
+            { decimals: 1, amount: 0.1 },
+            { decimals: 2, amount: 0.05 }
+          ],
+          angle: 0.5
+        }
+      });
+    });
+
     it('keeps a broken dimension in place, refuses export and offers a re-pick', async () => {
       const { onCommand } = setup({ sheet: dimensioned(999) });
       const canvas = screen.getByRole('application', {

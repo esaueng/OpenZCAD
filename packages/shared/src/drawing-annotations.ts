@@ -65,6 +65,10 @@ import type { DrawingViewId } from './drawings';
  * pointing at an edge with a leader or attached to the dimension of a
  * feature of size (a datum symbol may also hang from a frame). Like every
  * annotation they store intent only, and break by name rather than rebind.
+ *
+ * Schema v105 (D07 slice B) adds an ISO 286 fit class and an ISO 965 / UN
+ * thread class on a diameter, and the general-tolerance block on the paper
+ * (ISO 2768-1 classes, or a stated decimal-place block).
  */
 
 export type DrawingAnnotationId = Brand<string, 'DrawingAnnotationId'>;
@@ -275,7 +279,86 @@ export interface DrawingRadialDimension extends DrawingDimensionBase {
    * model each time it is drawn ("2× Ø6 THRU, CSK Ø12 × 90°").
    */
   countersink?: DrawingEdgeRef;
+  /**
+   * v105 (D07): an ISO 286 fit class on a diameter ("H7", "g6"): the
+   * diameter prints it with the limit deviations its tables state for the
+   * measured size. It replaces a tolerance, and a hole's callout.
+   */
+  fit?: DrawingFitClass;
+  /**
+   * v105 (D07): a tapped hole's thread class on its callout: ISO 965
+   * ("6H") for a metric thread, UN ("2B") for an inch one, printed after
+   * the designation ("M6×1-6H").
+   */
+  threadClass?: DrawingThreadClass;
 }
+
+/**
+ * v105: the ISO 286 fit classes a diameter may state: holes F, G, H and JS,
+ * shafts f, g, h, js, k, m, n and p, grades 5 to 11, whose limits ISO 286-1
+ * tables state without the Δ correction or subdivided size ranges.
+ */
+export const DRAWING_FIT_CLASS_PATTERN =
+  /^(?:F|G|H|JS|f|g|h|js|k|m|n|p)(?:[5-9]|10|11)$/;
+export type DrawingFitClass = string;
+
+/** v105: internal thread classes, ISO 965-1 then UN (ASME B1.1). */
+export const DRAWING_THREAD_CLASSES = [
+  '4H',
+  '5H',
+  '6H',
+  '7H',
+  '8H',
+  '4G',
+  '5G',
+  '6G',
+  '7G',
+  '8G',
+  '1B',
+  '2B',
+  '3B'
+] as const;
+export type DrawingThreadClass = (typeof DRAWING_THREAD_CLASSES)[number];
+
+/** v105: ISO 2768-1 linear and angular classes, fine to very coarse. */
+export const DRAWING_ISO_LINEAR_CLASSES = ['f', 'm', 'c', 'v'] as const;
+export type DrawingIsoLinearClass = (typeof DRAWING_ISO_LINEAR_CLASSES)[number];
+/** v105: ISO 2768-2 geometric classes. */
+export const DRAWING_ISO_GEOMETRIC_CLASSES = ['H', 'K', 'L'] as const;
+export type DrawingIsoGeometricClass =
+  (typeof DRAWING_ISO_GEOMETRIC_CLASSES)[number];
+
+/** v105: a stated block's tolerance for values written to `decimals` places. */
+export interface DrawingDecimalTolerance {
+  decimals: number;
+  /** ± amount, in the units the sheet prints in. */
+  amount: number;
+}
+
+/**
+ * v105 (D07): the sheet's general tolerances, a ruled block on the paper
+ * that states what an untoleranced dimension may deviate: ISO 2768-1 class
+ * (`linearClass`, with an ISO 2768-2 `geometricClass`), its table printed
+ * from the standard, or (`decimal`) a block stating ± per number of
+ * decimals written and for angles, as a title block's tolerance box does.
+ */
+export type DrawingGeneralTolerance = DrawingAnnotationBase & {
+  kind: 'general-tolerance';
+  /** On the paper, never in a view: the validator refuses one. */
+  viewId?: DrawingViewId;
+} & (
+    | {
+        scheme: 'iso-2768';
+        linearClass: DrawingIsoLinearClass;
+        geometricClass?: DrawingIsoGeometricClass;
+      }
+    | {
+        scheme: 'decimal';
+        places: DrawingDecimalTolerance[];
+        /** ± on angles, degrees. */
+        angle?: number;
+      }
+  );
 
 /**
  * v49: a revolved blend's radius, read from its torus face seen side-on,
@@ -653,6 +736,7 @@ export function isDrawingDimension(
     annotation.kind !== 'image' &&
     annotation.kind !== 'datum-feature' &&
     annotation.kind !== 'feature-control-frame' &&
+    annotation.kind !== 'general-tolerance' &&
     !isDrawingGeometryAnnotation(annotation)
   );
 }
@@ -674,7 +758,8 @@ export type DrawingAnnotation =
   | DrawingBomTable
   | DrawingBalloon
   | DrawingSheetImage
-  | DrawingToleranceAnnotation;
+  | DrawingToleranceAnnotation
+  | DrawingGeneralTolerance;
 
 export type DrawingAnnotationKind = DrawingAnnotation['kind'];
 
@@ -1062,6 +1147,103 @@ function isMaterialCondition(value: unknown): boolean {
   return value === 'mmc' || value === 'lmc';
 }
 
+/** v105: a diameter's fit or thread class, or why it is malformed. */
+function fitError(
+  value: Record<string, unknown>,
+  where: string
+): string | null {
+  if (value.kind !== 'diameter' || value.edge === undefined)
+    return `${where} states a fit or thread class, which only a diameter of a circular edge takes.`;
+  if (value.fit !== undefined) {
+    if (
+      typeof value.fit !== 'string' ||
+      !DRAWING_FIT_CLASS_PATTERN.test(value.fit)
+    )
+      return `${where} states a fit other than an ISO 286 hole F, G, H or JS or shaft f, g, h, js, k, m, n or p class, grade 5 to 11.`;
+    if (value.tolerance !== undefined)
+      return `${where} states both a fit and a tolerance; the fit is its tolerance.`;
+    if (value.reference !== undefined)
+      return `${where} is a reference dimension, which takes no fit.`;
+    if (value.threadClass !== undefined)
+      return `${where} states both a fit and a thread class.`;
+  }
+  if (value.threadClass !== undefined) {
+    if (
+      !(DRAWING_THREAD_CLASSES as readonly unknown[]).includes(
+        value.threadClass
+      )
+    )
+      return `${where} states a thread class other than an ISO 965 internal (4H–8H, 4G–8G) or UN internal (1B–3B) class.`;
+    if (value.tolerance !== undefined)
+      return `${where} states a thread class on a toleranced diameter, which shows no callout.`;
+  }
+  if (value.counterbore !== undefined || value.countersink !== undefined)
+    return `${where} is a counterbore or countersink callout, which takes no fit or thread class.`;
+  return null;
+}
+
+const GENERAL_TOLERANCE_KEYS: Readonly<Record<string, readonly string[]>> = {
+  'iso-2768': ['linearClass', 'geometricClass'],
+  decimal: ['places', 'angle']
+};
+
+/** v105: why a general-tolerance block is malformed, or null. */
+function generalToleranceError(
+  value: Record<string, unknown>,
+  where: string
+): string | null {
+  const own = GENERAL_TOLERANCE_KEYS[value.scheme as string];
+  if (!own)
+    return `${where} is a general-tolerance block with an unknown scheme.`;
+  const extra = Object.keys(value).find(
+    (key) =>
+      !['annotationId', 'kind', 'placementMm', 'scheme', ...own].includes(key)
+  );
+  if (extra !== undefined)
+    return `${where} is a general-tolerance block, which has no ${extra}.`;
+  if (value.scheme === 'iso-2768') {
+    if (
+      !(DRAWING_ISO_LINEAR_CLASSES as readonly unknown[]).includes(
+        value.linearClass
+      )
+    )
+      return `${where} names an ISO 2768-1 class other than f, m, c or v.`;
+    if (
+      value.geometricClass !== undefined &&
+      !(DRAWING_ISO_GEOMETRIC_CLASSES as readonly unknown[]).includes(
+        value.geometricClass
+      )
+    )
+      return `${where} names an ISO 2768-2 class other than H, K or L.`;
+    return null;
+  }
+  const places = value.places;
+  if (!Array.isArray(places) || places.length === 0 || places.length > 4)
+    return `${where} states one to four decimal-place tolerances.`;
+  const seen = new Set<number>();
+  for (const place of places as unknown[]) {
+    if (
+      !isRecord(place) ||
+      Object.keys(place).length !== 2 ||
+      !Number.isSafeInteger(place.decimals) ||
+      (place.decimals as number) < 0 ||
+      (place.decimals as number) > 4 ||
+      !isDeviation(place.amount) ||
+      place.amount <= 0
+    )
+      return `${where} states a decimal-place tolerance that is not 0–4 places and a positive amount of at most six decimals.`;
+    if (seen.has(place.decimals as number))
+      return `${where} states ${place.decimals as number} decimal places twice.`;
+    seen.add(place.decimals as number);
+  }
+  if (
+    value.angle !== undefined &&
+    (!isDeviation(value.angle) || value.angle <= 0 || value.angle >= 90)
+  )
+    return `${where} states an angle tolerance that is not a positive amount under 90°.`;
+  return null;
+}
+
 /** v98: why a datum symbol or frame is malformed, or null. */
 function toleranceAnnotationError(
   value: Record<string, unknown>,
@@ -1234,6 +1416,12 @@ export function drawingAnnotationError(
   }
   if (value.kind === 'datum-feature' || value.kind === 'feature-control-frame')
     return toleranceAnnotationError(value, where);
+  if (value.kind === 'general-tolerance')
+    return generalToleranceError(value, where);
+  if (value.fit !== undefined || value.threadClass !== undefined) {
+    const error = fitError(value, where);
+    if (error) return error;
+  }
   if (value.kind === 'bom-table' || value.kind === 'balloon') {
     if (
       [
@@ -1558,6 +1746,7 @@ export function drawingAnnotationReferences(
       return annotation.leader ? [annotation.leader] : [];
     case 'bom-table':
     case 'image':
+    case 'general-tolerance':
       return [];
     case 'balloon':
       return [annotation.leader];

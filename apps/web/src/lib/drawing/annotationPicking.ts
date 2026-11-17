@@ -551,7 +551,9 @@ export type AnnotationToolKind =
   | 'image'
   /** v98 (D07): a datum feature symbol and a feature control frame. */
   | 'datum-feature'
-  | 'feature-control-frame';
+  | 'feature-control-frame'
+  /** v105 (D07): the sheet's general-tolerance block, on the paper. */
+  | 'general-tolerance';
 
 /** v73: tools that mark geometry, made as soon as their picks are in. */
 export const GEOMETRY_TOOL_KINDS: readonly AnnotationToolKind[] = [
@@ -587,7 +589,8 @@ export const ANNOTATION_TOOL_LABELS: Readonly<
   'parts-list': 'Parts list',
   image: 'Image',
   'datum-feature': 'Datum feature',
-  'feature-control-frame': 'Feature control frame'
+  'feature-control-frame': 'Feature control frame',
+  'general-tolerance': 'General tolerances'
 };
 
 /** v98: the tools that point at an edge or attach to a dimension. */
@@ -661,6 +664,8 @@ export function annotationToolHint(tool: AnnotationTool): string {
       return 'Datum feature: pick the edge of the datum surface, or a size dimension (or its frame) to attach it to.';
     case 'feature-control-frame':
       return 'Feature control frame: pick the edge of the toleranced surface, or a size dimension to put the frame under.';
+    case 'general-tolerance':
+      return 'General tolerances: click where the block’s top-left corner goes.';
   }
 }
 
@@ -758,6 +763,7 @@ export function pickedEnough(tool: AnnotationTool): boolean {
       return tool.edges.length === 1;
     case 'parts-list':
     case 'image':
+    case 'general-tolerance':
       return tool.placed !== undefined;
     case 'datum-feature':
     case 'feature-control-frame':
@@ -885,7 +891,11 @@ export function applyAnnotationPick(
 ): PickResult {
   if (pickedEnough(tool)) return { ok: true, tool };
   // A parts list (and, v92, an image) sits on the paper: any click places it.
-  if (tool.kind === 'parts-list' || tool.kind === 'image')
+  if (
+    tool.kind === 'parts-list' ||
+    tool.kind === 'image' ||
+    tool.kind === 'general-tolerance'
+  )
     return {
       ok: true,
       tool: { ...tool, placed: { x: point[0], y: point[1] } }
@@ -1469,6 +1479,14 @@ export function draftAnnotation(
         : null;
     case 'parts-list':
       return { ...base, kind: 'bom-table' };
+    case 'general-tolerance':
+      // ISO 2768-m, the usual default; Properties chooses another.
+      return {
+        ...base,
+        kind: 'general-tolerance',
+        scheme: 'iso-2768',
+        linearClass: 'm'
+      };
     case 'image':
       return tool.pictureId
         ? {

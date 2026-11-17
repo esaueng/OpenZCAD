@@ -419,7 +419,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // were left unused when I02 and D07 landed first).
 // v101 adds M06 ribs (`rib` features): an older client cannot build one, so
 // it must refuse. Builds on v99 (v100 is claimed by D07's #1737).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 101 as const;
+// v105 adds D07 fits and general tolerances: an ISO 286 `fit` and a thread
+// `threadClass` on a diameter dimension, and the `general-tolerance` block
+// on the paper. An older client would print the diameter without its fit
+// and refuse the unknown kind, so it must refuse the document. Builds on
+// v101 (v100 was left unused when M06 landed first; v102-v104 are claimed by
+// #1740, #1741 and #1732).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 105 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

@@ -97,3 +97,39 @@ never by editing its open branches.
 
 Evidence: `test/drawing-gdt.test.ts`, `DrawingWorkspace.test.tsx` (frame
 properties) and `test/e2e/drawing-gdt.spec.ts`.
+
+## Slice B: fits, thread classes and general tolerances (schema v105)
+
+- **Fits.** A diameter of a circular edge may state an ISO 286 fit class
+  (`fit`). Printing it ("Ø8 H7 +0.015/0") reads the limit deviations from
+  ISO 286-1 tables 1–3, for the size the model has now, so a resized pin
+  re-reads its range's limits at the next Update.
+  - **Classes.** Only the classes those tables state alone: holes F, G, H
+    and JS, and shafts f, g, h, js, k, m, n and p, in grades 5 to 11. Holes
+    K to ZC need the Δ correction, and shafts r to zc need subdivided size
+    ranges, so the schema refuses them rather than print a guessed limit.
+  - **js.** An odd IT7–IT11 value is first rounded down to the even one.
+  - **Out of range.** A size outside over 0 up to 500 mm breaks as
+    `fit-out-of-range`.
+  - **What it replaces.** A fit is the diameter's tolerance and replaces a
+    hole's callout. It excludes a tolerance, a reference flag and a thread
+    class.
+- **Thread classes.** A tapped M01 hole's diameter may state an internal
+  thread class (`threadClass`), printed after the designation ("M6×1-6H"):
+  ISO 965-1 (4H–8H, 4G–8G) for metric threads, or UN (1B–3B) for inch ones.
+  - A class from the other system breaks as `thread-class-mismatch`.
+  - A bore without a thread breaks as `not-threaded`.
+- **General tolerances.** A `general-tolerance` block sits on the paper,
+  its top-left corner at its placement, as a ruled table like the parts
+  list.
+  - **ISO 2768.** `iso-2768` prints the ISO 2768-1 linear (table 1) and
+    angular (table 3) deviations for class f, m, c or v. These are in
+    millimetres, as the standard states them. The header names the class
+    with any ISO 2768-2 geometric class ("ISO 2768-mK").
+  - **By decimal places.** `decimal` states ± for values written to 0–4
+    decimals, and on angles, in the sheet's units. This is the common
+    block for inch drawings.
+  - **Tool and Properties.** General tolerances (W) places an ISO 2768-m
+    block, and Properties switches its scheme and classes.
+- **Schema.** v105, built on v101 (#1739), gated below it. An older client would print
+  a fitted diameter without its fit.

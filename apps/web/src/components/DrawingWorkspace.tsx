@@ -31,6 +31,7 @@ import {
   MessageCircle,
   Anchor,
   Columns3,
+  Diff,
   TableProperties,
   ImageIcon,
   Sun,
@@ -82,6 +83,12 @@ import {
   DRAWING_MATERIAL_CHARACTERISTICS,
   DRAWING_DATUM_MATERIAL_CHARACTERISTICS,
   MAX_DRAWING_DATUM_REFERENCES,
+  DRAWING_THREAD_CLASSES,
+  DRAWING_ISO_GEOMETRIC_CLASSES,
+  type DrawingThreadClass,
+  type DrawingRadialDimension,
+  type DrawingIsoLinearClass,
+  type DrawingIsoGeometricClass,
   type DrawingGeometricCharacteristic,
   type DrawingMaterialCondition,
   type UnitSystem,
@@ -254,6 +261,7 @@ import {
   type PickableFace
 } from '../lib/drawing/annotationPicking';
 import { CHARACTERISTIC_LABELS } from '../lib/drawing/toleranceFrames';
+import { FIT_GRADES, FIT_LETTERS } from '../lib/drawing/isoTolerances';
 import {
   createStarterSheet,
   defaultDrawingPaper,
@@ -1138,7 +1146,8 @@ const ANNOTATION_TOOLS: readonly AnnotationToolKind[] = [
   'parts-list',
   'image',
   'datum-feature',
-  'feature-control-frame'
+  'feature-control-frame',
+  'general-tolerance'
 ];
 
 const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
@@ -1162,7 +1171,8 @@ const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
     'parts-list': TableProperties,
     image: ImageIcon,
     'datum-feature': Anchor,
-    'feature-control-frame': Columns3
+    'feature-control-frame': Columns3,
+    'general-tolerance': Diff
   };
 
 /** One key per tool, live while Draw is open and focus is not in a field. */
@@ -1186,7 +1196,8 @@ const ANNOTATION_TOOL_KEYS: Readonly<Record<AnnotationToolKind, string>> = {
   'parts-list': 'P',
   image: 'I',
   'datum-feature': 'Q',
-  'feature-control-frame': 'F'
+  'feature-control-frame': 'F',
+  'general-tolerance': 'W'
 };
 
 /**
@@ -1265,7 +1276,8 @@ const ANNOTATION_KIND_LABELS: Readonly<
   balloon: 'Balloon',
   image: 'Image',
   'datum-feature': 'Datum feature',
-  'feature-control-frame': 'Feature control frame'
+  'feature-control-frame': 'Feature control frame',
+  'general-tolerance': 'General tolerances'
 };
 
 function annotationTitle(annotation: DrawingAnnotation): string {
@@ -1282,6 +1294,7 @@ function annotationTitle(annotation: DrawingAnnotation): string {
         annotation.kind === 'balloon' ||
         annotation.kind === 'datum-feature' ||
         annotation.kind === 'feature-control-frame' ||
+        annotation.kind === 'general-tolerance' ||
         isDrawingGeometryAnnotation(annotation)
       ? ANNOTATION_KIND_LABELS[annotation.kind]
       : `${ANNOTATION_KIND_LABELS[annotation.kind]} dimension`;
@@ -1970,6 +1983,13 @@ function AnnotationProperties(props: {
           Names the item number its part has in the assembly&apos;s parts list;
           it follows the list&apos;s numbering.
         </p>
+      ) : selected.kind === 'general-tolerance' ? (
+        <GeneralToleranceFields
+          selected={selected}
+          editable={editable}
+          numberFormat={props.numberFormat}
+          onUpdate={props.onUpdate}
+        />
       ) : selected.kind === 'datum-feature' ||
         selected.kind === 'feature-control-frame' ? (
         <ToleranceAnnotationFields
@@ -2045,6 +2065,7 @@ function AnnotationProperties(props: {
       <div className="drawing-field-row">
         {selected.kind !== 'bom-table' &&
           selected.kind !== 'image' &&
+          selected.kind !== 'general-tolerance' &&
           (selected.kind !== 'note' || selected.leader) && (
             <button
               type="button"
@@ -2526,9 +2547,20 @@ function DimensionFormat(props: {
             // A reference dimension is stated for information and takes no
             // tolerance (v68): marking one drops it.
             const marked = flag('reference', event.target.checked);
-            if (event.target.checked && 'tolerance' in marked) {
-              const { tolerance: _dropped, ...rest } = marked;
-              props.onUpdate(rest, 'Format dimension');
+            if (
+              event.target.checked &&
+              ('tolerance' in marked || 'fit' in marked)
+            ) {
+              // v105: nor a fit, which is a tolerance.
+              const {
+                tolerance: _dropped,
+                fit: _fit,
+                ...rest
+              } = marked as unknown as Record<string, unknown>;
+              props.onUpdate(
+                rest as unknown as DrawingAnnotation,
+                'Format dimension'
+              );
             } else props.onUpdate(marked, 'Format dimension');
           }}
         />
@@ -2556,12 +2588,318 @@ function DimensionFormat(props: {
           props.onUpdate(affixed(selected, 'suffix', text), 'Format dimension')
         }
       />
+      {selected.kind === 'diameter' &&
+        'edge' in selected &&
+        !selected.counterbore &&
+        !selected.countersink && (
+          <FitFields
+            selected={selected}
+            editable={editable}
+            onUpdate={props.onUpdate}
+          />
+        )}
       <ToleranceFields
         selected={selected}
         editable={editable}
         onUpdate={props.onUpdate}
       />
     </>
+  );
+}
+
+/**
+ * D07 (v105): a diameter's ISO 286 fit class, which is its tolerance, and a
+ * tapped hole's thread class on its callout. A fit replaces any tolerance
+ * and the callout, so choosing one drops them.
+ */
+function FitFields(props: {
+  selected: DrawingRadialDimension;
+  editable: boolean;
+  onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
+}) {
+  const { selected, editable } = props;
+  return (
+    <>
+      <label className="drawing-field">
+        <span>Fit (ISO 286)</span>
+        <select
+          value={selected.fit ?? ''}
+          disabled={!editable || selected.reference === true}
+          onChange={(event) => {
+            const {
+              fit: _fit,
+              tolerance: _tolerance,
+              threadClass: _thread,
+              ...rest
+            } = selected;
+            const fit = event.target.value;
+            props.onUpdate(
+              fit
+                ? { ...rest, fit }
+                : {
+                    ...rest,
+                    ...(selected.threadClass
+                      ? { threadClass: selected.threadClass }
+                      : {})
+                  },
+              'Fit diameter'
+            );
+          }}
+        >
+          <option value="">None</option>
+          <optgroup label="Hole">
+            {FIT_LETTERS.hole.flatMap((letter) =>
+              FIT_GRADES.map((grade) => (
+                <option key={letter + grade} value={`${letter}${grade}`}>
+                  {letter}
+                  {grade}
+                </option>
+              ))
+            )}
+          </optgroup>
+          <optgroup label="Shaft">
+            {FIT_LETTERS.shaft.flatMap((letter) =>
+              FIT_GRADES.map((grade) => (
+                <option key={letter + grade} value={`${letter}${grade}`}>
+                  {letter}
+                  {grade}
+                </option>
+              ))
+            )}
+          </optgroup>
+        </select>
+      </label>
+      <label className="drawing-field">
+        <span>Thread class</span>
+        <select
+          value={selected.threadClass ?? ''}
+          disabled={!editable || selected.fit !== undefined}
+          onChange={(event) => {
+            const {
+              threadClass: _previous,
+              tolerance: _tolerance,
+              ...rest
+            } = selected;
+            const value = event.target.value as DrawingThreadClass | '';
+            props.onUpdate(
+              value ? { ...rest, threadClass: value } : rest,
+              'Class thread'
+            );
+          }}
+        >
+          <option value="">None</option>
+          <optgroup label="ISO 965 (metric)">
+            {DRAWING_THREAD_CLASSES.filter((c) => !c.endsWith('B')).map(
+              (threadClass) => (
+                <option key={threadClass} value={threadClass}>
+                  {threadClass}
+                </option>
+              )
+            )}
+          </optgroup>
+          <optgroup label="UN (inch)">
+            {DRAWING_THREAD_CLASSES.filter((c) => c.endsWith('B')).map(
+              (threadClass) => (
+                <option key={threadClass} value={threadClass}>
+                  {threadClass}
+                </option>
+              )
+            )}
+          </optgroup>
+        </select>
+      </label>
+    </>
+  );
+}
+
+/**
+ * D07 (v105): a general-tolerance block's scheme: an ISO 2768-1 class (and
+ * ISO 2768-2 class), or ± per number of decimals written and on angles.
+ */
+function GeneralToleranceFields(props: {
+  selected: Extract<DrawingAnnotation, { kind: 'general-tolerance' }>;
+  editable: boolean;
+  numberFormat: DrawingNumberFormat;
+  onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
+}) {
+  const { selected, editable } = props;
+  const base = {
+    annotationId: selected.annotationId,
+    kind: 'general-tolerance' as const,
+    placementMm: selected.placementMm
+  };
+  const update = (next: DrawingAnnotation) =>
+    props.onUpdate(next, 'Format general tolerances');
+  const inch = props.numberFormat.units === 'inch';
+  return (
+    <>
+      <label className="drawing-field">
+        <span>Scheme</span>
+        <select
+          value={selected.scheme}
+          disabled={!editable}
+          onChange={(event) =>
+            update(
+              event.target.value === 'decimal'
+                ? {
+                    ...base,
+                    scheme: 'decimal',
+                    // The usual stated block, in the sheet's units.
+                    places: inch
+                      ? [
+                          { decimals: 2, amount: 0.01 },
+                          { decimals: 3, amount: 0.005 }
+                        ]
+                      : [
+                          { decimals: 1, amount: 0.1 },
+                          { decimals: 2, amount: 0.05 }
+                        ],
+                    angle: 0.5
+                  }
+                : { ...base, scheme: 'iso-2768', linearClass: 'm' }
+            )
+          }
+        >
+          <option value="iso-2768">ISO 2768</option>
+          <option value="decimal">By decimal places</option>
+        </select>
+      </label>
+      {selected.scheme === 'iso-2768' ? (
+        <>
+          <label className="drawing-field">
+            <span>Linear and angular class</span>
+            <select
+              value={selected.linearClass}
+              disabled={!editable}
+              onChange={(event) =>
+                update({
+                  ...selected,
+                  linearClass: event.target.value as DrawingIsoLinearClass
+                })
+              }
+            >
+              <option value="f">f (fine)</option>
+              <option value="m">m (medium)</option>
+              <option value="c">c (coarse)</option>
+              <option value="v">v (very coarse)</option>
+            </select>
+          </label>
+          <label className="drawing-field">
+            <span>Geometric class (ISO 2768-2)</span>
+            <select
+              value={selected.geometricClass ?? ''}
+              disabled={!editable}
+              onChange={(event) => {
+                const { geometricClass: _previous, ...rest } = selected;
+                const value = event.target.value as
+                  DrawingIsoGeometricClass | '';
+                update(value ? { ...rest, geometricClass: value } : rest);
+              }}
+            >
+              <option value="">None</option>
+              {DRAWING_ISO_GEOMETRIC_CLASSES.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+        </>
+      ) : (
+        <>
+          {[1, 2, 3, 4].map((decimals) => {
+            const place = selected.places.find(
+              (entry) => entry.decimals === decimals
+            );
+            const others = selected.places.filter(
+              (entry) => entry.decimals !== decimals
+            );
+            return (
+              <OptionalAmountField
+                key={decimals}
+                label={`X.${'X'.repeat(decimals)} ±`}
+                value={place?.amount}
+                // The last stated place cannot be cleared.
+                required={others.length === 0}
+                disabled={!editable}
+                onCommit={(amount) =>
+                  update({
+                    ...selected,
+                    places: [
+                      ...others,
+                      ...(amount === undefined ? [] : [{ decimals, amount }])
+                    ].sort((a, b) => a.decimals - b.decimals)
+                  })
+                }
+              />
+            );
+          })}
+          <OptionalAmountField
+            label="Angles ± (°)"
+            value={selected.angle}
+            required={false}
+            max={89}
+            disabled={!editable}
+            onCommit={(angle) => {
+              const { angle: _previous, ...rest } = selected;
+              update(angle === undefined ? rest : { ...rest, angle });
+            }}
+          />
+        </>
+      )}
+    </>
+  );
+}
+
+/** D07 (v105): a positive amount, or blank for none unless `required`. */
+function OptionalAmountField(props: {
+  label: string;
+  value: number | undefined;
+  required: boolean;
+  max?: number;
+  disabled: boolean;
+  onCommit: (value: number | undefined) => void;
+}) {
+  const shown = props.value === undefined ? '' : String(props.value);
+  const [draft, setDraft] = useState(shown);
+  useEffect(() => setDraft(shown), [shown]);
+  const commit = () => {
+    const text = draft.trim();
+    if (text === '') {
+      if (!props.required && props.value !== undefined)
+        props.onCommit(undefined);
+      setDraft(shown);
+      return;
+    }
+    const value = Number(text);
+    if (
+      Number.isFinite(value) &&
+      value > 0 &&
+      value <= (props.max ?? MAX_DRAWING_TOLERANCE) &&
+      Number(value.toFixed(MAX_DRAWING_DIMENSION_DECIMALS)) === value &&
+      value !== props.value
+    )
+      props.onCommit(value);
+    setDraft(shown);
+  };
+  return (
+    <label className="drawing-field">
+      <span>{props.label}</span>
+      <input
+        type="number"
+        step="any"
+        min={0}
+        value={draft}
+        placeholder="None"
+        disabled={props.disabled}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') commit();
+          if (event.key === 'Escape') setDraft(shown);
+        }}
+      />
+    </label>
   );
 }
 
@@ -2611,6 +2949,12 @@ function ToleranceFields(props: {
   if (selected.reference)
     return (
       <p className="drawing-hint">A reference dimension takes no tolerance.</p>
+    );
+  if ('fit' in selected && selected.fit)
+    return (
+      <p className="drawing-hint">
+        The fit states this diameter&apos;s tolerance.
+      </p>
     );
   return (
     <>
@@ -2792,7 +3136,7 @@ function DrawingToolRail(props: {
     ['angle', 'arc-angle', 'three-point-angle'],
     ['center-mark', 'intersection-mark', 'centerline', 'circle-centerline'],
     ['note', 'balloon', 'parts-list', 'image'],
-    ['datum-feature', 'feature-control-frame']
+    ['datum-feature', 'feature-control-frame', 'general-tolerance']
   ];
   return (
     <div
@@ -2822,6 +3166,8 @@ function DrawingToolRail(props: {
               kind === 'balloon' ||
               kind === 'parts-list' ||
               kind === 'image' ||
+              kind === 'general-tolerance' ||
+              isToleranceTool(kind) ||
               isGeometryTool(kind)
                 ? ANNOTATION_TOOL_LABELS[kind]
                 : `${ANNOTATION_TOOL_LABELS[kind]} dimension`;
@@ -3892,7 +4238,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         ? sheetReady && editable && hasParts
         : kind === 'balloon'
           ? canAnnotate && hasParts
-          : kind === 'note'
+          : kind === 'note' || kind === 'general-tolerance'
             ? sheetReady && editable
             : canAnnotate;
   const toolDisabledReason = (kind: AnnotationToolKind) =>
@@ -5000,7 +5346,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       if (
         finished.kind === 'note' ||
         finished.kind === 'image' ||
-        finished.kind === 'feature-control-frame'
+        finished.kind === 'feature-control-frame' ||
+        finished.kind === 'general-tolerance'
       )
         setPropertiesOpen(true);
       props.onStatus(
@@ -5008,15 +5355,17 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           ? 'Note added. Edit its text in Properties.'
           : finished.kind === 'image'
             ? 'Image added. Choose its picture and width in Properties.'
-            : finished.kind === 'feature-control-frame'
-              ? 'Feature control frame added. Choose its characteristic, tolerance and datums in Properties.'
-              : finished.kind === 'datum-feature'
-                ? `Datum ${annotation.kind === 'datum-feature' ? annotation.letter : ''} added.`
-                : isGeometryTool(finished.kind) ||
-                    finished.kind === 'balloon' ||
-                    finished.kind === 'parts-list'
-                  ? `${ANNOTATION_TOOL_LABELS[finished.kind]} added.`
-                  : `${ANNOTATION_TOOL_LABELS[finished.kind]} dimension added.`,
+            : finished.kind === 'general-tolerance'
+              ? 'General tolerances added (ISO 2768-m). Choose the class or a stated block in Properties.'
+              : finished.kind === 'feature-control-frame'
+                ? 'Feature control frame added. Choose its characteristic, tolerance and datums in Properties.'
+                : finished.kind === 'datum-feature'
+                  ? `Datum ${annotation.kind === 'datum-feature' ? annotation.letter : ''} added.`
+                  : isGeometryTool(finished.kind) ||
+                      finished.kind === 'balloon' ||
+                      finished.kind === 'parts-list'
+                    ? `${ANNOTATION_TOOL_LABELS[finished.kind]} added.`
+                    : `${ANNOTATION_TOOL_LABELS[finished.kind]} dimension added.`,
         { immediate: true }
       );
       // A note is placed and then typed; dimensions keep their tool for the
@@ -5025,7 +5374,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         finished.kind === 'note' ||
           finished.kind === 'parts-list' ||
           finished.kind === 'image' ||
-          finished.kind === 'feature-control-frame'
+          finished.kind === 'feature-control-frame' ||
+          finished.kind === 'general-tolerance'
           ? null
           : startAnnotationTool(finished.kind)
       );
