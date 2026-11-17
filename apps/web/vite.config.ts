@@ -10,6 +10,7 @@ import {
   PDFJS_ASSET_DIRS
 } from './src/lib/assistant/pdfjsAssets';
 import { resolveSourceCommit } from './build/sourceCommit';
+import { checkAppVersion } from '../../scripts/app-version.mjs';
 import { localRemusPackages } from './build/localRemus';
 import {
   remusArtifactGate,
@@ -130,6 +131,7 @@ function sourceCommit(): string {
 }
 
 function buildMetadata(
+  version: string,
   commit: string,
   remus: {
     version: string;
@@ -151,6 +153,7 @@ function buildMetadata(
           {
             format: 'openzcad-build-metadata',
             formatVersion: 2,
+            version,
             commit,
             remus,
             assets
@@ -286,6 +289,8 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     ...(remusArtifacts && !localRemus ? { artifacts: remusArtifacts } : {})
   };
   const commit = sourceCommit();
+  // Fails the build when a manifest disagrees with package.json.
+  const appVersion = checkAppVersion(repoRoot);
   const isDesktop = mode === 'desktop';
   const plugins = [];
   const react = (await import('@vitejs/plugin-react')).default;
@@ -295,7 +300,7 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     remusTranslatorRetry(),
     pdfjsAssets(),
     textFontAssets(),
-    buildMetadata(commit, remus),
+    buildMetadata(appVersion, commit, remus),
     lazyChunkPrefetch(),
     // Last: ties the stamp to the written output (emitted module paths and a
     // digest of every file) for scripts/check-release-build.mjs.
@@ -333,6 +338,7 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
       'import.meta.env.VITE_E2E': JSON.stringify(process.env.VITE_E2E ?? ''),
       'import.meta.env.OZ_DESKTOP': JSON.stringify(isDesktop),
       'import.meta.env.OZ_PERF': JSON.stringify(process.env.OZ_PERF ?? ''),
+      'import.meta.env.OZ_APP_VERSION': JSON.stringify(appVersion),
       'import.meta.env.OZ_BUILD_COMMIT': JSON.stringify(commit),
       'import.meta.env.OZ_REMUS_VERSION': JSON.stringify(remus.version),
       'import.meta.env.OZ_REMUS_COMMIT': JSON.stringify(remus.commit)

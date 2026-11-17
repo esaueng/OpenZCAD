@@ -7,6 +7,7 @@ import {
 } from 'node:fs';
 import { extname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isAppVersion } from './app-version.mjs';
 import {
   evaluateKernelWasm,
   KERNEL_WASM_ASSET_PATTERN,
@@ -216,6 +217,7 @@ const metadata = JSON.parse(
 if (
   metadata.format !== 'openzcad-build-metadata' ||
   metadata.formatVersion !== 2 ||
+  !isAppVersion(metadata.version) ||
   !/^[0-9a-f]{40}$/i.test(metadata.commit) ||
   !/^[0-9a-f]{40}$/i.test(metadata.remus?.commit)
 ) {

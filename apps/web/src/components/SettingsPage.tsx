@@ -74,6 +74,7 @@ import { BrandMark } from './BrandMark';
 import { ExternalAnchor } from './ExternalAnchor';
 import { AssistantConnectionSettings } from './AssistantConnectionSettings';
 import { api } from '../lib/api';
+import { APP_BUILD, appBuildDetail, appBuildLabel } from '../lib/appBuild';
 import { APP_SETTINGS_NUMBER_BOUNDS } from '../lib/appSettings';
 import { isDesktopApp } from '../lib/desktopBridge';
 import { privacyPolicyHref } from '../lib/privacyPolicy';
@@ -3074,6 +3075,11 @@ export function SettingsPage({
                 </SettingRow>
               </Group>
               <Group title="About this build">
+                <SettingRow compact title="App version">
+                  <Status title={appBuildDetail(APP_BUILD)}>
+                    {appBuildLabel(APP_BUILD)}
+                  </Status>
+                </SettingRow>
                 <SettingRow compact title="Geometry kernel">
                   <Status tone="good">Exact</Status>
                 </SettingRow>

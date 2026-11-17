@@ -2,7 +2,7 @@
   "name": "openzcad",
   "private": true,
   "license": "Apache-2.0",
-  "version": "0.1.0",
+  "version": "2026.1.0",
   "packageManager": "pnpm@10.8.0",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
@@ -39,6 +39,7 @@
     "deploy:beta": "pnpm --filter @openzcad/web deploy:beta",
     "deploy:stable": "pnpm --filter @openzcad/web deploy:stable",
     "promote:stable": "node scripts/promote-stable.mjs",
+    "version:app": "node scripts/app-version.mjs",
     "audit:dependencies": "pnpm audit --audit-level=high"
   },
   "pnpm": {

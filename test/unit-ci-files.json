@@ -60,6 +60,7 @@
     "test/adapter-refusal.test.ts",
     "test/api-routes.test.ts",
     "test/app-settings.test.ts",
+    "test/app-version.test.ts",
     "test/approximate-blend-disclosure.test.ts",
     "test/assembly-bom.test.ts",
     "test/assembly-coupling.test.ts",

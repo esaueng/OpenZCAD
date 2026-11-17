@@ -354,6 +354,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Frame rate overlay',
       'Export diagnostics',
       'Export interaction log',
+      'App version',
       'Geometry kernel',
       'Kernel version',
       'Document authority',
@@ -379,6 +380,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'troubleshooting',
       'support',
       'problem report',
+      'version',
+      'release',
+      'build',
       'reset settings',
       'restore defaults'
     ]
