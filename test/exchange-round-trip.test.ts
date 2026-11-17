@@ -32,6 +32,7 @@ import {
   reimportSolids,
   roundTripSketchDxf,
   sketchCoordinates,
+  isStepFormat,
   type SolidExchangeFormat,
   type SolidMeasure
 } from './support/exchange-harness';
@@ -52,7 +53,16 @@ const BOUNDS = { min: [0, -5, 0], max: [45, 10, 10] };
 const CURVED_AREA = 2 * Math.PI * 5 * 10;
 
 const SOLID_FORMATS: [SolidExchangeFormat, SolidFormatContract][] = (
-  ['step', 'stl-binary', 'stl', '3mf', 'obj', 'ply', 'glb'] as const
+  [
+    'step',
+    'step-ap242',
+    'stl-binary',
+    'stl',
+    '3mf',
+    'obj',
+    'ply',
+    'glb'
+  ] as const
 ).map((format) => [format, EXCHANGE_LOSS_CONTRACT[format]]);
 
 let adapter: ExactKernelAdapter;
@@ -172,6 +182,7 @@ describe(
           'obj',
           'ply',
           'step',
+          'step-ap242',
           'stl',
           'stl-binary',
           'svg'
@@ -214,7 +225,7 @@ describe(
             reading: units,
             bodyNames
           });
-          const context = { format, units, exact: format === 'step' };
+          const context = { format, units, exact: isStepFormat(format) };
           for (const property of contract.keeps) {
             checkSolidProperty(property, true, measure, context);
           }
@@ -224,6 +235,36 @@ describe(
         });
       }
     }
+
+    it('states the chosen STEP protocol in the header and application context', async () => {
+      const { document, bodyIds } = await referenceModel();
+      const text = (format: 'step' | 'step-ap242') =>
+        exportSolids(adapter, document, bodyIds, format).then((bytes) =>
+          new TextDecoder().decode(bytes)
+        );
+      const ap214 = await text('step');
+      const ap242 = await text('step-ap242');
+      expect(ap214).toContain("FILE_SCHEMA(('AUTOMOTIVE_DESIGN");
+      expect(ap242).toContain(
+        "FILE_SCHEMA(('AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF { 1 0 10303 442 1 1 4 }'));"
+      );
+      expect(ap242).toContain(
+        "'ap242_managed_model_based_3d_engineering', 2014"
+      );
+      expect(ap242).not.toMatch(/automotive/i);
+      // The same entities after the header: protocol is a statement, not
+      // a different model.
+      const entities = (step: string) =>
+        step
+          .slice(step.indexOf('DATA;'))
+          .split('\n')
+          .filter(
+            (row) => !/APPLICATION_(CONTEXT|PROTOCOL_DEFINITION)/.test(row)
+          )
+          .map((row) => row.replace(/^#\d+ = /, ''))
+          .sort();
+      expect(entities(ap242)).toEqual(entities(ap214));
+    });
 
     it('keeps every body a separate object inside a 3MF package, though the import merges them', async () => {
       const { document, bodyIds } = await referenceModel();

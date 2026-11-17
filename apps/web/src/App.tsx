@@ -19733,7 +19733,8 @@ export function App() {
           units: resolveExportUnits(
             appSettingsRef.current.files.exportUnits,
             doc.units
-          )
+          ),
+          stepProtocol: appSettingsRef.current.files.stepProtocol
         });
         if (!('text' in result)) {
           throw new Error('The STEP export returned no text.');

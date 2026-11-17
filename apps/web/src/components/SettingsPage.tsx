@@ -1351,6 +1351,29 @@ export function SettingsPage({
                   </select>
                 </SettingRow>
                 <SettingRow
+                  title="STEP protocol"
+                  hint="File › STEP. Both keep exact geometry, body names and colors."
+                >
+                  <select
+                    value={settings.files.stepProtocol}
+                    aria-label="STEP protocol"
+                    onChange={(event) =>
+                      patch({
+                        files: {
+                          ...settings.files,
+                          stepProtocol: event.target
+                            .value as AppSettings['files']['stepProtocol']
+                        }
+                      })
+                    }
+                  >
+                    <option value="ap214">AP214 (automotive design)</option>
+                    <option value="ap242">
+                      AP242 (model-based 3D engineering)
+                    </option>
+                  </select>
+                </SettingRow>
+                <SettingRow
                   title="Reopen the last project"
                   hint="Pick up where you left off on launch."
                 >

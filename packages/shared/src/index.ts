@@ -5302,6 +5302,12 @@ export interface AppSettings {
      * definition and SVG states its physical size, so neither follows it.
      */
     exportUnits: ExportUnits;
+    /**
+     * The STEP application protocol File › STEP writes. Both carry the same
+     * exact geometry, body names and colours; AP242 is the newer protocol
+     * some receivers ask for.
+     */
+    stepProtocol: StepProtocol;
   };
   collaboration: {
     /** Allow project invitations and live collaboration connections. */
@@ -5441,7 +5447,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     cloudAutosaveDelaySeconds: CLOUD_AUTOSAVE_DELAY_BOUNDS.default,
     unitlessImportUnits: 'ask',
     // Millimetres, what every export wrote before the unit became a choice.
-    exportUnits: 'mm'
+    exportUnits: 'mm',
+    // AP214, what every STEP export wrote before the protocol became a choice.
+    stepProtocol: 'ap214'
   },
   collaboration: {
     enabled: true
@@ -6198,6 +6206,15 @@ export const EXPORT_UNITS: readonly ExportUnits[] = [
   'm',
   'inch'
 ];
+
+/**
+ * A STEP application protocol the exporter writes: AP214 (automotive design,
+ * ISO 10303-214) or AP242 edition 1 (managed model-based 3D engineering,
+ * ISO 10303-242). Both carry exact B-rep geometry, names and colours.
+ */
+export type StepProtocol = 'ap214' | 'ap242';
+
+export const STEP_PROTOCOLS: readonly StepProtocol[] = ['ap214', 'ap242'];
 
 /** The concrete unit an export preference names for one document. */
 export function resolveExportUnits(

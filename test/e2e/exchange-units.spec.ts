@@ -232,3 +232,32 @@ test('mesh export writes the chosen unit and facet angle, as its check measured'
   );
   expect(step.bytes.toString('utf8')).toContain("CONVERSION_BASED_UNIT('INCH'");
 });
+
+test('File › STEP states the protocol chosen in Settings', async ({ page }) => {
+  test.setTimeout(120_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const protocol = page.getByRole('combobox', { name: 'STEP protocol' });
+  await expect(protocol).toHaveValue('ap214');
+  await protocol.selectOption('ap242');
+  await page
+    .getByRole('button', { name: /^Close settings and go back/ })
+    .click();
+  await createProject(page, 'Protocol part');
+  await createPrimitiveInPlace(page, 'box');
+  await expectBodyCount(page, 1);
+
+  const fileMenu = page.locator('details.file-menu');
+  await fileMenu.locator('summary').click();
+  const step = await download(page, () =>
+    fileMenu.getByRole('button', { name: /Export STEP/ }).click()
+  );
+  const text = step.bytes.toString('utf8');
+  expect(text).toContain(
+    "FILE_SCHEMA(('AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF { 1 0 10303 442 1 1 4 }'));"
+  );
+  expect(text).toContain("'ap242_managed_model_based_3d_engineering', 2014");
+  expect(text).not.toContain('AUTOMOTIVE_DESIGN');
+  expect(text).toContain('MANIFOLD_SOLID_BREP');
+});

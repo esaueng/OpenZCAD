@@ -14,7 +14,7 @@
  * writer fails an export loudly instead of shipping a half-converted file.
  */
 
-import type { BodyId } from '@openzcad/shared';
+import type { BodyId, StepProtocol } from '@openzcad/shared';
 
 import type { ExportUnitOptions } from './export-units';
 
@@ -24,6 +24,8 @@ export interface StepExportOptions extends ExportUnitOptions {
   fileName?: string;
   /** ISO 8601 time stamp for the header; the time of export when unset. */
   timestamp?: string;
+  /** The application protocol the file states; AP214 when unset. */
+  protocol?: StepProtocol;
 }
 
 /** Why a body was left out of a whole-document STEP. */
@@ -61,7 +63,35 @@ export interface StepExportMetadata {
   timestamp: string;
   /** One label per solid, in writer order. */
   solids: readonly StepSolidLabel[];
+  /** The application protocol the file states; AP214 when unset. */
+  protocol?: StepProtocol;
 }
+
+/**
+ * What each protocol states in the header and its application context.
+ * The two share every entity the export writes — product structure,
+ * exact geometry, `STYLED_ITEM` presentation — so the protocol changes
+ * these three statements and nothing else. AP242 is stated as edition 1
+ * (ISO 10303-242:2014), the long-form schema receivers read as AP242.
+ */
+const STEP_PROTOCOL_STATEMENTS: Record<
+  StepProtocol,
+  { schema: string; context: string; protocol: string; year: number }
+> = {
+  ap214: {
+    schema: 'AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }',
+    context: 'core data for automotive mechanical design processes',
+    protocol: 'automotive_design',
+    year: 2000
+  },
+  ap242: {
+    schema:
+      'AP242_MANAGED_MODEL_BASED_3D_ENGINEERING_MIM_LF { 1 0 10303 442 1 1 4 }',
+    context: 'managed model based 3d engineering',
+    protocol: 'ap242_managed_model_based_3d_engineering',
+    year: 2014
+  }
+};
 
 /** The header fields the writer takes itself, as its options JSON. */
 export function stepWriterOptions(metadata: StepExportMetadata): string {
@@ -204,8 +234,8 @@ function colourChannels(color: string): string {
 }
 
 /**
- * Finishes the writer's STEP text: AP214 product structure, the OpenZCAD
- * header, solid names, surface colours and normalized reals. `step` is the
+ * Finishes the writer's STEP text: AP214 (or AP242) product structure, the
+ * OpenZCAD header, solid names, surface colours and normalized reals. `step` is the
  * writer's output for exactly `metadata.solids.length` solids, already
  * given `metadata`'s header fields through {@link stepWriterOptions}.
  */
@@ -220,6 +250,7 @@ export function finishStepExport(
       'The STEP writer produced no DATA section; export refused.'
     );
   }
+  const statements = STEP_PROTOCOL_STATEMENTS[metadata.protocol ?? 'ap214'];
   const header = step.slice(0, dataStart).split('\n');
   replaceOnly(
     header,
@@ -237,7 +268,7 @@ export function finishStepExport(
     header,
     /^FILE_SCHEMA\(\('CONFIG_CONTROL_DESIGN'\)\);$/,
     'schema',
-    () => "FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));"
+    () => `FILE_SCHEMA(('${statements.schema}'));`
   );
 
   const data = step
@@ -248,8 +279,7 @@ export function finishStepExport(
     data,
     /^(#\d+ = APPLICATION_CONTEXT\()'configuration controlled 3D design of mechanical parts and assemblies'\);$/,
     'application context',
-    (match) =>
-      `${match[1]}'core data for automotive mechanical design processes');`
+    (match) => `${match[1]}'${statements.context}');`
   );
   replaceOnly(
     data,
@@ -261,7 +291,8 @@ export function finishStepExport(
     data,
     /^(#\d+ = APPLICATION_PROTOCOL_DEFINITION\('international standard', )'config_control_design', 1994(, #\d+\);)$/,
     'application protocol',
-    (match) => `${match[1]}'automotive_design', 2000${match[2]}`
+    (match) =>
+      `${match[1]}'${statements.protocol}', ${statements.year}${match[2]}`
   );
   const product = replaceOnly(
     data,
