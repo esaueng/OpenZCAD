@@ -115,7 +115,7 @@ script "acme/rounded-tray" "1.0.0" api 1 {
 
 ### Running
 
-A custom feature (`custom-feature` step, schema v98) embeds its script and
+A custom feature (`custom-feature` step, schema v104) embeds its script and
 replaces its target body. It runs in the kernel worker with the rest of the
 build: the interpreter is pure data handling inside OpenZCAD; it executes no
 code from the script. The steps run under the instance's own id, so warnings
