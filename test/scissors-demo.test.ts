@@ -3,11 +3,16 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
-import { normalizeDocument } from '@openzcad/document-core';
 import {
+  assemblyInterferenceOperands,
+  normalizeDocument
+} from '@openzcad/document-core';
+import {
+  jointWorldFrames,
   solveAssembly,
   toUserId,
   transformPoint,
+  type ProjectDocument,
   type Vector3
 } from '@openzcad/shared';
 import {
@@ -147,4 +152,55 @@ describe('shared scissors sample', () => {
     }
     expect(gap(max)).toBeGreaterThan(gap(min) * 1.5);
   });
+
+  // #1631: the pivot's child frame sat on the upper blade's top bore edge
+  // (z 4.85) and the parent's on the lower blade's bottom edge (z 0), so
+  // the joint dropped the upper blade 4.85 mm through the pin's head.
+  it('keeps the blades and the captive pin apart through the whole swing', async () => {
+    const set = seed.document.assembly!;
+    const joint = set.joints[0]!;
+    const { min, max } = joint.limits[0]!;
+    const angles = [min, 12, 30, 42, max];
+    for (const angle of angles) {
+      const posed: ProjectDocument = {
+        ...seed.document,
+        assembly: {
+          ...set,
+          joints: [{ ...joint, values: [angle] }]
+        }
+      };
+      const solution = solveAssembly(posed.assembly!);
+      // Coaxial, and seated where it was modelled: the frames meet.
+      const frames = jointWorldFrames(solution, posed.assembly!.joints[0]!)!;
+      expect(frames.child.origin.x).toBeCloseTo(frames.parent.origin.x, 9);
+      expect(frames.child.origin.y).toBeCloseTo(frames.parent.origin.y, 9);
+      expect(frames.child.origin.z).toBeCloseTo(frames.parent.origin.z, 9);
+      const upper = solution.poses.get(joint.child.componentId)!;
+      expect(transformPoint(upper, { x: 0, y: 0, z: 2.45 }).z).toBeCloseTo(
+        2.45,
+        9
+      );
+
+      const { operands, missing } = assemblyInterferenceOperands(
+        posed,
+        () => true
+      );
+      expect(missing).toEqual([]);
+      const report = await adapter.assemblyInterference(posed, operands);
+      expect(report.missing).toEqual([]);
+      expect(report.pairs).toHaveLength(3);
+      for (const pair of report.pairs) {
+        // Proven clear, and not merely touching: the blades keep their
+        // 0.05 mm gap and the pin its head and cap clearances.
+        expect({
+          angle,
+          pair: [pair.a, pair.b],
+          verdict: pair.verdict.kind
+        }).toEqual({ angle, pair: [pair.a, pair.b], verdict: 'clear' });
+        if (pair.verdict.kind === 'clear') {
+          expect(pair.verdict.touching).not.toBe(true);
+        }
+      }
+    }
+  }, 240_000);
 });
