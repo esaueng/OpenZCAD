@@ -122,6 +122,7 @@ import {
   type SketchReferenceLabelPositionInput,
   archiveHistorySources,
   renameCheckpoint,
+  setShareLinkSheets,
   type ImportedSourceArchiveIdentity,
   applyDocumentChanges,
   assertNoNewHistoryFork,
@@ -6204,6 +6205,18 @@ export class CommandManager {
     });
     if (next !== this.document)
       this.document = appendRevision(next, 'Archive imported source');
+    return this.document;
+  }
+
+  /**
+   * L08: chooses the drawing sheets share links show; a forward write with
+   * no undo entry. See `setShareLinkSheets`.
+   */
+  setShareLinkSheets(sheetIds: readonly string[]): ProjectDocument {
+    const next = setShareLinkSheets(this.document, sheetIds);
+    if (next === this.document) return this.document;
+    assertDocumentTextBudget(next);
+    this.document = next;
     return this.document;
   }
 

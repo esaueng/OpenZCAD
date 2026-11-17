@@ -30,6 +30,7 @@ import {
   StickyNote,
   MessageCircle,
   TableProperties,
+  ImageIcon,
   Sun,
   Trash2,
   TriangleRight,
@@ -60,7 +61,10 @@ import {
   MAX_DRAWING_DIMENSION_COUNT,
   drawingToleranceError,
   MAX_DRAWING_DIMENSION_DECIMALS,
+  MAX_DRAWING_IMAGE_WIDTH_MM,
+  MAX_DRAWING_SECTION_STEPS,
   MAX_DRAWING_NOTE_LENGTH,
+  MIN_DRAWING_IMAGE_WIDTH_MM,
   type DrawingAnnotation,
   type DrawingTolerance,
   type DrawingDetail,
@@ -83,6 +87,7 @@ import {
   drawingPaperMm,
   drawingPaperPerModelUnit,
   drawingSectionOrientations,
+  drawingSectionCut,
   drawingSectionPlane,
   drawingViewAlignment,
   formatDrawingScale,
@@ -94,11 +99,11 @@ import {
   type DrawingSheet,
   type DrawingSheetId,
   type DrawingTitleBlock,
+  type DrawingSectionStep,
   type DrawingView,
   type DrawingViewId,
   type DrawingViewOrientation,
   type ProjectDocument,
-  type Vector3,
   hasDraftDisplay
 } from '@openzcad/shared';
 import {
@@ -165,11 +170,18 @@ import {
 } from '../lib/drawing/sheetZoom';
 import {
   drawingExportFileName,
+  SheetPictureUnavailableError,
   sheetPageToPdf,
   sheetPageToDxf,
   sheetPageToSvg,
   sheetTextStart
 } from '../lib/drawing/sheetExport';
+import {
+  loadPagePictures,
+  pagePictures,
+  pictureDataUrl,
+  pictureJpegBytes
+} from '../lib/drawing/sheetPictures';
 import {
   annotationAnchor,
   composeSheetAnnotations,
@@ -180,11 +192,13 @@ import {
   type DrawingNumberFormat,
   markHiddenLeaders,
   sheetBom,
+  sheetPictures,
   balloonComponent,
   previewAnnotationLayer,
   resolveSheetAnnotations,
   holeCalloutLookup,
   type HoleCalloutLookup,
+  type SheetPictureLookup,
   sectionBodyKey,
   type AnnotationBox,
   type AnnotationResolution
@@ -280,6 +294,11 @@ import { drawingBodyReplacements } from '../lib/drawing/bodySuccessors';
  */
 export interface DrawingWorkspaceProps {
   document: ProjectDocument;
+  /**
+   * D02 (v92): a reference image's bytes by checksum, from the project's
+   * content-addressed store, for sheet images. Absent: none can be shown.
+   */
+  loadReferenceImage?: (checksumSha256: string) => Promise<Blob | null>;
   /** The last completed projection of the model; it may lag `document`. */
   bodies: Readonly<Record<string, BodyRepresentation | undefined>>;
   /**
@@ -322,7 +341,8 @@ export interface DrawingWorkspaceProps {
   requestSection?: (
     document: ProjectDocument,
     bodyIds: BodyId[],
-    plane: { normal: Vector3; depth: number },
+    /** v93: with a stepped section's steps. */
+    plane: ReturnType<typeof drawingSectionCut>,
     signal: AbortSignal
   ) => Promise<Record<string, SectionBodyInput>>;
   /** Why drawing edits are refused, or null. */
@@ -420,6 +440,11 @@ function viewIntentKey(view: DrawingView): string {
           ? `|frame:${[view.section.frame.direction, view.section.frame.x]
               .map((v) => `${v.x},${v.y},${v.z}`)
               .join('|')}`
+          : ''
+      }${
+        // v93: a stepped section's steps.
+        view.section.steps?.length
+          ? `|steps:${view.section.steps.map((step) => `${step.at}@${step.depth}`).join(',')}`
           : ''
       }`
     : '';
@@ -621,7 +646,7 @@ function useViewProjections(
     const cuts = new Map<
       string,
       {
-        plane: { normal: Vector3; depth: number };
+        plane: ReturnType<typeof drawingSectionCut>;
         row: string | null;
         bodyIds: Set<BodyId>;
         views: DrawingView[];
@@ -636,7 +661,13 @@ function useViewProjections(
       const row = projectionViewRow(view);
       if (planeKey && view.section) {
         const cut = cuts.get(planeKey) ?? {
-          plane: drawingSectionPlane({ ...view, section: view.section }),
+          // v93: a stepped section's steps go with its plane.
+          plane: drawingSectionCut(
+            { ...view, section: view.section },
+            sheet.views.find(
+              (entry) => entry.viewId === view.section!.sourceViewId
+            )?.orientation
+          ),
           row,
           bodyIds: new Set<BodyId>(),
           views: []
@@ -1084,7 +1115,8 @@ const ANNOTATION_TOOLS: readonly AnnotationToolKind[] = [
   'centerline',
   'circle-centerline',
   'balloon',
-  'parts-list'
+  'parts-list',
+  'image'
 ];
 
 const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
@@ -1105,7 +1137,8 @@ const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
     centerline: SeparatorVertical,
     'circle-centerline': CircleDashed,
     balloon: MessageCircle,
-    'parts-list': TableProperties
+    'parts-list': TableProperties,
+    image: ImageIcon
   };
 
 /** One key per tool, live while Draw is open and focus is not in a field. */
@@ -1126,7 +1159,8 @@ const ANNOTATION_TOOL_KEYS: Readonly<Record<AnnotationToolKind, string>> = {
   centerline: 'L',
   'circle-centerline': 'B',
   balloon: 'O',
-  'parts-list': 'P'
+  'parts-list': 'P',
+  image: 'I'
 };
 
 /** D03: the section view tool's key, beside the annotation tools'. */
@@ -1135,6 +1169,9 @@ const SECTION_TOOL_KEY = 'S';
 const DETAIL_TOOL_KEY = 'K';
 /** D03 (v81): the auxiliary view tool's key. */
 const AUXILIARY_TOOL_KEY = 'U';
+
+/** D02 (v92): how long before an unavailable sheet picture is asked again. */
+const PICTURE_RETRY_MS = 15_000;
 
 const DARK_PAPER_STORAGE_KEY = 'openzcad.drawing.darkPaper';
 
@@ -1188,7 +1225,8 @@ const ANNOTATION_KIND_LABELS: Readonly<
   'intersection-mark': 'Intersection mark',
   centerline: 'Centreline',
   'bom-table': 'Parts list',
-  balloon: 'Balloon'
+  balloon: 'Balloon',
+  image: 'Image'
 };
 
 function annotationTitle(annotation: DrawingAnnotation): string {
@@ -1366,6 +1404,108 @@ function AnnotationList(props: {
           values from the model and follow the sheet&apos;s Update.
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * D03 (v93): where along its line a stepped section's steps may go: the
+ * source's extent along the line (its u for a horizontal line, v for a
+ * vertical one), in model units.
+ */
+function sectionStepRange(
+  source: DrawingView,
+  section: DrawingView,
+  drawn: ViewState | undefined
+): [number, number] | null {
+  if (drawn?.state !== 'ready' || !drawn.projection.bounds) return null;
+  const alignment = drawingViewAlignment(
+    source.orientation,
+    section.orientation
+  );
+  if (alignment === null) return null;
+  const bounds = drawn.projection.bounds;
+  return alignment === 'column'
+    ? [bounds.minU, bounds.maxU]
+    : [bounds.minV, bounds.maxV];
+}
+
+/** D03 (v93): a section's steps: where each starts and its own cut. */
+function SectionStepFields(props: {
+  steps: readonly DrawingSectionStep[];
+  firstDepth: number;
+  /** World coordinate per stored depth, as the Cut at field shows it. */
+  sign: number;
+  axisLabel: string;
+  units: string;
+  /** The source's extent along the line; null while it is not drawn. */
+  bounds: [number, number] | null;
+  editable: boolean;
+  onCommit: (steps: DrawingSectionStep[]) => void;
+}) {
+  const { steps, sign } = props;
+  const commit = (next: DrawingSectionStep[]) =>
+    props.onCommit([...next].sort((a, b) => a.at - b.at));
+  const add = () => {
+    if (!props.bounds) return;
+    const [low, high] = props.bounds;
+    const last = steps.at(-1);
+    const from = last ? last.at : low;
+    const at = Math.round(((from + high) / 2) * 10) / 10;
+    commit([...steps, { at, depth: last ? last.depth : props.firstDepth }]);
+  };
+  return (
+    <div className="drawing-section-steps">
+      {steps.map((step, index) => (
+        <div key={index} className="drawing-field-row">
+          <NumberField
+            label={`Step ${index + 1} at (${props.units})`}
+            value={step.at}
+            disabled={!props.editable}
+            onCommit={(at) =>
+              commit(
+                steps.map((entry, i) =>
+                  i === index ? { ...entry, at } : entry
+                )
+              )
+            }
+          />
+          <NumberField
+            label={`Step ${index + 1} cut at ${props.axisLabel} (${props.units})`}
+            value={step.depth * sign}
+            disabled={!props.editable}
+            onCommit={(value) =>
+              commit(
+                steps.map((entry, i) =>
+                  i === index ? { ...entry, depth: value * sign } : entry
+                )
+              )
+            }
+          />
+          <button
+            type="button"
+            className="secondary"
+            disabled={!props.editable}
+            aria-label={`Remove step ${index + 1}`}
+            onClick={() => commit(steps.filter((_, i) => i !== index))}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="secondary"
+        disabled={
+          !props.editable ||
+          !props.bounds ||
+          steps.length >= MAX_DRAWING_SECTION_STEPS
+        }
+        onClick={add}
+        title="Step the cutting line to another depth along its run"
+      >
+        Add step
+      </button>
     </div>
   );
 }
@@ -1683,6 +1823,8 @@ function AnnotationProperties(props: {
   /** The sheet's number format: its printed units and default precision. */
   numberFormat: DrawingNumberFormat;
   resolutions: ReadonlyMap<DrawingAnnotationId, AnnotationResolution>;
+  /** D02 (v92): the project's pictures a sheet image may show. */
+  pictures: SheetPictureLookup;
   onTool: (tool: AnnotationTool | null) => void;
   onDeselect: () => void;
   onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
@@ -1702,7 +1844,10 @@ function AnnotationProperties(props: {
         </p>
       ) : resolution && !resolution.ok ? (
         <p className="drawing-annotation-status" role="alert">
-          Broken: {resolution.message} Re-pick what it measures, or delete it.
+          Broken: {resolution.message}{' '}
+          {selected.kind === 'image'
+            ? 'Choose another picture, or delete it.'
+            : 'Re-pick what it measures, or delete it.'}
         </p>
       ) : resolution?.ok && isDrawingDimension(selected) ? (
         <p className="drawing-annotation-value">
@@ -1726,6 +1871,57 @@ function AnnotationProperties(props: {
           editable={editable}
           onUpdate={props.onUpdate}
         />
+      ) : selected.kind === 'image' ? (
+        <>
+          <label className="drawing-field">
+            <span>Picture</span>
+            <select
+              value={
+                props.pictures.has(selected.referenceImageId)
+                  ? selected.referenceImageId
+                  : ''
+              }
+              disabled={!editable}
+              onChange={(event) =>
+                event.target.value &&
+                props.onUpdate(
+                  { ...selected, referenceImageId: event.target.value },
+                  'Change sheet image'
+                )
+              }
+            >
+              {props.pictures.has(selected.referenceImageId) ? null : (
+                <option value="">Deleted picture</option>
+              )}
+              {[...props.pictures].map(([id, picture]) => (
+                <option key={id} value={id}>
+                  {picture.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <NumberField
+            label="Width (mm)"
+            value={selected.widthMm}
+            disabled={!editable}
+            onCommit={(value) =>
+              props.onUpdate(
+                {
+                  ...selected,
+                  widthMm: Math.min(
+                    MAX_DRAWING_IMAGE_WIDTH_MM,
+                    Math.max(MIN_DRAWING_IMAGE_WIDTH_MM, value)
+                  )
+                },
+                'Resize sheet image'
+              )
+            }
+          />
+          <p className="drawing-hint">
+            One of the project&apos;s pictures (Insert image in Build), printed
+            at this width; its height keeps the picture&apos;s shape.
+          </p>
+        </>
       ) : selected.kind === 'balloon' ? (
         <p className="drawing-hint">
           Names the item number its part has in the assembly&apos;s parts list;
@@ -1796,6 +1992,7 @@ function AnnotationProperties(props: {
       )}
       <div className="drawing-field-row">
         {selected.kind !== 'bom-table' &&
+          selected.kind !== 'image' &&
           (selected.kind !== 'note' || selected.leader) && (
             <button
               type="button"
@@ -2199,7 +2396,7 @@ function DrawingToolRail(props: {
     ['radius', 'diameter', 'chamfer'],
     ['angle', 'arc-angle', 'three-point-angle'],
     ['center-mark', 'intersection-mark', 'centerline', 'circle-centerline'],
-    ['note', 'balloon', 'parts-list']
+    ['note', 'balloon', 'parts-list', 'image']
   ];
   return (
     <div
@@ -2228,6 +2425,7 @@ function DrawingToolRail(props: {
               kind === 'note' ||
               kind === 'balloon' ||
               kind === 'parts-list' ||
+              kind === 'image' ||
               isGeometryTool(kind)
                 ? ANNOTATION_TOOL_LABELS[kind]
                 : `${ANNOTATION_TOOL_LABELS[kind]} dimension`;
@@ -2313,6 +2511,16 @@ const TITLE_FIELDS: { key: keyof DrawingTitleBlock; label: string }[] = [
   { key: 'revision', label: 'Revision' },
   { key: 'author', label: 'Drawn by' },
   { key: 'date', label: 'Date' }
+];
+
+/** D02 (v94): the fields only the shop title block prints. */
+const SHOP_TITLE_FIELDS: { key: keyof DrawingTitleBlock; label: string }[] = [
+  { key: 'material', label: 'Material' },
+  { key: 'finish', label: 'Finish' },
+  { key: 'checkedBy', label: 'Checked by' },
+  { key: 'approvedBy', label: 'Approved by' },
+  { key: 'company', label: 'Company' },
+  { key: 'tolerances', label: 'General tolerances' }
 ];
 
 const NO_SHEETS: readonly DrawingSheet[] = [];
@@ -2969,6 +3177,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // this document, so a drawing kept with it keeps reading it.
   // D02 v80: the assembly's BOM table, which parts lists and balloons read.
   const bomTable = useMemo(() => sheetBom(document), [document]);
+  // D02 v92: the project's pictures, which sheet images show.
+  const pictures = useMemo(() => sheetPictures(document), [document]);
   const liveHoleCallouts = useMemo(
     () => holeCalloutLookup(document),
     [document]
@@ -3141,14 +3351,23 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               drawBodies,
               document.units,
               holeCallouts,
-              bomTable
+              bomTable,
+              pictures
             ),
             drawnViews,
             document.units,
             drawBodies
           )
         : new Map<DrawingAnnotationId, AnnotationResolution>(),
-    [shownSheet, drawBodies, document.units, drawnViews, holeCallouts, bomTable]
+    [
+      shownSheet,
+      drawBodies,
+      document.units,
+      drawnViews,
+      holeCallouts,
+      bomTable,
+      pictures
+    ]
   );
   /** Drawn and usable: matches the model, or keeps its earlier drawing. */
   const sheetReady = status?.kind === 'ready' || keptDrawing !== null;
@@ -3257,24 +3476,29 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // so a ready sheet with no views still takes one.
   const canAnnotate = sheetReady && editable && (sheet?.views.length ?? 0) > 0;
   const hasParts = (bomTable?.rows.length ?? 0) > 0;
+  const hasPictures = pictures.size > 0;
   const canUseTool = (kind: AnnotationToolKind) =>
-    kind === 'parts-list'
-      ? sheetReady && editable && hasParts
-      : kind === 'balloon'
-        ? canAnnotate && hasParts
-        : kind === 'note'
-          ? sheetReady && editable
-          : canAnnotate;
+    kind === 'image'
+      ? sheetReady && editable && hasPictures
+      : kind === 'parts-list'
+        ? sheetReady && editable && hasParts
+        : kind === 'balloon'
+          ? canAnnotate && hasParts
+          : kind === 'note'
+            ? sheetReady && editable
+            : canAnnotate;
   const toolDisabledReason = (kind: AnnotationToolKind) =>
     !editable
       ? (editDisabledReason ?? 'Drawing edits are unavailable.')
       : !sheetReady
         ? 'Update the sheet to annotate it.'
-        : (kind === 'parts-list' || kind === 'balloon') && !hasParts
-          ? 'Add parts to the assembly (Assemble) to list or balloon them.'
-          : kind === 'note' || kind === 'parts-list'
-            ? 'Notes are unavailable.'
-            : 'Add a view to dimension it.';
+        : kind === 'image' && !hasPictures
+          ? 'Add a picture to the project (Insert image in Build) to place it on the sheet.'
+          : (kind === 'parts-list' || kind === 'balloon') && !hasParts
+            ? 'Add parts to the assembly (Assemble) to list or balloon them.'
+            : kind === 'note' || kind === 'parts-list'
+              ? 'Notes are unavailable.'
+              : 'Add a view to dimension it.';
   const chooseTool = (next: AnnotationTool | null) => {
     setTool(next && pinnedTool(next));
     setSectionTool(null);
@@ -3690,23 +3914,57 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     );
     const fileName = drawingExportFileName(document.name, sheet.name, format);
     try {
+      // D02 (v92): the pictures the page shows, read from the project's
+      // store for this export only. DXF leaves them out (R12 has no
+      // embedded image), and says so.
+      const pictureCount = pagePictures(page.images).size;
+      const pdfPictures =
+        format === 'pdf'
+          ? await loadPagePictures(
+              page.images,
+              props.loadReferenceImage,
+              pictureJpegBytes
+            )
+          : null;
+      const svgPictures =
+        format === 'svg'
+          ? await loadPagePictures(
+              page.images,
+              props.loadReferenceImage,
+              pictureDataUrl
+            )
+          : null;
+      if (
+        pictureCount > 0 &&
+        ((format === 'pdf' && !pdfPictures) ||
+          (format === 'svg' && !svgPictures))
+      )
+        throw new SheetPictureUnavailableError();
       const saved =
         format === 'pdf'
           ? await saveCadBinaryFile(
               fileName,
               'pdf',
-              sheetPageToPdf(page, sheet.name) as Uint8Array<ArrayBuffer>
+              sheetPageToPdf(
+                page,
+                sheet.name,
+                pdfPictures ?? undefined
+              ) as Uint8Array<ArrayBuffer>
             )
           : await saveCadTextFile(
               fileName,
               format,
               format === 'dxf'
                 ? sheetPageToDxf(page)
-                : sheetPageToSvg(page, sheet.name)
+                : sheetPageToSvg(page, sheet.name, svgPictures ?? undefined)
             );
       props.onStatus(
         saved
-          ? `Exported the drawing to ${fileName}.`
+          ? `Exported the drawing to ${fileName}${
+              format === 'dxf' && pictureCount > 0
+                ? ' (its pictures are left out: DXF R12 cannot embed them)'
+                : ''
+            }.`
           : 'Drawing export cancelled.'
       );
     } catch (error) {
@@ -3894,6 +4152,56 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     autoDate
   ]);
   const page: SheetPage | null = composed?.page ?? null;
+  // D02 (v92): object URLs for the pictures the page shows, loaded from the
+  // project's store once each and released with the workspace.
+  const [pictureUrls, setPictureUrls] = useState<ReadonlyMap<string, string>>(
+    () => new Map()
+  );
+  const pictureUrlsRef = useRef(new Map<string, string>());
+  const pictureKey = [...pagePictures(page?.images).keys()].sort().join(',');
+  const loadPicture = props.loadReferenceImage;
+  // A picture not on this device yet (still downloading, offline) is asked
+  // for again a little later, so its placeholder does not stay for good.
+  const [pictureRetry, setPictureRetry] = useState(0);
+  useEffect(() => {
+    if (!loadPicture || !pictureKey) return;
+    let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const wanted = pictureKey
+      .split(',')
+      .filter((checksum) => !pictureUrlsRef.current.has(checksum));
+    void (async () => {
+      let missing = false;
+      for (const checksum of wanted) {
+        const blob = await loadPicture(checksum).catch(() => null);
+        if (cancelled) return;
+        if (!blob) {
+          missing = true;
+          continue;
+        }
+        if (pictureUrlsRef.current.has(checksum)) continue;
+        pictureUrlsRef.current.set(checksum, URL.createObjectURL(blob));
+        setPictureUrls(new Map(pictureUrlsRef.current));
+      }
+      if (missing && !cancelled)
+        retry = setTimeout(
+          () => setPictureRetry((count) => count + 1),
+          PICTURE_RETRY_MS
+        );
+    })();
+    return () => {
+      cancelled = true;
+      if (retry) clearTimeout(retry);
+    };
+  }, [pictureKey, loadPicture, pictureRetry]);
+  useEffect(
+    () => () => {
+      for (const url of pictureUrlsRef.current.values())
+        URL.revokeObjectURL(url);
+      pictureUrlsRef.current.clear();
+    },
+    []
+  );
   // Each view's projected extent: the drawn one once it is ready, the
   // model's estimate before. The canvas outlines, the placement flags and
   // "Fit views to sheet" all read the same one.
@@ -4206,8 +4514,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         return;
       }
     }
+    // v92: an image shows the project's newest picture until another is
+    // chosen in Properties.
+    const placed =
+      finished.kind === 'image' && !finished.pictureId
+        ? { ...finished, pictureId: [...pictures.keys()].at(-1) }
+        : finished;
     const annotation = draftAnnotation(
-      finished,
+      placed,
       createDrawingAnnotationId(),
       placementMm,
       undefined,
@@ -4237,21 +4551,26 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     ) {
       setSelectedAnnotationId(annotation.annotationId);
       setSelectedViewId(null);
-      if (finished.kind === 'note') setPropertiesOpen(true);
+      if (finished.kind === 'note' || finished.kind === 'image')
+        setPropertiesOpen(true);
       props.onStatus(
         finished.kind === 'note'
           ? 'Note added. Edit its text in Properties.'
-          : isGeometryTool(finished.kind) ||
-              finished.kind === 'balloon' ||
-              finished.kind === 'parts-list'
-            ? `${ANNOTATION_TOOL_LABELS[finished.kind]} added.`
-            : `${ANNOTATION_TOOL_LABELS[finished.kind]} dimension added.`,
+          : finished.kind === 'image'
+            ? 'Image added. Choose its picture and width in Properties.'
+            : isGeometryTool(finished.kind) ||
+                finished.kind === 'balloon' ||
+                finished.kind === 'parts-list'
+              ? `${ANNOTATION_TOOL_LABELS[finished.kind]} added.`
+              : `${ANNOTATION_TOOL_LABELS[finished.kind]} dimension added.`,
         { immediate: true }
       );
       // A note is placed and then typed; dimensions keep their tool for the
       // next one.
       setTool(
-        finished.kind === 'note' || finished.kind === 'parts-list'
+        finished.kind === 'note' ||
+          finished.kind === 'parts-list' ||
+          finished.kind === 'image'
           ? null
           : startAnnotationTool(finished.kind)
       );
@@ -5363,6 +5682,32 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               width={paper.width}
               height={paper.height}
             />
+            {/* D02 (v92): sheet images, beneath the lines. */}
+            {(page.images ?? []).map((image, index) => {
+              const href = pictureUrls.get(image.checksumSha256);
+              const y = paper.height - image.y - image.height;
+              return href ? (
+                <image
+                  key={index}
+                  className="drawing-sheet-image"
+                  href={href}
+                  x={image.x}
+                  y={y}
+                  width={image.width}
+                  height={image.height}
+                  preserveAspectRatio="none"
+                />
+              ) : (
+                <rect
+                  key={index}
+                  className="drawing-sheet-image-pending"
+                  x={image.x}
+                  y={y}
+                  width={image.width}
+                  height={image.height}
+                />
+              );
+            })}
             {SHEET_STROKE_ORDER.map((kind) => (
               <g key={kind} className={`drawing-strokes is-${kind}`}>
                 {page.strokes
@@ -5896,6 +6241,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             editable={editable}
             numberFormat={sheetNumberFormat(sheet, document.units)}
             resolutions={resolutions}
+            pictures={pictures}
             onTool={chooseTool}
             onDeselect={deselect}
             onUpdate={updateAnnotation}
@@ -5980,6 +6326,39 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                         )
                       }
                     />
+                    {!free && source && (
+                      <SectionStepFields
+                        steps={section.steps ?? []}
+                        firstDepth={section.depth}
+                        sign={sign}
+                        axisLabel={axis.toUpperCase()}
+                        units={document.units}
+                        bounds={
+                          projections.get(source.viewId)?.state === 'ready'
+                            ? (sectionStepRange(
+                                source,
+                                selectedView,
+                                projections.get(source.viewId)
+                              ) ?? null)
+                            : null
+                        }
+                        editable={editable}
+                        onCommit={(steps) =>
+                          run(
+                            commandFactories.updateDrawingView(
+                              {
+                                sheetId: sheet.sheetId,
+                                viewId: selectedView.viewId,
+                                sectionSteps: steps
+                              },
+                              steps.length > 0
+                                ? 'Edit section steps'
+                                : 'Remove section steps'
+                            )
+                          )
+                        }
+                      />
+                    )}
                     <p className="drawing-hint">
                       Cut from the{' '}
                       {source
@@ -6435,7 +6814,35 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             />
             <div className="drawing-panel-section">
               <h3>Title block</h3>
-              {TITLE_FIELDS.map(({ key, label }) => (
+              <label className="drawing-field">
+                <span>Layout</span>
+                <select
+                  value={sheet.titleBlockLayout ?? ''}
+                  disabled={!editable}
+                  onChange={(event) =>
+                    updateSheet(
+                      {
+                        titleBlockLayout:
+                          event.target.value === 'shop' ? 'shop' : null
+                      },
+                      'Change title-block layout'
+                    )
+                  }
+                >
+                  <option value="">Compact</option>
+                  <option value="shop">Shop</option>
+                </select>
+              </label>
+              {sheet.titleBlockLayout === 'shop' && (
+                <p className="drawing-hint">
+                  Adds material, finish, checked and approved, the company and a
+                  general-tolerance note.
+                </p>
+              )}
+              {[
+                ...TITLE_FIELDS,
+                ...(sheet.titleBlockLayout === 'shop' ? SHOP_TITLE_FIELDS : [])
+              ].map(({ key, label }) => (
                 <TextField
                   key={key}
                   label={label}

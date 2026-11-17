@@ -60,6 +60,7 @@ import {
   type ArtifactRecord,
   type E2eeMigrationAttemptExpectation,
   type E2eeProjectMigrationRecord,
+  type ListProjectCommentsResponse,
   type ProjectDocument,
   type ProjectSummary,
   type RevisionSummary
@@ -149,6 +150,11 @@ export type MigrationPhase =
   | 'checking'
   /** Slice 7-4: waiting for members to be ready; nothing is staged. */
   | 'members'
+  /**
+   * L08 (plan decision 5): the project has plaintext comments, which the
+   * cutover deletes; nothing more happens until the owner confirms that.
+   */
+  | 'comments'
   /** Slice 7-4: adding the members back, just before the cutover. */
   | 'readding'
   | 'cutover'
@@ -195,6 +201,11 @@ export interface MigrationProgress {
   readonly error?: MigrationError;
   /** Slice 7-4: a shared project's members and where each stands. */
   readonly members?: readonly MigrationMember[];
+  /**
+   * L08: how many plaintext comments encrypting deletes, while the run
+   * waits for the owner to confirm that (phase `comments`).
+   */
+  readonly commentCount?: number;
   /**
    * Slice 7-4: the migration attempt the members shown belong to
    * ({@link migrationAttemptOf}): an approval of them is given for it, and
@@ -292,6 +303,61 @@ export interface MigrationEngineDeps {
   readonly renewEveryMs?: number;
   /** Runs before each staging step; tests interrupt the engine through it. */
   beforeStep?(step: string, projectId: string): void | Promise<void>;
+  /**
+   * L08: how many plaintext comments the project holds. Encrypted comment
+   * logs cannot carry them yet, so the cutover deletes them, and a run
+   * stops for the owner's confirmation first (plan decision 5). None when
+   * omitted.
+   */
+  commentCount?(projectId: string): Promise<number>;
+}
+
+/**
+ * L08: how many plaintext comments a project holds, which encrypting it
+ * deletes (plan decision 5). A server without comment storage has none.
+ */
+export async function plaintextCommentCount(
+  fetcher: Fetch,
+  projectId: string
+): Promise<number> {
+  const response = await fetcher(
+    `/api/projects/${encodeURIComponent(projectId)}/comments`,
+    { credentials: 'same-origin' }
+  );
+  if (response.status === 503) {
+    const body = (await response.json().catch(() => null)) as {
+      code?: unknown;
+    } | null;
+    if (body?.code === 'COMMENTS_UNAVAILABLE') return 0;
+  }
+  if (!response.ok) {
+    throw new Error('This project’s comments could not be counted.');
+  }
+  // An answer that names no list is not a count of none: stop instead.
+  const body = (await response
+    .json()
+    .catch(() => null)) as Partial<ListProjectCommentsResponse> | null;
+  if (!body || !Array.isArray(body.comments)) {
+    throw new Error('This project’s comments could not be counted.');
+  }
+  return body.comments.length;
+}
+
+/** Code of {@link MigrationCommentsConfirmationError}. */
+export const MIGRATION_COMMENTS_CODE = 'MIGRATION_COMMENTS_CONFIRMATION';
+
+/**
+ * L08 (plan decision 5): encrypting would delete the project's plaintext
+ * comments, and the owner has not confirmed deleting that many.
+ */
+export class MigrationCommentsConfirmationError extends Error {
+  readonly code = MIGRATION_COMMENTS_CODE;
+  constructor(readonly count: number) {
+    super(
+      `Encrypting deletes ${count} comment${count === 1 ? '' : 's'}. Encrypted projects can’t keep comments made before encryption yet.`
+    );
+    this.name = 'MigrationCommentsConfirmationError';
+  }
 }
 
 /** The engine stopped because it was asked to (pause). */
@@ -364,6 +430,7 @@ export function migrationErrorOf(error: unknown): MigrationError {
             : message
       };
     case MIGRATION_APPROVAL_CODE:
+    case MIGRATION_COMMENTS_CODE:
       return { code, retryable: false, message };
     case E2EE_MIGRATION_CODES.leased:
       return {
@@ -501,6 +568,11 @@ export interface MigrateOptions {
    * dropped with it): the caller must not pass it again.
    */
   readonly onApprovalSpent?: () => void;
+  /**
+   * L08: the owner confirmed that encrypting deletes this many plaintext
+   * comments. A project holding more stops and asks again.
+   */
+  readonly approvedCommentDeletion?: number;
 }
 
 /** One run's hold on the owner's approval (see `migrate`). */
@@ -704,7 +776,14 @@ export function createProjectMigrationEngine(
     let rereads = 0;
     for (;;) {
       try {
-        await runOnce(project, check, report, () => progress, approval);
+        await runOnce(
+          project,
+          check,
+          report,
+          () => progress,
+          approval,
+          options.approvedCommentDeletion ?? 0
+        );
         return;
       } catch (error) {
         if (error instanceof MigrationPausedError) {
@@ -716,6 +795,14 @@ export function createProjectMigrationEngine(
           error instanceof MigrationApprovalNeededError
         ) {
           report({ phase: 'members', error: migrationErrorOf(error) });
+          throw error;
+        }
+        if (error instanceof MigrationCommentsConfirmationError) {
+          report({
+            phase: 'comments',
+            commentCount: error.count,
+            error: migrationErrorOf(error)
+          });
           throw error;
         }
         if (codeOf(error) === E2EE_MIGRATION_CODES.attemptChanged) {
@@ -761,7 +848,8 @@ export function createProjectMigrationEngine(
     check: (step: string) => Promise<void>,
     report: (change: Partial<MigrationProgress>) => void,
     current: () => MigrationProgress,
-    approval: RunApproval
+    approval: RunApproval,
+    approvedCommentDeletion: number
   ): Promise<void> {
     const projectId = project.projectId;
     await check('status');
@@ -781,6 +869,18 @@ export function createProjectMigrationEngine(
     if (status?.state === 'abandoned' && status.purgeCursor !== null) {
       // An earlier attempt's cleanup is unfinished: finish it first.
       await stepAll(() => migrations.abandon(projectId));
+    }
+    // L08 (plan decision 5): the cutover deletes the project's plaintext
+    // comments, which encrypted comment logs cannot carry yet. Nothing is
+    // staged, or switched over, until the owner confirms deleting as many
+    // as it holds now; a project that gained comments since asks again.
+    await check('comments');
+    const comments = (await deps.commentCount?.(projectId)) ?? 0;
+    if (comments > approvedCommentDeletion) {
+      // A resumed staging still holds the plaintext locked while it waits,
+      // so the row keeps offering Cancel.
+      if (status?.state === 'staging') report({ plaintextLocked: true });
+      throw new MigrationCommentsConfirmationError(comments);
     }
     // A staging left over (resumed, or another device's) holds it locked;
     // an abandoned one no longer does.
@@ -887,6 +987,13 @@ export function createProjectMigrationEngine(
         );
       }
       await check('cutover');
+      // The staging refuses new comments (PROJECT_MIGRATING), so this count
+      // is the one the cutover deletes: one posted between the first count
+      // and the staging is caught here, and the owner is asked again.
+      const staged = (await deps.commentCount?.(projectId)) ?? 0;
+      if (staged > approvedCommentDeletion) {
+        throw new MigrationCommentsConfirmationError(staged);
+      }
       if (invitations && sharing) {
         // Just before the cutover, the staged group holds exactly the
         // roster the owner approved, read from the group itself.

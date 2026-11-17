@@ -87,6 +87,54 @@ describe('CloudDataDeletionDialog', () => {
     }
   );
 
+  // Issue #1704: a profile deletion keeps encrypted projects but erases
+  // the keys that open them; the dialog says so and acknowledges the count
+  // it showed, which the server checks.
+  it.each([
+    ['profile', 2, true, 2],
+    ['profile', 0, false, 0],
+    ['all', 2, false, undefined]
+  ] as const)(
+    'for %s with %i encrypted projects, warns (%s) and acknowledges %s',
+    async (scope, encryptedProjectCount, warned, acknowledged) => {
+      const user = userEvent.setup();
+      vi.spyOn(api, 'accountDeletionPreview').mockResolvedValue({
+        ...preview,
+        encryptedProjectCount
+      });
+      const onConfirm = vi.fn(async () => {});
+      render(
+        <CloudDataDeletionDialog
+          scope={scope}
+          onConfirm={onConfirm}
+          onClose={vi.fn()}
+        />
+      );
+      await user.type(
+        await screen.findByLabelText('Deletion confirmation'),
+        'DELETE PROJECTS'
+      );
+      const warning = screen.queryByText(
+        /kept projects are end-to-end encrypted with those keys\. Your account will not be able to open their cloud copies again/
+      );
+      if (warned) expect(warning).toBeVisible();
+      else expect(warning).toBeNull();
+      await user.click(
+        screen.getByRole('button', {
+          name:
+            scope === 'profile'
+              ? 'Delete cloud profile'
+              : 'Delete all cloud data'
+        })
+      );
+      expect(onConfirm).toHaveBeenCalledWith(
+        scope,
+        'DELETE PROJECTS',
+        acknowledged
+      );
+    }
+  );
+
   it('keeps focus on the delete button while it runs and after it fails', async () => {
     const user = userEvent.setup();
     vi.spyOn(api, 'accountDeletionPreview').mockResolvedValue(preview);

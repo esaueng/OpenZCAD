@@ -6,7 +6,7 @@ import reactHooks from "eslint-plugin-react-hooks";
 export default tseslint.config(
   {
     // packages/mls/pkg is wasm-bindgen output, rebuilt by packages/mls/build.sh.
-    ignores: ["dist/**", "**/dist/**", "coverage/**", ".wrangler/**", "node_modules/**", "packages/mls/pkg/**"]
+    ignores: ["dist/**", "**/dist/**", "**/dist-desktop/**", "**/dist-ipad/**", "apps/ipad/Resources/Web/**", "coverage/**", ".wrangler/**", "node_modules/**", "packages/mls/pkg/**"]
   },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked.map((config) => ({

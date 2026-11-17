@@ -13,6 +13,8 @@ import {
   type MigrationLocks
 } from '../lib/e2ee/projectMigrations';
 import {
+  MIGRATION_COMMENTS_CODE,
+  MigrationCommentsConfirmationError,
   MigrationPausedError,
   memoryLeaseStore,
   type MigrationProgress,
@@ -1637,5 +1639,67 @@ describe('a shared project (slice 7-4)', () => {
     await waitFor(() =>
       expect(fake.engine.cancel).toHaveBeenCalledWith('proj_old')
     );
+  });
+});
+
+describe('a project with plaintext comments (L08, plan decision 5)', () => {
+  it('names how many comments encrypting deletes and goes on only once the owner confirms that many', async () => {
+    const given: (number | undefined)[] = [];
+    const fake = fakeEngine(async (summary, report, _signal, options) => {
+      if (summary.projectId !== 'proj_old') {
+        report({ phase: 'done' });
+        return;
+      }
+      given.push(options?.approvedCommentDeletion);
+      if ((options?.approvedCommentDeletion ?? 0) < 12) {
+        report({
+          phase: 'comments',
+          commentCount: 12,
+          error: {
+            code: MIGRATION_COMMENTS_CODE,
+            retryable: false,
+            message:
+              'Encrypting deletes 12 comments. Encrypted projects can’t keep comments made before encryption yet.'
+          }
+        });
+        throw new MigrationCommentsConfirmationError(12);
+      }
+      report({ phase: 'done' });
+    });
+    const controller = controllerWith(fake, null, {
+      plaintext: { listProjects: async () => [PROJECTS[1]!] } as never
+    });
+    render(
+      <ExistingProjectEncryption
+        userId="user_alice"
+        unlocked
+        controller={controller}
+        isOpen={async () => true}
+      />
+    );
+    await clickEncryptProjects();
+    const row = await screen.findByRole('listitem', { name: 'Older bracket' });
+    expect(
+      await within(row).findByText('Waiting for your confirmation')
+    ).toBeTruthy();
+    expect(
+      within(row).getByText(/Encrypting deletes 12 comments\./)
+    ).toBeTruthy();
+    // Nothing is staged while it waits, so there is nothing to cancel.
+    expect(within(row).queryByRole('button', { name: 'Cancel' })).toBeNull();
+    // Checking again without confirming asks again.
+    fireEvent.click(within(row).getByRole('button', { name: 'Check again' }));
+    await waitFor(() => expect(given).toEqual([undefined, undefined]));
+    await waitFor(() => expect(controller.getState().running).toBe(false));
+
+    fireEvent.click(
+      within(row).getByRole('button', {
+        name: 'Delete 12 comments and encrypt'
+      })
+    );
+    await waitFor(() =>
+      expect(within(row).getByText('Encrypted')).toBeTruthy()
+    );
+    expect(given).toEqual([undefined, undefined, 12]);
   });
 });

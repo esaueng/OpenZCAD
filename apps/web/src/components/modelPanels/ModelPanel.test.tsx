@@ -274,6 +274,23 @@ describe('ModelPanel', () => {
       screen.getByRole('button', { name: 'Original' })
     ).toBeInTheDocument();
   });
+  it('says Objects details are preparing in its header, not above its rows (#1598)', () => {
+    const { container, rerender } = renderPanels(['bodies'], {
+      geometryPending: true,
+      geometryPendingShown: true
+    });
+    const status = screen.getByText('Preparing…');
+    expect(status).toHaveAttribute('role', 'status');
+    expect(status).toHaveAccessibleName('Preparing model details…');
+    // The header's fixed row: nothing joins the list, so no row moves.
+    expect(status.closest('.model-panel-header')).not.toBeNull();
+    expect(container.querySelector('.feature-list [role="status"]')).toBeNull();
+    rerender({ geometryPending: true, geometryPendingShown: false });
+    expect(screen.queryByText('Preparing…')).toBeNull();
+    rerender({ geometryPending: false, geometryPendingShown: false });
+    expect(screen.queryByText('Preparing…')).toBeNull();
+  });
+
   it('gives the empty Objects message list-item semantics', () => {
     renderPanels(['bodies']);
     expect(

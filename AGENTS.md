@@ -158,6 +158,11 @@ in `.github/workflows/macos-desktop.yml`.
   commit stops resolving when GitHub deletes the branch at merge, and every
   `ci` run then fails at startup. Keep the caller's job named `checks`; it
   is part of both required contexts.
+- The app version (`YYYY.RELEASE.PATCH`, the Remus scheme) lives in the root
+  `package.json` and is repeated by the web, desktop, Tauri and Cargo
+  manifests. Change it only with `pnpm version:app --bump patch|release`, in
+  a standalone PR; every Vite build fails when a copy disagrees. See
+  [App versioning](docs/versioning.md).
 - Parity files intentionally use `test/parity/**/*.spec.ts`. Renaming one to
   `*.test.ts` silently moves it into the root pool instead of the serial parity
   job configured by `test/parity/vitest.corpus.config.ts`.

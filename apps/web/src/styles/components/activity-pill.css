@@ -93,6 +93,24 @@
   animation: oz-fade var(--dur-fast) var(--ease-out);
 }
 
+/* An ending the user has to read — a refusal, a warning — keeps the fixed
+   width but not the fixed height: its reason wraps in full rather than
+   ellipsizing at 150–350px with no way to read the rest. The lane above it
+   lifts by the measured height (--activity-pill-live-h, quiet-stage.css). */
+.activity-pill.needs-attention {
+  height: auto;
+  min-height: var(--activity-pill-h);
+  padding-block: 10px;
+  white-space: normal;
+}
+
+.activity-pill.needs-attention .activity-pill-name,
+.activity-pill.needs-attention .activity-pill-detail {
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
 .activity-pill.ok {
   --activity-pill-tone: var(--color-success);
 }

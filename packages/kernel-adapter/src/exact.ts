@@ -280,7 +280,9 @@ import {
   sanitizeThreeMf,
   sanitizeThreeMfModel
 } from './mesh-export-sanitize';
-import { orientGlbForGltf } from './glb-scene';
+import { zipSync } from 'fflate';
+import { mergeGlbBodies, orientGlbForGltf } from './glb-scene';
+import { mergeObjBodies } from './obj-labels';
 import { labelThreeMfObjects } from './three-mf-labels';
 import {
   declareStepLengthUnit,
@@ -900,6 +902,11 @@ export interface ExactKernelAdapter {
     options: {
       format: MeshExportFormat;
       deflection: number;
+      /**
+       * I04, OBJ only: write the body colours as a material library too, and
+       * return a ZIP holding `<stem>.obj` and `<stem>.mtl`.
+       */
+      objMaterials?: { stem: string };
     } & MeshExportTolerances
   ): Promise<Uint8Array<ArrayBuffer>>;
   /**
@@ -1303,7 +1310,8 @@ function writeStepBodies(
     productName: document.name,
     fileName: options.fileName ?? `${document.name}.step`,
     timestamp: options.timestamp ?? stepTimestamp(new Date()),
-    solids: exportSolidLabels(document, bodies)
+    solids: exportSolidLabels(document, bodies),
+    ...(options.protocol ? { protocol: options.protocol } : {})
   };
   // Never fuse: a boolean union changes the geometry (overlaps merge,
   // coincident faces weld). Every root of the arena document becomes its
@@ -5751,6 +5759,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     options: {
       format: MeshExportFormat;
       deflection: number;
+      /**
+       * I04, OBJ only: write the body colours as a material library too, and
+       * return a ZIP holding `<stem>.obj` and `<stem>.mtl`.
+       */
+      objMaterials?: { stem: string };
     } & MeshExportTolerances
   ): Promise<Uint8Array<ArrayBuffer>> {
     const { format, deflection } = options;
@@ -5806,6 +5819,42 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 angular
               )
             }));
+      // I04: glTF and OBJ carry each body as its own named, coloured object,
+      // so they are written body by body and merged.
+      if (format === 'glb' || format === 'obj') {
+        const labels = exportSolidLabels(
+          document,
+          grouped.map(({ bodyId }) => ({ bodyId, solids: [0] }))
+        );
+        const parts = grouped.map(({ solids }, index) => {
+          const document = kernel.serializeSolids(new Uint32Array(solids));
+          return {
+            bytes:
+              format === 'glb'
+                ? io.exportGlb(document, unitDeflection)
+                : io.exportObj(document, unitDeflection),
+            name: labels[index]!.name,
+            color: labels[index]!.color
+          };
+        });
+        if (format === 'glb') return orientGlbForGltf(mergeGlbBodies(parts));
+        const stem = options.objMaterials?.stem;
+        const merged = mergeObjBodies(
+          parts.map((part) => ({ ...part, text: decodeText(part.bytes) })),
+          stem ? `${stem}.mtl` : ''
+        );
+        const encoder = new TextEncoder();
+        if (!stem) {
+          // Without its library a material names nothing: names only.
+          return encoder.encode(
+            merged.obj.replace(/^(mtllib|usemtl) .*\n/gm, '')
+          );
+        }
+        return zipSync({
+          [`${stem}.obj`]: encoder.encode(merged.obj),
+          [`${stem}.mtl`]: encoder.encode(merged.mtl)
+        });
+      }
       const exportSolids = grouped.flatMap(({ solids }) => solids);
       const bodies = kernel.serializeSolids(new Uint32Array(exportSolids));
       // Every writer takes the whole arena document: bodies stay distinct
@@ -5816,15 +5865,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       const bytes =
         format === '3mf'
           ? io.export3mf(bodies, unitDeflection)
-          : format === 'obj'
-            ? io.exportObj(bodies, unitDeflection)
-            : format === 'glb'
-              ? io.exportGlb(bodies, unitDeflection)
-              : format === 'ply'
-                ? io.exportPly(bodies, unitDeflection)
-                : io.exportStl(bodies, unitDeflection);
-      // glTF is metres and +Y up; the tessellation is model millimetres,
-      // +Z up, which the GLB states through its root node (glb-scene.ts).
+          : format === 'ply'
+            ? io.exportPly(bodies, unitDeflection)
+            : io.exportStl(bodies, unitDeflection);
       // 3MF objects carry their body's name and display colour.
       return format === '3mf'
         ? sanitizeThreeMf(bytes, (model) =>
@@ -5835,11 +5878,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           )
         : format === 'stl-binary'
           ? sanitizeBinaryStl(bytes)
-          : format === 'ply'
-            ? sanitizeBinaryPly(bytes)
-            : format === 'glb'
-              ? orientGlbForGltf(bytes)
-              : (bytes as Uint8Array<ArrayBuffer>);
+          : sanitizeBinaryPly(bytes);
     });
   }
 

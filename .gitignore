@@ -2,6 +2,9 @@ node_modules
 .pnpm-store
 dist
 dist-desktop
+dist-ipad
+apps/ipad/Resources/Web
+**/xcuserdata/
 target
 artifacts
 apps/desktop/src-tauri/gen

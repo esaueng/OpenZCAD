@@ -586,7 +586,8 @@ describe('application settings', () => {
       cloudAutosave: false,
       cloudAutosaveDelaySeconds: 30,
       unitlessImportUnits: 'inch',
-      exportUnits: 'document'
+      exportUnits: 'document',
+      stepProtocol: 'ap242'
     };
     const parsed = parseUpdateAppSettingsRequest(
       { expectedRevision: 1, settings },
@@ -596,7 +597,8 @@ describe('application settings', () => {
       cloudAutosave: false,
       cloudAutosaveDelaySeconds: 30,
       unitlessImportUnits: 'inch',
-      exportUnits: 'document'
+      exportUnits: 'document',
+      stepProtocol: 'ap242'
     });
   });
 
@@ -614,6 +616,36 @@ describe('application settings', () => {
     });
     expect(unknown.files.unitlessImportUnits).toBe('ask');
     expect(unknown.files.exportUnits).toBe('mm');
+  });
+
+  it('defaults the STEP protocol to AP214 and keeps a known choice', () => {
+    expect(DEFAULT_APP_SETTINGS.files.stepProtocol).toBe('ap214');
+    expect(
+      normalizeAppSettings({ files: { stepProtocol: 'ap242' } }).files
+        .stepProtocol
+    ).toBe('ap242');
+    // A later client's protocol, or none at all, falls back to AP214.
+    expect(
+      normalizeAppSettings({ files: { stepProtocol: 'ap203' } }).files
+        .stepProtocol
+    ).toBe('ap214');
+    const settings = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      files: Record<string, unknown>;
+    };
+    delete settings.files.stepProtocol;
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 1, settings },
+        'development'
+      ).settings.files.stepProtocol
+    ).toBe('ap214');
+    settings.files.stepProtocol = 'ap999';
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 1, settings },
+        'development'
+      ).settings.files.stepProtocol
+    ).toBe('ap214');
   });
 
   it('keeps saving file-unit preferences a client never sent', () => {

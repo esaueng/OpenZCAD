@@ -1756,7 +1756,11 @@ describe('retention and cleanup', () => {
     const laptop = device(srv, owner, 'owner_laptop');
     await createEncrypted(laptop);
     const profile = await srv.call('POST', '/api/account/delete-data', {
-      body: { scope: 'profile', confirmation: 'DELETE CLOUD PROFILE' }
+      body: {
+        scope: 'profile',
+        confirmation: 'DELETE CLOUD PROFILE',
+        acknowledgedEncryptedProjectCount: 1
+      }
     });
     expect(profile.status).toBe(200);
     const all = await srv.call('POST', '/api/account/delete-data', {
@@ -1848,7 +1852,8 @@ describe('without migration 0033', () => {
       expect(
         (
           await srv.call('POST', '/api/account/delete-data', {
-            body: { scope, confirmation }
+            // The seeded project is encrypted (issue #1704).
+            body: { scope, confirmation, acknowledgedEncryptedProjectCount: 1 }
           })
         ).status
       ).toBe(200);

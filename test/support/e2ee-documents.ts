@@ -98,6 +98,8 @@ export interface Account {
   list: VerifiedDeviceList;
   devices: Map<string, CertifyingDevice>;
   accountKey: Uint8Array;
+  /** Each device's whole signing key pair, for `makeAccount`'s `reuse`. */
+  signingPairs: ReadonlyMap<string, SigningPair>;
   /** The identity's private key (share delegations, slice 5-10). */
   identityPrivateKey: CryptoKey;
   /** Rows the Worker reads the device list from. */
@@ -106,20 +108,32 @@ export interface Account {
   revoke(db: DatabaseSync, deviceId: string): Promise<void>;
 }
 
+type SigningPair = Awaited<ReturnType<typeof generateSigningKeyPair>>;
+
 const ecdhPublic = async () =>
   exportPublicKey((await generateEncryptionKeyPair()).publicKey);
 
 export async function makeAccount(
   userId: string,
   certified: readonly string[],
-  readOnly: readonly string[] = []
+  readOnly: readonly string[] = [],
+  options: {
+    /**
+     * Devices whose signing keys a new identity lists again, as a browser
+     * that kept its device keys is certified under a fresh setup.
+     */
+    reuse?: ReadonlyMap<string, SigningPair>;
+  } = {}
 ): Promise<Account> {
   const identity = await generateSigningKeyPair(false);
   const identityRaw = await exportPublicKey(identity.publicKey);
   const devices = new Map<string, CertifyingDevice>();
+  const signingPairs = new Map<string, SigningPair>();
   const listed: ListedDevice[] = [];
   for (const deviceId of [...certified, ...readOnly]) {
-    const signing = await generateSigningKeyPair(false);
+    const signing =
+      options.reuse?.get(deviceId) ?? (await generateSigningKeyPair(false));
+    signingPairs.set(deviceId, signing);
     devices.set(deviceId, { userId, deviceId, signing });
     if (!certified.includes(deviceId)) continue;
     listed.push({
@@ -173,6 +187,7 @@ export async function makeAccount(
     userId,
     list: await verifyDeviceList(identityRaw, chain),
     devices,
+    signingPairs,
     accountKey,
     identityPrivateKey: identity.privateKey,
     seed(db) {

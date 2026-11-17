@@ -1,3 +1,4 @@
+import type { MeshExportPackage } from '../lib/meshExportPackage';
 import { useEffect, useRef, useState } from 'react';
 import {
   CircleCheck,
@@ -155,7 +156,7 @@ export interface ExportDialogProps {
   onExport(
     format: MeshExportDialogFormat,
     deflection: number,
-    options?: { angularTolerance?: number }
+    options?: { angularTolerance?: number } & MeshExportPackage
   ): void;
   /**
    * Checks the mesh the export would write. `units` is the space its writer
@@ -190,6 +191,47 @@ export interface ExportDialogProps {
    * one the export writes. Absent, the dialog writes the model as shown.
    */
   configuration?: ExportDialogConfiguration;
+}
+
+/** I04: the dialog's remembered choices, per browser (a favourite format). */
+const FAVOURITE_KEY = 'openzcad-mesh-export:v1';
+
+interface ExportFavourite {
+  format: MeshExportDialogFormat;
+  extraFormats: MeshExportDialogFormat[];
+  perBody: boolean;
+  objMaterials: boolean;
+}
+
+function isFormat(value: unknown): value is MeshExportDialogFormat {
+  return FORMAT_OPTIONS.some((option) => option.format === value);
+}
+
+function loadFavourite(): ExportFavourite | null {
+  try {
+    const raw = JSON.parse(
+      localStorage.getItem(FAVOURITE_KEY) ?? 'null'
+    ) as Partial<ExportFavourite> | null;
+    if (!raw || !isFormat(raw.format)) return null;
+    return {
+      format: raw.format,
+      extraFormats: Array.isArray(raw.extraFormats)
+        ? raw.extraFormats.filter(isFormat)
+        : [],
+      perBody: raw.perBody === true,
+      objMaterials: raw.objMaterials === true
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveFavourite(favourite: ExportFavourite): void {
+  try {
+    localStorage.setItem(FAVOURITE_KEY, JSON.stringify(favourite));
+  } catch {
+    // A private window or blocked storage: the dialog simply forgets.
+  }
 }
 
 /** F06: the configuration picker of an export. */
@@ -233,7 +275,17 @@ export function ExportDialog({
   // down while the dialog is open, so nothing else would take the key.
   useModalFocus(dialogRef, { autoFocus: true });
 
-  const [chosenFormat, setFormat] = useState<MeshExportDialogFormat>('3mf');
+  const [favourite] = useState(loadFavourite);
+  const [chosenFormat, setFormat] = useState<MeshExportDialogFormat>(
+    favourite?.format ?? '3mf'
+  );
+  const [extraFormats, setExtraFormats] = useState<MeshExportDialogFormat[]>(
+    favourite?.extraFormats ?? []
+  );
+  const [perBody, setPerBody] = useState(favourite?.perBody ?? false);
+  const [objMaterials, setObjMaterials] = useState(
+    favourite?.objMaterials ?? false
+  );
   const stlOnly = bodies.some((body) => body.meshReference);
   const format =
     stlOnly && chosenFormat !== 'stl' && chosenFormat !== 'stl-binary'
@@ -377,10 +429,34 @@ export function ExportDialog({
       return;
     }
     const angularTolerance = angularToleranceFor(angle);
-    if (angularTolerance === undefined) onExport(format, deflection);
-    else onExport(format, deflection, { angularTolerance });
+    const extras = stlOnly
+      ? []
+      : extraFormats.filter((entry) => entry !== format);
+    const splitBodies = perBody && bodies.length > 1;
+    const withMaterials =
+      objMaterials && (format === 'obj' || extras.includes('obj'));
+    saveFavourite({ format, extraFormats: extras, perBody, objMaterials });
+    const packaging: MeshExportPackage = {
+      ...(splitBodies ? { perBody: true } : {}),
+      ...(extras.length > 0 ? { extraFormats: extras } : {}),
+      ...(withMaterials ? { objMaterials: true } : {})
+    };
+    const options = {
+      ...(angularTolerance === undefined ? {} : { angularTolerance }),
+      ...packaging
+    };
+    if (Object.keys(options).length === 0) onExport(format, deflection);
+    else onExport(format, deflection, options);
     onClose();
   }
+
+  const extraChoices = FORMAT_OPTIONS.filter(
+    (option) => option.format !== format
+  );
+  const packaged =
+    (perBody && bodies.length > 1) ||
+    extraFormats.some((entry) => entry !== format) ||
+    (objMaterials && (format === 'obj' || extraFormats.includes('obj')));
 
   const writtenUnits = UNIT_FREE_FORMATS.has(format)
     ? 'm'
@@ -558,6 +634,56 @@ export function ExportDialog({
             ) : null}
           </div>
         </fieldset>
+
+        {!stlOnly && (
+          <fieldset className="export-dialog-group">
+            <legend>Package</legend>
+            <label className="export-dialog-option">
+              <input
+                type="checkbox"
+                checked={perBody && bodies.length > 1}
+                disabled={bodies.length < 2}
+                onChange={(event) => setPerBody(event.target.checked)}
+              />
+              <span>One file per body</span>
+            </label>
+            <label className="export-dialog-option">
+              <input
+                type="checkbox"
+                checked={
+                  objMaterials &&
+                  (format === 'obj' || extraFormats.includes('obj'))
+                }
+                disabled={format !== 'obj' && !extraFormats.includes('obj')}
+                onChange={(event) => setObjMaterials(event.target.checked)}
+              />
+              <span>OBJ colors (.mtl)</span>
+            </label>
+            <p className="export-dialog-hint">Also export as</p>
+            {extraChoices.map((option) => (
+              <label key={option.format} className="export-dialog-option">
+                <input
+                  type="checkbox"
+                  aria-label={`Also export ${option.label}`}
+                  checked={extraFormats.includes(option.format)}
+                  onChange={(event) =>
+                    setExtraFormats((current) =>
+                      event.target.checked
+                        ? [...current, option.format]
+                        : current.filter((entry) => entry !== option.format)
+                    )
+                  }
+                />
+                <span aria-hidden="true">{option.label}</span>
+              </label>
+            ))}
+            {packaged && (
+              <p className="export-dialog-hint">
+                The files download together as one .zip.
+              </p>
+            )}
+          </fieldset>
+        )}
 
         <section className="export-dialog-group export-dialog-quality">
           <header>

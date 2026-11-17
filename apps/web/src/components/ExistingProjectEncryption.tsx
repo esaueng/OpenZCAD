@@ -70,6 +70,8 @@ function phaseLabel(progress: MigrationProgress): string {
       return 'Checking…';
     case 'members':
       return 'Waiting for members';
+    case 'comments':
+      return 'Waiting for your confirmation';
     case 'readding':
       return 'Adding members back…';
     case 'cutover':
@@ -89,6 +91,9 @@ function phaseLabel(progress: MigrationProgress): string {
         : 'Stopped';
   }
 }
+
+const commentsText = (count: number) =>
+  `${count} comment${count === 1 ? '' : 's'}`;
 
 function progressText(progress: MigrationProgress): string {
   const parts = [
@@ -271,6 +276,10 @@ function MigrationNotes() {
         <li>
           Original mesh files and image snapshots stored with a project are not
           carried over.
+        </li>
+        <li>
+          Comments on a project are deleted when it is encrypted. A project with
+          comments waits for you to confirm how many are deleted.
         </li>
         <li>
           While a project is being encrypted it opens read-only. Close it in
@@ -509,6 +518,7 @@ function ProjectRow({
     progress.phase === 'error' ||
     progress.phase === 'paused' ||
     progress.phase === 'members' ||
+    progress.phase === 'comments' ||
     unfinished;
   const active =
     progress.phase !== 'waiting' && progress.phase !== 'done' && !stopped;
@@ -555,6 +565,23 @@ function ProjectRow({
       >
         {stopped ? (
           <span className="encryption-actions">
+            {progress.phase === 'comments' && progress.commentCount ? (
+              <button
+                className="primary"
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  controller.approveCommentDeletion(
+                    progress.projectId,
+                    progress.commentCount ?? 0
+                  );
+                  void controller.run([progress.projectId]);
+                }}
+              >
+                <Check size={13} aria-hidden="true" />
+                {`Delete ${commentsText(progress.commentCount)} and encrypt`}
+              </button>
+            ) : null}
             {approvable ? (
               <button
                 className="primary"
@@ -582,7 +609,7 @@ function ProjectRow({
               <RefreshCcw size={13} aria-hidden="true" />
               {progress.phase === 'paused'
                 ? 'Resume'
-                : progress.phase === 'members'
+                : progress.phase === 'members' || progress.phase === 'comments'
                   ? 'Check again'
                   : unresolved
                     ? 'Retry encryption'
@@ -594,7 +621,7 @@ function ProjectRow({
                 dropped. */}
             {progress.cutOver ||
             unfinished ||
-            (progress.phase === 'members' &&
+            ((progress.phase === 'members' || progress.phase === 'comments') &&
               !progress.plaintextLocked) ? null : (
               <button
                 className="secondary"
@@ -667,7 +694,10 @@ function ProjectRow({
           {resetFailure}
         </p>
       ) : null}
-      {(active || stopped) && progress.phase !== 'members' && !unfinished ? (
+      {(active || stopped) &&
+      progress.phase !== 'members' &&
+      progress.phase !== 'comments' &&
+      !unfinished ? (
         <Meter
           used={progress.bytesDone}
           limit={Math.max(progress.bytesTotal, 1)}

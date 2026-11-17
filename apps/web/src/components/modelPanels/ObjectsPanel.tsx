@@ -70,7 +70,6 @@ export type ObjectsPanelProps = ObjectsSource &
   Pick<
     ModelPanelSource,
     | 'geometryPending'
-    | 'geometryPendingShown'
     | 'selectedFeatureNodeId'
     | 'selectedSketchProfileId'
     | 'selectedBodyIds'
@@ -300,7 +299,6 @@ export function ObjectsPanel({
   document,
   parameterValues,
   geometryPending = false,
-  geometryPendingShown = geometryPending,
   selectedFeatureNodeId,
   selectedSketchProfileId,
   selectedBodyIds,
@@ -884,11 +882,6 @@ export function ObjectsPanel({
         </div>
       </div>
       <div className="feature-list" role="list" aria-label="Objects">
-        {geometryPending && geometryPendingShown && (
-          <p className="muted sidebar-hint" role="status">
-            Preparing model details…
-          </p>
-        )}
         {filteredCount === 0 && !geometryPending && (
           <p className="muted sidebar-hint" role="listitem">
             {objectNeedle

@@ -12,6 +12,7 @@ import {
   type DrawingDetail,
   type DrawingSheetFormat,
   type DrawingSheetId,
+  type DrawingSectionStep,
   type DrawingTitleBlock,
   type DrawingView,
   type DrawingViewId,
@@ -38,6 +39,8 @@ export interface DrawingSheetUpdateInput {
   projectionAngle?: DrawingSheet['projectionAngle'];
   /** Fields set to an empty string fall back to their automatic value. */
   titleBlock?: Partial<Record<keyof DrawingTitleBlock, string>>;
+  /** D02 (v94): the title-block layout; null is the compact one. */
+  titleBlockLayout?: DrawingSheet['titleBlockLayout'] | null;
   /** Explicit Update: rebinds the sheet to the current model. */
   source?: DrawingSheet['source'];
   /** Explicit body succession; subshape witnesses are retained and rechecked. */
@@ -67,6 +70,8 @@ export interface DrawingViewUpdateInput {
   bodyIds?: BodyId[];
   /** D03: moves a section view's cutting plane, in model units. */
   sectionDepth?: number;
+  /** D03 (v93): a section's steps; empty removes them. */
+  sectionSteps?: DrawingSectionStep[];
   /** D03 (v78): a detail view's circle and scale; omitted fields are kept. */
   detail?: Partial<Pick<DrawingDetail, 'center' | 'radius' | 'scale'>>;
   /**
@@ -250,6 +255,10 @@ export function updateDrawingSheet(
         else delete titleBlock[key];
       }
       sheet.titleBlock = titleBlock;
+    }
+    if (input.titleBlockLayout !== undefined) {
+      if (input.titleBlockLayout === null) delete sheet.titleBlockLayout;
+      else sheet.titleBlockLayout = input.titleBlockLayout;
     }
     if (input.format !== undefined) {
       if (input.format === null || Object.keys(input.format).length === 0)
@@ -439,6 +448,15 @@ export function updateDrawingView(
       if (!view.section)
         throw new Error(`Drawing view ${input.viewId} is not a section.`);
       view.section = { ...view.section, depth: input.sectionDepth };
+    }
+    if (input.sectionSteps !== undefined) {
+      if (!view.section)
+        throw new Error(`Drawing view ${input.viewId} is not a section.`);
+      const { steps: _previous, ...rest } = view.section;
+      view.section =
+        input.sectionSteps.length > 0
+          ? { ...rest, steps: input.sectionSteps.map((step) => ({ ...step })) }
+          : rest;
     }
     if (input.bodyIds) view.bodyIds = [...input.bodyIds];
     if (input.centerMm) {

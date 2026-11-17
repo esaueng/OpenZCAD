@@ -296,3 +296,141 @@ export function glbPlacement(data: Uint8Array): readonly number[] {
     m[14]!
   ];
 }
+
+/** One body's GLB from the translator, with what to call and colour it. */
+export interface GlbBodyPart {
+  bytes: Uint8Array;
+  name: string;
+  /** `#rrggbb` sRGB. */
+  color: string;
+}
+
+/** An sRGB channel in [0, 1] as glTF's linear base colour factor. */
+function linearChannel(srgb: number): number {
+  return srgb <= 0.04045 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4;
+}
+
+function binChunk(rest: Uint8Array): Uint8Array {
+  if (rest.byteLength < 8) return new Uint8Array();
+  const view = new DataView(rest.buffer, rest.byteOffset, rest.byteLength);
+  const length = view.getUint32(0, true);
+  return rest.subarray(8, 8 + length);
+}
+
+/**
+ * I04: one GLB holding every body as its own named node and mesh, each mesh
+ * in a material of its body's display colour (one material per colour).
+ * The parts are the translator's per-body GLBs in model millimetres; the
+ * result is millimetres too, for {@link orientGlbForGltf} to wrap.
+ */
+export function mergeGlbBodies(
+  parts: readonly GlbBodyPart[]
+): Uint8Array<ArrayBuffer> {
+  type Accessor = { bufferView?: number; [key: string]: unknown };
+  type View = { buffer: number; byteOffset?: number; [key: string]: unknown };
+  type Primitive = {
+    attributes: Record<string, number>;
+    indices?: number;
+    material?: number;
+    [key: string]: unknown;
+  };
+  const accessors: Accessor[] = [];
+  const bufferViews: View[] = [];
+  const meshes: { name?: string; primitives: Primitive[] }[] = [];
+  const nodes: GltfNode[] = [];
+  const materials: Record<string, unknown>[] = [];
+  const materialIndex = new Map<string, number>();
+  const chunks: Uint8Array[] = [];
+  let binLength = 0;
+  for (const part of parts) {
+    const { json, rest } = readGlb(part.bytes);
+    const bin = binChunk(rest);
+    const viewOffset = bufferViews.length;
+    const accessorOffset = accessors.length;
+    for (const view of (json['bufferViews'] ?? []) as View[]) {
+      bufferViews.push({
+        ...view,
+        buffer: 0,
+        byteOffset: (view.byteOffset ?? 0) + binLength
+      });
+    }
+    for (const accessor of (json['accessors'] ?? []) as Accessor[]) {
+      accessors.push({
+        ...accessor,
+        ...(accessor.bufferView === undefined
+          ? {}
+          : { bufferView: accessor.bufferView + viewOffset })
+      });
+    }
+    const color = part.color.toLowerCase();
+    let material = materialIndex.get(color);
+    if (material === undefined) {
+      const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/.exec(color);
+      const channels = match
+        ? match.slice(1).map((hex) => linearChannel(parseInt(hex, 16) / 255))
+        : [0.8, 0.8, 0.8];
+      materials.push({
+        name: color,
+        pbrMetallicRoughness: {
+          baseColorFactor: [...channels, 1],
+          metallicFactor: 0,
+          roughnessFactor: 1
+        }
+      });
+      material = materials.length - 1;
+      materialIndex.set(color, material);
+    }
+    for (const mesh of (json.meshes ?? []) as {
+      primitives: Primitive[];
+    }[]) {
+      meshes.push({
+        name: part.name,
+        primitives: mesh.primitives.map((primitive) => ({
+          ...primitive,
+          attributes: Object.fromEntries(
+            Object.entries(primitive.attributes).map(([key, index]) => [
+              key,
+              index + accessorOffset
+            ])
+          ),
+          ...(primitive.indices === undefined
+            ? {}
+            : { indices: primitive.indices + accessorOffset }),
+          material
+        }))
+      });
+      nodes.push({ name: part.name, mesh: meshes.length - 1 });
+    }
+    chunks.push(bin);
+    binLength += bin.byteLength;
+    // Every view starts 4-byte aligned, as glTF requires of accessors.
+    const pad = (4 - (binLength % 4)) % 4;
+    if (pad) {
+      chunks.push(new Uint8Array(pad));
+      binLength += pad;
+    }
+  }
+  const bin = new Uint8Array(binLength);
+  let at = 0;
+  for (const chunk of chunks) {
+    bin.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  const rest = new Uint8Array(8 + binLength);
+  const view = new DataView(rest.buffer);
+  view.setUint32(0, binLength, true);
+  view.setUint32(4, 0x004e4942, true); // "BIN\0"
+  rest.set(bin, 8);
+  const json: GltfJson = {
+    asset: { version: '2.0', generator: 'OpenZCAD' },
+    scene: 0,
+    scenes: [{ nodes: nodes.map((_node, index) => index) }],
+    nodes,
+    meshes,
+    materials,
+    accessors,
+    bufferViews,
+    buffers: [{ byteLength: binLength }]
+  };
+  return writeGlb(json, rest);
+}

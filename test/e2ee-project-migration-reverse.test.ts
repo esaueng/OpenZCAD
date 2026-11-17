@@ -944,6 +944,17 @@ describe('turning an encrypted project back into plaintext', () => {
         expect(((await info.json()) as { code: string }).code).toBe(
           PROJECT_MIGRATING_CODE
         );
+        // A member's encrypted comment log (L08) is content too: the cutover
+        // purges the logs, so a write meanwhile is refused, not lost.
+        const comments = await srv.call(
+          'PUT',
+          `/api/e2ee/projects/${projectId}/comments`,
+          { body: {} }
+        );
+        expect(comments.status).toBe(409);
+        expect(((await comments.json()) as { code: string }).code).toBe(
+          PROJECT_MIGRATING_CODE
+        );
         const ticket = await srv.call(
           'POST',
           `/api/projects/${projectId}/collaboration/ticket`

@@ -546,7 +546,9 @@ export type AnnotationToolKind =
   | 'circle-centerline'
   /** v80: a part's item number, and the assembly's parts list. */
   | 'balloon'
-  | 'parts-list';
+  | 'parts-list'
+  /** v92: one of the project's pictures, placed on the paper. */
+  | 'image';
 
 /** v73: tools that mark geometry, made as soon as their picks are in. */
 export const GEOMETRY_TOOL_KINDS: readonly AnnotationToolKind[] = [
@@ -579,8 +581,12 @@ export const ANNOTATION_TOOL_LABELS: Readonly<
   centerline: 'Centreline',
   'circle-centerline': 'Circular centreline',
   balloon: 'Balloon',
-  'parts-list': 'Parts list'
+  'parts-list': 'Parts list',
+  image: 'Image'
 };
+
+/** v92: how wide a newly placed sheet image prints, paper mm. */
+export const DEFAULT_DRAWING_IMAGE_WIDTH_MM = 40;
 
 /** What each tool asks for next, by how many picks it has. */
 export function annotationToolHint(tool: AnnotationTool): string {
@@ -635,6 +641,8 @@ export function annotationToolHint(tool: AnnotationTool): string {
       return 'Balloon: pick an edge of an assembly part for its leader.';
     case 'parts-list':
       return 'Parts list: click where its top-left corner goes.';
+    case 'image':
+      return 'Image: click where its centre goes.';
   }
 }
 
@@ -655,6 +663,8 @@ export interface AnnotationTool {
   placed?: { x: number; y: number };
   /** Re-picking the references of this broken annotation. */
   repairId?: DrawingAnnotationId;
+  /** v92: the reference image an Image tool places. */
+  pictureId?: string;
   /**
    * What the view drew when the tool was pinned to it (see
    * {@link drawingViewSignature}); picks are only good while it holds.
@@ -724,6 +734,7 @@ export function pickedEnough(tool: AnnotationTool): boolean {
     case 'balloon':
       return tool.edges.length === 1;
     case 'parts-list':
+    case 'image':
       return tool.placed !== undefined;
   }
 }
@@ -847,8 +858,8 @@ export function applyAnnotationPick(
   } | null = null
 ): PickResult {
   if (pickedEnough(tool)) return { ok: true, tool };
-  // A parts list sits on the paper: any click places it.
-  if (tool.kind === 'parts-list')
+  // A parts list (and, v92, an image) sits on the paper: any click places it.
+  if (tool.kind === 'parts-list' || tool.kind === 'image')
     return {
       ok: true,
       tool: { ...tool, placed: { x: point[0], y: point[1] } }
@@ -1424,6 +1435,15 @@ export function draftAnnotation(
         : null;
     case 'parts-list':
       return { ...base, kind: 'bom-table' };
+    case 'image':
+      return tool.pictureId
+        ? {
+            ...base,
+            kind: 'image',
+            referenceImageId: tool.pictureId,
+            widthMm: DEFAULT_DRAWING_IMAGE_WIDTH_MM
+          }
+        : null;
   }
 }
 
@@ -1501,6 +1521,9 @@ export function draftRefusal(
   /** v80: the assembly's BOM, for parts lists and balloons. */
   bom?: SheetBom
 ): string | null {
+  // v92: an image measures nothing; its picture was chosen from the
+  // project's own, so there is nothing to refuse.
+  if (annotation.kind === 'image') return null;
   const resolution = resolveDrawingAnnotation(
     annotation,
     view,

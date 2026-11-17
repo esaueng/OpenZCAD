@@ -638,7 +638,7 @@ describe('decompression limits', () => {
     expect(PROJECT_ENVELOPE_KINDS[0]).toBe('document');
   });
 
-  it('appends project-info and key-archive without renumbering', async () => {
+  it('appends project-info, key-archive and comments without renumbering', async () => {
     // Wire codes are positions plus one; the first four never move.
     expect(PROJECT_ENVELOPE_KINDS).toEqual([
       'document',
@@ -646,13 +646,15 @@ describe('decompression limits', () => {
       'view-state',
       'share-snapshot',
       'project-info',
-      'key-archive'
+      'key-archive',
+      'comments'
     ]);
     for (const [kind, code] of [
       ['document', 1],
       ['share-snapshot', 4],
       ['project-info', 5],
-      ['key-archive', 6]
+      ['key-archive', 6],
+      ['comments', 7]
     ] as const) {
       const key = EnvelopeKey.generate();
       const keyBytes = key.bytes;
@@ -681,14 +683,14 @@ describe('decompression limits', () => {
         'limit-exceeded'
       );
     }
-    // A seventh kind code is still unknown.
+    // An eighth kind code is still unknown.
     const envelope = await encryptProjectEnvelope(
       EnvelopeKey.generate(),
       { ...HEADER, blobIds: [] },
       text('{}')
     );
     const unknown = new Uint8Array(envelope);
-    unknown[9] = 7;
+    unknown[9] = 8;
     expect(() => parseEnvelope(unknown)).toThrow(
       expect.objectContaining({ code: 'malformed' }) as unknown
     );
@@ -1673,16 +1675,20 @@ describe('content blobs', () => {
     expect(joinBytes(parts).byteLength).toBe(500_000);
   });
 
-  it('round-trips 5000 encrypted records without spreading them', { timeout: 30_000 }, async () => {
-    // The one-shot paths build and read many-chunk envelopes the same way.
-    const plaintext = patternBytes(CHUNK * 5_000, 1);
-    const key = patternBytes(32, 0x51);
-    const envelope = await sealProject(plaintext, { chunkSize: CHUNK }, key);
-    expect(parseEnvelope(envelope).chunkCount).toBe(5_000);
-    expect((await decryptProjectEnvelope(key, envelope)).plaintext).toEqual(
-      plaintext
-    );
-  });
+  it(
+    'round-trips 5000 encrypted records without spreading them',
+    { timeout: 30_000 },
+    async () => {
+      // The one-shot paths build and read many-chunk envelopes the same way.
+      const plaintext = patternBytes(CHUNK * 5_000, 1);
+      const key = patternBytes(32, 0x51);
+      const envelope = await sealProject(plaintext, { chunkSize: CHUNK }, key);
+      expect(parseEnvelope(envelope).chunkCount).toBe(5_000);
+      expect((await decryptProjectEnvelope(key, envelope)).plaintext).toEqual(
+        plaintext
+      );
+    }
+  );
 
   it('settles the reference when the source fails or the consumer cancels', async () => {
     const failing = new ReadableStream<Bytes>({

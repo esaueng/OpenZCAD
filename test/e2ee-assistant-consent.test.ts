@@ -252,7 +252,11 @@ describe('assistant consent on encrypted projects (ADR-024 6-1)', () => {
     expect(
       (
         await call('POST', '/api/account/delete-data', {
-          body: { scope: 'profile', confirmation: 'DELETE CLOUD PROFILE' }
+          body: {
+            scope: 'profile',
+            confirmation: 'DELETE CLOUD PROFILE',
+            acknowledgedEncryptedProjectCount: 1
+          }
         })
       ).status
     ).toBe(200);
@@ -501,7 +505,11 @@ describe('assistant consent on encrypted projects (ADR-024 6-1)', () => {
     expect(
       (
         await call('POST', '/api/account/delete-data', {
-          body: { scope: 'profile', confirmation: 'DELETE CLOUD PROFILE' },
+          body: {
+            scope: 'profile',
+            confirmation: 'DELETE CLOUD PROFILE',
+            acknowledgedEncryptedProjectCount: 1
+          },
           user: MEMBER
         })
       ).status

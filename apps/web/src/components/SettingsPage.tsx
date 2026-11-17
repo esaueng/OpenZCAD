@@ -74,6 +74,7 @@ import { BrandMark } from './BrandMark';
 import { ExternalAnchor } from './ExternalAnchor';
 import { AssistantConnectionSettings } from './AssistantConnectionSettings';
 import { api } from '../lib/api';
+import { APP_BUILD, appBuildDetail, appBuildLabel } from '../lib/appBuild';
 import { APP_SETTINGS_NUMBER_BOUNDS } from '../lib/appSettings';
 import { isDesktopApp } from '../lib/desktopBridge';
 import { privacyPolicyHref } from '../lib/privacyPolicy';
@@ -205,7 +206,8 @@ interface SettingsPageProps {
   onLogout(choice: DeviceKeySignOutChoice): Promise<void>;
   onDeleteCloudData(
     scope: AccountDeletionScope,
-    confirmation: string
+    confirmation: string,
+    acknowledgedEncryptedProjectCount?: number
   ): Promise<void>;
   onReset(): void;
   onApplyViewportDefaults(): void;
@@ -1348,6 +1350,29 @@ export function SettingsPage({
                     <option value="cm">Centimeters</option>
                     <option value="m">Meters</option>
                     <option value="inch">Inches</option>
+                  </select>
+                </SettingRow>
+                <SettingRow
+                  title="STEP protocol"
+                  hint="File › STEP. Both keep exact geometry, body names and colors."
+                >
+                  <select
+                    value={settings.files.stepProtocol}
+                    aria-label="STEP protocol"
+                    onChange={(event) =>
+                      patch({
+                        files: {
+                          ...settings.files,
+                          stepProtocol: event.target
+                            .value as AppSettings['files']['stepProtocol']
+                        }
+                      })
+                    }
+                  >
+                    <option value="ap214">AP214 (automotive design)</option>
+                    <option value="ap242">
+                      AP242 (model-based 3D engineering)
+                    </option>
                   </select>
                 </SettingRow>
                 <SettingRow
@@ -3051,6 +3076,11 @@ export function SettingsPage({
                 </SettingRow>
               </Group>
               <Group title="About this build">
+                <SettingRow compact title="App version">
+                  <Status title={appBuildDetail(APP_BUILD)}>
+                    {appBuildLabel(APP_BUILD)}
+                  </Status>
+                </SettingRow>
                 <SettingRow compact title="Geometry kernel">
                   <Status tone="good">Exact</Status>
                 </SettingRow>
@@ -3108,8 +3138,8 @@ export function SettingsPage({
       {deletionScope ? (
         <CloudDataDeletionDialog
           scope={deletionScope}
-          onConfirm={async (scope, confirmation) => {
-            await onDeleteCloudData(scope, confirmation);
+          onConfirm={async (scope, confirmation, acknowledged) => {
+            await onDeleteCloudData(scope, confirmation, acknowledged);
             setDeletionScope(null);
           }}
           onClose={() => setDeletionScope(null)}

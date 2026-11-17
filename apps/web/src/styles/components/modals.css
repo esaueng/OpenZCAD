@@ -1607,6 +1607,25 @@
   line-height: 1.4;
 }
 
+/* L08: the drawing sheets share links show. */
+.share-link-drawings-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.share-link-drawings-sheet {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 28px;
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
 .sharing-hint {
   margin: 0;
   color: var(--color-text-muted);

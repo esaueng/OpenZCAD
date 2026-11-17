@@ -36,6 +36,8 @@ import {
   decodeMeasurementsBody,
   decodeProjectInfoBody,
   decodeViewStateBody,
+  decodeCommentsBody,
+  type CommentsBody,
   decryptProjectEnvelope,
   type ContentBlobKind,
   type ContentBlobReference,
@@ -117,7 +119,8 @@ export type ProjectEnvelopeBody =
   | ProjectInfoBody
   | KeyArchiveBody
   | MeasurementsBody
-  | ViewStateBody;
+  | ViewStateBody
+  | CommentsBody;
 
 export type DecodeJob =
   ProjectEnvelopeDecodeJob | ContentBlobDecodeJob | SealDocumentJob;
@@ -253,6 +256,8 @@ export function decodeProjectBody(
       return decodeMeasurementsBody(plaintext, header);
     case 'view-state':
       return decodeViewStateBody(plaintext, header);
+    case 'comments':
+      return decodeCommentsBody(plaintext, header);
     default:
       throw new E2eeError(
         'invalid-argument',

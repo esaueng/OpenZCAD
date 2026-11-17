@@ -20,6 +20,8 @@ interface ImportMetaEnv {
   /** Perf and capture e2e builds keep the production renderer (renderProfile.ts). */
   readonly VITE_E2E_FULL_RENDER?: string;
   readonly OZ_PERF?: string;
+  /** The app version, `YYYY.RELEASE.PATCH` (scripts/app-version.mjs). */
+  readonly OZ_APP_VERSION: string;
   readonly OZ_BUILD_COMMIT: string;
   readonly OZ_REMUS_VERSION: string;
   readonly OZ_REMUS_COMMIT: string;

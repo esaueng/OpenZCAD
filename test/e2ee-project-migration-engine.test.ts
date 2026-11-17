@@ -39,9 +39,12 @@ import {
 } from '../apps/web/src/lib/api';
 import { createMigrationPlaintextSource } from '../apps/web/src/lib/e2ee/migrationPlaintextSource';
 import {
+  MIGRATION_COMMENTS_CODE,
+  MigrationCommentsConfirmationError,
   MigrationPausedError,
   createProjectMigrationEngine,
   memoryLeaseStore,
+  plaintextCommentCount,
   migratableProjects,
   migrationErrorOf,
   withBlobIds,
@@ -429,6 +432,8 @@ function engineOn(
     beforeCutover?: (projectId: string) => void;
     onCutover?: (projectId: string) => void;
     onCutoverFound?: (projectId: string) => void;
+    /** Counts the project's plaintext comments (L08, plan decision 5). */
+    commentCount?: (projectId: string) => Promise<number>;
     /** Wraps the device's migration routes (a failed or lost cutover). */
     migrations?: (api: ProjectMigrationsApi) => ProjectMigrationsApi;
   } = {}
@@ -473,7 +478,8 @@ function engineOn(
     ...(options.onCutover ? { onCutover: options.onCutover } : {}),
     ...(options.onCutoverFound
       ? { onCutoverFound: options.onCutoverFound }
-      : {})
+      : {}),
+    ...(options.commentCount ? { commentCount: options.commentCount } : {})
   });
   return {
     d,
@@ -764,6 +770,146 @@ describe('encrypting an existing project', () => {
     expect((await srv.call('GET', `/api/projects/${projectId}`)).status).toBe(
       200
     );
+  });
+
+  it('stops for the owner to confirm deleting its plaintext comments, then deletes exactly those', async () => {
+    const srv = roomServer();
+    const plain = await plaintextProject(srv, { revisions: 1 });
+    const projectId = plain.head.projectId;
+    const comment = (text: string) =>
+      srv.call('POST', `/api/projects/${projectId}/comments`, {
+        body: { text, anchor: { point: [0, 0, 0], documentVersion: 1 } }
+      });
+    expect((await comment('Check the fillet')).status).toBe(201);
+    expect((await comment('And the hole')).status).toBe(201);
+    let laptop = engineOn(srv, owner, 'owner_laptop', {
+      commentCount: (id) => plaintextCommentCount(laptop.d.fetcher, id)
+    });
+    const summary = await laptop.summary(projectId);
+
+    // L08 (plan decision 5): nothing is staged before the owner confirms.
+    const stopped = await laptop.engine
+      .migrate(summary)
+      .catch((error: unknown) => error);
+    expect(stopped).toBeInstanceOf(MigrationCommentsConfirmationError);
+    expect(laptop.progress.at(-1)).toMatchObject({
+      phase: 'comments',
+      commentCount: 2,
+      error: {
+        code: MIGRATION_COMMENTS_CODE,
+        message:
+          'Encrypting deletes 2 comments. Encrypted projects can’t keep comments made before encryption yet.'
+      }
+    });
+    expect(migrationRow(srv, projectId)).toBeUndefined();
+    expect(count(srv, 'project_comments', projectId)).toBe(2);
+
+    // A confirmation for fewer than it holds now asks again.
+    expect(
+      await laptop.engine
+        .migrate(summary, undefined, { approvedCommentDeletion: 1 })
+        .catch((error: unknown) => error)
+    ).toBeInstanceOf(MigrationCommentsConfirmationError);
+    expect(migrationRow(srv, projectId)).toBeUndefined();
+
+    laptop = engineOn(srv, owner, 'owner_laptop', {
+      commentCount: (id) => plaintextCommentCount(laptop.d.fetcher, id)
+    });
+    await laptop.engine.migrate(await laptop.summary(projectId), undefined, {
+      approvedCommentDeletion: 2
+    });
+    expect(formatOf(srv, projectId)).toBe(2);
+    expect(count(srv, 'project_comments', projectId)).toBe(0);
+  });
+
+  it('counts again before the cutover, catching a comment posted before the staging locked it', async () => {
+    const srv = roomServer();
+    const plain = await plaintextProject(srv, { revisions: 1 });
+    const projectId = plain.head.projectId;
+    const comment = (text: string) =>
+      srv.call('POST', `/api/projects/${projectId}/comments`, {
+        body: { text, anchor: { point: [0, 0, 0], documentVersion: 1 } }
+      });
+    expect((await comment('First')).status).toBe(201);
+    expect((await comment('Second')).status).toBe(201);
+    let counts = 0;
+    const laptop: ReturnType<typeof engineOn> = engineOn(
+      srv,
+      owner,
+      'owner_laptop',
+      {
+        commentCount: async (id) => {
+          const counted = await plaintextCommentCount(laptop.d.fetcher, id);
+          // Another member comments right after the first count, before
+          // the staging locks the plaintext.
+          if (++counts === 1) expect((await comment('Late')).status).toBe(201);
+          return counted;
+        }
+      }
+    );
+    const stopped = await laptop.engine
+      .migrate(await laptop.summary(projectId), undefined, {
+        approvedCommentDeletion: 2
+      })
+      .catch((error: unknown) => error);
+    expect(stopped).toBeInstanceOf(MigrationCommentsConfirmationError);
+    expect(laptop.progress.at(-1)).toMatchObject({
+      phase: 'comments',
+      commentCount: 3
+    });
+    // Staged, but not cut over: all three comments are still there.
+    expect(formatOf(srv, projectId)).toBe(1);
+    expect(count(srv, 'project_comments', projectId)).toBe(3);
+
+    // Resumed while it still waits, the staging reads as locked, so its
+    // row keeps offering Cancel.
+    expect(
+      await laptop.engine
+        .migrate(await laptop.summary(projectId), undefined, {
+          approvedCommentDeletion: 2
+        })
+        .catch((error: unknown) => error)
+    ).toBeInstanceOf(MigrationCommentsConfirmationError);
+    expect(laptop.progress.at(-1)).toMatchObject({
+      phase: 'comments',
+      commentCount: 3,
+      plaintextLocked: true
+    });
+
+    // The same browser resumes its staging once the owner confirms three.
+    await laptop.engine.migrate(await laptop.summary(projectId), undefined, {
+      approvedCommentDeletion: 3
+    });
+    expect(formatOf(srv, projectId)).toBe(2);
+    expect(count(srv, 'project_comments', projectId)).toBe(0);
+  });
+
+  it('stops rather than count none when the comments answer names no list', async () => {
+    const answering =
+      (status: number, body: unknown): typeof fetch =>
+      async () =>
+        new Response(JSON.stringify(body), { status });
+    for (const body of [{}, { comments: 'many' }, null]) {
+      await expect(
+        plaintextCommentCount(answering(200, body), 'proj_1')
+      ).rejects.toThrow('could not be counted');
+    }
+    await expect(
+      plaintextCommentCount(answering(500, { error: 'down' }), 'proj_1')
+    ).rejects.toThrow('could not be counted');
+    // Only a server without comment storage has none.
+    await expect(
+      plaintextCommentCount(
+        answering(503, { code: 'COMMENTS_UNAVAILABLE' }),
+        'proj_1'
+      )
+    ).resolves.toBe(0);
+    await expect(
+      plaintextCommentCount(answering(503, { code: 'OTHER' }), 'proj_1')
+    ).rejects.toThrow('could not be counted');
+    await expect(
+      plaintextCommentCount(answering(200, { comments: [{}, {}] }), 'proj_1')
+    ).resolves.toBe(2);
   });
 
   it('does not cut over when this device could not then save that the project is encrypted', async () => {

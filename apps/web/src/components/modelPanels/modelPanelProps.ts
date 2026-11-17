@@ -46,6 +46,13 @@ export interface ModelPanelSource {
    * Defaults to `geometryPending`.
    */
   geometryPendingShown?: boolean;
+  /**
+   * The pending analysis is only an uncommitted live preview's (a face
+   * offset held or under validation). History rows cannot change before it
+   * commits, so they show no "preparing" glyph for it (#1598); Objects still
+   * says its details are incomplete.
+   */
+  previewPending?: boolean;
   selectedFeatureNodeId: string | null;
   selectedSketchProfileId: string | null;
   selectedBodyIds: string[];
