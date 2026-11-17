@@ -138,6 +138,24 @@ export function parseResolveProjectCommentRequest(body: unknown): boolean {
   return (body as { resolved: boolean }).resolved;
 }
 
+/**
+ * The schema refuses any comment write on a project that is no longer
+ * plaintext (migration 0058): a request that passed the route's check and
+ * reached the database after the project was encrypted is refused here.
+ */
+function refuseNotPlaintext(error: unknown): never {
+  if (
+    error instanceof Error &&
+    error.message.includes('COMMENTS_PROJECT_NOT_PLAINTEXT')
+  )
+    throw new ProjectCommentRequestError(
+      409,
+      'This project is encrypted now; its comments are not stored in plaintext.',
+      'PROJECT_FORMAT_UNSUPPORTED'
+    );
+  throw error;
+}
+
 export async function listProjectComments(
   db: D1Database,
   projectId: string
@@ -206,7 +224,8 @@ export async function createProjectComment(
       projectId,
       MAX_PROJECT_COMMENTS
     )
-    .run();
+    .run()
+    .catch(refuseNotPlaintext);
   if (!result.meta?.changes)
     throw new ProjectCommentRequestError(
       409,
@@ -243,7 +262,8 @@ export async function resolveProjectComment(
       commentId,
       projectId
     )
-    .run();
+    .run()
+    .catch(refuseNotPlaintext);
   return toComment(await commentRow(db, projectId, commentId));
 }
 

@@ -2902,6 +2902,8 @@ export function ModelViewer({
   onCommentPinClickRef.current = onCommentPinClick;
   const commentPlacingRef = useRef(commentPlacing);
   commentPlacingRef.current = commentPlacing;
+  /** Places a comment under a press; set when the viewer mounts. */
+  const placeCommentRef = useRef<((event: PointerEvent) => void) | null>(null);
   const updateCommentPinsRef = useRef<(() => void) | null>(null);
   /** Makes one comment pin on the HUD; set when the viewer mounts. */
   const commentPinFactoryRef = useRef<(() => HTMLDivElement) | null>(null);
@@ -7450,6 +7452,33 @@ export function ModelViewer({
       );
     }
 
+    /**
+     * L08: places a comment on the nearest body surface among `stack`
+     * (`commentPlacementTarget`), reported through `onSelectTopology`;
+     * nothing else under the press acts.
+     */
+    function placeComment(stack: ReturnType<typeof picker.pickAll>) {
+      const surface = commentPlacementTarget(stack);
+      if (!surface) return;
+      onSelectTopologyRef.current(surface.selection, false, {
+        point: {
+          x: surface.hit.point.x,
+          y: surface.hit.point.y,
+          z: surface.hit.point.z
+        },
+        ...(surface.faceNormal
+          ? {
+              normal: {
+                x: surface.faceNormal.x,
+                y: surface.faceNormal.y,
+                z: surface.faceNormal.z
+              }
+            }
+          : {})
+      });
+    }
+    placeCommentRef.current = (event) => placeComment(picker.pickAll(event));
+
     function selectAtPointer(event: PointerEvent) {
       // The release that got here was a click, not the end of a gesture.
       gestureReleases[1] = false;
@@ -7471,24 +7500,7 @@ export function ModelViewer({
       // press and nothing else: no sketch profile, region, ghost plane,
       // datum or placement plane may act on it.
       if (commentPlacingRef.current) {
-        const surface = commentPlacementTarget(stack);
-        if (surface)
-          onSelectTopologyRef.current(surface.selection, false, {
-            point: {
-              x: surface.hit.point.x,
-              y: surface.hit.point.y,
-              z: surface.hit.point.z
-            },
-            ...(surface.faceNormal
-              ? {
-                  normal: {
-                    x: surface.faceNormal.x,
-                    y: surface.faceNormal.y,
-                    z: surface.faceNormal.z
-                  }
-                }
-              : {})
-          });
+        placeComment(stack);
         return;
       }
       // A ghost plane starts the sketch instead, even through a face in
@@ -12684,7 +12696,24 @@ export function ModelViewer({
     let penLiftedAt = Number.NEGATIVE_INFINITY;
     /** Fingers ignored until they lift: palms, and touches a pen displaced. */
     const rejectedTouches = new Set<number>();
+    /** The press that placed a comment, whose release is consumed too. */
+    let placementPointerId: number | null = null;
     const routePointerDown = (event: PointerEvent) => {
+      // L08: while a comment is being placed the primary press is the
+      // placement and nothing else: no handle, box selection, orbit or
+      // click selection starts from it. A touch tap reaches the same
+      // placement through `selectAtPointer`.
+      if (
+        commentPlacingRef.current &&
+        event.pointerType !== 'touch' &&
+        event.button === 0
+      ) {
+        event.stopImmediatePropagation();
+        event.preventDefault();
+        placementPointerId = event.pointerId;
+        placeCommentRef.current?.(event);
+        return;
+      }
       if (event.pointerType === 'pen') {
         penSeen = true;
         penPointerId = event.pointerId;
@@ -12720,6 +12749,11 @@ export function ModelViewer({
       return rejectedTouches.delete(event.pointerId);
     };
     const routePointerUp = (event: PointerEvent) => {
+      if (event.pointerId === placementPointerId) {
+        placementPointerId = null;
+        event.stopImmediatePropagation();
+        return;
+      }
       if (releaseRejected(event)) return;
       if (!touchNavigation.up(event)) {
         handlePointerUp(event);

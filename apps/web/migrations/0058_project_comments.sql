@@ -42,3 +42,24 @@ WHEN EXISTS (
 BEGIN
   SELECT RAISE(ABORT, 'ACCOUNT_ERASURE_IN_PROGRESS');
 END;
+
+-- An encrypted project's account holds ciphertext only (ADR-024): no comment
+-- is written to, or changed on, a project that is not plaintext, whatever
+-- route or race led there. Its plaintext comments were purged with it.
+CREATE TRIGGER IF NOT EXISTS block_comment_insert_unless_plaintext
+BEFORE INSERT ON project_comments
+WHEN COALESCE(
+  (SELECT storage_format FROM projects WHERE id = NEW.project_id), 1
+) != 1
+BEGIN
+  SELECT RAISE(ABORT, 'COMMENTS_PROJECT_NOT_PLAINTEXT');
+END;
+
+CREATE TRIGGER IF NOT EXISTS block_comment_update_unless_plaintext
+BEFORE UPDATE ON project_comments
+WHEN COALESCE(
+  (SELECT storage_format FROM projects WHERE id = NEW.project_id), 1
+) != 1
+BEGIN
+  SELECT RAISE(ABORT, 'COMMENTS_PROJECT_NOT_PLAINTEXT');
+END;

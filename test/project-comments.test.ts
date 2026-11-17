@@ -186,6 +186,32 @@ describe('L08 comments (plaintext projects, migration 0058)', () => {
     ).rejects.toThrow('ACCOUNT_ERASURE_IN_PROGRESS');
   });
 
+  it('refuses a write that reaches the database after the project was encrypted', async () => {
+    const { sqlite, db } = setup();
+    const thread = await createProjectComment(db, 'proj_a', owner, {
+      anchor,
+      text: 'Before encryption'
+    });
+    // The route's plaintext check passed; the project is encrypted before
+    // the write lands.
+    sqlite
+      .prepare("UPDATE projects SET storage_format = 2 WHERE id = 'proj_a'")
+      .run();
+    expect(
+      await refusal(
+        createProjectComment(db, 'proj_a', owner, { anchor, text: 'After' })
+      )
+    ).toBe(409);
+    expect(
+      await refusal(
+        resolveProjectComment(db, 'proj_a', thread.commentId, owner, true)
+      )
+    ).toBe(409);
+    expect(
+      sqlite.prepare('SELECT COUNT(*) AS n FROM project_comments').get()
+    ).toEqual({ n: 1 });
+  });
+
   it('parses only well-formed requests and anchors', () => {
     expect(
       parseCreateProjectCommentRequest({ anchor, text: '  Look  ' })

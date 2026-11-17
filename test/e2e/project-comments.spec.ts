@@ -89,7 +89,23 @@ test(
     await expect(panel.getByRole('status')).toContainText(
       'Click a point on the model'
     );
-    await page.locator('.viewer-host canvas').click();
+    // A drag across empty space neither box-selects nor places anything:
+    // while placing, a press is the placement and nothing else.
+    const canvas = page.locator('.viewer-host canvas');
+    const box = (await canvas.boundingBox())!;
+    await page.mouse.move(box.x + 12, box.y + 12);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, {
+      steps: 8
+    });
+    await page.mouse.up();
+    await expect(panel.getByRole('status')).toContainText(
+      'Click a point on the model'
+    );
+    await expect(
+      panel.getByRole('textbox', { name: 'New comment' })
+    ).toHaveCount(0);
+    await canvas.click();
     const composer = panel.getByRole('textbox', { name: 'New comment' });
     await composer.fill('Is the 10 mm wall enough?');
     await panel.getByRole('button', { name: 'Post' }).click();
