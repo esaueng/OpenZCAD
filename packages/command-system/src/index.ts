@@ -46,8 +46,15 @@ export {
   type OpeningAxis
 } from './growing-holder';
 import {
+  isDrawingGeometryAnnotation,
   PIPE_THREAD_SIZES,
   isPipeThreadSize,
+  standardPartGeometry,
+  standardPartHasLength,
+  standardPartMinimumLengthMm,
+  standardPartNoun,
+  standardPartProblem,
+  standardPartForHole,
   createId,
   createSketchReferenceAnnotationId,
   createSketchCompositeId,
@@ -170,6 +177,8 @@ import {
   type GearInput,
   sheetMetalBody,
   type SheetMetalInput,
+  standardPartBody,
+  type StandardPartInput,
   threadBody,
   type ThreadInput,
   type ImportedMeshInput,
@@ -222,6 +231,23 @@ import {
   moveToObjectFolder,
   setPrintClearance,
   type PrintClearanceSetInput,
+  createConfigurations,
+  deleteConfigurations,
+  addConfigurationRow,
+  renameConfigurationRow,
+  deleteConfigurationRow,
+  addConfigurationColumn,
+  deleteConfigurationColumn,
+  setConfigurationCell,
+  activateConfiguration,
+  type ConfigurationCreateInput,
+  type ConfigurationRowAddInput,
+  type ConfigurationRowRenameInput,
+  type ConfigurationRowDeleteInput,
+  type ConfigurationColumnAddInput,
+  type ConfigurationColumnDeleteInput,
+  type ConfigurationCellSetInput,
+  type ConfigurationActivateInput,
   addAssemblyComponents,
   updateAssemblyComponent,
   deleteAssemblyComponent,
@@ -374,6 +400,7 @@ export type CommandKind =
   | 'feature.hole'
   | 'feature.gear'
   | 'feature.sheet-metal'
+  | 'feature.standard-part'
   | 'feature.thread'
   | 'feature.shell'
   | 'feature.solid-offset'
@@ -408,6 +435,15 @@ export type CommandKind =
   | 'objectFolder.delete'
   | 'objectFolder.move'
   | 'printClearance.set'
+  | 'configuration.create'
+  | 'configuration.delete'
+  | 'configuration.row.add'
+  | 'configuration.row.rename'
+  | 'configuration.row.delete'
+  | 'configuration.column.add'
+  | 'configuration.column.delete'
+  | 'configuration.cell.set'
+  | 'configuration.activate'
   | 'assembly.components.add'
   | 'assembly.component.update'
   | 'assembly.component.delete'
@@ -494,6 +530,7 @@ export type AnyCommand =
   | CommandDefinition<HelicalSweepInput>
   | CommandDefinition<GearInput>
   | CommandDefinition<ThreadInput>
+  | CommandDefinition<StandardPartInput>
   | CommandDefinition<BooleanInput>
   | CommandDefinition<TransformInput>
   | CommandDefinition<MirrorInput>
@@ -526,6 +563,15 @@ export type AnyCommand =
   | CommandDefinition<ObjectFolderDeleteInput>
   | CommandDefinition<ObjectFolderMoveInput>
   | CommandDefinition<PrintClearanceSetInput>
+  | CommandDefinition<ConfigurationCreateInput>
+  | CommandDefinition<Record<string, never>>
+  | CommandDefinition<ConfigurationRowAddInput>
+  | CommandDefinition<ConfigurationRowRenameInput>
+  | CommandDefinition<ConfigurationRowDeleteInput>
+  | CommandDefinition<ConfigurationColumnAddInput>
+  | CommandDefinition<ConfigurationColumnDeleteInput>
+  | CommandDefinition<ConfigurationCellSetInput>
+  | CommandDefinition<ConfigurationActivateInput>
   | CommandDefinition<AssemblyComponentsAddInput>
   | CommandDefinition<AssemblyComponentUpdateInput>
   | CommandDefinition<AssemblyComponentDeleteInput>
@@ -1644,6 +1690,113 @@ const MIN_ENVELOPED_TEETH = 10;
  * (a pointed tip, a closed root land, a cylinder too small) is the kernel's
  * call and surfaces as its typed refusal at rebuild.
  */
+/**
+ * M17: structural checks for a standard part. The row is the catalogue's
+ * (`standardPartProblem`); a length only on a screw or dowel pin, positive
+ * and long enough to build; a placement with a non-zero axis.
+ */
+function validateStandardPartInput(
+  document: ProjectDocument,
+  input: StandardPartInput
+): void {
+  const problem = standardPartProblem(input);
+  if (problem) throw new Error(problem);
+  const value = (label: string, param: ParamValue) =>
+    resolvedModelingValue(document, `standard part ${label}`, param);
+  if (input.hole !== undefined) validateStandardPartHole(document, input);
+  if (standardPartHasLength(input.partKind)) {
+    // M17 (schema v77): in a hole, an absent length is matched to it.
+    if (input.length === undefined) {
+      if (input.hole !== undefined) return validatePlacement();
+      throw new Error(`A ${standardPartNoun(input)} needs a length.`);
+    }
+    const length = value('length', input.length);
+    const minimum =
+      standardPartMinimumLengthMm(standardPartGeometry(input)) /
+      millimetresPerUnit(document.units);
+    if (!(length > minimum - 1e-9)) {
+      throw new Error(
+        `A ${standardPartNoun(input)} this size must be longer than ${Number(minimum.toPrecision(4))} ${document.units}.`
+      );
+    }
+  } else if (input.length !== undefined) {
+    throw new Error(
+      `A ${standardPartNoun(input)} takes its height from its table, not a length.`
+    );
+  }
+  validatePlacement();
+
+  function validatePlacement(): void {
+    if (input.origin === undefined || input.axis === undefined) {
+      throw new Error('A standard part needs an origin and an axis.');
+    }
+    value('origin X', input.origin.x);
+    value('origin Y', input.origin.y);
+    value('origin Z', input.origin.z);
+    const axisLength = Math.hypot(
+      value('axis X', input.axis.x),
+      value('axis Y', input.axis.y),
+      value('axis Z', input.axis.z)
+    );
+    if (!(axisLength > 1e-12)) {
+      throw new Error('A standard part axis must be non-zero.');
+    }
+    if (input.xDirection !== undefined) {
+      value('x direction X', input.xDirection.x);
+      value('x direction Y', input.xDirection.y);
+      value('x direction Z', input.xDirection.z);
+    }
+  }
+}
+
+/**
+ * M17 (schema v77): a part inserted into a hole names an M01 hole feature,
+ * is a screw or a dowel pin, and is the size the hole takes: a screw the
+ * hole's standard size, a dowel pin the hole's diameter.
+ */
+function validateStandardPartHole(
+  document: ProjectDocument,
+  input: StandardPartInput
+): void {
+  const hole = findFeature(document, input.hole!.featureId);
+  if (!hole || hole.data.featureKind !== 'hole') {
+    throw new Error('A part is inserted into a hole feature.');
+  }
+  if (input.partKind !== 'screw' && input.partKind !== 'dowel') {
+    throw new Error('Only a screw or a dowel pin goes into a hole.');
+  }
+  const data = hole.data;
+  const diameterMm = data.standard
+    ? holeStandardDiameterMm(data.standard)
+    : resolvedModelingValue(document, 'hole diameter', data.diameter) *
+      millimetresPerUnit(document.units);
+  const matched = standardPartForHole(
+    input.partKind,
+    {
+      ...(data.standard
+        ? {
+            standard: {
+              system: data.standard.system,
+              size: data.standard.size,
+              kind: data.standard.kind
+            }
+          }
+        : {}),
+      diameterMm,
+      through: data.depthMode === 'through',
+      boreMm: 0
+    },
+    input.system,
+    input.head
+  );
+  if (typeof matched === 'string') throw new Error(matched);
+  if (matched.system !== input.system || matched.size !== input.size) {
+    throw new Error(
+      `${hole.name} takes ${matched.system === 'iso' ? 'an ISO' : 'an ANSI'} ${matched.size}, not ${input.size}.`
+    );
+  }
+}
+
 function validateGearInput(document: ProjectDocument, input: GearInput): void {
   const value = (label: string, param: ParamValue): number => {
     const resolved = resolvedModelingValue(document, label, param);
@@ -2292,6 +2445,11 @@ function validateModelingFeatureUpdate(
       validateSheetMetalInput(preview, { name: feature.name, ...sheet });
       break;
     }
+    case 'standard-part': {
+      const { featureKind: _kind, ...part } = feature.data;
+      validateStandardPartInput(preview, { name: feature.name, ...part });
+      break;
+    }
     case 'shell':
       validateShellInput(preview, {
         name: feature.name,
@@ -2885,6 +3043,19 @@ export const commandFactories = {
       'Edit sheet metal'
     );
   },
+  /** M17: a standard part from its standard's table, as a new body. */
+  standardPartBody(
+    payload: StandardPartInput
+  ): CommandDefinition<StandardPartInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.standard-part',
+      `Add ${standardPartNoun(payload)}`,
+      withIds,
+      (document) => standardPartBody(document, withIds).document,
+      (document) => validateStandardPartInput(document, withIds)
+    );
+  },
   threadBody(payload: ThreadInput): CommandDefinition<ThreadInput> {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
     return makeCommand(
@@ -3419,6 +3590,80 @@ export const commandFactories = {
       moveToObjectFolder(document, payload)
     );
   },
+  createConfigurations(
+    payload: ConfigurationCreateInput,
+    label = 'Add configurations'
+  ): CommandDefinition<ConfigurationCreateInput> {
+    return makeCommand('configuration.create', label, payload, (document) =>
+      createConfigurations(document, payload)
+    );
+  },
+  deleteConfigurations(
+    label = 'Remove configurations'
+  ): CommandDefinition<Record<string, never>> {
+    return makeCommand('configuration.delete', label, {}, (document) =>
+      deleteConfigurations(document)
+    );
+  },
+  addConfigurationRow(
+    payload: ConfigurationRowAddInput,
+    label = `Add configuration ${payload.name}`
+  ): CommandDefinition<ConfigurationRowAddInput> {
+    return makeCommand('configuration.row.add', label, payload, (document) =>
+      addConfigurationRow(document, payload)
+    );
+  },
+  renameConfigurationRow(
+    payload: ConfigurationRowRenameInput,
+    label = `Rename configuration to ${payload.name}`
+  ): CommandDefinition<ConfigurationRowRenameInput> {
+    return makeCommand('configuration.row.rename', label, payload, (document) =>
+      renameConfigurationRow(document, payload)
+    );
+  },
+  deleteConfigurationRow(
+    payload: ConfigurationRowDeleteInput,
+    label = 'Delete configuration'
+  ): CommandDefinition<ConfigurationRowDeleteInput> {
+    return makeCommand('configuration.row.delete', label, payload, (document) =>
+      deleteConfigurationRow(document, payload)
+    );
+  },
+  addConfigurationColumn(
+    payload: ConfigurationColumnAddInput,
+    label = 'Add configuration column'
+  ): CommandDefinition<ConfigurationColumnAddInput> {
+    return makeCommand('configuration.column.add', label, payload, (document) =>
+      addConfigurationColumn(document, payload)
+    );
+  },
+  deleteConfigurationColumn(
+    payload: ConfigurationColumnDeleteInput,
+    label = 'Remove configuration column'
+  ): CommandDefinition<ConfigurationColumnDeleteInput> {
+    return makeCommand(
+      'configuration.column.delete',
+      label,
+      payload,
+      (document) => deleteConfigurationColumn(document, payload)
+    );
+  },
+  setConfigurationCell(
+    payload: ConfigurationCellSetInput,
+    label = 'Edit configuration'
+  ): CommandDefinition<ConfigurationCellSetInput> {
+    return makeCommand('configuration.cell.set', label, payload, (document) =>
+      setConfigurationCell(document, payload)
+    );
+  },
+  activateConfiguration(
+    payload: ConfigurationActivateInput,
+    label = 'Switch configuration'
+  ): CommandDefinition<ConfigurationActivateInput> {
+    return makeCommand('configuration.activate', label, payload, (document) =>
+      activateConfiguration(document, payload)
+    );
+  },
   setPrintClearance(
     payload: PrintClearanceSetInput,
     label = payload.value === null
@@ -3434,7 +3679,11 @@ export const commandFactories = {
   ): CommandDefinition<DrawingAnnotationAddInput> {
     return makeCommand(
       'drawing.annotation.add',
-      payload.annotation.kind === 'note' ? 'Add note' : 'Add dimension',
+      payload.annotation.kind === 'note'
+        ? 'Add note'
+        : isDrawingGeometryAnnotation(payload.annotation)
+          ? 'Add mark'
+          : 'Add dimension',
       payload,
       (document) => addDrawingAnnotation(document, payload)
     );
@@ -5506,8 +5755,25 @@ export function isParameterRetype(command: {
   );
 }
 
+/**
+ * Tweak's vocabulary: setting a parameter's value, and (F06) switching to
+ * another configuration row the model's author defined. Both turn the
+ * model's published knobs; neither edits its features.
+ */
+export function isTweakCommandKind(kind: string): boolean {
+  return kind === 'parameter.set' || kind === 'configuration.activate';
+}
+
+/** Whether a command is one Tweak runs: a value edit or a row switch. */
+export function isTweakCommand(command: {
+  kind: string;
+  payload?: unknown;
+}): boolean {
+  return isTweakCommandKind(command.kind) && !isParameterRetype(command);
+}
+
 function parameterOnly(kinds: string[] | null): boolean {
-  return !!kinds?.length && kinds.every((kind) => kind === 'parameter.set');
+  return !!kinds?.length && kinds.every(isTweakCommandKind);
 }
 
 /** D01: a command that edits drawing sheets and never the model. */
@@ -5561,6 +5827,36 @@ export function isAssemblyOnlyCommand(command: AnyCommand): boolean {
 /** Whether a history entry edits the assembly section and nothing else. */
 function assemblyOnly(entry: DocumentHistoryEntry | undefined): boolean {
   return sectionOnly(entry, isAssemblyCommandKind, 'assembly');
+}
+
+/**
+ * F06: a configuration command that edits only the table. Activating a row,
+ * and setting a parameter or suppression cell of the active row, change the
+ * model; body and material cells change what is shown and exported but not
+ * the geometry, so they keep the ready geometry too.
+ */
+export function isConfigurationTableOnlyCommand(
+  command: AnyCommand,
+  document: ProjectDocument
+): boolean {
+  if (command.commands)
+    return (
+      command.commands.length > 0 &&
+      command.commands.every((child) =>
+        isConfigurationTableOnlyCommand(child, document)
+      )
+    );
+  if (!command.kind.startsWith('configuration.')) return false;
+  if (command.kind === 'configuration.activate') return false;
+  if (command.kind === 'configuration.cell.set') {
+    const payload = command.payload as ConfigurationCellSetInput;
+    return (
+      payload.rowId !== document.configurations?.activeRowId ||
+      payload.column.kind === 'body' ||
+      payload.column.kind === 'material'
+    );
+  }
+  return true;
 }
 
 /** I05: a command that edits reference images and never the model. */
@@ -6152,6 +6448,12 @@ export function replayCommands(
       case 'feature.thread':
         next = threadBody(next, command.payload as ThreadInput).document;
         break;
+      case 'feature.standard-part':
+        next = standardPartBody(
+          next,
+          command.payload as StandardPartInput
+        ).document;
+        break;
       case 'feature.shell':
         next = shellBody(next, command.payload as ShellInput).document;
         break;
@@ -6378,6 +6680,57 @@ export function replayCommands(
         next = moveToObjectFolder(
           next,
           command.payload as ObjectFolderMoveInput
+        );
+        break;
+      case 'configuration.create':
+        next = createConfigurations(
+          next,
+          command.payload as ConfigurationCreateInput
+        );
+        break;
+      case 'configuration.delete':
+        next = deleteConfigurations(next);
+        break;
+      case 'configuration.row.add':
+        next = addConfigurationRow(
+          next,
+          command.payload as ConfigurationRowAddInput
+        );
+        break;
+      case 'configuration.row.rename':
+        next = renameConfigurationRow(
+          next,
+          command.payload as ConfigurationRowRenameInput
+        );
+        break;
+      case 'configuration.row.delete':
+        next = deleteConfigurationRow(
+          next,
+          command.payload as ConfigurationRowDeleteInput
+        );
+        break;
+      case 'configuration.column.add':
+        next = addConfigurationColumn(
+          next,
+          command.payload as ConfigurationColumnAddInput
+        );
+        break;
+      case 'configuration.column.delete':
+        next = deleteConfigurationColumn(
+          next,
+          command.payload as ConfigurationColumnDeleteInput
+        );
+        break;
+      case 'configuration.cell.set':
+        next = setConfigurationCell(
+          next,
+          command.payload as ConfigurationCellSetInput
+        );
+        break;
+      case 'configuration.activate':
+        next = activateConfiguration(
+          next,
+          command.payload as ConfigurationActivateInput
         );
         break;
       case 'printClearance.set':

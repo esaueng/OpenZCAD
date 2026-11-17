@@ -231,7 +231,7 @@ test(
     const steps = [
       /Tap Box \(the cube\).*then Done/,
       /Tap a face or an edge/,
-      /Tap History.*touch and hold a row/,
+      /If it is closed, tap History.*touch and hold a row/,
       /File › Export/
     ];
     for (const [index, words] of steps.entries()) {

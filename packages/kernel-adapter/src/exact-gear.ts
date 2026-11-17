@@ -282,6 +282,25 @@ export { gearModule };
 /** A deterministic reference direction perpendicular to `axis`. */
 export { defaultGearXDirection };
 
+/**
+ * Cuts gear teeth into `face` of `solid` with the kernel's gear generator,
+ * by its own spec: the refusal throws typed, as the Gear feature's does.
+ * M17 cuts a threaded insert's knurl with it.
+ */
+export function cutGearTeethOnFace(
+  kernel: RemusKernel,
+  solid: number,
+  face: number,
+  spec: Record<string, unknown>
+): { solid: number } {
+  const { solid: cut } = unwrap(
+    gearKernel(kernel).cutGearTeethDetailed(solid, face, JSON.stringify(spec)),
+    'Gear'
+  );
+  validateGeneratedSolid(kernel, cut, 'Gear');
+  return { solid: cut };
+}
+
 /** Resolves a feature's expressions in document units. */
 interface GearValues {
   resolve(value: ParamValue, label: string): number;

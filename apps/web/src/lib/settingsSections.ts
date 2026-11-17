@@ -223,31 +223,16 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     detail: 'Keys, devices, and recovery',
     group: 'Cloud and data',
     settings: [
-      'Your fingerprint',
-      'Enter your recovery key',
-      'Use your passkey',
       'Add a device',
-      'Revoke read-only access',
-      'Revoke read-only devices',
-      'Replace recovery key',
-      'Device key',
-      'Recovery key',
       'Passkeys',
-      'Add a passkey',
-      'Remove passkey',
-      'Scan this code',
+      'Recovery key',
+      'Your fingerprint',
+      'Revoke read-only access',
       'Compare these digits',
       'Continue your approval request',
       'Approve from another device',
-      'Use your recovery key',
-      'Code from the new device',
-      'Compare the codes',
-      'Certify the new device',
-      'Your recovery key',
-      'Before you continue',
-      'Confirm recovery key',
-      'Current recovery key',
-      'Recovery key to confirm'
+      'Use your passkey',
+      'Use your recovery key'
     ],
     searchTerms: [
       'e2ee',
@@ -262,7 +247,12 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'recovery',
       'end-to-end encryption',
       'certify',
-      'approval requests'
+      'approval requests',
+      'requests to join',
+      'new device',
+      'qr code',
+      'scan',
+      'set up encryption'
     ]
   },
   {

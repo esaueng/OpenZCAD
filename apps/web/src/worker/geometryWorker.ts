@@ -7,7 +7,9 @@ import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import type {
   AssemblyInterferenceOperand,
-  AssemblyInterferenceReport
+  AssemblyInterferenceReport,
+  SurfaceAnalysisReport,
+  SurfaceAnalysisRequest
 } from '@openzcad/shared';
 import type {
   BodyId,
@@ -33,6 +35,7 @@ import type {
   kernelSnapshotBuildId,
   MeshQualityReport,
   MassPropertiesRead,
+  ExportBodySummary,
   PersistedHistorySession,
   RebuildProgress,
   SectionOutlineReport,
@@ -182,6 +185,12 @@ export type GeometryWorkerRequest =
       transparent?: boolean;
       /** 'step' only: the name the file is saved under, for its header. */
       fileName?: string;
+      /**
+       * F06: ignore `bodyIds` and write every body the document itself shows
+       * once built — a configuration that is not the displayed one, whose
+       * bodies the caller cannot list.
+       */
+      allShownBodies?: boolean;
     }
   | {
       /**
@@ -209,7 +218,8 @@ export type GeometryWorkerRequest =
       deflection: number;
       angularTolerance?: number;
       /** The space the writer tessellates in; millimetres when unset. */
-      units?: UnitSystem;
+      units?: UnitSystem; /** F06: as for an export, every body the document shows. */
+      allShownBodies?: boolean;
     }
   | {
       /**
@@ -234,6 +244,16 @@ export type GeometryWorkerRequest =
       requestId: string;
       document: ProjectDocument;
       bodyId: BodyId;
+    }
+  | {
+      /**
+       * F06: the bodies an export of this document writes, named and marked
+       * when they are mesh references: an export dialog for a configuration
+       * that is not shown lists and limits its formats from these.
+       */
+      type: 'export-bodies';
+      requestId: string;
+      document: ProjectDocument;
     }
   | {
       /**
@@ -263,6 +283,17 @@ export type GeometryWorkerRequest =
       requestId: string;
       document: ProjectDocument;
       operands: AssemblyInterferenceOperand[];
+    }
+  | {
+      /**
+       * M09 analysis overlays: the exact per-face analysis of the named
+       * bodies (the adapter's `surfaceAnalysis`). Read-only.
+       */
+      type: 'surface-analysis';
+      requestId: string;
+      document: ProjectDocument;
+      bodyIds: BodyId[];
+      analysis: SurfaceAnalysisRequest;
     }
   | {
       /** One planar sketch edit: corner fillet, corner chamfer, or offset. */
@@ -449,6 +480,15 @@ export type GeometryMassPropertiesResult =
     }
   | { type: 'mass-properties'; ok: false; requestId: string; error: string };
 
+export type GeometryExportBodiesResult =
+  | {
+      type: 'export-bodies';
+      ok: true;
+      requestId: string;
+      bodies: ExportBodySummary[];
+    }
+  | { type: 'export-bodies'; ok: false; requestId: string; error: string };
+
 export type GeometrySheetMetalFoldResult =
   | {
       type: 'sheet-metal-fold';
@@ -476,6 +516,20 @@ export type GeometryAssemblyInterferenceResult =
     }
   | {
       type: 'assembly-interference';
+      ok: false;
+      requestId: string;
+      error: string;
+    };
+
+export type GeometrySurfaceAnalysisResult =
+  | {
+      type: 'surface-analysis';
+      ok: true;
+      requestId: string;
+      report: SurfaceAnalysisReport;
+    }
+  | {
+      type: 'surface-analysis';
       ok: false;
       requestId: string;
       error: string;
@@ -601,10 +655,12 @@ export type GeometryWorkerResult =
   | GeometryMeshQualityResult
   | GeometryDrawingTessellationResult
   | GeometryMassPropertiesResult
+  | GeometryExportBodiesResult
   | GeometrySheetMetalFoldResult
   | GeometrySectionResult
   | GeometrySolveSketchResult
   | GeometryAssemblyInterferenceResult
+  | GeometrySurfaceAnalysisResult
   | GeometrySketch2dOpResult
   | GeometryRecognizeImportedFaceResult
   | GeometrySheetMetalFlatPatternResult;
@@ -1151,6 +1207,28 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       return;
     }
 
+    if (request.type === 'export-bodies') {
+      if (exactKernelStatus !== 'ready')
+        post(stateFor('loading-remus', request, { stale: true }));
+      const exact = await loadExactKernel();
+      if (!exact) {
+        throw exactKernelError instanceof Error
+          ? exactKernelError
+          : new Error('The exact Remus kernel failed to load.');
+      }
+      post(stateFor('rebuilding', request, { stale: true }));
+      await preloadDocumentFonts(document);
+      const bodies = await exact.documentExportBodies(document);
+      post({
+        type: 'export-bodies',
+        ok: true,
+        requestId: request.requestId,
+        bodies
+      });
+      post(stateFor('ready', request, { stale: false }));
+      return;
+    }
+
     if (request.type === 'mass-properties') {
       let result: MassPropertiesRead;
       if (
@@ -1245,6 +1323,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       request.type === 'section' ||
       request.type === 'solve-sketch' ||
       request.type === 'assembly-interference' ||
+      request.type === 'surface-analysis' ||
       request.type === 'sketch-2d-op' ||
       request.type === 'recognize-imported-face' ||
       request.type === 'sheet-metal-fold' ||
@@ -1363,6 +1442,21 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         post(stateFor('ready', request, { stale: false }));
         return;
       }
+      if (request.type === 'surface-analysis') {
+        const report = await exact.surfaceAnalysis(
+          document,
+          request.bodyIds,
+          request.analysis
+        );
+        post({
+          type: 'surface-analysis',
+          ok: true,
+          requestId: request.requestId,
+          report
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
       if (request.type === 'section') {
         const report = await exact.sectionOutline(
           document,
@@ -1410,7 +1504,9 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       if (request.type === 'mesh-quality') {
         const report = await exact.meshQuality(
           document,
-          request.bodyIds,
+          request.allShownBodies
+            ? await exact.documentExportBodyIds(document)
+            : request.bodyIds,
           request.deflection,
           {
             ...(request.units ? { units: request.units } : {}),
@@ -1477,8 +1573,11 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         post(stateFor('ready', request, { stale: false }));
         return;
       }
+      const exportBodyIds = request.allShownBodies
+        ? await exact.documentExportBodyIds(document)
+        : request.bodyIds;
       if (request.format !== 'step' && request.format !== 'stl') {
-        const data = await exact.exportMesh(document, request.bodyIds, {
+        const data = await exact.exportMesh(document, exportBodyIds, {
           format: request.format,
           deflection: request.deflection ?? DEFAULT_EXPORT_DEFLECTION,
           ...(request.units ? { units: request.units } : {}),
@@ -1502,21 +1601,16 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       }
       const text =
         request.format === 'step'
-          ? await exact.exportStep(document, request.bodyIds, {
+          ? await exact.exportStep(document, exportBodyIds, {
               ...(request.units ? { units: request.units } : {}),
               ...(request.fileName ? { fileName: request.fileName } : {})
             })
-          : await exact.exportStl(
-              document,
-              request.bodyIds,
-              request.deflection,
-              {
-                ...(request.units ? { units: request.units } : {}),
-                ...(request.angularTolerance !== undefined
-                  ? { angularTolerance: request.angularTolerance }
-                  : {})
-              }
-            );
+          : await exact.exportStl(document, exportBodyIds, request.deflection, {
+              ...(request.units ? { units: request.units } : {}),
+              ...(request.angularTolerance !== undefined
+                ? { angularTolerance: request.angularTolerance }
+                : {})
+            });
       const result: GeometryExportResult = {
         type: 'export',
         ok: true,
@@ -1808,6 +1902,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         requestId: request.requestId,
         error: message
       });
+    } else if (request.type === 'export-bodies') {
+      post({
+        type: 'export-bodies',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
     } else if (request.type === 'sheet-metal-fold') {
       post({
         type: 'sheet-metal-fold',
@@ -1846,6 +1947,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     } else if (request.type === 'assembly-interference') {
       post({
         type: 'assembly-interference',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'surface-analysis') {
+      post({
+        type: 'surface-analysis',
         ok: false,
         requestId: request.requestId,
         error: message

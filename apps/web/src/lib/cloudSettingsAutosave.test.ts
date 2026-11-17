@@ -273,6 +273,73 @@ describe('cloud settings autosave', () => {
     expect(test.autosave.syncedRevision).toBeNull();
   });
 
+  it('allows profile erasure after a failed locked-device save without losing the device copy', async () => {
+    const test = harness(async () => {
+      throw new Error('locked device');
+    });
+    const edited = settings(1);
+    test.autosave.schedule(edited);
+    await vi.advanceTimersByTimeAsync(25);
+    const erase = vi.fn(async () => {
+      test.autosave.endSession();
+      return { signedOut: true };
+    });
+
+    await expect(test.autosave.withProfileErasure(erase)).resolves.toEqual({
+      signedOut: true
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(erase).toHaveBeenCalledOnce();
+    expect(test.updateSettings).toHaveBeenCalledOnce();
+    expect(test.autosave.hasPendingChanges).toBe(true);
+    expect(test.localWrites.at(-1)).toEqual({
+      settings: edited,
+      revision: null
+    });
+  });
+
+  it('drains an in-flight write before erasure and ignores its stale success', async () => {
+    const request = deferred<AppSettingsResponse>();
+    const test = harness(() => request.promise);
+    test.autosave.schedule(settings(1));
+    await vi.advanceTimersByTimeAsync(25);
+    const erase = vi.fn(async () => test.autosave.endSession());
+    const deletion = test.autosave.withProfileErasure(erase);
+    expect(erase).not.toHaveBeenCalled();
+    request.resolve(account(settings(1), 1));
+    await deletion;
+    expect(erase).toHaveBeenCalledOnce();
+    expect(test.accountChanges).toEqual([]);
+    expect(test.autosave.syncedRevision).toBeNull();
+  });
+
+  it('restores the pending settings session when erasure fails', async () => {
+    const test = harness();
+    test.autosave.schedule(settings(1), 60_000);
+    await expect(
+      test.autosave.withProfileErasure(async () => {
+        throw new Error('delete failed');
+      })
+    ).rejects.toThrow('delete failed');
+    expect(test.updateSettings).not.toHaveBeenCalled();
+    await test.autosave.flushPending();
+    expect(test.updateSettings).toHaveBeenCalledOnce();
+    expect(test.autosave.syncedRevision).toBe(1);
+  });
+
+  it('never restores the erased session over a new account session', async () => {
+    const test = harness();
+    await test.autosave.withProfileErasure(async () => {
+      test.autosave.connectSession('other_user', account(settings(50), 50));
+    });
+    test.autosave.schedule(settings(51));
+    await test.autosave.flushPending();
+    expect(test.updateSettings).toHaveBeenLastCalledWith({
+      settings: settings(51),
+      expectedRevision: 50
+    });
+  });
+
   it('discards a response from an earlier session epoch for the same user', async () => {
     const oldRequest = deferred<AppSettingsResponse>();
     const update = vi.fn(() => oldRequest.promise);

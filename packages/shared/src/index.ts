@@ -15,14 +15,18 @@ export * from './keymap-settings';
 export * from './drawings';
 export * from './object-folders';
 export * from './print-clearance';
+export * from './configurations';
 export * from './assembly';
 export * from './assembly-coupling';
 export * from './assembly-kinematics';
 export * from './body-clash';
+export * from './surface-analysis';
 export * from './gear-mesh-types';
 export * from './gear-mesh';
 export * from './hole-points';
 export * from './hole-standards';
+export * from './standard-parts';
+export * from './standard-part-placement';
 import type { DocumentHistory } from './document-history';
 import { ownEntry } from './document-validation';
 import type { KeymapOverrides } from './keymap-settings';
@@ -36,7 +40,15 @@ import type { SheetMetalFeatureFields } from './sheet-metal';
 import type { SketchPromotion } from './sketch-promotions';
 import type { ObjectFolderSet } from './object-folders';
 import type { AssemblySet } from './assembly';
+import type { ConfigurationSet } from './configurations';
 import type { PipeThreadSize } from './pipe-threads';
+import type {
+  StandardPartBuild,
+  StandardPartKind,
+  StandardPartSize,
+  StandardPartSystem,
+  StandardScrewHead
+} from './standard-parts';
 import type {
   HoleClearanceFit,
   HoleStandardKind,
@@ -302,7 +314,52 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // thread is described for drawings and callouts but not cut, so the bore
 // stays its tap drill. An older client would cut the thread, so it must
 // refuse. Builds on v66.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 67 as const;
+// v68 adds D02 dimension tolerances, prefixes and suffixes (`tolerance`,
+// `prefix` and `suffix` on a drawing dimension): symmetric, deviation, limits
+// and basic tolerances read against the measured value each time the sheet is
+// drawn. Absent keeps the bare value, so every older sheet draws unchanged.
+// An older client would print the bare value and drop them on its next save,
+// so it must refuse. Builds on v67.
+// v69 adds M17 standard parts (`featureKind: 'standard-part'`): a screw,
+// nut, washer, threaded insert, dowel pin or ball bearing generated from its
+// standard's table as a new body. An older client has no builder for the
+// kind and would drop the body on rebuild, so it must refuse. Builds on v68.
+// v70 adds D02 drawing properties (`format` on a drawing sheet): the units,
+// precision, angle format and decimal separator its dimensions print in and
+// per-class line weights. Absent keeps every default, so every older sheet
+// draws unchanged. An older client would print in the document's units and
+// drop them on its next save, so it must refuse. Builds on v69.
+// v72 adds F06 configurations (`configurations`): a variant table whose rows
+// are named configurations and whose columns are parameters, feature
+// suppression, body visibility and material, with one active row. Absent
+// means no table, so every older document builds unchanged. An older client
+// would show and export bodies the active row hides and drop the table on
+// its next save, so it must refuse. Builds on v70 (v71 is claimed by M17).
+// v73 adds D02 geometry annotations: centre marks, intersection marks and
+// centrelines (`center-mark`, `intersection-mark`, `centerline` annotation
+// kinds) and a mark as a dimension point (`anchor: 'mark'`). An older client
+// would refuse the unknown kinds, so it must refuse the document. Builds on
+// v72.
+// v75 adds the D02 distance dimension (`kind: 'distance'`): point to line,
+// line to line, and to a circle's centre or its near or far side, where a
+// line may be a straight edge or a centreline. An older client would refuse
+// the unknown kind, so it must refuse the document. Builds on v74
+// (M17 standard parts in holes, #1644).
+// v77 adds M17 parts inserted into M01 holes (`hole` on a standard part):
+// the part stands in each of the hole's bores and takes its matched length
+// where it stores none. An older client would build one part at the stored
+// origin, or none without a length, so it must refuse. (M17 first claimed
+// v71 and then v74, but clients up to v75 have no `hole`.) Builds on v75.
+// v78 adds D03 detail views (`detail` on a drawing view): the region of a
+// source view inside a circle, at its own scale. An older client would draw
+// the whole view at the sheet's scale, uncropped, so it must refuse. Builds
+// on v77.
+// v80 adds D02 parts lists and balloons (`bom-table` and `balloon` drawing
+// annotations): an assembly's BOM table on the paper and a part's item
+// number at a leader, both read from the AS03 table each time the sheet is
+// drawn. An older client would refuse the unknown kinds, so it must refuse
+// the document. Builds on v79 (F06 assembly component configurations).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 80 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -371,6 +428,7 @@ export type FeatureKind =
   | 'gear'
   | 'thread'
   | 'sheet-metal'
+  | 'standard-part'
   | 'direct-edit'
   | 'imported-step'
   | 'imported-mesh'
@@ -2319,6 +2377,49 @@ export type FeatureData =
        */
       pipeSize?: PipeThreadSize;
     }
+  | {
+      /**
+       * M17 (schema v69): a standard part, generated as a new body from its
+       * standard's table (`standard-parts.ts`): a screw, nut, washer,
+       * threaded insert, dowel pin or deep groove ball bearing. Threads are
+       * modeled by the M15 thread generator and an insert's knurl by the M14
+       * gear generator. Nothing is consumed.
+       *
+       * Placement: `origin` is the part's seat and `axis` points the way it
+       * goes in. A screw's head stands behind the origin and its shank runs
+       * along `axis` (a countersunk head sinks along it from the origin, its
+       * top on the origin); a nut, washer, insert, dowel pin or bearing runs
+       * from the origin along `axis` for its height. `xDirection` turns a
+       * hex about the axis; absent is a deterministic perpendicular.
+       */
+      featureKind: 'standard-part';
+      partKind: StandardPartKind;
+      system: StandardPartSystem;
+      size: StandardPartSize;
+      /** Screws only; absent is `'socket'`. */
+      head?: StandardScrewHead;
+      /**
+       * Screws and dowel pins: the nominal length (under the head, or
+       * overall on a countersunk screw). Required on them, refused on the
+       * others, whose table fixes their height.
+       */
+      length?: ParamValue;
+      origin: ParametricVector3;
+      axis: ParametricVector3;
+      xDirection?: ParametricVector3;
+      /**
+       * M17 slice 2 (schema v71): the M01 hole the part is inserted into.
+       * The part then stands in every bore that hole drills (one solid
+       * each), on the bore's seat (a counterbore's floor, the entry face,
+       * or a countersunk head's top on the entry face) along the bore, and
+       * follows the hole when it moves. `origin` and `axis` keep where it
+       * stood when inserted. Without `length`, a screw or dowel pin takes
+       * the preferred length matched to the hole
+       * (`matchedStandardLengthMm`). The hole must be earlier in history,
+       * and must take the part's size (`standardPartForHole`).
+       */
+      hole?: { featureId: FeatureId };
+    }
   /**
    * M16 (schema v58): a sheet-metal part. The sketch cells in `profiles`
    * are the flat blank, `thickness` thick; every bend in `bends` folds it
@@ -3818,6 +3919,11 @@ export interface DerivedState {
    */
   datumFrames?: Record<FeatureId, DatumFrame>;
   /**
+   * M17: each standard part as the exact build placed it, by its feature
+   * (see {@link StandardPartBuild}). Absent before a rebuild.
+   */
+  standardParts?: Record<FeatureId, StandardPartBuild>;
+  /**
    * R01 (schema v28): each datum axis as the exact build resolved it at its
    * own history position. A datum axis that failed or is suppressed is absent.
    */
@@ -3918,6 +4024,11 @@ export interface ProjectDocument {
    * before. See `documentPrintClearance` in document-core.
    */
   printClearance?: ParamValue;
+  /**
+   * F06 (schema v72): the variant table, its rows and the active row. See
+   * `configurations.ts`. Absent means the document has no configurations.
+   */
+  configurations?: ConfigurationSet;
 }
 
 export interface SerializedCommand<TPayload = unknown> {
@@ -4803,6 +4914,8 @@ export interface AuthConfigResponse {
   mode: 'development' | 'email-code' | 'unconfigured';
   emailCodeEnabled: boolean;
   turnstileSiteKey?: string;
+  /** Only returned to a browser holding the temporary beta QA capability. */
+  qaTurnstileBypassEmail?: string;
   /** Present only on the native readiness endpoint. Older Workers fail closed. */
   desktopAuthEnabled?: boolean;
 }
@@ -5934,6 +6047,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   gear: '#c084fc',
   thread: '#84cc16',
   'sheet-metal': '#94a3b8',
+  'standard-part': '#c2b280',
   'direct-edit': '#2dd4bf',
   'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff',

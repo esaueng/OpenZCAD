@@ -26,9 +26,14 @@ import {
   Scaling,
   Scissors,
   StickyNote,
+  MessageCircle,
+  TableProperties,
   Sun,
   Trash2,
   TriangleRight,
+  LocateFixed,
+  SeparatorVertical,
+  CircleDashed,
   X,
   ZoomIn,
   ZoomOut,
@@ -39,14 +44,31 @@ import {
   composeCommands,
   type AnyCommand
 } from '@openzcad/command-system';
-import { updateDrawingView } from '@openzcad/document-core';
+import {
+  ASSEMBLY_BOM_COLUMNS,
+  updateDrawingView
+} from '@openzcad/document-core';
 import {
   createDrawingAnnotationId,
   createDrawingViewId,
+  MAX_DRAWING_DIMENSION_AFFIX_LENGTH,
   MAX_DRAWING_DIMENSION_COUNT,
+  drawingToleranceError,
   MAX_DRAWING_DIMENSION_DECIMALS,
   MAX_DRAWING_NOTE_LENGTH,
   type DrawingAnnotation,
+  type DrawingTolerance,
+  type DrawingDetail,
+  type DrawingDimension,
+  isDrawingDimension,
+  isDrawingGeometryAnnotation,
+  type DrawingLineClass,
+  type DrawingSheetFormat,
+  DRAWING_LINE_CLASSES,
+  DRAWING_LINE_CLASS_LABELS,
+  MAX_DRAWING_LINE_WIDTH_MM,
+  MIN_DRAWING_LINE_WIDTH_MM,
+  type DrawingToleranceKind,
   type DrawingAnnotationId,
   DRAWING_PAPER_LABELS,
   DRAWING_PAPER_SIZES_MM,
@@ -105,6 +127,7 @@ import {
   autoScaleSheet,
   composeSheetPage,
   sectionCaption,
+  detailCaption,
   sectionLineOnPage,
   SHEET_STROKE_ORDER,
   type ComposedView,
@@ -112,6 +135,8 @@ import {
   freeViewCenter,
   nextViewOrientation,
   sheetUnprintableCharacters,
+  SHEET_STROKE_WIDTH_MM,
+  titleBlockAutoDate,
   titleBlockBox,
   viewPageBox,
   viewPlacementIssue,
@@ -135,6 +160,7 @@ import {
 import {
   drawingExportFileName,
   sheetPageToPdf,
+  sheetPageToDxf,
   sheetPageToSvg,
   sheetTextStart
 } from '../lib/drawing/sheetExport';
@@ -142,7 +168,13 @@ import {
   annotationAnchor,
   composeSheetAnnotations,
   defaultDimensionDecimals,
+  DEFAULT_BOM_COLUMNS,
+  sheetMarkLookup,
+  sheetNumberFormat,
+  type DrawingNumberFormat,
   markHiddenLeaders,
+  sheetBom,
+  balloonComponent,
   previewAnnotationLayer,
   resolveSheetAnnotations,
   holeCalloutLookup,
@@ -165,6 +197,7 @@ import {
   applyAnnotationPick,
   draftAnnotation,
   draftRefusal,
+  isGeometryTool,
   drawingViewSignature,
   drawnLines,
   drawnOutlines,
@@ -199,6 +232,11 @@ import {
   sectionSourceAt,
   type SectionLine
 } from '../lib/drawing/sectionTool';
+import {
+  detailDraft,
+  detailRegionFromDrag,
+  detailSourceAt
+} from '../lib/drawing/detailTool';
 import {
   drawingAssistantDigest,
   type DrawingAssistantSource
@@ -795,7 +833,9 @@ function useViewProjections(
 function viewLabel(view: DrawingView): string {
   return view.section
     ? sectionCaption(view.section.label).replace('SECTION', 'Section')
-    : DRAWING_VIEW_LABELS[view.orientation];
+    : view.detail
+      ? `Detail ${view.detail.label}`
+      : DRAWING_VIEW_LABELS[view.orientation];
 }
 
 function statusMessage(status: SheetStatus): string | null {
@@ -920,11 +960,18 @@ const ANNOTATION_TOOLS: readonly AnnotationToolKind[] = [
   'horizontal',
   'vertical',
   'aligned',
+  'distance',
   'radius',
   'diameter',
   'angle',
   'chamfer',
-  'note'
+  'note',
+  'center-mark',
+  'intersection-mark',
+  'centerline',
+  'circle-centerline',
+  'balloon',
+  'parts-list'
 ];
 
 const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
@@ -932,11 +979,18 @@ const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
     horizontal: MoveHorizontal,
     vertical: MoveVertical,
     aligned: MoveDiagonal2,
+    distance: Ruler,
     radius: Radius,
     diameter: Diameter,
     angle: Angle,
     chamfer: TriangleRight,
-    note: StickyNote
+    note: StickyNote,
+    'center-mark': Crosshair,
+    'intersection-mark': LocateFixed,
+    centerline: SeparatorVertical,
+    'circle-centerline': CircleDashed,
+    balloon: MessageCircle,
+    'parts-list': TableProperties
   };
 
 /** One key per tool, live while Draw is open and focus is not in a field. */
@@ -944,15 +998,24 @@ const ANNOTATION_TOOL_KEYS: Readonly<Record<AnnotationToolKind, string>> = {
   horizontal: 'H',
   vertical: 'V',
   aligned: 'A',
+  distance: 'T',
   radius: 'R',
   diameter: 'D',
   angle: 'G',
   chamfer: 'C',
-  note: 'N'
+  note: 'N',
+  'center-mark': 'M',
+  'intersection-mark': 'X',
+  centerline: 'L',
+  'circle-centerline': 'B',
+  balloon: 'O',
+  'parts-list': 'P'
 };
 
 /** D03: the section view tool's key, beside the annotation tools'. */
 const SECTION_TOOL_KEY = 'S';
+/** D03 (v78): the detail view tool's key. */
+const DETAIL_TOOL_KEY = 'K';
 
 const DARK_PAPER_STORAGE_KEY = 'openzcad.drawing.darkPaper';
 
@@ -994,18 +1057,33 @@ const ANNOTATION_KIND_LABELS: Readonly<
   Record<DrawingAnnotation['kind'], string>
 > = {
   linear: 'Dimension',
+  distance: 'Distance',
   radius: 'Radius',
   diameter: 'Diameter',
   angle: 'Angle',
   chamfer: 'Chamfer',
-  note: 'Note'
+  note: 'Note',
+  'center-mark': 'Centre mark',
+  'intersection-mark': 'Intersection mark',
+  centerline: 'Centreline',
+  'bom-table': 'Parts list',
+  balloon: 'Balloon'
 };
 
 function annotationTitle(annotation: DrawingAnnotation): string {
+  if (annotation.kind === 'centerline')
+    return annotation.mode === 'circle'
+      ? 'Circular centreline'
+      : annotation.mode === 'lines'
+        ? 'Centreline between lines'
+        : 'Centreline';
   return annotation.kind === 'linear'
     ? `${ANNOTATION_TOOL_LABELS[annotation.direction]} dimension`
-    : annotation.kind === 'note'
-      ? 'Note'
+    : annotation.kind === 'note' ||
+        annotation.kind === 'bom-table' ||
+        annotation.kind === 'balloon' ||
+        isDrawingGeometryAnnotation(annotation)
+      ? ANNOTATION_KIND_LABELS[annotation.kind]
       : `${ANNOTATION_KIND_LABELS[annotation.kind]} dimension`;
 }
 
@@ -1018,9 +1096,11 @@ function annotationName(
   if (annotation.kind === 'note') return `Note: ${annotation.text}`;
   const title = annotationTitle(annotation);
   if (!ready) return title;
-  return resolution?.ok
+  if (!resolution?.ok) return `${title} (broken)`;
+  // A mark states no value: its name is its kind.
+  return resolution.resolved.label
     ? `${title} ${resolution.resolved.label}`
-    : `${title} (broken)`;
+    : title;
 }
 
 /**
@@ -1479,7 +1559,8 @@ function AnnotationProperties(props: {
   /** Re-picking needs a ready, editable sheet with views. */
   canRepick: boolean;
   editable: boolean;
-  units: ProjectDocument['units'];
+  /** The sheet's number format: its printed units and default precision. */
+  numberFormat: DrawingNumberFormat;
   resolutions: ReadonlyMap<DrawingAnnotationId, AnnotationResolution>;
   onTool: (tool: AnnotationTool | null) => void;
   onDeselect: () => void;
@@ -1502,15 +1583,31 @@ function AnnotationProperties(props: {
         <p className="drawing-annotation-status" role="alert">
           Broken: {resolution.message} Re-pick what it measures, or delete it.
         </p>
-      ) : resolution?.ok && selected.kind !== 'note' ? (
+      ) : resolution?.ok && isDrawingDimension(selected) ? (
         <p className="drawing-annotation-value">
           {resolution.resolved.label}
           {selected.kind === 'angle' || selected.kind === 'chamfer'
             ? ''
-            : ` ${props.units}`}
+            : ` ${props.numberFormat.units}`}
         </p>
       ) : null}
-      {selected.kind === 'note' ? (
+      {isDrawingGeometryAnnotation(selected) ? (
+        <p className="drawing-hint">
+          Marks geometry; dimensions may measure to a centre or intersection
+          mark.
+        </p>
+      ) : selected.kind === 'bom-table' ? (
+        <BomColumnFields
+          selected={selected}
+          editable={editable}
+          onUpdate={props.onUpdate}
+        />
+      ) : selected.kind === 'balloon' ? (
+        <p className="drawing-hint">
+          Names the item number its part has in the assembly&apos;s parts list;
+          it follows the list&apos;s numbering.
+        </p>
+      ) : selected.kind === 'note' ? (
         <TextField
           label="Text"
           value={selected.text}
@@ -1539,7 +1636,11 @@ function AnnotationProperties(props: {
             }}
           >
             <option value="">
-              Default ({defaultDimensionDecimals(selected.kind, props.units)})
+              Default (
+              {selected.kind === 'angle'
+                ? props.numberFormat.angleDecimals
+                : props.numberFormat.lengthDecimals}
+              )
             </option>
             {Array.from(
               { length: MAX_DRAWING_DIMENSION_DECIMALS + 1 },
@@ -1552,7 +1653,7 @@ function AnnotationProperties(props: {
           </select>
         </label>
       )}
-      {selected.kind !== 'note' && (
+      {isDrawingDimension(selected) && (
         <DimensionFormat
           selected={selected}
           editable={editable}
@@ -1568,25 +1669,26 @@ function AnnotationProperties(props: {
         </p>
       )}
       <div className="drawing-field-row">
-        {(selected.kind !== 'note' || selected.leader) && (
-          <button
-            type="button"
-            className="secondary"
-            disabled={!props.canRepick}
-            title="Pick the edges this measures again"
-            onClick={() =>
-              props.onTool(
-                startAnnotationTool(
-                  repairToolKind(selected),
-                  selected.annotationId,
-                  selected.viewId
+        {selected.kind !== 'bom-table' &&
+          (selected.kind !== 'note' || selected.leader) && (
+            <button
+              type="button"
+              className="secondary"
+              disabled={!props.canRepick}
+              title="Pick the edges this measures again"
+              onClick={() =>
+                props.onTool(
+                  startAnnotationTool(
+                    repairToolKind(selected),
+                    selected.annotationId,
+                    selected.viewId
+                  )
                 )
-              )
-            }
-          >
-            <Crosshair size={13} aria-hidden="true" /> Re-pick
-          </button>
-        )}
+              }
+            >
+              <Crosshair size={13} aria-hidden="true" /> Re-pick
+            </button>
+          )}
         <button
           type="button"
           className="secondary"
@@ -1605,7 +1707,7 @@ function AnnotationProperties(props: {
  * span across a cylinder, and reference dimensions in brackets.
  */
 function DimensionFormat(props: {
-  selected: Exclude<DrawingAnnotation, { kind: 'note' }>;
+  selected: DrawingDimension;
   editable: boolean;
   onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
 }) {
@@ -1657,6 +1759,30 @@ function DimensionFormat(props: {
           />
         </label>
       )}
+      {selected.kind === 'distance' &&
+        [selected.from, selected.to].some((target) => 'circle' in target) && (
+          <label className="drawing-field">
+            <span>Measure circles to</span>
+            <select
+              value={selected.extent ?? ''}
+              disabled={!editable}
+              onChange={(event) => {
+                const { extent: _previous, ...rest } = selected;
+                const extent = event.target.value;
+                props.onUpdate(
+                  extent === 'min' || extent === 'max'
+                    ? { ...rest, extent }
+                    : rest,
+                  'Format dimension'
+                );
+              }}
+            >
+              <option value="">Centres</option>
+              <option value="min">Near sides (minimum)</option>
+              <option value="max">Far sides (maximum)</option>
+            </select>
+          </label>
+        )}
       {selected.kind === 'linear' && (
         <label className="drawing-check">
           <input
@@ -1678,16 +1804,217 @@ function DimensionFormat(props: {
           type="checkbox"
           checked={selected.reference === true}
           disabled={!editable}
-          onChange={(event) =>
-            props.onUpdate(
-              flag('reference', event.target.checked),
-              'Format dimension'
-            )
-          }
+          onChange={(event) => {
+            // A reference dimension is stated for information and takes no
+            // tolerance (v68): marking one drops it.
+            const marked = flag('reference', event.target.checked);
+            if (event.target.checked && 'tolerance' in marked) {
+              const { tolerance: _dropped, ...rest } = marked;
+              props.onUpdate(rest, 'Format dimension');
+            } else props.onUpdate(marked, 'Format dimension');
+          }}
         />
         <span>Reference dimension (in brackets)</span>
       </label>
+      <TextField
+        label="Prefix"
+        value={selected.prefix ?? ''}
+        placeholder="None"
+        maxLength={MAX_DRAWING_DIMENSION_AFFIX_LENGTH}
+        printed
+        disabled={!editable}
+        onCommit={(text) =>
+          props.onUpdate(affixed(selected, 'prefix', text), 'Format dimension')
+        }
+      />
+      <TextField
+        label="Suffix"
+        value={selected.suffix ?? ''}
+        placeholder="None"
+        maxLength={MAX_DRAWING_DIMENSION_AFFIX_LENGTH}
+        printed
+        disabled={!editable}
+        onCommit={(text) =>
+          props.onUpdate(affixed(selected, 'suffix', text), 'Format dimension')
+        }
+      />
+      <ToleranceFields
+        selected={selected}
+        editable={editable}
+        onUpdate={props.onUpdate}
+      />
     </>
+  );
+}
+
+/** v68: `selected` with its prefix or suffix set, or cleared when blank. */
+function affixed(
+  selected: DrawingDimension,
+  key: 'prefix' | 'suffix',
+  text: string
+): DrawingAnnotation {
+  const { [key]: _previous, ...rest } = selected;
+  const trimmed = text.trim();
+  return trimmed ? { ...rest, [key]: trimmed } : rest;
+}
+
+const TOLERANCE_LABELS: Readonly<Record<DrawingToleranceKind, string>> = {
+  symmetric: 'Symmetric (±)',
+  deviation: 'Deviation (+/−)',
+  limits: 'Limits',
+  basic: 'Basic (framed)'
+};
+
+/**
+ * v68: a dimension's tolerance. Amounts are deviations from the measured
+ * value in the sheet's printed units (degrees on an angle), so Limits print the
+ * value plus each and follow the model through every Update.
+ */
+function ToleranceFields(props: {
+  selected: DrawingDimension;
+  editable: boolean;
+  onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
+}) {
+  const { selected, editable } = props;
+  const callout =
+    selected.kind === 'chamfer' ||
+    ('counterbore' in selected && selected.counterbore !== undefined) ||
+    ('countersink' in selected && selected.countersink !== undefined);
+  if (callout) return null;
+  const tolerance = selected.tolerance;
+  const set = (next: DrawingTolerance | null) => {
+    const { tolerance: _previous, ...rest } = selected;
+    if (next && drawingToleranceError(next)) return;
+    props.onUpdate(
+      next ? { ...rest, tolerance: next } : rest,
+      'Tolerance dimension'
+    );
+  };
+  if (selected.reference)
+    return (
+      <p className="drawing-hint">A reference dimension takes no tolerance.</p>
+    );
+  return (
+    <>
+      <label className="drawing-field">
+        <span>Tolerance</span>
+        <select
+          value={tolerance?.kind ?? ''}
+          disabled={!editable}
+          onChange={(event) => {
+            const kind = event.target.value as DrawingToleranceKind | '';
+            const step = 0.1;
+            if (kind === '') set(null);
+            else if (kind === 'basic') set({ kind });
+            else if (kind === 'symmetric')
+              set({
+                kind,
+                value:
+                  tolerance && 'upper' in tolerance
+                    ? Math.max(
+                        Math.abs(tolerance.upper),
+                        Math.abs(tolerance.lower)
+                      )
+                    : step
+              });
+            else
+              set({
+                kind,
+                ...(tolerance && 'upper' in tolerance
+                  ? { upper: tolerance.upper, lower: tolerance.lower }
+                  : tolerance?.kind === 'symmetric'
+                    ? { upper: tolerance.value, lower: -tolerance.value }
+                    : { upper: step, lower: -step })
+              });
+          }}
+        >
+          <option value="">None</option>
+          {(Object.keys(TOLERANCE_LABELS) as DrawingToleranceKind[]).map(
+            (kind) => (
+              <option key={kind} value={kind}>
+                {TOLERANCE_LABELS[kind]}
+              </option>
+            )
+          )}
+        </select>
+      </label>
+      {tolerance?.kind === 'symmetric' && (
+        <AmountField
+          label="±"
+          value={tolerance.value}
+          disabled={!editable}
+          onCommit={(value) => set({ kind: 'symmetric', value })}
+        />
+      )}
+      {(tolerance?.kind === 'deviation' || tolerance?.kind === 'limits') && (
+        <div className="drawing-field-row">
+          <AmountField
+            label="Upper"
+            value={tolerance.upper}
+            disabled={!editable}
+            onCommit={(upper) => set({ ...tolerance, upper })}
+          />
+          <AmountField
+            label="Lower"
+            value={tolerance.lower}
+            disabled={!editable}
+            onCommit={(lower) => set({ ...tolerance, lower })}
+          />
+        </div>
+      )}
+      {tolerance &&
+        tolerance.kind !== 'basic' &&
+        drawingToleranceError(tolerance) === null && (
+          <p className="drawing-hint">
+            {tolerance.kind === 'symmetric'
+              ? 'Plus or minus this amount.'
+              : tolerance.kind === 'deviation'
+                ? 'Signed deviations from the measured value, upper over lower.'
+                : 'The measured value plus each deviation, upper over lower.'}
+          </p>
+        )}
+    </>
+  );
+}
+
+/**
+ * A tolerance amount as typed: kept as text until committed, so "-0.05"
+ * survives its intermediate "-" and "-0.0"; a value the tolerance refuses
+ * (an upper below its lower, a non-positive ±) reverts.
+ */
+function AmountField(props: {
+  label: string;
+  value: number;
+  disabled: boolean;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(props.value));
+  useEffect(() => setDraft(String(props.value)), [props.value]);
+  const commit = () => {
+    const value = Number(draft);
+    if (draft.trim() !== '' && Number.isFinite(value) && value !== props.value)
+      props.onCommit(value);
+    // Accepted, the new value replaces this on its way back; refused, the
+    // stored one does.
+    setDraft(String(props.value));
+  };
+  return (
+    <label className="drawing-field">
+      <span>{props.label}</span>
+      <input
+        type="number"
+        step="any"
+        value={draft}
+        disabled={props.disabled}
+        aria-label={`Tolerance ${props.label === '±' ? 'amount' : props.label.toLowerCase()}`}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') commit();
+          if (event.key === 'Escape') setDraft(String(props.value));
+        }}
+      />
+    </label>
   );
 }
 
@@ -1725,12 +2052,20 @@ function DrawingToolRail(props: {
     disabledReason: string;
     onToggle: () => void;
   };
+  /** D03 (v78): the detail view tool. */
+  detail: {
+    active: boolean;
+    usable: boolean;
+    disabledReason: string;
+    onToggle: () => void;
+  };
 }) {
-  const { tool, section } = props;
+  const { tool, section, detail } = props;
   const groups: AnnotationToolKind[][] = [
-    ['horizontal', 'vertical', 'aligned'],
+    ['horizontal', 'vertical', 'aligned', 'distance'],
     ['radius', 'diameter', 'angle', 'chamfer'],
-    ['note']
+    ['center-mark', 'intersection-mark', 'centerline', 'circle-centerline'],
+    ['note', 'balloon', 'parts-list']
   ];
   return (
     <div
@@ -1756,8 +2091,11 @@ function DrawingToolRail(props: {
             const active = tool?.kind === kind && !tool.repairId;
             const usable = props.canUseTool(kind);
             const name =
-              kind === 'note'
-                ? 'Note'
+              kind === 'note' ||
+              kind === 'balloon' ||
+              kind === 'parts-list' ||
+              isGeometryTool(kind)
+                ? ANNOTATION_TOOL_LABELS[kind]
                 : `${ANNOTATION_TOOL_LABELS[kind]} dimension`;
             return (
               <button
@@ -1798,6 +2136,22 @@ function DrawingToolRail(props: {
         >
           <Scissors size={16} aria-hidden="true" />
         </button>
+        <button
+          type="button"
+          className={`drawing-rail-button${detail.active ? ' active' : ''}`}
+          aria-label="Detail view"
+          aria-pressed={detail.active}
+          aria-keyshortcuts={DETAIL_TOOL_KEY}
+          disabled={!detail.usable}
+          title={
+            detail.usable
+              ? `Detail view: drag a circle on a view, from its centre (${DETAIL_TOOL_KEY})`
+              : detail.disabledReason
+          }
+          onClick={detail.onToggle}
+        >
+          <ZoomIn size={16} aria-hidden="true" />
+        </button>
       </div>
     </div>
   );
@@ -1812,6 +2166,263 @@ const TITLE_FIELDS: { key: keyof DrawingTitleBlock; label: string }[] = [
 ];
 
 const NO_SHEETS: readonly DrawingSheet[] = [];
+
+/**
+ * v80: which BOM columns a parts list shows, in the table's order; at least
+ * one stays on.
+ */
+function BomColumnFields(props: {
+  selected: Extract<DrawingAnnotation, { kind: 'bom-table' }>;
+  editable: boolean;
+  onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
+}) {
+  const shown = props.selected.columns ?? DEFAULT_BOM_COLUMNS;
+  return (
+    <fieldset className="drawing-bodies">
+      <legend>Columns</legend>
+      {ASSEMBLY_BOM_COLUMNS.map((column) => (
+        <label key={column.key} className="drawing-check">
+          <input
+            type="checkbox"
+            checked={shown.includes(column.key)}
+            disabled={
+              !props.editable || (shown.length === 1 && shown[0] === column.key)
+            }
+            onChange={(event) => {
+              const next = ASSEMBLY_BOM_COLUMNS.map(
+                (entry) => entry.key
+              ).filter((key) =>
+                key === column.key ? event.target.checked : shown.includes(key)
+              );
+              const { columns: _previous, ...rest } = props.selected;
+              const same =
+                next.length === DEFAULT_BOM_COLUMNS.length &&
+                next.every((key, index) => key === DEFAULT_BOM_COLUMNS[index]);
+              props.onUpdate(
+                same ? rest : { ...rest, columns: next },
+                'Format parts list'
+              );
+            }}
+          />
+          {column.label}
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
+const UNIT_NAMES: Readonly<Record<ProjectDocument['units'], string>> = {
+  mm: 'Millimetres',
+  cm: 'Centimetres',
+  m: 'Metres',
+  inch: 'Inches'
+};
+
+/**
+ * D02 (schema v70): the sheet's drawing properties — the units, precision,
+ * angle format and decimal separator its dimensions print in, and its print
+ * weights. Each change replaces the whole format; a field set back to its
+ * default is left out, so a sheet with every default stores none.
+ */
+function SheetFormatFields(props: {
+  format: DrawingSheetFormat | undefined;
+  documentUnits: ProjectDocument['units'];
+  editable: boolean;
+  onChange: (format: DrawingSheetFormat | null) => void;
+}) {
+  const format = props.format ?? {};
+  const units = format.units ?? props.documentUnits;
+  const set = <K extends keyof DrawingSheetFormat>(
+    key: K,
+    value: DrawingSheetFormat[K] | undefined
+  ) => {
+    const { [key]: _previous, ...rest } = format;
+    const next: DrawingSheetFormat =
+      value === undefined ? rest : { ...rest, [key]: value };
+    props.onChange(Object.keys(next).length > 0 ? next : null);
+  };
+  const weights = format.lineWidthsMm ?? {};
+  const setWeight = (kind: DrawingLineClass, width: number | undefined) => {
+    const { [kind]: _previous, ...rest } = weights;
+    const next = width === undefined ? rest : { ...rest, [kind]: width };
+    set('lineWidthsMm', Object.keys(next).length > 0 ? next : undefined);
+  };
+  const decimalsOptions = Array.from(
+    { length: MAX_DRAWING_DIMENSION_DECIMALS + 1 },
+    (_, decimals) => (
+      <option key={decimals} value={decimals}>
+        {decimals}
+      </option>
+    )
+  );
+  return (
+    <div className="drawing-panel-section">
+      <h3>Drawing properties</h3>
+      <label className="drawing-field">
+        <span>Dimension units</span>
+        <select
+          value={format.units ?? ''}
+          disabled={!props.editable}
+          onChange={(event) =>
+            set(
+              'units',
+              (event.target.value || undefined) as
+                ProjectDocument['units'] | undefined
+            )
+          }
+        >
+          <option value="">Document ({UNIT_NAMES[props.documentUnits]})</option>
+          {(Object.keys(UNIT_NAMES) as ProjectDocument['units'][]).map(
+            (key) => (
+              <option key={key} value={key}>
+                {UNIT_NAMES[key]}
+              </option>
+            )
+          )}
+        </select>
+      </label>
+      <div className="drawing-field-row">
+        <label className="drawing-field">
+          <span>Length decimals</span>
+          <select
+            value={format.decimals ?? ''}
+            disabled={!props.editable}
+            onChange={(event) =>
+              set(
+                'decimals',
+                event.target.value === ''
+                  ? undefined
+                  : Number(event.target.value)
+              )
+            }
+          >
+            <option value="">
+              Default ({defaultDimensionDecimals('linear', units)})
+            </option>
+            {decimalsOptions}
+          </select>
+        </label>
+        <label className="drawing-field">
+          <span>Decimal separator</span>
+          <select
+            value={format.decimalSeparator ?? ''}
+            disabled={!props.editable}
+            onChange={(event) =>
+              set(
+                'decimalSeparator',
+                event.target.value === 'comma' ? 'comma' : undefined
+              )
+            }
+          >
+            <option value="">Point (12.5)</option>
+            <option value="comma">Comma (12,5)</option>
+          </select>
+        </label>
+      </div>
+      <div className="drawing-field-row">
+        <label className="drawing-field">
+          <span>Angles</span>
+          <select
+            value={format.angleFormat ?? 'decimal'}
+            disabled={!props.editable}
+            onChange={(event) =>
+              set(
+                'angleFormat',
+                event.target.value === 'dms' ? 'dms' : undefined
+              )
+            }
+          >
+            <option value="decimal">Decimal degrees</option>
+            <option value="dms">Degrees, minutes, seconds</option>
+          </select>
+        </label>
+        <label className="drawing-field">
+          <span>Angle decimals</span>
+          <select
+            value={format.angleDecimals ?? ''}
+            disabled={!props.editable}
+            onChange={(event) =>
+              set(
+                'angleDecimals',
+                event.target.value === ''
+                  ? undefined
+                  : Number(event.target.value)
+              )
+            }
+          >
+            <option value="">
+              Default ({defaultDimensionDecimals('angle', units)})
+            </option>
+            {decimalsOptions}
+          </select>
+        </label>
+      </div>
+      <details className="drawing-line-weights">
+        <summary>Line weights (mm)</summary>
+        {DRAWING_LINE_CLASSES.map((kind) => (
+          <WeightField
+            key={kind}
+            label={DRAWING_LINE_CLASS_LABELS[kind]}
+            value={weights[kind]}
+            fallback={SHEET_STROKE_WIDTH_MM[kind]}
+            disabled={!props.editable}
+            onCommit={(width) => setWeight(kind, width)}
+          />
+        ))}
+      </details>
+    </div>
+  );
+}
+
+/**
+ * One line class's print weight: blank is the ISO 128 default; a weight
+ * outside the bounds reverts.
+ */
+function WeightField(props: {
+  label: string;
+  value: number | undefined;
+  fallback: number;
+  disabled: boolean;
+  onCommit: (width: number | undefined) => void;
+}) {
+  const shown = props.value === undefined ? '' : String(props.value);
+  const [draft, setDraft] = useState(shown);
+  useEffect(() => setDraft(shown), [shown]);
+  const commit = () => {
+    const text = draft.trim();
+    const width = Number(text);
+    if (text === '') {
+      if (props.value !== undefined) props.onCommit(undefined);
+    } else if (
+      Number.isFinite(width) &&
+      width >= MIN_DRAWING_LINE_WIDTH_MM &&
+      width <= MAX_DRAWING_LINE_WIDTH_MM &&
+      width !== props.value
+    )
+      props.onCommit(width);
+    setDraft(shown);
+  };
+  return (
+    <label className="drawing-field">
+      <span>{props.label}</span>
+      <input
+        type="number"
+        min={MIN_DRAWING_LINE_WIDTH_MM}
+        max={MAX_DRAWING_LINE_WIDTH_MM}
+        step={0.05}
+        value={draft}
+        placeholder={String(props.fallback)}
+        disabled={props.disabled}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') commit();
+          if (event.key === 'Escape') setDraft(shown);
+        }}
+      />
+    </label>
+  );
+}
 
 export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const { document, bodies, editDisabledReason } = props;
@@ -1902,6 +2513,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const [sectionTool, setSectionTool] = useState<{
     drag: { start: [number, number]; current: [number, number] } | null;
     line: SectionLine | null;
+    pointer: [number, number] | null;
+  } | null>(null);
+  /**
+   * D03 (v78) detail tool: a circle dragged on a view (`drag`, from its
+   * centre), then the detail follows the pointer until a click places it.
+   */
+  const [detailTool, setDetailTool] = useState<{
+    drag: { start: [number, number]; current: [number, number] } | null;
+    region: {
+      sourceViewId: DrawingViewId;
+      center: { u: number; v: number };
+      radius: number;
+    } | null;
     pointer: [number, number] | null;
   } | null>(null);
   const [selectedAnnotationId, setSelectedAnnotationId] =
@@ -2127,6 +2751,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // M01: a hole's callout data, read from the document by its feature id,
   // for a diameter on its bore to call it out (standard, thread). Bound to
   // this document, so a drawing kept with it keeps reading it.
+  // D02 v80: the assembly's BOM table, which parts lists and balloons read.
+  const bomTable = useMemo(() => sheetBom(document), [document]);
   const liveHoleCallouts = useMemo(
     () => holeCalloutLookup(document),
     [document]
@@ -2283,14 +2909,15 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               shownSheet,
               drawBodies,
               document.units,
-              holeCallouts
+              holeCallouts,
+              bomTable
             ),
             drawnViews,
             document.units,
             drawBodies
           )
         : new Map<DrawingAnnotationId, AnnotationResolution>(),
-    [shownSheet, drawBodies, document.units, drawnViews, holeCallouts]
+    [shownSheet, drawBodies, document.units, drawnViews, holeCallouts, bomTable]
   );
   /** Drawn and usable: matches the model, or keeps its earlier drawing. */
   const sheetReady = status?.kind === 'ready' || keptDrawing !== null;
@@ -2398,19 +3025,29 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // Dimensions measure a view's geometry; a note on the paper needs none,
   // so a ready sheet with no views still takes one.
   const canAnnotate = sheetReady && editable && (sheet?.views.length ?? 0) > 0;
+  const hasParts = (bomTable?.rows.length ?? 0) > 0;
   const canUseTool = (kind: AnnotationToolKind) =>
-    kind === 'note' ? sheetReady && editable : canAnnotate;
+    kind === 'parts-list'
+      ? sheetReady && editable && hasParts
+      : kind === 'balloon'
+        ? canAnnotate && hasParts
+        : kind === 'note'
+          ? sheetReady && editable
+          : canAnnotate;
   const toolDisabledReason = (kind: AnnotationToolKind) =>
     !editable
       ? (editDisabledReason ?? 'Drawing edits are unavailable.')
       : !sheetReady
         ? 'Update the sheet to annotate it.'
-        : kind === 'note'
-          ? 'Notes are unavailable.'
-          : 'Add a view to dimension it.';
+        : (kind === 'parts-list' || kind === 'balloon') && !hasParts
+          ? 'Add parts to the assembly (Assemble) to list or balloon them.'
+          : kind === 'note' || kind === 'parts-list'
+            ? 'Notes are unavailable.'
+            : 'Add a view to dimension it.';
   const chooseTool = (next: AnnotationTool | null) => {
     setTool(next && pinnedTool(next));
     setSectionTool(null);
+    setDetailTool(null);
     setHover(null);
     if (next) {
       setPropertiesOpen(false);
@@ -2418,7 +3055,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         `${ANNOTATION_TOOL_LABELS[next.kind]} placement started.`,
         { immediate: true }
       );
-    } else if (tool || sectionTool) {
+    } else if (tool || sectionTool || detailTool) {
       props.onStatus('Placement canceled.', { immediate: true });
     }
     if (next) canvasRef.current?.focus();
@@ -2431,7 +3068,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   shortcutRef.current = (event: KeyboardEvent) => {
     if (!sheet || !drawingShortcutTarget(event, workspaceRef.current)) return;
     if (event.key === 'Escape') {
-      if (sectionTool) chooseTool(null);
+      if (sectionTool || detailTool) chooseTool(null);
       else if (shownAutoPlan) setAutoPlan(null);
       else if (tool) {
         chooseTool(null);
@@ -2448,6 +3085,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       event.preventDefault();
       event.stopPropagation();
       toggleSectionTool();
+      return;
+    }
+    if (event.key.toLowerCase() === DETAIL_TOOL_KEY.toLowerCase()) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleDetailTool();
       return;
     }
     const kind = ANNOTATION_TOOLS.find(
@@ -2774,7 +3417,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       setSelectedViewId(view.viewId);
   };
 
-  const exportSheet = async (format: 'pdf' | 'svg') => {
+  const exportSheet = async (format: 'pdf' | 'svg' | 'dxf') => {
     if (!sheet || !sheetReady) return;
     const viewStates = sheet.views.map((view) => {
       const state = projections.get(view.viewId);
@@ -2799,7 +3442,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const page = composeSheetPage(
       sheet,
       drawn,
-      { projectName: document.name, units: document.units, sheetNumber },
+      {
+        projectName: document.name,
+        units: document.units,
+        sheetNumber,
+        date: autoDate
+      },
       composeSheetAnnotations(sheet, drawn, resolutions, document.units)
     );
     const fileName = drawingExportFileName(document.name, sheet.name, format);
@@ -2813,8 +3461,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             )
           : await saveCadTextFile(
               fileName,
-              'svg',
-              sheetPageToSvg(page, sheet.name)
+              format,
+              format === 'dxf'
+                ? sheetPageToDxf(page)
+                : sheetPageToSvg(page, sheet.name)
             );
       props.onStatus(
         saved
@@ -2951,6 +3601,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const sheetPosition = sheet
     ? sheets.findIndex((entry) => entry.sheetId === sheet.sheetId) + 1
     : 0;
+  // The DATE cell's automatic value until the title block sets one.
+  const autoDate = useMemo(
+    () => titleBlockAutoDate(document.revisions),
+    [document.revisions]
+  );
   const sheetNumber = useMemo(
     () => ({ index: Math.max(1, sheetPosition), count: sheets.length }),
     [sheetPosition, sheets.length]
@@ -2963,7 +3618,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         page: composeSheetPage(shownSheet, ghostViews, {
           projectName: document.name,
           units: document.units,
-          sheetNumber
+          sheetNumber,
+          date: autoDate
         }),
         boxes: new Map<DrawingAnnotationId, AnnotationBox>(),
         ghost: true
@@ -2978,7 +3634,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       page: composeSheetPage(
         shownSheet,
         drawnViews,
-        { projectName: document.name, units: document.units, sheetNumber },
+        {
+          projectName: document.name,
+          units: document.units,
+          sheetNumber,
+          date: autoDate
+        },
         annotations
       ),
       boxes: annotations.boxes,
@@ -2991,7 +3652,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     resolutions,
     document.name,
     document.units,
-    sheetNumber
+    sheetNumber,
+    autoDate
   ]);
   const page: SheetPage | null = composed?.page ?? null;
   // Each view's projected extent: the drawn one once it is ready, the
@@ -3203,6 +3865,38 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const { faces, outlines } = currentPickable();
     return hitFace(faces, point, pickTolerance(pxPerMm), outlines);
   };
+  /**
+   * v73: the centre or intersection mark (or, v75, the straight centreline)
+   * whose box holds `point`, if any.
+   */
+  const markAt = (point: [number, number]) => {
+    if (!composed || composed.ghost || !shownSheet) return null;
+    for (const annotation of shownSheet.annotations ?? []) {
+      const centerline =
+        annotation.kind === 'centerline' && annotation.mode !== 'circle';
+      if (
+        annotation.kind !== 'center-mark' &&
+        annotation.kind !== 'intersection-mark' &&
+        !centerline
+      )
+        continue;
+      if (!resolutions.get(annotation.annotationId)?.ok) continue;
+      const box = composed.boxes.get(annotation.annotationId);
+      if (
+        box &&
+        point[0] >= box.x &&
+        point[0] <= box.x + box.width &&
+        point[1] >= box.y &&
+        point[1] <= box.y + box.height
+      )
+        return {
+          annotationId: annotation.annotationId,
+          viewId: annotation.viewId,
+          ...(centerline ? { centerline: true } : {})
+        };
+    }
+    return null;
+  };
 
   /** A pointer position in paper millimetres (y up), with the zoom. */
   const paperPoint = (event: {
@@ -3257,13 +3951,32 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const placementMm = view
       ? { x: round(at[0] - view.centerMm.x), y: round(at[1] - view.centerMm.y) }
       : { x: round(at[0]), y: round(at[1]) };
+    // v80: a balloon names the assembly component its edge belongs to.
+    let componentId: string | undefined;
+    if (finished.kind === 'balloon') {
+      componentId = balloonComponent(bomTable, finished.edges[0]?.bodyId);
+      if (!componentId) {
+        props.onStatus('That body is not a part of the assembly.');
+        setTool(startAnnotationTool(finished.kind));
+        return;
+      }
+    }
     const annotation = draftAnnotation(
       finished,
       createDrawingAnnotationId(),
-      placementMm
+      placementMm,
+      undefined,
+      componentId
     );
     if (!annotation) return;
-    const refusal = draftRefusal(annotation, view, drawBodies, document.units);
+    const refusal = draftRefusal(
+      annotation,
+      view,
+      drawBodies,
+      document.units,
+      sheetMarkLookup(sheet),
+      bomTable
+    );
     if (refusal) {
       props.onStatus(refusal);
       setTool(startAnnotationTool(finished.kind));
@@ -3283,13 +3996,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       props.onStatus(
         finished.kind === 'note'
           ? 'Note added. Edit its text in Properties.'
-          : `${ANNOTATION_TOOL_LABELS[finished.kind]} dimension added.`,
+          : isGeometryTool(finished.kind) ||
+              finished.kind === 'balloon' ||
+              finished.kind === 'parts-list'
+            ? `${ANNOTATION_TOOL_LABELS[finished.kind]} added.`
+            : `${ANNOTATION_TOOL_LABELS[finished.kind]} dimension added.`,
         { immediate: true }
       );
       // A note is placed and then typed; dimensions keep their tool for the
       // next one.
       setTool(
-        finished.kind === 'note' ? null : startAnnotationTool(finished.kind)
+        finished.kind === 'note' || finished.kind === 'parts-list'
+          ? null
+          : startAnnotationTool(finished.kind)
       );
     }
   };
@@ -3299,13 +4018,29 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     );
     setTool(null);
     if (!sheet || !previous) return;
-    const repaired = repairedAnnotation(previous, finished);
+    // v80: a balloon re-picked onto another part names that part.
+    const componentId =
+      previous.kind === 'balloon'
+        ? balloonComponent(bomTable, finished.edges[0]?.bodyId)
+        : undefined;
+    if (previous.kind === 'balloon' && !componentId) {
+      props.onStatus('That body is not a part of the assembly.');
+      return;
+    }
+    const repaired = repairedAnnotation(previous, finished, componentId);
     if (!repaired) {
       props.onStatus('Re-pick in the view this annotation belongs to.');
       return;
     }
     const view = sheet.views.find((entry) => entry.viewId === repaired.viewId);
-    const refusal = draftRefusal(repaired, view, drawBodies, document.units);
+    const refusal = draftRefusal(
+      repaired,
+      view,
+      drawBodies,
+      document.units,
+      sheetMarkLookup(sheet),
+      bomTable
+    );
     if (refusal) {
       props.onStatus(refusal);
       return;
@@ -3342,7 +4077,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       at.point,
       viewAt(at.point),
       drawBodies,
-      faceAt(at.point, at.pxPerMm)
+      faceAt(at.point, at.pxPerMm),
+      markAt(at.point)
     );
     if (!result.ok) {
       props.onStatus(result.message);
@@ -3352,7 +4088,12 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       commitRepair(result.tool);
       return;
     }
-    if (result.tool.placed) {
+    // A note on empty paper, and a mark or centreline, has nowhere further
+    // to be placed: it is made as soon as its picks are in.
+    if (
+      result.tool.placed ||
+      (isGeometryTool(result.tool.kind) && pickedEnough(result.tool))
+    ) {
       commitAnnotation(result.tool, at.point);
       return;
     }
@@ -3370,6 +4111,127 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     : !sheetReady
       ? 'Update the sheet to add a section.'
       : 'Add a front, top or side view to cut a section from.';
+  // D03 (v78) detail tool.
+  const canDetail =
+    sheetReady &&
+    editable &&
+    drawnViews.some(({ view }) => !view.section && !view.detail);
+  const detailDisabledReason = !editable
+    ? (editDisabledReason ?? 'Drawing edits are unavailable.')
+    : !sheetReady
+      ? 'Update the sheet to add a detail.'
+      : 'Add a view to take a detail from.';
+  function toggleDetailTool() {
+    if (detailTool) {
+      chooseTool(null);
+      return;
+    }
+    if (!canDetail) {
+      props.onStatus(detailDisabledReason);
+      return;
+    }
+    setTool(null);
+    setSectionTool(null);
+    setHover(null);
+    setPropertiesOpen(false);
+    setDetailTool({ drag: null, region: null, pointer: null });
+    props.onStatus('Detail view placement started.', { immediate: true });
+    canvasRef.current?.focus();
+  }
+  const detailSourceView = (viewId: DrawingViewId | undefined) =>
+    viewId
+      ? shownSheet?.views.find((entry) => entry.viewId === viewId)
+      : undefined;
+  /** The detail view the tool would place now, as a preview. */
+  const detailPreview =
+    detailTool?.region && detailTool.pointer && shownSheet
+      ? (() => {
+          const source = detailSourceView(detailTool.region.sourceViewId);
+          return source
+            ? detailDraft(
+                shownSheet,
+                source,
+                detailTool.region,
+                detailTool.pointer
+              )
+            : null;
+        })()
+      : null;
+  const onDetailPointerDown = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (event.button !== 0 || !detailTool || !shownSheet) return;
+    const at = paperPoint(event);
+    if (!at) return;
+    if (detailTool.region) {
+      const source = detailSourceView(detailTool.region.sourceViewId);
+      if (!source) return;
+      const view: DrawingView = {
+        ...detailDraft(shownSheet, source, detailTool.region, at.point),
+        viewId: createDrawingViewId()
+      };
+      setDetailTool(null);
+      if (
+        run(
+          commandFactories.addDrawingView({ sheetId: shownSheet.sheetId, view })
+        )
+      )
+        setSelectedViewId(view.viewId);
+      return;
+    }
+    if (!detailSourceAt(shownSheet, drawnViews, at.point, document.units)) {
+      props.onStatus('Start the detail circle inside a view, at its centre.');
+      return;
+    }
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setDetailTool({
+      drag: { start: at.point, current: at.point },
+      region: null,
+      pointer: null
+    });
+  };
+  const onDetailPointerMove = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (!detailTool) return;
+    const at = paperPoint(event);
+    if (!at) return;
+    if (detailTool.drag)
+      setDetailTool({
+        ...detailTool,
+        drag: { ...detailTool.drag, current: at.point }
+      });
+    else if (detailTool.region)
+      setDetailTool({ ...detailTool, pointer: at.point });
+  };
+  const onDetailPointerUp = (event: ReactPointerEvent<SVGRectElement>) => {
+    if (!detailTool?.drag || !shownSheet) return;
+    const at = paperPoint(event);
+    const end = at?.point ?? detailTool.drag.current;
+    const source = detailSourceAt(
+      shownSheet,
+      drawnViews,
+      detailTool.drag.start,
+      document.units
+    );
+    const region =
+      source &&
+      detailRegionFromDrag(
+        shownSheet,
+        source,
+        detailTool.drag.start,
+        end,
+        document.units
+      );
+    if (!source || !region) {
+      setDetailTool({ drag: null, region: null, pointer: null });
+      props.onStatus(
+        'Drag out from the centre of the region to its edge to circle it.'
+      );
+      return;
+    }
+    setDetailTool({
+      drag: null,
+      region: { sourceViewId: source.view.viewId, ...region },
+      pointer: end
+    });
+  };
   function toggleSectionTool() {
     if (sectionTool) {
       chooseTool(null);
@@ -3380,6 +4242,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return;
     }
     setTool(null);
+    setDetailTool(null);
     setHover(null);
     setPropertiesOpen(false);
     setSectionTool({ drag: null, line: null, pointer: null });
@@ -4111,6 +4974,21 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               >
                 SVG
               </button>
+              <button
+                type="button"
+                className="secondary"
+                aria-label="Export DXF"
+                disabled={exportReason !== null}
+                title={
+                  exportReason ??
+                  (outdated
+                    ? 'Export this sheet as DXF, as drawn before the latest model change'
+                    : 'Export this sheet as DXF (R12, paper millimetres, a layer per line kind)')
+                }
+                onClick={() => void exportSheet('dxf')}
+              >
+                DXF
+              </button>
             </div>
           </div>
         </div>
@@ -4350,7 +5228,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   <text x={x} y={paper.height - y}>
                     {annotation.kind === 'note'
                       ? 'Broken leader'
-                      : 'Broken dimension'}
+                      : annotation.kind === 'bom-table'
+                        ? 'Empty parts list'
+                        : annotation.kind === 'balloon'
+                          ? 'Broken balloon'
+                          : isDrawingGeometryAnnotation(annotation)
+                            ? 'Broken mark'
+                            : 'Broken dimension'}
                   </text>
                   <rect
                     className="drawing-annotation-hit"
@@ -4469,6 +5353,58 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   </g>
                 );
               })()}
+            {detailTool?.drag && (
+              <circle
+                className="drawing-section-preview"
+                cx={detailTool.drag.start[0]}
+                cy={paper.height - detailTool.drag.start[1]}
+                r={Math.hypot(
+                  detailTool.drag.current[0] - detailTool.drag.start[0],
+                  detailTool.drag.current[1] - detailTool.drag.start[1]
+                )}
+              />
+            )}
+            {detailPreview?.detail &&
+              (() => {
+                const r =
+                  detailPreview.detail.radius *
+                  drawingPaperPerModelUnit(
+                    detailPreview.detail.scale,
+                    document.units
+                  );
+                return (
+                  <g className="drawing-section-draft">
+                    <circle
+                      className="drawing-section-ghost"
+                      cx={detailPreview.centerMm.x}
+                      cy={paper.height - detailPreview.centerMm.y}
+                      r={r}
+                    />
+                    <text
+                      className="drawing-view-label"
+                      x={detailPreview.centerMm.x - r}
+                      y={paper.height - detailPreview.centerMm.y + r + 4}
+                      fontSize={3}
+                    >
+                      {detailCaption(
+                        detailPreview.detail.label,
+                        detailPreview.detail.scale
+                      )}
+                    </text>
+                  </g>
+                );
+              })()}
+            {detailTool && (
+              <rect
+                className="drawing-section-surface"
+                aria-label="Detail circle"
+                width={paper.width}
+                height={paper.height}
+                onPointerDown={onDetailPointerDown}
+                onPointerMove={onDetailPointerMove}
+                onPointerUp={onDetailPointerUp}
+              />
+            )}
             {sectionTool && (
               <rect
                 className="drawing-section-surface"
@@ -4494,7 +5430,29 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               disabledReason: sectionDisabledReason,
               onToggle: toggleSectionTool
             }}
+            detail={{
+              active: detailTool !== null,
+              usable: canDetail,
+              disabledReason: detailDisabledReason,
+              onToggle: toggleDetailTool
+            }}
           />
+          {detailTool && (
+            <div className="drawing-tool-hint" role="status">
+              <span>
+                {detailTool.region
+                  ? 'Move the detail into place, then click.'
+                  : 'Drag a circle on a view, out from its centre.'}
+              </span>
+              <button
+                type="button"
+                className="drawing-tool-hint-cancel"
+                onClick={() => chooseTool(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          )}
           {sectionTool && (
             <div className="drawing-tool-hint" role="status">
               <span>
@@ -4536,7 +5494,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             ready={sheetReady}
             canRepick={canAnnotate}
             editable={editable}
-            units={document.units}
+            numberFormat={sheetNumberFormat(sheet, document.units)}
             resolutions={resolutions}
             onTool={chooseTool}
             onDeselect={deselect}
@@ -4638,6 +5596,69 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   </>
                 );
               })()}
+            {selectedView.detail &&
+              (() => {
+                const detail = selectedView.detail;
+                const source = sheet.views.find(
+                  (view) => view.viewId === detail.sourceViewId
+                );
+                const update = (
+                  patch: Partial<Pick<DrawingDetail, 'radius' | 'scale'>>,
+                  label: string
+                ) =>
+                  run(
+                    commandFactories.updateDrawingView(
+                      {
+                        sheetId: sheet.sheetId,
+                        viewId: selectedView.viewId,
+                        detail: patch
+                      },
+                      label
+                    )
+                  );
+                return (
+                  <>
+                    <label className="drawing-field">
+                      <span>Detail scale</span>
+                      <select
+                        value={formatDrawingScale(detail.scale)}
+                        disabled={!editable}
+                        onChange={(event) => {
+                          const scale = DRAWING_SCALE_PRESETS.find(
+                            (preset) =>
+                              formatDrawingScale(preset) === event.target.value
+                          );
+                          if (scale)
+                            update({ scale: { ...scale } }, 'Scale detail');
+                        }}
+                      >
+                        {DRAWING_SCALE_PRESETS.map((preset) => (
+                          <option
+                            key={formatDrawingScale(preset)}
+                            value={formatDrawingScale(preset)}
+                          >
+                            {formatDrawingScale(preset)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <NumberField
+                      label={`Circle radius (${document.units})`}
+                      value={detail.radius}
+                      disabled={!editable}
+                      onCommit={(value) =>
+                        value > 0 && update({ radius: value }, 'Resize detail')
+                      }
+                    />
+                    <p className="drawing-hint">
+                      The part of the{' '}
+                      {source ? viewLabel(source).toLowerCase() : 'source'} view
+                      inside circle {detail.label}, at its own scale. It moves
+                      freely; the circle stays on its source.
+                    </p>
+                  </>
+                );
+              })()}
             {selectedView.parentViewId && (
               <p className="drawing-hint">
                 Projected from the{' '}
@@ -4681,6 +5702,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                     checked={selectedView.bodyIds.includes(id)}
                     disabled={
                       !editable ||
+                      // A detail draws its source's bodies (v78).
+                      selectedView.detail !== undefined ||
                       // Not offered for removal until the rebuild says
                       // whether it is really gone.
                       (geometryPending && !liveBodies.includes(id)) ||
@@ -4954,6 +5977,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         />
         {selection === null && (
           <>
+            <SheetFormatFields
+              format={sheet.format}
+              documentUnits={document.units}
+              editable={editable}
+              onChange={(format) =>
+                updateSheet({ format }, 'Change drawing properties')
+              }
+            />
             <div className="drawing-panel-section">
               <h3>Title block</h3>
               {TITLE_FIELDS.map(({ key, label }) => (
@@ -4961,7 +5992,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   key={key}
                   label={label}
                   value={sheet.titleBlock[key] ?? ''}
-                  placeholder={key === 'title' ? document.name : undefined}
+                  placeholder={
+                    key === 'title'
+                      ? document.name
+                      : key === 'date'
+                        ? autoDate
+                        : undefined
+                  }
                   printed
                   disabled={!editable}
                   onCommit={(value) =>

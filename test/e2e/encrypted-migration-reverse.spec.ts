@@ -229,7 +229,9 @@ test('stops encrypting a project through the UI, and it opens as plaintext', asy
 
   // The reverse panel, folded with the other rare tools, lists it with the
   // warning in plain words.
-  await settings.getByText('Recovery and beta tools', { exact: true }).click();
+  await settings
+    .getByText('Advanced encryption settings', { exact: true })
+    .click();
   const panel = stopPanel(settings);
   // Listed when the panel opened, before the project was encrypted.
   await panel.getByRole('button', { name: 'Refresh' }).click();

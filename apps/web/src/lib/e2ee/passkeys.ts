@@ -66,6 +66,37 @@ export function passkeysAvailable(): boolean {
   );
 }
 
+export type PasskeyPrfSupport = 'supported' | 'unsupported' | 'unknown';
+
+/**
+ * Whether this browser says it can evaluate the PRF extension that passkey
+ * unlock needs (WebAuthn Level 3 `getClientCapabilities`). `unknown` where
+ * the browser does not say: offering a passkey is then still worth a try,
+ * and `create` fails closed with a clear message if PRF is missing. A
+ * browser that says no is never offered the step at all.
+ */
+export async function passkeyPrfSupport(): Promise<PasskeyPrfSupport> {
+  if (!passkeysAvailable()) return 'unsupported';
+  const capabilities = (
+    PublicKeyCredential as unknown as {
+      getClientCapabilities?: () => Promise<Record<string, boolean>>;
+    }
+  ).getClientCapabilities;
+  if (typeof capabilities !== 'function') return 'unknown';
+  try {
+    const reported = (await capabilities.call(PublicKeyCredential))[
+      'extension:prf'
+    ];
+    return reported === true
+      ? 'supported'
+      : reported === false
+        ? 'unsupported'
+        : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
 function available(): void {
   if (!passkeysAvailable()) {
     throw new PasskeyError(

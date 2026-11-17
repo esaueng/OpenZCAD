@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DisplayMode } from '@openzcad/viewport';
 import { DisplayModeMenu, isWorkspaceShortcutKey } from './DisplayModeMenu';
+import { analysisRuntime } from '../lib/analysis/analysisRuntime';
 
 function renderMenu(displayMode: DisplayMode = 'shaded-edges', xray = false) {
   const onDisplayMode = vi.fn();
@@ -22,7 +23,38 @@ function renderMenu(displayMode: DisplayMode = 'shaded-edges', xray = false) {
 }
 
 describe('the Display menu (I52)', () => {
-  it('lists the three modes and X-ray, marking what is on', () => {
+  afterEach(() => analysisRuntime.reset());
+
+  it('switches an M09 analysis on and off, one at a time, and names it', () => {
+    const { trigger, menu } = renderMenu();
+    fireEvent.click(trigger);
+    fireEvent.click(menu().getByRole('button', { name: 'Draft analysis' }));
+    expect(analysisRuntime.get().request).toEqual({
+      kind: 'draft',
+      pull: { x: 0, y: 0, z: 1 },
+      minimumDegrees: 1
+    });
+    // The menu closes on a choice; the button says what is on.
+    expect(screen.queryByRole('group', { name: 'Display' })).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(trigger).toHaveAccessibleName(
+      'Display mode (W) — now: Shaded + edges · Draft analysis'
+    );
+    fireEvent.click(trigger);
+    const draft = menu().getByRole('button', { name: 'Draft analysis' });
+    expect(draft).toHaveAttribute('aria-pressed', 'true');
+    // Another analysis replaces it: one at a time.
+    fireEvent.click(menu().getByRole('button', { name: 'Zebra analysis' }));
+    expect(analysisRuntime.get().request).toEqual({
+      kind: 'zebra',
+      stripes: 12
+    });
+    fireEvent.click(trigger);
+    fireEvent.click(menu().getByRole('button', { name: 'Zebra analysis' }));
+    expect(analysisRuntime.get().request).toBeNull();
+  });
+
+  it('lists the three modes, X-ray and the analyses, marking what is on', () => {
     const { trigger, menu, onOpenChange } = renderMenu('shaded', true);
     expect(trigger).toHaveAccessibleName(
       'Display mode (W) — now: Shaded · X-ray'
@@ -36,13 +68,21 @@ describe('the Display menu (I52)', () => {
       'Shaded + edges',
       'Shaded',
       'Wireframe',
-      expect.stringMatching(/^X-ray/)
+      expect.stringMatching(/^X-ray/),
+      'Draft',
+      'Curvature',
+      'Zebra',
+      'Thickness'
     ]);
     expect(items.map((item) => item.getAttribute('aria-pressed'))).toEqual([
       'false',
       'true',
       'false',
-      'true'
+      'true',
+      'false',
+      'false',
+      'false',
+      'false'
     ]);
     expect(menu().getByRole('button', { name: 'X-ray (Shift+X)' })).toBe(
       items[3]

@@ -968,6 +968,178 @@ describe('WorkspaceReadout message lifetime', () => {
   });
 });
 
+describe('WorkspaceReadout section line', () => {
+  function readout(
+    status: string,
+    statusAt: number,
+    section: {
+      label: string;
+      note: string | null;
+      onTurnOff(): void;
+    } | null,
+    muted = false
+  ) {
+    return (
+      <WorkspaceReadout
+        status={status}
+        statusAt={statusAt}
+        section={section}
+        muted={muted}
+        tone="ready"
+        onOpenLog={vi.fn()}
+        {...SUMMARY}
+      />
+    );
+  }
+
+  it('says a cut is on, with Turn off beside it, for as long as it is on', async () => {
+    const onTurnOff = vi.fn();
+    const section = { label: 'Section · XZ plane', note: null, onTurnOff };
+    const { rerender } = render(readout('', 0, section));
+    const toast = screen.getByRole('contentinfo');
+    expect(toast).not.toHaveClass('hidden');
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /^Section · XZ plane$/
+    );
+    // Not the commit's Undo: the cut's own way off.
+    expect(screen.queryByRole('button', { name: /^Undo/ })).toBeNull();
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Turn off section view' })
+    );
+    expect(onTurnOff).toHaveBeenCalledTimes(1);
+    rerender(readout('Section view off.', Date.now(), null));
+    expect(
+      screen.queryByRole('button', { name: 'Turn off section view' })
+    ).toBeNull();
+  });
+
+  it('takes the place of the message that turned the cut on, and stays under a tool card', () => {
+    const section = {
+      label: 'Section · XY plane',
+      note: null,
+      onTurnOff: vi.fn()
+    };
+    const { rerender } = render(
+      readout(
+        'Section view on: XY plane · the model is untouched.',
+        Date.now(),
+        section
+      )
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /^Section · XY plane$/
+    );
+    expect(
+      screen.getByRole('button', { name: 'Turn off section view' })
+    ).toBeInTheDocument();
+    // A tool card carries the message, and does not say the model is cut.
+    rerender(readout('Pick a face.', Date.now(), section, true));
+    expect(screen.getByRole('contentinfo')).not.toHaveClass('hidden');
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /^Section · XY plane$/
+    );
+  });
+
+  it('gives way to a live message and comes back after it', () => {
+    vi.useFakeTimers();
+    try {
+      const section = {
+        label: 'Section · YZ plane',
+        note: null,
+        onTurnOff: vi.fn()
+      };
+      render(readout('Added box.', Date.now(), section));
+      expect(screen.getByRole('status')).toHaveTextContent(/^Added box\.$/);
+      expect(
+        screen.queryByRole('button', { name: 'Turn off section view' })
+      ).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(
+          STATUS_LIFETIME_MS + STATUS_CLOCK_STEP_MS + STATUS_MIN_DWELL_MS
+        );
+      });
+      expect(screen.getByRole('contentinfo')).not.toHaveClass('hidden');
+      expect(screen.getByRole('status')).toHaveTextContent(
+        /^Section · YZ plane$/
+      );
+      expect(
+        screen.getByRole('button', { name: 'Turn off section view' })
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('comes back at once when a tool card takes the message, not after its dwell', () => {
+    vi.useFakeTimers();
+    try {
+      const section = {
+        label: 'Section · XY plane',
+        note: null,
+        onTurnOff: vi.fn()
+      };
+      const at = Date.now();
+      const { rerender } = render(readout('Added box.', at, section));
+      expect(screen.getByRole('status')).toHaveTextContent(/^Added box\.$/);
+      // Well inside the message's 1.2 s dwell, a tool card opens.
+      act(() => {
+        vi.advanceTimersByTime(STATUS_MIN_DWELL_MS / 4);
+      });
+      rerender(readout('Added box.', at, section, true));
+      expect(screen.getByRole('status')).toHaveTextContent(
+        /^Section · XY plane$/
+      );
+      expect(
+        screen.getByRole('button', { name: 'Turn off section view' })
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the way off beside a geometry line that holds the row', () => {
+    render(
+      <WorkspaceReadout
+        status=""
+        statusAt={0}
+        geometryStatus={{
+          phase: 'Exact geometry failed: kernel refused',
+          projection: 'showing the previous result until it finishes'
+        }}
+        section={{
+          label: 'Section · XZ plane',
+          note: null,
+          onTurnOff: vi.fn()
+        }}
+        tone="warning"
+        onOpenLog={vi.fn()}
+        {...SUMMARY}
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Exact geometry failed: kernel refused'
+    );
+    expect(
+      screen.getByRole('button', { name: 'Turn off section view' })
+    ).toHaveTextContent('Turn off section');
+  });
+
+  it('points at an overlap in the cut and keeps the toolbox words for it (M09)', () => {
+    const note =
+      'Overlap in this cut: Blade A and Blade B (about 240 mm²). Display evidence from the meshes on screen, not an exact clash check.';
+    render(
+      readout('', 0, { label: 'Section · XY plane', note, onTurnOff: vi.fn() })
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Section · XY plane · overlap in this cut'
+    );
+    expect(screen.getByRole('note')).toHaveTextContent(note);
+    expect(
+      screen.getByRole('button', { name: /^Open activity log/ })
+    ).toHaveAttribute('title', expect.stringContaining(note));
+  });
+});
+
 describe('ViewportDockExtras', () => {
   it('reads the snap and offers no selection filter', () => {
     render(

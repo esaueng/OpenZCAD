@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type {
+  DrawingAnnotationId,
   DrawingAnnotation,
   DrawingSheet,
   DrawingView,
@@ -110,6 +111,53 @@ describe('drawing sheet edits (review I62)', () => {
     }
     // The original is untouched.
     expect(original.views[0]!.viewId).toBe('front');
+  });
+});
+
+describe('duplicating marks (D02 v73)', () => {
+  it('points a copied dimension at the copied mark, not the original', () => {
+    const original: DrawingSheet = {
+      ...sheet(),
+      annotations: [
+        {
+          annotationId: 'dann_mark' as DrawingAnnotationId,
+          kind: 'center-mark',
+          viewId: id('front'),
+          edge: { bodyId: 'b' as never, hash: 7 },
+          placementMm: { x: 0, y: 0 }
+        },
+        {
+          annotationId: 'dann_dim' as DrawingAnnotationId,
+          kind: 'linear',
+          viewId: id('front'),
+          direction: 'horizontal',
+          from: {
+            anchor: 'mark',
+            annotationId: 'dann_mark' as DrawingAnnotationId
+          },
+          to: { edge: { bodyId: 'b' as never, hash: 8 }, anchor: 'first' },
+          placementMm: { x: 0, y: 10 }
+        }
+      ]
+    };
+    let n = 0;
+    const copy = duplicateDrawingSheet(original, [original], {
+      sheet: () => 'sheet_copy' as DrawingSheet['sheetId'],
+      view: () => id(`v${++n}`),
+      annotation: () => `dann_${++n}` as DrawingAnnotationId
+    });
+    const [mark, dimension] = copy.annotations!;
+    expect(mark!.annotationId).not.toBe('dann_mark');
+    expect(dimension!.kind === 'linear' && dimension.from).toEqual({
+      anchor: 'mark',
+      annotationId: mark!.annotationId
+    });
+    // The original keeps its own.
+    const before = original.annotations![1]!;
+    expect(before.kind === 'linear' && before.from).toEqual({
+      anchor: 'mark',
+      annotationId: 'dann_mark'
+    });
   });
 });
 

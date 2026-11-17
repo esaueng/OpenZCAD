@@ -46,6 +46,20 @@ export function assertPrintClearanceSchema(version: unknown): void {
 }
 
 /**
+ * F06 configurations (schema v72): `configurations` and its commands. An
+ * older reader would show and export the bodies the active row hides.
+ */
+export const CONFIGURATION_SCHEMA_VERSION = 72;
+
+export function assertConfigurationSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    CONFIGURATION_SCHEMA_VERSION,
+    'Configurations'
+  );
+}
+
+/**
  * M15 thread runouts and pipe threads (schema v57): a thread carrying either
  * needs a document that declares it, or an older reader would build a plain
  * end or a cylindrical thread in its place.
@@ -112,6 +126,216 @@ export function assertHoleContentSchema(data: unknown, version: unknown): void {
  */
 export function assertSheetMetalSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 58, 'Sheet-metal features');
+}
+
+/**
+ * D02 dimension tolerances, prefixes and suffixes (schema v68): a drawing
+ * annotation carrying any needs a document that declares it, or an older
+ * reader would print the bare value and drop them on its next save.
+ */
+export function assertDrawingDimensionFormatSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    68,
+    'Dimension tolerances, prefixes and suffixes'
+  );
+}
+
+/**
+ * Whether `value` (a drawing set, a sheet, an annotation or a drawing
+ * command's payload) holds an annotation with a v68 field. Walks records and
+ * arrays only, once each.
+ */
+export function hasDrawingDimensionFormat(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (
+      typeof entry.annotationId === 'string' &&
+      (entry.tolerance !== undefined ||
+        entry.prefix !== undefined ||
+        entry.suffix !== undefined)
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/**
+ * M17 standard parts (schema v69): an older reader has no builder for the
+ * kind and would drop the body, so the document must declare the schema.
+ */
+export function assertStandardPartSchema(
+  version: unknown,
+  data?: unknown
+): void {
+  assertMinimumProjectSchema(version, 69, 'Standard parts');
+  if (record(data) && data.hole !== undefined)
+    assertMinimumProjectSchema(version, 77, 'Parts inserted into holes');
+}
+
+/**
+ * D02 drawing properties (schema v70): a sheet carrying `format` needs a
+ * document that declares it, or an older reader would print its dimensions
+ * in the document's units and drop the properties on its next save.
+ */
+export function assertDrawingFormatSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 70, 'Drawing properties');
+}
+
+/** Whether `value` holds a sheet, or a sheet update, that sets a format. */
+export function hasDrawingFormat(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    // A sheet, or a sheet update command's payload, which names its sheet
+    // beside the properties it sets (null clears them).
+    if (
+      typeof entry.sheetId === 'string' &&
+      entry.format !== undefined &&
+      entry.format !== null
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/**
+ * D02 geometry annotations (schema v73): centre and intersection marks,
+ * centrelines and mark points need a document that declares them.
+ */
+export function assertDrawingGeometrySchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    73,
+    'Centre marks, intersection marks and centrelines'
+  );
+}
+
+const GEOMETRY_KINDS: readonly unknown[] = [
+  'center-mark',
+  'intersection-mark',
+  'centerline'
+];
+
+/** Whether `value` holds a v73 geometry annotation or mark point. */
+export function hasDrawingGeometry(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (
+      (typeof entry.annotationId === 'string' &&
+        GEOMETRY_KINDS.includes(entry.kind)) ||
+      entry.anchor === 'mark'
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/** D02 distance dimensions (schema v75). */
+export function assertDrawingDistanceSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 75, 'Distance dimensions');
+}
+
+/** Whether `value` holds a v75 distance dimension. */
+export function hasDrawingDistance(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (typeof entry.annotationId === 'string' && entry.kind === 'distance')
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/** D03 detail views (schema v78). */
+export function assertDrawingDetailSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 78, 'Detail views');
+}
+
+/** Whether `value` holds a v78 detail view. */
+export function hasDrawingDetail(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (typeof entry.viewId === 'string' && entry.detail !== undefined)
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/** D02 parts lists and balloons (schema v80). */
+export function assertDrawingBomSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 80, 'Parts lists and balloons');
+}
+
+/** Whether `value` holds a v80 parts list or balloon. */
+export function hasDrawingBom(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (
+      typeof entry.annotationId === 'string' &&
+      (entry.kind === 'bom-table' || entry.kind === 'balloon')
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
 }
 
 function hasCouplings(assembly: unknown): boolean {
@@ -200,8 +424,51 @@ export function assertDocumentContentCommandSchema(
       assertAssemblyExplodeSchema(document.schemaVersion);
     if (command.kind === 'feature.sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
+    if (command.kind === 'feature.standard-part')
+      assertStandardPartSchema(document.schemaVersion, command.payload);
     if (command.kind === 'printClearance.set')
       assertPrintClearanceSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('configuration.')
+    )
+      assertConfigurationSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingDimensionFormat(command.payload)
+    )
+      assertDrawingDimensionFormatSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingFormat(command.payload)
+    )
+      assertDrawingFormatSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingGeometry(command.payload)
+    )
+      assertDrawingGeometrySchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingDistance(command.payload)
+    )
+      assertDrawingDistanceSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingDetail(command.payload)
+    )
+      assertDrawingDetailSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingBom(command.payload)
+    )
+      assertDrawingBomSchema(document.schemaVersion);
     if (!record(command.payload)) continue;
     if (
       command.kind === 'sketch.composite.add' &&
@@ -238,6 +505,19 @@ export function assertDocumentContentCommandSchema(
         command.payload.data.featureKind === 'thread')
     )
       assertThreadContentSchema(command.payload.data, document.schemaVersion);
+    // M17 (schema v77): `hole` is a standard part's only, so a patch that
+    // carries one and is not another kind's inserts the part into a hole.
+    if (
+      record(command.payload.data) &&
+      command.payload.data.hole !== undefined &&
+      (command.payload.data.featureKind === undefined ||
+        command.payload.data.featureKind === 'standard-part')
+    )
+      assertMinimumProjectSchema(
+        document.schemaVersion,
+        77,
+        'Parts inserted into holes'
+      );
     switch (command.kind) {
       case 'sketch.add':
       case 'sketch.object.add':
@@ -275,6 +555,15 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         (change.before !== undefined || change.after !== undefined)
       )
         assertPrintClearanceSchema(document.schemaVersion);
+  if (document.configurations !== undefined)
+    assertConfigurationSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'configurations' &&
+        (change.before !== undefined || change.after !== undefined)
+      )
+        assertConfigurationSchema(document.schemaVersion);
   if (document.assembly !== undefined)
     assertAssemblySchema(document.schemaVersion);
   if (hasCouplings(document.assembly))
@@ -291,6 +580,61 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         if (hasExplode(change.before) || hasExplode(change.after))
           assertAssemblyExplodeSchema(document.schemaVersion);
       }
+  if (hasDrawingDimensionFormat(document.drawings))
+    assertDrawingDimensionFormatSchema(document.schemaVersion);
+  if (hasDrawingFormat(document.drawings))
+    assertDrawingFormatSchema(document.schemaVersion);
+  if (hasDrawingGeometry(document.drawings))
+    assertDrawingGeometrySchema(document.schemaVersion);
+  if (hasDrawingDistance(document.drawings))
+    assertDrawingDistanceSchema(document.schemaVersion);
+  if (hasDrawingDetail(document.drawings))
+    assertDrawingDetailSchema(document.schemaVersion);
+  if (hasDrawingBom(document.drawings))
+    assertDrawingBomSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingBom(change.before) || hasDrawingBom(change.after))
+      )
+        assertDrawingBomSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingDetail(change.before) || hasDrawingDetail(change.after))
+      )
+        assertDrawingDetailSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingDistance(change.before) || hasDrawingDistance(change.after))
+      )
+        assertDrawingDistanceSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingGeometry(change.before) || hasDrawingGeometry(change.after))
+      )
+        assertDrawingGeometrySchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingDimensionFormat(change.before) ||
+          hasDrawingDimensionFormat(change.after))
+      )
+        assertDrawingDimensionFormatSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingFormat(change.before) || hasDrawingFormat(change.after))
+      )
+        assertDrawingFormatSchema(document.schemaVersion);
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch-object')
       assertSketchObjectContentSchema(
@@ -306,6 +650,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       assertHoleContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'standard-part')
+      assertStandardPartSchema(document.schemaVersion, node.data);
     if (
       node.kind === 'sketch' &&
       Array.isArray(node.composites) &&

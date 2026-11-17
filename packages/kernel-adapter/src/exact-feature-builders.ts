@@ -6,6 +6,7 @@ import { edgeSelectionKey } from './exact-edge-selection-transport';
 import { upstreamSnapshot } from './exact-carry-edit-gate';
 import { buildGearFeature } from './exact-gear';
 import { buildSheetMetalFeature } from './exact-sheet-metal';
+import { buildStandardPartFeature } from './exact-standard-part';
 import {
   buildThreadFeature,
   cutResolvedThread,
@@ -1535,7 +1536,7 @@ const BORE_FACE_TOLERANCE = 1e-6;
  * The cylindrical face `spec`'s bore left in `solid`: on its axis, at its
  * radius. A bore cut into pieces (or missing) has no single face to tap.
  */
-function boreFaceOf(
+export function boreFaceOf(
   kernel: RemusKernel,
   solid: number,
   spec: HoleToolSpec
@@ -4277,6 +4278,12 @@ function buildFeatureByKind(
       break;
     case 'sheet-metal':
       buildSheetMetalFeature(ctx, feature, feature.data);
+      break;
+    case 'standard-part':
+      buildStandardPartFeature(ctx, feature, feature.data, {
+        holeToolSpecFor,
+        boreFaceOf
+      });
       break;
     case 'split':
       buildSplitFeature(ctx, feature, feature.data);

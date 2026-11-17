@@ -2,6 +2,12 @@
  * Loads the default-on migration controller (`automaticMigration.ts`) off
  * the entry chunk, and keeps trying when the load fails.
  *
+ * Nothing optional loads until the server confirms all four rollout gates
+ * (`/api/e2ee/config`: enabled, projects, migration and default-on). With
+ * any gate closed, an older Worker answering 404 or the check unreachable,
+ * no chunk is requested and Settings stays closed; the same triggers below
+ * ask again (#953; `encryption-settings.spec.ts`, "closed gates").
+ *
  * The controller registers its own retry triggers (back online, an
  * encryption-state change, a key session becoming ready), so a chunk that
  * never arrives would leave automatic migration off for the whole session
@@ -12,6 +18,8 @@
  * triggers retry the load until it succeeds or the session ends. Once the
  * controller has loaded, its own listeners take over.
  */
+import type { E2eeConfigResponse } from '@openzcad/shared';
+import { desktopFetch } from '../desktopBridge';
 import { subscribeEncryptionState } from './encryptionStateEvents';
 import { subscribeKeySession } from './keySession';
 
@@ -27,6 +35,8 @@ export interface AutomaticMigrationModule {
 }
 
 export interface AutomaticMigrationLoaderOptions {
+  /** Injected in tests; the app asks `/api/e2ee/config`. */
+  readonly gatesOpen?: () => Promise<boolean>;
   /** Injected in tests; the app imports the controller chunk. */
   readonly load?: () => Promise<AutomaticMigrationModule>;
   /** False once the session this load was for is no longer current. */
@@ -37,6 +47,24 @@ export interface AutomaticMigrationLoaderOptions {
 
 const loadController = () =>
   import('./automaticMigration') as Promise<AutomaticMigrationModule>;
+
+/**
+ * Whether the server opens every automatic-migration gate. Anything but a
+ * clear yes on all four, including an older Worker, reads as closed.
+ */
+async function migrationGatesOpen(): Promise<boolean> {
+  const response = await desktopFetch('/api/e2ee/config', {
+    credentials: 'same-origin'
+  });
+  if (!response.ok) return false;
+  const config = (await response.json()) as Partial<E2eeConfigResponse>;
+  return (
+    config.enabled === true &&
+    config.projectsEnabled === true &&
+    config.migrationEnabled === true &&
+    config.defaultOn === true
+  );
+}
 
 /** Whether the browser says it is offline now. */
 const offline = () =>
@@ -51,6 +79,7 @@ export function startAutomaticMigration(
   userId: string,
   attention: (message: string) => void,
   {
+    gatesOpen = migrationGatesOpen,
     load = loadController,
     current = () => true,
     recovered = () => undefined
@@ -60,6 +89,8 @@ export function startAutomaticMigration(
   let failed = false;
   let controller: { dispose(): void } | null = null;
   let loading: Promise<void> | null = null;
+  /** A trigger arrived while a check was in flight; its answer may be stale. */
+  let again = false;
   const live = () => !disposed && current();
 
   const detach: Array<() => void> = [];
@@ -69,10 +100,18 @@ export function startAutomaticMigration(
 
   function attempt(): Promise<void> {
     if (!live() || controller) return Promise.resolve();
-    if (loading) return loading;
-    loading = load()
+    if (loading) {
+      again = true;
+      return loading;
+    }
+    loading = gatesOpen()
+      // A check that cannot be made reads as closed, said nowhere, and is
+      // asked again on the next trigger.
+      .catch(() => false)
+      .then((open) => (open && live() && !controller ? load() : null))
       .then(
         (module) => {
+          if (!module) return;
           if (!live() || controller) return;
           stopRetrying();
           if (failed) recovered();
@@ -98,6 +137,10 @@ export function startAutomaticMigration(
       )
       .finally(() => {
         loading = null;
+        if (again) {
+          again = false;
+          void attempt();
+        }
       });
     return loading;
   }

@@ -75,7 +75,7 @@ test('a delayed tab cannot overwrite the device-list pin advanced by another tab
   await otherSettings
     .getByRole('button', { name: 'Refresh', exact: true })
     .click();
-  await expect(otherSettings.getByText('2 certified')).toBeVisible();
+  await expect(otherSettings.getByText('2 devices', { exact: true })).toBeVisible();
 
   const readSequence = () =>
     page.evaluate(
@@ -126,12 +126,12 @@ test('the saved recovery key restores a certified browser after its replacement 
   await page.goto('/');
   const seeded = await seedE2eeDevice(page, server);
   const settings = await openEncryptionSettings(page);
-  await expect(settings.getByText('1 certified')).toBeVisible();
+  await expect(settings.getByText('1 device', { exact: true })).toBeVisible();
   const other = await context.newPage();
   await stubApi(other);
   await other.goto('/');
   const otherSettings = await openEncryptionSettings(other);
-  await expect(otherSettings.getByText('1 certified')).toBeVisible();
+  await expect(otherSettings.getByText('1 device', { exact: true })).toBeVisible();
   const nodeDevice = server.nodeDevice();
   const state = await loadEncryption(nodeDevice);
   if (state.kind !== 'ready')
@@ -147,13 +147,13 @@ test('the saved recovery key restores a certified browser after its replacement 
   await otherSettings
     .getByRole('button', { name: 'Refresh', exact: true })
     .click();
-  await expect(otherSettings.getByText('2 certified')).toBeVisible();
+  await expect(otherSettings.getByText('2 devices', { exact: true })).toBeVisible();
   await settings.getByRole('button', { name: 'Replace…', exact: true }).click();
   const newKey = (await settings
     .getByLabel('Recovery key', { exact: true })
     .textContent())!;
   await settings
-    .getByRole('checkbox', { name: 'I saved my recovery key' })
+    .getByRole('checkbox', { name: /I saved my recovery key/ })
     .check();
   await settings.getByRole('button', { name: 'Continue', exact: true }).click();
   await settings.getByLabel('Confirm recovery key').fill(newKey);
@@ -164,6 +164,11 @@ test('the saved recovery key restores a certified browser after its replacement 
   await expect(settings.getByRole('alert')).toContainText(
     'changed in another tab'
   );
+  // The failure is said in the dialog; close it to reload the page.
+  await page.keyboard.press('Escape');
+  await expect(
+    settings.getByRole('dialog', { name: 'Replace recovery key' })
+  ).toHaveCount(0);
   await settings.getByRole('button', { name: 'Refresh', exact: true }).click();
   await expect(settings.getByRole('alert')).toContainText(
     'replaced on another device'
@@ -176,7 +181,7 @@ test('the saved recovery key restores a certified browser after its replacement 
     .getByRole('button', { name: 'Unlock this device', exact: true })
     .click();
   await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
-  await expect(settings.getByText('1 certified')).toBeVisible();
+  await expect(settings.getByText('1 device', { exact: true })).toBeVisible();
   expect(
     server.db
       .prepare(

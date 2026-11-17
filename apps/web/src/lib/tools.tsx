@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import {
   Axis3d,
+  Bolt,
   Box,
   Cog,
   Cone,
@@ -77,6 +78,7 @@ export type ToolId =
   | 'thread'
   | 'sheet-metal'
   | 'bend'
+  | 'standard-part'
   | 'fillet'
   | 'chamfer'
   | 'linear-pattern'
@@ -254,6 +256,13 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     group: 'create',
     hint: 'Add a gear, rack or worm'
   },
+  'standard-part': {
+    label: 'Standard part',
+    short: 'Part',
+    icon: icon(<Bolt size={16} aria-hidden="true" />),
+    group: 'create',
+    hint: 'Add a screw, nut, washer, insert, dowel pin or bearing'
+  },
   'gear-teeth': {
     label: 'Gear teeth',
     icon: gearTeethGlyph,
@@ -385,7 +394,8 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
         'datum-axis',
         'reference-image',
         ...PRIMITIVE_TOOLS,
-        'gear'
+        'gear',
+        'standard-part'
       ]
     },
     {

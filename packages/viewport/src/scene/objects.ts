@@ -89,8 +89,20 @@ export function applyDisplayMode(
     } else if (isViewerMesh(child) || child.userData.sectionCap === true) {
       const mesh = child as ViewerMesh;
       const facetWireframe = child.userData.meshFacetWireframe === true;
-      mesh.material.visible = facesVisible || facetWireframe;
+      const visible = facesVisible || facetWireframe;
+      if (child.userData.analysisCovered === true) {
+        // An M09 analysis overlay stands in for these faces: keep what the
+        // mode wants for when it goes, and draw the overlay instead.
+        child.userData.analysisFacesVisible = visible;
+        mesh.material.visible = false;
+      } else {
+        mesh.material.visible = visible;
+      }
       mesh.material.wireframe = facetWireframe && !facesVisible;
+    } else if (child.userData.analysisOverlay === true) {
+      // M09: the analysis is drawn as the body's faces, so it shows when
+      // they would.
+      child.visible = facesVisible;
     } else if (child.userData.ownColourFill === true) {
       // A selected face follows the body's surfaces, including the
       // translucent faces X-ray displays over wireframe.

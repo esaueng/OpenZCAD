@@ -57,6 +57,15 @@ function hintOutgrowsField(probe: HTMLElement): boolean {
   return ink > room - 0.5;
 }
 
+/** A section cut on screen whose controls are put away. */
+export interface SectionStatus {
+  /** "Section · XY plane". */
+  label: string;
+  /** M09: the overlap note for the cut, or null when nothing overlaps. */
+  note: string | null;
+  onTurnOff(): void;
+}
+
 interface WorkspaceReadoutProps {
   status: string;
   statusAt?: number;
@@ -70,6 +79,14 @@ interface WorkspaceReadoutProps {
    * start used to expire unseen behind this line.
    */
   geometryStatus?: { phase: string; projection: string } | null;
+  /**
+   * A section cut on while its controls are put away (Assemble, View, or
+   * Build after Escape): the line says which cut, with Turn off beside it.
+   * A state like the geometry line, it never expires: a live message is
+   * drawn in its place while it lasts, and the cut's line comes back after.
+   * Before, a chip in the bottom-right corner said it, over the cube (I49).
+   */
+  section?: SectionStatus | null;
   tone: StatusTone;
   /** A tool card is up and carries the message itself. */
   muted?: boolean;
@@ -155,6 +172,7 @@ export function WorkspaceReadout({
   statusSticky,
   statusImmediate = false,
   geometryStatus = null,
+  section = null,
   tone,
   muted = false,
   onOpenLog,
@@ -293,23 +311,50 @@ export function WorkspaceReadout({
       statusAt === expiredAt ||
       (statusAt === spentAt && !repeated));
   const messageLive = !expired && status !== '';
+  // A cut left on is the floor under the message once the geometry is ready:
+  // the line between messages, and while a tool card carries the message
+  // (muted) too, since the card does not say the model is cut.
+  const sectionLine = section
+    ? `${section.label}${section.note ? ' · overlap in this cut' : ''}`
+    : null;
+  // The message that turned the cut on ("Section view on: XY plane · …")
+  // says less than the cut's own line, which has Turn off beside it: for
+  // its 8 s the way off was missing.
+  const sectionShown =
+    geometryStatus === null &&
+    sectionLine !== null &&
+    (!messageLive || Boolean(muted) || status.startsWith('Section view on:'));
   // The geometry line is the floor under the message: it carries the live
   // message ahead of the phase, and the projection note once it has gone.
-  const line = geometryStatus
-    ? messageLive
-      ? `${status} · ${geometryStatus.phase}`
-      : `${geometryStatus.phase} · ${geometryStatus.projection}`
-    : status;
-  const quiet = geometryStatus === null && expired;
-  const shown = !quiet && !muted && line !== '';
+  const line = sectionShown
+    ? sectionLine
+    : geometryStatus
+      ? messageLive
+        ? `${status} · ${geometryStatus.phase}`
+        : `${geometryStatus.phase} · ${geometryStatus.projection}`
+      : status;
+  const quiet = !sectionShown && geometryStatus === null && expired;
+  const shown = sectionShown || (!quiet && !muted && line !== '');
   // The log keeps every message; the toast holds each long enough to read.
+  // The cut's line is a state coming back, not news to read: held behind a
+  // retired message's dwell, the spent message came back with no Turn off.
   const paced = usePacedStatus(
     line,
-    tone,
+    sectionShown ? 'ready' : tone,
     shown,
     isNotableStatus,
-    statusImmediate
+    statusImmediate || sectionShown
   );
+  const undoShown =
+    shown && !sectionShown && Boolean(onUndo) && paced.status === line;
+  // The geometry line keeps the row while the model is not ready, and a
+  // failed rebuild keeps it there for good: the cut's way off stays beside
+  // it, or a phone with its view tools folded had none.
+  const turnOffShown =
+    section !== null &&
+    (sectionShown
+      ? paced.status === line
+      : geometryStatus !== null && shown && !undoShown);
   // Only what the user would go back for earns a counter: rebuild stages
   // and saves passed over in a burst are routine, and "10 more in log"
   // after adding one box sent people looking for a problem there was not.
@@ -472,9 +517,11 @@ export function WorkspaceReadout({
           title={
             quiet
               ? 'View activity log'
-              : missed
-                ? `${paced.status} — ${missed} in the activity log`
-                : `${paced.status} — View activity log`
+              : sectionShown && section?.note
+                ? `${paced.status} — ${section.note}`
+                : missed
+                  ? `${paced.status} — ${missed} in the activity log`
+                  : `${paced.status} — View activity log`
           }
           // No trailing period on the action's name (I9): the status, when
           // there is one, follows it as what the toast currently says.
@@ -498,7 +545,26 @@ export function WorkspaceReadout({
             </span>
           ) : null}
         </button>
-        {shown && onUndo && paced.status === line ? (
+        {section && turnOffShown ? (
+          <>
+            {sectionShown && section.note ? (
+              // M09: the toolbox's words for the overlap, which the line
+              // can only point at; read out, and on the line's tooltip.
+              <span className="visually-hidden" role="note">
+                {section.note}
+              </span>
+            ) : null}
+            <button
+              type="button"
+              className="workspace-toast-undo"
+              aria-label="Turn off section view"
+              onClick={section.onTurnOff}
+            >
+              {sectionShown ? 'Turn off' : 'Turn off section'}
+            </button>
+          </>
+        ) : null}
+        {undoShown ? (
           <button
             type="button"
             className="workspace-toast-undo"

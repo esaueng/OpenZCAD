@@ -68,11 +68,13 @@ import { datumAxis, datumPlane, type RefKind, type RefPick } from './datums';
 import { faceSpan, threadSpec, type ThreadRequest } from './thread';
 import { referenceImage, type ImageSlot } from './image';
 import { bendSpec, sheetMetalSpec, type SheetMetalRequest } from './sheetMetal';
+import { standardPartSpec, type StandardPartRequest } from './standardPart';
 
 export type { RefPick } from './datums';
 export type { ThreadRequest } from './thread';
 export type { ImagePlacement, ImageSlot } from './image';
 export type { SheetMetalRequest } from './sheetMetal';
+export type { StandardPartRequest } from './standardPart';
 
 /**
  * The in-place commands (U09), as data.
@@ -95,6 +97,7 @@ export type InPlaceToolId =
   | 'thread'
   | 'sheet-metal'
   | 'bend'
+  | 'standard-part'
   | 'shell'
   | 'thicken'
   | 'solid-offset'
@@ -128,6 +131,7 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'thread',
   'sheet-metal',
   'bend',
+  'standard-part',
   'shell',
   'thicken',
   'solid-offset',
@@ -446,6 +450,16 @@ export interface InPlaceContext {
    * a pattern on sketch points; empty when the sketch has none.
    */
   sketchPoints?(sketchId: SketchId): readonly SketchPointSpot[];
+  /**
+   * M17 (schema v71): an M01 hole feature's stored data and its entry
+   * face's outward normal, for a part inserted into it; null when the
+   * feature is not a hole.
+   */
+  holeFeature?(featureId: FeatureId): {
+    name: string;
+    data: Extract<FeatureData, { featureKind: 'hole' }>;
+    entryNormal: Vector3 | null;
+  } | null;
 }
 
 /** M02: a point entity of a sketch, where it stands. */
@@ -605,6 +619,11 @@ export type InPlaceRequest =
        */
       tool: 'sheet-metal';
       sheet: SheetMetalRequest;
+    }
+  | {
+      /** An M17 standard part (schema v69), as the feature stores it. */
+      tool: 'standard-part';
+      part: StandardPartRequest;
     }
   | {
       /** A primitive and its placement, as the card's Create built them. */
@@ -776,6 +795,11 @@ export interface InPlaceToolSpec {
   edgeMode?: 'many';
   /** Takes a plane: a ghost principal plane, a datum plane or a flat face. */
   wantsPlane?: boolean;
+  /**
+   * A flat face's plane stands where it was clicked (a standard part), not
+   * on the face's centroid (a new gear).
+   */
+  planeAtClick?: boolean;
   /** The datum sources its picks may be, and how a pick joins the others. */
   refKinds?: readonly RefKind[];
   takeRef?(refs: readonly RefPick[], ref: RefPick): RefPick[];
@@ -6317,6 +6341,7 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   thread: threadSpec,
   'sheet-metal': sheetMetalSpec,
   bend: bendSpec,
+  'standard-part': standardPartSpec,
   shell,
   thicken,
   'solid-offset': solidOffset,

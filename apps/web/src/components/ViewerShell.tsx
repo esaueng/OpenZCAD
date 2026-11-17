@@ -21,9 +21,11 @@ import { useAssemblyView } from '../lib/assembly/useAssemblyView';
 import type { ReferenceImageDisplay } from '../lib/referenceImageDisplay';
 import type { AutoFrameRequest } from '../lib/autoFrame';
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type MutableRefObject,
   type ReactNode
 } from 'react';
@@ -60,7 +62,6 @@ import type {
   WheelDevice
 } from '@openzcad/viewport';
 import {
-  SECTION_PLANE_LABELS,
   VIEWER_RAIL_STOPS,
   VIEWER_RAIL_STOPS_EXCEPT,
   ViewerToolbar
@@ -108,6 +109,16 @@ import { ProjectThumbnailSyncAgent } from './ProjectThumbnailSyncAgent';
 import type { ProjectThumbnailRecord } from '../lib/localProjectStore';
 import type { ThumbnailCloudTransport } from '../lib/cloudThumbnail';
 import type { DimensionMode } from '../lib/keypad';
+import { createLazyPanel } from './LazyPanel';
+import type { AnalysisPanel as AnalysisPanelComponent } from './AnalysisPanel';
+import {
+  analysisRuntime,
+  useAnalysisRuntime
+} from '../lib/analysis/analysisRuntime';
+import {
+  useSurfaceAnalysis,
+  type RunSurfaceAnalysis
+} from '../lib/analysis/useSurfaceAnalysis';
 
 type MeasurementCloudSyncState = readonly [
   projectId: string | undefined,
@@ -436,6 +447,11 @@ interface ViewerShellProps {
   nothingToSection?: boolean;
   /** Whether the section controls show while the cut is on (remembered). */
   sectionPanelOpen?: boolean;
+  /**
+   * M09: the overlap note for the cut on screen (null when there is none),
+   * for the status line that stands in for the put-away section controls.
+   */
+  onSectionOverlapNote?(note: string | null): void;
   onSectionPanelOpenChange?(open: boolean): void;
   onSectionPlane(plane: SectionPlaneId): void;
   onSectionOffset(offset: number): void;
@@ -448,7 +464,21 @@ interface ViewerShellProps {
    * and the rail's description of it can never disagree.
    */
   sectionOutline: SectionOutlineState;
+  /**
+   * M09: runs the exact surface analysis (the geometry worker's). Absent,
+   * the Display menu's analyses draw nothing.
+   */
+  runSurfaceAnalysis?: RunSurfaceAnalysis;
 }
+
+/** M09's analysis panel, loaded with the first analysis switched on. */
+const AnalysisPanel = createLazyPanel<
+  ComponentProps<typeof AnalysisPanelComponent>
+>('Analysis panel', () =>
+  import('./AnalysisPanel').then((module) => ({
+    default: module.AnalysisPanel
+  }))
+);
 
 export function ViewerShell({
   projectId,
@@ -610,15 +640,44 @@ export function ViewerShell({
   onToggleSection,
   nothingToSection,
   sectionPanelOpen,
+  onSectionOverlapNote,
   onSectionPanelOpenChange,
   onSectionPlane,
   onSectionOffset,
   onSectionCommit,
   onSectionFlip,
   onExportSectionDxf,
-  sectionOutline
+  sectionOutline,
+  runSurfaceAnalysis
 }: ViewerShellProps) {
   const { bodies, standIns: parameterVisualPreview } = view;
+  // M09 analysis overlays: the analysis the Display menu switched on, run on
+  // the bodies drawn as built. A stand-in or a body drawn somewhere else
+  // than the build put it withholds the overlay rather than paint the
+  // build's colours over a shape that is not the build's.
+  const analysisRequest = useAnalysisRuntime((s) => s.request);
+  // Defaults stated in millimetres (thickness's minimum wall) follow the
+  // document's units.
+  useEffect(() => {
+    analysisRuntime.setUnits(units);
+  }, [units]);
+  const analysisBodyIds = useMemo(
+    () => bodies.map((body) => body.bodyId),
+    [bodies]
+  );
+  const analysisPreviewing =
+    (parameterVisualPreview?.length ?? 0) > 0 || view.drawnElsewhere.length > 0;
+  const analysis = useSurfaceAnalysis({
+    request: analysisRequest,
+    document: view.document,
+    bodyIds: analysisBodyIds,
+    previewing: analysisPreviewing,
+    run: runSurfaceAnalysis
+  });
+  const analysisNames = useMemo(
+    () => new Map(bodies.map((body) => [body.bodyId as string, body.name])),
+    [bodies]
+  );
   // M09: bodies overlapping inside the cut, as the viewport's section pass
   // found them on the display meshes; named for the section toolbox.
   const [sectionOverlapIds, setSectionOverlapIds] = useState<
@@ -635,6 +694,13 @@ export function ViewerShell({
   const sectionOverlapText = settings.sectionView
     ? describeSectionOverlap(sectionOverlap, units)
     : null;
+  // M09: the overlap note goes up to the status line, which says a cut is
+  // on while its controls are put away (Assemble, View, Build after
+  // Escape) and carries the note in their place.
+  useEffect(() => {
+    onSectionOverlapNote?.(sectionOverlapText);
+    return () => onSectionOverlapNote?.(null);
+  }, [onSectionOverlapNote, sectionOverlapText]);
   // Assemble's posed view of the same document; null outside Assemble.
   const assemblyView = useAssemblyView(view.document);
   /**
@@ -833,6 +899,7 @@ export function ViewerShell({
         settings={settings}
         exactSection={exactSection}
         onSectionOverlap={setSectionOverlapIds}
+        analysisOverlay={analysis.overlay}
         fitSignal={fitSignal}
         autoFrame={autoFrame}
         creationFrame={creationFrame}
@@ -1049,48 +1116,24 @@ export function ViewerShell({
               }
               onDragEnd={() => orientationDragRef.current?.end()}
             />
-            {/* View has no instrument rail, yet command search can still
-                turn the cut on there. Without this the model stayed clipped
-                with nothing on screen saying so or turning it off. Build
-                says it too once its controls are put away (Escape, or the
-                rail button): a lit button alone did not say the model on
-                screen was cut (I49). */}
-            {settings.sectionView &&
-              (viewMode || sectionPanelOpen === false || !sectionRange) && (
-                <div
-                  className="view-mode-section"
-                  role="group"
-                  // Not "Section view": that names the controls themselves.
-                  aria-label="Section view on"
-                >
-                  <span className="view-mode-section-label">
-                    Section · {SECTION_PLANE_LABELS[settings.sectionView.plane]}
-                  </span>
-                  <button
-                    type="button"
-                    className="view-mode-section-off"
-                    onClick={onToggleSection}
-                  >
-                    Turn off
-                  </button>
-                  {sectionOverlapText ? (
-                    // M09: the same words the section toolbox shows, for a
-                    // cut whose toolbox is put away (Assemble, View).
-                    <p className="view-mode-section-overlap" role="note">
-                      <span
-                        className="rail-section-overlap-swatch"
-                        aria-hidden="true"
-                      />
-                      {sectionOverlapText}
-                    </p>
-                  ) : null}
-                </div>
-              )}
           </div>
           {!viewMode && !dockLayout && viewerToolbar}
         </>
       )}
       {modeOverlay}
+      {/* M09: the analysis the Display menu switched on, with its legend,
+          provenance and limits; its own island over the stage's foot. */}
+      {!hideViewerToolbar && analysisRequest && analysis.state ? (
+        <AnalysisPanel
+          request={analysisRequest}
+          run={analysis.state}
+          previewing={analysisPreviewing}
+          lengthUnit={units === 'inch' ? 'in' : units}
+          nameOf={(bodyId) => analysisNames.get(bodyId) ?? 'A body'}
+          onChange={analysisRuntime.update}
+          onOff={analysisRuntime.off}
+        />
+      ) : null}
       {/* Upright in the stage's bottom-left corner at every window size. */}
       <ViewportScaleIndicator scaleSinkRef={scaleIndicatorRef} units={units} />
       {frameRateOverlay && (

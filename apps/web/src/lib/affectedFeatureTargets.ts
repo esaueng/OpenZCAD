@@ -40,6 +40,7 @@ const HANDLED_FEATURE_KINDS: ReadonlySet<FeatureKind> = new Set<FeatureKind>([
   'gear',
   'thread',
   'sheet-metal',
+  'standard-part',
   'transform',
   'mirror',
   'shell',
@@ -281,6 +282,20 @@ export function affectedFeatureTargets(
       case 'thread':
         affected = affectedBodies.has(data.targetBodyId);
         break;
+      case 'standard-part': {
+        // M17 (schema v71): a part in a hole moves with the hole, whose
+        // result body is affected when the hole is.
+        const hole = data.hole
+          ? features.find(
+              (candidate) => candidate.featureId === data.hole!.featureId
+            )
+          : undefined;
+        affected =
+          hole !== undefined &&
+          (hole.featureId === source.featureId ||
+            (hole.bodyId !== undefined && affectedBodies.has(hole.bodyId)));
+        break;
+      }
       case 'primitive':
       case 'imported-mesh':
       case 'imported-step':

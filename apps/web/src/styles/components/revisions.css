@@ -354,6 +354,28 @@
   text-align: center;
 }
 
+.error-page-details > .secondary {
+  display: block;
+  margin: var(--sp-2) auto 0;
+}
+
+/* Two classes: the page card's `.error-page p` would otherwise win. */
+.error-page-details .error-page-hint {
+  display: block;
+  margin: var(--sp-2) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  text-align: center;
+}
+
+/* Taller than the message box: the first lines name where it failed. */
+.error-page-details code.error-page-stack {
+  max-height: 14rem;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
 .error-page-details code {
   display: block;
   margin-top: var(--sp-2);

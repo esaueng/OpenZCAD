@@ -6,6 +6,7 @@ import {
   parameterTable
 } from '../ParameterRows';
 import { PrintClearanceRow } from '../PrintClearanceRow';
+import { ConfigurationTable } from '../ConfigurationTable';
 
 export type ParametersPanelProps = Pick<
   ModelPanelSource,
@@ -27,6 +28,7 @@ export type ParametersPanelProps = Pick<
   | 'onConfigureToggle'
   | 'printClearance'
   | 'onSetPrintClearance'
+  | 'configurationTable'
 > &
   Partial<Pick<ModelPanelSource, 'units'>> & {
     /**
@@ -61,7 +63,8 @@ export function ParametersPanel({
   printClearance,
   onSetPrintClearance,
   units = 'mm',
-  bodies
+  bodies,
+  configurationTable
 }: ParametersPanelProps) {
   const table = parameterTable(parameters);
   return (
@@ -120,6 +123,13 @@ export function ParametersPanel({
           clearance={printClearance}
           units={units}
           {...(onSetPrintClearance ? { onSet: onSetPrintClearance } : {})}
+        />
+      )}
+      {configurationTable && (
+        <ConfigurationTable
+          {...configurationTable}
+          parameters={parameters}
+          bodies={bodies}
         />
       )}
     </>

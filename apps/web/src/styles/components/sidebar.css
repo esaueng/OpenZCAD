@@ -1942,3 +1942,79 @@
 .appearance-reset:hover {
   color: var(--color-accent-hi);
 }
+
+/* F06: the variant table under the parameters. Rows are configurations,
+   columns what each decides; it scrolls sideways rather than squeezing a
+   narrow sidebar's cells below a usable width. */
+.configuration-table {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.configuration-header,
+.configuration-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.configuration-actions select {
+  min-width: 0;
+  flex: 1;
+  font-size: var(--fs-xs);
+}
+
+.configuration-scroll {
+  overflow-x: auto;
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+}
+
+.configuration-scroll table {
+  border-collapse: collapse;
+  font-size: var(--fs-xs);
+  min-width: 100%;
+}
+
+.configuration-scroll th,
+.configuration-scroll td {
+  padding: 3px 6px;
+  border-bottom: var(--border-thin);
+  text-align: left;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.configuration-scroll thead th {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.configuration-scroll tr.active th[scope='row'] {
+  color: var(--color-accent);
+}
+
+.configuration-column-title,
+.configuration-row-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.configuration-cell-input {
+  width: 9ch;
+  height: 24px;
+  padding: 2px 6px;
+  font-size: var(--fs-xs);
+}
+
+.configuration-row-name .configuration-cell-input {
+  width: 14ch;
+}
+
+.configuration-export {
+  max-width: 9ch;
+  font-size: var(--fs-xs);
+}

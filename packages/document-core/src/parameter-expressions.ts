@@ -293,6 +293,12 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       for (const point of datumAxisPointSources(data.definition))
         if (point.type === 'point') vector(point.point, rewrite, 'length');
       return;
+    case 'standard-part':
+      fields(data, ['length'], rewrite, 'length');
+      vector(data.origin, rewrite, 'length');
+      vector(data.axis, rewrite, null);
+      vector(data.xDirection, rewrite, null);
+      return;
     case 'sketch':
     case 'sweep':
     case 'imported-mesh':

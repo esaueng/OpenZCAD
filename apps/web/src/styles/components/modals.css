@@ -797,6 +797,19 @@
   font-size: var(--fs-sm);
 }
 
+/* F06: which configuration the export writes. */
+.export-dialog-configuration {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+}
+
+.export-dialog-configuration select {
+  flex: 1;
+  min-width: 0;
+}
+
 .export-dialog-group {
   display: grid;
   /* A long body name widened the implicit track past the group's border. */
@@ -1930,6 +1943,22 @@
 
 .sharing-share-url {
   font-family: var(--font-mono);
+}
+
+/* F06: which configuration the new link opens on; it rewrites the URL. */
+.sharing-share-configuration {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  font-size: var(--fs-xs);
+}
+
+.sharing-share-configuration select {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  font-size: var(--fs-xs);
 }
 
 .sharing-share-once {

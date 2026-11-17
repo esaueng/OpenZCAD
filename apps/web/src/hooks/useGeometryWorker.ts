@@ -8,7 +8,9 @@ import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import type {
   AssemblyInterferenceOperand,
-  AssemblyInterferenceReport
+  AssemblyInterferenceReport,
+  SurfaceAnalysisReport,
+  SurfaceAnalysisRequest
 } from '@openzcad/shared';
 import { hasDraftDisplay as hasDraftBodies } from '@openzcad/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -45,6 +47,7 @@ import type {
   ExactSectionPlane,
   MeshQualityReport,
   MassPropertiesRead,
+  ExportBodySummary,
   SectionOutlineReport,
   SheetMetalFlatPattern,
   SketchPlanarOperation,
@@ -285,6 +288,8 @@ export interface GeometryWorkerApi {
       transparent?: boolean;
       /** 'step' only: the name the file is saved under, for its header. */
       fileName?: string;
+      /** F06: write every body the document shows, ignoring `bodyIds`. */
+      allShownBodies?: boolean;
       signal?: AbortSignal;
       onState?(state: GeometryWorkerState): void;
     }
@@ -302,6 +307,8 @@ export interface GeometryWorkerApi {
     options?: {
       angularTolerance?: number;
       units?: UnitSystem;
+      /** F06: check every body the document shows, ignoring `bodyIds`. */
+      allShownBodies?: boolean;
       onState?(state: GeometryWorkerState): void;
     }
   ): Promise<MeshQualityReport>;
@@ -332,6 +339,11 @@ export interface GeometryWorkerApi {
     bodyId: BodyId,
     options?: { signal?: AbortSignal }
   ): Promise<MassPropertiesRead>;
+  /**
+   * F06: the bodies an export of `document` writes, named and marked when
+   * they are mesh references, for a configuration that is not shown.
+   */
+  exportBodies(document: ProjectDocument): Promise<ExportBodySummary[]>;
   /**
    * M16: a sheet-metal feature folded to `fraction` of every bend (0 flat,
    * 1 as stored), as a view-only mesh; later features are not applied.
@@ -371,6 +383,15 @@ export interface GeometryWorkerApi {
     document: ProjectDocument,
     operands: AssemblyInterferenceOperand[]
   ): Promise<AssemblyInterferenceReport>;
+  /**
+   * M09 analysis overlays: the exact per-face analysis of the named bodies,
+   * sampled for the viewport (read-only).
+   */
+  surfaceAnalysis(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    analysis: SurfaceAnalysisRequest
+  ): Promise<SurfaceAnalysisReport>;
   /**
    * Runs one planar sketch edit — corner fillet, corner chamfer, or closed
    * loop offset — on the kernel's 2D operations. Geometry only: the caller
@@ -459,6 +480,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const massPropertiesRequests = useRef(
     new Map<string, PendingRequest<MassPropertiesRead>>()
   );
+  const exportBodiesRequests = useRef(
+    new Map<string, PendingRequest<ExportBodySummary[]>>()
+  );
   const sheetMetalFoldRequests = useRef(
     new Map<string, PendingRequest<SheetMetalFoldPreview>>()
   );
@@ -467,6 +491,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   );
   const interferenceRequests = useRef(
     new Map<string, PendingRequest<AssemblyInterferenceReport>>()
+  );
+  const surfaceAnalysisRequests = useRef(
+    new Map<string, PendingRequest<SurfaceAnalysisReport>>()
   );
   const sectionRequests = useRef(
     new Map<string, PendingRequest<SectionOutlineReport>>()
@@ -551,9 +578,11 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       meshQualityRequests.current,
       drawingTessellationRequests.current,
       massPropertiesRequests.current,
+      exportBodiesRequests.current,
       sheetMetalFoldRequests.current,
       solveSketchRequests.current,
       interferenceRequests.current,
+      surfaceAnalysisRequests.current,
       sectionRequests.current,
       sketchPlanarRequests.current,
       recognizeImportedFaceRequests.current,
@@ -1026,6 +1055,14 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           else pending.reject(new Error(message.error));
           return;
         }
+        if (message.type === 'export-bodies') {
+          const pending = exportBodiesRequests.current.get(message.requestId);
+          if (!pending) return;
+          exportBodiesRequests.current.delete(message.requestId);
+          if (message.ok) pending.resolve(message.bodies);
+          else pending.reject(new Error(message.error));
+          return;
+        }
         if (message.type === 'mass-properties') {
           const pending = massPropertiesRequests.current.get(message.requestId);
           if (!pending) return;
@@ -1048,6 +1085,21 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             return;
           }
           sectionRequests.current.delete(message.requestId);
+          if (message.ok) {
+            pending.resolve(message.report);
+          } else {
+            pending.reject(new Error(message.error));
+          }
+          return;
+        }
+        if (message.type === 'surface-analysis') {
+          const pending = surfaceAnalysisRequests.current.get(
+            message.requestId
+          );
+          if (!pending) {
+            return;
+          }
+          surfaceAnalysisRequests.current.delete(message.requestId);
           if (message.ok) {
             pending.resolve(message.report);
           } else {
@@ -1556,7 +1608,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             : {}),
           ...(options?.fileName !== undefined
             ? { fileName: options.fileName }
-            : {})
+            : {}),
+          ...(options?.allShownBodies ? { allShownBodies: true } : {})
         });
       });
     },
@@ -1569,7 +1622,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         ...(options?.angularTolerance !== undefined
           ? { angularTolerance: options.angularTolerance }
           : {}),
-        ...(options?.units !== undefined ? { units: options.units } : {})
+        ...(options?.units !== undefined ? { units: options.units } : {}),
+        ...(options?.allShownBodies ? { allShownBodies: true } : {})
       });
       if (!posted.ok) {
         return Promise.reject(new Error('Geometry worker is unavailable.'));
@@ -1589,6 +1643,15 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         plane,
         options?.signal
       ) as Promise<Record<BodyId, DrawingSectionBody>>;
+    },
+    exportBodies(document) {
+      const posted = postRequest(exportBodiesRequests.current, {
+        type: 'export-bodies',
+        document: documentForWorker(document)
+      });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker is unavailable.'));
     },
     massProperties(document, bodyId, options) {
       if (options?.signal?.aborted) {
@@ -1666,6 +1729,17 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         type: 'assembly-interference',
         document: documentForWorker(document),
         operands
+      });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker is unavailable.'));
+    },
+    surfaceAnalysis(document, bodyIds, analysis) {
+      const posted = postRequest(surfaceAnalysisRequests.current, {
+        type: 'surface-analysis',
+        document: documentForWorker(document),
+        bodyIds,
+        analysis
       });
       return posted.ok
         ? posted.promise

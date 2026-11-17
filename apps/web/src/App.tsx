@@ -18,10 +18,13 @@ import {
 } from './lib/localHistoryAppend';
 import {
   documentPrintClearance,
+  effectiveConfigurationRow,
+  documentForConfiguration,
   repairLegacyBracketModel,
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
 import type { PrintClearanceState } from './components/PrintClearanceRow';
+import type { ConfigurationActions } from './components/ConfigurationTable';
 import {
   noteProjectMigrating,
   registerProjectFlush,
@@ -205,7 +208,9 @@ import {
   duplicateFeatureCommands,
   duplicateFeatureRefusal,
   isParameterRetype,
+  isTweakCommand,
   isAssemblyOnlyCommand,
+  isConfigurationTableOnlyCommand,
   isDrawingCommand,
   isObjectFolderCommandKind,
   isReferenceImageCommandKind,
@@ -227,6 +232,7 @@ import {
   listObjectFolders,
   getParameterHiddenBodyIds,
   findFeature,
+  standardPartHoleSource,
   findSketch,
   getParameterScope,
   resolvedSketchDocument,
@@ -261,7 +267,10 @@ import {
   type PlaneBasis,
   type Vec2
 } from '@openzcad/geometry';
-import type { SketchSolveOutcome } from '@openzcad/kernel-adapter/exact';
+import type {
+  ExportBodySummary,
+  SketchSolveOutcome
+} from '@openzcad/kernel-adapter/exact';
 import type {
   ArtifactKind,
   AccountDeletionScope,
@@ -277,6 +286,7 @@ import type {
   FaceGeometry,
   FaceRecognitionSummary,
   ParamValue,
+  ConfigurationSet,
   FaceTopology,
   ProjectCheckpoint,
   PlaneId,
@@ -417,6 +427,11 @@ import {
   isEncryptedInvitationHash,
   pendingEncryptedInvitation
 } from './lib/e2ee/encryptedInvitationLink';
+import {
+  captureDeviceApprovalLink,
+  isDeviceApprovalHash,
+  pendingDeviceApproval
+} from './lib/e2ee/deviceApprovalLink';
 import { requestContactVerification } from './lib/e2ee/contactFocus';
 import { watchBuildVersion } from './lib/buildVersionWatch';
 import {
@@ -595,7 +610,6 @@ import {
 } from './lib/sketch/valueResolver';
 import { countClosedProfileSketches } from './lib/sketch/profileAvailability';
 import { useDocumentFonts } from './lib/textFonts';
-import { createProjectDiagnosticBundle } from './lib/projectDiagnostics';
 import type { DirectEditFixtureOutcome } from './lib/directEditFixture';
 import type * as InteractionDiagnostics from './lib/interactionDiagnostics';
 import { KERNEL_BUILD, supportsBlendGroupEdits } from './lib/kernelBuild';
@@ -635,6 +649,7 @@ import {
   ViewportDockExtras,
   WorkspaceReadout
 } from './components/WorkspaceReadout';
+import { SECTION_PLANE_LABELS } from './lib/sectionPlaneLabels';
 import { StatusActivityLog } from './components/StatusActivityLog';
 import { recordActivity } from './lib/activityLog';
 import { reportProjectListingFailure } from './lib/projectListingFailure';
@@ -678,7 +693,7 @@ import {
   ViewModeRail
 } from './components/ViewModeRail';
 import { StartScreen } from './components/StartScreen';
-import { SharePage, type SharePageState } from './components/SharePage';
+import type { SharePageState } from './components/SharePage';
 import { StartupScreen } from './components/StartupScreen';
 import { SettingsPlaceholder } from './components/SettingsPlaceholder';
 import {
@@ -701,11 +716,13 @@ import {
 } from './lib/projectInvitationLink';
 import {
   captureProjectShareRequest,
+  captureShareConfiguration,
   isEncryptedShareLink,
   shareLinkFromHash,
   projectLinkPath,
   clearProjectShareFragment
 } from './lib/projectShareLink';
+import { sharedDocumentOnRow } from './lib/sharedConfiguration';
 import type {
   ExportProgress,
   MeshExportDialogFormat,
@@ -1200,6 +1217,8 @@ const preflightCadPatch: typeof AiPatchPreflight.preflightCadPatch = (
  * read only for its Settings export, neither of which waits on the result.
  */
 const interactionDiagnostics = () => import('./lib/interactionDiagnostics');
+// Loaded on Export diagnostics only, as the interaction log is.
+const projectDiagnostics = () => import('./lib/projectDiagnostics');
 const closedOpenings = () => import('./lib/closedOpenings');
 /** A refused rebuild saved as a corpus fixture, on its Save reproduction. */
 const refusalReproduction = () => import('./lib/refusalReproduction');
@@ -1220,6 +1239,13 @@ function withSuspense<P extends object>(Lazy: JSXElementConstructor<P>) {
   };
 }
 
+// A share link's landing page: only a share link opens it, so it waits in
+// its own chunk, outside the entry chunk, which runs at its budget.
+const SharePage = preloadableSlot('Shared link', () =>
+  import('./components/SharePage').then((module) => ({
+    default: module.SharePage
+  }))
+);
 const LazyNumericKeypad = preloadableLazy(() =>
   import('./components/NumericKeypad').then((module) => ({
     default: module.NumericKeypad
@@ -2835,6 +2861,13 @@ export function App() {
   }, []);
   useEffect(() => {
     const openFragment = () => {
+      if (isDeviceApprovalHash(window.location.hash)) {
+        if (captureDeviceApprovalLink()) {
+          updateSettingsViewState({ open: true, activeSection: 'encryption' });
+          setSettingsOpen(true);
+        }
+        return;
+      }
       if (isEncryptedInvitationHash(window.location.hash)) {
         if (captureEncryptedInvitationLink()) {
           beginProjectNavigation(false);
@@ -2998,7 +3031,7 @@ export function App() {
   // Where the model panels live (U08). Read before anything can write the
   // new key: on a device that has none, the v1 drawer state it migrates
   // from is what `loadPanelState` just read, untouched. A device with
-  // neither starts in the two-sided Essentials.
+  // neither starts with Objects above History in one right column.
   const [panelLayout, setPanelLayout] = useState<PanelLayout>(() =>
     loadPanelLayout(undefined, undefined, { leftDock: true })
   );
@@ -3075,8 +3108,18 @@ export function App() {
   // address bar at once; Settings › Encryption opens on it once the session
   // is known (below), where it is accepted after encryption is set up.
   useState(captureEncryptedInvitationLink);
+  // A new device's approval QR code, opened by a phone's camera: taken off
+  // the address bar at once, and Settings › Encryption opens on it, where
+  // this device approves the new one once it is signed in and unlocked.
+  const [bootDeviceApproval] = useState(() => {
+    const code = captureDeviceApprovalLink();
+    if (code)
+      updateSettingsViewState({ open: true, activeSection: 'encryption' });
+    return code;
+  });
   const [settingsOpen, setSettingsOpen] = useState(
     () =>
+      bootDeviceApproval !== null ||
       pendingInvitationToken !== null ||
       desktopAuthorizationAttempt !== null ||
       loadSettingsViewState().open
@@ -3101,6 +3144,21 @@ export function App() {
   });
   const [sharingOpen, setSharingOpen] = useState(false);
   const [meshExportOpen, setMeshExportOpen] = useState(false);
+  /**
+   * F06: the configuration the mesh export writes; null is the active one,
+   * the model as shown. Reset when the dialog closes.
+   */
+  const [exportRowId, setExportRowId] = useState<string | null>(null);
+  /**
+   * F06: what an export of `exportRowId` writes, asked of the kernel for the
+   * row built on its own. The mesh dialog lists these and limits its formats
+   * by them, not by the row on screen.
+   */
+  const [exportRowBodies, setExportRowBodies] = useState<{
+    rowId: string;
+    version: number;
+    bodies: ExportBodySummary[];
+  } | null>(null);
   /** A unitless import waiting for the user to say what its numbers mean. */
   const [importUnitsPrompt, setImportUnitsPrompt] = useState<Omit<
     ComponentProps<typeof LazyImportUnitsDialog>,
@@ -3904,6 +3962,11 @@ export function App() {
   // one set of visible bodies. Everything that invalidates it bumps this
   // token, and an answer that arrives under an old token is dropped.
   const sectionTokenRef = useRef(0);
+  // M09: the viewport's overlap note for the cut on screen, which the status
+  // line carries while the section controls are put away.
+  const [sectionOverlapNote, setSectionOverlapNote] = useState<string | null>(
+    null
+  );
   const pendingSectionRestoreRef = useRef<string | null>(null);
   const restoredSectionRequestTokenRef = useRef<number | null>(null);
   // Key by membership so an unrelated dimension edit keeps the viewport's
@@ -4005,7 +4068,7 @@ export function App() {
     const userId = session?.userId ?? null;
     if (!userId || encryptedInvitationSessionRef.current === userId) return;
     encryptedInvitationSessionRef.current = userId;
-    if (pendingEncryptedInvitation()) {
+    if (pendingEncryptedInvitation() || pendingDeviceApproval()) {
       updateSettingsViewState({ open: true, activeSection: 'encryption' });
       setSettingsOpen(true);
     }
@@ -4841,6 +4904,9 @@ export function App() {
       setStatus(message);
     }
   });
+  // Read by effects that must not re-run whenever the hook's object changes.
+  const geometryRef = useRef(geometry);
+  geometryRef.current = geometry;
   useThumbnailCaptureActivity(
     sharedThumbnailCapture,
     geometryBusy ||
@@ -6975,11 +7041,7 @@ export function App() {
       return ensureCanEditAssembly(action);
     }
     const parametersOnly =
-      commands.length > 0 &&
-      commands.every(
-        (command) =>
-          command.kind === 'parameter.set' && !isParameterRetype(command)
-      );
+      commands.length > 0 && commands.every(isTweakCommand);
     return parametersOnly
       ? ensureCanEditParameters(action)
       : ensureCanEdit(action);
@@ -8500,6 +8562,15 @@ export function App() {
     () => requiredValueResolver(parameterScope.scope, doc?.units),
     [parameterScope.scope, doc?.units]
   );
+  // F06: the variant table as it reads, the active row as the model holds it.
+  const configurationView = useMemo((): ConfigurationSet | undefined => {
+    const set = doc?.configurations;
+    if (!doc || !set) return undefined;
+    return {
+      ...set,
+      rows: set.rows.map((row) => effectiveConfigurationRow(doc, row.id) ?? row)
+    };
+  }, [doc]);
   // L09: the document's print clearance, as the Parameters panel shows it.
   const printClearance = useMemo((): PrintClearanceState | undefined => {
     if (!doc) return undefined;
@@ -10694,7 +10765,8 @@ export function App() {
         isDrawingCommand(command) ||
         isReferenceImageCommandKind(command.kind) ||
         isObjectFolderCommandKind(command.kind) ||
-        isAssemblyOnlyCommand(command)
+        isAssemblyOnlyCommand(command) ||
+        isConfigurationTableOnlyCommand(command, beforeDocument)
       )
         geometry.retainReadyGeometry(next);
       if (derived) {
@@ -14519,17 +14591,13 @@ export function App() {
         projectController?.closeProject();
         await projectController?.whenIdle();
       }
-      await cloudSettingsAutosaveRef.current?.flushPending();
-
       if (sessionRef.current !== departingSession)
         throw new Error('The signed-in account changed. Try deleting again.');
       const erase = () => api.deleteAccountData(scope, confirmation);
-      const deleted =
-        scope === 'projects'
-          ? await erase()
-          : await (
-              await import('./lib/e2ee/accountErasure')
-            ).eraseAccountWithKeyCleanup({
+      const eraseProfile = () =>
+        import('./lib/e2ee/accountErasure').then(
+          ({ eraseAccountWithKeyCleanup }) =>
+            eraseAccountWithKeyCleanup({
               userId: departingSession?.userId ?? null,
               isCurrentSession: () => sessionRef.current === departingSession,
               erase,
@@ -14537,7 +14605,22 @@ export function App() {
                 endCloudSettingsSession();
                 projectController?.closeProject();
               }
-            });
+            })
+        );
+      const settingsController = cloudSettingsAutosaveRef.current;
+      const deleted =
+        scope === 'projects'
+          ? await (async () => {
+              await settingsController?.flushPending();
+              if (sessionRef.current !== departingSession)
+                throw new Error(
+                  'The signed-in account changed. Try deleting again.'
+                );
+              return erase();
+            })()
+          : settingsController
+            ? await settingsController.withProfileErasure(eraseProfile)
+            : await eraseProfile();
       if (scope === 'projects' && departingSession)
         forgetShelfProjectNames(
           departingSession.userId,
@@ -15319,6 +15402,9 @@ export function App() {
       return;
     }
     shareOpenAttemptRef.current = pendingShareToken;
+    // F06: the configuration the link opens on, read before the fragment
+    // can be tidied away.
+    const shareRowId = captureShareConfiguration();
     updateSettingsViewState({ open: false });
     setSettingsOpen(false);
     setSharingOpen(false);
@@ -15397,6 +15483,14 @@ export function App() {
         // a safe device copy may leave without their network response.
         if (!accountSavePendingRef.current) await draining;
         if (!isCurrent()) return;
+        // F06: a link naming a configuration opens on it once that row is
+        // known to build; otherwise the model opens as saved.
+        const opening = await sharedDocumentOnRow(
+          shared.document,
+          shareRowId,
+          (candidate) => geometryRef.current.previewGeometry(candidate)
+        );
+        if (!isCurrent()) return;
         // Before the document lands: the collaboration hook and the cloud
         // autosave controller must treat this project as not account-backed,
         // whatever this browser knew about the account before.
@@ -15407,13 +15501,15 @@ export function App() {
         setShareSession(opened);
         shareSessionRef.current = opened;
         setSharePage(null);
-        hydrateSharedDocumentRef.current(shared.document, {
+        hydrateSharedDocumentRef.current(opening.document, {
           rememberProject: false
         });
         setStatus(
-          shared.encryptedMode === 'view'
-            ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
-            : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
+          `${
+            shared.encryptedMode === 'view'
+              ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
+              : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
+          }${opening.note ? ` ${opening.note}` : ''}`
         );
       } catch (error) {
         if (isCurrent()) {
@@ -18866,30 +18962,37 @@ export function App() {
     }
   }
 
-  /** One sketch's exact curves as an SVG at 1:1 in document units. */
+  /**
+   * One sketch's exact curves as an SVG at 1:1 in document units, or (D04)
+   * as a DXF drawing in millimetres.
+   */
   async function handleExportSketchSvg(options: SvgExportOptions) {
+    const format = options.format ?? 'svg';
     // No rebuild guard: the sketch is read from the saved document, and the
     // worker queues the export behind any rebuild in flight. The dialog
     // offers SVG while the model updates, so it must be able to deliver it.
     if (!doc) {
       return;
     }
-    const fileName = `${exportFileStem(doc.name)}-sketch.svg`;
+    const fileName = `${exportFileStem(doc.name)}-sketch.${format}`;
+    const name = format.toUpperCase();
     try {
-      setStatus('Exporting the sketch as SVG…');
-      const result = await geometry.exportModel('svg', doc, [], {
+      setStatus(`Exporting the sketch ${name}…`);
+      const result = await geometry.exportModel(format, doc, [], {
         sketchId: options.sketchId as SketchId,
         transparent: options.transparent
       });
       if (!('text' in result)) {
-        throw new Error('The SVG export returned no text.');
+        throw new Error(`${name} export returned no text.`);
       }
-      const saved = await saveCadTextFile(fileName, 'svg', result.text);
+      const saved = await saveCadTextFile(fileName, format, result.text);
       setStatus(
-        saved ? `Exported the sketch to ${fileName}.` : 'SVG export cancelled.'
+        saved
+          ? `Exported the sketch to ${fileName}.`
+          : `${name} export cancelled.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'SVG export failed.'));
+      setStatus(errorMessage(error, `${name} export failed.`));
     }
   }
 
@@ -19278,32 +19381,91 @@ export function App() {
     }
   }
 
-  async function handleExportStep() {
+  /**
+   * F06: what an export of `rowId` writes. The active row (or none) is the
+   * model as shown, with the export scope's bodies. Another row is built for
+   * the file alone from `documentForConfiguration`, nothing in the open
+   * document changes, and it writes every body that row shows.
+   */
+  function exportTarget(rowId: string | null): {
+    document: ProjectDocument;
+    bodyIds: BodyId[];
+    allShownBodies: boolean;
+    rowName: string | null;
+  } | null {
+    if (!doc) return null;
+    const set = doc.configurations;
+    const row =
+      rowId && set && rowId !== set.activeRowId
+        ? set.rows.find((entry) => entry.id === rowId)
+        : undefined;
+    if (!row)
+      return {
+        document: doc,
+        bodyIds: exportBodyIds,
+        allShownBodies: false,
+        rowName: null
+      };
+    return {
+      document: documentForConfiguration(doc, row.id),
+      bodyIds: [],
+      allShownBodies: true,
+      rowName: row.name
+    };
+  }
+
+  /** The file stem of an export, naming a configuration that is not active. */
+  function exportStemFor(rowName: string | null): string {
+    return exportFileStem(
+      rowName && doc ? `${doc.name} ${rowName}` : (doc?.name ?? '')
+    );
+  }
+
+  async function handleExportStep(rowId: string | null = null) {
     if (currentGeometrySnapshot !== null) {
       setStatus(
         'The model is still updating. Try exporting again when it finishes.'
       );
       return;
     }
-    if (!doc || exportBodyIds.length === 0) {
+    let target: ReturnType<typeof exportTarget>;
+    try {
+      target = exportTarget(rowId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'That configuration cannot be exported.'));
+      return;
+    }
+    if (
+      !doc ||
+      !target ||
+      (!target.allShownBodies && target.bodyIds.length === 0)
+    ) {
       setStatus(emptyExportReason);
       return;
     }
-    const fileName = `${exportFileStem(doc.name)}.step`;
+    const { document: exported, bodyIds, allShownBodies, rowName } = target;
+    const fileName = `${exportStemFor(rowName)}.step`;
     const contentType = 'model/step';
     await runExportJob({
       fileName,
-      label: 'STEP',
+      label: rowName ? `STEP of ${rowName}` : 'STEP',
       kind: 'step-export',
       contentType,
       metadata: {
-        bodyIds: exportBodyIds.join(','),
+        bodyIds: bodyIds.join(','),
         documentVersion: doc.version,
-        units: doc.units
+        units: doc.units,
+        ...(rowName ? { configuration: rowName } : {})
       },
+      ...(rowName
+        ? {
+            completed: () => `Exported configuration ${rowName} to ${fileName}.`
+          }
+        : {}),
       produce: async (options) => {
-        const result = await geometry.exportModel('step', doc, exportBodyIds, {
+        const result = await geometry.exportModel('step', exported, bodyIds, {
           ...options,
+          ...(allShownBodies ? { allShownBodies: true } : {}),
           fileName,
           units: resolveExportUnits(
             appSettingsRef.current.files.exportUnits,
@@ -19338,28 +19500,47 @@ export function App() {
       );
       return;
     }
-    if (!doc || exportBodyIds.length === 0) {
+    let target: ReturnType<typeof exportTarget>;
+    try {
+      target = exportTarget(exportRowId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'That configuration cannot be exported.'));
+      return;
+    }
+    if (
+      !doc ||
+      !target ||
+      (!target.allShownBodies && target.bodyIds.length === 0)
+    ) {
       setStatus(emptyExportReason);
       return;
     }
+    const { document: exported, bodyIds, allShownBodies, rowName } = target;
     const info = MESH_EXPORT_FILE_INFO[format];
-    const fileName = `${exportFileStem(doc.name)}.${info.extension}`;
+    const fileName = `${exportStemFor(rowName)}.${info.extension}`;
     void runExportJob({
       fileName,
-      label: info.label,
+      label: rowName ? `${info.label} of ${rowName}` : info.label,
       kind: info.kind,
       contentType: info.contentType,
       metadata: {
-        bodyIds: exportBodyIds.join(','),
+        bodyIds: bodyIds.join(','),
         documentVersion: doc.version,
         units: doc.units,
         format,
-        deflectionMm: deflection
+        deflectionMm: deflection,
+        ...(rowName ? { configuration: rowName } : {})
       },
+      ...(rowName
+        ? {
+            completed: () => `Exported configuration ${rowName} to ${fileName}.`
+          }
+        : {}),
       produce: async (options) => {
-        const result = await geometry.exportModel(format, doc, exportBodyIds, {
+        const result = await geometry.exportModel(format, exported, bodyIds, {
           deflection,
           ...tolerances,
+          ...(allShownBodies ? { allShownBodies: true } : {}),
           units: resolveExportUnits(
             appSettingsRef.current.files.exportUnits,
             doc.units
@@ -19397,25 +19578,38 @@ export function App() {
       setStatus('The model is still updating. Try again when it finishes.');
       return;
     }
-    if (!doc || exportBodyIds.length === 0) {
+    let written: ReturnType<typeof exportTarget>;
+    try {
+      written = exportTarget(exportRowId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'That configuration cannot be exported.'));
+      return;
+    }
+    if (
+      !doc ||
+      !written ||
+      (!written.allShownBodies && written.bodyIds.length === 0)
+    ) {
       setStatus(emptyExportReason);
       return;
     }
+    const { document: exported, bodyIds, allShownBodies, rowName } = written;
     const slicer = DESKTOP_SLICERS.find((entry) => entry.id === target);
     if (!slicer && target !== 'download') return;
     const info = MESH_EXPORT_FILE_INFO['3mf'];
-    const fileName = `${exportFileStem(doc.name)}.${info.extension}`;
+    const fileName = `${exportStemFor(rowName)}.${info.extension}`;
     void runExportJob({
       fileName,
       label: slicer ? `3MF for ${slicer.label}` : '3MF for your slicer',
       kind: info.kind,
       contentType: info.contentType,
       metadata: {
-        bodyIds: exportBodyIds.join(','),
+        bodyIds: bodyIds.join(','),
         documentVersion: doc.version,
         units: doc.units,
         format: '3mf',
-        deflectionMm: deflection
+        deflectionMm: deflection,
+        ...(rowName ? { configuration: rowName } : {})
       },
       archive: false,
       completed: (bodies) =>
@@ -19423,9 +19617,10 @@ export function App() {
           ? `Opened ${bodies} in ${slicer.label} as ${fileName}.`
           : `Downloaded ${bodies} as ${fileName}. Open it from your browser’s downloads in your slicer.`,
       produce: async (options) => {
-        const result = await geometry.exportModel('3mf', doc, exportBodyIds, {
+        const result = await geometry.exportModel('3mf', exported, bodyIds, {
           deflection,
           ...tolerances,
+          ...(allShownBodies ? { allShownBodies: true } : {}),
           units: resolveExportUnits(
             appSettingsRef.current.files.exportUnits,
             doc.units
@@ -19455,12 +19650,21 @@ export function App() {
       onProgress?(progress: ExportProgress): void;
     }
   ) {
-    if (!doc || exportBodyIds.length === 0) {
+    let target: ReturnType<typeof exportTarget>;
+    try {
+      target = exportTarget(exportRowId);
+    } catch (error) {
+      return Promise.reject(
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
+    if (!target || (!target.allShownBodies && target.bodyIds.length === 0)) {
       return Promise.reject(
         new Error(emptyExportMessage(exportScopeInfo, 'checking printability'))
       );
     }
-    return geometry.meshQuality(doc, exportBodyIds, deflection, {
+    return geometry.meshQuality(target.document, target.bodyIds, deflection, {
+      ...(target.allShownBodies ? { allShownBodies: true } : {}),
       ...(options?.angularTolerance !== undefined
         ? { angularTolerance: options.angularTolerance }
         : {}),
@@ -19528,12 +19732,13 @@ export function App() {
     }
   }
 
-  function handleExportDiagnostics() {
+  async function handleExportDiagnostics() {
     if (!doc) {
       reportSupportExport('Open a project before exporting diagnostics.');
       return;
     }
     try {
+      const { createProjectDiagnosticBundle } = await projectDiagnostics();
       const bundle = createProjectDiagnosticBundle(doc, {
         remusVersion: KERNEL_BUILD.packageVersion,
         remusCommit: KERNEL_BUILD.sourceCommit
@@ -20009,7 +20214,9 @@ export function App() {
         selection?.kind === 'face' &&
         command.spec?.wantsPlane &&
         !command.spec.bodyMode &&
-        !command.spec.faceMode
+        !command.spec.faceMode &&
+        // M17: a part going into a hole takes the bore's face instead.
+        !takesFeatureFaces(command.spec, command.options)
       ) {
         // A command that takes only a plane (a new gear) stands on a flat
         // face as clicked, the way a Mirror's plane does.
@@ -20021,7 +20228,12 @@ export function App() {
             candidate.topologyId === selection.topologyId ||
             (selection.hash !== undefined && candidate.hash === selection.hash)
         )?.geometry;
-        const on = geometry?.centroid ?? geometry?.center ?? detail?.point;
+        // A standard part stands where the face was clicked.
+        const on =
+          (command.spec.planeAtClick ? detail?.point : undefined) ??
+          geometry?.centroid ??
+          geometry?.center ??
+          detail?.point;
         if (
           geometry?.normal &&
           on &&
@@ -23693,6 +23905,126 @@ export function App() {
    * real. An assistant patch already landing is awaited first, since its
    * commit is what the edit must be checked against.
    */
+  /**
+   * F06: runs one configuration command, checked against the document first
+   * so a refusal is answered (and nothing is committed) rather than thrown.
+   */
+  function runConfigurationCommand(command: AnyCommand): string | null {
+    const manager = managerRef.current;
+    if (!manager) return 'Editing is unavailable.';
+    try {
+      command.validate(manager.document);
+      command.apply(manager.document);
+    } catch (error) {
+      return error instanceof Error
+        ? error.message
+        : 'The configurations were not changed.';
+    }
+    return executeCommand(command)
+      ? null
+      : 'The configurations were not changed.';
+  }
+
+  /** F06: exports one configuration row, as STEP or from the mesh dialog. */
+  // F06: the bodies the mesh dialog's row writes, from that row's own build.
+  const exportRowDocument = meshExportOpen && exportRowId ? doc : null;
+  useEffect(() => {
+    if (!exportRowDocument || !exportRowId) return;
+    let current = true;
+    let target: ProjectDocument;
+    try {
+      target = documentForConfiguration(exportRowDocument, exportRowId);
+    } catch (error) {
+      setStatus(errorMessage(error, 'That configuration cannot be built.'));
+      setExportRowBodies({
+        rowId: exportRowId,
+        version: exportRowDocument.version,
+        bodies: []
+      });
+      return;
+    }
+    void geometryRef.current
+      .exportBodies(target)
+      .then(
+        (bodies) => bodies,
+        (error: unknown) => {
+          if (current)
+            setStatus(
+              errorMessage(error, 'The configuration could not be built.')
+            );
+          return [];
+        }
+      )
+      .then((bodies) => {
+        if (current)
+          setExportRowBodies({
+            rowId: exportRowId,
+            version: exportRowDocument.version,
+            bodies
+          });
+      });
+    return () => {
+      current = false;
+    };
+  }, [exportRowDocument, exportRowId, setStatus]);
+
+  function handleExportConfigurationRow(rowId: string, kind: 'step' | 'mesh') {
+    if (kind === 'step') {
+      void handleExportStep(rowId);
+      return;
+    }
+    setExportRowId(rowId === doc?.configurations?.activeRowId ? null : rowId);
+    setMeshExportOpen(true);
+  }
+
+  const configurationActions: ConfigurationActions = {
+    create: (name) =>
+      runConfigurationCommand(
+        commandFactories.createConfigurations({
+          rowId: `configuration_${crypto.randomUUID()}`,
+          name
+        })
+      ),
+    remove: () =>
+      runConfigurationCommand(commandFactories.deleteConfigurations()),
+    addRow: (name) =>
+      runConfigurationCommand(
+        commandFactories.addConfigurationRow({
+          rowId: `configuration_${crypto.randomUUID()}`,
+          name
+        })
+      ),
+    renameRow: (rowId, name) =>
+      runConfigurationCommand(
+        commandFactories.renameConfigurationRow({ rowId, name })
+      ),
+    deleteRow: (rowId) =>
+      runConfigurationCommand(
+        commandFactories.deleteConfigurationRow({ rowId })
+      ),
+    addColumn: (column) =>
+      runConfigurationCommand(
+        commandFactories.addConfigurationColumn({ column })
+      ),
+    deleteColumn: (column) =>
+      runConfigurationCommand(
+        commandFactories.deleteConfigurationColumn({ column })
+      ),
+    setCell: (rowId, column, value) =>
+      runConfigurationCommand(
+        commandFactories.setConfigurationCell({ rowId, column, value })
+      ),
+    activate: (rowId) => {
+      const row = doc?.configurations?.rows.find((entry) => entry.id === rowId);
+      return runConfigurationCommand(
+        commandFactories.activateConfiguration(
+          { rowId },
+          row ? `Switch to ${row.name}` : undefined
+        )
+      );
+    }
+  };
+
   /** L09: sets or clears the print clearance; answers with a refusal. */
   function handleSetPrintClearance(value: ParamValue | null): string | null {
     const manager = managerRef.current;
@@ -24458,6 +24790,12 @@ export function App() {
           bodyName,
           ...request.sheet
         });
+      case 'standard-part':
+        return commandFactories.standardPartBody({
+          name,
+          bodyName,
+          ...request.part
+        });
       case 'modeling': {
         // Through the card's own submission builder, so a face operation
         // run in place is validated and stored exactly as the card's was.
@@ -24790,6 +25128,9 @@ export function App() {
           )
         : [],
     bodyBounds: (bodyId) => inPlaceBodyPick(bodyId),
+    // M17 (schema v71): the hole a standard part is inserted into.
+    holeFeature: (featureId) =>
+      doc ? standardPartHoleSource(doc, representations, featureId) : null,
     liveBodyIds: () =>
       Object.values(representations)
         .filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId))
@@ -33008,7 +33349,7 @@ export function App() {
           onDeleteCloudData={handleDeleteCloudData}
           onReset={() => void handleResetAppSettings()}
           onApplyViewportDefaults={applyViewportDefaults}
-          onExportDiagnostics={handleExportDiagnostics}
+          onExportDiagnostics={() => void handleExportDiagnostics()}
           onExportInteractionLog={() => void handleExportInteractionLog()}
           onRegenerateThumbnails={() => void handleRegenerateThumbnails()}
           thumbnailRegeneration={thumbnailRegeneration}
@@ -33757,7 +34098,7 @@ export function App() {
       group: 'Support',
       keywords: ['troubleshooting', 'support', 'sanitized', 'json', 'report'],
       icon: <Download size={16} aria-hidden="true" />,
-      run: handleExportDiagnostics
+      run: () => void handleExportDiagnostics()
     },
     {
       id: 'file-export-interaction-log',
@@ -34561,6 +34902,12 @@ export function App() {
         handleSetParameter(name, expression)
       }
       printClearance={printClearance}
+      configurationTable={{
+        configurations: configurationView,
+        features,
+        onExportRow: handleExportConfigurationRow,
+        ...(editDisabledReason ? {} : { actions: configurationActions })
+      }}
       onSetPrintClearance={
         editDisabledReason ? undefined : handleSetPrintClearance
       }
@@ -34966,6 +35313,20 @@ export function App() {
             onOpenMeshExport={() => setMeshExportOpen(true)}
             // Make a copy is the top bar's labelled button now (I73).
             share={null}
+            configuration={
+              doc?.configurations
+                ? {
+                    rows: doc.configurations.rows,
+                    activeRowId: doc.configurations.activeRowId,
+                    onActivate: (rowId) =>
+                      void Promise.resolve(
+                        configurationActions.activate(rowId)
+                      ).then((refused) => {
+                        if (refused) setStatus(refused);
+                      })
+                  }
+                : null
+            }
             panelOpen={panelState.tweakPanelOpen}
             onTogglePanel={() =>
               setPanelState((current) => ({
@@ -36010,6 +36371,7 @@ export function App() {
             onToggleSection={toggleSectionView}
             nothingToSection={!viewerBodies.some((body) => !body.consumed)}
             sectionPanelOpen={panelState.sectionPanelOpen}
+            onSectionOverlapNote={setSectionOverlapNote}
             onSectionPanelOpenChange={(open) =>
               setPanelState((current) =>
                 current.sectionPanelOpen === open
@@ -36032,6 +36394,7 @@ export function App() {
             }}
             onExportSectionDxf={() => void handleExportSectionDxf()}
             sectionOutline={sectionOutline}
+            runSurfaceAnalysis={geometry.surfaceAnalysis}
           />
           {!modelingLocked &&
             !panelState.workspaceTourDismissed &&
@@ -36675,6 +37038,23 @@ export function App() {
               (parameterPreview !== null && !exactGeometryReady)
             }
             geometryStatus={geometryStatus}
+            // A cut left on says so on the status line once its controls
+            // are put away: View and Assemble have none, and Build's are
+            // closed with Escape or the rail button (I49).
+            section={
+              viewerSettings.sectionView &&
+              (modelingLocked ||
+                panelState.sectionPanelOpen === false ||
+                sectionAxisRange(viewerSettings.sectionView.plane) === null)
+                ? {
+                    label: `Section · ${
+                      SECTION_PLANE_LABELS[viewerSettings.sectionView.plane]
+                    }`,
+                    note: sectionOverlapNote,
+                    onTurnOff: toggleSectionView
+                  }
+                : null
+            }
             tone={tone}
             // The plane chooser carries the Sketch tool's instruction too:
             // the toast under it said the same sentence a second time. The
@@ -37259,6 +37639,7 @@ export function App() {
               <ProjectSharingDialog
                 projectId={doc.projectId}
                 projectName={doc.name}
+                configurations={doc.configurations?.rows ?? []}
                 localProject={!activeProjectIsCloud}
                 localImportSourceNames={localOnlySources.map(
                   (source) => source.sourceName
@@ -37512,30 +37893,62 @@ export function App() {
           )}
           {meshExportOpen &&
             doc &&
-            // Keep the dialog open if the last visible body is hidden.
-            (exportBodyIds.length > 0 ||
+            // A row that is not shown has its own bodies (listed below once
+            // the kernel answers); otherwise keep the dialog open if the
+            // last visible body is hidden.
+            (exportRowId !== null ||
+              exportBodyIds.length > 0 ||
               (exportScopeInfo?.hiddenExcluded ?? 0) > 0) && (
               <ExportDialog
                 scopeLabel={
-                  exportScopeInfo?.selection && selectedBody
-                    ? selectedBody.name
-                    : exportScopeInfo
-                      ? exportScopeLabel(exportScopeInfo)
-                      : `all bodies (${exportBodyIds.length})`
+                  exportRowId &&
+                  doc.configurations?.rows.some((row) => row.id === exportRowId)
+                    ? `every body configuration ${doc.configurations.rows.find((row) => row.id === exportRowId)!.name} shows`
+                    : exportScopeInfo?.selection && selectedBody
+                      ? selectedBody.name
+                      : exportScopeInfo
+                        ? exportScopeLabel(exportScopeInfo)
+                        : `all bodies (${exportBodyIds.length})`
                 }
-                bodies={exportBodyIds.map((bodyId) => ({
-                  bodyId,
-                  name:
-                    ownEntry(doc.derived.bodyRepresentations, bodyId)?.name ??
-                    bodyId,
-                  meshReference: ownEntry(
-                    doc.derived.bodyRepresentations,
-                    bodyId
-                  )?.meshReference
-                }))}
+                bodies={
+                  exportRowId !== null
+                    ? exportRowBodies?.rowId === exportRowId &&
+                      exportRowBodies.version === doc.version
+                      ? exportRowBodies.bodies
+                      : []
+                    : exportBodyIds.map((bodyId) => ({
+                        bodyId,
+                        name:
+                          ownEntry(doc.derived.bodyRepresentations, bodyId)
+                            ?.name ?? bodyId,
+                        meshReference: ownEntry(
+                          doc.derived.bodyRepresentations,
+                          bodyId
+                        )?.meshReference
+                      }))
+                }
                 revision={doc.version}
-                onClose={() => setMeshExportOpen(false)}
+                key={exportRowId ?? 'active'}
+                onClose={() => {
+                  setMeshExportOpen(false);
+                  setExportRowId(null);
+                }}
                 onExport={handleExportMesh}
+                {...(doc.configurations && doc.configurations.rows.length > 1
+                  ? {
+                      configuration: {
+                        rows: doc.configurations.rows,
+                        selectedRowId:
+                          exportRowId ?? doc.configurations.activeRowId,
+                        onSelect: (rowId: string) =>
+                          setExportRowId(
+                            rowId === doc.configurations?.activeRowId
+                              ? null
+                              : rowId
+                          )
+                      }
+                    }
+                  : {})}
                 slicerTargets={slicerTargets(isDesktopApp())}
                 onOpenInSlicer={handleOpenInSlicer}
                 onCheckQuality={handleCheckMeshQuality}

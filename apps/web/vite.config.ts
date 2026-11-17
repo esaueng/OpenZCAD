@@ -489,6 +489,14 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
             import.meta.url
           )
         ),
+        // M09's overlay drawing loads with the first analysis switched on,
+        // in its own chunk rather than the entry's.
+        '@openzcad/viewport/analysis-overlay': fileURLToPath(
+          new URL(
+            '../../packages/viewport/src/scene/analysisOverlay.ts',
+            import.meta.url
+          )
+        ),
         '@openzcad/viewport/types': fileURLToPath(
           new URL('../../packages/viewport/src/types.ts', import.meta.url)
         ),
@@ -595,6 +603,10 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               // with the preloaded model helpers too.
               id.includes('/apps/web/src/lib/modelingOperations.ts') ||
               id.includes('/apps/web/src/lib/featureSummary.ts') ||
+              // M17: the Standard part command's spec is pure too (its
+              // catalogue choices, placements and hole matching, over the
+              // shared catalogue). Keep it with them, off the entry chunk.
+              id.includes('/apps/web/src/lib/inPlace/standardPart.ts') ||
               // Canonical worker transport and revision/reference helpers are
               // already workspace dependencies. Reuse the preloaded model
               // chunk rather than adding another first-paint request.

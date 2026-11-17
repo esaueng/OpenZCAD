@@ -33,10 +33,8 @@ import {
 } from 'lucide-react';
 import type { ArtifactRecord, AuthSession, UnitSystem } from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
-import {
-  EncryptionIndicator,
-  type EncryptionIndicatorProps
-} from './EncryptionIndicator';
+import type { EncryptionIndicatorProps } from './EncryptionIndicator';
+import { preloadableSlot } from './PreloadableSlot';
 import { isEncryptedProject } from '../lib/api';
 import type { WorkspaceMode } from '../lib/panelState';
 import type { CollaborationStatus } from '../lib/useCollaboration';
@@ -60,6 +58,20 @@ import {
   type ReloadPrompt
 } from '../lib/staleChunk';
 import type { UnusedMeshPayloadsProps } from './UnusedMeshPayloads';
+
+// Only an end-to-end encrypted project shows the lock, so a plaintext
+// workspace never loads it: it waits in its own chunk, outside the entry
+// chunk, which runs at its budget (`scripts/report-bundle-sizes.mjs`).
+const EncryptionIndicator = preloadableSlot('Encryption status', () =>
+  import('./EncryptionIndicator').then((module) => ({
+    default: module.EncryptionIndicator
+  }))
+);
+
+/** Loads the encryption lock ahead of its first render (tests, warm-up). */
+export function preloadEncryptionIndicator(): Promise<void> {
+  return EncryptionIndicator.preload();
+}
 
 const UnusedMeshPayloads = createLazyPanel<UnusedMeshPayloadsProps>(
   'Mesh cleanup',

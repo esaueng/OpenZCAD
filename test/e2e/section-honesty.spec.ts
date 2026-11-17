@@ -51,12 +51,15 @@ test('the bracket says which faces stop the exact cut, and Build shows a cut lef
   await page.keyboard.press('Escape');
   await expect(panel).toBeHidden();
   await expect(toggle).toHaveAttribute('aria-pressed', 'true');
-  const chip = page.getByRole('group', { name: 'Section view on' });
-  await expect(chip).toBeVisible();
-  await expect(chip).toContainText(/Section · (XY|XZ|YZ) plane/);
-  await chip.getByRole('button', { name: 'Turn off' }).click();
+  // The status line over the search bar says which cut, with its way off.
+  const line = page.locator('.workspace-toast:not(.hidden)');
+  await expect(line.getByRole('status')).toHaveText(
+    /^Section · (XY|XZ|YZ) plane$/
+  );
+  const turnOff = line.getByRole('button', { name: 'Turn off section view' });
+  await turnOff.click();
   await expect(toggle).toHaveAttribute('aria-pressed', 'false');
-  await expect(chip).toBeHidden();
+  await expect(turnOff).toHaveCount(0);
 });
 
 test('an empty project has nothing to section', async ({ page }) => {

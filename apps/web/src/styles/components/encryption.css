@@ -47,6 +47,10 @@
   gap: var(--sp-2);
 }
 
+.encryption-actions.start {
+  justify-content: flex-start;
+}
+
 /* A QR code must stay dark on light in either theme to scan. */
 .encryption-qr {
   width: 168px;
@@ -174,18 +178,207 @@
   gap: var(--sp-1);
 }
 
-/* Setup's last step, "Encrypt new projects?" (design review I75): the
-   choice, ticked by default, and the button that keeps it. */
-.encryption-setup-choice {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+/* ── Dialogs: setup, recovery-key replacement and every key-authorized
+   action (L11 plan §4.2, §4.5). They open over Settings. ── */
+.encryption-dialog {
+  width: min(500px, 100%);
+  max-height: calc(100dvh - 12vh - 32px);
+  overflow-y: auto;
+  display: grid;
   gap: var(--sp-3);
+  padding: var(--sp-4);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
 }
 
-.encryption-setup-choice label {
+.encryption-dialog.danger {
+  border-top: 3px solid var(--color-danger-fill);
+}
+
+.encryption-dialog-progress {
+  display: flex;
+  gap: var(--sp-1);
+}
+
+.encryption-dialog-progress > span {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--color-border);
+}
+
+.encryption-dialog-progress > span[data-done] {
+  background: var(--color-accent);
+}
+
+.encryption-dialog-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.encryption-dialog-head h2 {
+  margin: 0;
+  font-size: var(--fs-lg);
+  overflow-wrap: anywhere;
+}
+
+.encryption-dialog-head > span {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.encryption-dialog-body {
+  display: grid;
+  gap: var(--sp-3);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.encryption-dialog-body p {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.encryption-dialog-body strong {
+  color: var(--color-text);
+}
+
+/* What losing every way in costs (I80): said plainly, not as an error. */
+.encryption-dialog-warning {
+  padding: var(--sp-2) var(--sp-3);
+  border-left: 3px solid var(--color-warning);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: color-mix(in srgb, var(--color-warning) 12%, transparent);
+}
+
+.encryption-dialog-body .encryption-dialog-warning {
+  color: var(--color-text);
+}
+
+.encryption-dialog-error {
+  color: var(--color-error-text);
+}
+
+.encryption-dialog-body .encryption-dialog-error {
+  color: var(--color-error-text);
+}
+
+.encryption-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+.encryption-passkey-button {
+  justify-content: center;
+  min-height: 36px;
+  width: 100%;
+}
+
+.encryption-link-button {
+  justify-self: start;
   display: inline-flex;
   align-items: center;
+  gap: var(--sp-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.encryption-link-button:hover {
+  text-decoration: underline;
+}
+
+.encryption-key-field {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.encryption-key-field label {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.encryption-key-field input {
+  width: 100%;
+  font-family: var(--font-mono);
+}
+
+.encryption-key-field small {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.encryption-key-field small.settings-field-error {
+  color: var(--color-error-text);
+}
+
+/* The new recovery key: large, wrapped in its groups, selectable whole. */
+.encryption-key-display {
+  display: block;
+  padding: var(--sp-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  line-height: 1.7;
+  letter-spacing: 0.04em;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+/* A new device waiting for approval: its QR code beside what to do. */
+.encryption-waiting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+}
+
+.encryption-waiting .encryption-scan {
+  justify-items: center;
+}
+
+.encryption-steps {
+  flex: 1 1 220px;
+  margin: 0;
+  padding-left: var(--sp-4);
+  display: grid;
   gap: var(--sp-2);
   font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+}
+
+.encryption-steps strong {
+  color: var(--color-text);
+}
+
+/* On a phone the status line's chip and Refresh go under its sentence, so
+   the headline is not squeezed into one word per line. */
+@media (max-width: 560px) {
+  .encryption-settings .settings-summary {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .encryption-settings .settings-summary .setting-control {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .encryption-waiting {
+    justify-content: center;
+  }
 }

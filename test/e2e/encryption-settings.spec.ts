@@ -2,6 +2,7 @@ import { expect, stubApi, test } from './openzcad-fixtures';
 import {
   createE2eeServer,
   installE2eeServer,
+  finishSetupDialog,
   openEncryptionSettings,
   seedE2eeDevice
 } from './e2ee-fixtures';
@@ -40,45 +41,49 @@ test('shows the reload instruction when automatic migration fails to download', 
   );
 });
 
+// Every CI run includes these (`@ci-smoke`): untagged, they ran only when
+// this file changed, so #1418 broke them unseen. It loaded the migration
+// controller before checking any gate, and a blocked chunk opened Settings.
 for (const available of [false, 'older-server'] as const) {
-  test(`does not load optional migration code or open Settings with closed gates: ${available}`, async ({
-    page,
-    context
-  }) => {
-    await stubApi(page);
-    await installE2eeServer(context, createE2eeServer());
-    let checks = 0;
-    await page.route('**/api/e2ee/config', (route) => {
-      checks++;
-      return available === 'older-server'
-        ? route.fulfill({ status: 404, json: { error: 'Not found' } })
-        : route.fulfill({
-            json: {
-              enabled: true,
-              projectsEnabled: true,
-              migrationEnabled: true,
-              defaultOn: false
-            }
-          });
-    });
-    let optionalRequests = 0;
-    await page.route(
-      /\/assets\/(?:automaticMigration|projectMigrations)-[^/]+\.js$/,
-      (route) => {
-        optionalRequests++;
-        return route.abort('failed');
-      }
-    );
-    await page.goto('/');
-    await expect(
-      page.getByRole('button', { name: 'Open settings' })
-    ).toBeVisible();
-    await expect.poll(() => checks).toBeGreaterThan(0);
-    await expect(
-      page.getByRole('dialog', { name: 'Settings', exact: true })
-    ).toHaveCount(0);
-    expect(optionalRequests).toBe(0);
-  });
+  test(
+    `does not load optional migration code or open Settings with closed gates: ${available}`,
+    { tag: '@ci-smoke' },
+    async ({ page, context }) => {
+      await stubApi(page);
+      await installE2eeServer(context, createE2eeServer());
+      let checks = 0;
+      await page.route('**/api/e2ee/config', (route) => {
+        checks++;
+        return available === 'older-server'
+          ? route.fulfill({ status: 404, json: { error: 'Not found' } })
+          : route.fulfill({
+              json: {
+                enabled: true,
+                projectsEnabled: true,
+                migrationEnabled: true,
+                defaultOn: false
+              }
+            });
+      });
+      let optionalRequests = 0;
+      await page.route(
+        /\/assets\/(?:automaticMigration|projectMigrations)-[^/]+\.js$/,
+        (route) => {
+          optionalRequests++;
+          return route.abort('failed');
+        }
+      );
+      await page.goto('/');
+      await expect(
+        page.getByRole('button', { name: 'Open settings' })
+      ).toBeVisible();
+      await expect.poll(() => checks).toBeGreaterThan(0);
+      await expect(
+        page.getByRole('dialog', { name: 'Settings', exact: true })
+      ).toHaveCount(0);
+      expect(optionalRequests).toBe(0);
+    }
+  );
 }
 
 test('rechecks default-on after reconnect and opens setup without reloading', async ({
@@ -173,48 +178,53 @@ test('sets up encryption only after the recovery key is confirmed', async ({
   await page.goto('/');
   const settings = await openEncryptionSettings(page);
   await settings.getByRole('button', { name: 'Set up encryption' }).click();
+  const setup = settings.getByRole('dialog', { name: 'Set up encryption' });
+  // The first step says plainly what losing every way in costs (I80),
+  // passkeys included, before any key exists.
+  await expect(setup).toContainText(
+    'If you lose every device, every passkey and the recovery key, your encrypted cloud projects can’t be recovered, by you or by us.'
+  );
+  await setup.getByRole('button', { name: 'Start' }).click();
 
-  const recoveryKey = (await settings
+  const recoveryKey = (await setup
     .getByLabel('Recovery key', { exact: true })
     .textContent())!;
   expect(recoveryKey).toMatch(/^([0-9A-Z]{4}-){13}[0-9A-Z]{4}$/);
-  // Step 1 says plainly what losing the keys costs (design review I80).
-  await expect(settings).toContainText(
-    'your encrypted cloud projects cannot be recovered, by you or by us'
-  );
-  // A passkey added later is a way back too, so the warning names it.
-  await expect(settings).toContainText(
-    'every device, any passkey you add, and this recovery key'
-  );
-  const proceed = settings.getByRole('button', { name: 'Continue' });
+  const proceed = setup.getByRole('button', { name: 'Continue' });
   await expect(proceed).toBeDisabled();
-  await settings
-    .getByRole('checkbox', { name: 'I saved my recovery key' })
+  await setup
+    .getByRole('checkbox', { name: /I saved my recovery key/ })
     .check();
   await proceed.click();
 
-  // A key that does not match is refused and nothing is set up.
-  const confirm = settings.getByLabel('Confirm recovery key');
+  // A key that does not match is refused at its field; nothing is set up.
+  const confirm = setup.getByLabel('Confirm recovery key');
   await confirm.fill(recoveryKey.replace(/^.{4}/, '0000'));
-  await settings.getByRole('button', { name: 'Finish setup' }).click();
-  await expect(settings.getByRole('alert')).toContainText(
-    'does not match the recovery key above'
+  await setup.getByRole('button', { name: 'Turn on encryption' }).click();
+  await expect(confirm).toHaveAttribute('aria-invalid', 'true');
+  await expect(setup.getByRole('alert')).toContainText(
+    'That does not match. Go back and check what you saved.'
   );
   expect(
     server.db.prepare('SELECT COUNT(*) AS n FROM e2ee_identities').get()
   ).toEqual({ n: 0 });
 
   await confirm.fill(recoveryKey.toLowerCase().replaceAll('-', ' '));
-  await settings.getByRole('button', { name: 'Finish setup' }).click();
-  await expect(settings.getByText('Certified', { exact: true })).toBeVisible();
+  await setup.getByRole('button', { name: 'Turn on encryption' }).click();
+  await finishSetupDialog(settings);
+  await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
+  await expect(settings.getByText('Encryption is on')).toBeVisible();
+  // The fingerprint is for comparing your own devices, so it lives under
+  // Advanced; people compare the contact code (design review I76).
+  await expect(settings.getByLabel('Your fingerprint')).toBeHidden();
+  await settings.getByText('Advanced encryption settings').click();
   await expect(settings.getByLabel('Your fingerprint')).toHaveText(
     /^(\d{5} ){7}\d{5}$/
   );
   // Replacing keys makes a new identity, so the hint must not call it fixed.
   await expect(settings).toContainText(
-    'Your identity. It changes only when you replace your keys.'
+    'Changes only when you replace your keys.'
   );
-  await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
   // The server holds wrapped keys only.
   const wraps = server.db
     .prepare('SELECT purpose FROM e2ee_key_wraps ORDER BY purpose')
@@ -234,8 +244,9 @@ test('sets up encryption only after the recovery key is confirmed', async ({
 });
 
 // Design review I75: setup said "Encryption is on" while new projects were
-// still created unencrypted. It now ends with "Encrypt new projects?", ticked.
-test('ends setup by asking to encrypt new projects, ticked by default', async ({
+// still created unencrypted. Setup now ends with "Encrypt new projects",
+// ticked by default (owner decision 2026-11-16).
+test('ends setup by encrypting new projects, ticked by default', async ({
   page,
   context
 }) => {
@@ -245,28 +256,32 @@ test('ends setup by asking to encrypt new projects, ticked by default', async ({
   await page.goto('/');
   const settings = await openEncryptionSettings(page);
   await settings.getByRole('button', { name: 'Set up encryption' }).click();
+  await settings.getByRole('button', { name: 'Start' }).click();
   const recoveryKey = (await settings
     .getByLabel('Recovery key', { exact: true })
     .textContent())!;
   await settings
-    .getByRole('checkbox', { name: 'I saved my recovery key' })
+    .getByRole('checkbox', { name: /I saved my recovery key/ })
     .check();
   await settings.getByRole('button', { name: 'Continue' }).click();
   await settings.getByLabel('Confirm recovery key').fill(recoveryKey);
-  await settings.getByRole('button', { name: 'Finish setup' }).click();
-  await expect(settings.getByText('Encrypt new projects?')).toBeVisible({
-    timeout: 30_000
-  });
-  const choice = settings.getByRole('checkbox', {
-    name: 'Encrypt new projects'
+  await settings.getByRole('button', { name: 'Turn on encryption' }).click();
+  const skip = settings.getByRole('button', { name: 'Skip', exact: true });
+  await expect(
+    skip.or(settings.getByRole('dialog', { name: 'Your projects' })).first()
+  ).toBeVisible({ timeout: 30_000 });
+  if (await skip.isVisible()) await skip.click();
+  const projects = settings.getByRole('dialog', { name: 'Your projects' });
+  const choice = projects.getByRole('checkbox', {
+    name: /Encrypt new projects/
   });
   await expect(choice).toBeChecked();
-  await expect(settings).toContainText(
-    'Projects you already have stay as they are until you encrypt them below.'
-  );
-  await settings.getByRole('button', { name: 'Done', exact: true }).click();
-  await expect(settings.getByText('Encrypt new projects?')).toHaveCount(0);
-  await expect(choice).toBeChecked();
+  await projects.getByRole('button', { name: 'Done', exact: true }).click();
+  await expect(projects).toHaveCount(0);
+  await expect(
+    settings.getByRole('checkbox', { name: 'Encrypt new projects' })
+  ).toBeChecked();
+  await expect(settings.getByText('Encryption is on')).toBeVisible();
   expect(
     server.db
       .prepare(
@@ -289,7 +304,7 @@ test('removes another device with the recovery key and rotates the keys', async 
     otherDevices: ['Old laptop']
   });
   const settings = await openEncryptionSettings(page);
-  await expect(settings.getByText('Certified', { exact: true })).toBeVisible();
+  await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
   await expect(settings.getByText('Old laptop')).toBeVisible();
   const before = server.db
     .prepare('SELECT COUNT(*) AS n FROM e2ee_key_wraps')
@@ -309,7 +324,7 @@ test('removes another device with the recovery key and rotates the keys', async 
   await expect(recoveryKey).not.toHaveAttribute('aria-invalid');
   await settings.getByRole('button', { name: 'Remove device' }).click();
   await expect(settings.getByText('Old laptop')).toHaveCount(0);
-  await expect(settings.getByText('1 certified')).toBeVisible();
+  await expect(settings.getByText('1 device', { exact: true })).toBeVisible();
   await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
   // The rotation replaced every account-key wrap; the removed device has none.
   const after = server.db

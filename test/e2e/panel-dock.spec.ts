@@ -979,25 +979,62 @@ test('a device whose drawer was closed migrates to the model alone', async ({
   expect(await storedV1(page)).toMatchObject({ drawerOpen: false });
 });
 
-test('a new device opens in the two-sided Essentials: Objects left, Parameters right', async ({
-  page
-}) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  // Nothing seeded at all: no v1 state and no layout.
-  await stubApi(page, {
-    panelLayout: null,
-    workspaceTour: true,
-    commandFoldClosed: true
-  });
-  await createProject(page, 'New device');
-  await expect(modelPanel(page, 'Objects')).toBeVisible({ timeout: 30_000 });
-  expect(await dockedTitles(page, 'left')).toEqual([['Objects']]);
-  expect(await dockedTitles(page, 'right')).toEqual([['Parameters']]);
-  await page.reload();
-  await expect(modelPanel(page, 'Objects')).toBeVisible({ timeout: 30_000 });
-  expect(await dockedTitles(page, 'left')).toEqual([['Objects']]);
-  expect(await dockedTitles(page, 'right')).toEqual([['Parameters']]);
-});
+for (const width of [1440, 1024]) {
+  test(
+    `a new device opens with Objects above History on the right at ${width}px`,
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      // Nothing seeded at all: no v1 state and no layout.
+      await stubApi(page, {
+        panelLayout: null,
+        workspaceTour: true,
+        commandFoldClosed: true
+      });
+      await createProject(page, 'New device');
+      const objects = modelPanel(page, 'Objects');
+      const history = modelPanel(page, 'History');
+      await expect(objects).toBeVisible({ timeout: 30_000 });
+      await expect(history).toBeVisible();
+      await expect(page.locator('.model-panel')).toHaveCount(2);
+      expect(await dockedTitles(page, 'left')).toEqual([]);
+      expect(await dockedTitles(page, 'right')).toEqual([
+        ['Objects', 'History']
+      ]);
+      await expect(
+        objects.getByRole('button', { name: 'Pin Objects' })
+      ).toHaveAttribute('aria-pressed', 'true');
+      await expect(
+        history.getByRole('button', { name: 'Pin History' })
+      ).toHaveAttribute('aria-pressed', 'true');
+      const objectsBox = await box(objects);
+      const historyBox = await box(history);
+      expect(historyBox.x).toBeCloseTo(objectsBox.x, 0);
+      expect(historyBox.width).toBeCloseTo(objectsBox.width, 0);
+      expect(historyBox.y).toBeGreaterThanOrEqual(
+        objectsBox.y + objectsBox.height
+      );
+      expect(historyBox.height).toBeGreaterThan(objectsBox.height);
+
+      await addBox(page);
+      await expect(objects).toContainText('Box');
+      await expect(history).toContainText('Box');
+      await page.reload();
+      await expect(history).toBeVisible({ timeout: 30_000 });
+      expect(await dockedTitles(page, 'left')).toEqual([]);
+      expect(await dockedTitles(page, 'right')).toEqual([
+        ['Objects', 'History']
+      ]);
+
+      // A user's later choice wins over the new default on the next visit.
+      await history.getByRole('button', { name: 'Close History' }).click();
+      await page.reload();
+      await expect(objects).toBeVisible({ timeout: 30_000 });
+      await expect(history).toHaveCount(0);
+      expect(await dockedTitles(page, 'right')).toEqual([['Objects']]);
+    }
+  );
+}
 
 for (const viewport of [
   { width: 600, height: 800 },

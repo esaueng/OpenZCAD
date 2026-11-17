@@ -197,6 +197,10 @@ export class PreparedEditSession {
       ) ||
       !sameMap(result.sketchBases, before.sketchBases) ||
       !sameMap(result.datumFrames, before.datumFrames) ||
+      !sameMap(
+        result.standardParts ?? new Map(),
+        before.standardParts ?? new Map()
+      ) ||
       !sameMap(result.datumAxes, before.datumAxes) ||
       !sameMap(
         result.sketchProjections ?? new Map(),

@@ -32,11 +32,15 @@
       "@openzcad/kernel-adapter/sheet-metal-flat-pattern": [
         "./packages/kernel-adapter/src/sheet-metal-flat-pattern.ts"
       ],
+      "@openzcad/agent-api": ["./packages/agent-api/src/index.ts"],
       "@openzcad/ai-contracts": ["./packages/ai-contracts/src/index.ts"],
       "@openzcad/ai-contracts/auto-parameterize": [
         "./packages/ai-contracts/src/auto-parameterize.ts"
       ],
       "@openzcad/viewport": ["./packages/viewport/src/index.ts"],
+      "@openzcad/viewport/analysis-overlay": [
+        "./packages/viewport/src/scene/analysisOverlay.ts"
+      ],
       "@openzcad/viewport/edge-chain": [
         "./packages/viewport/src/pick/edgeChain.ts"
       ],
