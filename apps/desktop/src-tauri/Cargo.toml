@@ -1,6 +1,6 @@
 [package]
 name = "openzcad-desktop"
-version = "0.1.0"
+version = "2026.1.0"
 description = "OpenZCAD desktop shell"
 authors = ["OpenZCAD contributors"]
 edition = "2021"
