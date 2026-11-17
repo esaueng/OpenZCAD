@@ -307,4 +307,31 @@ describe('RevisionsPanel', () => {
     ).toHaveTextContent('Save a');
     expect(screen.queryByRole('button', { name: 'Preview Save a' })).toBeNull();
   });
+  it('shows this device’s card for a save point in its details', async () => {
+    const user = userEvent.setup();
+    const saved = checkpoint('a', 1);
+    const plain = checkpoint('b', 2);
+    render(
+      <RevisionsPanel
+        documentVersion={9}
+        restorableCheckpointIds={new Set(['a', 'b'])}
+        onRestoreCheckpoint={vi.fn()}
+        onBranchCheckpoint={vi.fn()}
+        revisions={{
+          visible: [saved, plain],
+          canonicalIds: new Set(['a', 'b']),
+          local: [],
+          thumbnails: new Map([['a', 'data:image/webp;base64,AAAA']])
+        }}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: 'Save a' }));
+    expect(
+      screen.getByRole('img', { name: 'The model at Save a' })
+    ).toHaveAttribute('src', 'data:image/webp;base64,AAAA');
+    await user.click(screen.getByRole('button', { name: 'Save b' }));
+    expect(
+      screen.queryByRole('img', { name: 'The model at Save b' })
+    ).toBeNull();
+  });
 });

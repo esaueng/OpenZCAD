@@ -47,6 +47,10 @@ test(
     await expect(meta.locator('.revision-sync')).toHaveText('This device');
 
     await saved.locator('.revision-reason').click();
+    // This device drew the save's card from the model on screen.
+    await expect(
+      saved.getByRole('img', { name: 'The model at Manual save' })
+    ).toHaveAttribute('src', /^data:image\//);
     await saved.getByRole('button', { name: 'Rename Manual save' }).click();
     const field = page.getByRole('textbox', { name: 'Name for Manual save' });
     await field.fill('Before fillets');

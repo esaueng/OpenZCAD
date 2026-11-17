@@ -1647,6 +1647,37 @@ const LazyDatumAxisCard = lazyWithStaleChunkNotice(() =>
 
 const AssistantPanel = withSuspense(LazyAssistantPanel);
 
+/**
+ * L03: draws a save point's card from meshes already in memory and keeps it
+ * on this device, unless one is already kept. Best effort: a card that cannot
+ * be drawn leaves the versions list with its placeholder.
+ */
+async function captureCheckpointThumbnail(
+  projectId: string,
+  checkpointId: string,
+  representations: ProjectDocument['derived']['bodyRepresentations']
+): Promise<void> {
+  const bodies = Object.values(representations).filter(
+    (body) => !body.consumed
+  );
+  if (bodies.length === 0) return;
+  try {
+    const store = await import('./lib/checkpointThumbnails');
+    if (await store.hasCheckpointThumbnail(checkpointId)) return;
+    const { renderPartThumbnail } = await import('./lib/partThumbnail');
+    const source = await renderPartThumbnail(bodies);
+    if (!source) return;
+    await store.saveCheckpointThumbnail({
+      checkpointId,
+      projectId,
+      source,
+      capturedAt: new Date().toISOString()
+    });
+  } catch {
+    // A card is a convenience; the save point stands without it.
+  }
+}
+
 function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
   return (
     <Suspense fallback={<WorkspacePending />}>
@@ -4972,6 +5003,36 @@ export function App() {
   const exactGeometryReady = !parameterDraftActive && geometry.isReadyFor(doc);
   const exactGeometryReadyRef = useRef(exactGeometryReady);
   exactGeometryReadyRef.current = exactGeometryReady;
+  // L03: the newest save point's card, drawn once from the meshes on screen
+  // while the model still sits on it. Device only (lib/checkpointThumbnails).
+  const latestCheckpointId = doc?.checkpoints.at(-1)?.checkpointId ?? null;
+  const latestCheckpointVersion =
+    doc?.checkpoints.at(-1)?.documentVersion ?? null;
+  useEffect(() => {
+    if (
+      !doc ||
+      shareSession ||
+      latestCheckpointId === null ||
+      latestCheckpointVersion !== doc.version ||
+      !exactGeometryReady ||
+      hasDraftDisplay(doc.derived.bodyRepresentations)
+    )
+      return;
+    void captureCheckpointThumbnail(
+      doc.projectId,
+      latestCheckpointId,
+      doc.derived.bodyRepresentations
+    );
+    // Keyed on the save point and the version it names: the meshes are
+    // read once, when the model first stands complete on that save.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    doc?.projectId,
+    latestCheckpointId,
+    latestCheckpointVersion,
+    doc?.version,
+    exactGeometryReady
+  ]);
   // What is drawn is complete when the worker has caught up, or when a
   // validated commit attached its own complete rebuild to this version: the
   // broadcast rebuild that follows only re-derives it for the worker's live
@@ -16609,6 +16670,12 @@ export function App() {
       const derived = await geometry.syncOnce(snapshot);
       if (managerRef.current !== manager) return;
       const shown: ProjectDocument = { ...snapshot, derived };
+      // A save point this device never drew gets its card now.
+      void captureCheckpointThumbnail(
+        current.projectId,
+        checkpoint.checkpointId,
+        derived.bodyRepresentations
+      );
       setSelectedFeatureNode(null);
       setSelectedTopology(null);
       setSelectedEdges([]);

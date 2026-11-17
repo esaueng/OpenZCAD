@@ -9,6 +9,10 @@ import {
   listLocalSaveStateCheckpoints,
   onLocalSaveStatesChanged
 } from '../../lib/localProjectStore';
+import {
+  loadCheckpointThumbnails,
+  onCheckpointThumbnailsChanged
+} from '../../lib/checkpointThumbnails';
 import type { ModelPanelSource } from './modelPanelProps';
 
 /**
@@ -21,6 +25,8 @@ export interface RevisionCheckpoints {
   canonicalIds: ReadonlySet<string>;
   /** The device's stored save states for the open project. */
   local: ProjectCheckpoint[];
+  /** L03: this device's card for each save point that has one. */
+  thumbnails?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -77,11 +83,48 @@ export function useRevisionCheckpoints({
         left.createdAt.localeCompare(right.createdAt)
       )
     : checkpoints;
+  const thumbnails = useCheckpointThumbnails(
+    visibleCheckpoints.map((point) => point.checkpointId)
+  );
   return {
     visible: visibleCheckpoints,
     canonicalIds: canonicalCheckpointIds,
-    local: localCheckpoints
+    local: localCheckpoints,
+    thumbnails
   };
+}
+
+/** Loads this device's save-point cards and keeps them current. */
+function useCheckpointThumbnails(
+  checkpointIds: readonly string[]
+): ReadonlyMap<string, string> {
+  const [thumbnails, setThumbnails] = useState<ReadonlyMap<string, string>>(
+    () => new Map()
+  );
+  // Keyed on the ids, not the array: a new array arrives on every render.
+  const key = checkpointIds.join(' ');
+  useEffect(() => {
+    const ids = key ? key.split(' ') : [];
+    let cancelled = false;
+    let generation = 0;
+    const refresh = () => {
+      const request = ++generation;
+      void loadCheckpointThumbnails(ids)
+        .catch(() => new Map<string, string>())
+        .then((loaded) => {
+          if (!cancelled && request === generation) setThumbnails(loaded);
+        });
+    };
+    refresh();
+    const stop = onCheckpointThumbnailsChanged((checkpointId) => {
+      if (ids.includes(checkpointId)) refresh();
+    });
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [key]);
+  return thumbnails;
 }
 
 /** The Revisions header count. */
@@ -240,6 +283,7 @@ export function RevisionsPanel({
           canonical &&
           !!onRenameCheckpoint;
         const detailsId = `revision-details-${checkpoint.checkpointId}`;
+        const thumbnail = revisions.thumbnails?.get(checkpoint.checkpointId);
         const label = checkpointLabel(checkpoint);
         const previewing = previewingCheckpointId === checkpoint.checkpointId;
         const editor = revisionEditor(checkpoint, currentUserId);
@@ -335,6 +379,13 @@ export function RevisionsPanel({
             </span>
             {open ? (
               <div id={detailsId} className="revision-details">
+                {thumbnail ? (
+                  <img
+                    className="revision-thumb"
+                    src={thumbnail}
+                    alt={`The model at ${label}`}
+                  />
+                ) : null}
                 <p>
                   {new Date(checkpoint.createdAt).toLocaleString()} · document v
                   {checkpoint.documentVersion}
