@@ -177,6 +177,13 @@ async function openExactSection(page: Page) {
   await expect(
     page.getByRole('slider', { name: 'Section plane offset' })
   ).toBeVisible();
+  // These cases measure a Top (XY) cut; a first cut starts on Front (XZ),
+  // and a remembered Top cut comes back as it was.
+  const top = page
+    .getByRole('group', { name: 'Section plane' })
+    .getByRole('button', { name: 'Top (XY plane)' });
+  if ((await top.getAttribute('aria-pressed')) !== 'true') await top.click();
+  await expect(top).toHaveAttribute('aria-pressed', 'true');
   await expect(
     page.locator('.rail-section-state-kind', { hasText: 'Exact' })
   ).toBeVisible({ timeout: 30_000 });

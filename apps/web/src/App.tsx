@@ -13726,7 +13726,8 @@ export function App() {
         { immediate: true }
       );
     } else {
-      setSectionPlane('XY');
+      // With no remembered cut, the first one is on Front (XZ).
+      setSectionPlane('XZ');
     }
   }
 
