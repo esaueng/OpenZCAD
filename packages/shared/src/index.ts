@@ -355,11 +355,16 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // source view inside a circle, at its own scale. An older client would draw
 // the whole view at the sheet's scale, uncropped, so it must refuse. Builds
 // on v77.
-// v79 to v82 are claimed by F06 slice 4a, D02 parts lists (#1657), D03
-// auxiliary views (#1658) and D02 arc angles (#1662).
+// v80 adds D02 parts lists and balloons (`bom-table` and `balloon` drawing
+// annotations): an assembly's BOM table on the paper and a part's item
+// number at a leader, both read from the AS03 table each time the sheet is
+// drawn. An older client would refuse the unknown kinds, so it must refuse
+// the document. Builds on v79 (F06 assembly component configurations).
+// v81 and v82 are claimed by D03 auxiliary views (#1658) and D02 arc
+// angles (#1662).
 // v83 adds M17 simplified threads (`thread: 'simplified'` on a standard
 // part): the part is drawn as its plain envelope, with no thread cut. An
-// older client would cut it, so it must refuse. Builds on v78.
+// older client would cut it, so it must refuse. Builds on v80.
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 83 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;

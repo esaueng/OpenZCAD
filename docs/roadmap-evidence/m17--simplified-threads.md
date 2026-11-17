@@ -2,7 +2,7 @@
 row: M17
 ---
 
-Slice 4 is the simplified thread display (schema v83, up from v78). v79–v82 are claimed by F06 slice 4a, D02 #1657, D03 #1658 and D02 #1662.
+Slice 4 is the simplified thread display (schema v83, up from v80, with v81 and v82 claimed by D03 #1658 and D02 #1662).
 
 A screw, nut or threaded insert may store `thread: 'simplified'`, and the Standard part tool's Thread option makes Simplified the default. A simplified part is its plain envelope: the head's form, every size and its length are the modeled part's, but no thread is cut and there is no drive recess, chamfer or knurl. The uncut face is named `standard-part.face.thread`. A socket screw is then one revolve of 5 faces and 6 edges, where the modeled screw has about 465,600 display triangles. It refuses the lengths a modeled screw refuses, and switching back to Modeled clears the field. A standard part on a plane reads no other body, so the history cache's primitive reuse now restores it, derived lengths included, across an unrelated edit. A part in a hole is still rebuilt.
 

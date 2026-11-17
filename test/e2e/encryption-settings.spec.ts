@@ -41,45 +41,49 @@ test('shows the reload instruction when automatic migration fails to download', 
   );
 });
 
+// Every CI run includes these (`@ci-smoke`): untagged, they ran only when
+// this file changed, so #1418 broke them unseen. It loaded the migration
+// controller before checking any gate, and a blocked chunk opened Settings.
 for (const available of [false, 'older-server'] as const) {
-  test(`does not load optional migration code or open Settings with closed gates: ${available}`, async ({
-    page,
-    context
-  }) => {
-    await stubApi(page);
-    await installE2eeServer(context, createE2eeServer());
-    let checks = 0;
-    await page.route('**/api/e2ee/config', (route) => {
-      checks++;
-      return available === 'older-server'
-        ? route.fulfill({ status: 404, json: { error: 'Not found' } })
-        : route.fulfill({
-            json: {
-              enabled: true,
-              projectsEnabled: true,
-              migrationEnabled: true,
-              defaultOn: false
-            }
-          });
-    });
-    let optionalRequests = 0;
-    await page.route(
-      /\/assets\/(?:automaticMigration|projectMigrations)-[^/]+\.js$/,
-      (route) => {
-        optionalRequests++;
-        return route.abort('failed');
-      }
-    );
-    await page.goto('/');
-    await expect(
-      page.getByRole('button', { name: 'Open settings' })
-    ).toBeVisible();
-    await expect.poll(() => checks).toBeGreaterThan(0);
-    await expect(
-      page.getByRole('dialog', { name: 'Settings', exact: true })
-    ).toHaveCount(0);
-    expect(optionalRequests).toBe(0);
-  });
+  test(
+    `does not load optional migration code or open Settings with closed gates: ${available}`,
+    { tag: '@ci-smoke' },
+    async ({ page, context }) => {
+      await stubApi(page);
+      await installE2eeServer(context, createE2eeServer());
+      let checks = 0;
+      await page.route('**/api/e2ee/config', (route) => {
+        checks++;
+        return available === 'older-server'
+          ? route.fulfill({ status: 404, json: { error: 'Not found' } })
+          : route.fulfill({
+              json: {
+                enabled: true,
+                projectsEnabled: true,
+                migrationEnabled: true,
+                defaultOn: false
+              }
+            });
+      });
+      let optionalRequests = 0;
+      await page.route(
+        /\/assets\/(?:automaticMigration|projectMigrations)-[^/]+\.js$/,
+        (route) => {
+          optionalRequests++;
+          return route.abort('failed');
+        }
+      );
+      await page.goto('/');
+      await expect(
+        page.getByRole('button', { name: 'Open settings' })
+      ).toBeVisible();
+      await expect.poll(() => checks).toBeGreaterThan(0);
+      await expect(
+        page.getByRole('dialog', { name: 'Settings', exact: true })
+      ).toHaveCount(0);
+      expect(optionalRequests).toBe(0);
+    }
+  );
 }
 
 test('rechecks default-on after reconnect and opens setup without reloading', async ({

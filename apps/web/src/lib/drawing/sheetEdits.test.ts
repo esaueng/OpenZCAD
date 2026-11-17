@@ -148,7 +148,7 @@ describe('duplicating marks (D02 v73)', () => {
     });
     const [mark, dimension] = copy.annotations!;
     expect(mark!.annotationId).not.toBe('dann_mark');
-    expect(dimension!.kind === 'linear' && dimension!.from).toEqual({
+    expect(dimension!.kind === 'linear' && dimension.from).toEqual({
       anchor: 'mark',
       annotationId: mark!.annotationId
     });

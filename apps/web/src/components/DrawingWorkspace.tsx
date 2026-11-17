@@ -26,6 +26,8 @@ import {
   Scaling,
   Scissors,
   StickyNote,
+  MessageCircle,
+  TableProperties,
   Sun,
   Trash2,
   TriangleRight,
@@ -42,7 +44,10 @@ import {
   composeCommands,
   type AnyCommand
 } from '@openzcad/command-system';
-import { updateDrawingView } from '@openzcad/document-core';
+import {
+  ASSEMBLY_BOM_COLUMNS,
+  updateDrawingView
+} from '@openzcad/document-core';
 import {
   createDrawingAnnotationId,
   createDrawingViewId,
@@ -163,10 +168,13 @@ import {
   annotationAnchor,
   composeSheetAnnotations,
   defaultDimensionDecimals,
+  DEFAULT_BOM_COLUMNS,
   sheetMarkLookup,
   sheetNumberFormat,
   type DrawingNumberFormat,
   markHiddenLeaders,
+  sheetBom,
+  balloonComponent,
   previewAnnotationLayer,
   resolveSheetAnnotations,
   holeCalloutLookup,
@@ -961,7 +969,9 @@ const ANNOTATION_TOOLS: readonly AnnotationToolKind[] = [
   'center-mark',
   'intersection-mark',
   'centerline',
-  'circle-centerline'
+  'circle-centerline',
+  'balloon',
+  'parts-list'
 ];
 
 const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
@@ -978,7 +988,9 @@ const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
     'center-mark': Crosshair,
     'intersection-mark': LocateFixed,
     centerline: SeparatorVertical,
-    'circle-centerline': CircleDashed
+    'circle-centerline': CircleDashed,
+    balloon: MessageCircle,
+    'parts-list': TableProperties
   };
 
 /** One key per tool, live while Draw is open and focus is not in a field. */
@@ -995,7 +1007,9 @@ const ANNOTATION_TOOL_KEYS: Readonly<Record<AnnotationToolKind, string>> = {
   'center-mark': 'M',
   'intersection-mark': 'X',
   centerline: 'L',
-  'circle-centerline': 'B'
+  'circle-centerline': 'B',
+  balloon: 'O',
+  'parts-list': 'P'
 };
 
 /** D03: the section view tool's key, beside the annotation tools'. */
@@ -1051,7 +1065,9 @@ const ANNOTATION_KIND_LABELS: Readonly<
   note: 'Note',
   'center-mark': 'Centre mark',
   'intersection-mark': 'Intersection mark',
-  centerline: 'Centreline'
+  centerline: 'Centreline',
+  'bom-table': 'Parts list',
+  balloon: 'Balloon'
 };
 
 function annotationTitle(annotation: DrawingAnnotation): string {
@@ -1063,7 +1079,10 @@ function annotationTitle(annotation: DrawingAnnotation): string {
         : 'Centreline';
   return annotation.kind === 'linear'
     ? `${ANNOTATION_TOOL_LABELS[annotation.direction]} dimension`
-    : annotation.kind === 'note' || isDrawingGeometryAnnotation(annotation)
+    : annotation.kind === 'note' ||
+        annotation.kind === 'bom-table' ||
+        annotation.kind === 'balloon' ||
+        isDrawingGeometryAnnotation(annotation)
       ? ANNOTATION_KIND_LABELS[annotation.kind]
       : `${ANNOTATION_KIND_LABELS[annotation.kind]} dimension`;
 }
@@ -1577,6 +1596,17 @@ function AnnotationProperties(props: {
           Marks geometry; dimensions may measure to a centre or intersection
           mark.
         </p>
+      ) : selected.kind === 'bom-table' ? (
+        <BomColumnFields
+          selected={selected}
+          editable={editable}
+          onUpdate={props.onUpdate}
+        />
+      ) : selected.kind === 'balloon' ? (
+        <p className="drawing-hint">
+          Names the item number its part has in the assembly&apos;s parts list;
+          it follows the list&apos;s numbering.
+        </p>
       ) : selected.kind === 'note' ? (
         <TextField
           label="Text"
@@ -1639,25 +1669,26 @@ function AnnotationProperties(props: {
         </p>
       )}
       <div className="drawing-field-row">
-        {(selected.kind !== 'note' || selected.leader) && (
-          <button
-            type="button"
-            className="secondary"
-            disabled={!props.canRepick}
-            title="Pick the edges this measures again"
-            onClick={() =>
-              props.onTool(
-                startAnnotationTool(
-                  repairToolKind(selected),
-                  selected.annotationId,
-                  selected.viewId
+        {selected.kind !== 'bom-table' &&
+          (selected.kind !== 'note' || selected.leader) && (
+            <button
+              type="button"
+              className="secondary"
+              disabled={!props.canRepick}
+              title="Pick the edges this measures again"
+              onClick={() =>
+                props.onTool(
+                  startAnnotationTool(
+                    repairToolKind(selected),
+                    selected.annotationId,
+                    selected.viewId
+                  )
                 )
-              )
-            }
-          >
-            <Crosshair size={13} aria-hidden="true" /> Re-pick
-          </button>
-        )}
+              }
+            >
+              <Crosshair size={13} aria-hidden="true" /> Re-pick
+            </button>
+          )}
         <button
           type="button"
           className="secondary"
@@ -2034,7 +2065,7 @@ function DrawingToolRail(props: {
     ['horizontal', 'vertical', 'aligned', 'distance'],
     ['radius', 'diameter', 'angle', 'chamfer'],
     ['center-mark', 'intersection-mark', 'centerline', 'circle-centerline'],
-    ['note']
+    ['note', 'balloon', 'parts-list']
   ];
   return (
     <div
@@ -2060,7 +2091,10 @@ function DrawingToolRail(props: {
             const active = tool?.kind === kind && !tool.repairId;
             const usable = props.canUseTool(kind);
             const name =
-              kind === 'note' || isGeometryTool(kind)
+              kind === 'note' ||
+              kind === 'balloon' ||
+              kind === 'parts-list' ||
+              isGeometryTool(kind)
                 ? ANNOTATION_TOOL_LABELS[kind]
                 : `${ANNOTATION_TOOL_LABELS[kind]} dimension`;
             return (
@@ -2132,6 +2166,50 @@ const TITLE_FIELDS: { key: keyof DrawingTitleBlock; label: string }[] = [
 ];
 
 const NO_SHEETS: readonly DrawingSheet[] = [];
+
+/**
+ * v80: which BOM columns a parts list shows, in the table's order; at least
+ * one stays on.
+ */
+function BomColumnFields(props: {
+  selected: Extract<DrawingAnnotation, { kind: 'bom-table' }>;
+  editable: boolean;
+  onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
+}) {
+  const shown = props.selected.columns ?? DEFAULT_BOM_COLUMNS;
+  return (
+    <fieldset className="drawing-bodies">
+      <legend>Columns</legend>
+      {ASSEMBLY_BOM_COLUMNS.map((column) => (
+        <label key={column.key} className="drawing-check">
+          <input
+            type="checkbox"
+            checked={shown.includes(column.key)}
+            disabled={
+              !props.editable || (shown.length === 1 && shown[0] === column.key)
+            }
+            onChange={(event) => {
+              const next = ASSEMBLY_BOM_COLUMNS.map(
+                (entry) => entry.key
+              ).filter((key) =>
+                key === column.key ? event.target.checked : shown.includes(key)
+              );
+              const { columns: _previous, ...rest } = props.selected;
+              const same =
+                next.length === DEFAULT_BOM_COLUMNS.length &&
+                next.every((key, index) => key === DEFAULT_BOM_COLUMNS[index]);
+              props.onUpdate(
+                same ? rest : { ...rest, columns: next },
+                'Format parts list'
+              );
+            }}
+          />
+          {column.label}
+        </label>
+      ))}
+    </fieldset>
+  );
+}
 
 const UNIT_NAMES: Readonly<Record<ProjectDocument['units'], string>> = {
   mm: 'Millimetres',
@@ -2673,6 +2751,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // M01: a hole's callout data, read from the document by its feature id,
   // for a diameter on its bore to call it out (standard, thread). Bound to
   // this document, so a drawing kept with it keeps reading it.
+  // D02 v80: the assembly's BOM table, which parts lists and balloons read.
+  const bomTable = useMemo(() => sheetBom(document), [document]);
   const liveHoleCallouts = useMemo(
     () => holeCalloutLookup(document),
     [document]
@@ -2829,14 +2909,15 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               shownSheet,
               drawBodies,
               document.units,
-              holeCallouts
+              holeCallouts,
+              bomTable
             ),
             drawnViews,
             document.units,
             drawBodies
           )
         : new Map<DrawingAnnotationId, AnnotationResolution>(),
-    [shownSheet, drawBodies, document.units, drawnViews, holeCallouts]
+    [shownSheet, drawBodies, document.units, drawnViews, holeCallouts, bomTable]
   );
   /** Drawn and usable: matches the model, or keeps its earlier drawing. */
   const sheetReady = status?.kind === 'ready' || keptDrawing !== null;
@@ -2944,16 +3025,25 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // Dimensions measure a view's geometry; a note on the paper needs none,
   // so a ready sheet with no views still takes one.
   const canAnnotate = sheetReady && editable && (sheet?.views.length ?? 0) > 0;
+  const hasParts = (bomTable?.rows.length ?? 0) > 0;
   const canUseTool = (kind: AnnotationToolKind) =>
-    kind === 'note' ? sheetReady && editable : canAnnotate;
+    kind === 'parts-list'
+      ? sheetReady && editable && hasParts
+      : kind === 'balloon'
+        ? canAnnotate && hasParts
+        : kind === 'note'
+          ? sheetReady && editable
+          : canAnnotate;
   const toolDisabledReason = (kind: AnnotationToolKind) =>
     !editable
       ? (editDisabledReason ?? 'Drawing edits are unavailable.')
       : !sheetReady
         ? 'Update the sheet to annotate it.'
-        : kind === 'note'
-          ? 'Notes are unavailable.'
-          : 'Add a view to dimension it.';
+        : (kind === 'parts-list' || kind === 'balloon') && !hasParts
+          ? 'Add parts to the assembly (Assemble) to list or balloon them.'
+          : kind === 'note' || kind === 'parts-list'
+            ? 'Notes are unavailable.'
+            : 'Add a view to dimension it.';
   const chooseTool = (next: AnnotationTool | null) => {
     setTool(next && pinnedTool(next));
     setSectionTool(null);
@@ -3861,10 +3951,22 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const placementMm = view
       ? { x: round(at[0] - view.centerMm.x), y: round(at[1] - view.centerMm.y) }
       : { x: round(at[0]), y: round(at[1]) };
+    // v80: a balloon names the assembly component its edge belongs to.
+    let componentId: string | undefined;
+    if (finished.kind === 'balloon') {
+      componentId = balloonComponent(bomTable, finished.edges[0]?.bodyId);
+      if (!componentId) {
+        props.onStatus('That body is not a part of the assembly.');
+        setTool(startAnnotationTool(finished.kind));
+        return;
+      }
+    }
     const annotation = draftAnnotation(
       finished,
       createDrawingAnnotationId(),
-      placementMm
+      placementMm,
+      undefined,
+      componentId
     );
     if (!annotation) return;
     const refusal = draftRefusal(
@@ -3872,7 +3974,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       view,
       drawBodies,
       document.units,
-      sheetMarkLookup(sheet)
+      sheetMarkLookup(sheet),
+      bomTable
     );
     if (refusal) {
       props.onStatus(refusal);
@@ -3893,7 +3996,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       props.onStatus(
         finished.kind === 'note'
           ? 'Note added. Edit its text in Properties.'
-          : isGeometryTool(finished.kind)
+          : isGeometryTool(finished.kind) ||
+              finished.kind === 'balloon' ||
+              finished.kind === 'parts-list'
             ? `${ANNOTATION_TOOL_LABELS[finished.kind]} added.`
             : `${ANNOTATION_TOOL_LABELS[finished.kind]} dimension added.`,
         { immediate: true }
@@ -3901,7 +4006,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       // A note is placed and then typed; dimensions keep their tool for the
       // next one.
       setTool(
-        finished.kind === 'note' ? null : startAnnotationTool(finished.kind)
+        finished.kind === 'note' || finished.kind === 'parts-list'
+          ? null
+          : startAnnotationTool(finished.kind)
       );
     }
   };
@@ -3911,7 +4018,16 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     );
     setTool(null);
     if (!sheet || !previous) return;
-    const repaired = repairedAnnotation(previous, finished);
+    // v80: a balloon re-picked onto another part names that part.
+    const componentId =
+      previous.kind === 'balloon'
+        ? balloonComponent(bomTable, finished.edges[0]?.bodyId)
+        : undefined;
+    if (previous.kind === 'balloon' && !componentId) {
+      props.onStatus('That body is not a part of the assembly.');
+      return;
+    }
+    const repaired = repairedAnnotation(previous, finished, componentId);
     if (!repaired) {
       props.onStatus('Re-pick in the view this annotation belongs to.');
       return;
@@ -3922,7 +4038,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       view,
       drawBodies,
       document.units,
-      sheetMarkLookup(sheet)
+      sheetMarkLookup(sheet),
+      bomTable
     );
     if (refusal) {
       props.onStatus(refusal);
@@ -5111,9 +5228,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   <text x={x} y={paper.height - y}>
                     {annotation.kind === 'note'
                       ? 'Broken leader'
-                      : isDrawingGeometryAnnotation(annotation)
-                        ? 'Broken mark'
-                        : 'Broken dimension'}
+                      : annotation.kind === 'bom-table'
+                        ? 'Empty parts list'
+                        : annotation.kind === 'balloon'
+                          ? 'Broken balloon'
+                          : isDrawingGeometryAnnotation(annotation)
+                            ? 'Broken mark'
+                            : 'Broken dimension'}
                   </text>
                   <rect
                     className="drawing-annotation-hit"

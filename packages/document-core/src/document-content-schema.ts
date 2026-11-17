@@ -312,6 +312,34 @@ export function hasDrawingDetail(value: unknown): boolean {
   return false;
 }
 
+/** D02 parts lists and balloons (schema v80). */
+export function assertDrawingBomSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 80, 'Parts lists and balloons');
+}
+
+/** Whether `value` holds a v80 parts list or balloon. */
+export function hasDrawingBom(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (
+      typeof entry.annotationId === 'string' &&
+      (entry.kind === 'bom-table' || entry.kind === 'balloon')
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
 function hasCouplings(assembly: unknown): boolean {
   return record(assembly) && assembly.couplings !== undefined;
 }
@@ -437,6 +465,12 @@ export function assertDocumentContentCommandSchema(
       hasDrawingDetail(command.payload)
     )
       assertDrawingDetailSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingBom(command.payload)
+    )
+      assertDrawingBomSchema(document.schemaVersion);
     if (!record(command.payload)) continue;
     if (
       command.kind === 'sketch.composite.add' &&
@@ -570,6 +604,15 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
     assertDrawingDistanceSchema(document.schemaVersion);
   if (hasDrawingDetail(document.drawings))
     assertDrawingDetailSchema(document.schemaVersion);
+  if (hasDrawingBom(document.drawings))
+    assertDrawingBomSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingBom(change.before) || hasDrawingBom(change.after))
+      )
+        assertDrawingBomSchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
     for (const change of entry.changes)
       if (

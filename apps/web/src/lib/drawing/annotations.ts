@@ -1,4 +1,9 @@
 import {
+  assemblyBomTable,
+  assemblyComponentBodies,
+  deriveAssemblyBom,
+  isLiveAssemblyBody,
+  type AssemblyBomTable,
   getParameterScope,
   holeCallout,
   holeOfBoreFace
@@ -8,6 +13,7 @@ import {
   drawingPaperPerModelUnit,
   holeCalloutLabel,
   projectToView,
+  type BodyId,
   type FeatureId,
   type HoleCallout,
   type DrawingAnnotationId,
@@ -26,6 +32,7 @@ import {
   type DrawingCenterMark,
   type DrawingDimension,
   type DrawingDistanceTarget,
+  type DrawingBomColumnKey,
   type DrawingGeometryAnnotation,
   type DrawingIntersectionMark,
   isDrawingGeometryAnnotation,
@@ -53,6 +60,7 @@ import {
 import {
   viewPaperPerModelUnit,
   clipPolylineToCircle,
+  fitText,
   viewClipCircle,
   sheetSafeText,
   textWidthMm,
@@ -184,11 +192,32 @@ export type AnnotationBreak =
   | 'not-a-countersink'
   | 'mark-missing'
   | 'not-parallel'
-  | 'collinear';
+  | 'collinear'
+  | 'no-bom'
+  | 'not-in-bom'
+  | 'not-on-part';
 
 type UV = [number, number];
 
 export type ResolvedAnnotation =
+  | {
+      /** v80: a parts list's header and rows, cells as the BOM table wrote them. */
+      kind: 'bom-table';
+      header: string[];
+      numeric: boolean[];
+      rows: string[][];
+      label: string;
+    }
+  | {
+      /** v80: a balloon's item number and its leader edge, flat `[u, v, …]`. */
+      kind: 'balloon';
+      label: string;
+      leader: number[];
+      /** As a note's (below): what its view draws of the edge. */
+      leaderDepths?: number[];
+      leaderEdge?: { bodyId: string; topologyId: string };
+      leaderPieces?: number[][];
+    }
   | {
       /** v73: a centre mark's circle, in view (u, v). */
       kind: 'center-mark';
@@ -309,7 +338,7 @@ export function annotationBreakMessage(reason: AnnotationBreak): string {
     case 'invalid-reference':
       return 'The stored reference to this edge does not match its own fingerprint, so it is not trusted.';
     case 'leader-hidden':
-      return 'The view no longer draws any of the edge this note points at.';
+      return 'The view no longer draws any of the edge this points at.';
     case 'foreshortened':
       return 'This view does not see what this measures true size (it slopes into the view, or the view is isometric); dimension it where it lies parallel to the view.';
     case 'no-sharp':
@@ -328,6 +357,12 @@ export function annotationBreakMessage(reason: AnnotationBreak): string {
       return 'The two edges are no longer parallel in this view, so there is no line midway between them.';
     case 'collinear':
       return 'The three points now lie on one line, so no circle passes through them.';
+    case 'no-bom':
+      return 'The project has no assembly parts to list.';
+    case 'not-in-bom':
+      return 'The part this balloon named is no longer in the assembly.';
+    case 'not-on-part':
+      return 'The edge this balloon points at is not on the part it names.';
   }
 }
 
@@ -1050,6 +1085,30 @@ function projectedPolyline(view: DrawingView, edge: EdgeTopology): number[] {
   return out;
 }
 
+/**
+ * A leader's edge as a note or balloon carries it: its projected polyline,
+ * each point's depth, and the edge itself, so markHiddenLeaders can keep
+ * only what the view draws of it.
+ */
+function leaderOf(
+  view: DrawingView,
+  ref: DrawingEdgeRef,
+  edge: EdgeTopology
+): {
+  leader: number[];
+  leaderDepths: number[];
+  leaderEdge: { bodyId: string; topologyId: string };
+} {
+  const depths: number[] = [];
+  for (let i = 0; i + 2 < edge.points.length; i += 3)
+    depths.push(projectPoint(view, edge.points, i).depth);
+  return {
+    leader: projectedPolyline(view, edge),
+    leaderDepths: depths,
+    leaderEdge: { bodyId: ref.bodyId, topologyId: edge.topologyId }
+  };
+}
+
 /** A straight edge's projected ends, or why it cannot serve as a ray. */
 function straightEnds(
   view: DrawingView,
@@ -1469,28 +1528,64 @@ export function resolveDrawingAnnotation(
   /** D02 v70: the sheet's number format; absent prints in `units`. */
   format: DrawingNumberFormat = drawingNumberFormat(undefined, units),
   /** D02 v73: the sheet's annotations, for points that marks mark. */
-  marks?: MarkLookup
+  marks?: MarkLookup,
+  /** D02 v80: the assembly's BOM, for parts lists and balloons. */
+  bom?: SheetBom
 ): AnnotationResolution {
+  if (annotation.kind === 'bom-table') {
+    if (!bom || bom.rows.length === 0) return failure('no-bom');
+    const columns = (annotation.columns ?? DEFAULT_BOM_COLUMNS).map((key) =>
+      bom.columns.find((column) => column.key === key)!
+    );
+    return {
+      ok: true,
+      resolved: {
+        kind: 'bom-table',
+        label: '',
+        header: columns.map((column) => column.label),
+        numeric: columns.map((column) => column.numeric),
+        rows: bom.rows.map((row) =>
+          columns.map((column) => row.cells[column.key])
+        )
+      }
+    };
+  }
+  if (annotation.kind === 'balloon') {
+    if (!view) return failure('not-in-view');
+    const item = bom?.itemByComponent.get(annotation.componentId);
+    if (item === undefined) return failure('not-in-bom');
+    // The number is its row's: an edge of a part in another row would carry
+    // the wrong item number onto the paper. (Copies of one part share a row,
+    // so any of them reads the same number.)
+    const onPart = [...bom!.bodyByComponent].some(
+      ([componentId, bodyId]) =>
+        bodyId === annotation.leader.bodyId &&
+        bom!.itemByComponent.get(componentId) === item
+    );
+    if (!onPart) return failure('not-on-part');
+    const found = lookupEdge(annotation.leader, view, bodies);
+    if (!found.ok) return failure(found.reason);
+    return {
+      ok: true,
+      resolved: {
+        kind: 'balloon',
+        label: String(item),
+        ...leaderOf(view, annotation.leader, found.edge)
+      }
+    };
+  }
   if (annotation.kind === 'note') {
     const label = annotation.text;
     if (!annotation.leader || !view)
       return { ok: true, resolved: { kind: 'note', label } };
     const found = lookupEdge(annotation.leader, view, bodies);
     if (!found.ok) return failure(found.reason);
-    const depths: number[] = [];
-    for (let i = 0; i + 2 < found.edge.points.length; i += 3)
-      depths.push(projectPoint(view, found.edge.points, i).depth);
     return {
       ok: true,
       resolved: {
         kind: 'note',
         label,
-        leader: projectedPolyline(view, found.edge),
-        leaderDepths: depths,
-        leaderEdge: {
-          bodyId: annotation.leader.bodyId,
-          topologyId: found.edge.topologyId
-        }
+        ...leaderOf(view, annotation.leader, found.edge)
       }
     };
   }
@@ -2142,6 +2237,8 @@ export function annotationModelReading(
     !view ||
     annotation.kind === 'note' ||
     annotation.kind === 'distance' ||
+    annotation.kind === 'bom-table' ||
+    annotation.kind === 'balloon' ||
     isDrawingGeometryAnnotation(annotation)
   )
     return null;
@@ -2985,6 +3082,7 @@ export function layoutAnnotation(
   anchor: XY
 ): AnnotationLayout {
   if (resolved.kind === 'note') return noteLayout(resolved, toPage, anchor);
+  if (resolved.kind === 'bom-table') return bomTableLayout(resolved, anchor);
   if (!toPage) throw new Error('A dimension needs its view.');
   switch (resolved.kind) {
     case 'linear':
@@ -3000,7 +3098,159 @@ export function layoutAnnotation(
     case 'intersection-mark':
     case 'centerline':
       return geometryLayout(resolved, toPage, k);
+    case 'balloon':
+      return balloonLayout(resolved, toPage, anchor);
   }
+}
+
+/** v80: the parts list's default columns: item, quantity, part. */
+export const DEFAULT_BOM_COLUMNS: readonly DrawingBomColumnKey[] = [
+  'item',
+  'quantity',
+  'part'
+];
+const BOM_ROW_MM = 6;
+const BOM_PAD_MM = 1.5;
+/** The longest cell a parts list prints before it is cut with "...". */
+const BOM_MAX_CELL_MM = 70;
+
+/**
+ * v80: the parts list as a ruled table, its top-left corner at the
+ * placement: a bold header row, then one row per BOM row, numeric columns
+ * aligned to their end. Thin rules, as a title block's.
+ */
+function bomTableLayout(
+  resolved: Extract<ResolvedAnnotation, { kind: 'bom-table' }>,
+  anchor: XY
+): AnnotationLayout {
+  const size = ANNOTATION_TEXT_MM;
+  const cells = [resolved.header, ...resolved.rows].map((row, index) =>
+    row.map((cell) =>
+      fitText(sheetSafeText(cell), size, BOM_MAX_CELL_MM, index === 0)
+    )
+  );
+  const widths = resolved.header.map(
+    (_, column) =>
+      Math.max(
+        ...cells.map((row, index) =>
+          textWidthMm(row[column] ?? '', size, index === 0)
+        )
+      ) +
+      2 * BOM_PAD_MM
+  );
+  const total = widths.reduce((sum, width) => sum + width, 0);
+  const height = cells.length * BOM_ROW_MM;
+  const [x0, y0] = anchor;
+  const strokes: SheetStroke[] = [
+    {
+      kind: 'thin',
+      closed: true,
+      points: [x0, y0, x0 + total, y0, x0 + total, y0 - height, x0, y0 - height]
+    }
+  ];
+  for (let row = 1; row < cells.length; row += 1)
+    strokes.push({
+      kind: 'thin',
+      points: [x0, y0 - row * BOM_ROW_MM, x0 + total, y0 - row * BOM_ROW_MM]
+    });
+  let x = x0;
+  const texts: SheetText[] = [];
+  widths.forEach((width, column) => {
+    if (column > 0)
+      strokes.push({ kind: 'thin', points: [x, y0, x, y0 - height] });
+    cells.forEach((row, index) => {
+      const text = row[column] ?? '';
+      if (!text) return;
+      const end = resolved.numeric[column] && index > 0;
+      texts.push({
+        x: end ? x + width - BOM_PAD_MM : x + BOM_PAD_MM,
+        y: y0 - (index + 1) * BOM_ROW_MM + (BOM_ROW_MM - size) / 2,
+        sizeMm: size,
+        text,
+        ...(index === 0 ? { bold: true } : {}),
+        ...(end ? { align: 'end' as const } : {})
+      });
+    });
+    x += width;
+  });
+  return {
+    strokes,
+    texts,
+    box: { x: x0, y: y0 - height, width: total, height }
+  };
+}
+
+/** v80: a balloon's circle, at least this radius. */
+const BALLOON_RADIUS_MM = 4;
+
+/**
+ * v80: a balloon: the item number centred in a circle at the placement,
+ * and a leader from the circle's rim to the nearest point of its edge,
+ * ending in an arrow.
+ */
+function balloonLayout(
+  resolved: Extract<ResolvedAnnotation, { kind: 'balloon' }>,
+  toPage: (u: number, v: number) => XY,
+  anchor: XY
+): AnnotationLayout {
+  const text = sheetSafeText(resolved.label);
+  const radius = Math.max(
+    BALLOON_RADIUS_MM,
+    textWidthMm(text, ANNOTATION_TEXT_MM) / 2 + 1.5
+  );
+  const steps = 48;
+  const circle: number[] = [];
+  for (let i = 0; i < steps; i += 1) {
+    const angle = (2 * Math.PI * i) / steps;
+    circle.push(
+      anchor[0] + radius * Math.cos(angle),
+      anchor[1] + radius * Math.sin(angle)
+    );
+  }
+  const strokes: SheetStroke[] = [
+    { kind: 'dimension', closed: true, points: circle }
+  ];
+  // The tip lands only on what the view draws of the edge (see
+  // markHiddenLeaders): inside a detail's circle, and where it shows.
+  const pieces = (resolved.leaderPieces ?? [resolved.leader]).map((flat) => {
+    const points: XY[] = [];
+    for (let i = 0; i + 1 < flat.length; i += 2)
+      points.push(toPage(flat[i]!, flat[i + 1]!));
+    return points;
+  });
+  const tip = nearestOnPieces(pieces, anchor);
+  if (tip) {
+    const length = Math.hypot(tip[0] - anchor[0], tip[1] - anchor[1]);
+    if (length > radius + 1e-6) {
+      const d: XY = [
+        (tip[0] - anchor[0]) / length,
+        (tip[1] - anchor[1]) / length
+      ];
+      const from: XY = [anchor[0] + d[0] * radius, anchor[1] + d[1] * radius];
+      strokes.push(
+        line(from, tip),
+        arrow(tip, d, Math.min(ARROW_LENGTH_MM, length - radius))
+      );
+    }
+  }
+  return {
+    strokes,
+    texts: [
+      {
+        x: anchor[0],
+        y: anchor[1] - ANNOTATION_TEXT_MM / 2,
+        sizeMm: ANNOTATION_TEXT_MM,
+        text,
+        align: 'middle'
+      }
+    ],
+    box: {
+      x: anchor[0] - radius,
+      y: anchor[1] - radius,
+      width: 2 * radius,
+      height: 2 * radius
+    }
+  };
 }
 
 /** v73: how far centre lines run past what they mark, on the paper (ISO 128-20). */
@@ -3167,7 +3417,43 @@ export function drawnLines(
   return out;
 }
 
-/** Every annotation of a sheet resolved against the current model. */
+/**
+ * D02 v80: the BOM a sheet reads: the AS03 table, which parts lists and
+ * balloons show, and the body showing each component, which a balloon's
+ * leader must touch for its item number to be that part's.
+ */
+export interface SheetBom extends AssemblyBomTable {
+  bodyByComponent: ReadonlyMap<string, BodyId>;
+}
+
+/** The project's BOM for its sheets; absent with no assembly parts. */
+export function sheetBom(document: ProjectDocument): SheetBom | undefined {
+  const components = document.assembly?.components ?? [];
+  if (components.length === 0) return undefined;
+  const live = assemblyComponentBodies(document, (bodyId) =>
+    isLiveAssemblyBody(document, bodyId)
+  );
+  const bodyByComponent = new Map<string, BodyId>();
+  for (const component of components)
+    bodyByComponent.set(
+      component.id,
+      live.get(component.id) ?? component.bodyId
+    );
+  return { ...assemblyBomTable(deriveAssemblyBom(document)), bodyByComponent };
+}
+
+/** The listed component a body shows: the part a balloon on it names. */
+export function balloonComponent(
+  bom: SheetBom | undefined,
+  bodyId: string | undefined
+): string | undefined {
+  if (!bom || bodyId === undefined) return undefined;
+  for (const [componentId, body] of bom.bodyByComponent)
+    if (body === bodyId && bom.itemByComponent.has(componentId))
+      return componentId;
+  return undefined;
+}
+
 /** v73: a sheet's annotations by id, for points its marks mark. */
 export function sheetMarkLookup(
   sheet: Pick<DrawingSheet, 'annotations'>
@@ -3182,7 +3468,9 @@ export function resolveSheetAnnotations(
   sheet: DrawingSheet,
   bodies: AnnotationBodies,
   units: UnitSystem,
-  holes?: HoleCalloutLookup
+  holes?: HoleCalloutLookup,
+  /** D02 v80: the assembly's BOM, for parts lists and balloons. */
+  bom?: SheetBom
 ): Map<DrawingAnnotationId, AnnotationResolution> {
   const views = new Map(sheet.views.map((view) => [view.viewId, view]));
   const marks = sheetMarkLookup(sheet);
@@ -3196,7 +3484,8 @@ export function resolveSheetAnnotations(
         units,
         holes,
         sheetNumberFormat(sheet, units),
-        marks
+        marks,
+        bom
       )
     ])
   );
@@ -3216,8 +3505,11 @@ export function markHiddenLeaders(
   bodies: AnnotationBodies
 ): Map<DrawingAnnotationId, AnnotationResolution> {
   const out = new Map(resolutions);
+  // Notes' leaders and (v80) balloons'.
   const leaders = (sheet.annotations ?? []).filter(
-    (annotation) => annotation.kind === 'note' && annotation.leader
+    (annotation) =>
+      (annotation.kind === 'note' && annotation.leader) ||
+      annotation.kind === 'balloon'
   );
   if (leaders.length === 0) return out;
   const drawn = new Map(views.map((entry) => [entry.view.viewId, entry]));
@@ -3226,7 +3518,8 @@ export function markHiddenLeaders(
     const entry = annotation.viewId ? drawn.get(annotation.viewId) : undefined;
     if (
       !resolution?.ok ||
-      resolution.resolved.kind !== 'note' ||
+      (resolution.resolved.kind !== 'note' &&
+        resolution.resolved.kind !== 'balloon') ||
       !resolution.resolved.leader ||
       !entry?.projection.bounds
     )
@@ -3362,7 +3655,7 @@ function nearestWithDepth(
  * the drawn line is the other edge's, not this one's.
  */
 function ownedLeaderPieces(
-  resolved: Extract<ResolvedAnnotation, { kind: 'note' }>,
+  resolved: Extract<ResolvedAnnotation, { kind: 'note' | 'balloon' }>,
   entry: ComposedView,
   bodies: AnnotationBodies,
   tolerance: number

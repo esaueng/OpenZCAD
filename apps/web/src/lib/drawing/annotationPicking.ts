@@ -29,6 +29,7 @@ import {
   edgeEndsInPageOrder,
   referenceTrust,
   resolveDrawingAnnotation,
+  type SheetBom,
   type AnnotationBodies,
   type MarkLookup
 } from './annotations';
@@ -539,7 +540,10 @@ export type AnnotationToolKind =
   | 'center-mark'
   | 'intersection-mark'
   | 'centerline'
-  | 'circle-centerline';
+  | 'circle-centerline'
+  /** v80: a part's item number, and the assembly's parts list. */
+  | 'balloon'
+  | 'parts-list';
 
 /** v73: tools that mark geometry, made as soon as their picks are in. */
 export const GEOMETRY_TOOL_KINDS: readonly AnnotationToolKind[] = [
@@ -568,7 +572,9 @@ export const ANNOTATION_TOOL_LABELS: Readonly<
   'center-mark': 'Centre mark',
   'intersection-mark': 'Intersection mark',
   centerline: 'Centreline',
-  'circle-centerline': 'Circular centreline'
+  'circle-centerline': 'Circular centreline',
+  balloon: 'Balloon',
+  'parts-list': 'Parts list'
 };
 
 /** What each tool asks for next, by how many picks it has. */
@@ -614,6 +620,10 @@ export function annotationToolHint(tool: AnnotationTool): string {
           : 'Centreline: pick a point (an edge end, circle or mark), or a straight edge to run midway between two.';
     case 'circle-centerline':
       return `Circular centreline: pick point ${tool.points.length + 1} of 3 (an edge end, circle or mark).`;
+    case 'balloon':
+      return 'Balloon: pick an edge of an assembly part for its leader.';
+    case 'parts-list':
+      return 'Parts list: click where its top-left corner goes.';
   }
 }
 
@@ -696,6 +706,10 @@ export function pickedEnough(tool: AnnotationTool): boolean {
       return tool.points.length === 2 || tool.edges.length === 2;
     case 'circle-centerline':
       return tool.points.length === 3;
+    case 'balloon':
+      return tool.edges.length === 1;
+    case 'parts-list':
+      return tool.placed !== undefined;
   }
 }
 
@@ -818,6 +832,12 @@ export function applyAnnotationPick(
   } | null = null
 ): PickResult {
   if (pickedEnough(tool)) return { ok: true, tool };
+  // A parts list sits on the paper: any click places it.
+  if (tool.kind === 'parts-list')
+    return {
+      ok: true,
+      tool: { ...tool, placed: { x: point[0], y: point[1] } }
+    };
   if (markHit && tool.kind === 'distance') {
     if (tool.viewId && markHit.viewId !== tool.viewId)
       return {
@@ -923,7 +943,8 @@ export function applyAnnotationPick(
     tool.kind !== 'note' &&
     tool.kind !== 'radius' &&
     tool.kind !== 'diameter' &&
-    tool.kind !== 'center-mark'
+    tool.kind !== 'center-mark' &&
+    tool.kind !== 'balloon'
   )
     return {
       ok: false,
@@ -1084,6 +1105,7 @@ export function applyAnnotationPick(
         return { ok: false, message: 'Pick a straight edge.' };
       return { ok: true, tool: { ...next, edges: [...tool.edges, ref] } };
     case 'note':
+    case 'balloon':
       return { ok: true, tool: { ...next, edges: [ref] } };
     case 'center-mark':
       if (!isFaceOnCircle(view, hit.edge))
@@ -1251,7 +1273,9 @@ export function draftAnnotation(
   tool: AnnotationTool,
   annotationId: DrawingAnnotationId,
   placementMm: { x: number; y: number },
-  text = 'NOTE'
+  text = 'NOTE',
+  /** v80: the assembly component a balloon's edge belongs to. */
+  componentId?: string
 ): DrawingAnnotation | null {
   if (!pickedEnough(tool)) return null;
   const base = { annotationId, placementMm };
@@ -1344,6 +1368,18 @@ export function draftAnnotation(
         mode: 'circle',
         through: [tool.points[0]!, tool.points[1]!, tool.points[2]!]
       };
+    case 'balloon':
+      return componentId
+        ? {
+            ...base,
+            kind: 'balloon',
+            viewId: tool.viewId!,
+            leader: tool.edges[0]!,
+            componentId
+          }
+        : null;
+    case 'parts-list':
+      return { ...base, kind: 'bom-table' };
   }
 }
 
@@ -1353,13 +1389,24 @@ export function draftAnnotation(
  */
 export function repairedAnnotation(
   previous: DrawingAnnotation,
-  tool: AnnotationTool
+  tool: AnnotationTool,
+  /**
+   * v80: for a balloon, the part its re-picked edge belongs to (see
+   * `balloonComponent`); the balloon then names that part. Absent keeps
+   * the part it named, which a resolution refuses on another part's edge.
+   */
+  componentId?: string
 ): DrawingAnnotation | null {
   if (!pickedEnough(tool) || tool.viewId !== previous.viewId) return null;
   const draft = draftAnnotation(
     tool,
     previous.annotationId,
-    previous.placementMm
+    previous.placementMm,
+    undefined,
+    // A balloon re-picked names the part of its new edge (v80).
+    previous.kind === 'balloon'
+      ? (componentId ?? previous.componentId)
+      : undefined
   );
   if (!draft || draft.kind !== previous.kind) return null;
   if (previous.kind === 'note' && draft.kind === 'note')
@@ -1395,6 +1442,7 @@ export function repairToolKind(
 ): AnnotationToolKind {
   if (annotation.kind === 'centerline')
     return annotation.mode === 'circle' ? 'circle-centerline' : 'centerline';
+  if (annotation.kind === 'bom-table') return 'parts-list';
   return annotation.kind === 'linear' ? annotation.direction : annotation.kind;
 }
 
@@ -1405,7 +1453,9 @@ export function draftRefusal(
   bodies: AnnotationBodies,
   units: UnitSystem,
   /** v73: the sheet's annotations, for points that marks mark. */
-  marks?: MarkLookup
+  marks?: MarkLookup,
+  /** v80: the assembly's BOM, for parts lists and balloons. */
+  bom?: SheetBom
 ): string | null {
   const resolution = resolveDrawingAnnotation(
     annotation,
@@ -1414,7 +1464,8 @@ export function draftRefusal(
     units,
     undefined,
     undefined,
-    marks
+    marks,
+    bom
   );
   return resolution.ok ? null : resolution.message;
 }
