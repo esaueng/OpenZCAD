@@ -43,6 +43,7 @@ function renderTopBar(
     onImportFiles: vi.fn(),
     onOpenMeshExport: vi.fn(),
     onExportStep: vi.fn(),
+    onExportIges: vi.fn(),
     onRenameProject: vi.fn(),
     onReviewEditFailure: vi.fn(),
     onShowWarnings: vi.fn(),
@@ -648,6 +649,20 @@ describe('TopBar File menu', () => {
     ).toHaveAttribute('title', expect.stringContaining('STEP'));
     // Only Export STEP answers to the format's name.
     expect(screen.getAllByRole('button', { name: /STEP/ })).toHaveLength(1);
+  });
+
+  it('offers IGES beside STEP on one row, so the File menu gains no height', () => {
+    const { onExportIges, onExportStep } = renderTopBar({ canExport: true });
+    fileMenu().open = true;
+    const iges = screen.getByRole('button', {
+      name: 'Export IGES, all bodies'
+    });
+    const step = screen.getByRole('button', { name: /^Export STEP/ });
+    expect(iges.parentElement).toBe(step.parentElement);
+    expect(iges.parentElement).toHaveClass('topbar-menu-item-row');
+    fireEvent.click(iges);
+    expect(onExportIges).toHaveBeenCalledTimes(1);
+    expect(onExportStep).not.toHaveBeenCalled();
   });
 
   it('says which body a failed feature holds out of the export', () => {

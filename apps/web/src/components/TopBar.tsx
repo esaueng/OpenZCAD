@@ -1241,30 +1241,34 @@ export function TopBar({
                   {exportWithheld}
                 </span>
               )}
-              <button
-                type="button"
-                className="topbar-menu-item"
-                disabled={!canExport}
-                title={exportTitle('STEP')}
-                onClick={exportStepFromMenu}
-              >
-                <Download size={13} aria-hidden="true" />
-                <span>Export STEP</span>
-                <small>{exportScope ?? 'all bodies'}</small>
-              </button>
-              {onExportIges && (
+              {/* IGES shares STEP's row: a row of its own pushed the File
+                  menu past a 900px window's height. */}
+              <div className="topbar-menu-item-row">
                 <button
                   type="button"
                   className="topbar-menu-item"
                   disabled={!canExport}
-                  title={exportTitle('IGES')}
-                  onClick={exportIgesFromMenu}
+                  title={exportTitle('STEP')}
+                  onClick={exportStepFromMenu}
                 >
                   <Download size={13} aria-hidden="true" />
-                  <span>Export IGES</span>
+                  <span>Export STEP</span>
                   <small>{exportScope ?? 'all bodies'}</small>
                 </button>
-              )}
+                {onExportIges && (
+                  <button
+                    type="button"
+                    className="topbar-menu-item topbar-menu-item-compact"
+                    disabled={!canExport}
+                    title={exportTitle('IGES')}
+                    aria-label={`Export IGES, ${exportScope ?? 'all bodies'}`}
+                    onClick={exportIgesFromMenu}
+                  >
+                    <Download size={13} aria-hidden="true" />
+                    <span>IGES</span>
+                  </button>
+                )}
+              </div>
               <button
                 type="button"
                 className="topbar-menu-item"
