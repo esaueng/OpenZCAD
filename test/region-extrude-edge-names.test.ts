@@ -475,4 +475,51 @@ describe('#1663 edges of an extruded sketch region are named', () => {
       expect(new Set(names).size).toBe(names.length);
     }, 240_000);
   });
+
+  it('names no edge of a cell another cell of the sketch could be mistaken for', async () => {
+    // A circle cut by a diameter: the two halves have the same boundary,
+    // piece for piece. Nothing but position tells them apart, so a name
+    // would follow the extrude from one half to the other. Neither half's
+    // edges are named; a pick on them is stored as its hash, as before.
+    const sketched = addSketchFeature(createProjectDocument('Halves', user), {
+      name: 'Sketch',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+      objects: [
+        { objectKind: 'circle', radius: 10, centerX: 0, centerY: 0 },
+        line(-10, 0, 10, 0)
+      ]
+    });
+    const sketch = findSketch(sketched.document, sketched.sketchId)!;
+    const regions = computeSketchRegions(
+      sketch.objectIds.map((id) => ({
+        id,
+        data: (sketched.document.nodes[id] as { data: SketchObjectData }).data
+      })),
+      Number
+    );
+    expect(regions).toHaveLength(2);
+    for (const region of regions) {
+      const extruded = extrudeSketch(sketched.document, {
+        name: 'Extrude',
+        sketchId: sketched.sketchId,
+        distance: THICKNESS,
+        profiles: [
+          {
+            profileId: region.profileId,
+            regionFingerprint: region.regionFingerprint,
+            samplePoint: region.centroid,
+            sourceArea: region.area,
+            sourceEntityIds: region.sourceEntityIds
+          }
+        ]
+      });
+      const built = await adapter.syncDocument(extruded.document);
+      expect(built.warnings).toEqual([]);
+      const body = built.bodyRepresentations[extruded.bodyId]!;
+      expect(body.volume).toBeCloseTo((Math.PI * 100 * THICKNESS) / 2, 4);
+      expect(body.topology!.edges.some((edge) => edge.reference)).toBe(false);
+      // Its faces keep the names they had.
+      expect(body.topology!.faces.some((face) => face.reference)).toBe(true);
+    }
+  }, 240_000);
 });

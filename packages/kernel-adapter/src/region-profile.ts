@@ -103,6 +103,22 @@ export function resolveRegionProfiles(
   scope: Record<string, number>,
   options?: SketchProfileAnalysisOptions
 ): SketchRegion[] {
+  return resolveRegionProfilesInSketch(document, sketch, data, scope, options)
+    .regions;
+}
+
+/**
+ * {@link resolveRegionProfiles}, together with every cell the sketch
+ * currently has, selected or not: what tells whether a selected cell's
+ * boundary names it alone.
+ */
+export function resolveRegionProfilesInSketch(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  data: ProfileReferenceData,
+  scope: Record<string, number>,
+  options?: SketchProfileAnalysisOptions
+): { regions: SketchRegion[]; cells: readonly SketchRegion[] } {
   const references =
     data.profiles && data.profiles.length > 0
       ? data.profiles
@@ -252,7 +268,7 @@ export function resolveRegionProfiles(
       'Broken profile reference — the extrude resolves more than one reference to the same sketch profile.'
     );
   }
-  return [...unique.values()];
+  return { regions: [...unique.values()], cells: analysis.profiles };
 }
 
 export function resolveRegionProfile(

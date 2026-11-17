@@ -74,7 +74,11 @@ import {
   shiftBasisAlongNormal,
   subtract
 } from './exact-math';
-import { connectedRegionGroups, resolveRegionProfiles } from './region-profile';
+import {
+  connectedRegionGroups,
+  resolveRegionProfiles,
+  resolveRegionProfilesInSketch
+} from './region-profile';
 import { ellipseRegionEdges, splineRegionEdges } from './profile-curve-edges';
 import {
   basisMatchesLiftedFrame,
@@ -1034,24 +1038,25 @@ export function regionSideSources(
  * unnamed, and a boundary a cap shares with one side in several pieces all
  * stay hash-only.
  *
- * Two cells of one sketch can be bounded by the same entities (the two ends
- * of a bar another rectangle crosses), so the entity token alone does not
- * say which cell an edge belongs to, and a pick on one cell must not resolve
- * on the other when the extrude's selection changes. The name therefore
- * carries the cell's boundary as well: how many pieces bound it and which
- * named sides they are. Cells that still agree on all of that (a circle cut
- * by a chord) keep the same names, as their faces do; `buildRegionExtrude`
- * drops any edge name two solids of one feature would share.
+ * Which cell an edge belongs to is part of its name. Two cells of one
+ * sketch can be bounded by the same entities (the two ends of a bar another
+ * rectangle crosses, the two halves of a circle cut by a diameter), and a
+ * pick on one must never resolve on the other when the extrude's selection
+ * changes. `cells` is the boundary provenance of every cell fused into this
+ * solid, and it is null unless each of them is the only cell of the whole
+ * sketch, selected or not, with that boundary (`cellIdentity`): then the
+ * name says exactly which cells the solid is made of, and a different
+ * selection cannot produce it. Otherwise no edge is named.
  */
 function addRegionBoundaryEdgeRoles(
   kernel: RemusKernel,
   solid: number,
   candidates: ReturnType<typeof topologyCandidatesForSolid>,
   token: string,
-  /** Curves on the cell's boundary loops, named or not. */
-  boundaryPieces: number,
+  cells: string | null,
   assignments: RemusSemanticAssignment[]
 ) {
+  if (cells === null) return;
   // The publisher keeps a face role only when the name and the face are
   // one-to-one, so only those faces can vouch for an edge.
   const nameUses = new Map<string, number>();
@@ -1115,18 +1120,54 @@ function addRegionBoundaryEdgeRoles(
     if (edges) edges.push(candidate);
     else byPair.set(pair, [candidate]);
   }
-  const sides = [...faceRole.values()]
-    .filter((role) => role.startsWith('side.'))
-    .map((role) => role.slice('side.'.length))
-    .sort();
-  const cell = `${boundaryPieces}:${sides.join(',')}`;
   for (const [pair, edges] of byPair) {
     if (edges.length !== 1) continue;
     assignments.push({
       ...edges[0]!,
-      lineageName: `sweep.edge.region.${token}[${cell}].${pair}`
+      lineageName: `sweep.edge.region.${token}[${cells}].${pair}`
     });
   }
+}
+
+/**
+ * A cell's boundary as one comparable string: for its outer loop and each
+ * hole, the authored piece every curve was cut from (the sketch entity, and
+ * the edge of it for a composite shape, or the kind of curve), every repeat
+ * kept. It says what bounds the cell and never where the cell is, so it is
+ * unchanged by an edit of the sketch's dimensions.
+ */
+function cellBoundaryKey(cell: SketchRegion): string {
+  const loopKey = (loop: SketchRegion['outer']) =>
+    loop.curves
+      .map((curve) => {
+        const token = parseSketchBoundaryToken(curve.boundaryToken);
+        return token?.kind === 'composite'
+          ? `${token.objectId}:${token.edgeIndex}`
+          : `${token?.objectId ?? curve.sourceObjectId}:${curve.kind}`;
+      })
+      .sort()
+      .join(',');
+  return [loopKey(cell.outer), ...cell.holes.map(loopKey).sort()].join('|');
+}
+
+/**
+ * The cells fused into one solid, as the identity an edge name carries, or
+ * null when any of them shares its boundary with another cell of the sketch
+ * (two halves of a circle cut by a diameter, two glyphs of one text):
+ * then nothing but position distinguishes it from a cell the extrude could
+ * be pointed at instead.
+ */
+function cellIdentity(
+  group: readonly SketchRegion[],
+  cellsByBoundary: ReadonlyMap<string, number>
+): string | null {
+  const keys: string[] = [];
+  for (const cell of group) {
+    const key = cellBoundaryKey(cell);
+    if (cellsByBoundary.get(key) !== 1) return null;
+    keys.push(key);
+  }
+  return keys.sort().join(';');
 }
 
 /** Extrude one or more explicitly selected bounded sketch cells. */
@@ -1140,7 +1181,18 @@ export function buildRegionExtrude(
   basis: PlaneBasis,
   warn: (message: string) => void
 ): ExactShape {
-  const regions = resolveRegionProfiles(document, sketch, data, scope);
+  const { regions, cells } = resolveRegionProfilesInSketch(
+    document,
+    sketch,
+    data,
+    scope
+  );
+  // How many cells of the sketch, selected or not, have each boundary.
+  const cellsByBoundary = new Map<string, number>();
+  for (const cell of cells) {
+    const key = cellBoundaryKey(cell);
+    cellsByBoundary.set(key, (cellsByBoundary.get(key) ?? 0) + 1);
+  }
   const distance = resolveParamValue(
     data.distance,
     scope,
@@ -1251,10 +1303,7 @@ export function buildRegionExtrude(
         solid,
         candidates,
         token,
-        [merged.outer, ...merged.holes].reduce(
-          (count, loop) => count + loop.curves.length,
-          0
-        ),
+        cellIdentity(group, cellsByBoundary),
         assignments
       );
     }
