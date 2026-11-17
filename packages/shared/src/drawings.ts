@@ -369,14 +369,16 @@ export interface DrawingAuxiliary {
 
 /**
  * The frame a view projects in: its named orientation's, or an auxiliary
- * view's stored one (page-up `x × direction`).
+ * view's or free section's stored one (page-up `x × direction`).
  */
 export function drawingViewFrame(
-  view: Pick<DrawingView, 'orientation' | 'auxiliary'>
+  view: Pick<DrawingView, 'orientation' | 'auxiliary'> & {
+    section?: Pick<DrawingSectionCut, 'frame'> | undefined;
+  }
 ): DrawingViewFrame {
-  const auxiliary = view.auxiliary;
-  if (!auxiliary) return DRAWING_VIEW_FRAMES[view.orientation];
-  const { direction: d, x } = auxiliary;
+  const stored = view.auxiliary ?? view.section?.frame;
+  if (!stored) return DRAWING_VIEW_FRAMES[view.orientation];
+  const { direction: d, x } = stored;
   return {
     direction: { ...d },
     x: { ...x },
@@ -386,6 +388,17 @@ export function drawingViewFrame(
       z: x.x * d.y - x.y * d.x
     }
   };
+}
+
+/**
+ * Whether a view projects in a stored frame rather than its orientation's:
+ * an auxiliary view (v81) or a free section (v91). Its axes are not model
+ * axes, so axis-bound tools (auto-dimensioning, the audit) pass over it.
+ */
+export function drawingViewHasOwnFrame(
+  view: Pick<DrawingView, 'auxiliary' | 'section'>
+): boolean {
+  return view.auxiliary !== undefined || view.section?.frame !== undefined;
 }
 
 /**
@@ -425,6 +438,21 @@ export interface DrawingSectionCut {
   label: string;
   /** The plane's depth along this view's direction, in model units. */
   depth: number;
+  /**
+   * D03 (schema v91): a free section, cut by a plane at any angle across
+   * its source. Its frame is stored like an auxiliary view's (`direction`
+   * of sight, the plane's normal, in the source's plane, and page-right
+   * `x`; page-up is the source's direction of sight), the view keeps its
+   * source's orientation and is placed freely. Absent: the plane is normal
+   * to a principal direction and the view stays aligned with its source.
+   */
+  frame?: DrawingSectionFrame;
+}
+
+/** A free section's frame (D03, schema v91), unit and square. */
+export interface DrawingSectionFrame {
+  direction: Vector3;
+  x: Vector3;
 }
 
 export const MAX_DRAWING_SECTION_DEPTH = 1e7;
@@ -433,13 +461,34 @@ const SECTION_LABEL = /^[A-Z]{1,2}$/;
 /** The cutting plane of a section view: `dot(normal, p) = depth`. */
 export function drawingSectionPlane(
   view: Pick<DrawingView, 'orientation'> & {
-    section: Pick<DrawingSectionCut, 'depth'>;
+    section: Pick<DrawingSectionCut, 'depth' | 'frame'>;
   }
 ): { normal: Vector3; depth: number } {
   return {
-    normal: { ...DRAWING_VIEW_FRAMES[view.orientation].direction },
+    normal: {
+      ...(view.section.frame?.direction ??
+        DRAWING_VIEW_FRAMES[view.orientation].direction)
+    },
     depth: view.section.depth
   };
+}
+
+/**
+ * Where a free section's plane crosses its source view (D03, v91): the
+ * line `sight · (u, v) = depth` in the source's model (u, v), `sight` the
+ * plane's normal there (unit), the way the section line's arrows point.
+ */
+export function drawingFreeSectionLine(
+  source: DrawingViewOrientation,
+  frame: DrawingSectionFrame,
+  depth: number
+): { sight: [number, number]; depth: number } {
+  const from = DRAWING_VIEW_FRAMES[source];
+  const d = frame.direction;
+  const a = d.x * from.x.x + d.y * from.x.y + d.z * from.x.z;
+  const b = d.x * from.up.x + d.y * from.up.y + d.z * from.up.z;
+  const length = Math.hypot(a, b);
+  return { sight: [a / length, b / length], depth: depth / length };
 }
 
 /**
@@ -697,10 +746,35 @@ function drawingViewError(view: unknown, where: string): string | null {
       !Number.isFinite(section.depth) ||
       Math.abs(section.depth) > MAX_DRAWING_SECTION_DEPTH ||
       Object.keys(section).some(
-        (key) => !['sourceViewId', 'label', 'depth'].includes(key)
+        (key) => !['sourceViewId', 'label', 'depth', 'frame'].includes(key)
       )
     )
       return `${where} has an invalid section.`;
+    if (section.frame !== undefined) {
+      const frame = section.frame;
+      const unit = (value: unknown) =>
+        isRecord(value) &&
+        Object.keys(value).length === 3 &&
+        [value.x, value.y, value.z].every(
+          (component) =>
+            typeof component === 'number' && Number.isFinite(component)
+        ) &&
+        Math.abs(
+          Math.hypot(value.x as number, value.y as number, value.z as number) -
+            1
+        ) <= 1e-9;
+      if (
+        !isRecord(frame) ||
+        !unit(frame.direction) ||
+        !unit(frame.x) ||
+        Object.keys(frame).some((key) => !['direction', 'x'].includes(key))
+      )
+        return `${where} has an invalid section frame.`;
+      const d = frame.direction as Vector3;
+      const x = frame.x as Vector3;
+      if (Math.abs(d.x * x.x + d.y * x.y + d.z * x.z) > 1e-9)
+        return `${where} has a section frame whose axes are not square.`;
+    }
     if (view.parentViewId !== undefined)
       return `${where} cannot be both a section and a projected view.`;
   }
@@ -991,6 +1065,27 @@ export function drawingSheetError(value: unknown): string | null {
       return `${where} names section ${section.label} twice.`;
     labels.add(section.label);
     const source = views.get(section.sourceViewId);
+    if (section.frame) {
+      // A free section: seen along a direction in its source's plane,
+      // keeping the source's orientation, placed anywhere.
+      const sight =
+        source && source.orientation !== 'iso'
+          ? DRAWING_VIEW_FRAMES[source.orientation as DrawingViewOrientation]
+              .direction
+          : null;
+      const d = section.frame.direction;
+      if (
+        !source ||
+        !sight ||
+        source.section !== undefined ||
+        source.detail !== undefined ||
+        source.auxiliary !== undefined ||
+        source.orientation !== view.orientation ||
+        Math.abs(d.x * sight.x + d.y * sight.y + d.z * sight.z) > 1e-9
+      )
+        return `${where} has a section that cannot be cut from its source view.`;
+      continue;
+    }
     if (
       !source ||
       source.section !== undefined ||
