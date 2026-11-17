@@ -104,6 +104,7 @@
     "test/draft-display-release.test.ts",
     "test/drawing-assistant-operations.test.ts",
     "test/drawing-auto-dimension.test.ts",
+    "test/drawing-auxiliary-views.test.ts",
     "test/drawing-bom-balloons.test.ts",
     "test/drawing-centerlines.test.ts",
     "test/drawing-detail-views.test.ts",

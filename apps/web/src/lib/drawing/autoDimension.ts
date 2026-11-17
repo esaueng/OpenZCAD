@@ -1,6 +1,6 @@
 import {
+  drawingViewFrame,
   isDrawingDimension,
-  DRAWING_VIEW_FRAMES,
   DRAWING_VIEW_LABELS,
   MAX_DRAWING_ANNOTATIONS,
   createDrawingAnnotationId,
@@ -270,7 +270,8 @@ export function planAutoDimensions(
   // Views that measure true size: every principal view and section, never
   // the isometric one.
   const measuring = contexts.filter(
-    (context) => context.view.orientation !== 'iso'
+    // Principal views only: an auxiliary view's axes are no model axes.
+    (context) => context.view.orientation !== 'iso' && !context.view.auxiliary
   );
   /** What a view measures of a body: a section's cut edges, else the model's. */
   const edgesOf = (context: ViewContext, bodyId: string) =>
@@ -1006,7 +1007,7 @@ function circleOptions(
   }[] = [];
   for (const context of measuring) {
     if (!context.view.bodyIds.includes(bodyId as BodyId)) continue;
-    const direction = DRAWING_VIEW_FRAMES[context.view.orientation].direction;
+    const direction = drawingViewFrame(context.view).direction;
     for (const edge of edgesOf(context, bodyId)) {
       const circle = edge.curve?.circle;
       if (!circle || edge.displayRole === 'seam') continue;
@@ -1088,8 +1089,7 @@ function angleOptions(
     if (
       context.view.section ||
       !context.view.bodyIds.includes(bodyId as BodyId) ||
-      axisOf(DRAWING_VIEW_FRAMES[context.view.orientation].direction) !==
-        group.along
+      axisOf(drawingViewFrame(context.view).direction) !== group.along
     )
       continue;
     const edges = edgesOf(context, bodyId).filter(inPlane);
@@ -1181,7 +1181,7 @@ function boltSpanOptions(
       !context.view.bodyIds.includes(bodyId as BodyId)
     )
       continue;
-    const frame = DRAWING_VIEW_FRAMES[context.view.orientation];
+    const frame = drawingViewFrame(context.view);
     const facing =
       (frame.direction.x * d.x +
         frame.direction.y * d.y +
@@ -1304,7 +1304,7 @@ function bestSpan(
   } | null = null;
   for (const context of measuring) {
     if (!context.view.bodyIds.includes(bodyId as BodyId)) continue;
-    const frame = DRAWING_VIEW_FRAMES[context.view.orientation];
+    const frame = drawingViewFrame(context.view);
     const direction =
       axisOf(frame.x) === axis
         ? 'horizontal'
@@ -1361,7 +1361,7 @@ function sideOn(
       !context.view.bodyIds.includes(bodyId as BodyId)
     )
       return false;
-    const d = DRAWING_VIEW_FRAMES[context.view.orientation].direction;
+    const d = drawingViewFrame(context.view).direction;
     return Math.abs(axis.x * d.x + axis.y * d.y + axis.z * d.z) <= 1e-6;
   });
 }
@@ -1423,7 +1423,7 @@ function onRuns(context: ViewContext, uv: XY): boolean {
 
 /** Whether the view draws most of `edge` visible. */
 function edgeVisible(context: ViewContext, edge: EdgeTopology): boolean {
-  const frame = DRAWING_VIEW_FRAMES[context.view.orientation];
+  const frame = drawingViewFrame(context.view);
   const count = edge.points.length / 3;
   const samples = Math.min(9, count);
   let shown = 0;

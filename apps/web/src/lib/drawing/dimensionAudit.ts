@@ -1,6 +1,6 @@
 import {
+  drawingViewFrame,
   isDrawingDimension,
-  DRAWING_VIEW_FRAMES,
   type BodyId,
   type BoundingBox,
   type DrawingAnnotationId,
@@ -1050,9 +1050,13 @@ export function viewsAlong(
   axis: AuditAxis
 ) {
   return sheet.views.filter((view) => {
-    if (view.orientation === 'iso' || !view.bodyIds.includes(bodyId as never))
+    if (
+      view.orientation === 'iso' ||
+      view.auxiliary ||
+      !view.bodyIds.includes(bodyId as never)
+    )
       return false;
-    const frame = DRAWING_VIEW_FRAMES[view.orientation];
+    const frame = drawingViewFrame(view);
     return axisOf(frame.x) === axis || axisOf(frame.up) === axis;
   });
 }
@@ -1060,9 +1064,7 @@ export function viewsAlong(
 /** Whether `view` looks straight along `axis` (a circle about it is round). */
 function faceOn(view: DrawingView, axis: Vector3): boolean {
   return (
-    Math.abs(
-      Math.abs(dot(axis, DRAWING_VIEW_FRAMES[view.orientation].direction)) - 1
-    ) <= 1e-6
+    Math.abs(Math.abs(dot(axis, drawingViewFrame(view).direction)) - 1) <= 1e-6
   );
 }
 
@@ -1581,6 +1583,7 @@ export function readDimensionState(
         (view) =>
           view.bodyIds.includes(bodyId as never) &&
           view.orientation !== 'iso' &&
+          !view.auxiliary &&
           group.axes.some((axis) => faceOn(view, axis.direction)) &&
           // A section states it only where its cut leaves one of the circles.
           (!view.section ||
@@ -1596,13 +1599,11 @@ export function readDimensionState(
           (view) =>
             view.bodyIds.includes(bodyId as never) &&
             view.orientation !== 'iso' &&
+            !view.auxiliary &&
             group.axes.some(
               (axis) =>
                 Math.abs(
-                  dot(
-                    axis.direction,
-                    DRAWING_VIEW_FRAMES[view.orientation].direction
-                  )
+                  dot(axis.direction, drawingViewFrame(view).direction)
                 ) <= 1e-6
             )
         );
@@ -1621,11 +1622,10 @@ export function readDimensionState(
         (view) =>
           view.bodyIds.includes(bodyId as never) &&
           view.orientation !== 'iso' &&
+          !view.auxiliary &&
           group.axes.some(
             (axis) =>
-              Math.abs(
-                dot(axis, DRAWING_VIEW_FRAMES[view.orientation].direction)
-              ) <= 1e-6
+              Math.abs(dot(axis, drawingViewFrame(view).direction)) <= 1e-6
           )
       );
       const label = chamferLabel(group, units);
@@ -1643,12 +1643,11 @@ export function readDimensionState(
         (view) =>
           view.bodyIds.includes(bodyId as never) &&
           view.orientation !== 'iso' &&
+          !view.auxiliary &&
           !view.section &&
           group.axes.some(
             (axis) =>
-              Math.abs(
-                dot(axis, DRAWING_VIEW_FRAMES[view.orientation].direction)
-              ) <= 1e-6
+              Math.abs(dot(axis, drawingViewFrame(view).direction)) <= 1e-6
           )
       );
       const label = blendLabel(group, units);
@@ -1667,6 +1666,7 @@ export function readDimensionState(
         (view) =>
           view.bodyIds.includes(bodyId as never) &&
           view.orientation !== 'iso' &&
+          !view.auxiliary &&
           faceOn(view, UNIT[group.along])
       );
       const label = slopeLabel(group, units);
@@ -1684,13 +1684,10 @@ export function readDimensionState(
         (view) =>
           view.bodyIds.includes(bodyId as never) &&
           view.orientation !== 'iso' &&
+          !view.auxiliary &&
           Math.abs(
-            Math.abs(
-              dot(
-                circle.direction,
-                DRAWING_VIEW_FRAMES[view.orientation].direction
-              )
-            ) - 1
+            Math.abs(dot(circle.direction, drawingViewFrame(view).direction)) -
+              1
           ) <= 1e-6
       );
       const label = boltLabel(circle, units);

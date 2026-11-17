@@ -360,11 +360,14 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // number at a leader, both read from the AS03 table each time the sheet is
 // drawn. An older client would refuse the unknown kinds, so it must refuse
 // the document. Builds on v79 (F06 assembly component configurations).
-// v81 and v82 are claimed by D03 auxiliary views (#1658) and D02 arc
-// angles (#1662).
+// v81 adds D03 auxiliary views (`auxiliary` on a drawing view): seen square
+// to an edge its source draws true length, so an inclined face is drawn
+// true size. An older client would draw the source's view instead, so it
+// must refuse. Builds on v80.
+// v82 is claimed by D02 arc angles (#1662).
 // v83 adds M17 simplified threads (`thread: 'simplified'` on a standard
 // part): the part is drawn as its plain envelope, with no thread cut. An
-// older client would cut it, so it must refuse. Builds on v80.
+// older client would cut it, so it must refuse. Builds on v81.
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 83 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;

@@ -340,6 +340,31 @@ export function hasDrawingBom(value: unknown): boolean {
   return false;
 }
 
+/** D03 auxiliary views (schema v81). */
+export function assertDrawingAuxiliarySchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 81, 'Auxiliary views');
+}
+
+/** Whether `value` holds a v81 auxiliary view. */
+export function hasDrawingAuxiliary(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (typeof entry.viewId === 'string' && entry.auxiliary !== undefined)
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
 function hasCouplings(assembly: unknown): boolean {
   return record(assembly) && assembly.couplings !== undefined;
 }
@@ -471,6 +496,12 @@ export function assertDocumentContentCommandSchema(
       hasDrawingBom(command.payload)
     )
       assertDrawingBomSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingAuxiliary(command.payload)
+    )
+      assertDrawingAuxiliarySchema(document.schemaVersion);
     if (!record(command.payload)) continue;
     if (
       command.kind === 'sketch.composite.add' &&
@@ -606,6 +637,16 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
     assertDrawingDetailSchema(document.schemaVersion);
   if (hasDrawingBom(document.drawings))
     assertDrawingBomSchema(document.schemaVersion);
+  if (hasDrawingAuxiliary(document.drawings))
+    assertDrawingAuxiliarySchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingAuxiliary(change.before) ||
+          hasDrawingAuxiliary(change.after))
+      )
+        assertDrawingAuxiliarySchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
     for (const change of entry.changes)
       if (
