@@ -143,6 +143,10 @@ function HistoryFrame(props: ModelPanelProps) {
           <Suspense fallback={null}>
             <HistoryTextDialog
               document={document}
+              editBlocked={props.historyTextEditBlocked ?? null}
+              {...(props.onApplyHistoryText
+                ? { onApply: props.onApplyHistoryText }
+                : {})}
               onClose={() => setTextOpen(false)}
             />
           </Suspense>,

@@ -50,6 +50,8 @@ import {
 export interface HistoryTextReadResult {
   /** The text's content, or `null` when it does not parse. */
   model: HistoryModel | null;
+  /** Where each statement and sketch object is, by its id. */
+  spans: ReadonlyMap<string, TextSpan>;
   /** Errors block an edit; warnings describe what the document already holds. */
   diagnostics: HistoryTextDiagnostic[];
 }
@@ -279,6 +281,7 @@ function referenceKey(kind: string, feature: string, lineage: string): string {
 
 class Reader {
   readonly diagnostics: HistoryTextDiagnostic[] = [];
+  readonly spans = new Map<string, TextSpan>();
   private readonly knownIds = new Set<string>();
   private referenceIndex: Map<string, TopologyReferenceV5[]> | null = null;
   private scope: Record<string, number> = {};
@@ -371,6 +374,7 @@ class Reader {
         continue;
       }
       declared.set(statement.id, span);
+      this.spans.set(statement.id, statement.span);
       if (statement.type === 'param') {
         const parameter = this.readParameter(statement);
         if (parameter) parameters.push(parameter);
@@ -568,8 +572,9 @@ class Reader {
     }
     if (stored) {
       this.checkAgainstStored(statement.body, stored.data, STATEMENT_KEYS);
-    } else {
-      this.checkNewFeature(statement);
+    } else if (!this.checkNewFeature(statement)) {
+      // A kind the text cannot create: its fields are not worth typing.
+      return null;
     }
     const conversion = this.newConversion();
     const data = convertRecord(statement.body, [], conversion, STATEMENT_KEYS);
@@ -599,7 +604,7 @@ class Reader {
       featureKind: statement.kind,
       data: ordered
     } as unknown as FeatureNode;
-    this.checkExpressions(node, conversion, stored?.data);
+    this.checkExpressions(node, conversion, stored?.data, statement.span);
 
     const feature: HistoryFeature = {
       featureId: statement.id,
@@ -670,7 +675,12 @@ class Reader {
       name: typeof fields.name === 'string' ? fields.name : statement.name
     };
     Object.assign(fields, bookkeeping);
-    this.checkExpressions(fields as unknown as SketchNode, conversion, stored);
+    this.checkExpressions(
+      fields as unknown as SketchNode,
+      conversion,
+      stored,
+      sketchValue.span
+    );
     for (const key of Object.keys(bookkeeping)) {
       if (key !== 'name' || !hadName) delete fields[key];
     }
@@ -688,6 +698,7 @@ class Reader {
           );
           continue;
         }
+        this.spans.set(item.id, item.span);
         const object = this.readSketchObject(item);
         if (object) objects.push(object);
       }
@@ -747,7 +758,7 @@ class Reader {
       objectKind: item.head,
       data: ordered
     } as unknown as DocumentNode;
-    this.checkExpressions(node, conversion, stored);
+    this.checkExpressions(node, conversion, stored, item.span);
     return {
       id: item.id,
       name: item.name,
@@ -838,13 +849,13 @@ class Reader {
    * A statement the document does not hold yet. Only a primitive can be
    * created from text, so only a primitive is accepted, field by field.
    */
-  private checkNewFeature(statement: FeatureStatement): void {
+  private checkNewFeature(statement: FeatureStatement): boolean {
     if (statement.kind !== 'primitive') {
       this.error(
         `#${statement.id} is not a step of this document. Create a ${statement.kind} step in the app, then edit it here; the text adds primitives.`,
         statement.idSpan
       );
-      return;
+      return false;
     }
     const kind = entryOf(statement.body, 'primitiveKind');
     if (
@@ -901,6 +912,7 @@ class Reader {
         );
       }
     }
+    return true;
   }
 
   /**
@@ -960,7 +972,8 @@ class Reader {
   private checkExpressions(
     node: DocumentNode,
     conversion: Conversion,
-    storedRoot: unknown
+    storedRoot: unknown,
+    statementSpan: TextSpan
   ): void {
     let sites: ReturnType<typeof expressionSitesOf>;
     try {
@@ -968,7 +981,7 @@ class Reader {
     } catch (error) {
       this.error(
         `This statement does not have the shape its kind needs (${error instanceof Error ? error.message : 'unreadable'}).`,
-        conversion.expressions[0]?.node.span ?? zeroSpan
+        statementSpan
       );
       return;
     }
@@ -1012,9 +1025,6 @@ class Reader {
     }
   }
 }
-
-const zeroPosition = { line: 1, column: 1, offset: 0 };
-const zeroSpan: TextSpan = { start: zeroPosition, end: zeroPosition };
 
 function evaluateAt(
   expression: string,
@@ -1147,5 +1157,5 @@ export function readHistoryText(
   const diagnostics = reader.diagnostics.sort(
     (left, right) => left.span.start.offset - right.span.start.offset
   );
-  return { model, diagnostics };
+  return { model, spans: reader.spans, diagnostics };
 }

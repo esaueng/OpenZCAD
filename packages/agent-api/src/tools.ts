@@ -10,6 +10,11 @@ import {
 } from '@openzcad/ai-contracts';
 import { CommandManager } from '@openzcad/command-system';
 import { withoutDerivedProjection } from '@openzcad/document-core';
+import {
+  compileHistoryEdit,
+  printHistory,
+  type HistoryTextDiagnostic
+} from '@openzcad/scripting';
 import type { BodyRepresentation, ProjectDocument } from '@openzcad/shared';
 import { AgentToolError, errorMessage } from './errors';
 import {
@@ -30,6 +35,9 @@ import {
 
 /** The undo label an applied agent patch carries in the app's history. */
 export const AGENT_PATCH_UNDO_LABEL = 'Apply agent patch';
+
+/** The undo label an applied history text edit carries, as in the app. */
+export const AGENT_HISTORY_TEXT_UNDO_LABEL = 'Edit history text';
 
 /** `get_document` answers at most this much JSON. */
 export const MAX_AGENT_DOCUMENT_BYTES = 4 * 1024 * 1024;
@@ -183,6 +191,78 @@ export const AGENT_TOOL_DEFINITIONS: readonly AgentToolDefinition[] = [
   }
 ];
 
+const HISTORY_TEXT_ARGUMENT = {
+  type: 'string',
+  minLength: 1,
+  description:
+    'The whole history text, as get_history_text returned it with your edits applied. Unchanged statements stay as they are; removed statements delete their step.'
+} as const;
+
+const TEXT_VERSION_ARGUMENT = {
+  ...EXPECTED_VERSION_ARGUMENT,
+  description:
+    'The document version get_history_text reported for the text you edited. The call is refused if the project has moved on.'
+} as const;
+
+const HISTORY_TEXT_TOOLS: readonly AgentToolDefinition[] = [
+  {
+    name: 'get_history_text',
+    title: 'Get the history as text',
+    description:
+      'Returns the project’s feature history as OpenZCAD history text (version 1): typed parameters, then every step in history order with its stored fields, sketches with their objects. Expressions are in backticks, ids are #ids and picked faces and edges are face(#feature, "lineage") / edge(…). Edit the text and pass it to preflight_history_text or apply_history_text.',
+    inputSchema: objectSchema({ project: PROJECT_ARGUMENT }, ['project']),
+    annotations: READ_ONLY,
+    scope: 'read'
+  },
+  {
+    name: 'preflight_history_text',
+    title: 'Preflight a history text edit',
+    description:
+      'Compiles an edited history text into the patch proposal that makes the project say it (parameter and field values, names, order, deleted steps, new primitives), then runs the same exact preflight as preflight_patch. Writes nothing. Returns the changes and how each body changes, or each problem with its line and column.',
+    inputSchema: objectSchema(
+      {
+        project: PROJECT_ARGUMENT,
+        expectedVersion: TEXT_VERSION_ARGUMENT,
+        text: HISTORY_TEXT_ARGUMENT
+      },
+      ['project', 'expectedVersion', 'text']
+    ),
+    annotations: READ_ONLY,
+    scope: 'preflight'
+  },
+  {
+    name: 'apply_history_text',
+    title: 'Apply a history text edit as one undoable step',
+    description:
+      'Compiles and preflights the edited history text as preflight_history_text does, against the stored project, and only if it passes commits it as one transaction: one undo step labelled "Edit history text" when the project is opened in OpenZCAD. Refused, with nothing written, if the project is no longer at expectedVersion, the text has problems or preflight fails.',
+    inputSchema: objectSchema(
+      {
+        project: PROJECT_ARGUMENT,
+        expectedVersion: TEXT_VERSION_ARGUMENT,
+        text: HISTORY_TEXT_ARGUMENT
+      },
+      ['project', 'expectedVersion', 'text']
+    ),
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false
+    },
+    scope: 'edit'
+  }
+];
+
+/** Every tool, the patch tools first, in a stable order. */
+const ALL_AGENT_TOOLS: readonly AgentToolDefinition[] = [
+  ...AGENT_TOOL_DEFINITIONS,
+  ...HISTORY_TEXT_TOOLS
+];
+
+function describeDiagnostic(diagnostic: HistoryTextDiagnostic): string {
+  return `${diagnostic.span.start.line}:${diagnostic.span.start.column} ${diagnostic.message}`;
+}
+
 function textResult(
   value: Record<string, unknown>,
   isError = false
@@ -317,7 +397,8 @@ export function bodyChanges(
  */
 export function assertRetainedUndo(
   base: ProjectDocument,
-  next: ProjectDocument
+  next: ProjectDocument,
+  label: string = AGENT_PATCH_UNDO_LABEL
 ): void {
   const history = next.editHistory;
   const entry =
@@ -329,7 +410,7 @@ export function assertRetainedUndo(
   );
   if (
     !entry ||
-    entry.label !== AGENT_PATCH_UNDO_LABEL ||
+    entry.label !== label ||
     earlier.has(entry.id) ||
     history!.cursor !== history!.entries.length
   )
@@ -511,70 +592,157 @@ export function createAgentApi(options: AgentApiOptions): AgentApi {
       });
     },
     async apply_patch(args) {
+      return applyChecked(
+        projectArgument(args),
+        expectedVersionArgument(args),
+        AGENT_PATCH_UNDO_LABEL,
+        () => args.proposal
+      );
+    },
+    async get_history_text(args) {
+      const loaded = await workspace.load(projectArgument(args));
+      const text = printHistory(loaded.document);
+      if (new TextEncoder().encode(text).length > maxDocumentBytes)
+        throw new AgentToolError(
+          'too_large',
+          `The history text is larger than ${Math.round(maxDocumentBytes / 1024 / 1024)} MiB. Use get_digest and patches instead.`
+        );
+      return { version: loaded.document.version, text };
+    },
+    async preflight_history_text(args) {
       const project = projectArgument(args);
       const expected = expectedVersionArgument(args);
-      // A stale call is refused before it spends exact-kernel budget.
+      const text = historyTextArgument(args);
       assertVersion(await workspace.load(project), expected);
       kernelCalls.take('exact-kernel');
       return gate.run(async (deadline) => {
         const loaded = await workspace.load(project);
         assertVersion(loaded, expected);
-        const { base, report, result } = await checkedPatch(
+        const compiled = compiledText(loaded, text);
+        const { report, result } = await checkedPatch(
           loaded,
-          args.proposal,
+          compiled.proposal,
           deadline
         );
-        let next: ProjectDocument;
-        try {
-          next = new CommandManager(base).runTransaction(
-            AGENT_PATCH_UNDO_LABEL,
-            result.commands
-          );
-        } catch (error) {
-          throw new AgentToolError('refused', errorMessage(error));
-        }
-        if (next === base)
-          throw new AgentToolError(
-            'refused',
-            'The proposal changes nothing. Nothing was applied.'
-          );
-        assertRetainedUndo(base, next);
-        // The point of no return. A call past its budget — even one whose
-        // timer could not fire because the kernel held the event loop —
-        // writes nothing; a claimed call is never reported as timed out.
-        if (!deadline.claim())
-          throw new AgentToolError(
-            'timeout',
-            'The call ran past its time budget before it applied. Nothing was written.'
-          );
-        const committed = await workspace.commit(project, loaded.revision, {
-          ...next,
-          derived: result.candidate.derived
-        });
-        derivedCache.set(committed.document.projectId, {
-          revision: committed.revision,
-          derived: result.candidate.derived
-        });
         return {
           ok: true,
-          applied: true,
-          previousVersion: loaded.document.version,
-          version: committed.document.version,
-          undoLabel: AGENT_PATCH_UNDO_LABEL,
+          applied: false,
+          version: loaded.document.version,
+          candidateVersion: result.candidate.version,
+          changes: compiled.summary,
+          notes: compiled.notes,
           ...report
         };
       });
+    },
+    async apply_history_text(args) {
+      const text = historyTextArgument(args);
+      let summary: string[] = [];
+      const applied = await applyChecked(
+        projectArgument(args),
+        expectedVersionArgument(args),
+        AGENT_HISTORY_TEXT_UNDO_LABEL,
+        (loaded) => {
+          const compiled = compiledText(loaded, text);
+          summary = compiled.summary;
+          return compiled.proposal;
+        }
+      );
+      return { ...applied, changes: summary };
     }
   };
+
+  function historyTextArgument(args: Record<string, unknown>): string {
+    if (typeof args.text !== 'string' || args.text.length === 0)
+      throw new AgentToolError('invalid', 'text must be the history text.');
+    return args.text;
+  }
+
+  /** The text as a proposal against the stored document, or why not. */
+  function compiledText(loaded: LoadedProject, text: string) {
+    const compiled = compileHistoryEdit(loaded.document, text);
+    const errors = compiled.diagnostics.filter(
+      (diagnostic) => diagnostic.severity === 'error'
+    );
+    if (errors.length > 0)
+      throw new AgentToolError(
+        'invalid',
+        `The history text has ${errors.length} problem${errors.length === 1 ? '' : 's'}: ${errors.map(describeDiagnostic).join('; ')}`
+      );
+    if (!compiled.proposal)
+      throw new AgentToolError(
+        'refused',
+        'The history text changes nothing. Nothing was applied.'
+      );
+    return {
+      proposal: compiled.proposal,
+      summary: compiled.summary,
+      notes: compiled.diagnostics.map(describeDiagnostic)
+    };
+  }
+
+  async function applyChecked(
+    project: string,
+    expected: number | undefined,
+    label: string,
+    proposalFor: (loaded: LoadedProject) => unknown
+  ): Promise<Record<string, unknown>> {
+    // A stale call is refused before it spends exact-kernel budget.
+    assertVersion(await workspace.load(project), expected);
+    kernelCalls.take('exact-kernel');
+    return gate.run(async (deadline) => {
+      const loaded = await workspace.load(project);
+      assertVersion(loaded, expected);
+      const { base, report, result } = await checkedPatch(
+        loaded,
+        proposalFor(loaded),
+        deadline
+      );
+      let next: ProjectDocument;
+      try {
+        next = new CommandManager(base).runTransaction(label, result.commands);
+      } catch (error) {
+        throw new AgentToolError('refused', errorMessage(error));
+      }
+      if (next === base)
+        throw new AgentToolError(
+          'refused',
+          'The proposal changes nothing. Nothing was applied.'
+        );
+      assertRetainedUndo(base, next, label);
+      // The point of no return. A call past its budget — even one whose
+      // timer could not fire because the kernel held the event loop —
+      // writes nothing; a claimed call is never reported as timed out.
+      if (!deadline.claim())
+        throw new AgentToolError(
+          'timeout',
+          'The call ran past its time budget before it applied. Nothing was written.'
+        );
+      const committed = await workspace.commit(project, loaded.revision, {
+        ...next,
+        derived: result.candidate.derived
+      });
+      derivedCache.set(committed.document.projectId, {
+        revision: committed.revision,
+        derived: result.candidate.derived
+      });
+      return {
+        ok: true,
+        applied: true,
+        previousVersion: loaded.document.version,
+        version: committed.document.version,
+        undoLabel: label,
+        ...report
+      };
+    });
+  }
 
   return {
     scope,
     tools: () =>
-      AGENT_TOOL_DEFINITIONS.filter((tool) => scopeAllows(scope, tool.scope)),
+      ALL_AGENT_TOOLS.filter((tool) => scopeAllows(scope, tool.scope)),
     async call(name, rawArgs) {
-      const definition = AGENT_TOOL_DEFINITIONS.find(
-        (tool) => tool.name === name
-      );
+      const definition = ALL_AGENT_TOOLS.find((tool) => tool.name === name);
       if (!definition) throw new Error(`Unknown tool "${name}".`);
       try {
         if (!scopeAllows(scope, definition.scope))

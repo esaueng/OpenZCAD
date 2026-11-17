@@ -224,6 +224,9 @@ importers:
       '@openzcad/document-core':
         specifier: workspace:*
         version: link:../document-core
+      '@openzcad/scripting':
+        specifier: workspace:*
+        version: link:../scripting
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../shared
@@ -346,6 +349,9 @@ importers:
 
   packages/scripting:
     dependencies:
+      '@openzcad/ai-contracts':
+        specifier: workspace:*
+        version: link:../ai-contracts
       '@openzcad/document-core':
         specifier: workspace:*
         version: link:../document-core

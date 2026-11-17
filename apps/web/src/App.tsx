@@ -222,6 +222,7 @@ import type {
   CadSelectionContext
 } from '@openzcad/ai-contracts';
 import type { DrawingAssistantSource } from './lib/drawing/assistantContext';
+import type { PatchSource } from './components/modelPanels/modelPanelProps';
 import {
   appendRevision,
   createCheckpoint,
@@ -575,10 +576,6 @@ import {
   PROJECT_TOO_LARGE_FOR_ACCOUNT,
   type WorkspaceSaveState
 } from './lib/cloudProjectAutosave';
-import {
-  applyAccountProjectRefresh,
-  loadAccountRefresh
-} from './lib/accountProjectRefresh';
 import {
   decideProjectSync,
   shouldPollForFreshness
@@ -7992,7 +7989,14 @@ export function App() {
           // raised by the write that gets fenced rather than guessed at here.
           return;
         }
-        const fetched = await loadAccountRefresh(() =>
+        // Loaded only when a pull is due, outside the entry chunk. Offline
+        // with a stale chunk, this tick is skipped like an outage; the next
+        // poll tries again.
+        const refresh = await import('./lib/accountProjectRefresh').catch(
+          () => null
+        );
+        if (!refresh || cancelled) return;
+        const fetched = await refresh.loadAccountRefresh(() =>
           api.loadProject(current.projectId)
         );
         if (
@@ -8019,7 +8023,7 @@ export function App() {
         ) {
           return;
         }
-        const outcome = await applyAccountProjectRefresh({
+        const outcome = await refresh.applyAccountProjectRefresh({
           before: current,
           remote,
           current: () => managerRef.current?.document ?? null,
@@ -18420,13 +18424,21 @@ export function App() {
     }
   }
 
-  async function applyPatch(proposal: CadPatchProposal): Promise<boolean> {
+  async function applyPatch(
+    proposal: CadPatchProposal,
+    /** L15 history text: its wording, label and version fence. */
+    source?: PatchSource
+  ): Promise<boolean> {
     if (isDrawingProposal(proposal)) return applyDrawingPatch(proposal);
-    if (!ensureCanEdit('apply this AI proposal')) {
+    if (!ensureCanEdit(source?.action ?? 'apply this AI proposal')) {
       return false;
     }
     const current = managerRef.current?.document;
     if (!current) {
+      return false;
+    }
+    if (source && current.version !== source.baseVersion) {
+      setStatus(source.moved);
       return false;
     }
     setBusy(true);
@@ -18439,7 +18451,9 @@ export function App() {
       typeof window !== 'undefined';
     if (e2eApplyGate) window.__openzcadE2EApplyCheckInFlight = true;
     try {
-      setStatus('Checking the AI change against exact geometry…');
+      setStatus(
+        source?.checking ?? 'Checking the AI change against exact geometry…'
+      );
       let preflight: Awaited<ReturnType<typeof preflightCadPatch>>;
       if (e2eApplyGate) {
         const pending = preflightCadPatch(
@@ -18462,10 +18476,14 @@ export function App() {
         live.version !== current.version
       ) {
         throw new Error(
-          'The document changed during exact AI preflight. Review the refreshed proposal before applying it.'
+          source?.moved ??
+            'The document changed during exact AI preflight. Review the refreshed proposal before applying it.'
         );
       }
-      const applied = executeTransaction('Apply AI patch', preflight.commands);
+      const applied = executeTransaction(
+        source?.label ?? 'Apply AI patch',
+        preflight.commands
+      );
       if (applied) {
         // Topology ids belong to the pre-patch body. A fillet, boolean, or
         // pattern may consume that body and rebuild different edges/faces, so
@@ -35619,6 +35637,8 @@ export function App() {
       hiddenBodyIds={hiddenBodyIds}
       hiddenSketchIds={hiddenSketchIds}
       document={doc}
+      historyTextEditBlocked={editDisabledReason}
+      onApplyHistoryText={applyPatch}
       hiddenDatumIds={hiddenDatumIds}
       onHiddenDatumIdsChange={setHiddenDatumIds}
       hiddenReferenceImageIds={hiddenReferenceImageIds}

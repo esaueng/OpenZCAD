@@ -586,7 +586,9 @@ describe('ModelPanel', () => {
     const dialog = await screen.findByRole('dialog', {
       name: 'History as text'
     });
-    expect(dialog).toHaveTextContent('openzcad history 1');
+    expect(
+      within(dialog).getByLabelText<HTMLTextAreaElement>(/History text/).value
+    ).toMatch(/^openzcad history 1/);
     expect(toggle).toHaveAttribute('aria-pressed', 'true');
     await user.click(within(dialog).getByRole('button', { name: 'Close' }));
     expect(

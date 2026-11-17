@@ -8,4 +8,6 @@ Workflow:
 4. preflight_patch checks a proposal on the exact kernel without writing anything and reports how every body changes, or why it was refused.
 5. apply_patch (edit scope only) checks the proposal again and commits it as one undoable step. Pass the expectedVersion you planned against; if the project moved, read it again.
 
+Or edit the history as text: get_history_text returns the whole feature history as OpenZCAD history text; change values, names and order, delete steps or add primitives, and send the whole text to preflight_history_text or apply_history_text with the version it came from. Problems come back with their line and column.
+
 A refusal is final for that proposal: fix the cause it names instead of retrying unchanged. Calls are rate limited, and the exact kernel runs one call at a time.`;
