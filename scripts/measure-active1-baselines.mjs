@@ -5,7 +5,8 @@
 // Record: docs/performance/2026-11-15-active1-baselines.md.
 //
 //   node scripts/measure-active1-baselines.mjs [--runs 3] [--angle vulkan]
-//     [--only h02,w01-box,w01-history,pattern-node,pattern-browser]
+//     [--only h02,w01-box,w01-history,f06-switch-box,f06-switch-history,
+//             pattern-node,pattern-browser]
 //     [--out perf-results/active1/<stamp>] [--no-build] [--check]
 //     [--wait-minutes 180]
 //
@@ -35,6 +36,9 @@ const PROBES = [
   'h02',
   'w01-box',
   'w01-history',
+  // F06: Switch → frame for a configuration row, judged by the W01 budgets.
+  'f06-switch-box',
+  'f06-switch-history',
   'pattern-node',
   'pattern-browser'
 ];
@@ -162,9 +166,16 @@ export function summarize(dir) {
       budget.immediateEditMs
     );
   }
-  for (const [probe, label] of [
-    ['w01-box', 'simple box'],
-    ['w01-history', '100-feature history, isolated part']
+  for (const [probe, label, budgetProbe] of [
+    ['w01-box', 'simple box', 'w01-box'],
+    ['w01-history', '100-feature history, isolated part', 'w01-history'],
+    // F06 row switches answer to the same W01 budgets as an edit.
+    ['f06-switch-box', 'F06 row switch, simple box', 'w01-box'],
+    [
+      'f06-switch-history',
+      'F06 row switch, 100-feature history, isolated part',
+      'w01-history'
+    ]
   ]) {
     const files = existsSync(dir)
       ? readdirSync(dir).filter(
@@ -174,7 +185,7 @@ export function summarize(dir) {
     const reports = files.map((name) =>
       JSON.parse(readFileSync(join(dir, name), 'utf8'))
     );
-    const budget = ACTIVE1_BUDGETS.interaction[probe];
+    const budget = ACTIVE1_BUDGETS.interaction[budgetProbe];
     add(
       `W01 input → frame median (${label})`,
       reports.map((report) => report.summaries.inputToFrameMs.medianMs),
@@ -323,6 +334,17 @@ async function main() {
         CAD_PERF_BROWSER_HISTORY: '100',
         CAD_PERF_BROWSER_ISOLATE: '1',
         CAD_PERF_BROWSER_OUT: join(dir, `w01-history-r${round}.json`)
+      }),
+    'f06-switch-box': (round) =>
+      playwright('perf-configuration-switch', {
+        CONFIG_SWITCH_SAMPLES: '30',
+        CONFIG_SWITCH_OUT: join(dir, `f06-switch-box-r${round}.json`)
+      }),
+    'f06-switch-history': (round) =>
+      playwright('perf-configuration-switch', {
+        CONFIG_SWITCH_SAMPLES: '30',
+        CONFIG_SWITCH_HISTORY: '100',
+        CONFIG_SWITCH_OUT: join(dir, `f06-switch-history-r${round}.json`)
       }),
     'pattern-node': () =>
       run(
