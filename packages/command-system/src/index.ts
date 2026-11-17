@@ -2544,10 +2544,23 @@ function validateModelingFeatureUpdate(
       validateStandardPartInput(preview, { name: feature.name, ...part });
       break;
     }
-    case 'custom-feature':
+    case 'custom-feature': {
       validateBodyTarget(preview, feature.data.targetBodyId);
       validateCustomFeature(preview, feature.data, feature.featureId);
+      // The instance being edited is a publication too: its own version
+      // may not take other source in place.
+      const before = findFeature(document, input.featureId)?.data;
+      if (
+        before?.featureKind === 'custom-feature' &&
+        before.script.id === feature.data.script.id &&
+        before.script.version === feature.data.script.version &&
+        before.script.digest !== feature.data.script.digest
+      )
+        throw new Error(
+          `${before.script.id} ${before.script.version} is already published in this project with other source; publish the change as a new version.`
+        );
       break;
+    }
     case 'shell':
       validateShellInput(preview, {
         name: feature.name,

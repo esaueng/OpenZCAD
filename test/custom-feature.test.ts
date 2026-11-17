@@ -242,6 +242,30 @@ describe(
           })
         )
       ).toThrow(/already published in this project with other source/);
+      // Nor may a patch rewrite an instance's own published version in
+      // place (independent review finding): a new version is required.
+      const instance = listFeaturesInOrder(manager.document).at(-1)!;
+      expect(() =>
+        manager.execute(
+          commandFactories.updateFeature({
+            featureId: instance.featureId,
+            data: { script: other }
+          })
+        )
+      ).toThrow(/already published in this project with other source/);
+      const bumped = published(
+        ROUNDED_TRAY.replace('`2 mm`', '`3 mm`').replace('"1.0.0"', '"1.1.0"')
+      );
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: instance.featureId,
+          data: { script: bumped }
+        })
+      );
+      const updated = listFeaturesInOrder(manager.document).at(-1)!;
+      if (updated.data.featureKind !== 'custom-feature')
+        throw new Error('fixture');
+      expect(updated.data.script.version).toBe('1.1.0');
     });
 
     describe('through the history text', () => {
