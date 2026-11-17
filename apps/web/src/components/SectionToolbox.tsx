@@ -196,7 +196,7 @@ export function SectionToolbox({
     function place() {
       if (!panel) return;
       panel.style.translate = '';
-      const box = panel.getBoundingClientRect();
+      panel.style.maxHeight = '';
       const stage = panel.closest('.viewer-area');
       const rail = panel.closest('.instrument-rail')?.getBoundingClientRect();
       const footer = stage
@@ -205,6 +205,13 @@ export function SectionToolbox({
       const stageTop = stageTopEdge(panel, stage);
       const right = rail?.left ?? window.innerWidth;
       const bottom = footer?.top ?? window.innerHeight;
+      // Below the toolbar and clear of the footer's guidance on a short
+      // screen (844 × 390): the controls scroll rather than cover either.
+      const room = Math.floor(bottom - 48 - stageTop);
+      if (room > 0 && panel.getBoundingClientRect().height > room) {
+        panel.style.maxHeight = `${room}px`;
+      }
+      const box = panel.getBoundingClientRect();
       const x = Math.max(8, Math.min(box.x, right - box.width - 8));
       // Beside its button the controls hang mid-stage. Where they would also
       // stand across the canvas's middle (a stage narrower than about three

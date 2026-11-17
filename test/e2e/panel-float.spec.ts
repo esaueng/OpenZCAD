@@ -723,14 +723,20 @@ test(
     for (const viewport of [
       { width: 1280, height: 800 },
       { width: 1024, height: 768 },
-      { width: 1440, height: 900 }
+      { width: 1440, height: 900 },
+      // Short landscape: the controls also stay clear of the command bar.
+      { width: 844, height: 390 }
     ]) {
       await page.setViewportSize(viewport);
       await expect
         .poll(async () => {
           const toolbar = await box(assemble);
           const panel = await box(section);
-          return panel.y >= toolbar.y + toolbar.height;
+          const footer = await box(page.locator('.command-bar-lane'));
+          return (
+            panel.y >= toolbar.y + toolbar.height &&
+            panel.y + panel.height <= footer.y
+          );
         })
         .toBe(true);
       // The heading takes its own presses: Assemble is not under it.
