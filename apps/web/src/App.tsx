@@ -14998,7 +14998,8 @@ export function App() {
 
   async function handleDeleteCloudData(
     scope: AccountDeletionScope,
-    confirmation: string
+    confirmation: string,
+    acknowledgedEncryptedProjectCount?: number
   ) {
     const departingSession = sessionRef.current;
     setSettingsBusy(true);
@@ -15023,7 +15024,12 @@ export function App() {
       }
       if (sessionRef.current !== departingSession)
         throw new Error('The signed-in account changed. Try deleting again.');
-      const erase = () => api.deleteAccountData(scope, confirmation);
+      const erase = () =>
+        api.deleteAccountData(
+          scope,
+          confirmation,
+          acknowledgedEncryptedProjectCount
+        );
       const eraseProfile = () =>
         import('./lib/e2ee/accountErasure').then(
           ({ eraseAccountWithKeyCleanup }) =>

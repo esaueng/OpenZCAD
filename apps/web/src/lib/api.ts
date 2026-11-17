@@ -24,6 +24,7 @@ import type {
   CreateUploadSessionRequest,
   CreateUploadSessionResponse,
   UploadedArtifactPart,
+  DeleteAccountDataRequest,
   DeleteAccountDataResponse,
   DuplicateProjectRequest,
   DuplicateProjectResponse,
@@ -1712,10 +1713,20 @@ export const api = {
     requestJson<AccountDeletionPreview>(
       `/api/account/deletion-preview?scope=${encodeURIComponent(scope)}`
     ),
-  deleteAccountData: (scope: AccountDeletionScope, confirmation: string) =>
+  deleteAccountData: (
+    scope: AccountDeletionScope,
+    confirmation: string,
+    acknowledgedEncryptedProjectCount?: number
+  ) =>
     requestJson<DeleteAccountDataResponse>('/api/account/delete-data', {
       method: 'POST',
-      body: JSON.stringify({ scope, confirmation })
+      body: JSON.stringify({
+        scope,
+        confirmation,
+        ...(acknowledgedEncryptedProjectCount === undefined
+          ? {}
+          : { acknowledgedEncryptedProjectCount })
+      } satisfies DeleteAccountDataRequest)
     }),
   /**
    * The shelf. Encrypted projects arrive with a placeholder name and their

@@ -16,7 +16,16 @@ import {
 
 interface CloudDataDeletionDialogProps {
   scope: AccountDeletionScope;
-  onConfirm(scope: AccountDeletionScope, confirmation: string): Promise<void>;
+  /**
+   * `acknowledgedEncryptedProjectCount` is how many owned encrypted
+   * projects this dialog said a profile deletion leaves unreadable; the
+   * server refuses the deletion if the account owns more.
+   */
+  onConfirm(
+    scope: AccountDeletionScope,
+    confirmation: string,
+    acknowledgedEncryptedProjectCount?: number
+  ): Promise<void>;
   onClose(): void;
   /** Closes the dialog at "Download all data" (design review I84). */
   onDownloadFirst?(): void;
@@ -162,7 +171,11 @@ export function CloudDataDeletionDialog({
     setBusy(true);
     setError(null);
     try {
-      await onConfirm(scope, confirmation);
+      await onConfirm(
+        scope,
+        confirmation,
+        scope === 'profile' ? (preview?.encryptedProjectCount ?? 0) : undefined
+      );
     } catch (caught) {
       setError(deletionFailureMessage(caught));
       setBusy(false);
@@ -242,6 +255,24 @@ export function CloudDataDeletionDialog({
                   If you set up end-to-end encryption, the keys stored with your
                   account go too: your identity, your devices and their wrapped
                   keys. Your recovery key will no longer unlock anything.
+                </p>
+              ) : null}
+              {scope === 'profile' &&
+              (preview.encryptedProjectCount ?? 0) > 0 ? (
+                // Issue #1704: the retained projects stay encrypted to the
+                // erased keys. Signing in again returns to this account,
+                // but new keys continue none of the old ones.
+                <p>
+                  {countLabel(
+                    preview.encryptedProjectCount ?? 0,
+                    'kept project is',
+                    'kept projects are'
+                  )}{' '}
+                  end-to-end encrypted with those keys. Your account will not be
+                  able to open their cloud copies again, even if you sign in
+                  again and set up encryption anew, and your other devices will
+                  stop syncing them. Export any you want to keep working on
+                  first.
                 </p>
               ) : null}
               <small>
