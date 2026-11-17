@@ -71,3 +71,54 @@ test(
     await expect(revisionRow(page, 'Manual save')).toHaveCount(0);
   }
 );
+
+test(
+  'previews a saved version read only, then restores it from the preview',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Preview Part');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    await page.keyboard.press('ControlOrMeta+s');
+    await expect(revisionRow(page, 'Manual save')).toBeVisible();
+    await expectSaveSettled(page);
+    await createPrimitiveInPlace(page, 'cylinder');
+    await expectBodyCount(page, 2);
+
+    const saved = revisionRow(page, 'Manual save');
+    await saved.hover();
+    await saved.getByRole('button', { name: 'Preview Manual save' }).click();
+    const notice = page.getByRole('region', { name: 'Save preview' });
+    await expect(notice).toContainText('Previewing “Manual save”');
+    // The saved version builds one body; the project still has two.
+    await expect(notice).toContainText('1 body · read only');
+    await expectBodyCount(page, 2);
+    await expect(saved).toHaveClass(/is-previewing/);
+    // The viewport draws the saved version, not the project.
+    const canvas = page.locator('canvas[data-e2e-rendered-bodies]');
+    await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1');
+
+    // Read only: an undo while previewing changes nothing.
+    await page.keyboard.press('ControlOrMeta+z');
+    await expectBodyCount(page, 2);
+    await expect(notice).toBeVisible();
+
+    await notice.getByRole('button', { name: 'Close preview' }).click();
+    await expect(notice).toHaveCount(0);
+    await expectBodyCount(page, 2);
+    await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2');
+
+    await saved.hover();
+    await saved.getByRole('button', { name: 'Preview Manual save' }).click();
+    await expect(notice).toBeVisible();
+    await notice.getByRole('button', { name: 'Restore' }).click();
+    await expectBodyCount(page, 1);
+    await expect(notice).toHaveCount(0);
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Restored “Manual save”'
+    );
+  }
+);

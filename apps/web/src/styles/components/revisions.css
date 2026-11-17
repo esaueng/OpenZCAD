@@ -108,6 +108,16 @@
   opacity: 1;
 }
 
+/* The save point the viewport is previewing (L03): marked in the list as
+   well as by the notice over the model. */
+.revision-row.is-previewing {
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+.revision-row.is-previewing .revision-reason {
+  color: var(--color-text);
+}
+
 /* L03 versions-list columns: editor, device and where the save is stored,
    on one wrapping line under the time. */
 .revision-meta {
@@ -256,6 +266,50 @@
   color: var(--color-text-subtle);
   font-size: var(--fs-mini);
   font-style: italic;
+}
+
+/* L03 read-only preview of a saved version, in the workspace's notice row:
+   what is on screen, then Restore, Branch and Close. */
+.save-preview-notice {
+  /* The bottom lane passes clicks to the stage; Restore, Branch and Close
+     are controls and take their own. */
+  pointer-events: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+  padding: 1px 3px 2px 6px;
+  font-size: var(--fs-xs);
+  color: var(--color-text);
+}
+
+.save-preview-notice-line {
+  display: inline-flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  min-width: 0;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.save-preview-notice-detail {
+  color: var(--color-text-muted);
+}
+
+.save-preview-notice-actions {
+  display: inline-flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.save-preview-notice-actions .edit-refusal-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .error-boundary {

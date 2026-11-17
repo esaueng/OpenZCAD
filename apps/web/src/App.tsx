@@ -646,6 +646,7 @@ import {
   LIVE_SESSION_CONNECTING,
   LiveSessionNotice
 } from './components/LiveSessionNotice';
+import { SaveStatePreviewNotice } from './components/SaveStatePreviewNotice';
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
   ActivityLogButton,
@@ -3256,6 +3257,21 @@ export function App() {
   >(new Set());
   /** Open while the user is naming a save point. */
   const [namingSave, setNamingSave] = useState(false);
+  /**
+   * L03: the saved version the viewport is previewing, read only. Shown only
+   * while `previewDoc` is still its document: anything that replaces or
+   * clears the preview geometry ends the preview with it.
+   */
+  const [savePreview, setSavePreview] = useState<{
+    projectId: string;
+    checkpoint: ProjectCheckpoint;
+    document: ProjectDocument;
+  } | null>(null);
+  /** A banner action that needs the preview's edit lock gone first. */
+  const [savePreviewAction, setSavePreviewAction] = useState<{
+    kind: 'restore' | 'branch';
+    checkpoint: ProjectCheckpoint;
+  } | null>(null);
   const [pendingFeatureDelete, setPendingFeatureDelete] = useState<{
     featureId: FeatureId;
     name: string;
@@ -6843,10 +6859,19 @@ export function App() {
                       : null;
   // Being encrypted locks the document as firmly as a second tab does; the
   // second tab keeps its own notice.
+  // L03: a saved version on screen is read only; editing would act on a
+  // model the user is not looking at.
+  const savePreviewActive =
+    savePreview !== null &&
+    previewDoc === savePreview.document &&
+    savePreview.projectId === doc?.projectId;
   const projectEditDisabledReason =
     !projectOpenElsewhere && !shareSession && migrationEditReason
       ? migrationEditReason
-      : seatEditDisabledReason;
+      : (seatEditDisabledReason ??
+        (savePreviewActive
+          ? 'A saved version is open for preview — close it to edit'
+          : null));
   // View mode joins the same guard every other modeling edit uses. Project
   // rename has its own mode-aware guard below because it is workspace metadata:
   // owners may change it from either mode, while editors remain Build-only.
@@ -6943,6 +6968,22 @@ export function App() {
   assemblyEditDisabledReasonRef.current = assemblyEditDisabledReason;
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
+  // L03: a preview whose geometry something else replaced, or whose project
+  // closed, is over; its notice must not outlive it.
+  useEffect(() => {
+    if (savePreview && !savePreviewActive) setSavePreview(null);
+  }, [savePreview, savePreviewActive]);
+  // A banner action runs once the preview's edit lock has gone, so Restore
+  // meets the project's own guards rather than the preview's.
+  useEffect(() => {
+    if (!savePreviewAction || savePreviewActive) return;
+    const { kind, checkpoint } = savePreviewAction;
+    setSavePreviewAction(null);
+    if (kind === 'restore') void handleRestoreSaveState(checkpoint);
+    else void handleBranchSaveState(checkpoint);
+    // The handlers are this render's, which see the lock lifted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savePreviewAction, savePreviewActive]);
   // An import into a project that is still empty and still wears its
   // suggested name names the project for the file once the import lands as
   // its first content (lib/importProjectName, loaded with the first import:
@@ -16537,6 +16578,64 @@ export function App() {
       return null;
     }
     return api.loadRevision(projectId, checkpoint.revisionId).catch(() => null);
+  }
+
+  /**
+   * L03 read-only preview: builds a save state exactly and shows it in the
+   * viewport in place of the project, behind a notice offering Restore,
+   * Branch and Close. Nothing is written: the project, its undo history and
+   * its save points are untouched, and editing is refused until it closes.
+   * An encrypted project's account copy is read as a historical read
+   * (ADR-024): only from the history this browser trusts, never moving it.
+   */
+  async function handlePreviewSaveState(checkpoint: ProjectCheckpoint) {
+    const manager = managerRef.current;
+    const current = manager?.document;
+    if (!manager || !current || shareSessionRef.current) return;
+    setBusy(true);
+    try {
+      const snapshot = await loadSaveStateDocument(
+        current.projectId,
+        checkpoint
+      );
+      if (!snapshot) {
+        setStatus(
+          'That save state is no longer stored on this device or in your account.'
+        );
+        return;
+      }
+      const label = checkpointLabel(checkpoint);
+      setStatus(`Building “${label}” for preview…`);
+      const derived = await geometry.syncOnce(snapshot);
+      if (managerRef.current !== manager) return;
+      const shown: ProjectDocument = { ...snapshot, derived };
+      setSelectedFeatureNode(null);
+      setSelectedTopology(null);
+      setSelectedEdges([]);
+      setSelectedBodyIds([]);
+      setSelectedSketchProfileId(null);
+      setSelectedProfiles([]);
+      setTool(null);
+      setPreviewDoc(shown);
+      setSavePreview({
+        projectId: current.projectId,
+        checkpoint,
+        document: shown
+      });
+      setStatus(`Previewing “${label}”. Editing is off until you close it.`);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not preview that save state.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Ends a save-state preview; the project's own model shows again. */
+  function closeSavePreview(announce = true) {
+    if (!savePreview) return;
+    if (previewDoc === savePreview.document) setPreviewDoc(null);
+    setSavePreview(null);
+    if (announce) setStatus('Closed the preview.');
   }
 
   /**
@@ -35006,6 +35105,12 @@ export function App() {
       onBranchCheckpoint={(checkpoint) =>
         void handleBranchSaveState(checkpoint)
       }
+      onPreviewCheckpoint={(checkpoint) =>
+        void handlePreviewSaveState(checkpoint)
+      }
+      previewingCheckpointId={
+        savePreviewActive ? savePreview.checkpoint.checkpointId : null
+      }
       onRenameCheckpoint={
         editDisabledReason ? undefined : handleRenameCheckpoint
       }
@@ -37151,8 +37256,38 @@ export function App() {
             // the guidance row: the same line, remedies and Why? the control
             // shows, where the eye returns when the model has nothing to say.
             notice={
-              liveSessionConnecting &&
-              !(!keypad && calloutWithOperation?.operation?.error) ? (
+              savePreviewActive ? (
+                <SaveStatePreviewNotice
+                  label={checkpointLabel(savePreview.checkpoint)}
+                  createdAt={savePreview.checkpoint.createdAt}
+                  bodyCount={
+                    Object.values(
+                      savePreview.document.derived.bodyRepresentations
+                    ).filter((body) => !body.consumed).length
+                  }
+                  {...(seatEditDisabledReason === null &&
+                  buildModeDisabledReason === null
+                    ? {
+                        onRestore: () => {
+                          setSavePreviewAction({
+                            kind: 'restore',
+                            checkpoint: savePreview.checkpoint
+                          });
+                          closeSavePreview(false);
+                        }
+                      }
+                    : {})}
+                  onBranch={() => {
+                    setSavePreviewAction({
+                      kind: 'branch',
+                      checkpoint: savePreview.checkpoint
+                    });
+                    closeSavePreview(false);
+                  }}
+                  onClose={() => closeSavePreview()}
+                />
+              ) : liveSessionConnecting &&
+                !(!keypad && calloutWithOperation?.operation?.error) ? (
                 <LiveSessionNotice
                   key={doc.projectId}
                   onRetry={collaboration.reconnect}

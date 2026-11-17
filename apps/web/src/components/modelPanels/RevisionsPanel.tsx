@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { GitBranch, History, Pencil } from 'lucide-react';
+import { Eye, GitBranch, History, Pencil } from 'lucide-react';
 import {
   MAX_CHECKPOINT_NAME_LENGTH,
   checkpointLabel,
@@ -139,6 +139,8 @@ export type RevisionsPanelProps = Pick<
   | 'onRestoreCheckpoint'
   | 'onBranchCheckpoint'
   | 'onRenameCheckpoint'
+  | 'onPreviewCheckpoint'
+  | 'previewingCheckpointId'
 > & { revisions: RevisionCheckpoints };
 
 /** Names a save point in place of its row's name; Escape leaves it as it was. */
@@ -196,6 +198,8 @@ export function RevisionsPanel({
   onRestoreCheckpoint,
   onBranchCheckpoint,
   onRenameCheckpoint,
+  onPreviewCheckpoint,
+  previewingCheckpointId,
   revisions
 }: RevisionsPanelProps) {
   const {
@@ -237,11 +241,12 @@ export function RevisionsPanel({
           !!onRenameCheckpoint;
         const detailsId = `revision-details-${checkpoint.checkpointId}`;
         const label = checkpointLabel(checkpoint);
+        const previewing = previewingCheckpointId === checkpoint.checkpointId;
         const editor = revisionEditor(checkpoint, currentUserId);
         return (
           <div
             key={checkpoint.checkpointId}
-            className={`revision-row${index === 0 ? ' latest' : ''}${open ? ' is-open' : ''}`}
+            className={`revision-row${index === 0 ? ' latest' : ''}${open ? ' is-open' : ''}${previewing ? ' is-previewing' : ''}`}
             onClick={(event) => {
               // A press anywhere on the row opens it; its own buttons act.
               if ((event.target as HTMLElement).closest('.revision-action'))
@@ -271,6 +276,17 @@ export function RevisionsPanel({
             </small>
             {stored ? (
               <span className="revision-actions">
+                {!isCurrent && onPreviewCheckpoint && !previewing && (
+                  <button
+                    type="button"
+                    className="revision-action"
+                    aria-label={`Preview ${label}`}
+                    onClick={() => onPreviewCheckpoint(checkpoint)}
+                  >
+                    <Eye size={12} aria-hidden="true" />
+                    <span>Preview</span>
+                  </button>
+                )}
                 {!isCurrent && (
                   <button
                     type="button"
