@@ -47,6 +47,10 @@ test(
     await expect(meta.locator('.revision-sync')).toHaveText('This device');
 
     await saved.locator('.revision-reason').click();
+    // This device drew the save's card from the model on screen.
+    await expect(
+      saved.getByRole('img', { name: 'The model at Manual save' })
+    ).toHaveAttribute('src', /^data:image\//);
     await saved.getByRole('button', { name: 'Rename Manual save' }).click();
     const field = page.getByRole('textbox', { name: 'Name for Manual save' });
     await field.fill('Before fillets');
@@ -69,5 +73,91 @@ test(
     await expect(reopened).toBeVisible();
     await expect(reopened.locator('.revision-editor')).toHaveText(/^You/);
     await expect(revisionRow(page, 'Manual save')).toHaveCount(0);
+  }
+);
+
+test(
+  'previews a saved version read only, then restores it from the preview',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Preview Part');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    await page.keyboard.press('ControlOrMeta+s');
+    await expect(revisionRow(page, 'Manual save')).toBeVisible();
+    await expectSaveSettled(page);
+    await createPrimitiveInPlace(page, 'cylinder');
+    await expectBodyCount(page, 2);
+
+    const saved = revisionRow(page, 'Manual save');
+    await saved.hover();
+    await saved.getByRole('button', { name: 'Preview Manual save' }).click();
+    const notice = page.getByRole('region', { name: 'Save preview' });
+    await expect(notice).toContainText('Previewing “Manual save”');
+    // The saved version builds one body; the project still has two.
+    await expect(notice).toContainText('1 body · read only');
+    await expectBodyCount(page, 2);
+    await expect(saved).toHaveClass(/is-previewing/);
+    // The viewport draws the saved version, not the project.
+    const canvas = page.locator('canvas[data-e2e-rendered-bodies]');
+    await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1');
+
+    // Read only: an undo while previewing changes nothing.
+    await page.keyboard.press('ControlOrMeta+z');
+    await expectBodyCount(page, 2);
+    await expect(notice).toBeVisible();
+
+    await notice.getByRole('button', { name: 'Close preview' }).click();
+    await expect(notice).toHaveCount(0);
+    await expectBodyCount(page, 2);
+    await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2');
+
+    await saved.hover();
+    await saved.getByRole('button', { name: 'Preview Manual save' }).click();
+    await expect(notice).toBeVisible();
+    await notice.getByRole('button', { name: 'Restore' }).click();
+    await expectBodyCount(page, 1);
+    await expect(notice).toHaveCount(0);
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Restored “Manual save”'
+    );
+  }
+);
+
+test(
+  'compares a save point with the project now',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Compare Part');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    await page.keyboard.press('ControlOrMeta+s');
+    const saved = revisionRow(page, 'Manual save');
+    await expect(saved).toBeVisible();
+    await expectSaveSettled(page);
+    await createPrimitiveInPlace(page, 'cylinder');
+    await expectBodyCount(page, 2);
+
+    await saved.locator('.revision-reason').click();
+    await saved.getByRole('button', { name: 'Compare Manual save' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Compare “Manual save”' });
+    await expect(dialog).toBeVisible();
+    // From the save to now: the cylinder and its body were added.
+    await expect(
+      dialog.getByRole('region', { name: 'Features' })
+    ).toContainText('Added');
+    await expect(dialog.getByRole('region', { name: 'Bodies' })).toContainText(
+      'Added'
+    );
+    await dialog.getByRole('button', { name: 'Close' }).click();
+    await expect(dialog).toHaveCount(0);
+    // Comparing changed nothing.
+    await expectBodyCount(page, 2);
   }
 );

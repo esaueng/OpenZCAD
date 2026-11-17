@@ -226,6 +226,8 @@ import {
   appendRevision,
   createCheckpoint,
   createSavedRevision,
+  diffSaveStates,
+  type SaveStateDiff,
   createFeatureOnlyIds,
   createSavePoint,
   createProjectDocument,
@@ -646,6 +648,7 @@ import {
   LIVE_SESSION_CONNECTING,
   LiveSessionNotice
 } from './components/LiveSessionNotice';
+import { SaveStatePreviewNotice } from './components/SaveStatePreviewNotice';
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
   ActivityLogButton,
@@ -1482,6 +1485,11 @@ const LazySharedLinkCopyDialog = lazyWithStaleChunkNotice(() =>
     default: module.SharedLinkCopyDialog
   }))
 );
+const LazySaveStateCompareDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/SaveStateCompareDialog').then((module) => ({
+    default: module.SaveStateCompareDialog
+  }))
+);
 const LazySaveRevisionDialog = lazyWithStaleChunkNotice(() =>
   import('./components/SaveRevisionDialog').then((module) => ({
     default: module.SaveRevisionDialog
@@ -1646,6 +1654,37 @@ const LazyDatumAxisCard = lazyWithStaleChunkNotice(() =>
 
 const AssistantPanel = withSuspense(LazyAssistantPanel);
 
+/**
+ * L03: draws a save point's card from meshes already in memory and keeps it
+ * on this device, unless one is already kept. Best effort: a card that cannot
+ * be drawn leaves the versions list with its placeholder.
+ */
+async function captureCheckpointThumbnail(
+  projectId: string,
+  checkpointId: string,
+  representations: ProjectDocument['derived']['bodyRepresentations']
+): Promise<void> {
+  const bodies = Object.values(representations).filter(
+    (body) => !body.consumed
+  );
+  if (bodies.length === 0) return;
+  try {
+    const store = await import('./lib/checkpointThumbnails');
+    if (await store.hasCheckpointThumbnail(checkpointId)) return;
+    const { renderPartThumbnail } = await import('./lib/partThumbnail');
+    const source = await renderPartThumbnail(bodies);
+    if (!source) return;
+    await store.saveCheckpointThumbnail({
+      checkpointId,
+      projectId,
+      source,
+      capturedAt: new Date().toISOString()
+    });
+  } catch {
+    // A card is a convenience; the save point stands without it.
+  }
+}
+
 function ViewerShell(props: ComponentProps<typeof LazyViewerShell>) {
   return (
     <Suspense fallback={<WorkspacePending />}>
@@ -1675,6 +1714,8 @@ const ResumeSessionDialog = withSuspense(LazyResumeSessionDialog);
 const SharedLinkCopyDialog = withSuspense(LazySharedLinkCopyDialog);
 
 const SaveRevisionDialog = withSuspense(LazySaveRevisionDialog);
+
+const SaveStateCompareDialog = withSuspense(LazySaveStateCompareDialog);
 
 const DeleteFeatureDialog = withSuspense(LazyDeleteFeatureDialog);
 
@@ -3256,6 +3297,25 @@ export function App() {
   >(new Set());
   /** Open while the user is naming a save point. */
   const [namingSave, setNamingSave] = useState(false);
+  /**
+   * L03: the saved version the viewport is previewing, read only. Shown only
+   * while `previewDoc` is still its document: anything that replaces or
+   * clears the preview geometry ends the preview with it.
+   */
+  const [savePreview, setSavePreview] = useState<{
+    projectId: string;
+    checkpoint: ProjectCheckpoint;
+    document: ProjectDocument;
+  } | null>(null);
+  /** L03: the save point the compare dialog starts from. */
+  const [comparingSave, setComparingSave] = useState<ProjectCheckpoint | null>(
+    null
+  );
+  /** A banner action that needs the preview's edit lock gone first. */
+  const [savePreviewAction, setSavePreviewAction] = useState<{
+    kind: 'restore' | 'branch';
+    checkpoint: ProjectCheckpoint;
+  } | null>(null);
   const [pendingFeatureDelete, setPendingFeatureDelete] = useState<{
     featureId: FeatureId;
     name: string;
@@ -4956,6 +5016,36 @@ export function App() {
   const exactGeometryReady = !parameterDraftActive && geometry.isReadyFor(doc);
   const exactGeometryReadyRef = useRef(exactGeometryReady);
   exactGeometryReadyRef.current = exactGeometryReady;
+  // L03: the newest save point's card, drawn once from the meshes on screen
+  // while the model still sits on it. Device only (lib/checkpointThumbnails).
+  const latestCheckpointId = doc?.checkpoints.at(-1)?.checkpointId ?? null;
+  const latestCheckpointVersion =
+    doc?.checkpoints.at(-1)?.documentVersion ?? null;
+  useEffect(() => {
+    if (
+      !doc ||
+      shareSession ||
+      latestCheckpointId === null ||
+      latestCheckpointVersion !== doc.version ||
+      !exactGeometryReady ||
+      hasDraftDisplay(doc.derived.bodyRepresentations)
+    )
+      return;
+    void captureCheckpointThumbnail(
+      doc.projectId,
+      latestCheckpointId,
+      doc.derived.bodyRepresentations
+    );
+    // Keyed on the save point and the version it names: the meshes are
+    // read once, when the model first stands complete on that save.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    doc?.projectId,
+    latestCheckpointId,
+    latestCheckpointVersion,
+    doc?.version,
+    exactGeometryReady
+  ]);
   // What is drawn is complete when the worker has caught up, or when a
   // validated commit attached its own complete rebuild to this version: the
   // broadcast rebuild that follows only re-derives it for the worker's live
@@ -6843,10 +6933,19 @@ export function App() {
                       : null;
   // Being encrypted locks the document as firmly as a second tab does; the
   // second tab keeps its own notice.
+  // L03: a saved version on screen is read only; editing would act on a
+  // model the user is not looking at.
+  const savePreviewActive =
+    savePreview !== null &&
+    previewDoc === savePreview.document &&
+    savePreview.projectId === doc?.projectId;
   const projectEditDisabledReason =
     !projectOpenElsewhere && !shareSession && migrationEditReason
       ? migrationEditReason
-      : seatEditDisabledReason;
+      : (seatEditDisabledReason ??
+        (savePreviewActive
+          ? 'A saved version is open for preview — close it to edit'
+          : null));
   // View mode joins the same guard every other modeling edit uses. Project
   // rename has its own mode-aware guard below because it is workspace metadata:
   // owners may change it from either mode, while editors remain Build-only.
@@ -6943,6 +7042,22 @@ export function App() {
   assemblyEditDisabledReasonRef.current = assemblyEditDisabledReason;
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
+  // L03: a preview whose geometry something else replaced, or whose project
+  // closed, is over; its notice must not outlive it.
+  useEffect(() => {
+    if (savePreview && !savePreviewActive) setSavePreview(null);
+  }, [savePreview, savePreviewActive]);
+  // A banner action runs once the preview's edit lock has gone, so Restore
+  // meets the project's own guards rather than the preview's.
+  useEffect(() => {
+    if (!savePreviewAction || savePreviewActive) return;
+    const { kind, checkpoint } = savePreviewAction;
+    setSavePreviewAction(null);
+    if (kind === 'restore') void handleRestoreSaveState(checkpoint);
+    else void handleBranchSaveState(checkpoint);
+    // The handlers are this render's, which see the lock lifted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savePreviewAction, savePreviewActive]);
   // An import into a project that is still empty and still wears its
   // suggested name names the project for the file once the import lands as
   // its first content (lib/importProjectName, loaded with the first import:
@@ -16537,6 +16652,101 @@ export function App() {
       return null;
     }
     return api.loadRevision(projectId, checkpoint.revisionId).catch(() => null);
+  }
+
+  /**
+   * L03 read-only preview: builds a save state exactly and shows it in the
+   * viewport in place of the project, behind a notice offering Restore,
+   * Branch and Close. Nothing is written: the project, its undo history and
+   * its save points are untouched, and editing is refused until it closes.
+   * An encrypted project's account copy is read as a historical read
+   * (ADR-024): only from the history this browser trusts, never moving it.
+   */
+  async function handlePreviewSaveState(checkpoint: ProjectCheckpoint) {
+    const manager = managerRef.current;
+    const current = manager?.document;
+    if (!manager || !current || shareSessionRef.current) return;
+    setBusy(true);
+    try {
+      const snapshot = await loadSaveStateDocument(
+        current.projectId,
+        checkpoint
+      );
+      if (!snapshot) {
+        setStatus(
+          'That save state is no longer stored on this device or in your account.'
+        );
+        return;
+      }
+      const label = checkpointLabel(checkpoint);
+      setStatus(`Building “${label}” for preview…`);
+      const derived = await geometry.syncOnce(snapshot);
+      if (managerRef.current !== manager) return;
+      const shown: ProjectDocument = { ...snapshot, derived };
+      // A save point this device never drew gets its card now.
+      void captureCheckpointThumbnail(
+        current.projectId,
+        checkpoint.checkpointId,
+        derived.bodyRepresentations
+      );
+      setSelectedFeatureNode(null);
+      setSelectedTopology(null);
+      setSelectedEdges([]);
+      setSelectedBodyIds([]);
+      setSelectedSketchProfileId(null);
+      setSelectedProfiles([]);
+      setTool(null);
+      setPreviewDoc(shown);
+      setSavePreview({
+        projectId: current.projectId,
+        checkpoint,
+        document: shown
+      });
+      setStatus(`Previewing “${label}”. Editing is off until you close it.`);
+    } catch (error) {
+      setStatus(errorMessage(error, 'Could not preview that save state.'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * L03: compares a save state with the project now or with another stored
+   * save state. Both are read the way a preview reads them (this device,
+   * then the account's trusted history) and compared in the browser.
+   */
+  async function compareSaveState(
+    from: ProjectCheckpoint,
+    againstId: string
+  ): Promise<SaveStateDiff> {
+    const current = managerRef.current?.document;
+    if (!current) throw new Error('No project is open.');
+    const load = async (checkpoint: ProjectCheckpoint) => {
+      const document = await loadSaveStateDocument(
+        current.projectId,
+        checkpoint
+      );
+      if (!document)
+        throw new Error(
+          `“${checkpointLabel(checkpoint)}” is no longer stored on this device or in your account.`
+        );
+      return document;
+    };
+    const before = await load(from);
+    if (againstId === 'current') return diffSaveStates(before, current);
+    const other = current.checkpoints.find(
+      (point) => point.checkpointId === againstId
+    );
+    if (!other) throw new Error('That save point is not in this project.');
+    return diffSaveStates(before, await load(other));
+  }
+
+  /** Ends a save-state preview; the project's own model shows again. */
+  function closeSavePreview(announce = true) {
+    if (!savePreview) return;
+    if (previewDoc === savePreview.document) setPreviewDoc(null);
+    setSavePreview(null);
+    if (announce) setStatus('Closed the preview.');
   }
 
   /**
@@ -35006,6 +35216,13 @@ export function App() {
       onBranchCheckpoint={(checkpoint) =>
         void handleBranchSaveState(checkpoint)
       }
+      onPreviewCheckpoint={(checkpoint) =>
+        void handlePreviewSaveState(checkpoint)
+      }
+      onCompareCheckpoint={setComparingSave}
+      previewingCheckpointId={
+        savePreviewActive ? savePreview.checkpoint.checkpointId : null
+      }
       onRenameCheckpoint={
         editDisabledReason ? undefined : handleRenameCheckpoint
       }
@@ -37151,8 +37368,38 @@ export function App() {
             // the guidance row: the same line, remedies and Why? the control
             // shows, where the eye returns when the model has nothing to say.
             notice={
-              liveSessionConnecting &&
-              !(!keypad && calloutWithOperation?.operation?.error) ? (
+              savePreviewActive ? (
+                <SaveStatePreviewNotice
+                  label={checkpointLabel(savePreview.checkpoint)}
+                  createdAt={savePreview.checkpoint.createdAt}
+                  bodyCount={
+                    Object.values(
+                      savePreview.document.derived.bodyRepresentations
+                    ).filter((body) => !body.consumed).length
+                  }
+                  {...(seatEditDisabledReason === null &&
+                  buildModeDisabledReason === null
+                    ? {
+                        onRestore: () => {
+                          setSavePreviewAction({
+                            kind: 'restore',
+                            checkpoint: savePreview.checkpoint
+                          });
+                          closeSavePreview(false);
+                        }
+                      }
+                    : {})}
+                  onBranch={() => {
+                    setSavePreviewAction({
+                      kind: 'branch',
+                      checkpoint: savePreview.checkpoint
+                    });
+                    closeSavePreview(false);
+                  }}
+                  onClose={() => closeSavePreview()}
+                />
+              ) : liveSessionConnecting &&
+                !(!keypad && calloutWithOperation?.operation?.error) ? (
                 <LiveSessionNotice
                   key={doc.projectId}
                   onRetry={collaboration.reconnect}
@@ -37876,6 +38123,31 @@ export function App() {
               onApply={() => resolvePendingToolSwitch('apply')}
               onDiscard={() => resolvePendingToolSwitch('discard')}
               onCancel={() => resolvePendingToolSwitch('cancel')}
+            />
+          )}
+          {comparingSave && doc && (
+            <SaveStateCompareDialog
+              label={checkpointLabel(comparingSave)}
+              options={[
+                { id: 'current', label: 'The project now' },
+                ...[...doc.checkpoints]
+                  .reverse()
+                  .filter(
+                    (point) =>
+                      point.checkpointId !== comparingSave.checkpointId &&
+                      restorableCheckpointIds.has(point.checkpointId)
+                  )
+                  .map((point) => ({
+                    id: point.checkpointId,
+                    label: `${checkpointLabel(point)} · ${new Date(
+                      point.createdAt
+                    ).toLocaleString()}`
+                  }))
+              ]}
+              compare={(againstId) =>
+                compareSaveState(comparingSave, againstId)
+              }
+              onClose={() => setComparingSave(null)}
             />
           )}
           {namingSave && doc && (

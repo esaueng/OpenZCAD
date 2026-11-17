@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { GitBranch, History, Pencil } from 'lucide-react';
+import { Eye, GitBranch, GitCompare, History, Pencil } from 'lucide-react';
 import {
   MAX_CHECKPOINT_NAME_LENGTH,
   checkpointLabel,
@@ -9,6 +9,10 @@ import {
   listLocalSaveStateCheckpoints,
   onLocalSaveStatesChanged
 } from '../../lib/localProjectStore';
+import {
+  loadCheckpointThumbnails,
+  onCheckpointThumbnailsChanged
+} from '../../lib/checkpointThumbnails';
 import type { ModelPanelSource } from './modelPanelProps';
 
 /**
@@ -21,6 +25,8 @@ export interface RevisionCheckpoints {
   canonicalIds: ReadonlySet<string>;
   /** The device's stored save states for the open project. */
   local: ProjectCheckpoint[];
+  /** L03: this device's card for each save point that has one. */
+  thumbnails?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -77,11 +83,48 @@ export function useRevisionCheckpoints({
         left.createdAt.localeCompare(right.createdAt)
       )
     : checkpoints;
+  const thumbnails = useCheckpointThumbnails(
+    visibleCheckpoints.map((point) => point.checkpointId)
+  );
   return {
     visible: visibleCheckpoints,
     canonicalIds: canonicalCheckpointIds,
-    local: localCheckpoints
+    local: localCheckpoints,
+    thumbnails
   };
+}
+
+/** Loads this device's save-point cards and keeps them current. */
+function useCheckpointThumbnails(
+  checkpointIds: readonly string[]
+): ReadonlyMap<string, string> {
+  const [thumbnails, setThumbnails] = useState<ReadonlyMap<string, string>>(
+    () => new Map()
+  );
+  // Keyed on the ids, not the array: a new array arrives on every render.
+  const key = checkpointIds.join(' ');
+  useEffect(() => {
+    const ids = key ? key.split(' ') : [];
+    let cancelled = false;
+    let generation = 0;
+    const refresh = () => {
+      const request = ++generation;
+      void loadCheckpointThumbnails(ids)
+        .catch(() => new Map<string, string>())
+        .then((loaded) => {
+          if (!cancelled && request === generation) setThumbnails(loaded);
+        });
+    };
+    refresh();
+    const stop = onCheckpointThumbnailsChanged((checkpointId) => {
+      if (ids.includes(checkpointId)) refresh();
+    });
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [key]);
+  return thumbnails;
 }
 
 /** The Revisions header count. */
@@ -139,6 +182,9 @@ export type RevisionsPanelProps = Pick<
   | 'onRestoreCheckpoint'
   | 'onBranchCheckpoint'
   | 'onRenameCheckpoint'
+  | 'onPreviewCheckpoint'
+  | 'onCompareCheckpoint'
+  | 'previewingCheckpointId'
 > & { revisions: RevisionCheckpoints };
 
 /** Names a save point in place of its row's name; Escape leaves it as it was. */
@@ -196,6 +242,9 @@ export function RevisionsPanel({
   onRestoreCheckpoint,
   onBranchCheckpoint,
   onRenameCheckpoint,
+  onPreviewCheckpoint,
+  onCompareCheckpoint,
+  previewingCheckpointId,
   revisions
 }: RevisionsPanelProps) {
   const {
@@ -236,12 +285,14 @@ export function RevisionsPanel({
           canonical &&
           !!onRenameCheckpoint;
         const detailsId = `revision-details-${checkpoint.checkpointId}`;
+        const thumbnail = revisions.thumbnails?.get(checkpoint.checkpointId);
         const label = checkpointLabel(checkpoint);
+        const previewing = previewingCheckpointId === checkpoint.checkpointId;
         const editor = revisionEditor(checkpoint, currentUserId);
         return (
           <div
             key={checkpoint.checkpointId}
-            className={`revision-row${index === 0 ? ' latest' : ''}${open ? ' is-open' : ''}`}
+            className={`revision-row${index === 0 ? ' latest' : ''}${open ? ' is-open' : ''}${previewing ? ' is-previewing' : ''}`}
             onClick={(event) => {
               // A press anywhere on the row opens it; its own buttons act.
               if ((event.target as HTMLElement).closest('.revision-action'))
@@ -271,6 +322,17 @@ export function RevisionsPanel({
             </small>
             {stored ? (
               <span className="revision-actions">
+                {!isCurrent && onPreviewCheckpoint && !previewing && (
+                  <button
+                    type="button"
+                    className="revision-action"
+                    aria-label={`Preview ${label}`}
+                    onClick={() => onPreviewCheckpoint(checkpoint)}
+                  >
+                    <Eye size={12} aria-hidden="true" />
+                    <span>Preview</span>
+                  </button>
+                )}
                 {!isCurrent && (
                   <button
                     type="button"
@@ -319,6 +381,13 @@ export function RevisionsPanel({
             </span>
             {open ? (
               <div id={detailsId} className="revision-details">
+                {thumbnail ? (
+                  <img
+                    className="revision-thumb"
+                    src={thumbnail}
+                    alt={`The model at ${label}`}
+                  />
+                ) : null}
                 <p>
                   {new Date(checkpoint.createdAt).toLocaleString()} · document v
                   {checkpoint.documentVersion}
@@ -330,17 +399,30 @@ export function RevisionsPanel({
                       : '. Restore brings the project back to it (one Undo away; the current state is saved first). Branch copies it into a new project and leaves this one as it is.'
                     : '. Listed in the project’s history only: its model is no longer stored, so it cannot be restored or branched.'}
                 </p>
-                {canonical && onRenameCheckpoint && !renaming ? (
-                  <button
-                    type="button"
-                    className="revision-action"
-                    aria-label={`Rename ${label}`}
-                    onClick={() => setRenamingId(checkpoint.checkpointId)}
-                  >
-                    <Pencil size={12} aria-hidden="true" />
-                    <span>Rename</span>
-                  </button>
-                ) : null}
+                <span className="revision-detail-actions">
+                  {stored && canonical && onCompareCheckpoint ? (
+                    <button
+                      type="button"
+                      className="revision-action"
+                      aria-label={`Compare ${label}`}
+                      onClick={() => onCompareCheckpoint(checkpoint)}
+                    >
+                      <GitCompare size={12} aria-hidden="true" />
+                      <span>Compare</span>
+                    </button>
+                  ) : null}
+                  {canonical && onRenameCheckpoint && !renaming ? (
+                    <button
+                      type="button"
+                      className="revision-action"
+                      aria-label={`Rename ${label}`}
+                      onClick={() => setRenamingId(checkpoint.checkpointId)}
+                    >
+                      <Pencil size={12} aria-hidden="true" />
+                      <span>Rename</span>
+                    </button>
+                  ) : null}
+                </span>
               </div>
             ) : null}
           </div>

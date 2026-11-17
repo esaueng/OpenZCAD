@@ -2,6 +2,14 @@ import { listFeaturesInOrder } from './feature-order';
 export { listFeaturesInOrder } from './feature-order';
 export { withoutDerivedProjection } from './document-projection';
 export { sharedProjectSnapshotDocument } from './shared-snapshot';
+export {
+  diffSaveStates,
+  type SaveStateDiff,
+  type SaveStateDiffGroup,
+  type SaveStateDiffItem,
+  type SaveStateChangedItem,
+  type SaveStateParameterChange
+} from './save-state-diff';
 import { repairLegacyBracketModel } from './legacy-bracket';
 export {
   repairLegacyBracketModel,
