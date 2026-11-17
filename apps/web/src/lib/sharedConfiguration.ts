@@ -8,10 +8,11 @@ export type BuildForWarnings = (document: ProjectDocument) => Promise<{
 }>;
 
 /**
- * The messages of features a build could not build or refused. A suppressed
- * feature is skipped on purpose and an advisory changes nothing, so neither
- * is a failure; without the typed records only suppression notes are set
- * aside.
+ * The features a build could not build or refused, each keyed by the
+ * feature and its message: two features may share a name, so a message
+ * alone cannot tell which one failed. A suppressed feature is skipped on
+ * purpose and an advisory changes nothing, so neither is a failure; without
+ * the typed records only suppression notes are set aside.
  */
 function failures(result: Awaited<ReturnType<BuildForWarnings>>): string[] {
   if (result.featureWarnings)
@@ -20,7 +21,7 @@ function failures(result: Awaited<ReturnType<BuildForWarnings>>): string[] {
         (warning) =>
           warning.kind === 'build-failed' || warning.kind === 'refusal'
       )
-      .map((warning) => warning.message);
+      .map((warning) => `${warning.featureId}\u0000${warning.message}`);
   return result.warnings.filter(
     (warning) => !warning.endsWith('Suppressed; skipped during exact rebuild.')
   );
@@ -71,7 +72,7 @@ export async function sharedDocumentOnRow(
     if (added.length > 0)
       return {
         document,
-        note: `${row.name} could not be built (${added[0]}), so the model opened as saved.`
+        note: `${row.name} could not be built (${added[0]!.split('\u0000').at(-1)}), so the model opened as saved.`
       };
   } catch (error) {
     return {

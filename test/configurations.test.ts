@@ -431,6 +431,29 @@ describe('storage and history', () => {
     );
     expect(warns.document).toBe(document);
     expect(warns.note).toMatch(/Large could not be built/);
+    // Two features with one name: the saved model fails A, the row fixes A
+    // but breaks B. Same message, different feature: the row is refused.
+    const sameName = 'Feature "Placement": Transform target is unavailable.';
+    const swapped = await sharedDocumentOnRow(document, 'large', (candidate) =>
+      Promise.resolve({
+        warnings: [sameName],
+        featureWarnings: [
+          {
+            featureId:
+              candidate.configurations!.activeRowId === 'large'
+                ? 'feature_placement_b'
+                : 'feature_placement_a',
+            featureName: 'Placement',
+            message: sameName,
+            kind: 'build-failed'
+          } as FeatureWarning
+        ]
+      })
+    );
+    expect(swapped.document).toBe(document);
+    expect(swapped.note).toBe(
+      `Large could not be built (${sameName}), so the model opened as saved.`
+    );
     // A feature the row suppresses on purpose is not a failure.
     const suppressedNote =
       'Feature "Lug": Suppressed; skipped during exact rebuild.';
