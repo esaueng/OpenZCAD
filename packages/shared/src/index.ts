@@ -390,7 +390,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // a section cut by a plane at any angle across its source, seen square to
 // it and placed freely. An older client would cut a principal plane at the
 // stored depth instead, so it must refuse. Builds on v90 (F06 slice 4a).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 91 as const;
+// v92 adds D02 sheet images (`kind: 'image'` drawing annotations): one of
+// the project's reference images printed on the paper. An older client
+// would refuse the unknown kind, so it must refuse the document. Builds on
+// v91.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 92 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

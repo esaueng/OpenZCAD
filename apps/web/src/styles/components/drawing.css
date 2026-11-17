@@ -465,6 +465,20 @@
   pointer-events: none;
 }
 
+/* D02 (v92): a sheet image, and its box while its picture loads. */
+.drawing-sheet-image {
+  pointer-events: none;
+}
+
+.drawing-sheet-image-pending {
+  fill: none;
+  stroke: var(--color-text-muted, currentColor);
+  stroke-width: 1px;
+  stroke-dasharray: 2 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
 .drawing-section-ghost {
   fill: none;
   stroke: var(--color-accent);

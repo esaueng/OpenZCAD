@@ -410,6 +410,35 @@ export function hasDrawingAuxiliary(value: unknown): boolean {
   return false;
 }
 
+/** D02 sheet images (schema v92). */
+export function assertDrawingImageSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 92, 'Sheet images');
+}
+
+/** Whether `value` holds a v92 sheet image annotation. */
+export function hasDrawingImage(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (
+      entry.kind === 'image' &&
+      typeof entry.annotationId === 'string' &&
+      entry.referenceImageId !== undefined
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
 /** D03 free section planes (schema v91). */
 export function assertDrawingFreeSectionSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 91, 'Free section planes');
@@ -625,6 +654,12 @@ export function assertDocumentContentCommandSchema(
     if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('drawing.') &&
+      hasDrawingImage(command.payload)
+    )
+      assertDrawingImageSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
       hasDrawingDetail(command.payload)
     )
       assertDrawingDetailSchema(document.schemaVersion);
@@ -807,6 +842,15 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
           hasDrawingFreeSection(change.after))
       )
         assertDrawingFreeSectionSchema(document.schemaVersion);
+  if (hasDrawingImage(document.drawings))
+    assertDrawingImageSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingImage(change.before) || hasDrawingImage(change.after))
+      )
+        assertDrawingImageSchema(document.schemaVersion);
   if (hasDrawingDetail(document.drawings))
     assertDrawingDetailSchema(document.schemaVersion);
   if (hasDrawingBom(document.drawings))

@@ -37732,6 +37732,7 @@ export function App() {
           <ErrorBoundary label="Drawings" resetKey={doc.projectId}>
             <Suspense fallback={<WorkspacePending />}>
               <LazyDrawingWorkspace
+                loadReferenceImage={loadReferenceImage}
                 document={doc}
                 bodies={doc.derived.bodyRepresentations}
                 geometryPending={!geometry.isReadyFor(doc)}

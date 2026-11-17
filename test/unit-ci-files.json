@@ -120,6 +120,7 @@
     "test/drawing-distance-dimensions.test.ts",
     "test/drawing-free-sections.test.ts",
     "test/drawing-sheet-format.test.ts",
+    "test/drawing-sheet-images.test.ts",
     "test/e2e-shards.test.ts",
     "test/e2ee-authority-fork.test.ts",
     "test/e2ee-authority-trust.test.ts",
