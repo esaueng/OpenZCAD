@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Check, ScanEye, Triangle } from 'lucide-react';
+import { Check, Rows3, ScanEye, Spline, Triangle } from 'lucide-react';
 import type { DisplayMode, ViewerSettings } from '@openzcad/viewport';
 import { DisplayModeIcon } from './ViewerRailIcons';
 import { DISPLAY_MODE_LABELS, DISPLAY_MODE_ORDER } from '../lib/displayMode';
@@ -15,7 +15,9 @@ import type { SurfaceAnalysisKind } from '@openzcad/shared';
 
 /** The M09 analyses the menu offers, in order, with their icons. */
 const ANALYSIS_ITEMS: { kind: SurfaceAnalysisKind; icon: typeof Triangle }[] = [
-  { kind: 'draft', icon: Triangle }
+  { kind: 'draft', icon: Triangle },
+  { kind: 'curvature', icon: Spline },
+  { kind: 'zebra', icon: Rows3 }
 ];
 
 /**

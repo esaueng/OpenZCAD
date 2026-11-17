@@ -24,6 +24,19 @@
  * in degrees. Positive opens toward the pull. The minimum draft is not the
  * kernel's concern: the bands (`draftBand` in `@openzcad/shared`) are read
  * from these values by whoever colours them.
+ *
+ * Curvature: `getFaceCurvature` at each sample (principal curvatures, signed
+ * convex-positive against the outward normal), reduced to the requested
+ * measure. A face's range is exact where the measure is constant on its
+ * surface type (plane, cylinder, sphere); cones and tori vary along the
+ * face and NURBS anywhere, so theirs is sampled. Each face also carries its
+ * smallest radius from `getFaceMinRadius`, which the kernel computes in
+ * closed form on analytic surfaces and approximates on NURBS.
+ *
+ * Zebra: the exact outward normal at each sample (`evaluateSurfaceNormal`),
+ * sampled four times as densely, for the viewport to reflect into stripes.
+ * There is no value to range over; continuity is read from the stripes by
+ * eye and is not certified here.
  */
 import type {
   SurfaceAnalysisBody,
@@ -78,6 +91,30 @@ interface Evaluator {
   evaluate(face: number, u: number, v: number): SampleValue;
   /** Whether the face's sampled range is its exact range. */
   exactRange(surface: string): boolean;
+  /** Sampling density: chord relative to the body's size, and angle. */
+  deflectionRatio: number;
+  angularDeflection: number;
+  /** Extra per-face facts, added to its summary. */
+  describeFace?(face: number, surface: string): Partial<SurfaceAnalysisFace>;
+}
+
+/** Surfaces whose curvature is the same at every point. */
+const CONSTANT_CURVATURE = new Set(['plane', 'cylinder', 'sphere']);
+/** Surfaces on which `getFaceMinRadius` is closed-form. */
+const ANALYTIC_SURFACES = new Set([
+  'plane',
+  'cylinder',
+  'cone',
+  'sphere',
+  'torus'
+]);
+
+function finiteNormal(raw: ArrayLike<number>): [number, number, number] {
+  const normal: [number, number, number] = [raw[0]!, raw[1]!, raw[2]!];
+  if (raw.length < 3 || !normal.every(Number.isFinite)) {
+    throw new Error('The kernel returned no normal at this point.');
+  }
+  return normal;
 }
 
 function unit(v: {
@@ -92,11 +129,11 @@ function unit(v: {
   return [v.x / length, v.y / length, v.z / length];
 }
 
-function evaluatorFor(
+function draftEvaluator(
   kernel: RemusKernel,
-  request: SurfaceAnalysisRequest
+  pullDirection: { x: number; y: number; z: number }
 ): Evaluator {
-  const pull = unit(request.pull);
+  const pull = unit(pullDirection);
   return {
     evaluate(face, u, v) {
       const raw = kernel.getFaceDraftAngle(
@@ -112,20 +149,97 @@ function evaluatorFor(
         outwardNormal: [number, number, number];
       };
       const value = (parsed.angleRadians * 180) / Math.PI;
-      const normal = parsed.outwardNormal;
-      if (
-        !Number.isFinite(value) ||
-        !Array.isArray(normal) ||
-        normal.length !== 3 ||
-        !normal.every(Number.isFinite)
-      ) {
+      if (!Number.isFinite(value) || !Array.isArray(parsed.outwardNormal)) {
         throw new Error('The kernel returned no draft at this point.');
       }
-      return { value, normal: [normal[0], normal[1], normal[2]] };
+      return { value, normal: finiteNormal(parsed.outwardNormal) };
     },
     // A plane has one normal, so one draft: its range is exact.
-    exactRange: (surface) => surface === 'plane'
+    exactRange: (surface) => surface === 'plane',
+    deflectionRatio: ANALYSIS_LINEAR_DEFLECTION_RATIO,
+    angularDeflection: ANALYSIS_ANGULAR_DEFLECTION
   };
+}
+
+interface FaceCurvature {
+  k1: number;
+  k2: number;
+  gaussian: number;
+  mean: number;
+}
+
+function curvatureEvaluator(
+  kernel: RemusKernel,
+  measure: 'gaussian' | 'mean' | 'maximum'
+): Evaluator {
+  return {
+    evaluate(face, u, v) {
+      const raw: unknown = kernel.getFaceCurvature(face, u, v);
+      const parsed = (
+        typeof raw === 'string' ? JSON.parse(raw) : raw
+      ) as FaceCurvature;
+      const value =
+        measure === 'gaussian'
+          ? parsed.gaussian
+          : measure === 'mean'
+            ? parsed.mean
+            : Math.max(Math.abs(parsed.k1), Math.abs(parsed.k2));
+      if (!Number.isFinite(value)) {
+        throw new Error('The kernel returned no curvature at this point.');
+      }
+      return {
+        value,
+        normal: finiteNormal(kernel.evaluateSurfaceNormal(face, u, v))
+      };
+    },
+    exactRange: (surface) => CONSTANT_CURVATURE.has(surface),
+    deflectionRatio: ANALYSIS_LINEAR_DEFLECTION_RATIO,
+    angularDeflection: ANALYSIS_ANGULAR_DEFLECTION,
+    describeFace(face, surface) {
+      if (surface === 'plane') return { minRadius: null, minRadiusExact: true };
+      try {
+        const radius = kernel.getFaceMinRadius(face);
+        return Number.isFinite(radius) && radius >= 0
+          ? {
+              minRadius: radius,
+              minRadiusExact: ANALYTIC_SURFACES.has(surface)
+            }
+          : { minRadius: null, minRadiusExact: radius === Infinity };
+      } catch {
+        // No smallest radius is not a zero radius: leave it unstated.
+        return {};
+      }
+    }
+  };
+}
+
+function zebraEvaluator(kernel: RemusKernel): Evaluator {
+  return {
+    evaluate(face, u, v) {
+      return {
+        value: 0,
+        normal: finiteNormal(kernel.evaluateSurfaceNormal(face, u, v))
+      };
+    },
+    exactRange: () => true,
+    // Stripes bend between samples: sample four times as densely.
+    deflectionRatio: ANALYSIS_LINEAR_DEFLECTION_RATIO / 4,
+    angularDeflection: ANALYSIS_ANGULAR_DEFLECTION / 4
+  };
+}
+
+function evaluatorFor(
+  kernel: RemusKernel,
+  request: SurfaceAnalysisRequest
+): Evaluator {
+  switch (request.kind) {
+    case 'draft':
+      return draftEvaluator(kernel, request.pull);
+    case 'curvature':
+      return curvatureEvaluator(kernel, request.measure);
+    case 'zebra':
+      return zebraEvaluator(kernel);
+  }
 }
 
 interface FaceSamples {
@@ -149,7 +263,7 @@ export function analyzeBodySurfaces(
   const evaluator = evaluatorFor(kernel, request);
   const box = boxOf(kernel, solids);
   const scale = Math.max(box[3] - box[0], box[4] - box[1], box[5] - box[2]);
-  const deflection = Math.max(1e-5, scale * ANALYSIS_LINEAR_DEFLECTION_RATIO);
+  const deflection = Math.max(1e-5, scale * evaluator.deflectionRatio);
   const trust = deflection * PROJECTION_TRUST;
 
   const out: FaceSamples = {
@@ -177,7 +291,7 @@ export function analyzeBodySurfaces(
         mesh = kernel.tessellateFace(
           face,
           deflection,
-          ANALYSIS_ANGULAR_DEFLECTION
+          evaluator.angularDeflection
         );
       } catch (error) {
         // No mesh at all: the overlay has a hole here, so the viewport keeps
@@ -277,7 +391,8 @@ export function analyzeBodySurfaces(
           min,
           max,
           samples: evaluated,
-          exact: evaluated === vertexCount && evaluator.exactRange(surface)
+          exact: evaluated === vertexCount && evaluator.exactRange(surface),
+          ...evaluator.describeFace?.(face, surface)
         };
         faces.push(summary);
       } finally {

@@ -30,10 +30,14 @@ export type DraftPullId = keyof typeof DRAFT_PULL_DIRECTIONS;
 
 /** The analyses' names, as the Display menu and the panel show them. */
 export const ANALYSIS_LABELS: Record<SurfaceAnalysisKind, string> = {
-  draft: 'Draft'
+  draft: 'Draft',
+  curvature: 'Curvature',
+  zebra: 'Zebra'
 };
 
 export const DEFAULT_DRAFT_MINIMUM_DEGREES = 1;
+export const DEFAULT_ZEBRA_STRIPES = 12;
+export const ZEBRA_STRIPE_LIMITS = { min: 2, max: 40 } as const;
 
 export function defaultAnalysisRequest(
   kind: SurfaceAnalysisKind
@@ -45,6 +49,10 @@ export function defaultAnalysisRequest(
         pull: DRAFT_PULL_DIRECTIONS['+z'],
         minimumDegrees: DEFAULT_DRAFT_MINIMUM_DEGREES
       };
+    case 'curvature':
+      return { kind: 'curvature', measure: 'mean' };
+    case 'zebra':
+      return { kind: 'zebra', stripes: DEFAULT_ZEBRA_STRIPES };
   }
 }
 

@@ -17,7 +17,7 @@ import type { Vector3 } from './index';
  * Lengths are in model units, angles in degrees.
  */
 
-export type SurfaceAnalysisKind = 'draft';
+export type SurfaceAnalysisKind = 'draft' | 'curvature' | 'zebra';
 
 /**
  * Draft against a pull direction: the signed angle between each face and
@@ -34,7 +34,37 @@ export interface DraftAnalysisRequest {
   minimumDegrees: number;
 }
 
-export type SurfaceAnalysisRequest = DraftAnalysisRequest;
+/**
+ * Which curvature a curvature map shows, from the kernel's principal
+ * curvatures k1 ≥ k2 at each sample (1/length, positive where the surface
+ * is convex toward its outward normal):
+ * - `gaussian`: k1·k2 (1/length²), orientation-independent; zero on
+ *   developable faces (planes, cylinders, cones);
+ * - `mean`: (k1 + k2)/2, signed: convex positive, concave (a bore, a
+ *   fillet in a pocket) negative;
+ * - `maximum`: max(|k1|, |k2|), the reciprocal of the tightest local
+ *   radius.
+ */
+export type CurvatureMeasure = 'gaussian' | 'mean' | 'maximum';
+
+export interface CurvatureAnalysisRequest {
+  kind: 'curvature';
+  measure: CurvatureMeasure;
+}
+
+/**
+ * Zebra stripes: the exact outward normal at each sample, which the
+ * viewport reflects into stripes that move with the view. Values are not
+ * measured (every value is 0, NaN where the sample was not evaluated).
+ */
+export interface ZebraAnalysisRequest {
+  kind: 'zebra';
+  /** Stripe pairs across the reflected half-sphere (2–40). */
+  stripes: number;
+}
+
+export type SurfaceAnalysisRequest =
+  DraftAnalysisRequest | CurvatureAnalysisRequest | ZebraAnalysisRequest;
 
 /**
  * A draft this close to zero (degrees) is zero: a vertical wall evaluates to
@@ -101,6 +131,15 @@ export interface SurfaceAnalysisFace {
    * extremes of its samples (a plane's draft is one exact value).
    */
   exact: boolean;
+  /**
+   * Curvature only: the face's smallest radius of curvature over its whole
+   * trimmed domain, from the kernel's `getFaceMinRadius` (null for a plane,
+   * which has none). `minRadiusExact` is true for the analytic surfaces,
+   * where the kernel computes it in closed form, and false for NURBS, where
+   * it refines a grid search.
+   */
+  minRadius?: number | null;
+  minRadiusExact?: boolean;
 }
 
 /**
