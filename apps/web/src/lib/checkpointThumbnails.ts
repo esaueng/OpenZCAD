@@ -86,7 +86,7 @@ export async function saveCheckpointThumbnail(
 export function loadCheckpointThumbnails(
   checkpointIds: readonly string[]
 ): Promise<Map<string, string>> {
-  if (checkpointIds.length === 0) return Promise.resolve(new Map());
+  if (checkpointIds.length === 0) return Promise.resolve(new Map<string, string>());
   return scopedTransaction('readonly', [STORE], async (store) => {
     const thumbnails = store(STORE);
     const records = await Promise.all(
