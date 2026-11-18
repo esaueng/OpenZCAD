@@ -2537,6 +2537,22 @@
   font-size: var(--fs-sm);
 }
 
+/* A device read that answers quickly replaces an empty stage, not a grid of
+   placeholders that flashed for a frame or two after a reload. The cards keep
+   their space throughout, so nothing moves when they do appear. */
+.start-tile-placeholder {
+  animation: start-placeholder-reveal 0s 300ms both;
+}
+
+@keyframes start-placeholder-reveal {
+  from {
+    visibility: hidden;
+  }
+  to {
+    visibility: visible;
+  }
+}
+
 .start-tile-placeholder .start-tile-thumb {
   background: var(--color-surface);
 }

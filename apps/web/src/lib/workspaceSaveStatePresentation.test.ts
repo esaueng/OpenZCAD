@@ -154,6 +154,15 @@ describe('autosave reports as save states', () => {
     ).toBe('refused');
   });
 
+  it('keeps an account project whose copy was unreachable offline, not local', () => {
+    expect(autosaveReportedSaveState('local', undefined, true)).toBe('offline');
+    expect(autosaveReportedSaveState('syncing', undefined, true)).toBe(
+      'syncing'
+    );
+    expect(autosaveReportedSaveState('synced', undefined, true)).toBe('synced');
+    expect(autosaveReportedSaveState('local')).toBe('local');
+  });
+
   it('names one state one way in the top bar and the status bar', () => {
     const server = WORKSPACE_SAVE_STATE_PRESENTATION['server-error'];
     expect([server.topBarLabel, server.statusBarLabel]).toEqual([

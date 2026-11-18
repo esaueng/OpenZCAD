@@ -36,8 +36,15 @@ export function presentedWorkspaceSaveState(
  */
 export function autosaveReportedSaveState(
   state: CloudProjectSyncState,
-  error?: unknown
+  error?: unknown,
+  /**
+   * The project is the account's but its copy could not be reached when it
+   * was opened. The controller has no account baseline for it and reports
+   * device saves as `local`; that is an unreachable account, not device-only.
+   */
+  accountUnreachable = false
 ): WorkspaceSaveState {
+  if (state === 'local' && accountUnreachable) return 'offline';
   return state === 'offline' && error instanceof ApiError && error.status >= 500
     ? 'server-error'
     : state;
