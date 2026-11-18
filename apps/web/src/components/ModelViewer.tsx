@@ -1698,6 +1698,8 @@ export interface SceneContext {
   syncOrthographic(resetZoom: boolean): void;
   /** Re-applies navigation preferences onto the live orbit controls. */
   refreshNavigation(): void;
+  /** Turns canvas rotation off (a sketch) or back on, across rebinds. */
+  setRotationLocked(locked: boolean): void;
   /** Target-to-camera direction the view is settling on (a glide's end). */
   viewDirection(): THREE.Vector3;
   /** Starts a glide toward a new pose; user input cancels it. */
@@ -3771,6 +3773,7 @@ export function ModelViewer({
       setFieldOfView: (degrees) => cameraRig.setFieldOfView(degrees),
       syncOrthographic: (resetZoom) => cameraRig.syncOrthographic(resetZoom),
       refreshNavigation: () => cameraRig.refreshNavigationPreferences(),
+      setRotationLocked: (locked) => cameraRig.setRotationLocked(locked),
       viewDirection: () => cameraRig.viewDirection(),
       startCameraTween: (pose, onComplete, glide) =>
         cameraRig.startTween(pose, onComplete, glide),
@@ -16673,7 +16676,7 @@ export function ModelViewer({
     })();
     const distance = Math.max(context.camera.position.distanceTo(origin), 40);
     const pose = sketchEntryPose(sketchBasis, distance);
-    context.controls.enableRotate = false;
+    context.setRotationLocked(true);
     context.startCameraTween(
       // A user already looking at the plane has chosen its framing and roll.
       // Keep both; the stored sketch basis and its axis labels stay unchanged.
@@ -16724,7 +16727,7 @@ export function ModelViewer({
       if (centerTarget) {
         centerTarget.hidden = true;
       }
-      context.controls.enableRotate = true;
+      context.setRotationLocked(false);
       const saved = sketchReturnRef.current;
       sketchReturnRef.current = null;
       if (saved) {

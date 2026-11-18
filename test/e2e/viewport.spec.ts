@@ -2414,6 +2414,77 @@ test('the sketch status does not promise an exit Escape will not make', async ({
   await expect(status).not.toContainText('Sketching on');
 });
 
+test(
+  'a sketch stays flat: canvas orbit gestures do not turn it out of the plane',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Flat Sketch');
+    await page.getByRole('button', { name: 'New project' }).click();
+
+    // Middle-drag set to orbit, the binding that turned a sketch in 3D.
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    await page.getByRole('button', { name: 'Controls', exact: true }).click();
+    await page
+      .getByRole('radiogroup', { name: 'Middle-button drag' })
+      .getByRole('radio', { name: 'Orbit' })
+      .check();
+    await page
+      .getByRole('button', { name: /Back to workspace|Close settings/ })
+      .first()
+      .click();
+
+    await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+    await page.getByRole('button', { name: 'Top (XY)' }).click();
+    await expect(
+      page.getByRole('button', { name: 'Finish Sketch', exact: true })
+    ).toBeVisible();
+    // Off the armed Line tool, so the drags below are navigation gestures.
+    await page.keyboard.press('Escape');
+
+    const canvas = page.locator('.viewer-host canvas');
+    const facing = async () => {
+      const camera = await readLiveCamera(canvas);
+      const offset = camera.position.map(
+        (coordinate, axis) => coordinate - camera.target[axis]!
+      );
+      return offset[2]! / Math.hypot(...offset);
+    };
+    // The entry glide lands face-on, then switches to orthographic: the
+    // switch rebuilds the orbit controls, which used to turn rotation on.
+    await expect.poll(facing).toBeGreaterThan(0.999_999);
+    await page.waitForTimeout(800);
+
+    const bounds = await canvas.boundingBox();
+    if (!bounds) {
+      throw new Error('Viewer canvas is not laid out.');
+    }
+    const startX = bounds.x + bounds.width / 2;
+    const startY = bounds.y + bounds.height * 0.35;
+    const drag = async (button: 'left' | 'middle', shift: boolean) => {
+      if (shift) await page.keyboard.down('Shift');
+      await page.mouse.move(startX, startY);
+      await page.mouse.down({ button });
+      for (let step = 1; step <= 12; step += 1) {
+        await page.mouse.move(startX + step * 14, startY - step * 8);
+      }
+      await page.mouse.up({ button });
+      if (shift) await page.keyboard.up('Shift');
+      await page.waitForTimeout(600);
+    };
+
+    // A plain drag under Select is not captured by the sketch, so it reaches
+    // the controls' left-button orbit.
+    await drag('left', false);
+    expect(await facing()).toBeGreaterThan(0.999_999);
+    await drag('middle', false);
+    expect(await facing()).toBeGreaterThan(0.999_999);
+    await drag('left', true);
+    expect(await facing()).toBeGreaterThan(0.999_999);
+  }
+);
+
 test('a viewport callout keeps its position while it animates in', async ({
   page
 }) => {
