@@ -1928,7 +1928,10 @@ export function planSketchMirrorSet(
   axisId: string,
   resolve: Resolve
 ): SketchModifyPlan {
-  const sources = [...new Set(sourceIds)].filter((id) => id !== axisId);
+  // An undo can take a selected entity away; it is simply no longer a source.
+  const sources = [...new Set(sourceIds)].filter(
+    (id) => id !== axisId && sketchObject(document, sketch, id) !== null
+  );
   if (sources.length === 0) {
     return {
       status: 'refuse',

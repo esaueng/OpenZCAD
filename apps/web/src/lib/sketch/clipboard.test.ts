@@ -66,6 +66,46 @@ describe('sketch copy and paste', () => {
     expect(sketch().objectIds).toHaveLength(5);
   });
 
+  it('evaluates dimensions when copied, so a paste elsewhere keeps the shape', () => {
+    const source = (value: unknown) =>
+      value === 'width' ? 20 : value === 'r' ? 3 : Number(value);
+    const destination = (value: unknown) =>
+      value === 'width' ? 100 : value === 'r' ? 9 : Number(value);
+    const clipboard = copySketchObjects(
+      [
+        {
+          id: 'line',
+          data: { objectKind: 'line', x1: 0, y1: 0, x2: 'width', y2: 0 }
+        },
+        {
+          id: 'round',
+          data: { objectKind: 'circle', centerX: 0, centerY: 0, radius: 'r' }
+        }
+      ],
+      ['line', 'round'],
+      source
+    )!;
+    expect(clipboard.objects).toEqual([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 20, y2: 0 },
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 3 }
+    ]);
+    const { commands } = pasteSketchObjectsCommands(
+      clipboard,
+      'sk_any' as never,
+      destination
+    );
+    const added = (
+      commands[0] as unknown as {
+        payload: { objects: Record<string, unknown>[] };
+      }
+    ).payload.objects;
+    // Stepped one span (-3…20 = 23) plus a tenth; the copy keeps its
+    // copied length of 20 and radius of 3, not the destination's values.
+    expect(Number(added[0]!.x1)).toBeCloseTo(25.3, 9);
+    expect(Number(added[0]!.x2) - Number(added[0]!.x1)).toBeCloseTo(20, 9);
+    expect(added[1]).toMatchObject({ radius: 3 });
+  });
+
   it('copies nothing when nothing selected is in the sketch', () => {
     expect(copySketchObjects([], ['ghost'], resolve)).toBeNull();
   });

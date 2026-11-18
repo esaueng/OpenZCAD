@@ -11320,7 +11320,12 @@ export function ModelViewer({
       if (sketchModeRef.current && event.button === 0) {
         // A press on the selected object's grab point is a move, never an
         // orbit; anywhere else falls through to what a press always did.
-        if (beginSketchMove(event)) {
+        // With Shift or Cmd/Ctrl held it is a selection toggle instead, so a
+        // selected entity can be dropped from the set.
+        if (
+          !(event.shiftKey || togglesSelection(event)) &&
+          beginSketchMove(event)
+        ) {
           return;
         }
         const mode = sketchModeRef.current;

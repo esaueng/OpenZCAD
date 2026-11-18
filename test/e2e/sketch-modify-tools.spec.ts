@@ -319,6 +319,21 @@ test(
     await page.mouse.move(to.x, to.y, { steps: 10 });
     await page.mouse.up();
 
+    // Shift-click on the primary (the last line swept) drops it rather than
+    // grabbing it to move; a second Shift-click adds it back.
+    const second = at(0.505, 0.5);
+    await page.keyboard.down('Shift');
+    await page.mouse.click(second.x, second.y);
+    await page.keyboard.up('Shift');
+    await modifyTool(page, 'Mirror');
+    await expect(status).toContainText(
+      'Mirror: click the line to mirror the selected entity about.'
+    );
+    await page.keyboard.press('Escape');
+    await page.keyboard.down('Shift');
+    await page.mouse.click(second.x, second.y);
+    await page.keyboard.up('Shift');
+
     // Mirror armed over the selection asks only for the axis.
     await modifyTool(page, 'Mirror');
     await expect(status).toContainText(
@@ -330,12 +345,12 @@ test(
       .poll(async () => (await exportSketch(page)).objects.length)
       .toBe(5);
     const mirrored = await exportSketch(page);
-    const [axis, , , imageA] = mirrored.objects.map(
+    type Line = Extract<SketchObjectData, { objectKind: 'line' }>;
+    const [axis, sourceA, , imageA] = mirrored.objects.map(
       (object) => object.data
-    ) as Extract<SketchObjectData, { objectKind: 'line' }>[];
-    const sourceA = mirrored.objects[1]!.data as typeof axis;
-    expect(Number(imageA!.x1)).toBeCloseTo(
-      2 * Number(axis!.x1) - Number(sourceA.x1),
+    ) as [Line, Line, Line, Line, Line];
+    expect(Number(imageA.x1)).toBeCloseTo(
+      2 * Number(axis.x1) - Number(sourceA.x1),
       6
     );
 
@@ -362,6 +377,46 @@ test(
       .toBe(10);
   }
 );
+
+test('Delete after an undo removes the selected entities that remain', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const at = await startSketch(page, 'Undo Selection');
+  await drawLine(page, at(0.35, 0.4), at(0.45, 0.6));
+  await drawLine(page, at(0.55, 0.4), at(0.65, 0.6));
+  await page.keyboard.press('Escape');
+  const status = page.getByRole('contentinfo');
+  // Box the later line, then Shift-click the first, which becomes primary.
+  await page.mouse.move(at(0.52, 0.35).x, at(0.52, 0.35).y);
+  await page.mouse.down();
+  await page.mouse.move(at(0.7, 0.65).x, at(0.7, 0.65).y, { steps: 8 });
+  await page.mouse.up();
+  await page.keyboard.down('Shift');
+  await page.mouse.click(at(0.4, 0.5).x, at(0.4, 0.5).y);
+  await page.keyboard.up('Shift');
+  await modifyTool(page, 'Mirror');
+  await expect(status).toContainText(
+    'Mirror: click the line to mirror the 2 selected entities about.'
+  );
+  await page.keyboard.press('Escape');
+  // Undo takes the later line away while the selection still names it.
+  await undo(page);
+  await expect
+    .poll(async () => (await exportSketch(page)).objects.length)
+    .toBe(1);
+  // Only the line that is still there counts as selected.
+  await modifyTool(page, 'Mirror');
+  await expect(status).toContainText(
+    'Mirror: click the line to mirror the selected entity about.'
+  );
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Delete');
+  await expect(status).toContainText('Deleted sketch entity.');
+  await expect
+    .poll(async () => (await exportSketch(page)).objects.length)
+    .toBe(0);
+});
 
 test('Mirror reflects a line about a picked line and links it back', async ({
   page

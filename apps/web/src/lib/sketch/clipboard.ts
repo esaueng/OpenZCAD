@@ -7,7 +7,8 @@
  *
  * Relations are not copied: a copy is free geometry, as in a drawing. A
  * linked projection pastes as ordinary geometry, since its copy has no model
- * edge of its own to follow.
+ * edge of its own to follow. Dimensions are evaluated when copied, so a paste
+ * into another project, or after a parameter changes, draws what was copied.
  */
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import {
@@ -20,6 +21,52 @@ import { objectPolylines } from '../objectPolyline';
 import { translateSketchObject } from './session';
 
 type Resolve = (value: unknown) => number;
+
+/** Every dimensional field a sketch entity can carry. */
+const DIMENSION_FIELDS = [
+  'x',
+  'y',
+  'x1',
+  'y1',
+  'x2',
+  'y2',
+  'centerX',
+  'centerY',
+  'width',
+  'height',
+  'radius',
+  'radiusX',
+  'radiusY',
+  'sides',
+  'startAngleDeg',
+  'endAngleDeg',
+  'rotationDeg',
+  'startParamDeg',
+  'endParamDeg',
+  'size',
+  'rotation'
+] as const;
+
+/** The entity with every dimension evaluated to a plain number. */
+function evaluatedSketchObject(
+  data: SketchObjectData,
+  resolve: Resolve
+): SketchObjectData {
+  const next = { ...data } as Record<string, unknown>;
+  for (const field of DIMENSION_FIELDS) {
+    if (next[field] !== undefined) {
+      next[field] = resolve(next[field]);
+    }
+  }
+  if (data.objectKind === 'spline') {
+    next.points = data.points.map((point) => ({
+      x: resolve(point.x),
+      y: resolve(point.y)
+    }));
+  }
+  delete next.projection;
+  return next as unknown as SketchObjectData;
+}
 
 export interface SketchClipboard {
   objects: readonly SketchObjectData[];
@@ -62,10 +109,7 @@ export function copySketchObjects(
     }
   }
   return {
-    objects: taken.map(({ data }) => {
-      const { projection: _linked, ...plain } = data;
-      return plain;
-    }),
+    objects: taken.map(({ data }) => evaluatedSketchObject(data, resolve)),
     span: Number.isFinite(minX)
       ? { x: maxX - minX, y: maxY - minY }
       : { x: 0, y: 0 },

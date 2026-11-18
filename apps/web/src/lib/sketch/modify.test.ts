@@ -1291,7 +1291,7 @@ describe('Mirror over a selection', () => {
         manager.document,
         sketch(),
         sketchId,
-        [axis, line, circle],
+        [axis, line, 'ent_gone', circle],
         axis,
         resolve
       )

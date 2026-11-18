@@ -22307,7 +22307,10 @@ export function App() {
       composites: sketch?.composites ?? [],
       profiles,
       selectedObjectId: session.selectedObjectId,
-      selectedObjectIds: sketchSelectedObjectIds(session),
+      // An undo can take a selected entity away; only live ones count.
+      selectedObjectIds: sketchSelectedObjectIds(session).filter((id) =>
+        objects.some((object) => object.id === id)
+      ),
       parameterScope: parameterScope.scope,
       units: doc.units,
       constraintDiagnosticObjectIds: sketchSolveDiagnosticObjectIds,
@@ -23359,7 +23362,7 @@ export function App() {
     if (key === 'c') {
       const copied = clipboard.copySketchObjects(
         mode.objects,
-        sketchSelectedObjectIds(session),
+        mode.selectedObjectIds ?? [],
         resolve
       );
       if (copied) {
@@ -23431,9 +23434,11 @@ export function App() {
     ) {
       return;
     }
-    const objectIds = sketchSelectedObjectIds(
-      interaction.session
+    const live = managerRef.current?.document.nodes;
+    const objectIds = sketchSelectedObjectIds(interaction.session).filter(
+      (id) => live?.[id as EntityId]?.kind === 'sketch-object'
     ) as EntityId[];
+    if (objectIds.length === 0) return;
     const refusal = objectIds
       .map((id) =>
         sketchGeometryDeleteRefusal(
@@ -35812,9 +35817,7 @@ export function App() {
         }
         constraints={sketchConstraintItems}
         selectedObjectId={interaction.session.selectedObjectId}
-        selectedObjectCount={
-          sketchSelectedObjectIds(interaction.session).length
-        }
+        selectedObjectCount={sketchModeState?.selectedObjectIds?.length ?? 0}
         solveStatus={sketchSolveStatus}
         solving={sketchSolving}
         onEditTool={(kind, hint) => {
