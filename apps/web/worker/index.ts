@@ -29,7 +29,7 @@ import {
 } from './e2eeProjectPreferences';
 import {
   isE2eeAssistantConsentStorageReady,
-  liveAssistantConsentRoute
+  liveAssistantConsent
 } from './e2eeAssistantConsents';
 import {
   assertProjectNotMigrating,
@@ -253,7 +253,10 @@ import {
   saveLibraryFolderSet
 } from './libraryFolderSets';
 import {
+  CONSENTED_ASSISTANT_PROPOSAL_PATH,
+  assistantConsentVersion,
   assistantConsentRoute,
+  type AssistantConsentVersion,
   E2EE_DEFAULT_ON_CODE,
   PROJECT_SHELF_STATE_SEALED_CODE,
   E2EE_MIGRATION_CODES,
@@ -938,7 +941,7 @@ async function assertAssistantProjectAllowed(
   env: Env,
   identity: { userId: string; email?: string | null },
   projectId: string
-): Promise<string | null> {
+): Promise<AssistantConsentVersion | null> {
   const userId = identity.userId;
   // Before migration 0031 every project is plaintext.
   if (!(await isProjectStorageFormatReady(env.DB))) return null;
@@ -959,8 +962,8 @@ async function assertAssistantProjectAllowed(
       isE2eeProjectsEnabled(env, identity.email ?? undefined) &&
       (await isE2eeAssistantConsentStorageReady(env.DB))
     ) {
-      const route = await liveAssistantConsentRoute(env.DB!, userId, projectId);
-      if (route !== null) return route;
+      const consent = await liveAssistantConsent(env.DB!, userId, projectId);
+      if (consent !== null) return consent;
       throw new SharingRequestError(
         409,
         ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
@@ -1773,7 +1776,11 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     }
   }
 
-  if (request.method === 'POST' && pathname === '/api/assistant/proposals') {
+  const consentedAssistant = pathname === CONSENTED_ASSISTANT_PROPOSAL_PATH;
+  if (
+    request.method === 'POST' &&
+    (pathname === '/api/assistant/proposals' || consentedAssistant)
+  ) {
     const identity = await identifyAssistantIdentity(request, env);
     if (identity.anonymous) {
       // The deployment's assistant serves only signed-in accounts outside
@@ -1791,14 +1798,25 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     }
     const userId = identity.userId;
     await assertAccountNotErasing(env.DB, userId);
-    const payload = parseAssistantProposalRequest(
+    const { expectedConsent, ...payload } = parseAssistantProposalRequest(
       await readJsonBody(request, MAX_ASSISTANT_PROPOSAL_BODY_BYTES)
     );
-    const consentedRoute = await assertAssistantProjectAllowed(
+    const consent = await assertAssistantProjectAllowed(
       env,
       identity,
       payload.digest.projectId
     );
+    if (
+      consentedAssistant !== (consent !== null) ||
+      expectedConsent !==
+        (consent ? assistantConsentVersion(consent) : undefined)
+    ) {
+      throw new SharingRequestError(
+        409,
+        ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
+        'Assistant consent changed for this project. Check your consent before trying again.'
+      );
+    }
     const assistant = await resolveUserAssistant(userId, env, identity.email);
     if (!assistant.effective.configured) {
       return assistantNotConfigured();
@@ -1806,8 +1824,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     // An encrypted project's consent names who receives the data: another
     // key source, provider or model needs the user's consent again.
     if (
-      consentedRoute !== null &&
-      consentedRoute !== assistantConsentRoute(assistant.effective)
+      consent !== null &&
+      consent.route !== assistantConsentRoute(assistant.effective)
     ) {
       throw new SharingRequestError(
         409,
@@ -1829,10 +1847,24 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     }
     let response: Response;
     try {
+      if (consent) {
+        const latest = await liveAssistantConsent(
+          env.DB!,
+          userId,
+          payload.digest.projectId
+        );
+        if (!latest || assistantConsentVersion(latest) !== expectedConsent) {
+          throw new SharingRequestError(
+            409,
+            ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
+            'Assistant consent changed for this project. Check your consent before trying again.'
+          );
+        }
+      }
       response = await streamAssistantProposal(
         // Only an encrypted project needs consent: its model goes only to
         // providers that do not collect it.
-        { ...payload, encryptedProject: consentedRoute !== null },
+        { ...payload, encryptedProject: consent !== null },
         env,
         assistantSafetyIdentifier(providerIdentity, payload.retryAttempt),
         withRequestCustomInstructions(assistant.runtime, payload)

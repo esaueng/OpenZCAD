@@ -12,6 +12,8 @@ import {
 } from '@openzcad/crypto';
 import {
   ASSISTANT_CONSENT_COPY_VERSION,
+  CONSENTED_ASSISTANT_PROPOSAL_PATH,
+  assistantConsentVersion,
   DEFAULT_APP_SETTINGS,
   ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
   ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE,
@@ -141,6 +143,27 @@ function proposal(projectId: string) {
       features: [],
       warnings: []
     }
+  };
+}
+
+function consentedProposal(
+  projectId: string,
+  sequence: number,
+  endpoint?: string
+) {
+  const route = assistantConsentRoute({
+    source: 'deployment',
+    provider: 'openrouter',
+    model: 'openai/gpt-5.6-sol',
+    endpoint: endpoint ?? 'https://openrouter.ai/api/v1/responses'
+  });
+  return {
+    ...proposal(projectId),
+    expectedConsent: assistantConsentVersion({
+      route,
+      sequence,
+      copyVersion: ASSISTANT_CONSENT_COPY_VERSION
+    })
   };
 }
 
@@ -284,8 +307,8 @@ describe('assistant consent on encrypted projects (ADR-024 6-1)', () => {
       consent: { projectId, allowed: true, sequence: 1, revokedAt: null }
     });
     // The client cannot opt out: the Worker decides from the consent.
-    const sent = await call('POST', '/api/assistant/proposals', {
-      body: { ...proposal(projectId), encryptedProject: false }
+    const sent = await call('POST', CONSENTED_ASSISTANT_PROPOSAL_PATH, {
+      body: { ...consentedProposal(projectId, 1), encryptedProject: false }
     });
     expect(sent.status).toBe(200);
     await sent.text();
@@ -338,6 +361,54 @@ describe('assistant consent on encrypted projects (ADR-024 6-1)', () => {
         })
       ).status
     ).toBe(409);
+  });
+
+  // The browser's Stop runs while an Allow may still be in flight, both
+  // numbered from the same floor: whichever the account stores first, the
+  // other gets the stale answer, and the Stop is retried past an Allow
+  // stored meanwhile (`consentGate.ts`). The account then ends revoked.
+  it('keeps a Stop that races an Allow in flight: the late Allow is stale, a late Stop goes past it', async () => {
+    const { call, projectId } = await seed(FLAGS_ON);
+    const upstream = stubProvider();
+    const put = async (body: unknown) =>
+      call('PUT', `/api/e2ee/assistant-consents/${projectId}`, { body });
+    expect((await put(await consentBody(projectId, 1))).status).toBe(200);
+
+    // The Stop landed first: the Allow numbered from the same floor is
+    // refused as stale and names the Stop it lost to.
+    expect(
+      (await put(await consentBody(projectId, 2, { allowed: false }))).status
+    ).toBe(200);
+    const lateAllow = await put(await consentBody(projectId, 2));
+    expect(lateAllow.status).toBe(409);
+    expect(await lateAllow.json()).toMatchObject({
+      code: 'E2EE_ASSISTANT_CONSENT_STALE',
+      consent: { allowed: false, sequence: 2 }
+    });
+
+    // The Allow landed first: the Stop's first try is stale, and its retry
+    // past the stored Allow revokes it.
+    expect((await put(await consentBody(projectId, 3))).status).toBe(200);
+    const firstStop = await put(
+      await consentBody(projectId, 3, { allowed: false })
+    );
+    expect(firstStop.status).toBe(409);
+    expect(await codeOf(firstStop)).toBe('E2EE_ASSISTANT_CONSENT_STALE');
+    const retried = await put(
+      await consentBody(projectId, 4, { allowed: false })
+    );
+    expect(retried.status).toBe(200);
+    expect(await retried.json()).toMatchObject({
+      consent: { allowed: false, sequence: 4 }
+    });
+    const after = await call('POST', '/api/assistant/proposals', {
+      body: proposal(projectId)
+    });
+    expect(after.status).toBe(409);
+    expect(await codeOf(after)).toBe(
+      ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE
+    );
+    expect(upstream).not.toHaveBeenCalled();
   });
 
   it('honours only the caller’s own consent, for its project, route and copy', async () => {
@@ -428,8 +499,8 @@ describe('assistant consent on encrypted projects (ADR-024 6-1)', () => {
     // model, but not where the user agreed to send this project.
     (env as Record<string, unknown>).AI_BASE_URL =
       'https://openrouter.ai/api/v1/other';
-    const moved = await call('POST', '/api/assistant/proposals', {
-      body: proposal(projectId)
+    const moved = await call('POST', CONSENTED_ASSISTANT_PROPOSAL_PATH, {
+      body: consentedProposal(projectId, 1)
     });
     expect(moved.status).toBe(409);
     expect(await codeOf(moved)).toBe(
@@ -441,6 +512,49 @@ describe('assistant consent on encrypted projects (ADR-024 6-1)', () => {
       await call('GET', '/api/assistant/status')
     ).json()) as { endpoint?: string };
     expect(status.endpoint).toBe('https://openrouter.ai/api/v1/other');
+  });
+
+  it('refuses a pending request after the account changes consent and the provider together', async () => {
+    const { call, env, projectId } = await seed(FLAGS_ON);
+    const upstream = stubProvider();
+    const consentPath = '/api/e2ee/assistant-consents/' + projectId;
+    expect(
+      (
+        await call('PUT', consentPath, {
+          body: await consentBody(projectId, 1)
+        })
+      ).status
+    ).toBe(200);
+    const newBase = 'https://openrouter.ai/api/v1/other';
+    (env as Record<string, unknown>).AI_BASE_URL = newBase;
+    const endpoint = newBase;
+    const route = assistantConsentRoute({
+      source: 'deployment',
+      provider: 'openrouter',
+      model: 'openai/gpt-5.6-sol',
+      endpoint
+    });
+    expect(
+      (
+        await call('PUT', consentPath, {
+          body: await consentBody(projectId, 2, { route })
+        })
+      ).status
+    ).toBe(200);
+    const stale = await call('POST', CONSENTED_ASSISTANT_PROPOSAL_PATH, {
+      body: consentedProposal(projectId, 1)
+    });
+    expect(stale.status).toBe(409);
+    expect(await codeOf(stale)).toBe(
+      ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE
+    );
+    expect(upstream).not.toHaveBeenCalled();
+    const current = await call('POST', CONSENTED_ASSISTANT_PROPOSAL_PATH, {
+      body: consentedProposal(projectId, 2, endpoint)
+    });
+    expect(current.status).toBe(200);
+    await current.text();
+    expect(upstream).toHaveBeenCalledTimes(1);
   });
 
   it('lists the caller’s consents and shows co-members who allowed it (M6)', async () => {
