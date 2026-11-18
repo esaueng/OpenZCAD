@@ -254,7 +254,6 @@ import {
   numberedFeatureName,
   extrudeToFaceUnresolved,
   repairedDirectEditOperation,
-  resolveParamValue,
   staleDirectEditFaceRepair,
   withEchoedSavePoints,
   withoutDerivedProjection,
@@ -5942,6 +5941,8 @@ export function App() {
    * it is rebuilt (a new choice), rather than back at its last drag.
    */
   const regionDraftDistance = useRef<number | null>(null);
+  // Keep the held handle's distance when a document revision replaces its frame.
+  const regionDragDistance = useRef<number | null>(null);
   /** The text the open Extrude keypad last left its value at. */
   const regionKeypadText = useRef<{
     valueId: ExtrudeValueId;
@@ -22154,6 +22155,7 @@ export function App() {
   useEffect(() => {
     regionExtrudeSettings.current = null;
     regionDraftDistance.current = null;
+    regionDragDistance.current = null;
   }, [regionSketchKey]);
   useEffect(() => {
     extrudeEditRequest.current += 1;
@@ -22174,19 +22176,18 @@ export function App() {
       current.mode === 'region'
         ? (regionExtrudeSettings.current?.distance ?? current.lastValue)
         : null;
-    let resolved: number | null = null;
-    if (distance) {
-      try {
-        resolved = resolveParamValue(
-          distance,
-          parameterScopeRef.current.scope,
-          'distance',
-          managerRef.current?.document.units
-        );
-      } catch {
-        // Incomplete expressions keep the form open without a preview.
-      }
-    }
+    const draftDistance =
+      distance == null
+        ? null
+        : evalParamValue(
+            distance,
+            parameterScopeRef.current.scope,
+            managerRef.current?.document.units
+          );
+    const resolved =
+      current.mode === 'region' && current.phase === 'dragging'
+        ? (regionDragDistance.current ?? draftDistance)
+        : draftDistance;
     // Replace the preview when the choice, profile set, or base revision
     // changes. Keep the last frame visible until the replacement lands.
     if (resolved === null) regionExtrudePreview.clear();
@@ -30047,6 +30048,7 @@ export function App() {
       const distance = regionExtentIsDerived()
         ? offset
         : Math.round(offset * 1000) / 1000;
+      regionDragDistance.current = distance;
       if (Math.abs(distance) <= 1e-9) {
         regionExtrudePreview.clear();
         setPreviewDeferred(false);
@@ -35455,12 +35457,18 @@ export function App() {
     (!modelingLocked || drawingMode);
   const assistantHidden = directMode;
   const commandSession = commandSessionFor(interaction);
+  const regionFormDistance =
+    interaction.mode === 'region'
+      ? (regionExtrudeState?.value.distance ?? interaction.lastValue)
+      : null;
+  const regionResolvedDistance =
+    regionFormDistance == null
+      ? null
+      : evalParamValue(regionFormDistance, parameterScope.scope, doc.units);
   const regionPreviewDistance =
     interaction.mode === 'region' && interaction.phase === 'dragging'
-      ? lastValidPreview
-      : typeof regionExtrudeState?.value.distance === 'number'
-        ? regionExtrudeState.value.distance
-        : (regionExtrudeState?.distance ?? null);
+      ? (regionDragDistance.current ?? regionResolvedDistance)
+      : regionResolvedDistance;
   const regionExtrudeResolution =
     interaction.mode === 'region' &&
     interaction.phase !== 'validating' &&
@@ -36860,6 +36868,9 @@ export function App() {
             onDirectManipulationChange={(dragging, source) => {
               if (source === 'move') {
                 return;
+              }
+              if (interactionRef.current.mode === 'region') {
+                regionDragDistance.current = null;
               }
               dispatchInteraction({
                 type: dragging ? 'drag-engage' : 'drag-release'

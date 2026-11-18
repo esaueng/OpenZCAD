@@ -1,7 +1,8 @@
 import {
   addPrimitiveFeature,
   addSketchFeature,
-  createProjectDocument
+  createProjectDocument,
+  setParameter
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import {
@@ -47,6 +48,7 @@ test('cuts two native profiles with explicit intent and retains it through undo 
       { objectKind: 'circle', radius: 2.5, centerX: 57, centerY: 20 }
     ]
   }).document;
+  document = setParameter(document, { name: 'allowance', expression: '1' });
   await page.route('**/api/projects', (route) =>
     route.request().method() === 'POST'
       ? route.fulfill({
@@ -163,6 +165,60 @@ test('cuts two native profiles with explicit intent and retains it through undo 
   await expect(auto).toContainText('Preview: Cut · Renamed plate', {
     timeout: 30_000
   });
+
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: '5' });
+  await expect(auto).toContainText('Preview: New body', { timeout: 30_000 });
+  await revealModelPanel(page, 'Parameters');
+  const allowance = page.getByLabel('Expression for allowance');
+  await page.evaluate(() => {
+    (
+      Reflect.get(window, '__extrudeValidationGate') as ExtrudeValidationGate
+    ).hold = true;
+  });
+  await allowance.fill('2');
+  await allowance.press('Enter');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Checking allowance'
+  );
+  const [, handle] = await canvas.evaluate(
+    (element) =>
+      JSON.parse(element.dataset.e2eRegionHandles ?? '[]') as {
+        x: number;
+        y: number;
+        dx: number;
+        dy: number;
+        pixelsPerUnit: number;
+      }[]
+  );
+  const bounds = await canvas.boundingBox();
+  if (!handle || !bounds) throw new Error('The region handle is missing.');
+  const x = bounds.x + handle.x;
+  const y = bounds.y + handle.y;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await expect(
+    page.getByRole('region', { name: 'Extrude operation' })
+  ).toHaveClass(/phase-dragging/);
+  await page.keyboard.down('Shift');
+  await page.mouse.move(
+    x - handle.dx * handle.pixelsPerUnit * 11,
+    y - handle.dy * handle.pixelsPerUnit * 11,
+    { steps: 10 }
+  );
+  await page.keyboard.up('Shift');
+  await expect(page.getByTestId('direct-manipulation-value')).toHaveText(/-\d/);
+  await page.evaluate(() =>
+    (
+      Reflect.get(window, '__extrudeValidationGate') as ExtrudeValidationGate
+    ).release()
+  );
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Parameter allowance updated.'
+  );
+  await expect(auto).toContainText('Preview: Cut · Renamed plate', {
+    timeout: 30_000
+  });
+  await page.mouse.up();
   await auto.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(auto).toHaveCount(0);
 
@@ -312,6 +368,11 @@ test('Auto uses the full typed distance to classify a thin overlap', async ({
       { objectKind: 'circle', radius: 0.004, centerX: 0.017, centerY: 0.02 }
     ]
   }).document;
+  document = setParameter(document, {
+    name: 'reach',
+    expression: '0.01 m',
+    quantity: 'length'
+  });
   await page.route('**/api/projects', (route) =>
     route.request().method() === 'POST'
       ? route.fulfill({
@@ -341,6 +402,14 @@ test('Auto uses the full typed distance to classify a thin overlap', async ({
   await expect(bar).toContainText('Preview: New body', { timeout: 30_000 });
   await setInPlaceOptionValues(page, 'Extrude', { Distance: '0.0104' });
   await expect(bar).toContainText('Preview: Add', { timeout: 30_000 });
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: 'reach' });
+  await expect(bar).toContainText('Preview: New body', { timeout: 30_000 });
+  await revealModelPanel(page, 'Parameters');
+  const reach = page.getByLabel('Expression for reach');
+  await reach.fill('0.0104 m');
+  await reach.press('Enter');
+  await expect(bar).toContainText('Preview: Add', { timeout: 30_000 });
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: '0.0104' });
   await bar.getByRole('button', { name: 'Done' }).click();
   await expect(bar).toHaveCount(0, { timeout: 30_000 });
 
