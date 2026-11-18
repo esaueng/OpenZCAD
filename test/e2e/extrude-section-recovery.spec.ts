@@ -20,6 +20,8 @@ import {
 
 const ready = { timeout: 30_000 };
 
+test.use({ hasTouch: true });
+
 async function projectedPlatePoints(canvas: Locator) {
   return canvas.evaluate(
     (element) =>
@@ -265,6 +267,9 @@ test(
     await expect(hint).toHaveCount(0);
     await expect(reveal).toHaveCount(0);
     await expect(bar).toContainText('Preview: Cut · Plate');
+    await expect(bar).toBeFocused();
+    const options = bar.locator('details.in-place-command-options summary');
+    await options.click();
     await expect(barChoice(bar, 'Operation', 'Auto')).toHaveAttribute(
       'aria-checked',
       'true'
@@ -280,9 +285,9 @@ test(
         includeHidden: true
       })
     ).toHaveText('-6 mm');
+    await options.click();
     await expect(done).toBeEnabled();
     await expect(row).toHaveCount(0);
-    await expect(bar).toBeFocused();
     await waitForStillViewport(page);
     const after = await projectedPlatePoints(canvas);
     for (const [index, point] of before.entries()) {
@@ -300,22 +305,26 @@ test(
     await expect(reveal).toBeVisible();
     expect(await extrudeRequests()).toBe(requestsBeforeReveal);
     await page.setViewportSize({ width: 390, height: 844 });
-    await bar.locator('details.in-place-command-options summary').click();
-    await bar.getByRole('button', { name: 'Distance', exact: true }).click();
+    await options.tap();
+    await bar.getByRole('button', { name: 'Distance', exact: true }).tap();
     const keypad = page.getByRole('dialog', { name: 'Distance value' });
     const keypadInput = keypad.locator('input.keypad-value');
     const sheetReveal = keypad.getByRole('button', {
       name: 'Show full model',
       exact: true
     });
+    await expect(keypad.locator('.keypad-grid')).toBeVisible();
     await keypadInput.fill('-5.5');
     await expect
       .poll(extrudeRequests, ready)
       .toBeGreaterThan(requestsBeforeReveal);
     await expect(sheetReveal).toBeVisible(ready);
     await expect(reveal).toBeHidden();
-    await sheetReveal.click();
-    await expect(section).toHaveAttribute('aria-pressed', 'false');
+    expect((await sheetReveal.boundingBox())?.height).toBeGreaterThanOrEqual(
+      44
+    );
+    await sheetReveal.tap();
+    await expect.poll(() => renderedSections(canvas)).toBe(0);
     await expect(reveal).toHaveCount(0);
     await expect(keypadInput).toHaveValue('-5.5');
     await expect(keypadInput).toBeFocused();
