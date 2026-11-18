@@ -8932,8 +8932,7 @@ export function App() {
     () => doc?.derived.bodyRepresentations ?? {},
     [doc?.derived.bodyRepresentations]
   );
-  // Set up motion centres its axis on, and sizes its slide from, these boxes.
-  const assemblyBodyBounds = useMemo(
+  const bodyMeshBounds = useMemo(
     () => meshBoundsLookup(representations),
     [representations]
   );
@@ -12133,7 +12132,7 @@ export function App() {
     );
     if (!body || !edge) return null;
     const points = edge.points ?? [];
-    const box = inPlaceBodyPick(bodyId as BodyId);
+    const box = bodyMeshBounds(bodyId as BodyId);
     const centre = box
       ? {
           x: (box.min.x + box.max.x) / 2,
@@ -20863,6 +20862,40 @@ export function App() {
     return loop.length > 1 ? loop : [selection];
   }
 
+  /** Resolve every member before changing the command's edge selection. */
+  function pickInPlaceEdgeRun(
+    selections: TopologySelection[],
+    toggle: boolean
+  ) {
+    const command = inPlaceRef.current;
+    const picks: EdgePick[] = [];
+    for (const selection of selections) {
+      const edge = inPlaceEdgeForSelection(selection);
+      if (!edge) {
+        if (!toggle) {
+          setStatus(
+            'This edge run could not be matched to the original body. Pick another edge or clear the edge selection.'
+          );
+        }
+        return true;
+      }
+      picks.push(edge);
+    }
+    if (!toggle) return command.setEdges(picks);
+
+    // The pieces of one circle go in or come out together on a single click.
+    const held = command.slots.edges.filter(
+      (edge) => edge.bodyId === picks[0]!.bodyId
+    );
+    const pickedHashes = new Set(picks.map((edge) => edge.hash));
+    const rest = held.filter((edge) => !pickedHashes.has(edge.hash));
+    return command.setEdges(
+      held.some((edge) => edge.hash === picks[0]!.hash)
+        ? rest
+        : [...rest, ...picks]
+    );
+  }
+
   // L08 review comments: a plaintext project in the account, for every
   // member. An encrypted project's are not offered until they can travel as
   // encrypted records, so nothing about them is sent in plaintext.
@@ -20996,23 +21029,7 @@ export function App() {
           const edge = inPlaceEdgeForSelection(selection);
           return edge ? command.pickEdge(edge) : true;
         }
-        const picks: EdgePick[] = [];
-        for (const piece of pieces) {
-          const edge = inPlaceEdgeForSelection(piece);
-          if (!edge) return true;
-          picks.push(edge);
-        }
-        // The whole circle goes in or comes out together, as one edge would.
-        const held = command.slots.edges.filter(
-          (edge) => edge.bodyId === picks[0]!.bodyId
-        );
-        const pickedHashes = new Set(picks.map((edge) => edge.hash));
-        const rest = held.filter((edge) => !pickedHashes.has(edge.hash));
-        return command.setEdges(
-          held.some((edge) => edge.hash === picks[0]!.hash)
-            ? rest
-            : [...rest, ...picks]
-        );
+        return pickInPlaceEdgeRun(pieces, true);
       }
       // A datum's sources: a face is a plane or a cylinder's axis, an edge
       // is its nearer end or (for an Axis) the edge itself.
@@ -21854,6 +21871,40 @@ export function App() {
     selectEdgeChainFromViewer(selections);
   }
 
+  function handleViewportEdgeRun(selections: TopologySelection[]) {
+    if (!inPlaceRef.current.spec?.edgeMode) {
+      handleSelectEdgeChainFromViewer(selections);
+    } else if (
+      !extrudeEditRef.current &&
+      selections.length > 0 &&
+      topologyBatchReady(selections)
+    ) {
+      pickInPlaceEdgeRun(selections, false);
+    }
+  }
+
+  function topologyBatchReady(selections: TopologySelection[]): boolean {
+    if (!doc) return false;
+    if (currentGeometrySnapshot !== null) {
+      setStatus(
+        'The model is still updating. Try that selection again when it finishes.'
+      );
+      return false;
+    }
+    if (
+      !exactGeometryReady &&
+      selections.some(
+        (selection) => !selectionResolvesInDerived(doc, selection)
+      )
+    ) {
+      setStatus(
+        'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
+      );
+      return false;
+    }
+    return true;
+  }
+
   function selectEdgeChainFromViewer(selections: TopologySelection[]) {
     const first = selections[0];
     if (!doc || !first) {
@@ -21978,24 +22029,7 @@ export function App() {
       handleBoxSelectFromViewer([]);
       return;
     }
-    if (!doc) return;
-    if (currentGeometrySnapshot !== null) {
-      setStatus(
-        'The model is still updating. Try that selection again when it finishes.'
-      );
-      return;
-    }
-    if (
-      !exactGeometryReady &&
-      selections.some(
-        (selection) => !selectionResolvesInDerived(doc, selection)
-      )
-    ) {
-      setStatus(
-        'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
-      );
-      return;
-    }
+    if (!topologyBatchReady(selections)) return;
     // A box sweep during an in-place Fillet or Chamfer adds to its edges,
     // each taken as a click would take it, none toggled back out.
     if (kind === 'edge' && inPlaceRef.current.spec?.edgeMode) {
@@ -26018,22 +26052,8 @@ export function App() {
   }
   /** A body as an in-place command's body slot holds it, with its box. */
   function inPlaceBodyPick(bodyId: BodyId): BodyPick | null {
-    const vertices = representations[bodyId]?.mesh.vertices;
-    if (!vertices || vertices.length < 3) return null;
-    const min = { x: Infinity, y: Infinity, z: Infinity };
-    const max = { x: -Infinity, y: -Infinity, z: -Infinity };
-    for (let index = 0; index + 2 < vertices.length; index += 3) {
-      const x = vertices[index]!;
-      const y = vertices[index + 1]!;
-      const z = vertices[index + 2]!;
-      if (x < min.x) min.x = x;
-      if (y < min.y) min.y = y;
-      if (z < min.z) min.z = z;
-      if (x > max.x) max.x = x;
-      if (y > max.y) max.y = y;
-      if (z > max.z) max.z = z;
-    }
-    return { bodyId, min, max };
+    const box = bodyMeshBounds(bodyId);
+    return box ? { bodyId, min: { ...box.min }, max: { ...box.max } } : null;
   }
   /**
    * U09 phase 7: an edit's request as the `updateFeature` its Done commits.
@@ -37685,7 +37705,7 @@ export function App() {
               currentGeometrySnapshot !== null ||
               currentFaceGeometryPreview?.geometry.topology === 'pending'
             }
-            onSelectEdgeChain={handleSelectEdgeChainFromViewer}
+            onSelectEdgeChain={handleViewportEdgeRun}
             // Assemble's picks are parts. Once an assembly exists its own
             // viewport takes the primary button; before one does (the
             // "Start an assembly" first run) a click fell through to
@@ -37838,7 +37858,7 @@ export function App() {
                       : undefined
                   )
                 }
-                bodyBounds={assemblyBodyBounds}
+                bodyBounds={bodyMeshBounds}
                 reducedMotion={appSettings.appearance.reducedMotion}
                 checkInterference={geometry.assemblyInterference}
               />

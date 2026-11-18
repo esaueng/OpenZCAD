@@ -1,5 +1,6 @@
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import type { GeometryBodyRepresentation } from '@openzcad/shared';
+import type { Page } from '@playwright/test';
 import {
   curvedChainDocument,
   CURVED_CHAIN_VOLUME
@@ -13,55 +14,63 @@ import {
   enableFullRender,
   expect,
   expectBodyCount,
+  finishInPlaceCommand,
+  pressTool,
+  revealModelPanel,
+  setBarValues,
   setSelectionFilter,
   stubApi,
   test,
   waitForStillViewport
 } from './openzcad-fixtures';
 
+async function openCurvedChain(page: Page) {
+  const adapter = await createExactKernelAdapter();
+  let backup: Buffer;
+  try {
+    const model = await curvedChainDocument(adapter);
+    backup = Buffer.from(
+      JSON.stringify({
+        format: 'openzcad-project',
+        version: 1,
+        document: model.document,
+        files: []
+      })
+    );
+  } finally {
+    adapter.dispose();
+  }
+  await enableFullRender(page);
+  await stubApi(page, { panelLayout: null });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await expect(page).toHaveTitle('OpenZCAD');
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+  await page
+    .getByRole('button', { name: 'Import project', exact: true })
+    .click();
+  await page.getByLabel('Import project backup').setInputFiles({
+    name: 'corner.openzcad',
+    mimeType: 'application/json',
+    buffer: backup
+  });
+  await page
+    .getByRole('button', { name: 'History panel', exact: true })
+    .waitFor({ state: 'visible', timeout: 60_000 });
+  await expectBodyCount(page, 1);
+}
+
 test(
   'the complete 33.71 mm straight–arc–straight edge chamfers through preview, Apply and saved replay',
   { tag: '@ci-smoke' },
   async ({ page }, testInfo) => {
     test.setTimeout(180_000);
-    const adapter = await createExactKernelAdapter();
-    let backup: Buffer;
-    try {
-      const model = await curvedChainDocument(adapter);
-      backup = Buffer.from(
-        JSON.stringify({
-          format: 'openzcad-project',
-          version: 1,
-          document: model.document,
-          files: []
-        })
-      );
-    } finally {
-      adapter.dispose();
-    }
-    await enableFullRender(page);
-    await stubApi(page, { panelLayout: null });
-    await page.setViewportSize({ width: 1440, height: 1000 });
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     page.on('console', (message) => {
       if (message.type() === 'error') errors.push(message.text());
     });
-    await page.goto('/');
-    await expect(page).toHaveTitle('OpenZCAD');
-    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
-    await page
-      .getByRole('button', { name: 'Import project', exact: true })
-      .click();
-    await page.getByLabel('Import project backup').setInputFiles({
-      name: 'corner.openzcad',
-      mimeType: 'application/json',
-      buffer: backup
-    });
-    await page
-      .getByRole('button', { name: 'History panel', exact: true })
-      .waitFor({ state: 'visible', timeout: 60_000 });
-    await expectBodyCount(page, 1);
+    await openCurvedChain(page);
     await page
       .getByRole('button', { name: 'History panel', exact: true })
       .click();
@@ -193,5 +202,71 @@ test(
       kernel.free();
     }
     expect(errors).toEqual([]);
+  }
+);
+
+test(
+  'double-clicking a run fills an active Chamfer and survives a History edit',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    page.setDefaultTimeout(15_000);
+    await openCurvedChain(page);
+    await page
+      .getByRole('button', {
+        name: 'Top front left isometric view',
+        exact: true
+      })
+      .click();
+    await page.getByRole('button', { name: 'Fit view (F)' }).click();
+    await waitForStillViewport(page);
+
+    await pressTool(page, /^Chamfer/);
+    const bar = page.getByRole('group', { name: 'Chamfer command' });
+    await expect(bar.getByRole('status')).toContainText('Click the edges');
+    const canvas = page.locator('.viewer-host canvas');
+    const point = await canvas.evaluate(
+      (element) =>
+        new Promise<{ x: number; y: number }>((resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-project-points', {
+              detail: {
+                points: [[0, 10, 15]],
+                resolve: ({ points }: { points: { x: number; y: number }[] }) =>
+                  resolve(points[0]!)
+              }
+            })
+          );
+        })
+    );
+    await page.mouse.dblclick(point.x, point.y);
+    await bar.getByLabel('Chamfer options').click();
+    const picks = bar.getByRole('list', { name: 'Chamfered edges' });
+    await expect(picks.getByRole('listitem')).toHaveCount(3, {
+      timeout: 10_000
+    });
+    const names = await picks.locator('.edge-pick-name').allTextContents();
+    await setBarValues(page, bar, { Distance: '1' });
+    await expect(bar.getByRole('status')).toContainText('3 edges');
+    await finishInPlaceCommand(page, 'Chamfer');
+
+    await revealModelPanel(page, 'History');
+    await page
+      .locator('.feature-row-main', { hasText: 'Chamfer' })
+      .last()
+      .click();
+    const edit = page.getByRole('group', { name: 'Edit Chamfer command' });
+    await expect(edit.getByRole('status')).toContainText('3 edges');
+    await edit.getByLabel('Edit Chamfer options').click();
+    await expect(
+      edit
+        .getByRole('list', { name: 'Chamfered edges' })
+        .locator('.edge-pick-name')
+    ).toHaveText(names);
+    await expect(edit.getByRole('textbox', { name: 'Distance' })).toHaveValue(
+      '1'
+    );
+    await edit.getByRole('button', { name: 'Cancel' }).click();
+    await expect(edit).toHaveCount(0);
   }
 );
