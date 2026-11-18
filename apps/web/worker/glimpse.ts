@@ -52,7 +52,8 @@ export function parseUsage(
     (!EVENTS.has(v.event) && !expandedMetric(v.event, v.bucket, 'openzcad'))
   )
     return null;
-  if (expandedMetric(v.event, v.bucket, 'openzcad')) return {level: 'optional', event: v.event, bucket: v.bucket};
+  if (expandedMetric(v.event, v.bucket, 'openzcad'))
+    return { level: 'optional', event: v.event, bucket: v.bucket };
   if (
     v.event === 'operation_latency'
       ? !BUCKETS.has(v.bucket)
@@ -61,18 +62,67 @@ export function parseUsage(
     return null;
   return { level: 'optional', event: v.event, bucket: v.bucket };
 }
+export async function handleGlimpseWorkspaceSession(
+  request: Request,
+  env: GlimpseEnv
+): Promise<Response> {
+  if (request.method !== 'POST') return reply(405);
+  if (
+    request.headers.get('Origin') !== new URL(request.url).origin ||
+    request.headers.get('Sec-Fetch-Site') !== 'same-origin'
+  )
+    return reply(403);
+  if (
+    new URL(request.url).search ||
+    Number(request.headers.get('Content-Length')) > 0
+  )
+    return reply(400);
+  const collector = glimpseBinding(env.GLIMPSE);
+  if (
+    !collector ||
+    env.GLIMPSE_BASIC_ENABLED !== 'true' ||
+    request.headers.get('DNT') === '1' ||
+    request.headers.get('Sec-GPC') === '1'
+  )
+    return reply(204);
+  try {
+    if (
+      !env.GLIMPSE_USAGE_LIMITER ||
+      !(await env.GLIMPSE_USAGE_LIMITER.limit({ key: 'workspace-session' }))
+        .success
+    )
+      return reply(429);
+    // A bodyless browser POST can arrive as an empty stream in workerd.
+    const reader = request.body?.getReader();
+    if (reader && !(await reader.read()).done) {
+      void reader.cancel().catch(() => undefined);
+      return reply(400);
+    }
+    await collector.record({
+      level: 'basic',
+      event: 'workspace_session',
+      bucket: 'none'
+    });
+  } catch {
+    // Delivery is best effort. Nothing from the incoming request is forwarded.
+  }
+  return reply(204);
+}
+
+function reply(status: number): Response {
+  return new Response(null, {
+    status,
+    headers: {
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff'
+    }
+  });
+}
+
 export async function handleGlimpseUsage(
   request: Request,
   env: GlimpseEnv
 ): Promise<Response> {
-  const reply = (status: number) =>
-    new Response(null, {
-      status,
-      headers: {
-        'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff'
-      }
-    });
   if (request.method !== 'POST') return reply(405);
   if (
     request.headers.get('Origin') !== new URL(request.url).origin ||

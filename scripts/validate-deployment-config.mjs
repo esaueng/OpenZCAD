@@ -611,6 +611,22 @@ export function validateDeploymentConfig(
         errors.push(`${label} changed from the official deployment value`);
       }
     }
+    const glimpse = binding(config, 'services', 'GLIMPSE');
+    if (
+      (glimpse ||
+        ['GLIMPSE_BASIC_ENABLED', 'GLIMPSE_USAGE_ENABLED'].some(
+          (flag) =>
+            flagEnabled(config.vars?.[flag]) || config.vars?.[flag] === true
+        )) &&
+      (glimpse?.service !== 'glimpse' ||
+        glimpse?.entrypoint !==
+          (stable ? 'OpenZCADStableIngest' : 'OpenZCADIngest') ||
+        glimpse?.environment !== undefined)
+    ) {
+      errors.push(
+        `GLIMPSE must use the ${stable ? 'stable' : 'beta'} entrypoint`
+      );
+    }
     if (stable) {
       if (
         !OFFICIAL_STABLE.publicOrigins.includes(config.vars?.PUBLIC_APP_ORIGIN)
@@ -619,8 +635,7 @@ export function validateDeploymentConfig(
           `public origin must be one of ${OFFICIAL_STABLE.publicOrigins.join(', ')}`
         );
       }
-      // Stable shares nothing with beta: not its data, its Previews or the
-      // Glimpse collector beta reports to.
+      // Stable has its own resources and no Preview environment.
       if (config.previews !== undefined) {
         errors.push('stable must not define previews; Previews belong to beta');
       }
@@ -643,19 +658,9 @@ export function validateDeploymentConfig(
       if (values.some((value) => betaValues.includes(value))) {
         errors.push('stable references a beta resource');
       }
-      // Service bindings reach another Worker's production deployment (the
-      // Glimpse collector beta reports to); stable has none until the
-      // cutover decides which channel reports.
       for (const item of config.services ?? []) {
-        errors.push(
-          `stable service binding ${item?.binding} would share beta's`
-        );
-      }
-      for (const flag of ['GLIMPSE_BASIC_ENABLED', 'GLIMPSE_USAGE_ENABLED']) {
-        const value = config.vars?.[flag];
-        if (flagEnabled(value) || value === true) {
-          errors.push(`vars.${flag} must be off on stable until the cutover`);
-        }
+        if (item !== glimpse)
+          errors.push(`unexpected stable service binding ${item?.binding}`);
       }
       // Rate-limit namespaces are account-wide budgets: one shared with beta
       // lets beta traffic spend stable's limit. They can only be compared

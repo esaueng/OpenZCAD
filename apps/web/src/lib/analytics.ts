@@ -4,6 +4,7 @@ import {
   cloudRequestSignal
 } from './cloudMode';
 import { isDesktopApp } from './desktopBridge';
+import { DEPLOYMENT_REALM } from './deploymentRealm';
 
 import type { REFUSAL_SURFACES } from './glimpseContract';
 import {
@@ -51,7 +52,9 @@ export function hasAnalyticsConsent(): boolean {
   }
 }
 export function isAnalyticsEnabled(): boolean {
-  if (!hasAnalyticsConsent()) return false;
+  return hasAnalyticsConsent() && canSendBrowserAnalytics();
+}
+function canSendBrowserAnalytics(): boolean {
   // Recheck the persisted master switch too: cold boot/module ordering and
   // changes in another tab must never turn an offline choice into a send.
   try {
@@ -69,6 +72,25 @@ export function isAnalyticsEnabled(): boolean {
   )
     return false;
   return true;
+}
+let workspaceSessionAttempted = false;
+export function trackWorkspaceSession(): void {
+  if (workspaceSessionAttempted || !DEPLOYMENT_REALM) return;
+  workspaceSessionAttempted = true;
+  const sendWhenVisible = () => {
+    if (document.visibilityState !== 'visible') return;
+    document.removeEventListener('visibilitychange', sendWhenVisible);
+    if (!canSendBrowserAnalytics()) return;
+    void fetch('/api/glimpse/workspace-session', {
+      method: 'POST',
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
+      cache: 'no-store',
+      signal: cloudRequestSignal()
+    }).catch(() => undefined);
+  };
+  document.addEventListener('visibilitychange', sendWhenVisible);
+  sendWhenVisible();
 }
 export function setAnalyticsEnabled(enabled: boolean): boolean {
   if (typeof window === 'undefined') return false;

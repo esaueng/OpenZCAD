@@ -155,7 +155,7 @@
     <main>
       <p><a href="/">← Back to OpenZCAD</a></p>
       <h1>Privacy policy</h1>
-      <p class="muted">Effective November 14, 2026</p>
+      <p class="muted">Effective November 18, 2026</p>
 
       <section class="summary" aria-labelledby="summary">
         <h2 id="summary" style="border-top: 0; margin-top: 12px">In short</h2>
@@ -539,7 +539,13 @@
         <li>
           <strong>Basic statistics</strong> (always on for the hosted service):
           the server counts API requests, server errors and response times in
-          fixed ranges.
+          fixed ranges. It also sends totals for registered cloud accounts,
+          accounts with a valid web login and valid web sign-in sessions. The
+          hosted browser app contributes one count when a loaded page first
+          becomes visible. The request has an empty body and sends no sign-in
+          cookie or referrer. With Cloud features off, Do Not Track or Global
+          Privacy Control enabled, or in the desktop app, this browser count is
+          skipped. Beta and stable have separate totals.
         </li>
         <li>
           <strong>Optional usage analytics</strong> (off unless you turn them on
@@ -706,9 +712,7 @@
           </tr>
           <tr>
             <td>Basic and optional analytics totals</td>
-            <td>
-              Aggregate totals identify no one and may be kept indefinitely
-            </td>
+            <td>Glimpse retains daily aggregates for up to 90 UTC days</td>
           </tr>
           <tr>
             <td>Server logs</td>

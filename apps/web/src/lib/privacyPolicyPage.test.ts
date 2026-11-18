@@ -92,7 +92,7 @@ describe('privacy policy page', () => {
     expect(document.querySelector('h1')?.textContent?.trim()).toBe(
       'Privacy policy'
     );
-    expect(pageText()).toContain('Effective November 14, 2026');
+    expect(pageText()).toContain('Effective November 18, 2026');
     // The security policy refuses analytics the edge could inject, and the
     // page says so instead of saying it allows them.
     expect(pageText()).toContain('blocks every other third-party script');

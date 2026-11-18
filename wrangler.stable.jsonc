@@ -4,10 +4,8 @@
 // secrets and rate-limit namespaces are its own; nothing is shared with the
 // beta Worker in wrangler.jsonc. docs/release-channels.md describes both.
 //
-// It serves zcad.app (production) and stable.zcad.app. Glimpse stays off
-// with no GLIMPSE service binding: both Workers report as app "openzcad",
-// so turning it on here would mix two user bases in one census while beta
-// still reports.
+// It serves zcad.app (production) and stable.zcad.app. Its Glimpse entrypoint
+// writes only to the stable channel, which has its own counters and snapshots.
 //
 // Keep it in step with wrangler.jsonc: test/release-channels.test.ts fails
 // on any difference beyond the ones listed there.
@@ -111,6 +109,7 @@
       }
     }
   ],
+  "services": [{"binding":"GLIMPSE", "service":"glimpse", "entrypoint":"OpenZCADStableIngest"}],
   "assets": {
     "directory": "./apps/web/dist",
     "binding": "ASSETS",
@@ -118,8 +117,8 @@
     "run_worker_first": ["/api/*", "/healthz"]
   },
   "vars": {
-    "GLIMPSE_BASIC_ENABLED": "false",
-    "GLIMPSE_USAGE_ENABLED": "false",
+    "GLIMPSE_BASIC_ENABLED": "true",
+    "GLIMPSE_USAGE_ENABLED": "true",
     "ENVIRONMENT": "beta",
     "AUTH_MODE": "email-code",
     "PRODUCTION_GUARD": "enabled",

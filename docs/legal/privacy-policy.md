@@ -18,8 +18,8 @@ Michigan, United States (one sentence in section 1, the only place to edit).
 
 ## Placeholders
 
-None left. The effective date (November 14, 2026, for blocking Cloudflare
-Web Analytics in the security policy) is at the top of the page;
+None left. The effective date (November 18, 2026, for hosted OpenZCAD adoption
+statistics) is at the top of the page;
 update it whenever the policy changes.
 `apps/web/src/lib/privacyPolicyPlaceholders.test.ts` ("FILL IN BEFORE MERGE")
 fails in `pnpm test:web` while any placeholder in square brackets and capitals
@@ -41,8 +41,7 @@ without a new commitment. Review these before merge:
   which need no script, are unaffected.
 - Signed-out assistant counters: "kept without a set expiry". The code has no
   deletion path for them.
-- Analytics totals: "may be kept indefinitely". Glimpse's retention is set in
-  that service, not here.
+- Glimpse retains Basic and Optional daily aggregates for up to 90 UTC days.
 - Server logs: "for as long as Cloudflare's Workers Logs keep them for our
   account". The plan's window is not in the code.
 - Backups: "up to 30 days", matching ADR-024 and the in-app copy for

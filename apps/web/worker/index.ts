@@ -1,6 +1,12 @@
 import { releaseDevelopmentE2eeWrite } from './e2eeWriteAuthorization';
 import { accountConsent, publishCensus } from './glimpseCensus';
-import { handleGlimpseUsage, countApi, type GlimpseEnv } from './glimpse';
+import { publishAdoption } from './glimpseAdoption';
+import {
+  countApi,
+  handleGlimpseUsage,
+  handleGlimpseWorkspaceSession,
+  type GlimpseEnv
+} from './glimpse';
 import { handleE2eeRequest, projectBucket } from './e2ee';
 import {
   handleEncryptedSharedBlob,
@@ -3188,7 +3194,7 @@ export default {
             isE2eeDefaultOn(env, email)
         : undefined
     );
-    await publishCensus(env);
+    await Promise.all([publishCensus(env), publishAdoption(env)]);
   },
   async fetch(
     request: Request,
@@ -3197,6 +3203,8 @@ export default {
   ): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (path === '/api/glimpse/usage') return handleGlimpseUsage(request, env);
+    if (path === '/api/glimpse/workspace-session')
+      return handleGlimpseWorkspaceSession(request, env);
     const started = performance.now();
     let status = 500;
     try {
