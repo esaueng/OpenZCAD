@@ -21,21 +21,33 @@ import {
   type SegmentOption
 } from './settingsControls';
 
-function hintFor(status: SpaceMouseStatus): string {
+function hintFor(status: SpaceMouseStatus, native: boolean): string {
   switch (status.state) {
     case 'unsupported':
       return 'Needs Chrome or Edge on a computer.';
     case 'blocked':
       return 'This page is not allowed to use USB devices.';
     case 'disconnected':
-      return 'Connect a 3Dconnexion SpaceMouse. The browser asks which device to share.';
+      return native
+        ? 'Enable the wired SpaceMouse Pro while OpenZCAD is in front.'
+        : 'Connect a 3Dconnexion SpaceMouse. The browser asks which device to share.';
     case 'connecting':
       return 'Connecting…';
     case 'connected':
+      if (native) {
+        return status.rotationLocked
+          ? 'Wired SpaceMouse Pro enabled. Press Lock to turn the view again.'
+          : 'Wired SpaceMouse Pro enabled while OpenZCAD is in front.';
+      }
       return status.rotationLocked
         ? `${status.name} is connected. Rotation is locked; press Lock to turn the view again.`
         : `${status.name} moves the view, and every key works.`;
     case 'error':
+      if (native)
+        return (
+          status.message +
+          ' Quit 3DconnexionHelper or any app using the device, then retry.'
+        );
       return `${status.message} 3Dconnexion's driver (3DxWare) keeps the device to itself while it is installed; uninstall it, or quit any other app using the device, then connect again.`;
   }
 }
@@ -61,7 +73,7 @@ export function SpaceMouseSettings({
       title="3D mouse"
       hint={
         <span role="status" aria-live="polite">
-          {hintFor(status)}
+          {hintFor(status, hub.native)}
         </span>
       }
     >

@@ -47,6 +47,20 @@ that native scale and then uses the same debug-only bridge to exercise hit
 testing against a 2x WebGL backing store. Physical two-finger hardware testing
 on the minimum supported macOS version remains a signed-beta release gate.
 
+## Wired SpaceMouse Pro
+
+Plug in the wired 3Dconnexion SpaceMouse Pro (3DX-700040, USB
+046d:c62b), then choose **Connect** in Settings > Controls > 3D mouse.
+OpenZCAD captures the device through macOS IOHID while its main window
+is in front and releases it when you switch apps or choose Disconnect.
+This prevents the cap from moving the macOS cursor in OpenZCAD.
+If capture fails, quit 3DconnexionHelper or other apps using the device,
+then try Connect again. Connect is required again after an app restart.
+
+The desktop reader uses the same navigation settings and buttons as
+browser SpaceMouse input. In a sketch, the cap still pans and zooms
+while sketch orientation stays locked.
+
 ## Release boundary
 
 The current target is a working local-first desktop MVP. The dedicated native
