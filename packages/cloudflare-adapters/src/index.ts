@@ -1867,7 +1867,14 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().requireProjectRead(userId, projectId);
     }
-    return this.resolveProjectAccess(userId, projectId);
+    return (await this.resolveProjectAccess(userId, projectId)).access;
+  }
+
+  async getProjectVersion(userId: UserId, projectId: string): Promise<number> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().getProjectVersion(userId, projectId);
+    }
+    return (await this.resolveProjectAccess(userId, projectId)).documentVersion;
   }
 
   async requireProjectEdit(
@@ -1877,7 +1884,7 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().requireProjectEdit(userId, projectId);
     }
-    const access = await this.resolveProjectAccess(userId, projectId);
+    const { access } = await this.resolveProjectAccess(userId, projectId);
     if (
       access.role === 'viewer' ||
       (await this.projectCopyCleanupClaim(projectId))
@@ -1919,7 +1926,7 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().requireProjectOwner(userId, projectId);
     }
-    const access = await this.resolveProjectAccess(userId, projectId);
+    const { access } = await this.resolveProjectAccess(userId, projectId);
     if (access.role !== 'owner') {
       throw new ProjectNotFoundError(projectId);
     }
@@ -8931,30 +8938,37 @@ export class D1R2PersistenceService implements PersistenceService {
   private async resolveProjectAccess(
     userId: UserId,
     projectId: string
-  ): Promise<ProjectAccess> {
-    const format = await this.storageFormatColumn('');
+  ): Promise<{ access: ProjectAccess; documentVersion: number }> {
     if (!isCloudflareFeatureEnabled(this.env, 'PROJECT_SHARING_ENABLED')) {
+      const format = await this.storageFormatColumn('');
       const row = await this.env
         .DB!.prepare(
-          `SELECT user_id AS owner_user_id${format}
+          `SELECT user_id AS owner_user_id, document_version${format}
            FROM projects
            WHERE id = ? AND user_id = ?`
         )
         .bind(projectId, userId)
-        .first<{ owner_user_id: UserId; storage_format?: number | null }>();
+        .first<{
+          owner_user_id: UserId;
+          document_version: number;
+          storage_format?: number | null;
+        }>();
       if (!row) {
         throw new ProjectNotFoundError(projectId);
       }
       return {
-        projectId,
-        ownerUserId: row.owner_user_id,
-        role: 'owner',
-        ...storageFormatOf(row)
+        access: {
+          projectId,
+          ownerUserId: row.owner_user_id,
+          role: 'owner',
+          ...storageFormatOf(row)
+        },
+        documentVersion: row.document_version
       };
     }
     const row = await this.env
       .DB!.prepare(
-        `SELECT p.user_id AS owner_user_id${await this.storageFormatColumn('p.')},
+        `SELECT p.user_id AS owner_user_id, p.document_version${await this.storageFormatColumn('p.')},
                 CASE
                   WHEN p.user_id = ? THEN 'owner'
                   WHEN p.status = 'deleted' THEN NULL
@@ -8988,6 +9002,7 @@ export class D1R2PersistenceService implements PersistenceService {
       .bind(userId, userId, projectId)
       .first<{
         owner_user_id: UserId;
+        document_version: number;
         resolved_role: ProjectAccess['role'] | null;
         storage_format?: number | null;
       }>();
@@ -8995,10 +9010,13 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new ProjectNotFoundError(projectId);
     }
     return {
-      projectId,
-      ownerUserId: row.owner_user_id,
-      role: row.resolved_role,
-      ...storageFormatOf(row)
+      access: {
+        projectId,
+        ownerUserId: row.owner_user_id,
+        role: row.resolved_role,
+        ...storageFormatOf(row)
+      },
+      documentVersion: row.document_version
     };
   }
 

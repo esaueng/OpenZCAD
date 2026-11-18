@@ -396,6 +396,67 @@ describe('signed-in reads', () => {
     expect(session.status).toBe(200);
     expect(await session.json()).toMatchObject({ userId });
   });
+
+  it('uses the beta override when the account-read binding is missing', async () => {
+    fixMinute();
+    const { env, sqlite } = hostedEnv();
+    const { userId, cookie } = await signedIn(sqlite);
+    const read = () =>
+      worker.fetch(
+        new Request('https://example.com/api/collaboration/config', {
+          headers: { cookie }
+        }),
+        { ...env, ACCOUNT_READ_LIMIT_PER_MINUTE: '3000' }
+      );
+    expect((await read()).status).toBe(200);
+    sqlite
+      .prepare(
+        'UPDATE auth_rate_limits SET request_count = 2999 WHERE bucket = ?'
+      )
+      .run(`api-read:${userId}`);
+    expect((await read()).status).toBe(200);
+    expect((await read()).status).toBe(429);
+  });
+
+  it('reads only an authorized project version, including encrypted projects', async () => {
+    const { env, sqlite, statements } = hostedEnv();
+    const owner = await signedIn(sqlite, 'user_owner');
+    const member = await signedIn(sqlite, 'user_member');
+    const outsider = await signedIn(sqlite, 'user_outsider');
+    const write = sqlite.prepare(
+      `INSERT INTO projects
+         (id, user_id, name, document_json, updated_at, document_version, storage_format)
+       VALUES (?, ?, '', ?, '2026-11-18T00:00:00Z', ?, ?)`
+    );
+    write.run('proj_plain', owner.userId, '{}', 17, 1);
+    write.run('proj_encrypted', owner.userId, 'e2ee-v1', 27, 2);
+    sqlite
+      .prepare(
+        `INSERT INTO project_members
+         (project_id, user_id, role, added_by_user_id, created_at, updated_at)
+       VALUES ('proj_encrypted', ?, 'viewer', ?, 1, 1)`
+      )
+      .run(member.userId, owner.userId);
+    const read = (projectId: string, cookie: string) =>
+      worker.fetch(
+        new Request(`https://example.com/api/projects/${projectId}/version`, {
+          headers: { cookie }
+        }),
+        env
+      );
+    statements.length = 0;
+    expect(await (await read('proj_plain', owner.cookie)).json()).toEqual({
+      documentVersion: 17
+    });
+    expect(await (await read('proj_encrypted', member.cookie)).json()).toEqual({
+      documentVersion: 27
+    });
+    expect((await read('proj_encrypted', outsider.cookie)).status).toBe(404);
+    expect((await read('proj_missing', member.cookie)).status).toBe(404);
+    expect(statements.join('\n')).not.toMatch(
+      /document_json|e2ee_project_envelopes/
+    );
+  });
 });
 
 /** A signed-in browser session for a fresh account on `sqlite`. */
@@ -558,22 +619,52 @@ describe('Workers rate-limit bindings', () => {
         readFileSync(path, 'utf8')
       );
       expect(parsed.error, path).toBeUndefined();
-      const declared = new Map(
-        (
-          (parsed.config as { ratelimits?: RateLimitEntry[] }).ratelimits ?? []
-        ).map((entry) => [entry.name, entry])
-      );
-      for (const [name, limit] of Object.entries(REQUEST_LIMITS)) {
-        expect(declared.get(name)?.simple, `${path} ${name}`).toEqual({
-          limit,
-          period: 60
-        });
+      const config = parsed.config as LimiterConfig & {
+        previews?: LimiterConfig;
+      };
+      const views = [
+        {
+          config,
+          label: path,
+          accountReadOverride: path === 'wrangler.jsonc' ? '3000' : undefined
+        },
+        ...(config.previews
+          ? [
+              {
+                config: config.previews,
+                label: `${path} previews`,
+                accountReadOverride: undefined
+              }
+            ]
+          : [])
+      ];
+      for (const { config, label, accountReadOverride } of views) {
+        expect(config.vars?.ACCOUNT_READ_LIMIT_PER_MINUTE, label).toBe(
+          accountReadOverride
+        );
+        const declared = new Map(
+          config.ratelimits.map((entry) => [entry.name, entry])
+        );
+        for (const [name, limit] of Object.entries(REQUEST_LIMITS)) {
+          expect(declared.get(name)?.simple, `${label} ${name}`).toEqual({
+            limit:
+              name === 'ACCOUNT_READ_LIMITER' && accountReadOverride
+                ? Number(accountReadOverride)
+                : limit,
+            period: 60
+          });
+        }
+        const ids = [...declared.values()].map((entry) => entry.namespace_id);
+        expect(new Set(ids).size, label).toBe(ids.length);
       }
-      const ids = [...declared.values()].map((entry) => entry.namespace_id);
-      expect(new Set(ids).size, path).toBe(ids.length);
     }
   });
 });
+
+interface LimiterConfig {
+  ratelimits: RateLimitEntry[];
+  vars?: { ACCOUNT_READ_LIMIT_PER_MINUTE?: string };
+}
 
 interface RateLimitEntry {
   name: string;

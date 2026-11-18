@@ -2312,12 +2312,6 @@ const E2E_SLOW_FRAME_MS =
     ? window.__openzcadE2ESlowFrameMs
     : undefined;
 
-/**
- * How often an open cloud project checks whether another device has moved it.
- * Focus and reconnect cover the cases that matter most; the interval is the
- * backstop for a tab left open and in front of somebody.
- */
-const FRESHNESS_POLL_INTERVAL_MS = 60_000;
 /** How long the model panels wait before calling the model "preparing". */
 const PANEL_PENDING_DELAY_MS = 400;
 /** How long a rebuild runs before the tool palette reads it as waiting. */
@@ -7962,153 +7956,139 @@ export function App() {
    * which is what the room is for.
    */
   useEffect(() => {
+    const accountId = session?.userId;
+    const projectId = doc?.projectId;
     if (
       !cloudFunctionsEnabled ||
-      !doc?.projectId ||
-      !session ||
+      !projectId ||
+      !accountId ||
       shareSession ||
       sharedAccountProject
     ) {
       return;
     }
     let cancelled = false;
-    let checking = false;
+    const isCurrent = () =>
+      !cancelled &&
+      !projectOpenElsewhereRef.current &&
+      managerRef.current?.document.projectId === projectId &&
+      sessionRef.current?.userId === accountId;
 
     async function check() {
-      if (checking || projectOpenElsewhereRef.current) return;
-      checking = true;
-      try {
-        await projectOwnershipSettledRef.current;
-        if (cancelled || projectOpenElsewhereRef.current) return;
-        const controller = cloudProjectAutosaveRef.current;
-        const current = managerRef.current?.document;
-        if (cancelled || !controller || !current) {
-          return;
+      if (!isCurrent()) return;
+      await projectOwnershipSettledRef.current;
+      if (!isCurrent()) return;
+      const controller = cloudProjectAutosaveRef.current;
+      const current = managerRef.current?.document;
+      if (!controller || !current) {
+        return;
+      }
+      // Asked on every tick rather than once when the effect was set up. Both
+      // answers change without anything here changing with them: saving the
+      // open project to the account makes it worth polling, and resolving a
+      // conflict releases the controller that was holding it back.
+      if (
+        !shouldPollForFreshness({
+          projectId: current.projectId,
+          signedIn: true,
+          accountHoldsProject: remoteVersionsRef.current.has(current.projectId),
+          awaitingResolution: controller.isHalted
+        })
+      ) {
+        return;
+      }
+      const { documentVersion } = await api.getProjectVersion(
+        current.projectId
+      );
+      if (!isCurrent() || typeof documentVersion !== 'number') {
+        return;
+      }
+      const action = decideProjectSync({
+        localVersion: current.version,
+        accountVersion: documentVersion,
+        lastSyncedVersion: controller.syncedVersion,
+        hasUnsentChanges: controller.hasPendingChanges
+      });
+      if (action !== 'pull') {
+        // `push` is already the autosave controller's job, and `conflict` is
+        // raised by the write that gets fenced rather than guessed at here.
+        return;
+      }
+      // Loaded only when a pull is due, outside the entry chunk. Offline
+      // with a stale chunk, this tick is skipped like an outage; the next
+      // poll tries again.
+      const refresh = await import('./lib/accountProjectRefresh').catch(
+        () => null
+      );
+      if (!refresh || !isCurrent()) return;
+      const fetched = await refresh.loadAccountRefresh(() =>
+        api.loadProject(current.projectId)
+      );
+      if (
+        fetched.kind === 'repair' &&
+        isCurrent() &&
+        managerRef.current?.document?.projectId === current.projectId
+      ) {
+        // The account moved to a version this browser cannot open: halt
+        // the controller, so no queued edit writes against that head, and
+        // enter repair through its status, exactly as a refused write does.
+        controller.haltForRepair(current.projectId, fetched.error);
+        return;
+      }
+      const remote = fetched.kind === 'document' ? fetched.document : null;
+      const live = managerRef.current?.document;
+      // Anything the user did while the document was in flight makes it stale.
+      if (
+        !isCurrent() ||
+        !remote ||
+        !live ||
+        live.projectId !== current.projectId ||
+        live.version !== current.version ||
+        controller.hasPendingChanges
+      ) {
+        return;
+      }
+      const outcome = await refresh.applyAccountProjectRefresh({
+        before: current,
+        remote,
+        current: () => managerRef.current?.document ?? null,
+        isActive: () =>
+          isCurrent() && cloudProjectAutosaveRef.current === controller,
+        hasPendingChanges: () => controller.hasPendingChanges,
+        saveLocal: saveLocalProject,
+        apply: (document) => {
+          controller.adoptAccountVersion(document.projectId, document.version);
+          remoteVersionsRef.current.set(document.projectId, document.version);
+          // A refresh of the open project is not a choice to reopen it, and
+          // must not revise the pointer under an open of another project.
+          hydrateDocument(document, { rememberProject: false });
+        },
+        saveBaseline: (document) =>
+          saveLastSyncedVersion(document.projectId, document.version),
+        onDiverged: (document) => {
+          controller.haltForConflict(document.projectId);
         }
-        // Asked on every tick rather than once when the effect was set up. Both
-        // answers change without anything here changing with them: saving the
-        // open project to the account makes it worth polling, and resolving a
-        // conflict releases the controller that was holding it back.
-        if (
-          !shouldPollForFreshness({
-            projectId: current.projectId,
-            signedIn: Boolean(session),
-            accountHoldsProject: remoteVersionsRef.current.has(
-              current.projectId
-            ),
-            awaitingResolution: controller.isHalted
-          })
-        ) {
-          return;
+      });
+      if (outcome === 'diverged' && isCurrent()) {
+        const latest = managerRef.current?.document;
+        if (latest?.projectId === current.projectId) {
+          raiseAccountConflict(latest.projectId, latest, remote.version);
         }
-        const summary = (
-          await api.listProjects().catch(() => null)
-        )?.projects.find((project) => project.projectId === current.projectId);
-        if (cancelled || summary?.documentVersion === undefined) {
-          return;
-        }
-        const action = decideProjectSync({
-          localVersion: current.version,
-          accountVersion: summary.documentVersion,
-          lastSyncedVersion: controller.syncedVersion,
-          hasUnsentChanges: controller.hasPendingChanges
-        });
-        if (action !== 'pull') {
-          // `push` is already the autosave controller's job, and `conflict` is
-          // raised by the write that gets fenced rather than guessed at here.
-          return;
-        }
-        // Loaded only when a pull is due, outside the entry chunk. Offline
-        // with a stale chunk, this tick is skipped like an outage; the next
-        // poll tries again.
-        const refresh = await import('./lib/accountProjectRefresh').catch(
-          () => null
-        );
-        if (!refresh || cancelled) return;
-        const fetched = await refresh.loadAccountRefresh(() =>
-          api.loadProject(current.projectId)
-        );
-        if (
-          fetched.kind === 'repair' &&
-          !cancelled &&
-          managerRef.current?.document?.projectId === current.projectId
-        ) {
-          // The account moved to a version this browser cannot open: halt
-          // the controller, so no queued edit writes against that head, and
-          // enter repair through its status, exactly as a refused write does.
-          controller.haltForRepair(current.projectId, fetched.error);
-          return;
-        }
-        const remote = fetched.kind === 'document' ? fetched.document : null;
-        const live = managerRef.current?.document;
-        // Anything the user did while the document was in flight makes it stale.
-        if (
-          cancelled ||
-          !remote ||
-          !live ||
-          live.projectId !== current.projectId ||
-          live.version !== current.version ||
-          controller.hasPendingChanges
-        ) {
-          return;
-        }
-        const outcome = await refresh.applyAccountProjectRefresh({
-          before: current,
-          remote,
-          current: () => managerRef.current?.document ?? null,
-          isActive: () =>
-            !cancelled &&
-            !projectOpenElsewhereRef.current &&
-            cloudProjectAutosaveRef.current === controller,
-          hasPendingChanges: () => controller.hasPendingChanges,
-          saveLocal: saveLocalProject,
-          apply: (document) => {
-            controller.adoptAccountVersion(
-              document.projectId,
-              document.version
-            );
-            remoteVersionsRef.current.set(document.projectId, document.version);
-            // A refresh of the open project is not a choice to reopen it, and
-            // must not revise the pointer under an open of another project.
-            hydrateDocument(document, { rememberProject: false });
-          },
-          saveBaseline: (document) =>
-            saveLastSyncedVersion(document.projectId, document.version),
-          onDiverged: (document) => {
-            controller.haltForConflict(document.projectId);
-          }
-        });
-        if (outcome === 'diverged' && !cancelled) {
-          const latest = managerRef.current?.document;
-          if (latest?.projectId === current.projectId) {
-            raiseAccountConflict(latest.projectId, latest, remote.version);
-          }
-        }
-        if (outcome === 'applied' && !cancelled) {
-          setStatus(`Updated to the version saved on another device.`);
-        }
-      } finally {
-        checking = false;
+      }
+      if (outcome === 'applied' && isCurrent()) {
+        setStatus(`Updated to the version saved on another device.`);
       }
     }
 
-    const onFocus = () => void check();
-    const interval = window.setInterval(
-      () => void check(),
-      FRESHNESS_POLL_INTERVAL_MS
-    );
-    window.addEventListener('focus', onFocus);
-    window.addEventListener('online', onFocus);
+    const stop = watchLibraryFreshness(check, undefined, { minimumGapMs: 0 });
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
-      window.removeEventListener('focus', onFocus);
-      window.removeEventListener('online', onFocus);
+      stop();
     };
   }, [
     cloudFunctionsEnabled,
     doc?.projectId,
-    session,
+    session?.userId,
     shareSession,
     sharedAccountProject
   ]);
@@ -14507,7 +14487,7 @@ export function App() {
   }
 
   recheckSessionRef.current = refreshCloudConnection;
-  async function refreshCloudConnection() {
+  async function refreshCloudConnection(reuseProjectList = false) {
     if (!cloudFunctionsEnabledRef.current) {
       return;
     }
@@ -14525,13 +14505,15 @@ export function App() {
     const accountResolution = sessionRef.current
       ? null
       : beginAccountResolution();
+    const listedAccount = reuseProjectList ? sessionRef.current?.userId : null;
     try {
       await refreshCloudAccount(
         keySessionRevision,
         ownsAuth,
         ownsHealth,
         isCurrent,
-        () => endAccountResolution(accountResolution)
+        () => endAccountResolution(accountResolution),
+        listedAccount
       );
     } finally {
       endAccountResolution(accountResolution);
@@ -14543,7 +14525,8 @@ export function App() {
     ownsAuth: () => boolean,
     ownsHealth: () => boolean,
     isCurrent: () => boolean,
-    accountKnown: () => void
+    accountKnown: () => void,
+    listedAccount: UserId | null | undefined
   ) {
     void api
       .health()
@@ -14614,15 +14597,13 @@ export function App() {
       setAccountSettings(remoteSettings);
       accountKnown();
       setCollaborationRollout(collaborationCapabilities);
-      const listed = await loadProjectSummaries(
-        sessionRef.current?.userId ?? null
-      );
-      if (!isCurrent()) {
-        return;
+      if (activeSession.userId !== listedAccount) {
+        const listed = await loadProjectSummaries(activeSession.userId);
+        if (!isCurrent()) return;
+        setProjects(listed.projects);
+        setCloudProjectIds(listed.cloudProjectIds);
+        setAccountProjectListReached(listed.remoteReached);
       }
-      setProjects(listed.projects);
-      setCloudProjectIds(listed.cloudProjectIds);
-      setAccountProjectListReached(listed.remoteReached);
       setSettingsMessage('Cloud profile connected.');
       setStatus(LIBRARY_MODE_STATUS.cloudReady);
     } catch {
@@ -14656,7 +14637,8 @@ export function App() {
       return;
     }
     setSettingsMessage('');
-    void refreshCloudConnection();
+    // The shelf watcher refreshes when Settings closes.
+    void refreshCloudConnection(true);
   }
 
   function closeSettings() {

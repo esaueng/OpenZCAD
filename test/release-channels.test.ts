@@ -61,6 +61,8 @@ describe('stable channel configuration', () => {
   it('matches beta except for the differences a channel needs', () => {
     const beta = read('wrangler.jsonc');
     const stable = read('wrangler.stable.jsonc');
+    expect(beta.vars.ACCOUNT_READ_LIMIT_PER_MINUTE).toBe('3000');
+    expect(stable.vars.ACCOUNT_READ_LIMIT_PER_MINUTE).toBeUndefined();
     const strip = (config: Config) => {
       const copy = structuredClone(config);
       for (const key of [
@@ -75,6 +77,7 @@ describe('stable channel configuration', () => {
       ])
         delete copy[key];
       for (const key of [
+        'ACCOUNT_READ_LIMIT_PER_MINUTE',
         'GLIMPSE_BASIC_ENABLED',
         'GLIMPSE_USAGE_ENABLED',
         'PUBLIC_APP_ORIGIN',
@@ -87,7 +90,17 @@ describe('stable channel configuration', () => {
     expect(strip(stable)).toEqual(strip(beta));
     const limits = (config: Config) =>
       config.ratelimits.map(({ name, simple }) => ({ name, simple }));
-    expect(limits(stable)).toEqual(limits(beta));
+    expect(
+      beta.ratelimits.find(({ name }) => name === 'ACCOUNT_READ_LIMITER')
+        ?.simple
+    ).toEqual({ limit: 3000, period: 60 });
+    expect(limits(stable)).toEqual(
+      limits(beta).map((entry) =>
+        entry.name === 'ACCOUNT_READ_LIMITER'
+          ? { ...entry, simple: { limit: 1200, period: 60 } }
+          : entry
+      )
+    );
   });
 
   it('mails sign-in codes and invitations from each channel’s own domain', () => {

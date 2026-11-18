@@ -357,6 +357,7 @@ function assertEditorLeaseEligible(
 }
 
 const PROJECT_ROUTE = /^\/api\/projects\/([^/]+)$/;
+const PROJECT_VERSION_ROUTE = /^\/api\/projects\/([^/]+)\/version$/;
 const PROJECT_DUPLICATE_ROUTE = /^\/api\/projects\/([^/]+)\/duplicate$/;
 const PROJECT_SHELF_RESET_ROUTE = /^\/api\/projects\/([^/]+)\/shelf\/reset$/;
 const PROJECT_REVISIONS_ROUTE = /^\/api\/projects\/([^/]+)\/revisions$/;
@@ -2021,6 +2022,16 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     request.method,
     pathname
   );
+
+  const projectVersionMatch = PROJECT_VERSION_ROUTE.exec(pathname);
+  if (request.method === 'GET' && projectVersionMatch) {
+    // Reading the document still goes through its format-specific route.
+    const documentVersion = await persistence.getProjectVersion(
+      userId,
+      projectVersionMatch[1]!
+    );
+    return json({ documentVersion });
+  }
 
   if (request.method === 'GET' && pathname === '/api/settings') {
     return json(await getAppSettings(userId, env, session.email));

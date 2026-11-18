@@ -164,7 +164,12 @@ export const REQUEST_LIMITS = {
 
 export type RequestLimiter = keyof typeof REQUEST_LIMITS;
 
-export type RequestLimiterEnv = { [Name in RequestLimiter]?: WorkersRateLimit };
+export type RequestLimiterEnv = {
+  [Name in RequestLimiter]?: WorkersRateLimit;
+} & {
+  /** Must match the account-read binding when it overrides the default. */
+  ACCOUNT_READ_LIMIT_PER_MINUTE?: string;
+};
 
 /**
  * Counts one request against `bucket` and the limiter's limit: in the named
@@ -174,7 +179,8 @@ export type RequestLimiterEnv = { [Name in RequestLimiter]?: WorkersRateLimit };
 export async function enforceRequestLimit(
   env: CloudflareEnv & RequestLimiterEnv,
   limiter: RequestLimiter,
-  bucket: string
+  bucket: string,
+  fallbackLimit: number = REQUEST_LIMITS[limiter]
 ): Promise<void> {
   if (env.ENVIRONMENT === 'development' && env.PRODUCTION_GUARD === undefined)
     return;
@@ -192,7 +198,7 @@ export async function enforceRequestLimit(
       return;
     }
   }
-  await enforceApiRateLimit(env, bucket, REQUEST_LIMITS[limiter]);
+  await enforceApiRateLimit(env, bucket, fallbackLimit);
 }
 
 /**
@@ -225,7 +231,13 @@ export async function enforceAccountReadRateLimit(
   env: CloudflareEnv & RequestLimiterEnv,
   userId: string
 ): Promise<void> {
-  await enforceRequestLimit(env, 'ACCOUNT_READ_LIMITER', `api-read:${userId}`);
+  const limit = Number(env.ACCOUNT_READ_LIMIT_PER_MINUTE);
+  await enforceRequestLimit(
+    env,
+    'ACCOUNT_READ_LIMITER',
+    `api-read:${userId}`,
+    Number.isSafeInteger(limit) && limit > 0 ? limit : undefined
+  );
 }
 
 /**

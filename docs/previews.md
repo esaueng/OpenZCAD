@@ -17,7 +17,7 @@ binding and var it reads comes from the `previews` block:
 | `ARTIFACTS` (R2) | `openzcad-preview-artifacts`, shared by all Previews |
 | `PROJECT_ROOM` (Durable Object) | A new namespace per Preview, created by Cloudflare |
 | `EMAIL` | The production sender, so sign-in codes arrive |
-| Rate limits | The production limits, in their own namespaces |
+| Rate limits | Standard limits in their own namespaces. Signed-in account reads stay at 1,200 per minute, while beta allows 3,000. |
 | `GLIMPSE` (service) | None; Preview analytics are off |
 
 `PUBLIC_APP_ORIGIN` is unset in Previews, so invitation email answers 503

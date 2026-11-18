@@ -235,6 +235,9 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
 
   // Plaintext projects.
   [String.raw`/^\/api\/projects\/([^/]+)$/`]: [[P, 'none']],
+  [String.raw`/^\/api\/projects\/([^/]+)\/version$/`]: [
+    [`${P}/version`, 'read']
+  ],
   [String.raw`/^\/api\/projects\/([^/]+)(\/.*)?$/`]: [
     [P, 'none'],
     [`${P}/document`, 'plaintext', ['PUT']]

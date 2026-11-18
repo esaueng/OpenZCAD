@@ -83,15 +83,17 @@ function browserHost(): LibraryRefreshHost {
 }
 
 /**
- * Calls `refresh` while the shelf is shown; returns the stop function. The
- * caller has just listed the shelf, so the first refresh waits for the
- * minimum gap. A refresh never overlaps the previous one. A refresh that
+ * Calls `refresh` while visible and returns the stop function. The shelf
+ * has just listed its projects, so its first refresh waits for the default
+ * minimum gap. The workspace can check on focus or reconnect immediately.
+ * A refresh never overlaps the previous one. A refresh that
  * reports `rateLimited`, or rejects with a rate limit (`rateLimitOf`),
  * backs off; any other outcome clears the backoff.
  */
 export function watchLibraryFreshness(
   refresh: () => Promise<void | LibraryRefreshOutcome>,
-  host: LibraryRefreshHost = browserHost()
+  host: LibraryRefreshHost = browserHost(),
+  { minimumGapMs = LIBRARY_REFRESH_MIN_GAP_MS } = {}
 ): LibraryFreshnessWatch {
   let stopped = false;
   let paused = false;
@@ -137,7 +139,7 @@ export function watchLibraryFreshness(
     }
     if (blocked()) return;
     const now = host.now();
-    if (now - lastStarted < LIBRARY_REFRESH_MIN_GAP_MS) return;
+    if (now - lastStarted < minimumGapMs) return;
     if (now < waitUntil) return;
     start();
   };
