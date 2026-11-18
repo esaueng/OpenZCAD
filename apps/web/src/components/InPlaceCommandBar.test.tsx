@@ -952,7 +952,7 @@ describe('the state pill', () => {
       });
       expect(pill).toHaveTextContent('Checking… 3 s');
       // Built: the count goes.
-      rerender(<InPlaceCommandBar {...props} canFinish previewPending />);
+      rerender(<InPlaceCommandBar {...props} canFinish />);
       expect(pill).toHaveTextContent(/^Preview$/);
       // The next value's preview counts from nothing again.
       rerender(

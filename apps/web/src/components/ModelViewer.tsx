@@ -9355,11 +9355,11 @@ export function ModelViewer({
     resetSketchSlotRef.current = resetSlotPlacement;
 
     function slotValue(field: SlotDimension): number | undefined {
-      const typed = slotKeys?.text[field];
-      if (typed) return Number(typed);
       if (slotEntry?.field === field && slotEntryValue !== null) {
         return slotEntryValue;
       }
+      const typed = slotKeys?.text[field];
+      if (typed) return Number(typed);
       return slotDraft?.[
         field === 'radius' ? 'pointerRadius' : 'centerSpacing'
       ];
@@ -9388,7 +9388,10 @@ export function ModelViewer({
         field: SlotDimension,
         value: string
       ) {
-        const typed = slotKeys?.text[field];
+        const typed =
+          slotEntry?.field === field && slotEntryValue !== null
+            ? undefined
+            : slotKeys?.text[field];
         setElementText(
           chip,
           `${SLOT_DIMENSIONS[field].label} ${typed === undefined ? value : typed || '…'} ${unitLabelRef.current}`
@@ -9442,13 +9445,12 @@ export function ModelViewer({
         slotEntry.cancel();
         return;
       }
-      slotKeys = null;
       slotEntryValue = null;
       hideSketchDimLabel();
       const chip = field === 'centerSpacing' ? slotSpacingChip : slotRadiusChip;
       const rect = chip.getBoundingClientRect();
-      const error = () => {
-        const dimension = SLOT_DIMENSIONS[field];
+      const error = (invalidField = field) => {
+        const dimension = SLOT_DIMENSIONS[invalidField];
         return `${dimension.label} must be at least ${dimension.minimum} ${unitLabelRef.current}.`;
       };
       const request: SketchSlotEntry = {
@@ -9465,12 +9467,23 @@ export function ModelViewer({
           if (slotEntry !== request) return null;
           if (value < SLOT_DIMENSIONS[field].minimum) return error();
           if (field === 'radius') {
+            const spacing = slotValue('centerSpacing');
+            if (
+              spacing !== undefined &&
+              (!Number.isFinite(spacing) ||
+                spacing < SLOT_DIMENSIONS.centerSpacing.minimum)
+            )
+              return error('centerSpacing');
             slotEntryValue = value;
             const shape = renderSlotPlacement();
             if (!shape) return error();
             placeSlot(shape);
           } else {
             draft.centerSpacing = value;
+            if (slotKeys) {
+              delete slotKeys.text.centerSpacing;
+              if (!slotKeys.text.radius) slotKeys = null;
+            }
             request.cancel();
           }
           return null;
@@ -9480,7 +9493,7 @@ export function ModelViewer({
           slotEntry = null;
           slotEntryValue = null;
           open(null);
-          onSketchSlotStageRef.current?.('radius');
+          onSketchSlotStageRef.current?.(slotKeys ? 'exact' : 'radius');
           renderSlotPlacement();
         }
       };
@@ -9492,18 +9505,22 @@ export function ModelViewer({
 
     function handleSlotPlacementKey(event: KeyboardEvent): boolean {
       if (!slotDraft || sketchModeRef.current?.tool !== 'slot') return false;
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        !slotChips.contains(target) &&
+        target.closest(
+          'dialog, [role="dialog"], [aria-modal="true"], button, [role="button"], a[href], summary'
+        )
+      )
+        return false;
       const handled = () => {
         event.preventDefault();
         event.stopPropagation();
         return true;
       };
       if (slotEntry) {
-        if (
-          event.key !== 'Escape' ||
-          (event.target instanceof Element &&
-            event.target.closest('.numeric-keypad'))
-        )
-          return false;
+        if (event.key !== 'Escape' || isTextEntryTarget(target)) return false;
         slotEntry.cancel();
         return handled();
       }

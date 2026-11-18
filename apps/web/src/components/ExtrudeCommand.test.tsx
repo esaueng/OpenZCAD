@@ -107,6 +107,7 @@ describe('in-place Extrude bar', () => {
     update({ resolvedChoice: cut, previewPending: true });
     expect(status).toHaveTextContent('Auto · Checking preview…');
     expect(status).not.toHaveTextContent('Cut · Plate');
+    expect(screen.getByText('Checking…', { exact: true })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Done' })).toBeEnabled();
 
     update({

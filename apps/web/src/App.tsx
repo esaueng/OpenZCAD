@@ -4630,9 +4630,9 @@ export function App() {
   const [sketchSlotStage, setSketchSlotStage] = useState<
     'radius' | 'exact' | null
   >(null);
-  const [sketchSlotEntryError, setSketchSlotEntryError] = useState<string | null>(
-    null
-  );
+  const [sketchSlotEntryError, setSketchSlotEntryError] = useState<
+    string | null
+  >(null);
   // A typed in-place value outside its command's range keeps the keypad
   // open with this sentence under the field, until the entry changes.
   const [keypadRangeError, setKeypadRangeError] = useState<{
@@ -5965,10 +5965,7 @@ export function App() {
       RegionExtrudePreviewCandidate,
       OffsetPreviewResult & { resolved: ResolvedExtrude }
     >({
-      build: (requestedDistance) => {
-        const distance = regionExtentIsDerived()
-          ? requestedDistance
-          : Math.round(requestedDistance * 1000) / 1000;
+      build: (distance) => {
         const base = managerRef.current?.document;
         const current = interactionRef.current;
         // To face with no face picked yet has nothing to preview.
@@ -22166,10 +22163,13 @@ export function App() {
     interaction.mode === 'region'
       ? `${interaction.target.sketchId}:${interaction.targets.map((target) => target.regionFingerprint).join(',')}:${JSON.stringify(interaction.extrudeChoice)}`
       : null;
+  const regionPreviewProjectId = regionInteractionKey ? doc?.projectId : null;
+  const regionPreviewVersion = regionInteractionKey ? doc?.version : null;
   useEffect(() => {
+    const current = interactionRef.current;
+    if (current.mode === 'region' && current.phase === 'validating') return;
     setPreviewDeferred(false);
     setLastValidPreview(null);
-    const current = interactionRef.current;
     const distance =
       current.mode === 'region'
         ? (regionExtrudeSettings.current?.distance ?? current.lastValue)
@@ -22187,11 +22187,17 @@ export function App() {
         // Incomplete expressions keep the form open without a preview.
       }
     }
-    // A new choice or region set replaces the preview on screen when it
-    // lands, rather than blanking it for the rebuild.
+    // Replace the preview when the choice, profile set, or base revision
+    // changes. Keep the last frame visible until the replacement lands.
     if (resolved === null) regionExtrudePreview.clear();
     else replaceRegionExtrudePreview(resolved);
-  }, [regionInteractionKey, regionExtrudePreview, replaceRegionExtrudePreview]);
+  }, [
+    regionInteractionKey,
+    regionPreviewProjectId,
+    regionPreviewVersion,
+    regionExtrudePreview,
+    replaceRegionExtrudePreview
+  ]);
 
   /**
    * The sketch plane basis is memoized on the session's plane reference
@@ -28241,13 +28247,16 @@ export function App() {
     // its dormant distance only has to be non-zero, not three decimals deep
     // (a face 0.4 mm away in a metre document is 0.0004).
     const derived = regionExtentIsDerived();
-    let rounded = derived ? distance : Math.round(distance * 1000) / 1000;
-    if (rounded === 0) {
+    let commitDistance =
+      exact !== undefined || derived
+        ? distance
+        : Math.round(distance * 1000) / 1000;
+    if (commitDistance === 0) {
       if (!derived) return;
       // A derived extent ignores the distance, so a dormant zero (`0 mm`, a
       // parameter at 0) is stored as the same non-zero sentinel the card
       // sends for an untouched one.
-      rounded = 1;
+      commitDistance = 1;
       exact = 1;
     }
     const preview = reusableRegionExtrudePreview.current;
@@ -28260,7 +28269,7 @@ export function App() {
     regionExtrudePreview.stop();
     setRegionExtrudeChecking(false);
     setPreviewDeferred(false);
-    const input = regionExtrudeInputFor(target, exact ?? rounded);
+    const input = regionExtrudeInputFor(target, exact ?? commitDistance);
     const choice = regionExtrudeSettings.current?.choice ??
       interaction.extrudeChoice ?? {
         operation: 'automatic' as const
@@ -28286,9 +28295,13 @@ export function App() {
           selected,
           selectedProfilesRef.current
         );
-      const faceAttachment = regionExtrudeFaceAttachment(base, target, rounded);
+      const faceAttachment = regionExtrudeFaceAttachment(
+        base,
+        target,
+        commitDistance
+      );
       setBusy(true);
-      dispatchInteraction({ type: 'validation-start', value: rounded });
+      dispatchInteraction({ type: 'validation-start', value: commitDistance });
       setStatus(
         choice.operation === 'automatic'
           ? 'Classifying the extrusion against the model…'
@@ -28350,8 +28363,8 @@ export function App() {
         const committed = await executeValidatedDirectEdit(
           command,
           resultBodyId,
-          regionExtrudeOutcome(resolved, rounded, doc?.units),
-          rounded,
+          regionExtrudeOutcome(resolved, commitDistance, doc?.units),
+          commitDistance,
           () => {
             setSelectedProfiles([]);
             // G15: Create closes the extrude as Box, Hole and Fillet close
@@ -28375,7 +28388,7 @@ export function App() {
           regionExtrudePreview.clear();
           reportPreviewFailure(
             errorMessage(error, 'The selected extrusion could not be created.'),
-            rounded
+            commitDistance
           );
         }
       } finally {
@@ -30031,7 +30044,10 @@ export function App() {
       if (current.phase === 'validating') {
         return;
       }
-      if (Math.abs(offset) <= 1e-9) {
+      const distance = regionExtentIsDerived()
+        ? offset
+        : Math.round(offset * 1000) / 1000;
+      if (Math.abs(distance) <= 1e-9) {
         regionExtrudePreview.clear();
         setPreviewDeferred(false);
         setPreviewVerdict({ value: offset, status: 'unchecked' });
@@ -30039,7 +30055,7 @@ export function App() {
         return;
       }
       setRegionExtrudeChecking(true);
-      if (!regionExtrudePreview.request(offset)) {
+      if (!regionExtrudePreview.request(distance)) {
         setRegionExtrudeChecking(false);
         setPreviewVerdict({ value: offset, status: 'unchecked' });
       }
@@ -35439,21 +35455,30 @@ export function App() {
     (!modelingLocked || drawingMode);
   const assistantHidden = directMode;
   const commandSession = commandSessionFor(interaction);
+  const regionPreviewDistance =
+    interaction.mode === 'region' && interaction.phase === 'dragging'
+      ? lastValidPreview
+      : typeof regionExtrudeState?.value.distance === 'number'
+        ? regionExtrudeState.value.distance
+        : (regionExtrudeState?.distance ?? null);
   const regionExtrudeResolution =
     interaction.mode === 'region' &&
     interaction.phase !== 'validating' &&
     !regionExtrudeChecking &&
     previewDoc &&
-    lastValidPreview !== null
+    regionPreviewDistance !== null
       ? reuseResolvedExtrudePreview(reusableRegionExtrudePreview.current, {
           base: doc,
-          input: regionExtrudeInputFor(interaction.target, lastValidPreview),
+          input: regionExtrudeInputFor(
+            interaction.target,
+            regionPreviewDistance
+          ),
           choice: regionExtrudeSettings.current?.choice ??
             interaction.extrudeChoice ?? { operation: 'automatic' },
           faceAttachment: regionExtrudeFaceAttachment(
             doc,
             interaction.target,
-            lastValidPreview
+            regionPreviewDistance
           )
         })
       : null;
@@ -38402,7 +38427,9 @@ export function App() {
                     !(keypad?.kind === 'command' && commandEntryError)
                   }
                   previewPending={
-                    inPlace.request !== null && inPlace.refusal === null
+                    inPlace.request !== null &&
+                    !inPlace.canFinish &&
+                    inPlace.refusal === null
                   }
                   options={inPlace.optionSpecs.map((option) => ({
                     ...option,

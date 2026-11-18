@@ -481,10 +481,13 @@ export function ExtrudeCommand({
     const text = draft[valueId];
     const plain = Number(text.trim());
     const unit = valueId === 'draftAngle' ? '°' : ` ${units}`;
+    const formatted = formatNumber(plain);
     return {
       id: valueId,
       label: VALUE_LABELS[valueId],
-      text: Number.isFinite(plain) ? `${formatNumber(plain)}${unit}` : text
+      text: Number.isFinite(plain)
+        ? `${Number(formatted) === plain ? formatted : plain}${unit}`
+        : text
     };
   });
 
@@ -510,6 +513,7 @@ export function ExtrudeCommand({
       hint={hint}
       refusal={toFacePicking?.armed ? null : refusal}
       canFinish={canFinish}
+      previewPending={checking}
       // While a Done is checked (or an exact operation holds the model) the
       // draft it captured is the one shown: only Cancel takes input.
       locked={disabled}

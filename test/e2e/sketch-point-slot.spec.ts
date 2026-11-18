@@ -292,6 +292,52 @@ test('types both slot sizes after the center picks and cancels one rung at a tim
   expect(composites).toHaveLength(1);
 });
 
+test('keeps typed slot spacing across dialog focus and radius keypad entry', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const at = await startSketch(page, 'Mixed slot entry');
+  const first = at(0.35, 0.55);
+  const second = at(0.56, 0.55);
+  const spacing = page.getByRole('button', { name: /^Center spacing / });
+  const radius = page.getByRole('button', { name: /^Radius .* mm$/ });
+
+  await shapeTile(page, 'Slot');
+  await page.mouse.click(first.x, first.y);
+  await page.mouse.click(second.x, second.y);
+  await expect(spacing).not.toHaveAccessibleName('Center spacing 40 mm');
+  await page.keyboard.type('40');
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('5');
+
+  await page.keyboard.press('ControlOrMeta+Shift+s');
+  const save = page.getByRole('dialog', { name: 'Name this save' });
+  await save.getByRole('button', { name: 'Cancel' }).press('Enter');
+  await expect(save).toBeHidden();
+  await expect(spacing).toHaveAccessibleName('Center spacing 40 mm');
+
+  await radius.click();
+  const pad = page.getByRole('dialog', { name: 'Radius value' });
+  await pad.locator('input').fill('3');
+  await pad.getByRole('button', { name: 'Apply radius' }).click();
+  await expect(pad).toBeHidden();
+  await expect(spacing).toBeHidden();
+
+  const { objects, composites } = await exportSketch(page);
+  const center = objects.find(
+    ({ data }) => data.objectKind === 'line' && data.construction
+  )?.data;
+  if (center?.objectKind !== 'line')
+    throw new Error('Slot center line is missing.');
+  expect(Number(center.x2) - Number(center.x1)).toBeCloseTo(40, 10);
+  expect(
+    objects.flatMap(({ data }) =>
+      data.objectKind === 'arc' ? [data.radius] : []
+    )
+  ).toEqual([3, 3]);
+  expect(composites).toHaveLength(1);
+});
+
 test.describe('slot touch entry', () => {
   test.use({ hasTouch: true });
 
