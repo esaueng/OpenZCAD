@@ -316,6 +316,12 @@ export class CameraController {
   private readonly sixDofZoomNdc = new THREE.Vector2(0, 0);
   /** What the current 3D mouse motion turns about; null is the target. */
   private sixDofPivot: THREE.Vector3 | null = null;
+  /**
+   * Canvas rotation is off (a sketch keeps the view on its plane). Held here
+   * rather than only on the controls, because a projection switch builds
+   * fresh OrbitControls, whose `enableRotate` starts out true.
+   */
+  private rotationLocked = false;
 
   constructor(options: CameraControllerOptions) {
     this.options = options;
@@ -664,6 +670,7 @@ export class CameraController {
     camera.up.copy(heldUp);
     orbit.enableDamping = true;
     orbit.dampingFactor = DRAG_DAMPING;
+    orbit.enableRotate = !this.rotationLocked;
     // In free mode there is no polar clamp: an orbit carries straight over
     // the top and bottom. A turntable leaves the stock clamped rotation.
     installFreeOrbit(
@@ -1507,6 +1514,15 @@ export class CameraController {
     // remains storage-free and its release re-arms this settle path.
     this.emitViewChange();
     this.scheduleSettledViewChange();
+  }
+
+  /**
+   * Turns canvas rotation off or back on. The lock outlives a projection
+   * switch, which rebuilds the controls; the view cube still orbits.
+   */
+  setRotationLocked(locked: boolean) {
+    this.rotationLocked = locked;
+    this.orbit.enableRotate = !locked;
   }
 
   /**

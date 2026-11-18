@@ -601,6 +601,24 @@ describe('CameraController external orbit lifecycle', () => {
     controller.dispose();
   });
 
+  it('keeps canvas rotation locked through a projection switch (sketch mode)', () => {
+    const { controller } = createController(false);
+    // Sketch entry locks rotation, then its glide lands by switching to
+    // orthographic, which rebuilds the orbit controls.
+    controller.setRotationLocked(true);
+    expect(controller.controls.enableRotate).toBe(false);
+    controller.applyProjection('orthographic');
+    expect(controller.controls.enableRotate).toBe(false);
+    controller.applyProjection('perspective');
+    expect(controller.controls.enableRotate).toBe(false);
+    // Leaving the sketch hands rotation back, and later rebuilds keep it.
+    controller.setRotationLocked(false);
+    expect(controller.controls.enableRotate).toBe(true);
+    controller.applyProjection('orthographic');
+    expect(controller.controls.enableRotate).toBe(true);
+    controller.dispose();
+  });
+
   it('cancels an active external orbit and pending settle on dispose', () => {
     const { controller, requestRender, onViewChange, onViewSettled } =
       createController(false);
