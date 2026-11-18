@@ -13057,11 +13057,10 @@ export function App() {
     // captured `interaction` predates both. Reading it live is what lets the
     // disarm below actually fire for the handle the right-click just armed.
     const liveInteraction = interactionRef.current;
-    // A toolbar command owns the next gesture. Preserve the body selection
-    // that pre-fills Move/boolean forms, but disarm any selection-first face or
-    // edge handle so two manipulators can never claim the same pointer.
+    // A toolbar command owns the next gesture. Keep the body selection for
+    // Move/boolean forms and release any armed handles or Extrude profile picks.
     cancelDirectManipulationRef.current?.();
-    if (liveInteraction.mode !== 'idle') {
+    if (liveInteraction.mode !== 'idle' || liveInteraction.boxSelectProfiles) {
       cylinderRadiusPreview.clear();
       clearEdgePreview();
       dispatchInteraction({ type: 'clear' });
@@ -13242,6 +13241,10 @@ export function App() {
 
   /** Closes the feature panel alone, leaving the selection where it is. */
   function closeFeaturePanel() {
+    const current = interactionRef.current;
+    if (current.mode === 'idle' && current.boxSelectProfiles) {
+      dispatchInteraction({ type: 'clear' });
+    }
     // An in-place command is the panel it replaced: whatever closes panels
     // (another tool, a workspace switch, Measure) ends it too, quietly,
     // since the action that closed it says what happened.

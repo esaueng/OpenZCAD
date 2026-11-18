@@ -18,6 +18,7 @@ import {
   MODEL_ONLY,
   bodyCardFromHistory,
   extrudeBar,
+  pressTool,
   setBarValues,
   waitForStillViewport
 } from './openzcad-fixtures';
@@ -167,8 +168,8 @@ test(
                 points: [
                   [10, 29, 8],
                   [51, 11, 8],
-                  [36, 45, 8],
-                  [30, 35, 8],
+                  [82, 45, 8],
+                  [70, 35, 8],
                   [42, 29, 8],
                   [58, 11, 8]
                 ],
@@ -190,8 +191,8 @@ test(
       await page.mouse.move(to.x, to.y, { steps: 8 });
       await page.mouse.up();
     }
-    // A plain profile click shows an Extrude handle, but a normal sweep
-    // still selects bodies until the user launches Extrude explicitly.
+    // A plain profile click shows an Extrude handle. A normal sweep starting
+    // outside the plate still selects it until the user launches Extrude.
     await pickProfile(canvas, 0);
     await expect(editor).toBeVisible();
     await sweep(bodyRight!, bodyLeft!);
@@ -203,6 +204,18 @@ test(
     await page.keyboard.press('e');
     await expect(status).toContainText('Open outline is not closed');
     await expect(editor).toHaveCount(0);
+    // Image takes over the tool without installing a panel or changing the
+    // selection. Dismissing its file picker must leave normal body sweeps.
+    const chooser = page.waitForEvent('filechooser');
+    await pressTool(page, /^Image — /);
+    await (await chooser).setFiles([]);
+    await sweep(bodyRight!, bodyLeft!);
+    await expect(status).toContainText('1 body selected.');
+    await expect(editor).toHaveCount(0);
+    await page.keyboard.press('Escape');
+
+    await page.keyboard.press('e');
+    await expect(status).toContainText('Open outline is not closed');
     // The same rectangle encloses the first profile (with an opening) and
     // crosses the second. It must not cut the center of the first as well.
     await sweep(left!, right!);
