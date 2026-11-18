@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./exact": "./src/exact.ts",
+    "./sketch-2d-ops": "./src/sketch-2d-ops.ts",
     "./face-attachment": "./src/face-attachment.ts",
     "./topology-lineage": "./src/topology-lineage.ts",
     "./extrude-inference": "./src/extrude-inference.ts",

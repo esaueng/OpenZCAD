@@ -27,14 +27,21 @@ function apply(document: ProjectDocument, commands: AnyCommand[]) {
   }, document);
 }
 
+export interface SketchEditValidation {
+  isCurrent(): boolean;
+  checkCandidate(document: ProjectDocument): Promise<void>;
+}
+
 /** Check the same exact downstream branch that a sketch edit will rebuild. */
 export async function checkSketchEdit(
   base: ProjectDocument,
   sketchId: SketchId,
   commands: AnyCommand[],
-  derive: (document: ProjectDocument) => Promise<ProjectDocument['derived']>
+  derive: (document: ProjectDocument) => Promise<ProjectDocument['derived']>,
+  checkCandidate?: (document: ProjectDocument) => Promise<void>
 ) {
   const document = apply(base, commands);
+  if (checkCandidate) await checkCandidate(document);
   const source = listFeaturesInOrder(document).find(
     (feature) =>
       feature.data.featureKind === 'sketch' &&

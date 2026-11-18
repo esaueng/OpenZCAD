@@ -8,6 +8,7 @@ import {
 } from '@openzcad/viewport';
 import type { PlaneBasis } from '@openzcad/geometry';
 import type { SketchObjectData } from '@openzcad/shared';
+import type { SketchFilletBatchPlan } from '../../lib/sketch/filletBatch';
 import {
   adaptiveGridSpacing,
   type SketchInferenceSegment,
@@ -115,6 +116,11 @@ export interface SketchModeRig {
    * call restores it. Null ends the preview.
    */
   setPreviewObject(objectId: string | null, data?: SketchObjectData): void;
+  /** Draws a fillet draft while preserving the original line pick proxies. */
+  setFilletPreview(
+    plan: SketchFilletBatchPlan | null,
+    firstLine?: string
+  ): void;
   /** Updates the adaptive sketch-local grid and returns its minor spacing. */
   setGrid(worldPerPixel: number, visible: boolean): number;
   /** Closed profiles derived from the canonical sketch objects. */
@@ -378,6 +384,10 @@ export function buildSketchModeRig(
   previewGroup.name = 'sketch-move-preview';
   group.add(previewGroup);
 
+  const filletGroup = new THREE.Group();
+  filletGroup.name = 'sketch-fillet-preview';
+  group.add(filletGroup);
+
   const profileGroup = new THREE.Group();
   profileGroup.name = 'sketch-profiles';
   group.add(profileGroup);
@@ -498,18 +508,50 @@ export function buildSketchModeRig(
   let committed: CommittedState | null = null;
   /** The object a preview stands in for; hidden from the committed draw. */
   let previewedId: string | null = null;
+  let profilesVisible = false;
+  let filletLines = new Map<string, 'trimmed' | 'conflict'>();
+  let filletFirstLine: string | undefined;
 
-  const objectColor = (
+  const objectStyle = (
     state: CommittedState,
     id: string,
     construction: boolean
-  ) =>
-    committedSketchColor({
-      diagnostic: state.diagnosticIds.has(id),
-      selected: state.selectedIds.has(id),
-      defined: state.definedIds.has(id),
-      construction
+  ) => {
+    const diagnostic =
+      state.diagnosticIds.has(id) || filletLines.get(id) === 'conflict';
+    const selected = state.selectedIds.has(id) || filletFirstLine === id;
+    return {
+      color: committedSketchColor({
+        diagnostic,
+        selected,
+        defined: state.definedIds.has(id),
+        construction
+      }),
+      linewidth: SKETCH_LINE_WIDTH + (selected ? 1.2 : 0),
+      opacity: diagnostic ? 1 : construction ? 0.72 : 0.95
+    };
+  };
+  const committedVisible = (id: string) =>
+    id !== previewedId && filletLines.get(id) !== 'trimmed';
+
+  const appendVisual = (
+    container: THREE.Group,
+    vertices: THREE.Vector3[],
+    style: { color: number; linewidth: number; opacity: number },
+    closed = false
+  ) => {
+    const visual = createSketchCurve(vertices, {
+      ...style,
+      depthTest: true,
+      closed,
+      resolution: resolution()
     });
+    visual.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
+    visual.frustumCulled = false;
+    visual.raycast = () => undefined;
+    container.add(visual);
+    return visual;
+  };
 
   /**
    * One object's pick proxies and fat lines, added to `container`; its snap
@@ -523,10 +565,8 @@ export function buildSketchModeRig(
     dotPositions: number[],
     dotColors: number[]
   ) => {
-    const diagnostic = state.diagnosticIds.has(object.id);
     const construction = object.data.construction === true;
-    const color = objectColor(state, object.id, construction);
-    const opacity = diagnostic ? 1 : construction ? 0.72 : 0.95;
+    const style = objectStyle(state, object.id, construction);
     // One object can draw several runs — a text object is one loop per
     // glyph region plus one per counter.
     let polylines: SketchObjectPolyline[];
@@ -576,31 +616,22 @@ export function buildSketchModeRig(
       pickProxy.userData.pickProxy = true;
       container.add(pickProxy);
 
-      const visual = createSketchCurve(vertices, {
-        color,
-        linewidth:
-          SKETCH_LINE_WIDTH + (state.selectedIds.has(object.id) ? 1.2 : 0),
-        opacity,
-        depthTest: true,
-        closed: polyline.closed,
-        resolution: resolution()
-      });
+      const visual = appendVisual(container, vertices, style, polyline.closed);
       if (object.data.construction) {
         visual.material.dashed = true;
         visual.material.dashSize = 1.4;
         visual.material.gapSize = 1;
       }
-      visual.renderOrder = VIEWPORT_RENDER_ORDER.ACTIVE_SKETCH;
-      visual.frustumCulled = false;
-      visual.raycast = () => undefined; // the proxy is the only pick target
       visual.userData.sketchObjectId = object.id;
-      container.add(visual);
+      visual.visible =
+        container !== committedGroup || committedVisible(object.id);
     }
     // The constraint-schema snap points wear the object's own colour,
     // so the defined-state tint covers points with no second code path.
     // Dots never pick: the proxy lines above stay the only pick targets.
+    if (container === committedGroup && !committedVisible(object.id)) return;
     try {
-      const dotColor = new THREE.Color(color);
+      const dotColor = new THREE.Color(style.color);
       for (const marker of sketchObjectMarkerPoints(
         object.data,
         state.resolve
@@ -655,15 +686,10 @@ export function buildSketchModeRig(
   };
 
   /**
-   * The committed dots, less the previewed object's. Every object's dots
-   * share one buffer, so hiding one object's means rebuilding the buffer —
-   * marker points only, no polylines or glyph layout — once per preview,
-   * not per frame.
+   * Rebuilds the shared dot buffer when a preview hides or highlights an
+   * object. The committed lines and pick proxies stay in place.
    */
-  const rebuildCommittedDots = (
-    state: CommittedState,
-    skipId: string | null
-  ) => {
+  const rebuildCommittedDots = (state: CommittedState) => {
     const existing = committedGroup.getObjectByName('sketch-snap-points');
     if (existing instanceof THREE.Points) {
       committedGroup.remove(existing);
@@ -677,12 +703,12 @@ export function buildSketchModeRig(
       state.objects,
       state.textBudgetError
     )) {
-      if (object.id === skipId) {
+      if (!committedVisible(object.id)) {
         continue;
       }
       try {
         dotColor.set(
-          objectColor(state, object.id, object.data.construction === true)
+          objectStyle(state, object.id, object.data.construction === true).color
         );
         for (const marker of sketchObjectMarkerPoints(
           object.data,
@@ -747,32 +773,31 @@ export function buildSketchModeRig(
           disposeChildren(previewGroup);
           for (const child of committedGroup.children) {
             if (
-              child.userData.sketchObjectId === previewedId &&
-              child.userData.pickProxy !== true
+              child instanceof Line2 &&
+              child.userData.sketchObjectId === previewedId
             ) {
-              child.visible = true;
+              child.visible = filletLines.get(previewedId) !== 'trimmed';
             }
           }
-          rebuildCommittedDots(state, null);
           previewedId = null;
+          rebuildCommittedDots(state);
         }
         return;
       }
       if (previewedId !== objectId) {
         // First frame of this preview: hide the stored object once.
         for (const child of committedGroup.children) {
-          if (child.userData.pickProxy === true) {
-            continue;
+          if (!(child instanceof Line2)) continue;
+          const id = child.userData.sketchObjectId as string;
+          if (id === previewedId) {
+            child.visible = filletLines.get(id) !== 'trimmed';
           }
-          if (child.userData.sketchObjectId === previewedId) {
-            child.visible = true;
-          }
-          if (child.userData.sketchObjectId === objectId) {
+          if (id === objectId) {
             child.visible = false;
           }
         }
-        rebuildCommittedDots(state, objectId);
         previewedId = objectId;
+        rebuildCommittedDots(state);
       }
       disposeChildren(previewGroup);
       // The moved object answers to the same text budget as the committed
@@ -794,6 +819,78 @@ export function buildSketchModeRig(
       appendObject(previewGroup, state, previewEntry, dotPositions, dotColors);
       appendDots(previewGroup, dotPositions, dotColors);
     },
+    setFilletPreview(plan, firstLine) {
+      const previous = filletLines;
+      const previousFirstLine = filletFirstLine;
+      filletLines = new Map();
+      filletFirstLine = firstLine;
+      disposeChildren(filletGroup);
+      if (plan?.status === 'refuse') {
+        for (const id of plan.lineIds) filletLines.set(id, 'conflict');
+      } else if (plan?.status === 'ready') {
+        const style = {
+          color: IN_PROGRESS_COLOR,
+          linewidth: SKETCH_LINE_WIDTH,
+          opacity: 0.95
+        };
+        for (const line of plan.lines) {
+          filletLines.set(line.objectId, 'trimmed');
+          appendVisual(
+            filletGroup,
+            [liftPoint(basis, line.start), liftPoint(basis, line.end)],
+            line.objectId === firstLine
+              ? { ...style, linewidth: SKETCH_LINE_WIDTH + 1.2 }
+              : style
+          );
+        }
+        for (const arc of plan.arcs) {
+          const [run] = objectPolylines(
+            {
+              objectKind: 'arc',
+              centerX: arc.center.x,
+              centerY: arc.center.y,
+              radius: arc.radius,
+              startAngleDeg: arc.startAngleDeg,
+              endAngleDeg: arc.endAngleDeg
+            },
+            Number
+          );
+          if (!run) continue;
+          // Use the planner's exact tangencies at both ends of the draw run.
+          run.points[0] = arc[arc.startsAt];
+          run.points[run.points.length - 1] =
+            arc[arc.startsAt === 'a' ? 'b' : 'a'];
+          appendVisual(
+            filletGroup,
+            run.points.map((point) => liftPoint(basis, point)),
+            style
+          );
+        }
+      }
+      // The stored fill still has its sharp corners. Keep it available for
+      // immediate restoration when the draft clears or refuses.
+      profileGroup.visible =
+        profilesVisible && filletGroup.children.length === 0;
+      const state = committed;
+      if (!state) return;
+      let dotsChanged = false;
+      for (const child of committedGroup.children) {
+        if (!(child instanceof Line2)) continue;
+        const id = child.userData.sketchObjectId as string;
+        const firstChanged =
+          previousFirstLine !== firstLine &&
+          (id === previousFirstLine || id === firstLine);
+        if (!firstChanged && previous.get(id) === filletLines.get(id)) continue;
+        const { material } = child;
+        const style = objectStyle(state, id, material.dashed);
+        material.color.set(style.color);
+        material.linewidth = style.linewidth;
+        material.opacity = style.opacity;
+        child.visible = committedVisible(id);
+        dotsChanged = true;
+      }
+      if (dotsChanged) rebuildCommittedDots(state);
+    },
     setGrid(worldPerPixel, visible) {
       const spacing = adaptiveGridSpacing(worldPerPixel);
       if (Math.abs(spacing - activeGridSpacing) > activeGridSpacing * 1e-9) {
@@ -805,7 +902,8 @@ export function buildSketchModeRig(
     },
     setProfiles(profiles, visible) {
       disposeChildren(profileGroup);
-      profileGroup.visible = visible;
+      profilesVisible = visible;
+      profileGroup.visible = visible && filletGroup.children.length === 0;
       if (!visible) {
         return;
       }
@@ -1043,6 +1141,7 @@ export function buildSketchModeRig(
       group.removeFromParent();
       disposeChildren(committedGroup);
       disposeChildren(previewGroup);
+      disposeChildren(filletGroup);
       disposeChildren(profileGroup);
       disposeChildren(textPreviewGroup);
       disposeGrid();

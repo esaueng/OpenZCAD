@@ -328,6 +328,7 @@ interface ViewerShellProps {
   onToggleEdgeOp?(): void;
   onDirectManipulationChange(dragging: boolean, source?: 'move'): void;
   sketchMode: SketchModeState | null;
+  sketchFillet?: ModelViewerProps['sketchFillet'];
   /** Where the text card's live outline sits; the card's Place reads it. */
   sketchTextAnchorRef?: MutableRefObject<{ x: number; y: number } | null>;
   onSketchCommit(object: SketchObjectData): void;
@@ -584,6 +585,7 @@ export function ViewerShell({
   onToggleEdgeOp,
   onDirectManipulationChange,
   sketchMode,
+  sketchFillet,
   sketchTextAnchorRef,
   onSketchCommit,
   onSketchCommitComposite,
@@ -1084,6 +1086,7 @@ export function ViewerShell({
         onToggleEdgeOp={onToggleEdgeOp}
         onDirectManipulationChange={onDirectManipulationChange}
         sketchMode={sketchMode}
+        sketchFillet={sketchFillet}
         sketchTextAnchorRef={sketchTextAnchorRef}
         onSketchCommit={onSketchCommit}
         onSketchCommitComposite={onSketchCommitComposite}
