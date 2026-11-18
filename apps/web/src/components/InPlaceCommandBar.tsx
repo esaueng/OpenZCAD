@@ -1,5 +1,6 @@
 import { Check, MoreHorizontal, SlidersHorizontal, X } from 'lucide-react';
 import {
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -104,6 +105,12 @@ export interface InPlaceCommandBarProps {
    * offers it as one press: "Use 6.25 mm".
    */
   onTrySize?(dimension: SmallerSize['dimension'], size: number): void;
+  /** Guidance and a secondary action for an accepted preview. */
+  recovery?: {
+    hint: ReactNode;
+    label: string;
+    onActivate(): void;
+  };
   /**
    * Rarely used choices (a hole's style, a draft's pull direction), behind
    * a disclosure: each a short row of mutually exclusive buttons.
@@ -186,6 +193,7 @@ export function InPlaceCommandBar({
   refusal = null,
   unitLabel = null,
   onTrySize,
+  recovery,
   options = [],
   onOption,
   onPreciseValues,
@@ -206,6 +214,18 @@ export function InPlaceCommandBar({
   onCancel
 }: InPlaceCommandBarProps) {
   const commandRef = useRef<HTMLDivElement>(null);
+  const recoveryEnterHeld = useRef(false);
+  const restoreRecoveryFocus = useCallback(
+    (button: HTMLButtonElement | null) => {
+      if (!button) return;
+      return () => {
+        if (button.ownerDocument.activeElement === button) {
+          commandRef.current?.focus({ preventScroll: true });
+        }
+      };
+    },
+    []
+  );
   const pendingEntries = useRef<PendingEntries>(new Set()).current;
   /**
    * The Done press under way found an entry it could not apply: that press
@@ -230,6 +250,10 @@ export function InPlaceCommandBar({
   // 6 Enter" then Enter again lost the second Enter, and only one pressed
   // seconds later applied.
   const [queued, setQueued] = useState(false);
+  const shownRecovery =
+    canFinish && !previewPending && !locked && !queued && !refusal
+      ? recovery
+      : undefined;
   useEffect(() => {
     if (!queued) return;
     if (canFinish && !locked) {
@@ -299,6 +323,18 @@ export function InPlaceCommandBar({
     observer?.observe(element);
     return () => observer?.disconnect();
   }, [shown]);
+
+  function handleRecoveryKey(event: KeyboardEvent<HTMLButtonElement>) {
+    if (event.key === 'Enter') {
+      recoveryEnterHeld.current = event.type === 'keydown';
+      if (event.repeat) event.preventDefault();
+    } else if (event.key !== ' ') {
+      return;
+    }
+    // Leave the native click to the button and keep the keys from the workspace.
+    event.stopPropagation();
+  }
+
   return (
     <div
       ref={commandRef}
@@ -312,8 +348,17 @@ export function InPlaceCommandBar({
           return;
         event.preventDefault();
         event.stopPropagation();
+        // An Enter that revealed the model can still be held after the
+        // button disappears and focus returns here.
+        if (event.repeat && recoveryEnterHeld.current) return;
+        recoveryEnterHeld.current = false;
         if (canFinish && !locked) onDone();
         else if (previewPending && !locked && !refusal) setQueued(true);
+      }}
+      onKeyUp={(event) => {
+        if (event.key !== 'Enter' || !recoveryEnterHeld.current) return;
+        recoveryEnterHeld.current = false;
+        event.stopPropagation();
       }}
     >
       <span className="in-place-command-title">{title}</span>
@@ -341,7 +386,7 @@ export function InPlaceCommandBar({
         aria-live="polite"
         title={shown ?? undefined}
       >
-        {shown ?? hint}
+        {shown ?? shownRecovery?.hint ?? hint}
       </span>
       {shown && (clamped || expanded) ? (
         <button
@@ -381,6 +426,28 @@ export function InPlaceCommandBar({
           disabled={locked}
         >
           Precise values…
+        </button>
+      )}
+      {shownRecovery && (
+        <button
+          ref={restoreRecoveryFocus}
+          type="button"
+          className="in-place-command-cancel in-place-command-recovery"
+          onPointerDown={(event) => {
+            if (
+              event.button === 0 &&
+              event.currentTarget.ownerDocument.activeElement?.closest(
+                '.numeric-keypad'
+              )
+            ) {
+              event.preventDefault();
+            }
+          }}
+          onKeyDown={handleRecoveryKey}
+          onKeyUp={handleRecoveryKey}
+          onClick={shownRecovery.onActivate}
+        >
+          {shownRecovery.label}
         </button>
       )}
       {options.length > 0 ||

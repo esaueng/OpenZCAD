@@ -210,6 +210,15 @@ describe('projectionMatches', () => {
     ).toBe(true);
   });
 
+  it('keeps the signature from before measured bodies carried raw outer bounds', () => {
+    const next = projection(10);
+    Object.values(next.bodyRepresentations)[0]!.solidBounds = {
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 1, y: 2, z: 5 }
+    };
+    expect(projectionSignature(next)).toBe(signature(10));
+  });
+
   it('refuses a different measurement, hash, name, warning or shape', () => {
     const stored = signature(46453.13371217121);
     expect(projectionMatches(stored, signature(46453.1338))).toBe(false);

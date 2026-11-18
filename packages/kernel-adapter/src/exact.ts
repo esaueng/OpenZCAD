@@ -3285,6 +3285,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       min: { x: Infinity, y: Infinity, z: Infinity },
       max: { x: -Infinity, y: -Infinity, z: -Infinity }
     };
+    const solidBounds = { min: { ...bbox.min }, max: { ...bbox.max } };
     let volume = 0;
     const analysisJobs: (() => void)[] = [];
     let analysisRemaining = 0;
@@ -3298,6 +3299,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
     for (const solid of shape.solids) {
       const bounds = kernel.boundingBox(solid);
+      solidBounds.min.x = Math.min(solidBounds.min.x, bounds[0]!);
+      solidBounds.min.y = Math.min(solidBounds.min.y, bounds[1]!);
+      solidBounds.min.z = Math.min(solidBounds.min.z, bounds[2]!);
+      solidBounds.max.x = Math.max(solidBounds.max.x, bounds[3]!);
+      solidBounds.max.y = Math.max(solidBounds.max.y, bounds[4]!);
+      solidBounds.max.z = Math.max(solidBounds.max.z, bounds[5]!);
       // What the body publishes: the kernel's box, tightened to its display
       // mesh where that proves it loose (see exact-bounds.ts).
       let publishedBounds: readonly number[];
@@ -3765,6 +3772,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       strictValid,
       meshClosure,
       bbox,
+      solidBounds,
       displayLinearDeflections,
       ...(draftDisplay ? { draftDisplay: true as const } : {})
     };
@@ -4930,6 +4938,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             ? { importedStepDeclaredSolidCount: imported.declaredSolidCount }
             : {}),
           bbox: measured.bbox,
+          ...(measured.valid ? { solidBounds: measured.solidBounds } : {}),
           topology: measured.topology,
           ...(measured.draftDisplay ? { displayQuality: 'draft' as const } : {})
         };

@@ -4916,9 +4916,8 @@ button.model-panel-grip[aria-expanded='true'] {
   opacity: 1;
 }
 
-/* Cancel (and Precise values, which shares its look) rests bare like the
-   bar's other secondary actions and becomes a whole button under the
-   pointer; Done stays the filled primary. */
+/* Secondary actions rest bare and gain an edge under the pointer.
+   Done stays the filled primary. */
 .in-place-command-cancel {
   background: transparent;
   border-color: transparent;
@@ -4978,17 +4977,30 @@ button.model-panel-grip[aria-expanded='true'] {
     grid-row: 2;
   }
 
-  .in-place-command > .in-place-command-precise {
+  .in-place-command
+    > :is(.in-place-command-precise, .in-place-command-recovery) {
     grid-column: 1;
     grid-row: 2;
   }
 
-  .in-place-command:has(> .in-place-command-precise)
+  .in-place-command:has(
+      > :is(.in-place-command-precise, .in-place-command-recovery)
+    )
     > .in-place-command-parameters {
     grid-column: 2;
   }
 
-  .in-place-command > .in-place-command-cancel:not(.in-place-command-precise),
+  .in-place-command:has(> .in-place-command-precise)
+    > .in-place-command-recovery {
+    grid-column: 1 / -1;
+    grid-row: 5;
+  }
+
+  .in-place-command
+    > .in-place-command-cancel:not(
+      .in-place-command-precise,
+      .in-place-command-recovery
+    ),
   .in-place-command > .in-place-command-done {
     grid-row: 3;
   }
