@@ -1167,6 +1167,23 @@ function localBlendGroupBoss(
   );
 }
 
+function regionPickForSketch(
+  sketchId: string,
+  region: Omit<RegionPickData, 'sketchId'>
+): RegionPickData {
+  return {
+    sketchId,
+    profileId: region.profileId,
+    regionFingerprint: region.regionFingerprint,
+    samplePoint: region.samplePoint,
+    centroid: region.centroid,
+    boundingBox: region.boundingBox,
+    sourceEntityIds: region.sourceEntityIds,
+    sourceBoundaryLoops: region.sourceBoundaryLoops,
+    area: region.area
+  };
+}
+
 /** The interaction machine's view of one picked region. */
 function regionTargetFor(region: RegionPickData): RegionTarget {
   return {
@@ -11600,17 +11617,8 @@ export function App() {
       (candidate) => candidate.sketchId === sketchId
     );
     const available =
-      view?.regions.map((region): RegionPickData => ({
-        sketchId,
-        profileId: region.profileId,
-        regionFingerprint: region.regionFingerprint,
-        samplePoint: region.samplePoint,
-        centroid: region.centroid,
-        boundingBox: region.boundingBox,
-        sourceEntityIds: region.sourceEntityIds,
-        sourceBoundaryLoops: region.sourceBoundaryLoops,
-        area: region.area
-      })) ?? [];
+      view?.regions.map((region) => regionPickForSketch(sketchId, region)) ??
+      [];
     if (available.length === 0) {
       setStatus(
         extrudeSketchGuidance([
@@ -27911,21 +27919,7 @@ export function App() {
                 Math.max(selected.area * 0.01, 1e-9)
           ) ??
           (sourceMatches.length === 1 ? sourceMatches[0] : undefined);
-        return profile
-          ? [
-              {
-                sketchId: selected.sketchId,
-                profileId: profile.profileId,
-                regionFingerprint: profile.regionFingerprint,
-                samplePoint: profile.samplePoint,
-                centroid: profile.centroid,
-                boundingBox: profile.boundingBox,
-                sourceEntityIds: profile.sourceEntityIds,
-                sourceBoundaryLoops: profile.sourceBoundaryLoops,
-                area: profile.area
-              }
-            ]
-          : [];
+        return profile ? [regionPickForSketch(selected.sketchId, profile)] : [];
       });
       const unchanged =
         remapped.length === current.length &&
@@ -28037,17 +28031,7 @@ export function App() {
             new Map(objects.map(({ id, data }) => [id, data]))
           )
         }
-      ).map((region) => ({
-        sketchId,
-        profileId: region.profileId,
-        regionFingerprint: region.regionFingerprint,
-        samplePoint: region.samplePoint,
-        centroid: region.centroid,
-        boundingBox: region.boundingBox,
-        sourceEntityIds: region.sourceEntityIds,
-        sourceBoundaryLoops: region.sourceBoundaryLoops,
-        area: region.area
-      }));
+      ).map((region) => regionPickForSketch(sketchId, region));
     } catch {
       return null;
     }
@@ -28162,17 +28146,7 @@ export function App() {
       (candidate) => candidate.sketchId === sketchId
     );
     return (
-      view?.regions.map((candidate) => ({
-        sketchId,
-        profileId: candidate.profileId,
-        regionFingerprint: candidate.regionFingerprint,
-        samplePoint: candidate.samplePoint,
-        centroid: candidate.centroid,
-        boundingBox: candidate.boundingBox,
-        sourceEntityIds: candidate.sourceEntityIds,
-        sourceBoundaryLoops: candidate.sourceBoundaryLoops,
-        area: candidate.area
-      })) ?? []
+      view?.regions.map((region) => regionPickForSketch(sketchId, region)) ?? []
     );
   }
 
@@ -31307,17 +31281,9 @@ export function App() {
       const perReference = references.map((reference) =>
         regionsForReference(view, reference)
       );
-      const highlighted = perReference.flat().map((region) => ({
-        sketchId: extrudeData.sketchId,
-        profileId: region.profileId,
-        regionFingerprint: region.regionFingerprint,
-        samplePoint: region.samplePoint,
-        centroid: region.centroid,
-        boundingBox: region.boundingBox,
-        sourceEntityIds: region.sourceEntityIds,
-        sourceBoundaryLoops: region.sourceBoundaryLoops,
-        area: region.area
-      }));
+      const highlighted = perReference
+        .flat()
+        .map((region) => regionPickForSketch(extrudeData.sketchId, region));
       setSelectedProfiles(highlighted);
       // Only with a rendered view to resolve against. A consumed sketch is
       // hidden by default, and a face-attached one drops out of `sketchViews`
