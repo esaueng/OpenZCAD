@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { ProjectSummary } from '@openzcad/shared';
-import { api as appApi } from '../lib/api';
 import {
   ASSISTANT_CONSENT_FINALITY,
   ASSISTANT_CONSENT_TRANSIT
@@ -16,6 +14,8 @@ import {
   type AssistantConsentState,
   type ConsentPinStore
 } from '../lib/e2ee/assistantConsent';
+import { verifyShelfEntries } from '../lib/e2ee/progressiveShelf';
+import { isRateLimitError } from '../lib/rateLimit';
 import { Group, Notice, SettingRow, Status } from './settingsControls';
 
 interface Listed {
@@ -34,13 +34,10 @@ export function routeWords(route: string): string {
   return `${source === 'personal' ? 'Your key' : 'OpenZCAD’s key'} · ${provider} · ${model ?? ''}`;
 }
 
-/**
- * The shelf, for project names. One function for every render: a default
- * made per render changed `reload` each time, and its effect then ran on
- * every render, each run rendering again, so the section asked the Worker
- * (and decrypted the shelf) without end.
- */
-const defaultListProjects = () => appApi.listProjects();
+const defaultLoadProjectName = async (projectId: string) =>
+  (await import('../lib/e2ee/encryptedProjects')).readEncryptedProjectName(
+    projectId
+  );
 
 /**
  * Settings › Encryption › "Assistant access" (ADR-024 Phase 6, slice 6-1):
@@ -55,13 +52,13 @@ export function AssistantAccessSettings({
   unlocked,
   api: injectedApi,
   pins: injectedPins,
-  listProjects = defaultListProjects
+  loadProjectName = defaultLoadProjectName
 }: {
   userId: string;
   unlocked: boolean;
   api?: AssistantConsentApi;
   pins?: ConsentPinStore;
-  listProjects?: () => Promise<{ projects: ProjectSummary[] }>;
+  loadProjectName?: (projectId: string) => Promise<string | undefined>;
 }) {
   const api = useMemo(
     () => injectedApi ?? createAssistantConsentApi(),
@@ -98,15 +95,31 @@ export function AssistantAccessSettings({
       }
       const { consents } = await api.list();
       setAvailable(true);
-      setListed(
-        await Promise.all(
-          consents.map(async (stored) => ({
-            projectId: stored.projectId,
-            route: stored.route,
-            state: await verifyListedConsent(ctx, stored)
-          }))
-        )
+      const entries = await Promise.all(
+        consents.map(async (stored) => ({
+          projectId: stored.projectId,
+          route: stored.route,
+          state: await verifyListedConsent(ctx, stored)
+        }))
       );
+      setListed(entries);
+      const visible = entries.filter(
+        ({ state }) =>
+          state.kind === 'refused' ||
+          (state.kind === 'verified' && state.allowed)
+      );
+      const resolved = new Map<string, string>();
+      // A missing or rate-limited name leaves the project ID visible.
+      await verifyShelfEntries(
+        visible,
+        ({ projectId }) => loadProjectName(projectId),
+        ({ projectId }, name) => {
+          if (name !== undefined) resolved.set(projectId, name);
+        },
+        () => context() !== null,
+        isRateLimitError
+      ).catch(() => {});
+      setNames(resolved);
     } catch (caught) {
       const status = (caught as { status?: unknown } | null)?.status;
       if (status === 501 || status === 503 || status === 404) {
@@ -119,15 +132,7 @@ export function AssistantAccessSettings({
           : 'Assistant access is unavailable right now.'
       );
     }
-    try {
-      const { projects } = await listProjects();
-      setNames(
-        new Map(projects.map((project) => [project.projectId, project.name]))
-      );
-    } catch {
-      // Names are a convenience: rows fall back to the project id.
-    }
-  }, [api, context, listProjects]);
+  }, [api, context, loadProjectName]);
 
   useEffect(() => {
     if (unlocked) void reload();
@@ -141,13 +146,21 @@ export function AssistantAccessSettings({
     setBusy(entry.projectId);
     setError(null);
     try {
-      await saveAssistantConsent(
+      const state = await saveAssistantConsent(
         ctx,
         entry.projectId,
         { allowed: false, route: '' },
         consentFloor(entry.state)
       );
+      setListed((entries) =>
+        entries.map((candidate) =>
+          candidate.projectId === entry.projectId
+            ? { ...candidate, route: '', state }
+            : candidate
+        )
+      );
     } catch (caught) {
+      if (!isRateLimitError(caught)) await reload();
       setError(
         caught instanceof Error
           ? caught.message
@@ -155,7 +168,6 @@ export function AssistantAccessSettings({
       );
     } finally {
       setBusy(null);
-      await reload();
     }
   };
 

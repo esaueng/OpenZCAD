@@ -510,6 +510,7 @@ export interface OwnedProjectInstance {
 
 export interface PersistenceService {
   requireProjectRead(userId: UserId, projectId: string): Promise<ProjectAccess>;
+  getProjectVersion(userId: UserId, projectId: string): Promise<number>;
   requireProjectEdit(userId: UserId, projectId: string): Promise<ProjectAccess>;
   requireProjectOwner(
     userId: UserId,
@@ -855,6 +856,11 @@ export class InMemoryPersistenceService implements PersistenceService {
     projectId: string
   ): Promise<ProjectAccess> {
     return this.resolveProjectAccess(userId, projectId);
+  }
+
+  async getProjectVersion(userId: UserId, projectId: string): Promise<number> {
+    this.resolveProjectAccess(userId, projectId);
+    return this.projects.get(projectId)!.version;
   }
 
   async requireProjectEdit(

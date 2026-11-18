@@ -46,6 +46,8 @@ const METADATA_ROUTES: ReadonlyArray<{ method: string; rest: RegExp }> = [
   // Clearing readable shelf state once the sealed library record holds it
   // (ADR-024 amendment 2026-11-14).
   { method: 'POST', rest: /^\/shelf\/reset$/ },
+  // A version hint for the open workspace, with no document content.
+  { method: 'GET', rest: /^\/version$/ },
   // Reading and revoking existing access stays possible on any project.
   { method: 'GET', rest: /^\/sharing$/ },
   { method: 'GET', rest: /^\/share-links$/ },

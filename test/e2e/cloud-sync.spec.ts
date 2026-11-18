@@ -385,6 +385,12 @@ class SharedCloudProjectApi {
       }
       return route.fulfill({ json: this.project });
     });
+    await page.route('**/api/projects/*/version', (route) => {
+      const project = this.project;
+      return project?.projectId === projectIdFrom(route.request().url())
+        ? route.fulfill({ json: { documentVersion: project.version } })
+        : route.fulfill({ status: 404, json: { error: 'Project not found.' } });
+    });
     await page.route('**/api/projects/*/workspace-sessions', async (route) => {
       if (route.request().method() === 'GET')
         return route.fulfill({ json: { sessions: this.sessions } });
@@ -477,6 +483,51 @@ async function renameProject(page: Page, name: string): Promise<void> {
     page.getByRole('button', { name: 'Rename project' })
   ).toContainText(name);
 }
+
+test('checks the open project version before fetching a changed document', async ({
+  page
+}) => {
+  const api = new SharedCloudProjectApi();
+  await api.install(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Project version check');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible();
+  const project = api.project!;
+  const readsBefore = api.projectLoadAttempts;
+  let catalogueReads = 0;
+  page.on('request', (request) => {
+    if (
+      request.method() === 'GET' &&
+      new URL(request.url()).pathname === '/api/projects'
+    ) {
+      catalogueReads++;
+    }
+  });
+  const focusAfter = async (time: number) => {
+    await page.clock.setFixedTime(time);
+    const read = page.waitForResponse((response) =>
+      new URL(response.url()).pathname.endsWith(`/${project.projectId}/version`)
+    );
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    expect((await read).ok()).toBeTruthy();
+  };
+  const now = await page.evaluate(() => Date.now());
+  await focusAfter(now + 12_000);
+  expect(api.projectLoadAttempts).toBe(readsBefore);
+
+  api.project = {
+    ...project,
+    name: 'Updated on another device',
+    version: project.version + 1
+  };
+  await focusAfter(now + 24_000);
+  await expect(page.locator('.breadcrumb')).toContainText(api.project.name);
+  expect(api.projectLoadAttempts).toBe(readsBefore + 1);
+  expect(catalogueReads).toBe(0);
+});
 
 test('drains a pending account edit before opening a public share', async ({
   page

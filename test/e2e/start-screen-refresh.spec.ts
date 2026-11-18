@@ -480,17 +480,14 @@ test('the library poll waits while Settings covers the shelf and lists once on c
   const isListing = (request: { url(): string; method(): string }) =>
     new URL(request.url()).pathname === '/api/projects' &&
     request.method() === 'GET';
-  // Opening Settings reconnects the account, which lists once itself.
-  const opened = page.waitForResponse((response) =>
-    isListing(response.request())
-  );
-  await page.getByRole('button', { name: 'Open settings' }).click();
-  await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
-  await opened;
   let listings = 0;
   page.on('request', (request) => {
     if (isListing(request)) listings += 1;
   });
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await expect(settings).toBeVisible();
+  await expect(settings.getByText('Cloud profile connected.')).toBeVisible();
   await page.waitForTimeout(10_500);
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await page.waitForTimeout(500);

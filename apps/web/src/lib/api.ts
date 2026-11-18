@@ -1835,6 +1835,12 @@ export const api = {
       return rateLimited ? { ...unverified(), rateLimited } : unverified();
     }
   },
+  getProjectVersion: (projectId: string) =>
+    requestJson<{ documentVersion: number }>(
+      `/api/projects/${encodeURIComponent(projectId)}/version`,
+      undefined,
+      { expectedMissing: true }
+    ),
   /**
    * A new project. An account that encrypts new projects (decision D2)
    * creates it through the encrypted route, which never sees the document;

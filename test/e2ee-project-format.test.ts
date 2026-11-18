@@ -219,6 +219,7 @@ describe('project storage format (ADR-024 Phase 4, slice 4-1)', () => {
       '/revisions',
       '/revisions/segment_2',
       '/document',
+      '/version',
       '/workspace-sessions',
       '/measurements',
       '/comments',

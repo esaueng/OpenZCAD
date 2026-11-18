@@ -421,6 +421,13 @@ export async function stubApi(
       ? route.fulfill({ json: { sessions: [] } })
       : route.fulfill({ status: 204 })
   );
+  await page.route('**/api/projects/*/version', (route) => {
+    const path = new URL(route.request().url()).pathname.split('/');
+    const document = accountHeads.get(decodeURIComponent(path[3] ?? ''));
+    return document
+      ? route.fulfill({ json: { documentVersion: document.version } })
+      : route.fulfill({ status: 404, json: { error: 'Project not found.' } });
+  });
   await page.route('**/api/account/storage', (route) =>
     route.fulfill({
       json: {

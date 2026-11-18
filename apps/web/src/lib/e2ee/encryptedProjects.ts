@@ -865,6 +865,14 @@ export async function listEncryptedArtifacts(
   return exportArtifacts(projectId, body);
 }
 
+/** Reads one project's verified name without listing the library. */
+export async function readEncryptedProjectName(
+  projectId: string
+): Promise<string | undefined> {
+  const { body } = await (await encryptedProjectStore()).info.read(projectId);
+  return body?.name;
+}
+
 /**
  * Publishes a captured shelf thumbnail of an encrypted project: a thumbnail
  * blob, named by a new project info (slice 4-7). Resolves to its blob id.
