@@ -65,7 +65,10 @@ import {
 import { CONSTRAINT_TOOL_SPECS } from '../lib/sketch/constraints';
 import type { SketchDefinedState } from '../lib/sketch/constraints';
 import type { ConstraintInspectionTarget } from '../lib/sketch/constraintInspection';
-import { SKETCH_EDIT_TOOL_SPECS } from '../lib/sketch/edits';
+import {
+  SKETCH_EDIT_TOOL_SPECS,
+  sketchMirrorSetHint
+} from '../lib/sketch/edits';
 import { DEFAULT_SKETCH_OFFSET_OPTIONS } from '../lib/sketch/offset';
 import { ArcGlyph, CONSTRAINT_ICONS } from './constraintIcons';
 import { Tooltip } from './Tooltip';
@@ -143,6 +146,8 @@ interface SketchToolRailProps {
   onOffsetOptions?(options: SketchOffsetOptions): void;
   constraints: SketchConstraintListItem[];
   selectedObjectId?: string | null;
+  /** How many entities are selected; Mirror over them asks only for the axis. */
+  selectedObjectCount?: number;
   solveStatus: SketchSolveStatus | null;
   solving: boolean;
   onTool(tool: SketchToolId): void;
@@ -681,6 +686,7 @@ export function SketchToolRail({
   onOffsetOptions,
   constraints,
   selectedObjectId,
+  selectedObjectCount = 0,
   solveStatus,
   solving,
   onTool,
@@ -1196,7 +1202,13 @@ export function SketchToolRail({
             // Choosing a tool again brings back its folded options strip.
             setFoldedStripKey(null);
             if (active) onEditTool(null);
-            else onEditTool(kind, hint);
+            else
+              onEditTool(
+                kind,
+                kind === 'mirror' && selectedObjectCount > 0
+                  ? sketchMirrorSetHint(selectedObjectCount)
+                  : hint
+              );
           }}
         >
           <Icon size={16} aria-hidden="true" />

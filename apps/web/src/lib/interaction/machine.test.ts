@@ -9,6 +9,7 @@ import {
   isStaleReferenceError,
   isStaleSelectionError,
   sketchToolKeysSuspended,
+  sketchSelectedObjectIds,
   sketchPickArmed,
   projectionRepickHolds,
   radialFaceOperationName,
@@ -1997,5 +1998,112 @@ describe('a preview refused under a held handle', () => {
       value: -9
     });
     expect(state).toMatchObject({ phase: 'failed', lastValue: -9 });
+  });
+});
+
+describe('sketch entity multi-selection', () => {
+  const plane = { type: 'canonical', plane: 'XY', offset: 0 } as const;
+  const sketchSession = (state: InteractionState) => {
+    if (state.mode !== 'sketch') throw new Error('not sketching');
+    return state.session;
+  };
+  const selectA = () =>
+    interactionReducer(
+      interactionReducer(IDLE, { type: 'enter-sketch', plane }),
+      { type: 'sketch-select-object', objectId: 'a' }
+    );
+
+  it('adds and drops entities with a toggle click, the last kept as primary', () => {
+    let state = interactionReducer(selectA(), {
+      type: 'sketch-select-object',
+      objectId: 'b',
+      toggle: true
+    });
+    expect(sketchSelectedObjectIds(sketchSession(state))).toEqual(['a', 'b']);
+    expect(sketchSession(state).selectedObjectId).toBe('b');
+    state = interactionReducer(state, {
+      type: 'sketch-select-object',
+      objectId: 'b',
+      toggle: true
+    });
+    expect(sketchSelectedObjectIds(sketchSession(state))).toEqual(['a']);
+    expect(sketchSession(state).selectedObjectId).toBe('a');
+    // A toggle on empty canvas keeps what is held.
+    state = interactionReducer(state, {
+      type: 'sketch-select-object',
+      objectId: null,
+      toggle: true
+    });
+    expect(sketchSelectedObjectIds(sketchSession(state))).toEqual(['a']);
+  });
+
+  it('replaces the set on a plain click, and clears it on Escape', () => {
+    let state = interactionReducer(selectA(), {
+      type: 'sketch-select-objects',
+      objectIds: ['b', 'c'],
+      additive: true
+    });
+    expect(sketchSelectedObjectIds(sketchSession(state))).toEqual([
+      'a',
+      'b',
+      'c'
+    ]);
+    state = interactionReducer(state, {
+      type: 'sketch-select-object',
+      objectId: 'b'
+    });
+    expect(sketchSelectedObjectIds(sketchSession(state))).toEqual(['b']);
+    state = interactionReducer(state, {
+      type: 'sketch-select-objects',
+      objectIds: ['c', 'd']
+    });
+    expect(sketchSelectedObjectIds(sketchSession(state))).toEqual(['c', 'd']);
+    state = interactionReducer(state, { type: 'escape' });
+    expect(sketchSelectedObjectIds(sketchSession(state))).toEqual([]);
+  });
+
+  it('reads a list that lost its primary as the primary alone', () => {
+    expect(
+      sketchSelectedObjectIds({
+        selectedObjectId: 'z',
+        selectedObjectIds: ['a', 'b']
+      })
+    ).toEqual(['z']);
+  });
+
+  it('arms Mirror over a selection with the entities as its sources', () => {
+    let state = interactionReducer(selectA(), {
+      type: 'sketch-select-object',
+      objectId: 'b',
+      toggle: true
+    });
+    state = interactionReducer(state, {
+      type: 'sketch-edit-tool',
+      kind: 'mirror'
+    });
+    expect(sketchSession(state).pendingEdit).toEqual({
+      kind: 'mirror',
+      picks: [],
+      sources: ['a', 'b']
+    });
+    // Without a selection Mirror still picks its source first.
+    state = interactionReducer(
+      interactionReducer(IDLE, { type: 'enter-sketch', plane }),
+      { type: 'sketch-edit-tool', kind: 'mirror' }
+    );
+    expect(sketchSession(state).pendingEdit).toEqual({
+      kind: 'mirror',
+      picks: []
+    });
+  });
+
+  it('drops the set with the tool when a drawing tool is armed', () => {
+    let state = interactionReducer(selectA(), {
+      type: 'sketch-select-object',
+      objectId: 'b',
+      toggle: true
+    });
+    state = interactionReducer(state, { type: 'sketch-tool', tool: 'line' });
+    expect(sketchSelectedObjectIds(sketchSession(state))).toEqual([]);
   });
 });

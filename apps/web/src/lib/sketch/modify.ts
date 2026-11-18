@@ -1912,6 +1912,79 @@ export function planSketchMirror(
   };
 }
 
+/**
+ * Mirror a selection about one line: each entity as `planSketchMirror`
+ * would, gathered into one transaction. The axis is skipped if it was
+ * selected too, and an entity the tool cannot mirror (a point, text, a
+ * shape held together as a rectangle or polygon, one already symmetric) is
+ * left out and counted, so one odd entity does not block the rest. Only when
+ * nothing can be mirrored is the whole set refused, with the first reason.
+ */
+export function planSketchMirrorSet(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  sketchId: SketchId,
+  sourceIds: readonly string[],
+  axisId: string,
+  resolve: Resolve
+): SketchModifyPlan {
+  // An undo can take a selected entity away; it is simply no longer a source.
+  const sources = [...new Set(sourceIds)].filter(
+    (id) => id !== axisId && sketchObject(document, sketch, id) !== null
+  );
+  if (sources.length === 0) {
+    return {
+      status: 'refuse',
+      reason:
+        'The mirror line is the only thing selected. Select what to mirror, then pick the line.'
+    };
+  }
+  const commands: AnyCommand[] = [];
+  const optional: AnyCommand[] = [];
+  let mirrored = 0;
+  let firstRefusal: string | null = null;
+  for (const sourceId of sources) {
+    const plan = planSketchMirror(
+      document,
+      sketch,
+      sketchId,
+      sourceId,
+      axisId,
+      resolve
+    );
+    if (plan.status === 'refuse') {
+      firstRefusal ??= plan.reason;
+      // Every entity reflects about the same axis, so a bad axis refuses
+      // them all alike: say so once, rather than "nothing could be".
+      if (sketchObject(document, sketch, axisId)?.objectKind !== 'line') {
+        return plan;
+      }
+      continue;
+    }
+    commands.push(...plan.commands);
+    optional.push(...(plan.optional ?? []));
+    mirrored += 1;
+  }
+  if (mirrored === 0) {
+    return {
+      status: 'refuse',
+      reason: firstRefusal ?? 'Nothing selected can be mirrored.'
+    };
+  }
+  const skipped = sources.length - mirrored;
+  return {
+    status: 'commands',
+    label: 'Mirror',
+    message:
+      `Mirror added ${mirrored} linked ${mirrored === 1 ? 'entity' : 'entities'}.` +
+      (skipped > 0
+        ? ` ${skipped} could not be mirrored and ${skipped === 1 ? 'was' : 'were'} left out.`
+        : ''),
+    commands,
+    ...(optional.length > 0 ? { optional } : {})
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Patterns
 

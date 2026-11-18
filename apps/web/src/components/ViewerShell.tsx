@@ -348,6 +348,7 @@ interface ViewerShellProps {
   onSketchMoveChange?: ModelViewerProps['onSketchMoveChange'];
   onSketchMoveCommit?: ModelViewerProps['onSketchMoveCommit'];
   onSketchSelectObject: ModelViewerProps['onSketchSelectObject'];
+  onSketchBoxSelect?: ModelViewerProps['onSketchBoxSelect'];
   sketchViews: SketchViewData[];
   selectedProfileIds: string[];
   profileSelectionMode: boolean;
@@ -597,6 +598,7 @@ export function ViewerShell({
   onSketchMoveChange,
   onSketchMoveCommit,
   onSketchSelectObject,
+  onSketchBoxSelect,
   sketchViews,
   selectedProfileIds,
   profileSelectionMode,
@@ -1097,6 +1099,7 @@ export function ViewerShell({
         onSketchMoveChange={onSketchMoveChange}
         onSketchMoveCommit={onSketchMoveCommit}
         onSketchSelectObject={onSketchSelectObject}
+        onSketchBoxSelect={onSketchBoxSelect}
         sketchViews={sketchViews}
         selectedProfileIds={selectedProfileIds}
         profileSelectionMode={profileSelectionMode}

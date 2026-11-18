@@ -296,6 +296,128 @@ test('Extend runs a line on to the first curve in its way, one undo step per cli
   expect(restored.constraints).toEqual([]);
 });
 
+test(
+  'a box selects several entities to mirror, copy, paste and delete together',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    const at = await startSketch(page, 'Multi Select');
+    // The axis on the left; a two-line wedge to its right.
+    await drawLine(page, at(0.3, 0.3), at(0.3, 0.8));
+    await drawLine(page, at(0.4, 0.6), at(0.47, 0.4));
+    await drawLine(page, at(0.47, 0.4), at(0.54, 0.6));
+    // Off Line, onto Select.
+    await page.keyboard.press('Escape');
+    const status = page.getByRole('contentinfo');
+
+    // A left-to-right box takes only what lies wholly inside it: the wedge,
+    // not the axis it starts beside.
+    const from = at(0.36, 0.34);
+    const to = at(0.6, 0.66);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: 10 });
+    await page.mouse.up();
+
+    // Shift-click on the primary (the last line swept) drops it rather than
+    // grabbing it to move; a second Shift-click adds it back.
+    const second = at(0.505, 0.5);
+    await page.keyboard.down('Shift');
+    await page.mouse.click(second.x, second.y);
+    await page.keyboard.up('Shift');
+    await modifyTool(page, 'Mirror');
+    await expect(status).toContainText(
+      'Mirror: click the line to mirror the selected entity about.'
+    );
+    await page.keyboard.press('Escape');
+    await page.keyboard.down('Shift');
+    await page.mouse.click(second.x, second.y);
+    await page.keyboard.up('Shift');
+
+    // Mirror armed over the selection asks only for the axis.
+    await modifyTool(page, 'Mirror');
+    await expect(status).toContainText(
+      'Mirror: click the line to mirror the 2 selected entities about.'
+    );
+    await page.mouse.click(at(0.3, 0.5).x, at(0.3, 0.5).y);
+    await expect(status).toContainText('Mirror added 2 linked entities.');
+    await expect
+      .poll(async () => (await exportSketch(page)).objects.length)
+      .toBe(5);
+    const mirrored = await exportSketch(page);
+    type Line = Extract<SketchObjectData, { objectKind: 'line' }>;
+    const [axis, sourceA, , imageA] = mirrored.objects.map(
+      (object) => object.data
+    ) as [Line, Line, Line, Line, Line];
+    expect(Number(imageA.x1)).toBeCloseTo(
+      2 * Number(axis.x1) - Number(sourceA.x1),
+      6
+    );
+
+    // Select all, copy and paste: five more entities, the copies selected.
+    const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+    await page.keyboard.press(`${modifier}+a`);
+    await page.keyboard.press(`${modifier}+c`);
+    await expect(status).toContainText('Copied 5 sketch entities.');
+    await page.keyboard.press(`${modifier}+v`);
+    await expect(status).toContainText('Pasted 5 sketch entities.');
+    await expect
+      .poll(async () => (await exportSketch(page)).objects.length)
+      .toBe(10);
+
+    // Delete takes the whole pasted selection in one step.
+    await page.keyboard.press('Delete');
+    await expect(status).toContainText('Deleted 5 sketch entities.');
+    await expect
+      .poll(async () => (await exportSketch(page)).objects.length)
+      .toBe(5);
+    await undo(page);
+    await expect
+      .poll(async () => (await exportSketch(page)).objects.length)
+      .toBe(10);
+  }
+);
+
+test('Delete after an undo removes the selected entities that remain', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const at = await startSketch(page, 'Undo Selection');
+  await drawLine(page, at(0.35, 0.4), at(0.45, 0.6));
+  await drawLine(page, at(0.55, 0.4), at(0.65, 0.6));
+  await page.keyboard.press('Escape');
+  const status = page.getByRole('contentinfo');
+  // Box the later line, then Shift-click the first, which becomes primary.
+  await page.mouse.move(at(0.52, 0.35).x, at(0.52, 0.35).y);
+  await page.mouse.down();
+  await page.mouse.move(at(0.7, 0.65).x, at(0.7, 0.65).y, { steps: 8 });
+  await page.mouse.up();
+  await page.keyboard.down('Shift');
+  await page.mouse.click(at(0.4, 0.5).x, at(0.4, 0.5).y);
+  await page.keyboard.up('Shift');
+  await modifyTool(page, 'Mirror');
+  await expect(status).toContainText(
+    'Mirror: click the line to mirror the 2 selected entities about.'
+  );
+  await page.keyboard.press('Escape');
+  // Undo takes the later line away while the selection still names it.
+  await undo(page);
+  await expect
+    .poll(async () => (await exportSketch(page)).objects.length)
+    .toBe(1);
+  // Only the line that is still there counts as selected.
+  await modifyTool(page, 'Mirror');
+  await expect(status).toContainText(
+    'Mirror: click the line to mirror the selected entity about.'
+  );
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Delete');
+  await expect(status).toContainText('Deleted sketch entity.');
+  await expect
+    .poll(async () => (await exportSketch(page)).objects.length)
+    .toBe(0);
+});
+
 test('Mirror reflects a line about a picked line and links it back', async ({
   page
 }) => {

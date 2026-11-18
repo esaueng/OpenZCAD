@@ -101,7 +101,8 @@ export interface SketchModeRig {
    */
   setObjects(
     objects: { id: string; data: SketchObjectData }[],
-    selectedObjectId: string | null,
+    /** The selected entity, or every one of a multi-selection. */
+    selectedObjectId: string | null | readonly string[],
     resolve: (value: unknown) => number,
     diagnosticObjectIds?: readonly string[],
     definedObjectIds?: readonly string[],
@@ -123,6 +124,11 @@ export interface SketchModeRig {
   ): void;
   /** Returns the closest committed entity under the current ray. */
   pickObject(raycaster: THREE.Raycaster, threshold: number): string | null;
+  /**
+   * Each committed entity's drawn runs, as world points (a point entity is
+   * one point). A box selection projects them to the screen.
+   */
+  objectOutlines(): { id: string; runs: THREE.Vector3[][] }[];
   /** Replaces the in-progress (orange) polyline; null hides it. */
   setInProgress(points: SketchPoint[] | null, closed: boolean): void;
   /**
@@ -483,7 +489,7 @@ export function buildSketchModeRig(
 
   interface CommittedState {
     objects: { id: string; data: SketchObjectData }[];
-    selectedObjectId: string | null;
+    selectedIds: ReadonlySet<string>;
     resolve: (value: unknown) => number;
     diagnosticIds: ReadonlySet<string>;
     definedIds: ReadonlySet<string>;
@@ -500,7 +506,7 @@ export function buildSketchModeRig(
   ) =>
     committedSketchColor({
       diagnostic: state.diagnosticIds.has(id),
-      selected: id === state.selectedObjectId,
+      selected: state.selectedIds.has(id),
       defined: state.definedIds.has(id),
       construction
     });
@@ -573,7 +579,7 @@ export function buildSketchModeRig(
       const visual = createSketchCurve(vertices, {
         color,
         linewidth:
-          SKETCH_LINE_WIDTH + (state.selectedObjectId === object.id ? 1.2 : 0),
+          SKETCH_LINE_WIDTH + (state.selectedIds.has(object.id) ? 1.2 : 0),
         opacity,
         depthTest: true,
         closed: polyline.closed,
@@ -708,7 +714,13 @@ export function buildSketchModeRig(
       previewedId = null;
       const state: CommittedState = {
         objects,
-        selectedObjectId,
+        selectedIds: new Set(
+          selectedObjectId === null
+            ? []
+            : typeof selectedObjectId === 'string'
+              ? [selectedObjectId]
+              : selectedObjectId
+        ),
         resolve,
         diagnosticIds: new Set(diagnosticObjectIds),
         definedIds: new Set(definedObjectIds),
@@ -828,6 +840,32 @@ export function buildSketchModeRig(
         mesh.renderOrder = VIEWPORT_RENDER_ORDER.SKETCH_FILL;
         profileGroup.add(mesh);
       }
+    },
+    objectOutlines() {
+      const outlines = new Map<string, THREE.Vector3[][]>();
+      for (const child of committedGroup.children) {
+        const id = child.userData.sketchObjectId as string | undefined;
+        if (!id || child.userData.pickProxy !== true) {
+          continue;
+        }
+        const position = (child as THREE.Line).geometry?.getAttribute(
+          'position'
+        );
+        if (!position) {
+          continue;
+        }
+        const run: THREE.Vector3[] = [];
+        for (let index = 0; index < position.count; index += 1) {
+          run.push(new THREE.Vector3().fromBufferAttribute(position, index));
+        }
+        if ((child as THREE.LineLoop).isLineLoop && run.length > 0) {
+          run.push(run[0]!.clone());
+        }
+        const runs = outlines.get(id) ?? [];
+        runs.push(run);
+        outlines.set(id, runs);
+      }
+      return [...outlines].map(([id, runs]) => ({ id, runs }));
     },
     pickObject(raycaster, threshold) {
       const priorThreshold = raycaster.params.Line?.threshold;
