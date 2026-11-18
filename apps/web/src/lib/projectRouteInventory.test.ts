@@ -78,6 +78,9 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
   '/api/collaboration/config': [['/api/collaboration/config', 'read']],
   '/api/glimpse/account-consent': [['/api/glimpse/account-consent', 'none']],
   '/api/glimpse/usage': [['/api/glimpse/usage', 'none']],
+  '/api/glimpse/workspace-session': [
+    ['/api/glimpse/workspace-session', 'none', ['POST']]
+  ],
   '/api/health': [['/api/health', 'read']],
   '/api/library-folders': [['/api/library-folders', 'none']],
   '/api/project-invitations/accept': [
