@@ -15,6 +15,7 @@
  *   (`GET /api/e2ee/projects/:id/share-comments`), and the owner hides one
  *   by deleting it (`DELETE …/share-comments/:commentId`).
  */
+import { readBoundedRequestText } from './requestBody';
 import {
   MAX_SHARE_COMMENT_GRANT_BYTES,
   decodeShareCommentGrant,
@@ -86,10 +87,9 @@ function unavailable(): never {
 }
 
 async function readJson(request: Request): Promise<Record<string, unknown>> {
-  const text = await request.text();
-  if (text.length > MAX_REQUEST_CHARS) {
-    refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.');
-  }
+  const text = await readBoundedRequestText(request, MAX_REQUEST_CHARS, () =>
+    refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.')
+  );
   try {
     return record(JSON.parse(text), 'body');
   } catch (error) {
