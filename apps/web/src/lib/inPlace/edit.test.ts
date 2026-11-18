@@ -1748,6 +1748,38 @@ describe('an untouched edit writes the feature back as stored', () => {
     });
   });
 
+  it('sweep edits keep the stored construction unless explicitly upgrading to exact', () => {
+    const profile = {
+      sketchId: SKETCH,
+      profile: { all: true as const, sourceEntityIds: ['a'] }
+    };
+    const path = { sketchId: SKETCH, entityIds: ['p1'] as never[] };
+    const guide = { sketchId: SKETCH, entityIds: ['rail1'] as never[] };
+    const sampled = feature({
+      featureKind: 'sweep',
+      profile,
+      path,
+      guide,
+      mode: 'standard'
+    });
+    const request = { tool: 'sweep', profile, path, mode: 'standard' } as const;
+
+    const keepingSampled = inPlaceFeatureUpdate(sampled, request);
+    expect(keepingSampled?.clearData).toEqual(['guide']);
+    expect(keepingSampled?.data).not.toHaveProperty('construction');
+
+    const keepingRail = inPlaceFeatureUpdate(sampled, { ...request, guide });
+    expect(keepingRail).not.toHaveProperty('clearData');
+    expect(keepingRail?.data).toHaveProperty('guide', guide);
+
+    const exact = inPlaceFeatureUpdate(sampled, {
+      ...request,
+      construction: 'in-place'
+    });
+    expect(exact?.clearData).toEqual(['guide']);
+    expect(exact?.data).toHaveProperty('construction', 'in-place');
+  });
+
   it('sweep: a path curve the sketch no longer has is left out, and said', () => {
     const sweep = (entityIds: string[]): FeatureData => ({
       featureKind: 'sweep',

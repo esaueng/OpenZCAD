@@ -1200,14 +1200,9 @@ export function inPlaceFeatureUpdate(
             ? { construction: request.construction }
             : {})
         },
-        ...(request.guide && request.construction
-          ? {}
-          : {
-              clearData: [
-                ...(request.guide ? [] : ['guide']),
-                ...(request.construction ? [] : ['construction'])
-              ]
-            })
+        // An absent construction keeps a sampled sweep sampled. Exact
+        // construction is written explicitly and cannot be cleared.
+        ...(request.guide ? {} : { clearData: ['guide'] })
       };
     case 'datum-point':
     case 'datum-csys':
