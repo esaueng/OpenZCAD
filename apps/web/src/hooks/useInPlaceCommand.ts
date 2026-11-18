@@ -2203,7 +2203,7 @@ export function useInPlaceCommand(
     request,
     hint: spec
       ? [
-          spec.hint(slots, chosen, ctx),
+          spec.hint(slots, chosen, ctx, request),
           previewValid && previewedKey === requestKey && previewAdvisory
             ? `Note: ${previewAdvisory}`
             : null

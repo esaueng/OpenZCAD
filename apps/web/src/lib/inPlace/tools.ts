@@ -1016,7 +1016,8 @@ export interface InPlaceToolSpec {
   hint(
     slots: InPlaceSlots,
     options?: Record<string, string>,
-    ctx?: InPlaceContext
+    ctx?: InPlaceContext,
+    request?: InPlaceRequest | null
   ): string;
   /**
    * Whether the picks (and, for a typed plane or axis, the options) suffice.
