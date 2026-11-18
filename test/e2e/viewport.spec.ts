@@ -2474,6 +2474,10 @@ test(
       await page.waitForTimeout(600);
     };
 
+    // A plain drag under Select is not captured by the sketch, so it reaches
+    // the controls' left-button orbit.
+    await drag('left', false);
+    expect(await facing()).toBeGreaterThan(0.999_999);
     await drag('middle', false);
     expect(await facing()).toBeGreaterThan(0.999_999);
     await drag('left', true);
