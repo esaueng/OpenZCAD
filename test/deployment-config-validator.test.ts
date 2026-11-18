@@ -283,15 +283,23 @@ describe('deployment configuration preflight', () => {
       expect(migrations.d1_databases).toEqual(previews.d1_databases);
     });
 
-    it('gives Previews every rate limit production has', () => {
+    it('keeps Preview limits aligned except for the beta account-read override', () => {
       const config = officialConfig() as unknown as {
         ratelimits: { name: string; simple: unknown }[];
         previews: { ratelimits: { name: string; simple: unknown }[] };
       };
       const shape = (limits: { name: string; simple: unknown }[]) =>
         limits.map(({ name, simple }) => ({ name, simple }));
+      expect(
+        config.ratelimits.find(({ name }) => name === 'ACCOUNT_READ_LIMITER')
+          ?.simple
+      ).toEqual({ limit: 3000, period: 60 });
       expect(shape(config.previews.ratelimits)).toEqual(
-        shape(config.ratelimits)
+        shape(config.ratelimits).map((entry) =>
+          entry.name === 'ACCOUNT_READ_LIMITER'
+            ? { ...entry, simple: { limit: 1200, period: 60 } }
+            : entry
+        )
       );
     });
   });

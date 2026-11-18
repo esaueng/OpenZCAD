@@ -36,6 +36,7 @@ function fakeHost() {
     },
     tick: () => tick?.(),
     focus: () => win.dispatchEvent(new Event('focus')),
+    online: () => win.dispatchEvent(new Event('online')),
     setVisibility(state: DocumentVisibilityState) {
       doc.visibilityState = state;
       doc.dispatchEvent(new Event('visibilitychange'));
@@ -91,6 +92,21 @@ describe('watchLibraryFreshness', () => {
     fake.focus();
     await settle();
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('checks the workspace on focus or reconnect without the shelf gap', async () => {
+    const fake = fakeHost();
+    const refresh = vi.fn(async () => undefined);
+    watchLibraryFreshness(refresh, fake.host, { minimumGapMs: 0 });
+
+    fake.focus();
+    fake.online();
+    await settle();
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    fake.online();
+    await settle();
+    expect(refresh).toHaveBeenCalledTimes(2);
   });
 
   it('never refreshes a hidden tab', async () => {

@@ -506,16 +506,14 @@ test('checks the open project version before fetching a changed document', async
       catalogueReads++;
     }
   });
-  const focusAfter = async (time: number) => {
-    await page.clock.setFixedTime(time);
+  const checkOnFocus = async () => {
     const read = page.waitForResponse((response) =>
       new URL(response.url()).pathname.endsWith(`/${project.projectId}/version`)
     );
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));
     expect((await read).ok()).toBeTruthy();
   };
-  const now = await page.evaluate(() => Date.now());
-  await focusAfter(now + 12_000);
+  await checkOnFocus();
   expect(api.projectLoadAttempts).toBe(readsBefore);
 
   api.project = {
@@ -523,7 +521,7 @@ test('checks the open project version before fetching a changed document', async
     name: 'Updated on another device',
     version: project.version + 1
   };
-  await focusAfter(now + 24_000);
+  await checkOnFocus();
   await expect(page.locator('.breadcrumb')).toContainText(api.project.name);
   expect(api.projectLoadAttempts).toBe(readsBefore + 1);
   expect(catalogueReads).toBe(0);

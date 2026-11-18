@@ -8080,7 +8080,7 @@ export function App() {
       }
     }
 
-    const stop = watchLibraryFreshness(check);
+    const stop = watchLibraryFreshness(check, undefined, { minimumGapMs: 0 });
     return () => {
       cancelled = true;
       stop();
