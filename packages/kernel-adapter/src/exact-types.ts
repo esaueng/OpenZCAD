@@ -6,6 +6,7 @@
  */
 import type { DatumAxis, DatumCsys, PlaneBasis, Vec3 } from '@openzcad/geometry';
 import type {
+  BoundingBox,
   BodyId,
   FaceTopologyReferenceV5,
   BodyTopology,
@@ -172,6 +173,7 @@ export interface MeasuredShape {
     min: Vec3;
     max: Vec3;
   };
+  solidBounds: BoundingBox;
   /**
    * The linear display deflection each solid was meshed at, in solid order.
    * Fed back as the held value for the body's next measurement so an edit

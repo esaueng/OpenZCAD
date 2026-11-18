@@ -92,6 +92,8 @@ interface ExtrudeCommandProps {
   previewPending?: boolean;
   /** The current draft's accepted exact operation, while Auto is selected. */
   resolvedChoice?: ResolvedExtrude['inference'] | null;
+  /** Leaves Section view for a current preview hidden by the section. */
+  onShowFullModel?: () => void;
   /** The edited feature's name as it is now (a rename since it opened). */
   name?: string;
   toFacePicking?: ExtrudeToFacePicking;
@@ -148,6 +150,7 @@ export function ExtrudeCommand({
   note = null,
   previewPending = false,
   resolvedChoice = null,
+  onShowFullModel,
   name,
   entryRefusal = null,
   toFacePicking,
@@ -358,7 +361,21 @@ export function ExtrudeCommand({
       : choice.operation === 'new-body'
         ? 'New body'
         : `${OPERATIONS.find((item) => item.value === choice.operation)!.label}${target ? ` · ${target}` : ''}`;
-  const hint = `${inferred ? 'Preview: ' : ''}${operation} · ${checking ? 'Checking preview…' : guidance}`;
+  const hintLead = `${inferred ? 'Preview: ' : ''}${operation} · `;
+  const hint = `${hintLead}${checking ? 'Checking preview…' : guidance}`;
+  const recovery =
+    onShowFullModel && !toFacePicking?.armed
+      ? {
+          hint: (
+            <>
+              {hintLead}
+              <span>Section view hides this change</span>
+            </>
+          ),
+          label: 'Show full model',
+          onActivate: onShowFullModel
+        }
+      : undefined;
 
   const options: InPlaceOption[] = [
     {
@@ -514,6 +531,7 @@ export function ExtrudeCommand({
       refusal={toFacePicking?.armed ? null : refusal}
       canFinish={canFinish}
       previewPending={checking}
+      recovery={recovery}
       // While a Done is checked (or an exact operation holds the model) the
       // draft it captured is the one shown: only Cancel takes input.
       locked={disabled}

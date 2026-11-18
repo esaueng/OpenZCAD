@@ -34,6 +34,7 @@ import {
   regionInferenceRefusal,
   resolveExtrudeOperation
 } from '../apps/web/src/lib/extrudeInference';
+import { isExtrudeChangeClipped } from '../apps/web/src/lib/extrudeSectionVisibility';
 import { faceSketchAttachment } from '../apps/web/src/lib/faceSketchAttachment';
 import { profileReferencesForSelection } from '../apps/web/src/lib/profileReferences';
 import { computeSketchRegions, setTextFontProvider } from '@openzcad/geometry';
@@ -235,12 +236,18 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
 
   it('resolves the live preview operation once from exact geometry', async () => {
     for (const expectation of [
-      { offset: 2, distance: 4, operation: 'cut' },
-      { offset: 8, distance: 4, operation: 'add' },
-      { offset: 10, distance: 4, operation: 'new-body' },
-      { offset: 10, distance: -4, operation: 'cut' }
+      { offset: 2, distance: 4, operation: 'cut', builds: 3 },
+      { offset: 8, distance: 4, operation: 'add', builds: 2 },
+      { offset: 10, distance: 4, operation: 'new-body', builds: 1 },
+      { offset: 10, distance: -4, operation: 'cut', builds: 3 }
     ] as const) {
       const base = baseSketchDocument(expectation.offset).document;
+      const builds: Promise<ProjectDocument['derived']>[] = [];
+      const derive = vi.fn((document: ProjectDocument) => {
+        const build = kernel.syncDocument(document);
+        builds.push(build);
+        return build;
+      });
       const resolved = await resolveExtrudeOperation({
         base,
         input: {
@@ -248,10 +255,30 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
           sketchId: getLatestSketchId(base)!,
           distance: expectation.distance
         },
-        derive: (document) => kernel.syncDocument(document)
+        derive
       });
       expect(resolved.inference.operation).toBe(expectation.operation);
       expect(resolved.command.payload.operation).toBe(expectation.operation);
+      expect(derive).toHaveBeenCalledTimes(expectation.builds);
+      expect(await builds.at(-1)).toBe(resolved.derived);
+      const { bodyId } = resolved.command.payload.ids!;
+      const tool = (await builds[0]!).bodyRepresentations[bodyId]!;
+      expect(resolved.toolBounds).toBe(tool.solidBounds);
+      expect(resolved.toolBounds?.min.z).toBe(
+        Math.min(expectation.offset, expectation.offset + expectation.distance)
+      );
+      expect(resolved.toolBounds?.max.z).toBe(
+        Math.max(expectation.offset, expectation.offset + expectation.distance)
+      );
+      expect(resolved.derived.bodyRepresentations[bodyId]?.consumed).toBe(
+        false
+      );
+      expect(
+        isExtrudeChangeClipped(resolved, {
+          plane: 'XY',
+          offset: tool.solidBounds!.min.z - 1
+        })
+      ).toBe(true);
     }
   });
 
@@ -283,6 +310,9 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
     // Growing away from that face means join, and the exact rebuild has to
     // accept an add whose operands only touch.
     const { document: base, targetBodyId } = baseSketchDocument(10);
+    const derive = vi.fn((document: ProjectDocument) =>
+      kernel.syncDocument(document)
+    );
     const resolved = await resolveExtrudeOperation({
       base,
       input: {
@@ -290,7 +320,7 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
         sketchId: getLatestSketchId(base)!,
         distance: 4
       },
-      derive: (document) => kernel.syncDocument(document),
+      derive,
       faceAttachment: { bodyId: targetBodyId, direction: 'away' }
     });
     expect(resolved.inference).toMatchObject({
@@ -299,10 +329,14 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
       targetBodyId
     });
     expect(resolved.command.payload.operation).toBe('add');
+    expect(derive).toHaveBeenCalledTimes(2);
+    expect(resolved.toolBounds?.min.z).toBe(10);
+    expect(resolved.toolBounds?.max.z).toBe(14);
     // The union is one body, not a pair of lumps: the box plus the boss.
-    const result = resolved.derived.bodyRepresentations[
-      resolved.command.payload.ids!.bodyId
-    ];
+    const result =
+      resolved.derived.bodyRepresentations[
+        resolved.command.payload.ids!.bodyId
+      ];
     expect(result?.consumed).toBe(false);
     expect(result?.volume).toBeCloseTo(20 * 20 * 10 + 4 * 4 * 4, 3);
     expect(resolved.derived.warnings).toEqual([]);

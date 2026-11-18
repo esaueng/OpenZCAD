@@ -127,6 +127,8 @@ interface NumericKeypadProps {
    * a host whose own Done stands beside the keypad holds it meanwhile.
    */
   onEntryError?(error: string | null): void;
+  /** Reveals an accepted Extrude hidden behind the section plane. */
+  onShowFullModel?(): void;
   /** Commit: evaluated value in document units, plus the raw text. */
   onCommit(value: number, raw: string): void;
   /** Exact preview refused the current value; entry stays editable. */
@@ -414,6 +416,7 @@ export function NumericKeypad({
   anchorRef,
   onPreview,
   onEntryError,
+  onShowFullModel,
   onCommit,
   commitDisabled = false,
   commitDisabledReason,
@@ -1143,6 +1146,28 @@ export function NumericKeypad({
           <Check size={16} aria-hidden="true" />
         </button>
       </div>
+      {placement === 'sheet' && state === 'ready' && onShowFullModel && (
+        <div className="keypad-section-recovery">
+          <span>Section view hides this change</span>
+          <button
+            type="button"
+            className="in-place-command-cancel"
+            onPointerDown={(event) => event.preventDefault()}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') event.preventDefault();
+            }}
+            onKeyUp={(event) => {
+              if (event.key === 'Enter') event.currentTarget.click();
+            }}
+            onClick={() => {
+              inputRef.current?.focus({ preventScroll: true });
+              onShowFullModel();
+            }}
+          >
+            Show full model
+          </button>
+        </div>
+      )}
       {offsetMeaning !== null && (
         <p className="keypad-meaning" id={meaningId}>
           {offsetMeaning}

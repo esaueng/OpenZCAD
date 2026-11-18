@@ -1069,6 +1069,7 @@ import {
   reuseRunningExtrudePreview,
   type ResolvedExtrudePreview
 } from './lib/resolvedExtrudePreview';
+import { isExtrudeChangeClipped } from './lib/extrudeSectionVisibility';
 import type {
   ExtrudeFormValue,
   ExtrudeToFacePicking
@@ -13842,6 +13843,15 @@ export function App() {
     doc?.projectId
   );
 
+  function turnSectionViewOff() {
+    if (!viewerSettingsRef.current.sectionView) return;
+    pendingSectionRestoreRef.current = null;
+    setViewerSettings(({ sectionView: _cleared, ...rest }) => rest);
+    persistSectionView(undefined);
+    clearSectionOutline();
+    setStatus('Section view off.', { immediate: true });
+  }
+
   /**
    * Switches the section view on or off. The rail button and the palette
    * both toggle: cycling through every plane to reach "off" took up to three
@@ -13849,14 +13859,11 @@ export function App() {
    * and switching back on restores the complete cut last used.
    */
   function toggleSectionView() {
-    pendingSectionRestoreRef.current = null;
     if (viewerSettings.sectionView) {
-      setViewerSettings(({ sectionView: _cleared, ...rest }) => rest);
-      persistSectionView(undefined);
-      clearSectionOutline();
-      setStatus('Section view off.', { immediate: true });
+      turnSectionViewOff();
       return;
     }
+    pendingSectionRestoreRef.current = null;
     // An empty stage has nothing to cut; the palette says so rather than
     // leaving a cut on with no controls to carry into the next mode (I49).
     if (!viewerBodies.some((body) => !body.consumed)) {
@@ -35472,6 +35479,33 @@ export function App() {
           )
         })
       : null;
+  const sectionView = viewerSettings.sectionView;
+  const previewExtrusion = regionExtrudeResolution?.command.payload;
+  const extrudeHiddenBySection =
+    interaction.mode === 'region' &&
+    (interaction.phase === 'armed' || interaction.phase === 'exact-entry') &&
+    interaction.targets.length === 1 &&
+    sectionView !== undefined &&
+    previewExtrusion !== undefined &&
+    (previewExtrusion.endCondition ?? 'blind') === 'blind' &&
+    !previewExtrusion.symmetric &&
+    evalParamValue(
+      previewExtrusion.backDistance ?? 0,
+      parameterScope.scope,
+      doc.units
+    ) === 0 &&
+    regionExtrudeResolution !== null &&
+    previewDoc?.derived === regionExtrudeResolution.derived &&
+    viewportGeometry.document === previewDoc &&
+    !viewportGeometry.standIns?.length &&
+    viewportGeometry.drawnElsewhere.length === 0 &&
+    viewportGeometry.bodies.some(
+      (body) =>
+        body.bodyId === previewExtrusion.ids?.bodyId &&
+        !body.meshReference &&
+        (body.opacity ?? 1) > 0
+    ) &&
+    isExtrudeChangeClipped(regionExtrudeResolution, sectionView);
   const baseToolCard = toolCardFor(interaction, cylinderDimensionMode);
   const editingSketchName =
     interaction.mode === 'sketch' && interaction.session.sketchId
@@ -37403,7 +37437,12 @@ export function App() {
                       anchorRef={keypadAnchorRef}
                       onDimensionModeChange={setCylinderDimensionMode}
                       {...(keypad.kind === 'extrude'
-                        ? { onEntryError: setRegionExtrudeEntryError }
+                        ? {
+                            onEntryError: setRegionExtrudeEntryError,
+                            onShowFullModel: extrudeHiddenBySection
+                              ? turnSectionViewOff
+                              : undefined
+                          }
                         : {})}
                       // A value the kernel checks as it is typed is Ready
                       // only once the value on screen has built.
@@ -38547,6 +38586,9 @@ export function App() {
                 <ExtrudeCommand
                   previewPending={regionExtrudeChecking}
                   resolvedChoice={regionExtrudeResolution?.inference}
+                  onShowFullModel={
+                    extrudeHiddenBySection ? turnSectionViewOff : undefined
+                  }
                   key={`extrude-${interaction.target.sketchId}`}
                   initial={{
                     name: 'Extrude',

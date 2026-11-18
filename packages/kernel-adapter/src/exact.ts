@@ -3285,6 +3285,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       min: { x: Infinity, y: Infinity, z: Infinity },
       max: { x: -Infinity, y: -Infinity, z: -Infinity }
     };
+    const solidBounds = { min: { ...bbox.min }, max: { ...bbox.max } };
     let volume = 0;
     const analysisJobs: (() => void)[] = [];
     let analysisRemaining = 0;
@@ -3695,6 +3696,25 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       bbox.max.x = Math.max(bbox.max.x, publishedBounds[3]!);
       bbox.max.y = Math.max(bbox.max.y, publishedBounds[4]!);
       bbox.max.z = Math.max(bbox.max.z, publishedBounds[5]!);
+      // Published bounds may use display mesh extrema. Enlarge them by the
+      // actual chord deflection and Float32 slack before intersecting with
+      // the raw box. The intersection still encloses the solid and tightens
+      // loose bounds such as a rotated ellipse.
+      for (const [index, axis] of (['x', 'y', 'z'] as const).entries()) {
+        const min = bounds[index]!;
+        const max = bounds[index + 3]!;
+        const slack =
+          meshTessellation.linearDeflection +
+          4 * Math.fround(Math.max(Math.abs(min), Math.abs(max))) * 2 ** -23;
+        solidBounds.min[axis] = Math.min(
+          solidBounds.min[axis],
+          Math.max(min, publishedBounds[index]! - slack)
+        );
+        solidBounds.max[axis] = Math.max(
+          solidBounds.max[axis],
+          Math.min(max, publishedBounds[index + 3]! + slack)
+        );
+      }
       analysisJobs.push(() => {
         const done = onStage?.('Volume');
         volume += kernel.volume(solid, MEASUREMENT_DEFLECTION);
@@ -3765,6 +3785,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       strictValid,
       meshClosure,
       bbox,
+      solidBounds,
       displayLinearDeflections,
       ...(draftDisplay ? { draftDisplay: true as const } : {})
     };
@@ -4930,6 +4951,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             ? { importedStepDeclaredSolidCount: imported.declaredSolidCount }
             : {}),
           bbox: measured.bbox,
+          ...(measured.valid ? { solidBounds: measured.solidBounds } : {}),
           topology: measured.topology,
           ...(measured.draftDisplay ? { displayQuality: 'draft' as const } : {})
         };

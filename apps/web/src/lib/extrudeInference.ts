@@ -10,6 +10,8 @@ import {
 import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
+  BodyRepresentation,
+  BoundingBox,
   FeatureId,
   ProjectDocument,
   SketchProfileReference
@@ -27,6 +29,8 @@ export interface ResolvedExtrude {
     reason: ExtrudeOperationInference['reason'] | 'explicit';
   };
   baseVersion: number;
+  /** The standalone sweep's outer bound, when this resolution built the tool. */
+  toolBounds?: BoundingBox;
 }
 
 export type ExtrudeChoice =
@@ -96,7 +100,7 @@ function inferenceBody(
 function builtResult(
   derived: DerivedState,
   extrusion: { bodyId: BodyId; featureId: FeatureId; name: string }
-): ExtrudeInferenceBody | null {
+): BodyRepresentation | null {
   return refusingWarning(
     extrusion.name,
     derived.warnings,
@@ -104,7 +108,7 @@ function builtResult(
     extrusion.featureId
   )
     ? null
-    : inferenceBody(extrusion.bodyId, derived);
+    : (ownEntry(derived.bodyRepresentations, extrusion.bodyId) ?? null);
 }
 
 function isMeasuredZeroOverlap(
@@ -169,7 +173,8 @@ export async function resolveExtrudeOperation(
     command.validate(options.base);
     const document = command.apply(options.base);
     const derived = await options.derive(document);
-    if (!builtResult(derived, reservedResult)) {
+    const result = builtResult(derived, reservedResult);
+    if (!result) {
       throw new Error(
         derived.warnings.at(-1) ??
           'The selected extrusion operation did not produce an exact result body.'
@@ -179,6 +184,9 @@ export async function resolveExtrudeOperation(
       command,
       document,
       derived,
+      ...(choice.operation === 'new-body'
+        ? { toolBounds: result.solidBounds }
+        : {}),
       baseVersion: options.base.version,
       inference: {
         operation: choice.operation,
@@ -195,7 +203,7 @@ export async function resolveExtrudeOperation(
   newBodyCommand.validate(options.base);
   const newBodyDocument = newBodyCommand.apply(options.base);
   const newBodyDerived = await options.derive(newBodyDocument);
-  const extrusion = inferenceBody(resultBodyId, newBodyDerived);
+  const extrusion = builtResult(newBodyDerived, reservedResult);
   if (!extrusion) {
     throw new Error('Extrude preview did not produce an exact result body.');
   }
@@ -247,6 +255,7 @@ export async function resolveExtrudeOperation(
         command,
         document,
         derived,
+        toolBounds: extrusion.solidBounds,
         inference: {
           operation: 'add',
           targetBodyId: target.bodyId,
@@ -303,6 +312,7 @@ export async function resolveExtrudeOperation(
       command: newBodyCommand,
       document: newBodyDocument,
       derived: newBodyDerived,
+      toolBounds: extrusion.solidBounds,
       inference,
       baseVersion: options.base.version
     };
@@ -331,6 +341,7 @@ export async function resolveExtrudeOperation(
     command,
     document,
     derived,
+    toolBounds: extrusion.solidBounds,
     inference,
     baseVersion: options.base.version
   };

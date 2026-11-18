@@ -88,6 +88,88 @@ describe('in-place Extrude bar', () => {
     );
   });
 
+  it('offers to show a hidden Auto Cut while keeping the preview and draft', async () => {
+    const user = userEvent.setup();
+    const showFullModel = vi.fn();
+    const { commandRef, onDraft, onPreview, onSubmit, update } = setup({
+      onShowFullModel: showFullModel,
+      resolvedChoice: {
+        operation: 'cut',
+        targetBodyId: plate,
+        reason: 'enclosed',
+        tolerance: 1e-6
+      }
+    });
+    showFullModel.mockImplementation(() =>
+      update({ onShowFullModel: undefined })
+    );
+    act(() => commandRef.current?.setValue('distance', '2 - thickness'));
+
+    const advisory = 'Section view hides this change';
+    const status = screen.getByRole('status');
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(status).toHaveTextContent(`Preview: Cut · Plate · ${advisory}`);
+    expect(within(status).getByText(advisory, { exact: true }).tagName).toBe(
+      'SPAN'
+    );
+    expect(screen.getByText('Preview', { exact: true })).toBeVisible();
+    const done = screen.getByRole('button', { name: 'Done' });
+    expect(done).toBeEnabled();
+    const button = screen.getByRole('button', {
+      name: 'Show full model'
+    });
+    expect(button.closest('details')).toBeNull();
+    await user.click(button);
+
+    expect(showFullModel).toHaveBeenCalledOnce();
+    expect(status).toHaveTextContent(/^Preview: Cut · Plate/);
+    expect(status).not.toHaveTextContent(advisory);
+    expect(button).not.toBeInTheDocument();
+    expect(commandRef.current?.text('distance')).toBe('2 - thickness');
+    expect(onDraft).toHaveBeenCalledOnce();
+    expect(onPreview).toHaveBeenCalledOnce();
+    expect(onSubmit).not.toHaveBeenCalled();
+    await user.click(done);
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        distance: '2 - thickness',
+        choice: { operation: 'automatic' }
+      })
+    );
+  });
+
+  it.each([
+    ['a pending preview', { previewPending: true }],
+    ['a preview refusal', { note: 'This cut did not produce a valid body.' }],
+    [
+      'a keypad refusal',
+      { entryRefusal: 'Distance: Unexpected end of expression.' }
+    ],
+    ['a commit lock', { disabled: true }],
+    ['a held drag', { onShowFullModel: undefined }]
+  ] as const)('withdraws section recovery during %s', (_condition, next) => {
+    const showFullModel = vi.fn();
+    const { update, onSubmit } = setup({
+      initial: { name: 'Extrude', sketchId, distance: -6 },
+      onShowFullModel: showFullModel
+    });
+    const button = screen.getByRole('button', { name: 'Show full model' });
+    expect(button).toBeVisible();
+    button.focus();
+    update(next);
+    expect(
+      screen.queryByRole('button', { name: 'Show full model' })
+    ).toBeNull();
+    expect(
+      screen.getByRole('group', { name: 'Extrude command' })
+    ).toHaveFocus();
+    expect(screen.getByRole('status')).not.toHaveTextContent(
+      'Section view hides this change'
+    );
+    expect(showFullModel).not.toHaveBeenCalled();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it('shows an operation only after the latest automatic draft has been previewed', () => {
     const cut = {
       operation: 'cut',
