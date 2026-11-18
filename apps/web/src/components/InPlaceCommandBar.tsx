@@ -14,6 +14,7 @@ import { ownedTopologyName } from '../lib/topologyLabels';
 import { modelingRefusalSummary } from '../lib/modelingRefusal';
 import { plainRefusal } from '../lib/refusalLanguage';
 import type { InPlacePanelSectionView } from '../lib/inPlace/panel';
+import type { BodyPick } from '../lib/inPlace/tools';
 import { spokenValueName } from '../lib/inPlace/chipNames';
 import {
   blendRefusalText,
@@ -136,6 +137,11 @@ export interface InPlaceCommandBarProps {
     items: readonly { id: string; name: string; owner?: string }[];
   } | null;
   onRemovePick?(id: string): void;
+  booleanOperands?: {
+    bodies: readonly BodyPick[];
+    name(id: BodyPick['bodyId']): string | undefined;
+    remove(body: BodyPick): void;
+  };
   /** Exact numbers behind the same disclosure, each opening the keypad. */
   values?: readonly InPlaceOptionValue[];
   /** A value's button was pressed, at this client point (for the keypad). */
@@ -199,8 +205,9 @@ export function InPlaceCommandBar({
   onPreciseValues,
   actions = [],
   onAction,
-  picks = null,
+  picks: listedPicks = null,
   onRemovePick,
+  booleanOperands,
   values = [],
   onValue,
   onValueCommit,
@@ -213,6 +220,16 @@ export function InPlaceCommandBar({
   onDone,
   onCancel
 }: InPlaceCommandBarProps) {
+  const picks: InPlaceCommandBarProps['picks'] = booleanOperands
+    ? {
+        label: 'Boolean operands',
+        minimum: 0,
+        items: booleanOperands.bodies.map((body, index) => ({
+          id: body.bodyId,
+          name: `${index === 0 ? 'Base' : 'Tool'} · ${booleanOperands.name(body.bodyId) ?? 'Body'}`
+        }))
+      }
+    : listedPicks;
   const commandRef = useRef<HTMLDivElement>(null);
   const recoveryEnterHeld = useRef(false);
   const restoreRecoveryFocus = useCallback(
@@ -491,7 +508,11 @@ export function InPlaceCommandBar({
                             : 'Remove'
                         }
                         disabled={locked || picks.items.length <= picks.minimum}
-                        onClick={() => onRemovePick?.(item.id)}
+                        onClick={() => {
+                          const operand = booleanOperands?.bodies[index];
+                          if (operand) booleanOperands?.remove(operand);
+                          else onRemovePick?.(item.id);
+                        }}
                       >
                         <X size={12} aria-hidden="true" />
                       </button>

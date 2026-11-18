@@ -3,8 +3,10 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor
+  waitFor,
+  within
 } from '@testing-library/react';
+import { toBodyId } from '@openzcad/shared';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -16,6 +18,37 @@ import {
 } from './forms/parameterDefinition';
 
 describe('InPlaceCommandBar', () => {
+  it('lists Boolean operands by role and removes the named tool pick', () => {
+    const base = {
+      bodyId: toBodyId('base'),
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 10, y: 10, z: 10 }
+    };
+    const tool = { ...base, bodyId: toBodyId('tool') };
+    const remove = vi.fn();
+    render(
+      <InPlaceCommandBar
+        title="Union"
+        hint="2 bodies"
+        canFinish
+        booleanOperands={{
+          bodies: [base, tool],
+          name: (id) => (id === base.bodyId ? 'Plate' : 'Boss'),
+          remove
+        }}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    screen.getByLabelText('Union options').closest('details')!.open = true;
+    const list = within(screen.getByRole('list', { name: 'Boolean operands' }));
+    const [first, second] = list.getAllByRole('listitem');
+    expect(first).toHaveTextContent('Base · Plate');
+    expect(second).toHaveTextContent('Tool · Boss');
+    fireEvent.click(list.getByRole('button', { name: 'Remove 2 Tool · Boss' }));
+    expect(remove).toHaveBeenCalledExactlyOnceWith(tool);
+  });
+
   it('confirms from the focused instructions only when ready and leaves child controls their Enter key', () => {
     const onDone = vi.fn();
     const command = (canFinish: boolean, locked = false) => (

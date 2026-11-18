@@ -1362,26 +1362,25 @@ describe('body tools', () => {
   it('booleans: picks in order, the first the base; keep from Options', () => {
     const spec = IN_PLACE_TOOL_SPECS.subtract;
     expect(spec.ready({ ...EMPTY, bodies: [BODY] })).toBe(false);
-    expect(
-      spec.request(
-        { ...EMPTY, bodies: [BODY, OTHER] },
-        {},
-        { keepOriginals: 'target' },
-        CTX
-      )
-    ).toEqual({
+    const slots = { ...EMPTY, bodies: [BODY, OTHER] };
+    expect(spec.hint(slots)).toContain('2 bodies · Keep originals: None');
+    for (const [value, label] of [
+      ['target', 'Base body'],
+      ['tools', 'Tool bodies'],
+      ['all', 'All bodies']
+    ] as const) {
+      expect(spec.hint(slots, { keepOriginals: value })).toContain(
+        `Keep originals: ${label}`
+      );
+    }
+    expect(spec.request(slots, {}, { keepOriginals: 'target' }, CTX)).toEqual({
       tool: 'boolean',
       operation: 'subtract',
       targetBodyIds: ['body_a', 'body_b'],
       keepOriginals: 'target'
     });
     expect(
-      spec.request(
-        { ...EMPTY, bodies: [BODY, OTHER] },
-        {},
-        { keepOriginals: 'none' },
-        CTX
-      )
+      spec.request(slots, {}, { keepOriginals: 'none' }, CTX)
     ).not.toHaveProperty('keepOriginals');
   });
 });
