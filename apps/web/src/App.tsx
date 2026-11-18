@@ -23802,6 +23802,40 @@ export function App() {
         : new Map<string, string>(),
     [editingSketchNode, sketchReadDocument]
   );
+  const {
+    active: filletArmed,
+    checking: filletChecking,
+    cornerIds: filletCornerIds,
+    corners: filletCorners,
+    firstLine: filletFirstLine,
+    plan: filletPlan,
+    toggle: toggleFilletCorner
+  } = sketchFillet;
+  const filletHud = useMemo(
+    () =>
+      filletArmed
+        ? {
+            corners: filletCorners,
+            selectedIds: filletCornerIds ?? [],
+            firstLine: filletFirstLine,
+            labels: sketchLabels,
+            plan: filletPlan,
+            disabled: filletChecking || filletKeypadOpen,
+            onToggle: toggleFilletCorner
+          }
+        : null,
+    [
+      filletArmed,
+      filletChecking,
+      filletCornerIds,
+      filletCorners,
+      filletFirstLine,
+      filletKeypadOpen,
+      filletPlan,
+      sketchLabels,
+      toggleFilletCorner
+    ]
+  );
 
   const sketchOverview = useMemo(() => {
     const objects =
@@ -36972,19 +37006,7 @@ export function App() {
               });
             }}
             sketchMode={modelingLocked ? null : sketchModeForViewer}
-            sketchFillet={
-              sketchFillet.active && !modelingLocked
-                ? {
-                    corners: sketchFillet.corners,
-                    selectedIds: sketchFillet.cornerIds ?? [],
-                    firstLine: sketchFillet.firstLine,
-                    labels: sketchLabels,
-                    plan: sketchFillet.plan,
-                    disabled: sketchFillet.checking || filletKeypadOpen,
-                    onToggle: sketchFillet.toggle
-                  }
-                : null
-            }
+            sketchFillet={modelingLocked ? null : filletHud}
             sketchTextAnchorRef={sketchTextAnchorRef}
             onSketchCommit={handleSketchCommit}
             onSketchCommitComposite={handleSketchCommitComposite}
@@ -38550,6 +38572,7 @@ export function App() {
               sketchFillet.active && !modelingLocked ? (
                 <InPlaceCommandBar
                   title="Sketch Fillet"
+                  ignoreRepeatedEnter
                   hint={
                     sketchFillet.checking
                       ? 'Checking the rounded sketch…'

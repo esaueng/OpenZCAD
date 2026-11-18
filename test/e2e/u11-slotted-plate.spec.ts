@@ -139,19 +139,18 @@ async function holdNextSketchSolve(page: Page) {
         return;
       }
       Worker.prototype.postMessage = original;
-      const worker = this;
       Reflect.set(
         window,
         '__releaseSketchFilletSolve',
         () =>
           new Promise<void>((resolve) => {
-            function replied(event: MessageEvent<{ requestId?: string }>) {
+            const replied = (event: MessageEvent<{ requestId?: string }>) => {
               if (event.data.requestId !== message.requestId) return;
-              worker.removeEventListener('message', replied);
+              this.removeEventListener('message', replied);
               resolve();
-            }
-            worker.addEventListener('message', replied);
-            Reflect.apply(original, worker, args);
+            };
+            this.addEventListener('message', replied);
+            Reflect.apply(original, this, args);
           })
       );
     };
@@ -305,9 +304,12 @@ test(
         .toBe(true);
       await bar.getByRole('button', { name: 'Cancel', exact: true }).click();
       await expect(bar).toHaveCount(0);
-      await page.evaluate(() =>
-        Reflect.get(window, '__releaseSketchFilletSolve')()
-      );
+      await page.evaluate(async () => {
+        const release = Reflect.get(window, '__releaseSketchFilletSolve') as
+          (() => Promise<void>) | undefined;
+        if (!release) throw new Error('No sketch solve was held.');
+        await release();
+      });
       expect(sketchSnapshot(await exportDocument(page))).toEqual(rectangle);
 
       await sketchFilletTool(page).click();

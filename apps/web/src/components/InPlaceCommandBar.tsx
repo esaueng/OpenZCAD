@@ -121,6 +121,8 @@ export interface InPlaceCommandBarProps {
   onPreciseValues?(): void;
   /** A command with one editable measurement can name it on the button. */
   preciseValue?: { id: string; label: string; text: string };
+  /** Exact entry returns focus here. A held Enter must not also apply it. */
+  ignoreRepeatedEnter?: boolean;
   /**
    * One-off actions beside the choices (a fillet's Select all edges, a
    * chamfer's Swap the two faces), under the same disclosure.
@@ -200,6 +202,7 @@ export function InPlaceCommandBar({
   onOption,
   onPreciseValues,
   preciseValue,
+  ignoreRepeatedEnter = false,
   actions = [],
   onAction,
   picks = null,
@@ -353,7 +356,8 @@ export function InPlaceCommandBar({
         event.stopPropagation();
         // An Enter that revealed the model can still be held after the
         // button disappears and focus returns here.
-        if (event.repeat) return;
+        if (event.repeat && (ignoreRepeatedEnter || recoveryEnterHeld.current))
+          return;
         recoveryEnterHeld.current = false;
         if (canFinish && !locked) onDone();
         else if (previewPending && !locked && !refusal) setQueued(true);

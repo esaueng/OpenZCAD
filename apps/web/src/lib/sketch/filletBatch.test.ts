@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CommandManager } from '@openzcad/command-system';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   addSketchFeature,
   createProjectDocument,
@@ -13,10 +13,12 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { centerRectangleShape, compositeCommands } from './composites';
+import { solvedSketchCommands } from './applySolve';
 import {
   listSketchFilletCorners,
   planSketchFilletBatch,
   sketchFilletBatchCommands,
+  sketchFilletCandidateRefusal,
   type SketchFilletBatchPlan
 } from './filletBatch';
 
@@ -232,6 +234,78 @@ describe('batch sketch fillet', () => {
       reason:
         'Radius 26 in overlaps the trims by 2 in on a 50 in line. Use a smaller radius.'
     });
+  });
+
+  it('explains a dimension holding a selected edge before the solve', () => {
+    const { manager, rectangle, corners } = centeredRectangle();
+    const id = rectangle.edgeIds[0]!;
+    const corner = corners.find(
+      ({ a, b }) => a.objectId === id || b.objectId === id
+    )!;
+    const document = manager.runTransaction('Dimension line', [
+      commandFactories.addSketchConstraint({
+        sketchId: rectangle.sketchId,
+        constraint: {
+          constraintKind: 'distance',
+          a: { objectId: id, point: 'start' },
+          b: { objectId: id, point: 'end' },
+          value: 80
+        }
+      })
+    ]);
+    const sketch = findSketch(document, rectangle.sketchId)!;
+    expect(
+      planSketchFilletBatch(document, sketch, [corner.id], 5, resolve)
+    ).toEqual({
+      status: 'refuse',
+      lineIds: [id],
+      cornerIds: [corner.id],
+      reason:
+        'A driving dimension holds this line at 80 mm. Change or remove the dimension before applying the fillet.'
+    });
+  });
+
+  it('accepts one rounded corner with a sub-tolerance legacy gap on an unrelated pair of lines', async () => {
+    const { manager, rectangle, corners } = centeredRectangle();
+    const { sketchId } = rectangle;
+    const extended = manager.runTransaction('Add old sketch geometry', [
+      commandFactories.addSketchObjects({
+        sketchId,
+        objects: [line(60, 0, 80, 0), line(80.0000005, 0, 80, 20)]
+      })
+    ]);
+    const [first, second] = findSketch(extended, sketchId)!.objectIds.slice(-2);
+    const base = manager.runTransaction('Hold the old joint', [
+      commandFactories.addSketchConstraint({
+        sketchId,
+        constraint: {
+          constraintKind: 'coincident',
+          a: { objectId: first!, point: 'end' },
+          b: { objectId: second!, point: 'start' }
+        }
+      })
+    ]);
+    const sketch = findSketch(base, sketchId)!;
+    const plan = ready(
+      planSketchFilletBatch(base, sketch, [corners[0]!.id], 5, resolve)
+    );
+    const candidate = manager.runTransaction(
+      'Fillet one corner',
+      sketchFilletBatchCommands(base, sketch, plan, 5)
+    );
+    const adapter = await createExactKernelAdapter();
+    try {
+      const solved = await adapter.solveSketch(candidate, sketchId);
+      expect(solved.converged).toBe(true);
+      expect(
+        solvedSketchCommands(candidate, sketchId, solved).length
+      ).toBeGreaterThan(0);
+      expect(
+        sketchFilletCandidateRefusal(candidate, sketchId, solved)
+      ).toBeNull();
+    } finally {
+      adapter.dispose();
+    }
   });
 
   it('refuses an invalid radius or a selection missing from the base geometry', () => {

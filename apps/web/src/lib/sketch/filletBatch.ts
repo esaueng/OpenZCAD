@@ -11,10 +11,11 @@ import {
   type EntityId,
   type ParamValue,
   type ProjectDocument,
+  type SketchId,
   type SketchNode,
   type SketchPointRef
 } from '@openzcad/shared';
-
+import { solveStatusLabel, solvedSketchCommands } from './applySolve';
 import {
   addFilletCornerCommands,
   deleteCornerCoincidenceCommands,
@@ -322,7 +323,62 @@ export function planSketchFilletBatch(
       ]
     };
   }
+  for (const { data } of sketch.constraints ?? []) {
+    if (data.constraintKind === 'lock') {
+      const line = lines.get(data.point.objectId);
+      const end = data.point.point;
+      if (!line || (end !== 'start' && end !== 'end')) continue;
+      const cornerId = end === 'start' ? line.startCornerId : line.endCornerId;
+      if (cornerId && !sameSketchPoint(line[end], data)) {
+        return {
+          status: 'refuse',
+          reason:
+            'A selected corner has a locked endpoint. Unlock it before applying the fillet.',
+          lineIds: [line.objectId],
+          cornerIds: [cornerId]
+        };
+      }
+    }
+    if (
+      data.constraintKind === 'distance' &&
+      data.a.objectId === data.b.objectId &&
+      ((data.a.point === 'start' && data.b.point === 'end') ||
+        (data.a.point === 'end' && data.b.point === 'start'))
+    ) {
+      const line = lines.get(data.a.objectId);
+      const wanted = resolve(data.value);
+      if (!line || wanted === undefined || !Number.isFinite(wanted)) continue;
+      const length = Math.hypot(
+        line.end.x - line.start.x,
+        line.end.y - line.start.y
+      );
+      if (Math.abs(length - wanted) > JOINT_TOLERANCE) {
+        return {
+          status: 'refuse',
+          reason: `A driving dimension holds this line at ${lengthLabel(wanted)}. Change or remove the dimension before applying the fillet.`,
+          lineIds: [line.objectId],
+          cornerIds: [line.startCornerId, line.endCornerId].filter(
+            (id) => id !== undefined
+          )
+        };
+      }
+    }
+  }
   return { status: 'ready', lines: [...lines.values()], arcs };
+}
+
+/** Preserve the planned sketch up to the same slack used to recognize joints. */
+export function sketchFilletCandidateRefusal(
+  candidate: ProjectDocument,
+  sketchId: SketchId,
+  outcome: Parameters<typeof solvedSketchCommands>[2]
+): string | null {
+  if (!outcome.converged || outcome.rolledBack)
+    return solveStatusLabel(outcome);
+  return solvedSketchCommands(candidate, sketchId, outcome, JOINT_TOLERANCE)
+    .length
+    ? 'A constraint would move the rounded sketch. Edit the conflicting constraints before applying the fillet.'
+    : null;
 }
 
 function lineData(document: ProjectDocument, objectId: EntityId): LineData {

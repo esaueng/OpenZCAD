@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AnyCommand } from '@openzcad/command-system';
 import {
   millimetresPerUnit,
@@ -10,8 +10,9 @@ import type { KeypadRequest } from '../../components/NumericKeypad';
 import { errorMessage } from '../errors';
 import { evalParamValue } from '../model';
 import { countLabel } from '../toasts';
-import { solveStatusLabel, solvedSketchCommands } from './applySolve';
+import type { solvedSketchCommands } from './applySolve';
 import type { SketchEditValidation } from './editing';
+import type * as SketchFilletTools from './filletBatch';
 
 interface FilletCommitHost {
   document: ProjectDocument;
@@ -53,7 +54,7 @@ export function useSketchFilletDraft(
   } | null>(null);
   const fillet = filletDraft?.key === sketchFilletKey ? filletDraft : null;
   const [filletTools, setFilletTools] = useState<
-    typeof import('./filletBatch') | null
+    typeof SketchFilletTools | null
   >(null);
   const [filletLoadError, setFilletLoadError] = useState(false);
   const filletArmed = sketchFilletKey !== null;
@@ -139,28 +140,31 @@ export function useSketchFilletDraft(
     !filletKeypadOpen &&
     !blocked &&
     !filletChecking;
-  function toggleSketchFilletCorner(id: string) {
-    if (
-      !sketchFilletKey ||
-      filletChecking ||
-      filletKeypadOpen ||
-      !filletCorners.some((corner) => corner.id === id)
-    )
-      return;
-    setFilletDraft((previous) => {
-      const current = previous?.key === sketchFilletKey ? previous : null;
-      const cornerIds = current?.cornerIds ?? [];
-      return {
-        ...current,
-        key: sketchFilletKey,
-        firstLine: undefined,
-        error: undefined,
-        cornerIds: cornerIds.includes(id)
-          ? cornerIds.filter((cornerId) => cornerId !== id)
-          : [...cornerIds, id]
-      };
-    });
-  }
+  const toggleSketchFilletCorner = useCallback(
+    (id: string) => {
+      if (
+        !sketchFilletKey ||
+        filletChecking ||
+        filletKeypadOpen ||
+        !filletCorners.some((corner) => corner.id === id)
+      )
+        return;
+      setFilletDraft((previous) => {
+        const current = previous?.key === sketchFilletKey ? previous : null;
+        const cornerIds = current?.cornerIds ?? [];
+        return {
+          ...current,
+          key: sketchFilletKey,
+          firstLine: undefined,
+          error: undefined,
+          cornerIds: cornerIds.includes(id)
+            ? cornerIds.filter((cornerId) => cornerId !== id)
+            : [...cornerIds, id]
+        };
+      });
+    },
+    [filletChecking, filletCorners, filletKeypadOpen, sketchFilletKey]
+  );
 
   function pickSketchFilletLine(objectId: string | null) {
     if (!sketchFilletKey || filletChecking || filletKeypadOpen) return;
@@ -265,14 +269,12 @@ export function useSketchFilletDraft(
           isCurrent,
           checkCandidate: async (candidate) => {
             const outcome = await host.solve(candidate, sketchId);
-            if (!outcome.converged || outcome.rolledBack) {
-              throw new Error(solveStatusLabel(outcome));
-            }
-            if (solvedSketchCommands(candidate, sketchId, outcome).length) {
-              throw new Error(
-                'A constraint would move the rounded sketch. Edit the conflicting constraints before applying the fillet.'
-              );
-            }
+            const refusal = filletTools.sketchFilletCandidateRefusal(
+              candidate,
+              sketchId,
+              outcome
+            );
+            if (refusal) throw new Error(refusal);
           }
         }
       );
