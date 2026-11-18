@@ -90,6 +90,7 @@ describe('explicit extrusion intent', { timeout: 30_000 }, () => {
       derive
     });
     expect(derive).toHaveBeenCalledTimes(1);
+    expect(cut.toolBounds).toBeUndefined();
     expect(cut.command.payload).toMatchObject({
       operation: 'cut',
       targetBodyId
@@ -115,12 +116,22 @@ describe('explicit extrusion intent', { timeout: 30_000 }, () => {
 
   it('honors New Body even when the same volumes would otherwise classify as Cut', async () => {
     const { base, input } = await plateWithBores();
+    const derive = vi.fn((document: typeof base) =>
+      kernel.syncDocument(document)
+    );
     const result = await resolveExtrudeOperation({
       base,
       input,
       choice: { operation: 'new-body' },
-      derive: (document) => kernel.syncDocument(document)
+      derive
     });
+    expect(derive).toHaveBeenCalledTimes(1);
+    expect(result.toolBounds).toBe(
+      result.derived.bodyRepresentations[result.command.payload.ids!.bodyId]
+        ?.solidBounds
+    );
+    expect(result.toolBounds?.min.z).toBe(0);
+    expect(result.toolBounds?.max.z).toBe(8);
     expect(result.command.payload.operation).toBe('new-body');
     expect(result.command.payload.targetBodyId).toBeUndefined();
     expect(

@@ -41,14 +41,45 @@ export function checkDeclaration(
   return { previous, current };
 }
 
+export function kernelComparisonBase(eventName, event, checkedCommit) {
+  let base;
+  if (eventName === 'pull_request') {
+    // A PR run tests GitHub's synthetic merge. Its first parent is the
+    // base actually used, which may be newer than the event's base SHA.
+    const headers = checkedCommit.split('\n\n', 1)[0];
+    const parents = [...headers.matchAll(/^parent ([0-9a-f]{40})$/gm)].map(
+      ([, sha]) => sha
+    );
+    if (parents.length !== 2 || parents[1] !== event.pull_request?.head?.sha)
+      throw new Error(
+        'Kernel declaration requires the checked PR merge commit.'
+      );
+    base = parents[0];
+  } else if (eventName === 'merge_group') {
+    base = event.merge_group?.base_sha;
+  }
+  if (!/^[0-9a-f]{40}$/.test(base ?? ''))
+    throw new Error('Missing exact kernel comparison base.');
+  return base;
+}
+
 if (
   process.argv[1] &&
   pathToFileURL(resolve(process.argv[1])).href === import.meta.url
 ) {
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
-  const base = event.pull_request?.base.sha ?? event.merge_group?.base_sha;
-  if (!/^[0-9a-f]{40}$/.test(base ?? ''))
-    throw new Error('Missing exact kernel comparison base.');
+  const eventName = process.env.GITHUB_EVENT_NAME;
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], {
+    encoding: 'utf8'
+  }).trim();
+  if (head !== process.env.GITHUB_SHA)
+    throw new Error('Kernel declaration requires the exact CI checkout.');
+  // Git's raw commit headers include parents even in the shallow checkout.
+  const checkedCommit =
+    eventName === 'pull_request'
+      ? execFileSync('git', ['cat-file', 'commit', head], { encoding: 'utf8' })
+      : '';
+  const base = kernelComparisonBase(eventName, event, checkedCommit);
   execFileSync('git', ['fetch', '--no-tags', '--depth=1', 'origin', base], {
     stdio: 'inherit'
   });
@@ -59,7 +90,7 @@ if (
       }),
       readFileSync('pnpm-lock.yaml', 'utf8'),
       {
-        event: process.env.GITHUB_EVENT_NAME,
+        event: eventName,
         headRef: event.pull_request?.head.ref,
         labels: event.pull_request?.labels?.map((l) => l.name)
       }

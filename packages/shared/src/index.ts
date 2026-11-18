@@ -3941,6 +3941,8 @@ export interface BodyRepresentation {
   /** Display-only source facets. `volume` is a compatibility placeholder. */
   meshReference?: true;
   bbox: BoundingBox;
+  /** Conservative outer bounds for measured native solids. */
+  solidBounds?: BoundingBox;
   /**
    * Absent when the kernel could not integrate this solid — it raises on a
    * degenerate one where `volume` merely answers zero — or when the projection
