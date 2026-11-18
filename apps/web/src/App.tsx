@@ -36497,12 +36497,9 @@ export function App() {
               saveProjectMeasurements
             ]}
             projectThumbnailSync={
-              geometry.state.phase === 'ready'
+              exactGeometryReady
                 ? [
-                    doc.projectId,
-                    doc.version,
-                    doc.derived.updatedAt,
-                    doc.derived.bodyRepresentations,
+                    doc,
                     Boolean(
                       session &&
                       cloudProjectIds.has(doc.projectId) &&

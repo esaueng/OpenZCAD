@@ -21,7 +21,10 @@ export interface ThumbnailRegenerationHost {
   rebuild(
     document: ProjectDocument
   ): Promise<ProjectDocument['derived'] | null>;
-  render(bodies: BodyRepresentation[]): Promise<string | null>;
+  render(
+    bodies: BodyRepresentation[],
+    sketchDocument?: ProjectDocument
+  ): Promise<string | null>;
   /** Writes this device's card record; never the account's. */
   save(
     projectId: string,
@@ -156,7 +159,7 @@ async function redraw(
     bodies = liveBodies(derived.bodyRepresentations);
   }
 
-  const source = await host.render(bodies);
+  const source = await host.render(bodies, document);
   ensureActive(host);
   if (source === null && project.thumbnailArtifactId) return false;
   await host.save(project.projectId, {

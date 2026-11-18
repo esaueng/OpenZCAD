@@ -1,6 +1,7 @@
 import type {
   ArtifactId,
   BodyRepresentation,
+  ProjectDocument,
   ProjectId
 } from '@openzcad/shared';
 import type { ProjectThumbnailRecord } from './localProjectStore';
@@ -20,6 +21,7 @@ export interface StagedThumbnail {
   updatedAt: string;
   /** The bodies geometry reported ready for `version`, unconsumed only. */
   bodies: BodyRepresentation[];
+  sketchDocument?: ProjectDocument;
 }
 
 export interface CapturedThumbnail {
@@ -33,12 +35,15 @@ export interface CapturedThumbnail {
 
 export interface ThumbnailCaptureHost {
   /**
-   * Draws the card synchronously from meshes already in memory. Synchronous
+   * Draws the card synchronously from geometry already in memory. Synchronous
    * on purpose: a leave-time flush has to finish before the shelf reads the
    * store, and nothing asynchronous may sit between "the user left" and "the
    * record exists" or the card is a placeholder until the next visit.
    */
-  render(bodies: BodyRepresentation[]): string | null;
+  render(
+    bodies: BodyRepresentation[],
+    sketchDocument?: ProjectDocument
+  ): string | null;
   load(projectId: string): Promise<ProjectThumbnailRecord | null>;
   save(
     projectId: string,
@@ -141,9 +146,19 @@ export function createThumbnailCapture(
   ): Promise<void> {
     const cached = await host.load(entry.projectId).catch(() => null);
     if (staged?.entry !== entry) return;
-    if (
+    const matching =
       cached &&
       thumbnailRecordDescribes(cached, { documentVersion: entry.version })
+        ? cached
+        : null;
+    if (
+      matching &&
+      // Cards saved before sketch previews treated a sketch-only model as empty.
+      (matching.source !== null ||
+        !entry.sketchDocument?.sketchOrder.length ||
+        !Object.values(entry.sketchDocument.nodes).some(
+          (node) => node.kind === 'sketch' && node.objectIds.length > 0
+        ))
     ) {
       // Another tab, or an earlier idle capture, already drew this version.
       written.set(entry.projectId, entry.version);
@@ -151,8 +166,8 @@ export function createThumbnailCapture(
         projectId: entry.projectId,
         version: entry.version,
         updatedAt: entry.updatedAt,
-        source: cached.source,
-        ...(cached.artifactId ? { artifactId: cached.artifactId } : {})
+        source: matching.source,
+        ...(matching.artifactId ? { artifactId: matching.artifactId } : {})
       });
       return;
     }
@@ -166,7 +181,10 @@ export function createThumbnailCapture(
           (!forceCapture && (busy || Date.now() - lastActivityAt < idleMs))
         )
           return { rendered: false as const };
-        return { rendered: true as const, source: host.render(entry.bodies) };
+        return {
+          rendered: true as const,
+          source: host.render(entry.bodies, entry.sketchDocument)
+        };
       });
       if (!result.rendered) return;
       source = result.source;
@@ -177,11 +195,13 @@ export function createThumbnailCapture(
       return;
     }
     try {
-      await host.save(entry.projectId, {
-        source,
-        version: entry.version,
-        updatedAt: entry.updatedAt
-      });
+      if (source !== null || !matching) {
+        await host.save(entry.projectId, {
+          source,
+          version: entry.version,
+          updatedAt: entry.updatedAt
+        });
+      }
     } catch {
       return;
     }

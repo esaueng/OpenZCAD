@@ -1,6 +1,12 @@
 import * as THREE from 'three';
-import type { BodyRepresentation } from '@openzcad/shared';
+import type { PlaneBasis } from '@openzcad/geometry';
+import type { BodyRepresentation, ProjectDocument } from '@openzcad/shared';
 import { currentRenderProfile } from '../components/viewer/renderProfile';
+import {
+  createSketchCurve,
+  SKETCH_COLOR,
+  SKETCH_CURVE_WIDTH
+} from '../components/viewer/sketchCurve';
 import {
   SELECTION_SEMANTICS,
   STUDIO_RIG,
@@ -15,6 +21,8 @@ import {
   keepProgram,
   shouldRenderTopologyEdge
 } from '@openzcad/viewport';
+import { thumbnailSketches } from './thumbnailSketches';
+import { preloadDocumentFonts } from './textFonts';
 
 /**
  * Twice the 360×200 card the capture was first drawn for: the shelf's tiles
@@ -62,7 +70,8 @@ export function queuePartThumbnail<T>(work: () => Promise<T> | T): Promise<T> {
  * the part opens in.
  */
 export function createThumbnailCamera(
-  bounds: THREE.Box3
+  bounds: THREE.Box3,
+  sketchPlane?: PlaneBasis
 ): THREE.PerspectiveCamera {
   const camera = new THREE.PerspectiveCamera(
     THUMBNAIL_FOV,
@@ -75,6 +84,7 @@ export function createThumbnailCamera(
   // default, every tile came out tipped onto a corner, showing the part in an
   // orientation the viewport never puts it in.
   camera.up.set(0, 0, 1);
+  if (sketchPlane) camera.up.copy(sketchPlane.v);
 
   const sphere = bounds.isEmpty()
     ? new THREE.Sphere(new THREE.Vector3(), 1)
@@ -92,7 +102,7 @@ export function createThumbnailCamera(
 
   camera.position
     .copy(sphere.center)
-    .addScaledVector(VIEW_DIRECTIONS.iso, distance);
+    .addScaledVector(sketchPlane?.normal ?? VIEW_DIRECTIONS.iso, distance);
   // Both planes scale with the part rather than sitting at fixed millimetre
   // distances: a part measured in microns would otherwise fall entirely behind
   // a hard-coded near plane, and the tight ratio this gives buys depth
@@ -104,21 +114,29 @@ export function createThumbnailCamera(
   return camera;
 }
 
+function hasThumbnailMesh(body: BodyRepresentation): boolean {
+  return (
+    !body.consumed &&
+    body.mesh.vertices.length >= 9 &&
+    body.mesh.indices.length >= 3
+  );
+}
+
 /**
  * Draws the card. Synchronous and unqueued so a caller that had to load
  * something first can hold a single queue slot for the whole job; reach for
  * {@link renderPartThumbnail} when the meshes are already to hand.
  */
 export function renderThumbnailFrame(
-  bodies: BodyRepresentation[]
+  bodies: BodyRepresentation[],
+  sketchDocument?: ProjectDocument
 ): string | null {
-  const visibleBodies = bodies.filter(
-    (body) =>
-      !body.consumed &&
-      body.mesh.vertices.length >= 9 &&
-      body.mesh.indices.length >= 3
-  );
-  if (visibleBodies.length === 0) {
+  const visibleBodies = bodies.filter(hasThumbnailMesh);
+  const sketches =
+    visibleBodies.length === 0 && sketchDocument
+      ? thumbnailSketches(sketchDocument)
+      : [];
+  if (visibleBodies.length === 0 && sketches.length === 0) {
     return null;
   }
 
@@ -128,6 +146,48 @@ export function renderThumbnailFrame(
 
   try {
     scene.add(bodyGroup);
+    const resolution = { width: THUMBNAIL_WIDTH, height: THUMBNAIL_HEIGHT };
+    if (sketches.length) {
+      for (const sketch of sketches) {
+        for (const curve of sketch.curves) {
+          bodyGroup.add(
+            createSketchCurve(curve.points, {
+              color: curve.construction ? 0x7b8da3 : SKETCH_COLOR,
+              linewidth: SKETCH_CURVE_WIDTH * THUMBNAIL_SCALE,
+              opacity: curve.construction ? 0.72 : 1,
+              closed: curve.closed,
+              resolution
+            })
+          );
+        }
+        if (sketch.points.length) {
+          bodyGroup.add(
+            new THREE.Points(
+              new THREE.BufferGeometry().setFromPoints(sketch.points),
+              new THREE.PointsMaterial({
+                color: SKETCH_COLOR,
+                size: 4 * THUMBNAIL_SCALE,
+                sizeAttenuation: false,
+                toneMapped: false
+              })
+            )
+          );
+        }
+      }
+      const plane = sketches[0]!.basis;
+      const normal = new THREE.Vector3().copy(plane.normal);
+      const parallel = sketches.every(
+        (sketch) => Math.abs(normal.dot(sketch.basis.normal)) > 0.9999
+      );
+      renderer.render(
+        scene,
+        createThumbnailCamera(
+          new THREE.Box3().setFromObject(bodyGroup),
+          parallel ? plane : undefined
+        )
+      );
+      return renderer.domElement.toDataURL('image/webp', 0.86);
+    }
     // The viewport's studio rig (viewport/render/studio.ts), so a card shows
     // the part the way the workspace does.
     const environment = thumbnailEnvironment(renderer);
@@ -145,10 +205,6 @@ export function renderThumbnailFrame(
     keyLight.position.set(80, -100, 140);
     scene.add(keyLight);
 
-    const resolution = {
-      width: THUMBNAIL_WIDTH,
-      height: THUMBNAIL_HEIGHT
-    };
     for (const body of visibleBodies) {
       const object = createObjectForBody(body, resolution);
       for (const edge of body.topology?.edges ?? []) {
@@ -263,8 +319,12 @@ function thumbnailRenderer(): THREE.WebGLRenderer {
  * Builds a disposable image projection from saved derived meshes. The
  * ProjectDocument remains canonical; this result is only a card-sized cache.
  */
-export function renderPartThumbnail(
-  bodies: BodyRepresentation[]
+export async function renderPartThumbnail(
+  bodies: BodyRepresentation[],
+  sketchDocument?: ProjectDocument
 ): Promise<string | null> {
-  return queuePartThumbnail(() => renderThumbnailFrame(bodies));
+  if (sketchDocument?.sketchOrder.length && !bodies.some(hasThumbnailMesh)) {
+    await preloadDocumentFonts(sketchDocument);
+  }
+  return queuePartThumbnail(() => renderThumbnailFrame(bodies, sketchDocument));
 }

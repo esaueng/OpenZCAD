@@ -1,4 +1,10 @@
 import {
+  addSketchFeature,
+  createProjectDocument,
+  withoutDerivedProjection
+} from '@openzcad/document-core';
+import { toUserId } from '@openzcad/shared';
+import {
   createPrimitiveInPlace,
   test,
   expect,
@@ -49,4 +55,64 @@ test('a part modelled and left at once lists with its card preview', async ({
     'src',
     /^data:image\/webp;base64,/
   );
+});
+
+test('a sketch-only project has a drawn card after leaving and reloading', async ({
+  page
+}) => {
+  const { document } = addSketchFeature(
+    createProjectDocument('Thumbnail Sketch', toUserId('owner')),
+    {
+      name: 'Open curves',
+      planeRef: { type: 'canonical', plane: 'XZ', offset: 12 },
+      objects: [
+        { objectKind: 'line', x1: 0, y1: 0, x2: 30, y2: 0 },
+        {
+          objectKind: 'arc',
+          centerX: 10,
+          centerY: 0,
+          radius: 10,
+          startAngleDeg: 0,
+          endAngleDeg: 180
+        }
+      ]
+    }
+  );
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Import project backup').setInputFiles({
+    name: 'thumbnail-sketch.openzcad',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        format: 'openzcad-project',
+        version: 1,
+        document: withoutDerivedProjection(document),
+        files: []
+      })
+    )
+  });
+  await expect(page.locator('.breadcrumb')).toContainText(document.name);
+  await expectBodyCount(page, 0);
+  await page.getByTitle('Back to projects').click();
+
+  const tile = page.locator('.start-tile', { hasText: document.name });
+  const image = tile.locator('.start-tile-thumb img');
+  await expect(image).toHaveAttribute('src', /^data:image\/webp;base64,/);
+  await expect(tile.getByText('No geometry')).toHaveCount(0);
+  const drawn = await image.evaluate(async (element: HTMLImageElement) => {
+    await element.decode();
+    const canvas = window.document.createElement('canvas');
+    canvas.width = element.naturalWidth;
+    canvas.height = element.naturalHeight;
+    const context = canvas.getContext('2d')!;
+    context.drawImage(element, 0, 0);
+    const { data } = context.getImageData(0, 0, canvas.width, canvas.height);
+    return data.some((value, index) => index % 4 === 2 && value > 150);
+  });
+  expect(drawn).toBe(true);
+  const source = await image.getAttribute('src');
+
+  await page.reload();
+  await expect(image).toHaveAttribute('src', source!);
 });
