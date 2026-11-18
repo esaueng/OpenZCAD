@@ -74,8 +74,9 @@ export interface BodyGhost {
    * cross-section. Call it each frame with the body as currently displayed
    * (an exact preview replaces the object); `null` makes the whole part solid again.
    * Does nothing for a dragged face that is not planar.
+   * Returns false when the live mesh reaches past the plane but cannot be capped.
    */
-  veilAddedMaterial(live: THREE.Mesh | null): void;
+  veilAddedMaterial(live: THREE.Mesh | null): boolean;
   dispose(): void;
 }
 
@@ -446,7 +447,7 @@ export function createBodyGhost(
       liveMaterial.transparent
     ) {
       unveil();
-      return;
+      return true;
     }
     // Where the solid stops and the veil starts: a hair past the old face,
     // leaving the old face as a quiet reference on the solid side.
@@ -455,7 +456,7 @@ export function createBodyGhost(
     // old face, and a cap there would close empty air with a solid face.
     if (!reachesBeyond(live, plane, margin)) {
       unveil();
-      return;
+      return true;
     }
     if (veil && veil.live !== live) unveil();
     // three.js keeps what lies on a plane's positive side.
@@ -465,7 +466,7 @@ export function createBodyGhost(
     const cap = liveCap(live, keep);
     if (!cap) {
       unveil();
-      return;
+      return false;
     }
     if (!veil) {
       const beyond = new THREE.Plane(
@@ -565,6 +566,7 @@ export function createBodyGhost(
       }
     };
     visit(live);
+    return true;
   }
 
   return {

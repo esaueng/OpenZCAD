@@ -469,7 +469,7 @@ describe('the offset body ghost', () => {
             return null;
           });
         live.geometry.getAttribute('position').needsUpdate = true;
-        ghost.veilAddedMaterial(live);
+        expect(ghost.veilAddedMaterial(live)).toBe(false);
         expect(veilParts(ghost)).toEqual([]);
         expect(live.material.clippingPlanes).toBeNull();
         expect(highlight.material.clippingPlanes).toBeNull();
@@ -477,7 +477,7 @@ describe('the offset body ghost', () => {
         expect(section).toHaveBeenCalledTimes(1);
         section.mockRestore();
         live.geometry.getAttribute('position').needsUpdate = true;
-        ghost.veilAddedMaterial(live);
+        expect(ghost.veilAddedMaterial(live)).toBe(true);
         expect(surfaceArea(capOf(ghost).geometry)).toBeCloseTo(4, 5);
         ghost.dispose();
       }

@@ -4036,6 +4036,8 @@ export function ModelViewer({
       directionY: number;
       pixelsPerUnit: number;
       initialOffset: number;
+      /** This gesture's viewport deformation could not draw a closed veil. */
+      exactPreviewOnly: boolean;
       /** Pressed while its release validated (`onRetakeLockedHandle`). */
       retaken: boolean;
     } | null = null;
@@ -4343,14 +4345,16 @@ export function ModelViewer({
     // While the pointer holds the face, material the drag adds is still a
     // proposal and draws as ghost; letting go makes the part solid again.
     function syncOffsetVeil() {
-      if (!offsetGhost) return;
+      if (!offsetGhost) return true;
       const target = offsetHandleRef.current;
       const body = target ? context.objectsByBodyId.get(target.bodyId) : null;
       // Selection rebuilds its overlays with each preview body, so this
       // runs every frame the ghost is up.
       hideHighlightsUnderGhost(body ?? undefined);
       const live = offsetDrag ? body : null;
-      offsetGhost.veilAddedMaterial(live instanceof THREE.Mesh ? live : null);
+      return offsetGhost.veilAddedMaterial(
+        live instanceof THREE.Mesh ? live : null
+      );
     }
     offsetGhostClearRef.current = clearOffsetGhost;
     offsetGhostClipRef.current = (plane) => {
@@ -4489,11 +4493,15 @@ export function ModelViewer({
       if (!proxy || proxy.pending === null) return;
       const offset = proxy.pending;
       proxy.pending = null;
-      if (!proxy.preview.apply(offset)) {
-        // A declined value leaves the proxy showing the part as it was, which
-        // flashed the unmoved body for a frame mid-drag. Hold the last value
-        // it could show until the exact stream answers for this one, the
-        // way a refused exact preview keeps the last accepted shape.
+      const applied = proxy.preview.apply(offset);
+      const drag = offsetDrag;
+      const openVeil = applied && drag !== null && !syncOffsetVeil();
+      if (!applied || openVeil) {
+        // A deformed tessellation can have a branched cut contour even when
+        // the exact shape is valid. Keep the last drawable frame until the
+        // worker answers, and stream exact frames for the rest of the drag
+        // so successful proxy frames cannot keep interrupting that handoff.
+        if (openVeil) drag.exactPreviewOnly = true;
         if (proxy.shown === null || !proxy.preview.apply(proxy.shown)) {
           restoreOffsetBodyProxy();
         } else {
@@ -5055,6 +5063,7 @@ export function ModelViewer({
         directionY: screen.directionY,
         pixelsPerUnit: screen.pixelsPerUnit,
         initialOffset: armedRig.value(),
+        exactPreviewOnly: false,
         retaken
       };
       // The ghost copies the body before the proxy deforms it.
@@ -5789,6 +5798,7 @@ export function ModelViewer({
         event as CustomEvent<{
           bodyId?: string;
           normal: { x: number; y: number; z: number };
+          lineageName?: string;
           select?: boolean;
           /** Where on the face the click lands; the face's centroid if absent. */
           point?: { x: number; y: number; z: number };
@@ -5815,6 +5825,8 @@ export function ModelViewer({
         return (
           candidate.geometry?.surfaceType === 'plane' &&
           normal !== undefined &&
+          (detail.lineageName === undefined ||
+            candidate.reference?.lineageName === detail.lineageName) &&
           new THREE.Vector3(normal.x, normal.y, normal.z)
             .normalize()
             .distanceTo(wanted) < 1e-6
@@ -6823,6 +6835,7 @@ export function ModelViewer({
           resolve?: (value: {
             bodies?: readonly GeometryBodyRepresentation[];
             offsetWorldObjects: string[];
+            offsetVeilVisible: boolean;
             sectionCaps: {
               triangles: number;
               bounds: { min: number[]; max: number[] };
@@ -7004,6 +7017,9 @@ export function ModelViewer({
       });
       detail.resolve({
         offsetWorldObjects,
+        offsetVeilVisible: Boolean(
+          offsetGhost?.object.getObjectByName('offset-body-ghost-veil-fill')
+        ),
         sectionCaps,
         exactSections,
         sectionOverlaps,
@@ -10794,8 +10810,17 @@ export function ModelViewer({
               value,
               ms: performance.now() - event.timeStamp
             });
-            const exactOnRelease = queueOffsetBodyProxy(value, event.timeStamp);
-            onOffsetPreviewRef.current(value, !exactOnRelease);
+            if (
+              offsetDrag.exactPreviewOnly &&
+              !offsetDrag.retaken &&
+              value === 0
+            ) {
+              restoreOffsetBodyProxy();
+            }
+            const usedProxy =
+              !offsetDrag.exactPreviewOnly &&
+              queueOffsetBodyProxy(value, event.timeStamp);
+            onOffsetPreviewRef.current(value, !usedProxy);
           }
           renderer.domElement.style.cursor = 'grabbing';
           requestRender();
@@ -12378,7 +12403,10 @@ export function ModelViewer({
           Math.abs(finalOffset - completed.initialOffset) > 1e-9 &&
           Math.abs(finalOffset) > 1e-9
         ) {
-          queueOffsetBodyProxy(finalOffset);
+          // If the worker hasn't replaced the deformed mesh yet, the held
+          // proxy can show the release value solid without a veil cap.
+          if (!completed.exactPreviewOnly || offsetBodyProxy)
+            queueOffsetBodyProxy(finalOffset);
           // A refusal may retain the last accepted exact shape. The
           // re-armed handle follows that projection, never the refused input.
           // The Total the chip read at release, so the commit can name it
@@ -13201,7 +13229,7 @@ export function ModelViewer({
       }
       const cylinderRadiusProxyFrame = flushCylinderRadiusProxy();
       const offsetBodyProxyFrame = flushOffsetBodyProxy();
-      syncOffsetVeil();
+      if (!offsetBodyProxyFrame || !offsetDrag) syncOffsetVeil();
       updateOffsetChip();
       // After the offset chip, which clears the keypad anchor without a rig
       // of its own: the command's anchor has to be the frame's last word.

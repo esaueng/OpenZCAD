@@ -1,5 +1,8 @@
 import { withoutDerivedProjection } from '@openzcad/document-core';
-import type { ProjectDocument } from '@openzcad/shared';
+import type {
+  GeometryBodyRepresentation,
+  ProjectDocument
+} from '@openzcad/shared';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { filletedUnion, longFilletedUnion } from '../support/filleted-union';
 import {
@@ -245,8 +248,204 @@ for (const longHistory of [false, true])
     }
   );
 
+test(
+  'a filleted union top keeps its translucent pull when the fast preview cannot close the section',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    const adapter = await createExactKernelAdapter();
+    const { document } = await filletedUnion(adapter, {
+      width: 50,
+      height: 52,
+      depth: 28.5,
+      cylinder: { radius: 17.5, height: 54 },
+      radius: 2,
+      heightEdit: false
+    }).finally(() => adapter.dispose());
+    await stubApi(page);
+    await page.addInitScript(() => {
+      const send = Worker.prototype.postMessage;
+      Worker.prototype.postMessage = function (message, transfer) {
+        const posted = message as { type?: string; requestId?: string } | null;
+        const forward = () =>
+          send.call(this, message, transfer as StructuredSerializeOptions);
+        const held = window.__heldOffsetGeometry;
+        if (held && posted?.type === 'preview-geometry') {
+          held.preview = forward;
+          return;
+        }
+        if (held && posted?.type === 'sync' && posted.requestId !== undefined) {
+          held.validation = forward;
+          return;
+        }
+        return forward();
+      };
+    });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Import project' }).click();
+    await page.getByLabel('Import project backup').setInputFiles({
+      name: 'filleted-union.openzcad',
+      mimeType: 'application/json',
+      buffer: Buffer.from(
+        JSON.stringify({
+          format: 'openzcad-project',
+          version: 1,
+          document: withoutDerivedProjection(document),
+          files: []
+        })
+      )
+    });
+    await expectBodyCount(page, 1);
+    const canvas = page.locator('.viewer-host canvas');
+    await expect
+      .poll(async () => {
+        await canvas.evaluate((element) =>
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-select-planar-face', {
+              detail: {
+                normal: { x: 0, y: 0, z: 1 },
+                lineageName: 'boolean.face.operand.1.primitive.box.face.z-max'
+              }
+            })
+          )
+        );
+        return canvas.getAttribute('data-e2e-handle-x');
+      })
+      .not.toBeNull();
+    const drawn = () =>
+      canvas.evaluate((element) => {
+        let result: { veil: boolean; top: number | undefined } | null = null;
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-render-policy', {
+            detail: {
+              includeBodies: true,
+              resolve: (state: {
+                offsetVeilVisible: boolean;
+                bodies: GeometryBodyRepresentation[];
+              }) => {
+                result = {
+                  veil: state.offsetVeilVisible,
+                  top: state.bodies[0]?.topology?.faces.find(
+                    ({ geometry }) =>
+                      geometry?.surfaceType === 'plane' &&
+                      geometry.normal?.z === 1 &&
+                      geometry.center.z < 50
+                  )?.geometry?.center.z
+                };
+              }
+            }
+          })
+        );
+        return result;
+      });
+    await waitForStillViewport(page);
+    const handle = await canvas.evaluate((element) => ({
+      x: Number(element.dataset.e2eHandleX),
+      y: Number(element.dataset.e2eHandleY),
+      dx: Number(element.dataset.e2eHandleDx),
+      dy: Number(element.dataset.e2eHandleDy),
+      scale: Number(element.dataset.e2eHandlePixelsPerUnit)
+    }));
+    const rect = (await canvas.boundingBox())!;
+    const x = rect.x + handle.x;
+    const y = rect.y + handle.y;
+    const pull = (value: number) =>
+      page.mouse.move(
+        x + handle.dx * handle.scale * value,
+        y + handle.dy * handle.scale * value
+      );
+    await page.evaluate(() => {
+      window.__heldOffsetGeometry = {};
+    });
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    try {
+      await pull(4);
+      await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '4');
+      expect(await drawn()).toEqual({ veil: true, top: 28.5 });
+
+      // At +16 the stretched mesh has a branched section at the old plane.
+      // Keep the last translucent frame up while exact geometry is held.
+      await pull(16);
+      await expect(page.getByTestId('direct-manipulation-value')).toContainText(
+        '16'
+      );
+      expect(await drawn()).toEqual({ veil: true, top: 28.5 });
+      expect(await canvas.getAttribute('data-e2e-height-proxy-offset')).toBe(
+        '4'
+      );
+      await expect
+        .poll(() =>
+          page.evaluate(() => Boolean(window.__heldOffsetGeometry?.preview))
+        )
+        .toBe(true);
+
+      // The starting geometry is already available if the hand returns to
+      // zero before the worker answers.
+      await pull(0);
+      await expect(canvas).not.toHaveAttribute('data-e2e-height-proxy-offset');
+      await page.evaluate(() => {
+        window.__heldOffsetGeometry = {};
+      });
+      await pull(16);
+      await expect
+        .poll(() =>
+          page.evaluate(() => Boolean(window.__heldOffsetGeometry?.preview))
+        )
+        .toBe(true);
+      await page.evaluate(() => {
+        const latest = window.__heldOffsetGeometry!.preview!;
+        window.__heldOffsetGeometry = undefined;
+        latest();
+      });
+      await expect(canvas).not.toHaveAttribute('data-e2e-height-proxy-offset');
+      await expect.poll(drawn).toEqual({ veil: true, top: 44.5 });
+
+      // Continuing the gesture stays on the exact path. A return to a value
+      // the proxy can draw must not clear the installed exact frame.
+      await pull(4);
+      await expect.poll(drawn).toEqual({ veil: true, top: 32.5 });
+      await expect(canvas).not.toHaveAttribute('data-e2e-height-proxy-offset');
+    } finally {
+      await page.keyboard.press('Escape');
+      await page.mouse.up();
+    }
+    await expect.poll(drawn).toEqual({ veil: false, top: 28.5 });
+
+    // Releasing while the worker is still held can draw the final proxy
+    // solid while validation catches up, even though it couldn't be veiled.
+    await page.evaluate(() => {
+      window.__heldOffsetGeometry = {};
+    });
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await pull(4);
+    await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '4');
+    await pull(16);
+    await expect(page.getByTestId('direct-manipulation-value')).toContainText(
+      '16'
+    );
+    await page.mouse.up();
+    await expect(canvas).toHaveAttribute('data-e2e-height-proxy-offset', '16');
+    expect(await drawn()).toEqual({ veil: false, top: 28.5 });
+    await expect
+      .poll(() =>
+        page.evaluate(() => Boolean(window.__heldOffsetGeometry?.validation))
+      )
+      .toBe(true);
+    await page.evaluate(() => {
+      const validate = window.__heldOffsetGeometry!.validation!;
+      window.__heldOffsetGeometry = undefined;
+      validate();
+    });
+    await expect.poll(drawn).toEqual({ veil: false, top: 44.5 });
+  }
+);
+
 declare global {
   interface Window {
+    __heldOffsetGeometry?: { preview?: () => void; validation?: () => void };
     __resizeCommitFrames?: { viewportChip: number; readoutless: number };
     /** Live-document syncs posted to the geometry worker (no request id). */
     __liveSyncs?: number;
