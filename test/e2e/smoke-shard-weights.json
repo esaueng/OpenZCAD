@@ -9,7 +9,7 @@
   "boolean-selection.spec.ts": 11,
   "bore-rest-validation.spec.ts": 101,
   "camera-clipping.spec.ts": 80,
-  "chamfer-curved-chain.spec.ts": 71,
+  "chamfer-curved-chain.spec.ts": 80,
   "chamfer-fillet-corner.spec.ts": 49,
   "chamfer-freeform.spec.ts": 146,
   "chamfer-rounded-block.spec.ts": 153,
