@@ -562,7 +562,7 @@ test('a window floated over a live handle leaves its value chip clear and reacha
   await page.keyboard.press('Escape');
   const face = await findFacePoint(page);
   await page.mouse.click(face.x, face.y);
-  const chip = page.locator('.handle-value-chip');
+  const chip = page.getByTestId('direct-manipulation-value');
   await expect(chip).toBeVisible();
   const before = await box(chip);
 
@@ -596,9 +596,8 @@ test('a window floated over a live handle leaves its value chip clear and reacha
   // Its own: a press on it reaches the chip, not the window.
   const after = await box(chip);
   expect(
-    await page.evaluate(
-      ({ x, y }) =>
-        document.elementFromPoint(x, y)?.closest('.handle-value-chip') !== null,
+    await chip.evaluate(
+      (element, { x, y }) => element.contains(document.elementFromPoint(x, y)),
       { x: after.x + after.width / 2, y: after.y + after.height / 2 }
     )
   ).toBe(true);
@@ -614,7 +613,7 @@ test(
     await page.keyboard.press('Escape');
     const face = await findFacePoint(page);
     await page.mouse.click(face.x, face.y);
-    const chip = page.locator('.handle-value-chip');
+    const chip = page.getByTestId('direct-manipulation-value');
     await expect(chip).toBeVisible();
     await page.getByRole('button', { name: /^Section view/ }).click();
     const section = page.locator('.rail-section-panel');
@@ -639,15 +638,13 @@ test(
       .toBe(false);
     const after = await box(chip);
     expect(
-      await page.evaluate(
-        ({ x, y }) =>
-          Boolean(
-            document.elementFromPoint(x, y)?.closest('.handle-value-chip')
-          ),
+      await chip.evaluate(
+        (element, { x, y }) =>
+          element.contains(document.elementFromPoint(x, y)),
         { x: after.x + after.width / 2, y: after.y + after.height / 2 }
       )
     ).toBe(true);
-    await page.getByTestId('direct-manipulation-value').click();
+    await chip.click();
     await expect(page.getByRole('dialog', { name: /value$/ })).toBeVisible();
   }
 );

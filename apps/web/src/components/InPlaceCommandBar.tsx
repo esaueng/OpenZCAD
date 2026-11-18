@@ -244,7 +244,7 @@ export function InPlaceCommandBar({
   // A preview still being built says how long it has taken: a large
   // pattern's took over a minute behind a still "Preview", which read as
   // nothing happening at all.
-  const building = previewPending && !canFinish && !refusal && !locked;
+  const building = previewPending && !refusal && !locked;
   const [buildingFor, setBuildingFor] = useState(0);
   useEffect(() => {
     setBuildingFor(0);
@@ -325,11 +325,13 @@ export function InPlaceCommandBar({
           ? 'Applying…'
           : refusal
             ? 'Needs attention'
-            : canFinish || previewPending
-              ? building && buildingFor >= PREVIEW_ELAPSED_AFTER_S
-                ? `Preview · ${buildingFor} s`
-                : 'Preview'
-              : ''}
+            : building
+              ? buildingFor >= PREVIEW_ELAPSED_AFTER_S
+                ? `Checking… ${buildingFor} s`
+                : 'Checking…'
+              : canFinish
+                ? 'Preview'
+                : ''}
       </span>
       <span
         ref={hintRef}

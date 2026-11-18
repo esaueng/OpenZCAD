@@ -52,6 +52,8 @@ export interface CommandPromptContext {
    * boolean split into four arcs is the one "closed edge" the user clicked.
    */
   edgeNoun?: string;
+  /** The Slot has two placed centers before its size controls are offered. */
+  slotStage?: 'radius' | 'exact' | 'keypad';
 }
 
 /** How each rung of the Escape ladder reads to someone about to press it. */
@@ -75,7 +77,8 @@ const SKETCH_TOOL_STEPS: Record<string, string> = {
   line: 'Click to start a line, then click each point',
   arc: 'Click the centre, then the start and end of the arc',
   circle: 'Drag from the centre to set the radius',
-  rectangle: 'Click or drag from one corner to the other'
+  rectangle: 'Click or drag from one corner to the other',
+  slot: 'Pick the first center'
 };
 
 /**
@@ -183,6 +186,24 @@ export function commandPrompt(
       };
     }
     if (state.session.drawing) {
+      if (state.session.tool === 'slot') {
+        if (context.slotStage === 'keypad') {
+          return { step: 'Enter an exact size', escape: 'closes exact entry' };
+        }
+        if (context.slotStage === 'exact') {
+          return {
+            step: 'Tab switches size · Enter places',
+            escape: 'closes exact entry'
+          };
+        }
+        return {
+          step:
+            context.slotStage === 'radius'
+              ? 'Pick the radius · or type center spacing, Tab, radius'
+              : 'Pick the second center',
+          escape: 'cancels the slot'
+        };
+      }
       const shapeStep = SKETCH_DRAWING_STEPS[state.session.tool];
       return shapeStep
         ? { step: shapeStep, escape: 'cancels the shape' }

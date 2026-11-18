@@ -430,13 +430,25 @@ import {
   dragCompositeShape,
   inscribedPolygonShape,
   isCompositeShape,
+  MIN_COMPOSITE_SIZE,
+  SLOT_DIMENSIONS,
   threePointRectangleShape,
   slotPreviewPoints,
   slotRadiusAt,
   slotShape,
   typedRectangleShape,
-  type CompositeShape
+  type CompositeShape,
+  type SlotDimension
 } from '../lib/sketch/composites';
+
+export interface SketchSlotEntry {
+  field: SlotDimension;
+  label: string;
+  anchor: { x: number; y: number };
+  preview(value: number): string | null;
+  apply(value: number): string | null;
+  cancel(): void;
+}
 
 /** The machine events a sketch object drag reports. */
 type SketchMoveEvent = Extract<
@@ -1570,6 +1582,8 @@ export interface ModelViewerProps {
   onSketchConstraintSelectionShown?(constraintId: string, shown: boolean): void;
   /** Mirrors chain/drag liveness into the interaction machine. */
   onSketchDrawingChange(drawing: boolean): void;
+  onSketchSlotEntry?(entry: SketchSlotEntry | null): void;
+  onSketchSlotStage?(stage: 'radius' | 'exact' | null): void;
   /**
    * Whether a press on the selected object's grab point may drag it: false
    * while a pick tool is armed or a solve or rebuild owns the sketch, so the
@@ -2590,6 +2604,8 @@ export function ModelViewer({
   onSelectSketchConstraint,
   onSketchConstraintSelectionShown,
   onSketchDrawingChange,
+  onSketchSlotEntry,
+  onSketchSlotStage,
   sketchMoveEnabled = false,
   onSketchMoveChange,
   onSketchMoveCommit,
@@ -3146,6 +3162,11 @@ export function ModelViewer({
   onSketchCommitCompositeRef.current = onSketchCommitComposite;
   const onSketchDrawingChangeRef = useRef(onSketchDrawingChange);
   onSketchDrawingChangeRef.current = onSketchDrawingChange;
+  const onSketchSlotEntryRef = useRef(onSketchSlotEntry);
+  onSketchSlotEntryRef.current = onSketchSlotEntry;
+  const onSketchSlotStageRef = useRef(onSketchSlotStage);
+  onSketchSlotStageRef.current = onSketchSlotStage;
+  const resetSketchSlotRef = useRef<(() => void) | null>(null);
   const onSketchSelectObjectRef = useRef(onSketchSelectObject);
   onSketchSelectObjectRef.current = onSketchSelectObject;
   const sketchMoveEnabledRef = useRef(sketchMoveEnabled);
@@ -4851,7 +4872,7 @@ export function ModelViewer({
         event.stopPropagation();
         return;
       }
-      if (handleSketchNumericKey(event)) {
+      if (handleSlotPlacementKey(event) || handleSketchNumericKey(event)) {
         return;
       }
       if (
@@ -5683,6 +5704,20 @@ export function ModelViewer({
     // Cursor-following dimension readout for in-viewport sketching.
     const sketchDimLabel = hud.create('sketch-dim-label');
     sketchDimLabelRef.current = sketchDimLabel;
+
+    const slotChips = hud.create('handle-chip-pair');
+    slotChips.dataset.paired = '';
+    const slotChip = (field: SlotDimension) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'handle-value-chip';
+      button.style.minHeight = '36px';
+      prepareCommandChip(button, () => openSlotEntry(field));
+      slotChips.append(button);
+      return button;
+    };
+    const slotSpacingChip = slotChip('centerSpacing');
+    const slotRadiusChip = slotChip('radius');
 
     const sketchGridIndicator = hud.create('sketch-grid-indicator', {
       ariaHidden: true
@@ -9313,6 +9348,269 @@ export function ModelViewer({
       }
     }
 
+    let slotDraft: {
+      first: SketchPoint;
+      second: SketchPoint;
+      pointerRadius: number;
+      centerSpacing?: number;
+    } | null = null;
+    let slotKeys: {
+      field: SlotDimension;
+      text: Partial<Record<SlotDimension, string>>;
+    } | null = null;
+    let slotEntry: SketchSlotEntry | null = null;
+    let slotEntryValue: number | null = null;
+
+    function resetSlotPlacement() {
+      if (!slotDraft) return;
+      slotDraft = null;
+      slotKeys = null;
+      if (slotEntry) onSketchSlotEntryRef.current?.(null);
+      slotEntry = null;
+      slotEntryValue = null;
+      hud.hide(slotChips);
+      onSketchSlotStageRef.current?.(null);
+    }
+    resetSketchSlotRef.current = resetSlotPlacement;
+
+    function slotValue(field: SlotDimension): number | undefined {
+      if (slotEntry?.field === field && slotEntryValue !== null) {
+        return slotEntryValue;
+      }
+      const typed = slotKeys?.text[field];
+      if (typed) return Number(typed);
+      return slotDraft?.[
+        field === 'radius' ? 'pointerRadius' : 'centerSpacing'
+      ];
+    }
+
+    function renderSlotPlacement(): CompositeShape | null {
+      if (!slotDraft) return null;
+      const { first, second, pointerRadius } = slotDraft;
+      const spacing = slotValue('centerSpacing');
+      const radius = slotValue('radius') ?? pointerRadius;
+      const shape = slotShape(first, second, radius, spacing);
+      const lineEnd =
+        spacing !== undefined &&
+        spacing >= MIN_COMPOSITE_SIZE &&
+        Number.isFinite(spacing)
+          ? pointAtDistanceAlongDirection(first, second, spacing)
+          : second;
+      sketchRigRef.current?.setInProgress(
+        shape ? slotPreviewPoints(shape) : [first, lineEnd],
+        shape !== null
+      );
+      const shownSpacing =
+        spacing ?? Math.hypot(second.x - first.x, second.y - first.y);
+      function showValue(
+        chip: HTMLElement,
+        field: SlotDimension,
+        value: string
+      ) {
+        const typed =
+          slotEntry?.field === field && slotEntryValue !== null
+            ? undefined
+            : slotKeys?.text[field];
+        setElementText(
+          chip,
+          `${SLOT_DIMENSIONS[field].label} ${typed === undefined ? value : typed || '…'} ${unitLabelRef.current}`
+        );
+      }
+      showValue(
+        slotSpacingChip,
+        'centerSpacing',
+        spacing === undefined
+          ? formatNumber(shownSpacing)
+          : String(shownSpacing)
+      );
+      showValue(
+        slotRadiusChip,
+        'radius',
+        slotEntry?.field === 'radius' && slotEntryValue !== null
+          ? String(radius)
+          : formatNumber(radius)
+      );
+      requestRender();
+      return shape;
+    }
+
+    function showSlotChips(event: PointerEvent) {
+      slotChips.hidden = false;
+      const stage = measureClearStage(renderer.domElement)?.rect;
+      const width = slotChips.offsetWidth;
+      const offsetX =
+        stage && event.clientX + 20 + width > stage.right ? -20 - width : 20;
+      const offsetY = stage && event.clientY + 54 > stage.bottom ? -36 : 36;
+      hud.showAtPointerClamped(slotChips, event, offsetX, offsetY);
+    }
+
+    function placeSlot(shape: CompositeShape) {
+      // Slot placement keeps its construction relations and the same undo
+      // transaction regardless of how its provisional sizes were set.
+      onSketchCommitCompositeRef.current(shape);
+      resetSlotPlacement();
+      sketchGestureRef.current.circleFirst = null;
+      sketchRigRef.current?.setInProgress(null, false);
+      hideSketchDimLabel();
+      onSketchDrawingChangeRef.current(false);
+      requestRender();
+    }
+
+    function openSlotEntry(field: SlotDimension) {
+      const draft = slotDraft;
+      const open = onSketchSlotEntryRef.current;
+      if (!draft || !open) return;
+      if (slotEntry?.field === field) {
+        slotEntry.cancel();
+        return;
+      }
+      slotEntryValue = null;
+      hideSketchDimLabel();
+      const chip = field === 'centerSpacing' ? slotSpacingChip : slotRadiusChip;
+      const rect = chip.getBoundingClientRect();
+      const error = (invalidField = field) => {
+        const dimension = SLOT_DIMENSIONS[invalidField];
+        return `${dimension.label} must be at least ${dimension.minimum} ${unitLabelRef.current}.`;
+      };
+      const request: SketchSlotEntry = {
+        field,
+        label: SLOT_DIMENSIONS[field].label,
+        anchor: { x: rect.left + rect.width / 2, y: rect.bottom },
+        preview(value) {
+          if (slotEntry !== request) return null;
+          slotEntryValue = value;
+          renderSlotPlacement();
+          return value >= SLOT_DIMENSIONS[field].minimum ? null : error();
+        },
+        apply(value) {
+          if (slotEntry !== request) return null;
+          if (value < SLOT_DIMENSIONS[field].minimum) return error();
+          if (field === 'radius') {
+            const spacing = slotValue('centerSpacing');
+            if (
+              spacing !== undefined &&
+              (!Number.isFinite(spacing) ||
+                spacing < SLOT_DIMENSIONS.centerSpacing.minimum)
+            )
+              return error('centerSpacing');
+            slotEntryValue = value;
+            const shape = renderSlotPlacement();
+            if (!shape) return error();
+            placeSlot(shape);
+          } else {
+            draft.centerSpacing = value;
+            if (slotKeys) {
+              delete slotKeys.text.centerSpacing;
+              if (!slotKeys.text.radius) slotKeys = null;
+            }
+            request.cancel();
+          }
+          return null;
+        },
+        cancel() {
+          if (slotEntry !== request) return;
+          slotEntry = null;
+          slotEntryValue = null;
+          open(null);
+          onSketchSlotStageRef.current?.(slotKeys ? 'exact' : 'radius');
+          renderSlotPlacement();
+        }
+      };
+      slotEntry = request;
+      open(request);
+      onSketchSlotStageRef.current?.('exact');
+      renderSlotPlacement();
+    }
+
+    function handleSlotPlacementKey(event: KeyboardEvent): boolean {
+      if (!slotDraft || sketchModeRef.current?.tool !== 'slot') return false;
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        !slotChips.contains(target) &&
+        target.closest(
+          'dialog, [role="dialog"], [aria-modal="true"], button, [role="button"], a[href], summary'
+        )
+      )
+        return false;
+      const handled = () => {
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      };
+      if (slotEntry) {
+        if (event.key !== 'Escape' || isTextEntryTarget(target)) return false;
+        slotEntry.cancel();
+        return handled();
+      }
+      if (
+        isTextEntryTarget(event.target) ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey
+      )
+        return false;
+      if (event.key === 'Escape' && slotKeys) {
+        slotKeys = null;
+        hideSketchDimLabel();
+        onSketchSlotStageRef.current?.('radius');
+      } else if (event.key === 'Tab' && slotKeys) {
+        slotKeys.field =
+          slotKeys.field === 'centerSpacing' ? 'radius' : 'centerSpacing';
+        hideSketchDimLabel();
+      } else if (event.key === 'Enter' && slotKeys) {
+        const shape = renderSlotPlacement();
+        if (shape) {
+          placeSlot(shape);
+        } else if (latestSketchPointerEvent) {
+          showSlotSizeRefusal(latestSketchPointerEvent);
+        }
+        return handled();
+      } else if (event.key === 'Backspace' && slotKeys) {
+        slotKeys.text[slotKeys.field] =
+          slotKeys.text[slotKeys.field]?.slice(0, -1) ?? '';
+        hideSketchDimLabel();
+      } else if (/^[0-9.]$/.test(event.key)) {
+        if (!slotKeys) {
+          slotKeys = {
+            field:
+              event.target === slotRadiusChip ||
+              (event.target !== slotSpacingChip &&
+                slotDraft.centerSpacing !== undefined)
+                ? 'radius'
+                : 'centerSpacing',
+            text: {}
+          };
+          onSketchSlotStageRef.current?.('exact');
+        }
+        const previous = slotKeys.text[slotKeys.field] ?? '';
+        if (event.key !== '.' || !previous.includes('.')) {
+          slotKeys.text[slotKeys.field] = previous + event.key;
+        }
+        hideSketchDimLabel();
+      } else {
+        return false;
+      }
+      if (slotKeys) {
+        const chip =
+          slotKeys.field === 'centerSpacing' ? slotSpacingChip : slotRadiusChip;
+        chip.focus({ preventScroll: true });
+      }
+      renderSlotPlacement();
+      return handled();
+    }
+
+    function showSlotSizeRefusal(event: PointerEvent) {
+      const units = unitLabelRef.current;
+      positionSketchDimLabel(
+        event,
+        slotKeys
+          ? `Center spacing ≥ ${MIN_COMPOSITE_SIZE} ${units} · Radius ≥ ${SLOT_DIMENSIONS.radius.minimum} ${units}`
+          : 'Move off the center line to set the radius',
+        false
+      );
+    }
+
     const SKETCH_NUMERIC_LABELS = {
       radius: 'Radius',
       diameter: 'Diameter',
@@ -9830,32 +10128,22 @@ export function ModelViewer({
         showSketchCenterInference(point, snapTargetsRef.current);
       }
       if (mode.tool === 'slot' && gesture.circleFirst) {
-        // I01: the centre line, then the whole outline at the pointer's
-        // distance off it.
-        if (!gesture.circleSecond) {
+        if (!slotDraft) {
           rig.setInProgress([gesture.circleFirst, point], false);
           positionSketchDimLabel(
             event,
             `${Math.round(Math.hypot(point.x - gesture.circleFirst.x, point.y - gesture.circleFirst.y) * 1000) / 1000} ${unitLabelRef.current} · centre 2 of 2`,
             false
           );
+          requestRender();
         } else {
-          const shape = slotShape(
-            gesture.circleFirst,
-            gesture.circleSecond,
-            slotRadiusAt(gesture.circleFirst, gesture.circleSecond, point)
+          slotDraft.pointerRadius = slotRadiusAt(
+            slotDraft.first,
+            slotDraft.second,
+            point
           );
-          if (shape) {
-            rig.setInProgress(slotPreviewPoints(shape), true);
-            positionSketchDimLabel(event, compositeSizeLabel(shape), false);
-          } else {
-            rig.setInProgress(
-              [gesture.circleFirst, gesture.circleSecond],
-              false
-            );
-          }
+          renderSlotPlacement();
         }
-        requestRender();
         return;
       }
       if (
@@ -12084,36 +12372,39 @@ export function ModelViewer({
         }
         if (mode.tool === 'slot' && point && !moved) {
           if (!gesture.circleFirst) {
+            finishSketchNumericEntry();
             gesture.circleFirst = point;
             onSketchDrawingChangeRef.current(true);
-          } else if (!gesture.circleSecond) {
+          } else if (!slotDraft) {
             if (
               Math.hypot(
                 point.x - gesture.circleFirst.x,
                 point.y - gesture.circleFirst.y
-              ) >= 0.5
+              ) >= MIN_COMPOSITE_SIZE
             ) {
-              gesture.circleSecond = point;
-            }
-          } else {
-            const shape = slotShape(
-              gesture.circleFirst,
-              gesture.circleSecond,
-              slotRadiusAt(gesture.circleFirst, gesture.circleSecond, point)
-            );
-            if (shape) {
-              onSketchCommitCompositeRef.current(shape);
-              gesture.circleFirst = null;
-              gesture.circleSecond = null;
-              rig?.setInProgress(null, false);
+              slotDraft = {
+                first: gesture.circleFirst,
+                second: point,
+                pointerRadius: 0
+              };
               hideSketchDimLabel();
-              onSketchDrawingChangeRef.current(false);
+              renderSlotPlacement();
+              showSlotChips(event);
+              onSketchSlotStageRef.current?.('radius');
+            }
+          } else if (slotEntry) {
+            slotEntry.cancel();
+          } else {
+            slotDraft.pointerRadius = slotRadiusAt(
+              slotDraft.first,
+              slotDraft.second,
+              point
+            );
+            const shape = renderSlotPlacement();
+            if (shape) {
+              placeSlot(shape);
             } else {
-              positionSketchDimLabel(
-                event,
-                'Move off the centre line to set the radius',
-                false
-              );
+              showSlotSizeRefusal(event);
             }
           }
           requestRender();
@@ -13726,7 +14017,9 @@ export function ModelViewer({
       offsetChip.removeEventListener('click', handleChipClick);
       dimensionPrefix.removeEventListener('click', toggleCylinderDimensionMode);
       radiusLabelChip.removeEventListener('click', handleChipClick);
+      resetSlotPlacement();
       hud.dispose();
+      resetSketchSlotRef.current = null;
       topologyPickListRef.current = null;
       // Dimension graphics own their own geometries and materials; clearing
       // the group they sit in would orphan those on the GPU.
@@ -16810,6 +17103,7 @@ export function ModelViewer({
     );
     context.requestRender();
     return () => {
+      resetSketchSlotRef.current?.();
       rig.dispose();
       if (sketchRigRef.current === rig) {
         sketchRigRef.current = null;
@@ -17088,6 +17382,9 @@ export function ModelViewer({
   // Escape ends the line chain: clear the local anchor when the machine says
   // drawing stopped.
   useEffect(() => {
+    if (!sketchMode?.drawing || sketchMode.tool !== 'slot') {
+      resetSketchSlotRef.current?.();
+    }
     if (sketchMode && !sketchMode.drawing) {
       const gesture = sketchGestureRef.current;
       gesture.chainAnchor = null;

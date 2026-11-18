@@ -1,7 +1,8 @@
 import {
   addPrimitiveFeature,
   addSketchFeature,
-  createProjectDocument
+  createProjectDocument,
+  setParameter
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import {
@@ -47,6 +48,7 @@ test('cuts two native profiles with explicit intent and retains it through undo 
       { objectKind: 'circle', radius: 2.5, centerX: 57, centerY: 20 }
     ]
   }).document;
+  document = setParameter(document, { name: 'allowance', expression: '1' });
   await page.route('**/api/projects', (route) =>
     route.request().method() === 'POST'
       ? route.fulfill({
@@ -117,6 +119,109 @@ test('cuts two native profiles with explicit intent and retains it through undo 
       }
     });
   });
+
+  await page.locator('.feature-row-main', { hasText: 'Bore layout' }).click();
+  await page.keyboard.press('e');
+  const auto = extrudeBar(page);
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: '5' });
+  await expect(auto).toContainText('Preview: New body', { timeout: 30_000 });
+  await page.evaluate(() => {
+    (
+      Reflect.get(window, '__extrudeValidationGate') as ExtrudeValidationGate
+    ).hold = true;
+  });
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: '-6' });
+  // The outgoing positive preview can remain on the stage while the new
+  // cut checks, but its operation is no longer the one the bar promises.
+  await expect(auto).toContainText('Checking preview');
+  await expect(auto.getByText('Checking…', { exact: true })).toBeVisible();
+  await expect(auto).not.toContainText('Preview: New body');
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (
+            Reflect.get(
+              window,
+              '__extrudeValidationGate'
+            ) as ExtrudeValidationGate
+          ).count
+      )
+    )
+    .toBeGreaterThan(0);
+
+  // Renaming advances the document while the cut preview is held by the worker.
+  await revealModelPanel(page, 'Objects');
+  const objects = page.getByRole('list', { name: 'Objects' });
+  await objects.getByRole('button', { name: /^Rename body Plate/ }).click();
+  const bodyName = objects.getByRole('textbox', { name: /^Rename body Plate/ });
+  await bodyName.fill('Renamed plate');
+  await bodyName.press('Enter');
+  await page.evaluate(() =>
+    (
+      Reflect.get(window, '__extrudeValidationGate') as ExtrudeValidationGate
+    ).release()
+  );
+  await expect(auto).toContainText('Preview: Cut · Renamed plate', {
+    timeout: 30_000
+  });
+
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: '5' });
+  await expect(auto).toContainText('Preview: New body', { timeout: 30_000 });
+  await revealModelPanel(page, 'Parameters');
+  const allowance = page.getByLabel('Expression for allowance');
+  await page.evaluate(() => {
+    (
+      Reflect.get(window, '__extrudeValidationGate') as ExtrudeValidationGate
+    ).hold = true;
+  });
+  await allowance.fill('2');
+  await allowance.press('Enter');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Checking allowance'
+  );
+  const [, handle] = await canvas.evaluate(
+    (element) =>
+      JSON.parse(element.dataset.e2eRegionHandles ?? '[]') as {
+        x: number;
+        y: number;
+        dx: number;
+        dy: number;
+        pixelsPerUnit: number;
+      }[]
+  );
+  const bounds = await canvas.boundingBox();
+  if (!handle || !bounds) throw new Error('The region handle is missing.');
+  const x = bounds.x + handle.x;
+  const y = bounds.y + handle.y;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await expect(
+    page.getByRole('region', { name: 'Extrude operation' })
+  ).toHaveClass(/phase-dragging/);
+  await page.keyboard.down('Shift');
+  await page.mouse.move(
+    x - handle.dx * handle.pixelsPerUnit * 11,
+    y - handle.dy * handle.pixelsPerUnit * 11,
+    { steps: 10 }
+  );
+  await page.keyboard.up('Shift');
+  await expect(page.getByTestId('direct-manipulation-value')).toHaveText(/-\d/);
+  await page.evaluate(() =>
+    (
+      Reflect.get(window, '__extrudeValidationGate') as ExtrudeValidationGate
+    ).release()
+  );
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Parameter allowance updated.'
+  );
+  await expect(auto).toContainText('Preview: Cut · Renamed plate', {
+    timeout: 30_000
+  });
+  await page.mouse.up();
+  await auto.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(auto).toHaveCount(0);
+
   for (const cancel of ['Escape', 'Dismiss'] as const) {
     await page.locator('.feature-row-main', { hasText: 'Bore layout' }).click();
     await page.keyboard.press('e');
@@ -238,6 +343,91 @@ test('cuts two native profiles with explicit intent and retains it through undo 
   await expect(
     barChoice(await editExtrudeFromHistory(page, extrusion), 'Operation', 'Cut')
   ).toHaveAttribute('aria-checked', 'true');
+});
+
+test('Auto uses the full typed distance to classify a thin overlap', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  let document = createProjectDocument(
+    'Exact reach',
+    toUserId('user_e2e'),
+    'm'
+  );
+  document = addPrimitiveFeature(document, {
+    name: 'Plate',
+    primitiveKind: 'box',
+    dimensions: { width: 0.074, height: 0.053, depth: 0.008 }
+  });
+  document = addSketchFeature(document, {
+    name: 'Extension',
+    plane: 'XY',
+    offset: -0.0102,
+    objects: [
+      { objectKind: 'circle', radius: 0.004, centerX: 0.017, centerY: 0.02 }
+    ]
+  }).document;
+  document = setParameter(document, {
+    name: 'reach',
+    expression: '0.01 m',
+    quantity: 'length'
+  });
+  await page.route('**/api/projects', (route) =>
+    route.request().method() === 'POST'
+      ? route.fulfill({
+          status: 201,
+          json: {
+            project: {
+              projectId: document.projectId,
+              name: document.name,
+              revisionCount: 1,
+              updatedAt: new Date().toISOString()
+            },
+            document
+          }
+        })
+      : route.fulfill({ json: { projects: [] } })
+  );
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill(document.name);
+  await page.getByRole('button', { name: 'New project' }).click();
+  await expectBodyCount(page, 1);
+  await page.locator('.feature-row-main', { hasText: 'Extension' }).click();
+  await page.keyboard.press('e');
+
+  const bar = extrudeBar(page);
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: '0.01' });
+  await expect(bar).toContainText('Preview: New body', { timeout: 30_000 });
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: '0.0104' });
+  await expect(bar).toContainText('Preview: Add', { timeout: 30_000 });
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: 'reach' });
+  await expect(bar).toContainText('Preview: New body', { timeout: 30_000 });
+  await revealModelPanel(page, 'Parameters');
+  const reach = page.getByLabel('Expression for reach');
+  await reach.fill('0.0104 m');
+  await reach.press('Enter');
+  await expect(bar).toContainText('Preview: Add', { timeout: 30_000 });
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: '0.0104' });
+  await bar.getByRole('button', { name: 'Done' }).click();
+  await expect(bar).toHaveCount(0, { timeout: 30_000 });
+
+  const extrusion = page.locator('.feature-row-main', { hasText: 'Extrude' });
+  await expect(extrusion).toHaveCount(1);
+  await expectBodyCount(page, 1);
+  const edit = await editExtrudeFromHistory(page, extrusion);
+  await expect(barChoice(edit, 'Operation', 'Add')).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
+  await expect(
+    edit.getByRole('button', {
+      name: 'Distance',
+      exact: true,
+      includeHidden: true
+    })
+  ).toContainText('0.0104 m');
 });
 
 test('uses the shared editor for preview, cancel, create and operation changes in history', async ({
