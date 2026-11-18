@@ -170,8 +170,8 @@ test(
     await page.keyboard.press('f');
     await waitForStillViewport(page);
 
-    // The bore spans X=54.5 to 59.5. A flipped YZ cut at X=66 keeps only
-    // X >= 66, so the plate remains visible and the entire change is clipped.
+    // The bore spans X=54.5 to 59.5. The flipped cut first keeps some of
+    // the bore, then leaves only the plate when moved to X=66.
     const section = page.getByRole('button', { name: /^Section view — now:/ });
     const panel = page.getByRole('group', {
       name: 'Section view',
@@ -182,7 +182,7 @@ test(
     const flip = panel.getByRole('button', { name: 'Flip cut direction' });
     await section.click();
     await side.click();
-    await offset.fill('66');
+    await offset.fill('58');
     await offset.press('Enter');
     await flip.click();
     await expect(flip).toHaveAttribute('aria-pressed', 'true');
@@ -190,13 +190,9 @@ test(
     await expect(panel).toBeHidden();
     await expect(section).toHaveAttribute('aria-pressed', 'true');
 
-    // History can pick the clipped sketch. The command still builds the
-    // exact preview and resolves Auto to the plate.
-    await page.locator('.feature-row-main', { hasText: 'Bore layout' }).click();
-    await page.keyboard.press('e');
     const bar = extrudeBar(page);
-    await setBarValues(page, bar, { Distance: '-6' });
     const done = bar.getByRole('button', { name: 'Done', exact: true });
+    const cancel = bar.getByRole('button', { name: 'Cancel', exact: true });
     const hint = bar.getByText('Section view hides this change', {
       exact: true
     });
@@ -204,14 +200,58 @@ test(
       name: 'Show full model',
       exact: true
     });
-    await expect(bar).toContainText('Preview: Cut · Plate', ready);
-    await expect(done).toBeEnabled();
+    const boreSketch = page.locator('.feature-row-main', {
+      hasText: 'Bore layout'
+    });
+    async function previewBore() {
+      await boreSketch.click();
+      await page.keyboard.press('e');
+      await setBarValues(page, bar, { Distance: '-6' });
+      await expect(bar).toContainText('Preview: Cut · Plate', ready);
+      await expect(done).toBeEnabled();
+    }
+
+    await previewBore();
+    await expect(section).toHaveAttribute('aria-pressed', 'true');
+    await expect(hint).toHaveCount(0);
+    await expect(reveal).toHaveCount(0);
+    await cancel.click();
+    await expect(bar).toHaveCount(0);
+    await section.click();
+    await offset.fill('66');
+    await offset.press('Enter');
+    await section.click();
+    await expect(panel).toBeHidden();
+
+    // History can pick the clipped sketch. The command still builds the
+    // exact preview and resolves Auto to the plate.
+    await previewBore();
     await expect(row).toHaveCount(0);
     await expect.poll(() => renderedSections(canvas)).toBeGreaterThan(0);
     await expect.poll(renderedTriangles).toBeGreaterThan(plateTriangles);
     const previewTriangles = await renderedTriangles();
     await expect(hint).toBeVisible();
     await expect(reveal).toBeVisible();
+    const display = page.getByRole('button', { name: /^Display mode/ });
+    const displayMenu = page.getByRole('group', {
+      name: 'Display',
+      exact: true
+    });
+    const xray = displayMenu.getByRole('button', { name: /^X-ray/ });
+    await display.click();
+    await displayMenu
+      .getByRole('button', { name: 'Wireframe', exact: true })
+      .click();
+    await expect(display).toHaveAccessibleName(/Wireframe/);
+    await expect(reveal).toBeVisible();
+    await display.click();
+    await xray.click();
+    await expect(xray).toHaveAttribute('aria-pressed', 'true');
+    await expect(reveal).toBeVisible();
+    await xray.click();
+    await displayMenu
+      .getByRole('button', { name: 'Shaded + edges', exact: true })
+      .click();
     await waitForStillViewport(page);
     const before = await projectedPlatePoints(canvas);
     const requestsBeforeReveal = await extrudeRequests();
@@ -259,15 +299,22 @@ test(
     await expect(section).toHaveAttribute('aria-pressed', 'true');
     await expect(reveal).toBeVisible();
     expect(await extrudeRequests()).toBe(requestsBeforeReveal);
+    await page.setViewportSize({ width: 390, height: 844 });
     await bar.locator('details.in-place-command-options summary').click();
     await bar.getByRole('button', { name: 'Distance', exact: true }).click();
-    const keypadInput = page.locator('.numeric-keypad input.keypad-value');
+    const keypad = page.getByRole('dialog', { name: 'Distance value' });
+    const keypadInput = keypad.locator('input.keypad-value');
+    const sheetReveal = keypad.getByRole('button', {
+      name: 'Show full model',
+      exact: true
+    });
     await keypadInput.fill('-5.5');
     await expect
       .poll(extrudeRequests, ready)
       .toBeGreaterThan(requestsBeforeReveal);
-    await expect(reveal).toBeVisible(ready);
-    await reveal.click();
+    await expect(sheetReveal).toBeVisible(ready);
+    await expect(reveal).toBeHidden();
+    await sheetReveal.click();
     await expect(section).toHaveAttribute('aria-pressed', 'false');
     await expect(reveal).toHaveCount(0);
     await expect(keypadInput).toHaveValue('-5.5');
@@ -275,15 +322,13 @@ test(
     await expect(row).toHaveCount(0);
     await keypadInput.press('Enter');
     await expect(keypadInput).toBeHidden();
-    await bar.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await cancel.click();
     await expect(bar).toHaveCount(0);
     await expect(row).toHaveCount(0);
     await expect.poll(renderedTriangles).toBe(plateTriangles);
 
-    await page.locator('.feature-row-main', { hasText: 'Bore layout' }).click();
-    await page.keyboard.press('e');
-    await setBarValues(page, bar, { Distance: '-6' });
-    await expect(bar).toContainText('Preview: Cut · Plate', ready);
+    await previewBore();
 
     await done.click();
     await expect(bar).toHaveCount(0, ready);

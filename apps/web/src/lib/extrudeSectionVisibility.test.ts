@@ -3,6 +3,7 @@ import {
   addPrimitiveFeature,
   addSketchFeature,
   createProjectDocument,
+  findSketch,
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
@@ -71,6 +72,61 @@ describe('extrude section visibility', { timeout: 30_000 }, () => {
     expect(isExtrudeChangeClipped(cut, { ...flippedYZ, flipped: false })).toBe(
       false
     );
+  });
+
+  it('proves a rotated elliptical sweep is wholly clipped despite loose raw bounds', async () => {
+    const plate = addPrimitiveFeature(
+      createProjectDocument('Rotated ellipse', toUserId('user_section')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 200, height: 100, depth: 10 }
+      }
+    );
+    const { document: base, sketchId } = addSketchFeature(plate, {
+      name: 'Elliptical profile',
+      plane: 'XY',
+      offset: 10,
+      object: {
+        objectKind: 'ellipse',
+        centerX: 200,
+        centerY: 20,
+        radiusX: 100,
+        radiusY: 60,
+        rotationDeg: 45
+      }
+    });
+    const ellipseKernel = await createExactKernelAdapter();
+    try {
+      const preview = await resolveExtrudeOperation({
+        base,
+        input: {
+          name: 'Elliptical extrusion',
+          sketchId,
+          distance: 5,
+          profiles: [
+            {
+              all: true,
+              sourceEntityIds: findSketch(base, sketchId)!.objectIds
+            }
+          ]
+        },
+        choice: { operation: 'new-body' },
+        derive: (next) => ellipseKernel.syncDocument(next)
+      });
+      expect(preview.toolBounds?.min.x).toBeGreaterThan(117);
+      expect(preview.toolBounds?.min.x).toBeLessThanOrEqual(
+        200 - Math.hypot(100, 60) / Math.SQRT2
+      );
+      expect(
+        isExtrudeChangeClipped(preview, { plane: 'YZ', offset: 100 })
+      ).toBe(true);
+      expect(
+        isExtrudeChangeClipped(preview, { plane: 'YZ', offset: 118 })
+      ).toBe(false);
+    } finally {
+      ellipseKernel.dispose();
+    }
   });
 
   it.each([
@@ -195,7 +251,7 @@ describe('extrude section visibility', { timeout: 30_000 }, () => {
     ).toBe(true);
   });
 
-  it('keeps raw bounds through cache reuse and worker projection while stripping them from stored documents', async () => {
+  it('keeps conservative bounds through cache reuse and worker projection while stripping them from stored documents', async () => {
     const replay = await kernel.syncDocument(cut.document);
     expect(reusedMeasurements).toBe(cut.document.bodyOrder.length);
     const projectId = cut.document.projectId;

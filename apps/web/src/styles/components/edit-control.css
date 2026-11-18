@@ -353,6 +353,25 @@
   max-width: none;
 }
 
+.keypad-section-recovery {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-inline: 6px;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.keypad-section-recovery button {
+  flex: 0 0 auto;
+  min-height: 44px;
+}
+
+.viewer-area:has(.keypad-section-recovery) .in-place-command-recovery {
+  display: none;
+}
+
 /* While the control stands in the value chip's place, the operation tag
    beside it wears the control's surface and height: the two read as one
    control, tag then value. */

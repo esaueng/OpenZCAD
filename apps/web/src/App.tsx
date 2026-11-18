@@ -35486,8 +35486,6 @@ export function App() {
     (interaction.phase === 'armed' || interaction.phase === 'exact-entry') &&
     interaction.targets.length === 1 &&
     sectionView !== undefined &&
-    !viewerSettings.xray &&
-    viewerSettings.displayMode !== 'wireframe' &&
     previewExtrusion !== undefined &&
     (previewExtrusion.endCondition ?? 'blind') === 'blind' &&
     !previewExtrusion.symmetric &&
@@ -35505,7 +35503,7 @@ export function App() {
       (body) =>
         body.bodyId === previewExtrusion.ids?.bodyId &&
         !body.meshReference &&
-        (body.opacity ?? 1) === 1
+        (body.opacity ?? 1) > 0
     ) &&
     isExtrudeChangeClipped(regionExtrudeResolution, sectionView);
   const baseToolCard = toolCardFor(interaction, cylinderDimensionMode);
@@ -37439,7 +37437,12 @@ export function App() {
                       anchorRef={keypadAnchorRef}
                       onDimensionModeChange={setCylinderDimensionMode}
                       {...(keypad.kind === 'extrude'
-                        ? { onEntryError: setRegionExtrudeEntryError }
+                        ? {
+                            onEntryError: setRegionExtrudeEntryError,
+                            onShowFullModel: extrudeHiddenBySection
+                              ? turnSectionViewOff
+                              : undefined
+                          }
                         : {})}
                       // A value the kernel checks as it is typed is Ready
                       // only once the value on screen has built.
