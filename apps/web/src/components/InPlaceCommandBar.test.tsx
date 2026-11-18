@@ -5,6 +5,7 @@ import {
   screen,
   waitFor
 } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { InPlaceCommandBar } from './InPlaceCommandBar';
@@ -255,6 +256,109 @@ describe('InPlaceCommandBar', () => {
     expect(precise).toHaveBeenCalledTimes(1);
     expect(done).not.toHaveBeenCalled();
   });
+
+  it.each(['Enter', 'Space'])(
+    'activates recovery with native %s and hands focus back to the bar',
+    async (key) => {
+      const user = userEvent.setup();
+      const recover = vi.fn();
+      const done = vi.fn();
+      const workspaceKey = vi.fn((event: KeyboardEvent) => {
+        if (event.key === 'Enter' || event.key === ' ') event.preventDefault();
+      });
+      function Command() {
+        const [show, setShow] = useState(true);
+        return (
+          <InPlaceCommandBar
+            title="Extrude"
+            hint="Cut · Plate"
+            canFinish
+            recovery={
+              show
+                ? {
+                    hint: 'Section view hides this change',
+                    label: 'Show full model',
+                    onActivate: () => {
+                      recover();
+                      setShow(false);
+                    }
+                  }
+                : undefined
+            }
+            onDone={done}
+            onCancel={vi.fn()}
+          />
+        );
+      }
+      window.addEventListener('keydown', workspaceKey);
+      window.addEventListener('keyup', workspaceKey);
+      try {
+        render(<Command />);
+        const bar = screen.getByRole('group', { name: 'Extrude command' });
+        const button = screen.getByRole('button', { name: 'Show full model' });
+        await user.tab();
+        expect(button).toHaveFocus();
+        workspaceKey.mockClear();
+        await user.keyboard('{Escape}');
+        expect(workspaceKey).toHaveBeenCalledTimes(2);
+        workspaceKey.mockClear();
+
+        await user.keyboard(key === 'Enter' ? '{Enter>}' : ' ');
+        expect(recover).toHaveBeenCalledOnce();
+        expect(bar).toHaveFocus();
+        if (key === 'Enter') {
+          fireEvent.keyDown(bar, { key: 'Enter', repeat: true });
+          await user.keyboard('{/Enter}');
+        }
+        expect(workspaceKey).not.toHaveBeenCalled();
+        expect(done).not.toHaveBeenCalled();
+        await user.keyboard('{Enter}');
+        expect(done).toHaveBeenCalledOnce();
+      } finally {
+        window.removeEventListener('keydown', workspaceKey);
+        window.removeEventListener('keyup', workspaceKey);
+      }
+    }
+  );
+
+  it('keeps the keypad focused with its typed value during pointer recovery', async () => {
+    const user = userEvent.setup();
+    const recover = vi.fn();
+    const done = vi.fn();
+    const command = (show: boolean) => (
+      <>
+        <div className="numeric-keypad">
+          <input aria-label="Distance" defaultValue="2 - thickness" />
+        </div>
+        <InPlaceCommandBar
+          title="Extrude"
+          hint="Cut · Plate"
+          canFinish
+          recovery={
+            show
+              ? {
+                  hint: 'Section view hides this change',
+                  label: 'Show full model',
+                  onActivate: recover
+                }
+              : undefined
+          }
+          onDone={done}
+          onCancel={vi.fn()}
+        />
+      </>
+    );
+    const { rerender } = render(command(true));
+    recover.mockImplementation(() => rerender(command(false)));
+    const entry = screen.getByRole('textbox', { name: 'Distance' });
+    entry.focus();
+    await user.click(screen.getByRole('button', { name: 'Show full model' }));
+    expect(recover).toHaveBeenCalledOnce();
+    expect(entry).toHaveFocus();
+    expect(entry).toHaveValue('2 - thickness');
+    expect(done).not.toHaveBeenCalled();
+  });
+
   it('names the command and its step, with no fields', () => {
     render(
       <InPlaceCommandBar

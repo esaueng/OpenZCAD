@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import {
   checkDeclaration,
+  kernelComparisonBase,
   kernelPin
 } from '../scripts/kernel-pin-declaration.mjs';
 
@@ -41,5 +42,61 @@ it('refuses missing baselines and split package pins', () => {
   expect(() => kernelPin(before + after)).toThrow('exactly one');
   expect(() => checkDeclaration('', after, { event: 'pull_request' })).toThrow(
     'exactly one'
+  );
+});
+
+const staleBase = '1'.repeat(40);
+const checkoutBase = '2'.repeat(40);
+const prHead = '3'.repeat(40);
+const event = {
+  pull_request: { base: { sha: staleBase }, head: { sha: prHead } }
+};
+const rawCommit = (...parents: string[]) =>
+  [
+    'tree ' + '4'.repeat(40),
+    ...parents.map((sha) => 'parent ' + sha),
+    '',
+    'Synthetic merge commit'
+  ].join('\n');
+
+it('uses the base of the tested merge even when the PR event has an older pin', () => {
+  const base = kernelComparisonBase(
+    'pull_request',
+    event,
+    rawCommit(checkoutBase, prHead)
+  );
+  expect(base).toBe(checkoutBase);
+  const baselineLock = base === checkoutBase ? after : before;
+  expect(
+    checkDeclaration(baselineLock, after, { event: 'pull_request' }).current
+  ).toBe('b'.repeat(40));
+  expect(() =>
+    checkDeclaration(baselineLock, before, { event: 'pull_request' })
+  ).toThrow('kernel-bump');
+});
+
+it('rejects a bare PR head or a merge with the wrong PR parent', () => {
+  expect(() =>
+    kernelComparisonBase('pull_request', event, rawCommit(checkoutBase))
+  ).toThrow('checked PR merge');
+  expect(() =>
+    kernelComparisonBase(
+      'pull_request',
+      event,
+      rawCommit(checkoutBase, staleBase)
+    )
+  ).toThrow('checked PR merge');
+});
+
+it('uses the queue event base and refuses a missing queue base', () => {
+  expect(
+    kernelComparisonBase(
+      'merge_group',
+      { merge_group: { base_sha: checkoutBase } },
+      ''
+    )
+  ).toBe(checkoutBase);
+  expect(() => kernelComparisonBase('merge_group', {}, '')).toThrow(
+    'Missing exact kernel comparison base'
   );
 });

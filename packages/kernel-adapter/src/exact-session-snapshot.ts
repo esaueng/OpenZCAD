@@ -160,10 +160,13 @@ export function isPersistedHistorySession(
  * or a draft display changes those without changing the model), bounds
  * tightened from that mesh, display metadata the document supplies, the
  * worker session's projection revision and lazily integrated mass properties.
+ * The raw outer bound is also excluded: it is fresh projection metadata and
+ * must not change the signature of a previously captured session.
  */
 const PRESENTATION_KEYS = new Set([
   'mesh',
   'bbox',
+  'solidBounds',
   'triangleStart',
   'triangleCount',
   'points',

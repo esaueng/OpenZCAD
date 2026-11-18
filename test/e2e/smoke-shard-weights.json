@@ -66,6 +66,7 @@
   "extrude-cold-load.spec.ts": 15,
   "extrude-edit-in-place.spec.ts": 11,
   "extrude-in-place.spec.ts": 42,
+  "extrude-section-recovery.spec.ts": 16,
   "extrude-through-all.spec.ts": 9,
   "face-drag-continuity.spec.ts": 18,
   "face-edge-chamfer.spec.ts": 15,
