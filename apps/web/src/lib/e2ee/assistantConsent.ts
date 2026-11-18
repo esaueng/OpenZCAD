@@ -26,6 +26,10 @@ import {
   type E2eeSaveAssistantConsentRequest
 } from '@openzcad/shared';
 import { desktopFetch } from '../desktopBridge';
+import {
+  raiseAssistantConsentFloor,
+  type GrantStorage
+} from './assistantConsentGrants';
 import { E2eeApiError } from './e2eeApi';
 import { unlockedAccount } from './unlockedKeys';
 
@@ -109,8 +113,7 @@ const PIN_KEY = (userId: string, projectId: string) =>
  * forged record verify.
  */
 export function localStorageConsentPins(
-  storage: Pick<Storage, 'getItem' | 'setItem'> | null = typeof window ===
-  'undefined'
+  storage: GrantStorage | null = typeof window === 'undefined'
     ? null
     : window.localStorage
 ): ConsentPinStore {
@@ -126,6 +129,10 @@ export function localStorageConsentPins(
       }
     },
     async write(userId, projectId, sequence) {
+      // The send gate's floor (`assistantConsentGrants.ts`): one key per
+      // verified record, so no tab's write lowers it, unlike this pin's
+      // read-then-write below, which serves only rollback detection.
+      raiseAssistantConsentFloor(userId, projectId, sequence, storage);
       try {
         const current = await this.read(userId, projectId);
         // A pin only moves forward, whichever tab writes it.
