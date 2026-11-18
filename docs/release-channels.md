@@ -11,6 +11,7 @@ else.
 | Email sender | `noreply@beta.zcad.app` | `noreply@zcad.app` |
 | Deploys from | `main`, on every merge | `stable`, only when promoted |
 | Deploy command (Workers Builds) | `pnpm run deploy:beta` | `pnpm run deploy:stable` |
+| Signed-in API reads | 3,000 per account per minute | 3,000 per account per minute |
 | Previews | `<branch>.dev.zcad.app` on staging data ([previews.md](previews.md)) | none |
 
 Accounts, projects, secrets, sessions, rate-limit budgets and
