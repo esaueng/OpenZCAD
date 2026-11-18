@@ -238,6 +238,11 @@ export interface PendingSketchConstraint {
 export interface PendingSketchEdit {
   kind: SketchEditToolKind;
   picks: string[];
+  /**
+   * Mirror armed over a selection: these entities are the sources, so the
+   * one pick left is the axis. Absent for the pick-the-source flow.
+   */
+  sources?: readonly string[];
 }
 
 /** How the Offset tool closes the corner where two offsets part. */
@@ -311,6 +316,13 @@ export interface SketchSessionState {
   drawing: boolean;
   /** Stable document id of the entity selected for editing. */
   selectedObjectId: string | null;
+  /**
+   * The whole entity selection when several are picked (box, Shift or
+   * Cmd/Ctrl-click). It always contains `selectedObjectId`, the primary;
+   * read it through {@link sketchSelectedObjectIds}, which treats a list
+   * that has lost its primary as stale and falls back to the primary alone.
+   */
+  selectedObjectIds?: readonly string[];
   /**
    * The relation picked from its viewport glyph; Delete removes it. It sits
    * beside the entity selection rather than replacing it, so a relation
@@ -510,7 +522,18 @@ export type InteractionEvent =
   | { type: 'sketch-curve-mode'; mode: SketchCurveMode }
   | { type: 'sketch-created'; sketchId: string }
   | { type: 'sketch-drawing'; drawing: boolean }
-  | { type: 'sketch-select-object'; objectId: string | null }
+  | {
+      type: 'sketch-select-object';
+      objectId: string | null;
+      /** Shift or Cmd/Ctrl-click: add the entity, or drop it if held. */
+      toggle?: boolean;
+    }
+  /** A box sweep: replace the selection, or add to it (`additive`). */
+  | {
+      type: 'sketch-select-objects';
+      objectIds: readonly string[];
+      additive?: boolean;
+    }
   | { type: 'sketch-select-constraint'; constraintId: string | null }
   | {
       type: 'sketch-constraint-tool';
@@ -605,6 +628,36 @@ export function composingTextDraft(
  * stray key would otherwise switch tools or exit the sketch and throw the
  * typed draft away. Escape and the rail are the explicit exits.
  */
+/**
+ * Every selected sketch entity, primary last. A list that no longer holds
+ * the primary was left behind by a reducer that only knows the single
+ * selection, so it reads as the primary alone.
+ */
+export function sketchSelectedObjectIds(
+  session: Pick<SketchSessionState, 'selectedObjectId' | 'selectedObjectIds'>
+): readonly string[] {
+  const primary = session.selectedObjectId;
+  if (!primary) {
+    return [];
+  }
+  const all = session.selectedObjectIds;
+  return all && all.length > 1 && all.includes(primary) ? all : [primary];
+}
+
+/** The session with `ids` selected; the last becomes the primary. */
+function withSketchSelection(
+  session: SketchSessionState,
+  ids: readonly string[]
+): SketchSessionState {
+  const unique = [...new Set(ids)];
+  const { selectedObjectIds: _previous, ...rest } = session;
+  return {
+    ...rest,
+    selectedObjectId: unique.at(-1) ?? null,
+    ...(unique.length > 1 ? { selectedObjectIds: unique } : {})
+  };
+}
+
 export function sketchToolKeysSuspended(state: InteractionState): boolean {
   return composingTextDraft(state) !== null;
 }
@@ -1071,6 +1124,10 @@ function reduceInteraction(
           drawing: false,
           selectedObjectId:
             event.tool === 'select' ? state.session.selectedObjectId : null,
+          selectedObjectIds:
+            event.tool === 'select'
+              ? state.session.selectedObjectIds
+              : undefined,
           selectedConstraintId: null,
           pendingConstraint: null,
           pendingEdit: null,
@@ -1129,7 +1186,17 @@ function reduceInteraction(
           tool: 'select',
           drawing: false,
           pendingConstraint: null,
-          pendingEdit: event.kind ? { kind: event.kind, picks: [] } : null,
+          pendingEdit: event.kind
+            ? {
+                kind: event.kind,
+                picks: [],
+                // Mirror over a selection asks only for the axis.
+                ...(event.kind === 'mirror' &&
+                sketchSelectedObjectIds(state.session).length > 0
+                  ? { sources: sketchSelectedObjectIds(state.session) }
+                  : {})
+              }
+            : null,
           selectedConstraintId: null
         }
       };
@@ -1200,19 +1267,45 @@ function reduceInteraction(
             session: { ...state.session, drawing: event.drawing }
           }
         : state;
-    case 'sketch-select-object':
-      return state.mode === 'sketch'
-        ? {
-            ...state,
-            session: {
-              ...state.session,
-              tool: 'select',
-              drawing: false,
-              selectedObjectId: event.objectId,
-              selectedConstraintId: null
-            }
-          }
-        : state;
+    case 'sketch-select-object': {
+      if (state.mode !== 'sketch') {
+        return state;
+      }
+      const held = sketchSelectedObjectIds(state.session);
+      const ids = !event.toggle
+        ? event.objectId
+          ? [event.objectId]
+          : []
+        : !event.objectId
+          ? held
+          : held.includes(event.objectId)
+            ? held.filter((id) => id !== event.objectId)
+            : [...held, event.objectId];
+      return {
+        ...state,
+        session: {
+          ...withSketchSelection(state.session, ids),
+          tool: 'select',
+          drawing: false,
+          selectedConstraintId: null
+        }
+      };
+    }
+    case 'sketch-select-objects': {
+      if (state.mode !== 'sketch' || state.session.moving) {
+        return state;
+      }
+      const held = event.additive ? sketchSelectedObjectIds(state.session) : [];
+      return {
+        ...state,
+        session: {
+          ...withSketchSelection(state.session, [...held, ...event.objectIds]),
+          tool: 'select',
+          drawing: false,
+          selectedConstraintId: null
+        }
+      };
+    }
     case 'sketch-select-constraint':
       // A glyph click is a plain selection: it lands on Select and ends any
       // armed pick tool, but keeps the selected entity (see the field).

@@ -958,11 +958,13 @@ import {
   DEFAULT_SKETCH_POLYGON_SIDES,
   radialFaceOperationName,
   toolCardFor,
+  sketchSelectedObjectIds,
   type FaceTarget,
   type RegionTarget,
   type SketchConstraintToolKind,
   type SketchEditToolKind
 } from './lib/interaction/machine';
+import type { SketchClipboard } from './lib/sketch/clipboard';
 import type {
   SketchEditHost,
   SketchEditPickContext,
@@ -4832,6 +4834,8 @@ export function App() {
     isolateBody
   };
   const managerRef = useRef<CommandManager | null>(null);
+  /** Sketch entities copied with Cmd/Ctrl+C, for Cmd/Ctrl+V. */
+  const sketchClipboardRef = useRef<SketchClipboard | null>(null);
   const parameterEditRequest = useRef(0);
   /** The assistant patch currently landing, for edits that must follow it. */
   const patchApplyRef = useRef<Promise<boolean> | null>(null);
@@ -22303,6 +22307,7 @@ export function App() {
       composites: sketch?.composites ?? [],
       profiles,
       selectedObjectId: session.selectedObjectId,
+      selectedObjectIds: sketchSelectedObjectIds(session),
       parameterScope: parameterScope.scope,
       units: doc.units,
       constraintDiagnosticObjectIds: sketchSolveDiagnosticObjectIds,
@@ -23336,6 +23341,88 @@ export function App() {
     }
   }
 
+  /** Cmd/Ctrl+A, C and V in a sketch: select all, copy, paste entities. */
+  async function handleSketchClipboardKey(key: 'a' | 'c' | 'v') {
+    const mode = sketchModeState;
+    if (interaction.mode !== 'sketch' || !mode || !doc) return;
+    const session = interaction.session;
+    if (key === 'a') {
+      if (session.pendingConstraint || session.pendingEdit) return;
+      dispatchInteraction({
+        type: 'sketch-select-objects',
+        objectIds: mode.objects.map((object) => object.id)
+      });
+      return;
+    }
+    const resolve = sketchValueResolver(mode.parameterScope, doc.units);
+    const clipboard = await import('./lib/sketch/clipboard');
+    if (key === 'c') {
+      const copied = clipboard.copySketchObjects(
+        mode.objects,
+        sketchSelectedObjectIds(session),
+        resolve
+      );
+      if (copied) {
+        sketchClipboardRef.current = copied;
+        setStatus(
+          `Copied ${copied.objects.length} sketch ${copied.objects.length === 1 ? 'entity' : 'entities'}.`
+        );
+      }
+      return;
+    }
+    const copied = sketchClipboardRef.current;
+    const base = managerRef.current?.document;
+    const sketchId = session.sketchId as SketchId | null;
+    if (!copied || !base || !sketchId) {
+      setStatus(
+        copied ? 'Draw an entity first, then paste.' : 'Nothing copied yet.'
+      );
+      return;
+    }
+    if (
+      sketchSolving ||
+      geometryBusy ||
+      !requireCurrentSketchGeometry(sketchId)
+    )
+      return;
+    const { commands, objectIds } = clipboard.pasteSketchObjectsCommands(
+      copied,
+      sketchId,
+      resolve
+    );
+    const label = 'Paste sketch geometry';
+    const pasted = `Pasted ${objectIds.length} sketch ${objectIds.length === 1 ? 'entity' : 'entities'}.`;
+    const source = listFeaturesInOrder(base).find(
+      (feature) =>
+        feature.data.featureKind === 'sketch' &&
+        feature.data.sketchId === sketchId
+    );
+    // As with a delete, features built on the sketch rebuild first.
+    let committed = false;
+    if (
+      !source ||
+      affectedFeatureTargets(base, source.featureId).length === 0
+    ) {
+      committed = executeTransaction(label, commands);
+    } else {
+      setSketchEditError(null);
+      setSketchSolving(true);
+      try {
+        committed = await commitSketchEdit(base, sketchId, commands, label);
+      } catch (error) {
+        if (error instanceof FeatureBuildError)
+          recordHistoryFailure(error, base);
+        setStatus(errorMessage(error, 'The copy could not be pasted.'));
+      } finally {
+        setSketchSolving(false);
+      }
+    }
+    if (committed) {
+      dispatchInteraction({ type: 'sketch-select-objects', objectIds });
+      setStatus(pasted);
+    }
+  }
+
   function handleDeleteSketchEntity() {
     if (
       interaction.mode !== 'sketch' ||
@@ -23344,11 +23431,18 @@ export function App() {
     ) {
       return;
     }
-    const refusal = sketchGeometryDeleteRefusal(
-      managerRef.current?.document,
-      interaction.session.sketchId,
-      interaction.session.selectedObjectId
-    );
+    const objectIds = sketchSelectedObjectIds(
+      interaction.session
+    ) as EntityId[];
+    const refusal = objectIds
+      .map((id) =>
+        sketchGeometryDeleteRefusal(
+          managerRef.current?.document,
+          interaction.session.sketchId!,
+          id
+        )
+      )
+      .find(Boolean);
     if (refusal) {
       setSketchEditError(refusal);
       setStatus(refusal);
@@ -23360,13 +23454,14 @@ export function App() {
       return;
     const sketchId = interaction.session.sketchId as SketchId;
     const objectId = interaction.session.selectedObjectId as EntityId;
-    const command = commandFactories.deleteSketchObject(
-      { sketchId, objectId },
-      'Delete sketch entity'
-    );
     const commands = [
-      ...retainSketchGeometryCommands(base, sketchId, [objectId]),
-      command
+      ...retainSketchGeometryCommands(base, sketchId, objectIds),
+      ...objectIds.map((id) =>
+        commandFactories.deleteSketchObject(
+          { sketchId, objectId: id },
+          'Delete sketch entity'
+        )
+      )
     ];
     setSketchDiagnosticPoints([]);
     const source = listFeaturesInOrder(base).find(
@@ -23380,7 +23475,11 @@ export function App() {
     ) {
       if (executeTransaction('Delete sketch entity', commands)) {
         dispatchInteraction({ type: 'sketch-select-object', objectId: null });
-        setStatus('Deleted sketch entity.');
+        setStatus(
+          objectIds.length > 1
+            ? `Deleted ${objectIds.length} sketch entities.`
+            : 'Deleted sketch entity.'
+        );
       }
       return;
     }
@@ -23399,7 +23498,11 @@ export function App() {
       .then((committed) => {
         if (!committed) return;
         dispatchInteraction({ type: 'sketch-select-object', objectId: null });
-        setStatus('Deleted sketch entity.');
+        setStatus(
+          objectIds.length > 1
+            ? `Deleted ${objectIds.length} sketch entities.`
+            : 'Deleted sketch entity.'
+        );
       })
       .catch((error: unknown) => {
         if (error instanceof FeatureBuildError) {
@@ -33613,10 +33716,13 @@ export function App() {
           finishSketchSession();
           return;
         }
-        // Select all would select the page's text, which is never what a
-        // sketch means by it (I46).
-        if (meta && event.key.toLowerCase() === 'a' && !event.altKey) {
+        // Select all takes every entity, never the page's text (I46). Copy
+        // and paste work on the entity selection.
+        if (meta && !event.altKey && /^[acv]$/i.test(event.key)) {
           event.preventDefault();
+          void handleSketchClipboardKey(
+            event.key.toLowerCase() as 'a' | 'c' | 'v'
+          );
           return;
         }
         // A relation picked from its glyph is the narrower selection, so
@@ -35706,6 +35812,9 @@ export function App() {
         }
         constraints={sketchConstraintItems}
         selectedObjectId={interaction.session.selectedObjectId}
+        selectedObjectCount={
+          sketchSelectedObjectIds(interaction.session).length
+        }
         solveStatus={sketchSolveStatus}
         solving={sketchSolving}
         onEditTool={(kind, hint) => {
@@ -36710,7 +36819,8 @@ export function App() {
               snapPoint,
               clickPoint,
               planePoint,
-              unreferencedSnap
+              unreferencedSnap,
+              toggle
             ) => {
               if (
                 handleSketchConstraintPick(
@@ -36726,7 +36836,24 @@ export function App() {
               ) {
                 return true;
               }
-              dispatchInteraction({ type: 'sketch-select-object', objectId });
+              dispatchInteraction({
+                type: 'sketch-select-object',
+                objectId,
+                toggle
+              });
+            }}
+            onSketchBoxSelect={(objectIds, additive) => {
+              // An armed pick tool takes clicks, not sweeps.
+              if (
+                interaction.mode === 'sketch' &&
+                !interaction.session.pendingConstraint &&
+                !interaction.session.pendingEdit
+              )
+                dispatchInteraction({
+                  type: 'sketch-select-objects',
+                  objectIds,
+                  additive
+                });
             }}
             sketchViews={sketchViews}
             selectedProfileIds={viewerSelectedProfileIds}

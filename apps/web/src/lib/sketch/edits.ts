@@ -28,6 +28,7 @@ import {
   planSketchLinearPattern,
   planSketchExtend,
   planSketchMirror,
+  planSketchMirrorSet,
   planSketchTrim,
   resolvePatternPivot,
   settleOptionalRelations,
@@ -1065,10 +1066,37 @@ export function advanceSketchEdit(
   host: SketchEditHost,
   document: ProjectDocument,
   sketch: SketchNode,
-  pending: { kind: SketchEditToolKind; picks: string[] },
+  pending: {
+    kind: SketchEditToolKind;
+    picks: string[];
+    sources?: readonly string[];
+  },
   objectId: string | null,
   context: SketchEditPickContext = {}
 ): void {
+  if (pending.kind === 'mirror' && pending.sources?.length) {
+    // Armed over a selection: this one pick is the axis.
+    if (!objectId) {
+      host.setStatus(sketchMirrorSetHint(pending.sources.length));
+      return;
+    }
+    host.disarm();
+    void commitSketchEditPlan(
+      host,
+      document,
+      sketch,
+      'mirror',
+      planSketchMirrorSet(
+        document,
+        sketch,
+        sketch.sketchId,
+        pending.sources,
+        objectId,
+        host.resolve
+      )
+    );
+    return;
+  }
   const outcome = advanceSketchEditPick(
     document,
     sketch,
@@ -1179,6 +1207,22 @@ export async function runSketchEdit(
     at,
     offset
   );
+  await commitSketchEditPlan(host, document, sketch, kind, plan);
+}
+
+/** What Mirror asks for once it is armed over `count` selected entities. */
+export function sketchMirrorSetHint(count: number): string {
+  return `Mirror: click the line to mirror the ${count === 1 ? 'selected entity' : `${count} selected entities`} about.`;
+}
+
+/** Commit one planned modify tool as a single transaction, or say why not. */
+async function commitSketchEditPlan(
+  host: SketchEditHost,
+  document: ProjectDocument,
+  sketch: SketchNode,
+  kind: SketchEditToolKind,
+  plan: SketchEditPlan
+): Promise<void> {
   if (plan.status === 'refuse') {
     host.setStatus(plan.reason);
     return;

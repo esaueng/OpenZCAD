@@ -24,6 +24,7 @@ import {
   planSketchExtend,
   planSketchLinearPattern,
   planSketchMirror,
+  planSketchMirrorSet,
   planSketchTrim,
   resolvePatternPivot,
   settleOptionalRelations,
@@ -1272,6 +1273,90 @@ describe('Extend', () => {
     expect(plan.status === 'refuse' ? plan.reason : '').toContain(
       'reference dimension'
     );
+  });
+});
+
+describe('Mirror over a selection', () => {
+  it('mirrors every selected entity about one line in one transaction', () => {
+    const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      { objectKind: 'line', x1: 2, y1: 0, x2: 6, y2: 4 },
+      { objectKind: 'circle', centerX: 5, centerY: -5, radius: 1 }
+    ]);
+    const [axis, line, circle] = ids as [string, string, string];
+    const before = sketch().objectIds.length;
+    // The axis sits in the selection too: it is skipped, not mirrored.
+    const plan = commit(
+      planSketchMirrorSet(
+        manager.document,
+        sketch(),
+        sketchId,
+        [axis, line, circle],
+        axis,
+        resolve
+      )
+    );
+    expect(plan.message).toBe('Mirror added 2 linked entities.');
+    const images = sketch().objectIds.map(String).slice(before);
+    expect(images).toHaveLength(2);
+    expectClose(object(images[0]!), { x1: -2, y1: 0, x2: -6, y2: 4 });
+    expectClose(object(images[1]!), { centerX: -5, centerY: -5, radius: 1 });
+    // One transaction: one undo takes both images away.
+    manager.undo();
+    expect(sketch().objectIds).toHaveLength(before);
+  });
+
+  it('leaves out what it cannot mirror and counts it', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      { objectKind: 'line', x1: 2, y1: 0, x2: 6, y2: 4 },
+      // Already symmetric about the axis: its image is itself.
+      { objectKind: 'circle', centerX: 0, centerY: 3, radius: 1 }
+    ]);
+    const [axis, line, round] = ids as [string, string, string];
+    const plan = planSketchMirrorSet(
+      manager.document,
+      sketch(),
+      sketchId,
+      [line, round],
+      axis,
+      resolve
+    );
+    expect(plan.status).toBe('commands');
+    expect(plan.status === 'commands' && plan.message).toBe(
+      'Mirror added 1 linked entity. 1 could not be mirrored and was left out.'
+    );
+  });
+
+  it('refuses a non-line axis once, and a selection of only the axis', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      { objectKind: 'circle', centerX: 5, centerY: -5, radius: 1 }
+    ]);
+    const [axis, circle] = ids as [string, string];
+    expect(
+      planSketchMirrorSet(
+        manager.document,
+        sketch(),
+        sketchId,
+        [axis],
+        circle,
+        resolve
+      )
+    ).toEqual({
+      status: 'refuse',
+      reason: 'Mirror reflects about a line. Pick a line as the mirror.'
+    });
+    expect(
+      planSketchMirrorSet(
+        manager.document,
+        sketch(),
+        sketchId,
+        [axis],
+        axis,
+        resolve
+      ).status
+    ).toBe('refuse');
   });
 });
 

@@ -64,6 +64,7 @@ import {
 } from './viewer/sketchDimensions';
 import { buildSketchRelationGlyphs } from './viewer/sketchRelations';
 import { alreadyFacesSketch, sketchReturnUp } from './viewer/sketchCamera';
+import { sketchObjectsInBox } from '../lib/sketch/boxSelect';
 import { createSketchCurve, SKETCH_CURVE_WIDTH } from './viewer/sketchCurve';
 import { pointerSlack } from '../lib/pointerSlack';
 import { renderChipText, setElementText } from '../lib/domText';
@@ -676,6 +677,8 @@ export interface SketchModeState {
   composites?: readonly SketchComposite[];
   profiles: { outer: SketchPoint[]; holes: SketchPoint[][] }[];
   selectedObjectId: string | null;
+  /** Every selected entity when several are; absent is the primary alone. */
+  selectedObjectIds?: readonly string[];
   parameterScope: Record<string, number>;
   units?: UnitSystem;
   /** Plane-local endpoints highlighted by Profile diagnostics on request. */
@@ -754,7 +757,9 @@ function drawSketchModeObjects(
 ) {
   rig.setObjects(
     mode.objects,
-    mode.selectedObjectId,
+    mode.selectedObjectIds?.length
+      ? mode.selectedObjectIds
+      : mode.selectedObjectId,
     sketchModeResolver(mode),
     mode.constraintDiagnosticObjectIds,
     mode.definedObjectIds,
@@ -1609,8 +1614,15 @@ export interface ModelViewerProps {
      * parametric rectangle corner, a midpoint…), so a point-taking tool can
      * say why it refused it.
      */
-    unreferencedSnap: UnreferencedSnap | null
+    unreferencedSnap: UnreferencedSnap | null,
+    /** Shift or Cmd/Ctrl was held: add or drop the entity, not replace. */
+    toggle?: boolean
   ): boolean | void;
+  /**
+   * Sketch entities swept by a drag rectangle under Select; `additive` when
+   * Shift or Cmd/Ctrl was held. Empty and not additive clears the selection.
+   */
+  onSketchBoxSelect?(objectIds: string[], additive: boolean): void;
   onSelectSketchProfile(sketchId: string): void;
   onResizePrimitiveFace(commit: FaceResizeCommit): void;
   /**
@@ -2495,6 +2507,7 @@ export function ModelViewer({
   onSelectEdgeChain,
   selectionFilter,
   onBoxSelect,
+  onSketchBoxSelect,
   onBoxSelectTopology,
   fieldOfView = VIEWPORT_FIELD_OF_VIEW_BOUNDS.default,
   xrayOpacity = XRAY_OPACITY_BOUNDS.default / 100,
@@ -2678,6 +2691,8 @@ export function ModelViewer({
   pickListEnabledRef.current = pickListEnabled;
   const onBoxSelectRef = useRef(onBoxSelect);
   onBoxSelectRef.current = onBoxSelect;
+  const onSketchBoxSelectRef = useRef(onSketchBoxSelect);
+  onSketchBoxSelectRef.current = onSketchBoxSelect;
   const onBoxSelectTopologyRef = useRef(onBoxSelectTopology);
   onBoxSelectTopologyRef.current = onBoxSelectTopology;
   // X-ray is read per pick and per sweep, like the filter.
@@ -3972,6 +3987,8 @@ export function ModelViewer({
       startY: number;
       /** Pressed on the armed offset face: travel drags it instead. */
       faceGrab?: boolean;
+      /** Under a sketch's Select: the sweep takes sketch entities. */
+      sketch?: boolean;
     } | null = null;
     /**
      * A press on the offset handle while its release validates. Held to its
@@ -11307,6 +11324,14 @@ export function ModelViewer({
           return;
         }
         const mode = sketchModeRef.current;
+        if (mode.tool === 'select' && !mode.drawing) {
+          // A drag under Select sweeps a selection box over the entities,
+          // as it does over bodies; a press that stays put is still a click.
+          beginBoxSelect(event);
+          boxSelect!.sketch = true;
+          gestures.begin(event);
+          return;
+        }
         const gesture = sketchGestureRef.current;
         const point = sketchPointAt(event);
         rememberPlacedSnap(point);
@@ -11716,6 +11741,43 @@ export function ModelViewer({
         gestures.release(event, null);
         return;
       }
+      if (boxSelect?.sketch && event.pointerId === boxSelect.pointerId) {
+        const started = boxSelect;
+        boxSelect = null;
+        hud.hide(selectionBand);
+        const from = hud.toLocal(started.startX, started.startY);
+        const to = hud.toLocal(event.clientX, event.clientY);
+        const rect =
+          from && to ? rectFromDrag(from.x, from.y, to.x, to.y) : null;
+        const rig = sketchRigRef.current;
+        if (rect && isBoxSelectDrag(rect) && rig && sketchModeRef.current) {
+          gestures.release(event, null);
+          const host = renderer.domElement;
+          const camera = cameraRig.activeCamera;
+          const toScreen = (point: THREE.Vector3) => {
+            const projected = point.clone().project(camera);
+            return {
+              x: ((projected.x + 1) / 2) * host.clientWidth,
+              y: ((1 - projected.y) / 2) * host.clientHeight
+            };
+          };
+          onSketchBoxSelectRef.current?.(
+            sketchObjectsInBox(
+              rig.objectOutlines().map(({ id, runs }) => ({
+                id,
+                runs: runs.map((run) => run.map(toScreen))
+              })),
+              rect,
+              boxSelectMode(started.startX, event.clientX)
+            ),
+            event.shiftKey || togglesSelection(event)
+          );
+          requestRender();
+          return;
+        }
+        // A press that never travelled falls through to the sketch's own
+        // click selection below.
+      }
       if (boxSelect && event.pointerId === boxSelect.pointerId) {
         const started = boxSelect;
         boxSelect = null;
@@ -11925,7 +11987,8 @@ export function ModelViewer({
                     ? { sourceId: activeSketchSnap.sourceId }
                     : {})
                 }
-              : null
+              : null,
+            event.shiftKey || togglesSelection(event)
           );
           if (!objectId && consumed !== true) {
             const profile = picker.pick(event)?.region;
