@@ -88,7 +88,7 @@
       "name": "ACCOUNT_READ_LIMITER",
       "namespace_id": "2026111606",
       "simple": {
-        "limit": 1200,
+        "limit": 3000,
         "period": 60
       }
     },
@@ -122,6 +122,7 @@
     "ENVIRONMENT": "beta",
     "AUTH_MODE": "email-code",
     "PRODUCTION_GUARD": "enabled",
+    "ACCOUNT_READ_LIMIT_PER_MINUTE": "3000",
     "AUTH_EMAIL_FROM": "noreply@zcad.app",
     "PROJECT_INVITATION_EMAIL_FROM": "noreply@zcad.app",
     "PUBLIC_APP_ORIGIN": "https://zcad.app",

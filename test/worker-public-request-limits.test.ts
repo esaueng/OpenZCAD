@@ -397,7 +397,7 @@ describe('signed-in reads', () => {
     expect(await session.json()).toMatchObject({ userId });
   });
 
-  it('uses the beta override when the account-read binding is missing', async () => {
+  it('uses the hosted override when the account-read binding is missing', async () => {
     fixMinute();
     const { env, sqlite } = hostedEnv();
     const { userId, cookie } = await signedIn(sqlite);
@@ -609,11 +609,11 @@ describe('Workers rate-limit bindings', () => {
   });
 
   it('match the limits each Wrangler configuration declares', () => {
-    for (const path of [
-      'wrangler.jsonc',
-      'wrangler.stable.jsonc',
-      'wrangler.selfhost.example.jsonc'
-    ]) {
+    for (const [path, accountReadOverride] of [
+      ['wrangler.jsonc', '3000'],
+      ['wrangler.stable.jsonc', '3000'],
+      ['wrangler.selfhost.example.jsonc', undefined]
+    ] as const) {
       const parsed = ts.parseConfigFileTextToJson(
         path,
         readFileSync(path, 'utf8')
@@ -626,7 +626,7 @@ describe('Workers rate-limit bindings', () => {
         {
           config,
           label: path,
-          accountReadOverride: path === 'wrangler.jsonc' ? '3000' : undefined
+          accountReadOverride
         },
         ...(config.previews
           ? [
