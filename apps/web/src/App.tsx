@@ -13106,11 +13106,12 @@ export function App() {
         (sketchOptions.length === 1 ? sketchOptions[0]!.sketchId : null);
       if (sketchId) {
         startExtrude(sketchId);
+      } else if (sketchViews.some((view) => view.regions.length > 0)) {
+        setTool('extrude');
+        setStatus(
+          'Click a closed profile or drag a box to select profiles for Extrude.'
+        );
       } else {
-        // No sketch to resolve, and there is no picking mode any more: a
-        // click on any shaded closed profile arms the drag-arrow rig
-        // directly, so the hint is the whole flow — and it names any sketch
-        // that has no closed profile to shade.
         setStatus(
           extrudeSketchGuidance(
             sketchOptions.map((option) => ({
@@ -28038,15 +28039,15 @@ export function App() {
 
   function selectRegionFromViewer(
     region: RegionPickData,
-    modifiers: { additive: boolean; toggle: boolean }
-  ) {
-    // A glyph stands for its whole text object: the commit builds the whole
-    // word, so the pick selects, arms and previews the whole word too.
-    const group = profilesBuiltWith(
+    modifiers: { additive: boolean; toggle: boolean },
+    group: readonly RegionPickData[] = profilesBuiltWith(
       region,
       regionPicksForSketch(region.sketchId),
       entityWideProfileSource
-    );
+    )
+  ) {
+    // A glyph stands for its whole text object: the commit builds the whole
+    // word, so the pick selects, arms and previews the whole word too.
     const nextProfiles = updateProfileSelection(
       selectedProfiles,
       region,
@@ -28083,6 +28084,54 @@ export function App() {
           ? `Closed sketch profile selected · ${profileExtrudeKey ? `press ${platformShortcutLabel(profileExtrudeKey)} to Extrude, or drag the arrow` : 'drag the arrow to extrude'}.`
           : 'Sketch profile selection cleared.'
     );
+  }
+
+  function handleBoxSelectRegions(
+    regions: RegionPickData[],
+    additive: boolean
+  ) {
+    // As with Extrude's selection of a whole sketch, leave the inner cells
+    // that represent openings out of a bulk pick. They still take clicks.
+    const eligible = new Map(
+      [...new Set(regions.map(({ sketchId }) => sketchId))].map((sketchId) => [
+        sketchId,
+        new Set(
+          regionsOutsideHoles(
+            sketchViews.find((view) => view.sketchId === sketchId)?.regions ??
+              []
+          ).map(({ profileId }) => profileId)
+        )
+      ])
+    );
+    const picked = regions.filter(({ sketchId, profileId }) =>
+      eligible.get(sketchId)?.has(profileId)
+    );
+    const first = picked[0];
+    if (!first) {
+      setStatus('No closed sketch profiles in the box.');
+      return;
+    }
+    if (picked.some((region) => region.sketchId !== first.sketchId)) {
+      setStatus('Extrude profiles from one sketch at a time.');
+      return;
+    }
+    const allowed = eligible.get(first.sketchId)!;
+    const available = regionPicksForSketch(first.sketchId).filter(
+      ({ profileId }) => allowed.has(profileId)
+    );
+    const group = new Map<string, RegionPickData>();
+    for (const region of picked) {
+      for (const member of profilesBuiltWith(
+        region,
+        available,
+        entityWideProfileSource
+      )) {
+        group.set(member.profileId, member);
+      }
+    }
+    selectRegionFromViewer(first, { additive, toggle: false }, [
+      ...group.values()
+    ]);
   }
 
   /** Every detected region of one sketch view, as pick data. */
@@ -36975,6 +37024,20 @@ export function App() {
                 inPlaceSpec.profileMode !== 'none')
             }
             onSelectRegion={handleSelectRegion}
+            onBoxSelectRegions={
+              !modelingLocked &&
+              !inPlace.active &&
+              !extrudeEditFeature &&
+              !toFacePick &&
+              !keypad &&
+              (selectionFilter === 'any' || selectionFilter === 'sketch') &&
+              ((tool === 'extrude' && interaction.mode === 'idle') ||
+                (interaction.mode === 'region' &&
+                  (interaction.phase === 'armed' ||
+                    interaction.phase === 'failed')))
+                ? handleBoxSelectRegions
+                : undefined
+            }
             onHoverRegion={handleHoverRegion}
             planePickerArmed={
               !modelingLocked &&

@@ -17,7 +17,9 @@ import {
   revealModelPanel,
   MODEL_ONLY,
   bodyCardFromHistory,
-  extrudeBar
+  extrudeBar,
+  setBarValues,
+  waitForStillViewport
 } from './openzcad-fixtures';
 
 interface RegionHandle {
@@ -106,6 +108,103 @@ async function exportedDocument(page: Page): Promise<ProjectDocument> {
     }
   ).document;
 }
+
+test(
+  'window and crossing sweeps choose the profiles for one Extrude',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    page.setDefaultTimeout(12_000);
+    await stubApi(page, { panelLayout: MODEL_ONLY });
+    let document = createProjectDocument(
+      'Box-picked pockets',
+      toUserId('user_e2e')
+    );
+    document = addPrimitiveFeature(document, {
+      name: 'Plate',
+      primitiveKind: 'box',
+      dimensions: { width: 74, height: 53, depth: 8 }
+    });
+    document = addSketchFeature(document, {
+      name: 'Pockets',
+      plane: 'XY',
+      offset: 8,
+      objects: [
+        ...[20, 50].map((centerX) => ({
+          objectKind: 'rectangle' as const,
+          width: 10,
+          height: 10,
+          centerX,
+          centerY: 20
+        })),
+        { objectKind: 'circle', centerX: 20, centerY: 20, radius: 2 }
+      ]
+    }).document;
+    await openDocument(page, document);
+    const canvas = page.locator('.viewer-host canvas');
+    await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
+      timeout: 30_000
+    });
+    await page.getByRole('button', { name: 'Standard views' }).click();
+    await page
+      .getByRole('group', { name: 'Standard views' })
+      .getByRole('button', { name: /^Top view/ })
+      .click();
+    await waitForStillViewport(page);
+    await page.keyboard.press('e');
+    const editor = extrudeBar(page);
+    await expect(editor).toContainText('2 profiles');
+    await waitForStillViewport(page);
+    const corners = await canvas.evaluate(
+      (element) =>
+        new Promise<{ x: number; y: number }[]>((resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-project-points', {
+              detail: {
+                points: [
+                  [10, 29, 8],
+                  [51, 11, 8]
+                ],
+                resolve: (state: { points: { x: number; y: number }[] }) =>
+                  resolve(state.points)
+              }
+            })
+          );
+        })
+    );
+    const [left, right] = corners;
+    expect(left!.x).toBeLessThan(right!.x);
+    async function sweep(
+      from: { x: number; y: number },
+      to: { x: number; y: number }
+    ) {
+      await page.mouse.move(from.x, from.y);
+      await page.mouse.down();
+      await page.mouse.move(to.x, to.y, { steps: 8 });
+      await page.mouse.up();
+    }
+    // The same rectangle encloses the first profile (with an opening) and
+    // crosses the second. It must not cut the center of the first as well.
+    await sweep(left!, right!);
+    await expect.poll(async () => (await regionHandles(canvas)).length).toBe(1);
+    await sweep(right!, left!);
+    await expect(editor).toContainText('2 profiles');
+    await expect.poll(async () => (await regionHandles(canvas)).length).toBe(2);
+
+    await setBarValues(page, editor, { Distance: '-3' });
+    await expect(editor).toContainText('Preview: Cut');
+    await editor.getByRole('button', { name: 'Done' }).click();
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'cut into the body'
+    );
+    const features = listFeaturesInOrder(await exportedDocument(page));
+    const cuts = features.filter(({ data }) => data.featureKind === 'extrude');
+    expect(cuts).toHaveLength(1);
+    expect(cuts[0]!.data).toMatchObject({
+      profiles: [expect.any(Object), expect.any(Object)]
+    });
+  }
+);
 
 test('Shift-picked regions extrude together from any one of their arrows', async ({
   page

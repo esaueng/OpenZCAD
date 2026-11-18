@@ -1,11 +1,17 @@
 import * as THREE from 'three';
 import type { PlaneBasis } from '@openzcad/geometry';
 import {
+  bodiesInBox,
   REGION_COMMAND_OPACITY,
   REGION_HOVER_OPACITY,
   REGION_IDLE_OPACITY,
   REGION_SELECTED_OPACITY,
   VIEWPORT_RENDER_ORDER,
+  type BoxSelectCandidate,
+  type BoxSelectMode,
+  type BoxSelectOptions,
+  type ProfilePickTarget,
+  type ScreenRect,
   type RegionPickData
 } from '@openzcad/viewport';
 
@@ -61,6 +67,40 @@ export function triangulateRegionGeometry(
 }
 
 export const REGION_FILL_COLOR = 0x6798ff;
+
+/** Select the same hole-aware fills drawn for the viewport's region picks. */
+export function regionsInBox(
+  targets: readonly ProfilePickTarget[],
+  rect: ScreenRect,
+  mode: BoxSelectMode,
+  projection: BoxSelectOptions
+): RegionPickData[] {
+  const candidates: BoxSelectCandidate[] = [];
+  const picks = new Map<string, RegionPickData>();
+  for (const { object, pick } of targets) {
+    if (!object.visible || !(object instanceof THREE.Mesh)) continue;
+    const geometry: unknown = object.geometry;
+    if (!(geometry instanceof THREE.BufferGeometry)) continue;
+    const position: unknown = geometry.getAttribute('position');
+    const index = geometry.getIndex();
+    if (
+      !(position instanceof THREE.BufferAttribute) ||
+      index === null ||
+      index.count < 3
+    )
+      continue;
+    const id = String(candidates.length);
+    picks.set(id, pick);
+    candidates.push({
+      bodyId: id,
+      positions: position.array,
+      indices: index.array
+    });
+  }
+  return bodiesInBox(candidates, rect, mode, projection).map((id) =>
+    picks.get(id)!
+  );
+}
 
 /** Builds the cached fill mesh for one first-class sketch profile. */
 export function buildRegionMesh(
