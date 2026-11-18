@@ -15,13 +15,15 @@ else.
 
 Accounts, projects, secrets, sessions, rate-limit budgets and
 collaboration rooms are separate. A user of one channel has no account on
-the other. Glimpse analytics report from beta only; stable has no
-`GLIMPSE` service binding (both would report as app `openzcad`).
+the other. Glimpse's OpenZCAD channel filter reads the distinct analytics
+partitions written by `OpenZCADIngest` (beta) and `OpenZCADStableIngest`
+(stable).
 
 `scripts/validate-deployment-config.mjs` checks each config against its
 channel (`--target official` for beta, `--target stable`). It refuses a
 stable config that names a beta resource, shares a rate-limit namespace,
-binds a service, turns Glimpse on, defines Previews, or uses another
+binds an unexpected service, points Glimpse at the beta entrypoint, defines
+Previews, or uses another
 channel's sender or origin. CI dry-runs both deploys on every PR.
 
 ## Realms: each channel's state in the browser

@@ -20,6 +20,7 @@ beforeEach(async () => {
       }
     })
   );
+  vi.stubGlobal('location', { hostname: 'beta.zcad.app' });
   vi.stubGlobal('navigator', { doNotTrack: '0' });
   vi.stubGlobal('localStorage', window.localStorage);
   send = vi
@@ -389,4 +390,47 @@ describe('kernel_refused wire contract', () => {
       ).toBe(false);
     }
   });
+});
+
+describe('Basic workspace sessions', () => {
+  it('counts a visible startup once with optional analytics off', () => {
+    const page = Object.assign(new EventTarget(), {
+      visibilityState: 'hidden'
+    });
+    vi.stubGlobal('document', page);
+    analytics.trackWorkspaceSession();
+    expect(send).not.toHaveBeenCalled();
+    page.visibilityState = 'visible';
+    page.dispatchEvent(new Event('visibilitychange'));
+    analytics.trackWorkspaceSession();
+    expect(analytics.hasAnalyticsConsent()).toBe(false);
+    expect(send).toHaveBeenCalledExactlyOnceWith(
+      '/api/glimpse/workspace-session',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'omit',
+        referrerPolicy: 'no-referrer'
+      })
+    );
+    expect(send.mock.calls[0]?.[1]).not.toHaveProperty('body');
+  });
+
+  it.each(['cloud off', 'DNT', 'GPC', 'desktop'])(
+    'skips the startup count with %s',
+    (mode) => {
+      vi.stubGlobal(
+        'document',
+        Object.assign(new EventTarget(), { visibilityState: 'visible' })
+      );
+      if (mode === 'cloud off')
+        store.set('openzcad-cloud-functions-enabled:v1', 'false');
+      if (mode === 'DNT') vi.stubGlobal('navigator', { doNotTrack: '1' });
+      if (mode === 'GPC')
+        vi.stubGlobal('navigator', { globalPrivacyControl: true });
+      if (mode === 'desktop')
+        Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {} });
+      analytics.trackWorkspaceSession();
+      expect(send).not.toHaveBeenCalled();
+    }
+  );
 });

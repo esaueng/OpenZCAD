@@ -117,7 +117,7 @@ describe('stable channel configuration', () => {
     );
   });
 
-  it('shares no data, rate-limit budget or analytics with beta', () => {
+  it('uses separate data, rate-limit budgets and analytics entrypoints', () => {
     const beta = read('wrangler.jsonc');
     const stable = read('wrangler.stable.jsonc');
     const ids = (config: Config) =>
@@ -130,9 +130,18 @@ describe('stable channel configuration', () => {
     for (const id of ids(stable)) expect(betaIds.has(id), id).toBe(false);
     expect(stable.d1_databases[0]!.database_id).not.toBe(OFFICIAL.databaseId);
     expect(stable.r2_buckets[0]!.bucket_name).not.toBe(OFFICIAL.bucketName);
-    expect(stable.services).toBeUndefined();
-    expect(stable.vars.GLIMPSE_BASIC_ENABLED).toBe('false');
-    expect(stable.vars.GLIMPSE_USAGE_ENABLED).toBe('false');
+    expect(beta.services).toEqual([
+      { binding: 'GLIMPSE', service: 'glimpse', entrypoint: 'OpenZCADIngest' }
+    ]);
+    expect(stable.services).toEqual([
+      {
+        binding: 'GLIMPSE',
+        service: 'glimpse',
+        entrypoint: 'OpenZCADStableIngest'
+      }
+    ]);
+    expect(stable.vars.GLIMPSE_BASIC_ENABLED).toBe('true');
+    expect(stable.vars.GLIMPSE_USAGE_ENABLED).toBe('true');
   });
 
   it('refuses beta resources, Previews and a foreign origin on stable', () => {
@@ -161,12 +170,14 @@ describe('stable channel configuration', () => {
     const errors = validateDeploymentConfig(stable, options);
     expect(errors).toEqual(
       expect.arrayContaining([
-        "stable service binding GLIMPSE would share beta's",
-        'vars.GLIMPSE_BASIC_ENABLED must be off on stable until the cutover',
-        'vars.GLIMPSE_USAGE_ENABLED must be off on stable until the cutover',
+        'GLIMPSE must use the stable entrypoint',
         `stable rate limit ${beta.ratelimits[0]!.name} shares beta namespace ${beta.ratelimits[0]!.namespace_id}`
       ])
     );
+    beta.services = read('wrangler.stable.jsonc').services;
+    expect(
+      validateDeploymentConfig(beta, { ...options, target: 'official' })
+    ).toContain('GLIMPSE must use the beta entrypoint');
     const { betaConfig: _beta, ...withoutBeta } = options;
     expect(
       validateDeploymentConfig(read('wrangler.stable.jsonc'), withoutBeta)

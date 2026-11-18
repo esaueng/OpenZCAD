@@ -1,4 +1,4 @@
-import { trackUsage } from './lib/analytics';
+import { trackUsage, trackWorkspaceSession } from './lib/analytics';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
@@ -99,6 +99,9 @@ if (import.meta.env.VITE_E2E !== '1') {
   );
 }
 trackUsage('workspace_opened');
+window.addEventListener('openzcad:startup-ready', trackWorkspaceSession, {
+  once: true
+});
 
 const rootElement = document.getElementById('root');
 

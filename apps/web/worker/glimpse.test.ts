@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   handleGlimpseUsage,
+  handleGlimpseWorkspaceSession,
   parseUsage,
   countApi,
   type GlimpseEnv
@@ -125,15 +126,27 @@ describe('Glimpse privacy boundary', () => {
 });
 
 it('accepts bounded expanded diagnostics and rejects private text and extra dimensions', () => {
-  expect(parseUsage({event:'project_size',bucket:'1_10mib'})).toEqual({level:'optional',event:'project_size',bucket:'1_10mib'});
-  expect(parseUsage({event:'error_runtime',bucket:'none'})).toEqual({level:'optional',event:'error_runtime',bucket:'none'});
-  expect(parseUsage({event:'error_runtime',bucket:'private.step'})).toBeNull();
-  expect(parseUsage({event:'error_runtime',bucket:'none',stack:'private'})).toBeNull();
+  expect(parseUsage({ event: 'project_size', bucket: '1_10mib' })).toEqual({
+    level: 'optional',
+    event: 'project_size',
+    bucket: '1_10mib'
+  });
+  expect(parseUsage({ event: 'error_runtime', bucket: 'none' })).toEqual({
+    level: 'optional',
+    event: 'error_runtime',
+    bucket: 'none'
+  });
+  expect(
+    parseUsage({ event: 'error_runtime', bucket: 'private.step' })
+  ).toBeNull();
+  expect(
+    parseUsage({ event: 'error_runtime', bucket: 'none', stack: 'private' })
+  ).toBeNull();
 });
 
 it('keeps client and relay wire vocabularies aligned', async () => {
-  const client=await import('../src/lib/glimpseContract');
-  const relay=await import('./glimpseContract');
+  const client = await import('../src/lib/glimpseContract');
+  const relay = await import('./glimpseContract');
   expect(client.EXPANDED).toEqual(relay.EXPANDED);
   expect(client.CENSUS_FIELDS).toEqual(relay.CENSUS_FIELDS);
   expect(client.ACTIVITY_FIELDS).toEqual(relay.ACTIVITY_FIELDS);
@@ -155,7 +168,9 @@ it.each([
     bucket: 'none'
   });
   expect(parseUsage({ event, bucket: '5123ms' })).toBeNull();
-  expect(parseUsage({ event, bucket: 'none', adapter: 'Private GPU' })).toBeNull();
+  expect(
+    parseUsage({ event, bucket: 'none', adapter: 'Private GPU' })
+  ).toBeNull();
 });
 
 it('accepts activity counts only all together, bounded and consistent', async () => {
@@ -236,4 +251,46 @@ it('relays only canonical kernel_refused buckets and nothing beside them', async
       client.parseKernelRefusedBucket(candidate)
     );
   }
+});
+
+it('relays only a fixed Basic workspace counter from an empty same-origin POST', async () => {
+  const { record, env } = setup();
+  env.GLIMPSE_USAGE_ENABLED = 'false';
+  const url = 'https://app.test/api/glimpse/workspace-session';
+  const headers = {
+    Origin: 'https://app.test',
+    'Sec-Fetch-Site': 'same-origin'
+  };
+  const send = (init: RequestInit = {}) =>
+    handleGlimpseWorkspaceSession(
+      new Request(url, { method: 'POST', headers, ...init }),
+      env
+    );
+  expect((await send({ headers: { ...headers, DNT: '1' } })).status).toBe(204);
+  expect((await send({ headers: { ...headers, 'Sec-GPC': '1' } })).status).toBe(
+    204
+  );
+  expect(
+    (await send({ headers: { ...headers, Origin: 'https://other.test' } }))
+      .status
+  ).toBe(403);
+  expect((await send({ body: 'private' })).status).toBe(400);
+  expect(record).not.toHaveBeenCalled();
+  const emptyBody = new ReadableStream({
+    start: (controller) => controller.close()
+  });
+  const browserPost = {
+    headers: { ...headers, 'Content-Length': '0' },
+    body: emptyBody,
+    duplex: 'half'
+  };
+  expect((await send(browserPost)).status).toBe(204);
+  expect(record).toHaveBeenCalledExactlyOnceWith({
+    level: 'basic',
+    event: 'workspace_session',
+    bucket: 'none'
+  });
+  env.GLIMPSE_BASIC_ENABLED = 'false';
+  expect((await send()).status).toBe(204);
+  expect(record).toHaveBeenCalledOnce();
 });

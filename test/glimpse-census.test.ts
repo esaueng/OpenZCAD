@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { CENSUS_SQL } from '../apps/web/worker/glimpseCensus';
+import { publishAdoption } from '../apps/web/worker/glimpseAdoption';
 import { census } from '../apps/web/worker/glimpseContract';
 function fixture(legacyArtifact = false, upTo = '9999') {
   const db = new DatabaseSync(':memory:');
@@ -532,4 +533,38 @@ describe('account-statistics permission version', () => {
       db.close();
     }
   });
+});
+
+it('counts registered accounts and valid web logins independently of consent', async () => {
+  const db = fixture();
+  const adoptionSnapshot = vi.fn().mockResolvedValue({ accepted: true });
+  try {
+    db.exec(`
+      DELETE FROM account_erasure_requests WHERE user_id='erasing';
+      UPDATE users SET email=id || '@example.test' WHERE id IN ('no','expired','erasing');
+      INSERT INTO auth_sessions (token_hash,user_id,created_at,expires_at) VALUES
+        ('first','no',unixepoch(),unixepoch()+60),
+        ('second','no',unixepoch(),unixepoch()+60),
+        ('old','expired',0,1),
+        ('removed','erasing',unixepoch(),unixepoch()+60),
+        ('e2ee-write:lease','expired',unixepoch(),unixepoch()+60);
+      INSERT INTO account_erasure_requests (user_id, scope, started_at, updated_at) VALUES('erasing','all',1,1);
+    `);
+    const env = {
+      GLIMPSE: { adoptionSnapshot },
+      DB: d1(db),
+      GLIMPSE_USAGE_ENABLED: 'false'
+    };
+    await publishAdoption(env);
+    expect(adoptionSnapshot).not.toHaveBeenCalled();
+    await publishAdoption({ ...env, GLIMPSE_BASIC_ENABLED: 'true' });
+    expect(adoptionSnapshot).toHaveBeenCalledExactlyOnceWith({
+      generation: 2,
+      accounts: 2,
+      signedInAccounts: 1,
+      signInSessions: 2
+    });
+  } finally {
+    db.close();
+  }
 });
