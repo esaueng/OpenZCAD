@@ -140,6 +140,12 @@ test(
         { objectKind: 'circle', centerX: 20, centerY: 20, radius: 2 }
       ]
     }).document;
+    document = addSketchFeature(document, {
+      name: 'Open outline',
+      plane: 'XY',
+      offset: 8,
+      objects: [{ objectKind: 'line', x1: 60, y1: 40, x2: 65, y2: 42 }]
+    }).document;
     await openDocument(page, document);
     const canvas = page.locator('.viewer-host canvas');
     await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
@@ -151,10 +157,7 @@ test(
       .getByRole('button', { name: /^Top view/ })
       .click();
     await waitForStillViewport(page);
-    await page.keyboard.press('e');
     const editor = extrudeBar(page);
-    await expect(editor).toContainText('2 profiles');
-    await waitForStillViewport(page);
     const corners = await canvas.evaluate(
       (element) =>
         new Promise<{ x: number; y: number }[]>((resolve) => {
@@ -163,7 +166,11 @@ test(
               detail: {
                 points: [
                   [10, 29, 8],
-                  [51, 11, 8]
+                  [51, 11, 8],
+                  [36, 45, 8],
+                  [30, 35, 8],
+                  [42, 29, 8],
+                  [58, 11, 8]
                 ],
                 resolve: (state: { points: { x: number; y: number }[] }) =>
                   resolve(state.points)
@@ -172,7 +179,7 @@ test(
           );
         })
     );
-    const [left, right] = corners;
+    const [left, right, bodyRight, bodyLeft, toggleLeft, toggleRight] = corners;
     expect(left!.x).toBeLessThan(right!.x);
     async function sweep(
       from: { x: number; y: number },
@@ -183,6 +190,19 @@ test(
       await page.mouse.move(to.x, to.y, { steps: 8 });
       await page.mouse.up();
     }
+    // A plain profile click shows an Extrude handle, but a normal sweep
+    // still selects bodies until the user launches Extrude explicitly.
+    await pickProfile(canvas, 0);
+    await expect(editor).toBeVisible();
+    await sweep(bodyRight!, bodyLeft!);
+    const status = page.getByRole('contentinfo');
+    await expect(status).toContainText('1 body selected.');
+    await expect(editor).toHaveCount(0);
+    await page.keyboard.press('Escape');
+
+    await page.keyboard.press('e');
+    await expect(status).toContainText('Open outline is not closed');
+    await expect(editor).toHaveCount(0);
     // The same rectangle encloses the first profile (with an opening) and
     // crosses the second. It must not cut the center of the first as well.
     await sweep(left!, right!);
@@ -190,6 +210,20 @@ test(
     await sweep(right!, left!);
     await expect(editor).toContainText('2 profiles');
     await expect.poll(async () => (await regionHandles(canvas)).length).toBe(2);
+
+    await page.keyboard.down('Control');
+    try {
+      await sweep(toggleLeft!, toggleRight!);
+      await expect
+        .poll(async () => (await regionHandles(canvas)).length)
+        .toBe(1);
+      await sweep(toggleLeft!, toggleRight!);
+      await expect
+        .poll(async () => (await regionHandles(canvas)).length)
+        .toBe(2);
+    } finally {
+      await page.keyboard.up('Control');
+    }
 
     await setBarValues(page, editor, { Distance: '-3' });
     await expect(editor).toContainText('Preview: Cut');

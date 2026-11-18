@@ -11679,7 +11679,8 @@ export function App() {
     dispatchInteraction({
       type: 'select-region',
       target: regionTargetFor(anchor),
-      group: chosen.map(regionTargetFor)
+      group: chosen.map(regionTargetFor),
+      boxSelectProfiles: true
     });
     setStatus(
       chosen.length === 1
@@ -13106,23 +13107,26 @@ export function App() {
         (sketchOptions.length === 1 ? sketchOptions[0]!.sketchId : null);
       if (sketchId) {
         startExtrude(sketchId);
-      } else if (sketchViews.some((view) => view.regions.length > 0)) {
-        setTool('extrude');
-        setStatus(
-          'Click a closed profile or drag a box to select profiles for Extrude.'
-        );
       } else {
-        setStatus(
-          extrudeSketchGuidance(
-            sketchOptions.map((option) => ({
-              name: option.name,
-              closed: Boolean(
-                sketchViews.find(
-                  (candidate) => candidate.sketchId === option.sketchId
-                )?.regions.length
-              )
-            }))
+        const sketches = sketchOptions.map((option) => ({
+          name: option.name,
+          closed: Boolean(
+            sketchViews.find((view) => view.sketchId === option.sketchId)
+              ?.regions.length
           )
+        }));
+        const canPick = sketches.some(({ closed }) => closed);
+        if (canPick) {
+          setTool(null);
+          setExtrudeCreateGeneration((current) => current + 1);
+          extrudeReturnRef.current = null;
+          dispatchInteraction({ type: 'pick-extrude-profiles' });
+        }
+        const guidance = extrudeSketchGuidance(sketches);
+        setStatus(
+          canPick
+            ? `${guidance} You can also drag a box around profiles.`
+            : guidance
         );
       }
       return true;
@@ -13547,7 +13551,10 @@ export function App() {
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
     setSelectedProfiles([]);
-    if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+    if (
+      interaction.mode !== 'sketch' &&
+      (interaction.mode !== 'idle' || interaction.boxSelectProfiles)
+    ) {
       dispatchInteraction({ type: 'clear' });
     }
   }
@@ -21902,7 +21909,10 @@ export function App() {
     // manipulation target belongs to that old face or edge, so retaining it
     // would leave a handle capable of editing geometry that is no longer
     // selected.
-    if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+    if (
+      interaction.mode !== 'sketch' &&
+      (interaction.mode !== 'idle' || interaction.boxSelectProfiles)
+    ) {
       dispatchInteraction({ type: 'clear' });
     }
     setSelectedSketchProfileId(null);
@@ -22048,7 +22058,10 @@ export function App() {
       const faces = inPlaceFacesFor(selections);
       if (inPlaceRef.current.addFaces(faces) !== null) return;
     }
-    if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+    if (
+      interaction.mode !== 'sketch' &&
+      (interaction.mode !== 'idle' || interaction.boxSelectProfiles)
+    ) {
       dispatchInteraction({ type: 'clear' });
     }
     const bodyIds = [...new Set(selections.map((face) => face.bodyId))];
@@ -28103,9 +28116,15 @@ export function App() {
         )
       ])
     );
-    const picked = regions.filter(({ sketchId, profileId }) =>
+    const hits = regions.filter(({ sketchId, profileId }) =>
       eligible.get(sketchId)?.has(profileId)
     );
+    const current = interactionRef.current;
+    const currentSketch =
+      current.mode === 'region'
+        ? hits.filter(({ sketchId }) => sketchId === current.target.sketchId)
+        : [];
+    const picked = currentSketch.length > 0 ? currentSketch : hits;
     const first = picked[0];
     if (!first) {
       setStatus('No closed sketch profiles in the box.');
@@ -28162,7 +28181,7 @@ export function App() {
         setStatus('Closed sketch profile — click to select.');
       return;
     }
-    if (tool === 'extrude') {
+    if (interaction.mode === 'idle' && interaction.boxSelectProfiles) {
       setStatus(
         selectedProfiles.length > 0
           ? `${selectedProfiles.length} profile${selectedProfiles.length === 1 ? '' : 's'} selected.`
@@ -34079,7 +34098,12 @@ export function App() {
             return;
           }
           event.preventDefault();
-          if (tool || selectedFeatureNodeId || interaction.mode !== 'idle') {
+          if (
+            tool ||
+            selectedFeatureNodeId ||
+            interaction.mode !== 'idle' ||
+            interaction.boxSelectProfiles
+          ) {
             cancelPanel();
           } else if (
             toolFold.commandFoldOpen &&
@@ -37018,7 +37042,9 @@ export function App() {
             // region under the preview solid is still how a profile is
             // retargeted, or a Loft's next section picked.
             profileSelectionMode={
-              tool === 'extrude' ||
+              (tool === null &&
+                interaction.mode === 'idle' &&
+                Boolean(interaction.boxSelectProfiles)) ||
               (inPlace.active &&
                 inPlaceSpec !== null &&
                 inPlaceSpec.profileMode !== 'none')
@@ -37026,13 +37052,15 @@ export function App() {
             onSelectRegion={handleSelectRegion}
             onBoxSelectRegions={
               !modelingLocked &&
+              tool === null &&
               !inPlace.active &&
               !extrudeEditFeature &&
               !toFacePick &&
               !keypad &&
               (selectionFilter === 'any' || selectionFilter === 'sketch') &&
-              ((tool === 'extrude' && interaction.mode === 'idle') ||
+              ((interaction.mode === 'idle' && interaction.boxSelectProfiles) ||
                 (interaction.mode === 'region' &&
+                  interaction.boxSelectProfiles &&
                   (interaction.phase === 'armed' ||
                     interaction.phase === 'failed')))
                 ? handleBoxSelectRegions
