@@ -946,11 +946,11 @@ describe('the state pill', () => {
       act(() => {
         vi.advanceTimersByTime(1_000);
       });
-      expect(pill).toHaveTextContent(/^Preview$/);
+      expect(pill).toHaveTextContent(/^Checking…$/);
       act(() => {
         vi.advanceTimersByTime(2_000);
       });
-      expect(pill).toHaveTextContent('Preview · 3 s');
+      expect(pill).toHaveTextContent('Checking… 3 s');
       // Built: the count goes.
       rerender(<InPlaceCommandBar {...props} canFinish previewPending />);
       expect(pill).toHaveTextContent(/^Preview$/);
@@ -961,7 +961,7 @@ describe('the state pill', () => {
       act(() => {
         vi.advanceTimersByTime(2_000);
       });
-      expect(pill).toHaveTextContent('Preview · 2 s');
+      expect(pill).toHaveTextContent('Checking… 2 s');
     } finally {
       vi.useRealTimers();
     }
@@ -980,7 +980,7 @@ describe('the state pill', () => {
     const pill = container.querySelector('.in-place-command-state');
     expect(pill).toBeEmptyDOMElement();
     rerender(<InPlaceCommandBar {...props} canFinish={false} previewPending />);
-    expect(pill).toHaveTextContent('Preview');
+    expect(pill).toHaveTextContent('Checking…');
   });
 });
 

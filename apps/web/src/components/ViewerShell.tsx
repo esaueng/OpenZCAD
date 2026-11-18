@@ -344,6 +344,8 @@ interface ViewerShellProps {
   onSelectSketchConstraint?: ModelViewerProps['onSelectSketchConstraint'];
   onSketchConstraintSelectionShown?: ModelViewerProps['onSketchConstraintSelectionShown'];
   onSketchDrawingChange(drawing: boolean): void;
+  onSketchSlotEntry?: ModelViewerProps['onSketchSlotEntry'];
+  onSketchSlotStage?: ModelViewerProps['onSketchSlotStage'];
   sketchMoveEnabled?: ModelViewerProps['sketchMoveEnabled'];
   onSketchMoveChange?: ModelViewerProps['onSketchMoveChange'];
   onSketchMoveCommit?: ModelViewerProps['onSketchMoveCommit'];
@@ -594,6 +596,8 @@ export function ViewerShell({
   onSelectSketchConstraint,
   onSketchConstraintSelectionShown,
   onSketchDrawingChange,
+  onSketchSlotEntry,
+  onSketchSlotStage,
   sketchMoveEnabled,
   onSketchMoveChange,
   onSketchMoveCommit,
@@ -1095,6 +1099,8 @@ export function ViewerShell({
         onSelectSketchConstraint={onSelectSketchConstraint}
         onSketchConstraintSelectionShown={onSketchConstraintSelectionShown}
         onSketchDrawingChange={onSketchDrawingChange}
+        onSketchSlotEntry={onSketchSlotEntry}
+        onSketchSlotStage={onSketchSlotStage}
         sketchMoveEnabled={sketchMoveEnabled}
         onSketchMoveChange={onSketchMoveChange}
         onSketchMoveCommit={onSketchMoveCommit}

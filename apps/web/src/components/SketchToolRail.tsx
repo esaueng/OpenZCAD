@@ -349,7 +349,7 @@ const SHAPE_MODES: {
     mode: 'slot',
     label: 'Slot',
     tile: 'Slot',
-    detail: 'Two end centres, then the radius',
+    detail: 'Pick two centers, then pick a radius or enter exact sizes',
     icon: RectangleHorizontal
   },
   {

@@ -190,6 +190,30 @@ describe('the Escape line matches the ladder it describes', () => {
     ).toBe('Enter apply · Esc cancel');
   });
 
+  it('names each slot pick and the current Escape rung', () => {
+    const drawingSlot = sketchState('slot', true);
+    expect(commandPromptText(sketchState('slot'))).toBe(
+      'Pick the first center · Esc returns to selection'
+    );
+    expect(commandPromptText(drawingSlot)).toBe(
+      'Pick the second center · Esc cancels the slot'
+    );
+    expect(
+      commandPromptText(drawingSlot, 'diameter', { slotStage: 'radius' })
+    ).toBe(
+      'Pick the radius · or type center spacing, Tab, radius · Esc cancels the slot'
+    );
+    expect(
+      commandPromptText(drawingSlot, 'diameter', { slotStage: 'exact' })
+    ).toBe('Tab switches size · Enter places · Esc closes exact entry');
+    expect(
+      commandPromptText(drawingSlot, 'diameter', {
+        slotStage: 'keypad',
+        editor: { state: 'ready', explaining: true }
+      })
+    ).toBe('Esc close');
+  });
+
   it('stays silent about Escape while a value is being validated', () => {
     // Escape does nothing mid-validation, so the prompt must not offer it.
     expect(commandPrompt(faceState('validating'))?.escape).toBeNull();

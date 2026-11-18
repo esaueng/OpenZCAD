@@ -325,11 +325,13 @@ export function InPlaceCommandBar({
           ? 'Applying…'
           : refusal
             ? 'Needs attention'
-            : canFinish || previewPending
-              ? building && buildingFor >= PREVIEW_ELAPSED_AFTER_S
-                ? `Preview · ${buildingFor} s`
-                : 'Preview'
-              : ''}
+            : building
+              ? buildingFor >= PREVIEW_ELAPSED_AFTER_S
+                ? `Checking… ${buildingFor} s`
+                : 'Checking…'
+              : canFinish
+                ? 'Preview'
+                : ''}
       </span>
       <span
         ref={hintRef}

@@ -51,8 +51,14 @@ function setup(overrides: Partial<Parameters<typeof ExtrudeCommand>[0]> = {}) {
     onCancel: vi.fn(),
     ...overrides
   };
-  render(<ExtrudeCommand {...props} />);
-  return { ...props, distanceSetterRef, commandRef };
+  const { rerender } = render(<ExtrudeCommand {...props} />);
+  return {
+    ...props,
+    distanceSetterRef,
+    commandRef,
+    update: (overrides: Partial<Parameters<typeof ExtrudeCommand>[0]>) =>
+      rerender(<ExtrudeCommand {...props} {...overrides} />)
+  };
 }
 
 async function openOptions(user: ReturnType<typeof userEvent.setup>) {
@@ -69,6 +75,7 @@ function choice(group: string, label: string) {
 describe('in-place Extrude bar', () => {
   it('names an automatic preview operation and its target outside Options', () => {
     setup({
+      initial: { name: 'Extrude', sketchId, distance: 10 },
       resolvedChoice: {
         operation: 'cut',
         targetBodyId: plate,
@@ -78,6 +85,66 @@ describe('in-place Extrude bar', () => {
     });
     expect(screen.getByRole('status')).toHaveTextContent(
       /^Preview: Cut · Plate/
+    );
+  });
+
+  it('shows an operation only after the latest automatic draft has been previewed', () => {
+    const cut = {
+      operation: 'cut',
+      targetBodyId: plate,
+      reason: 'enclosed',
+      tolerance: 1e-6
+    } as const;
+    const { commandRef, update } = setup();
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent(/^Auto · Drag the arrows/);
+
+    act(() => commandRef.current?.setValue('distance', '10'));
+    update({ resolvedChoice: cut });
+    expect(status).toHaveTextContent(/^Preview: Cut · Plate/);
+
+    act(() => commandRef.current?.setValue('distance', '20'));
+    update({ resolvedChoice: cut, previewPending: true });
+    expect(status).toHaveTextContent('Auto · Checking preview…');
+    expect(status).not.toHaveTextContent('Cut · Plate');
+    expect(screen.getByRole('button', { name: 'Done' })).toBeEnabled();
+
+    update({
+      resolvedChoice: {
+        operation: 'new-body',
+        reason: 'no-overlap',
+        tolerance: 1e-6
+      }
+    });
+    expect(status).toHaveTextContent(/^Preview: New body/);
+  });
+
+  it('keeps an explicit 10 mm New body draft separate from an inferred target', async () => {
+    const user = userEvent.setup();
+    const { commandRef, onSubmit } = setup({
+      resolvedChoice: {
+        operation: 'cut',
+        targetBodyId: plate,
+        reason: 'enclosed',
+        tolerance: 1e-6
+      },
+      previewPending: true
+    });
+    act(() => commandRef.current?.setValue('distance', '10'));
+    await openOptions(user);
+    await user.click(choice('Operation', 'New body'));
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'New body · Checking preview…'
+    );
+    expect(
+      screen.queryByRole('radiogroup', { name: 'Target body' })
+    ).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        distance: 10,
+        choice: { operation: 'new-body' }
+      })
     );
   });
 
@@ -285,8 +352,12 @@ describe('in-place Extrude bar', () => {
       screen.getByRole('button', { name: 'Reverse direction' })
     ).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Distance' })).toBeDisabled();
-    // A keypad left open across the Done commits nothing either.
-    act(() => commandRef.current?.setValue('distance', '20'));
+    // Late keypad and drag events cannot replace the draft being checked.
+    act(() => {
+      commandRef.current?.setValue('distance', '20');
+      distanceSetterRef.current?.(30);
+    });
+    expect(commandRef.current?.text('distance')).toBe('10');
     expect(onPreview).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
     await user.click(screen.getByRole('button', { name: 'Cancel' }));

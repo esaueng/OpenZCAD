@@ -27,6 +27,8 @@ import {
 } from '@openzcad/shared';
 import {
   compositeCommands,
+  slotPreviewPoints,
+  slotRadiusAt,
   slotShape
 } from '../apps/web/src/lib/sketch/composites';
 
@@ -91,6 +93,27 @@ function addSlot(
 }
 
 describe('I01 slot', () => {
+  it('resizes the picked axis from the first center and keeps the existing slot minimums', () => {
+    const first = { x: -10, y: 12 };
+    const pickedSecond = { x: -1, y: 24 };
+    const radius = slotRadiusAt(first, pickedSecond, { x: -14, y: 15 });
+    const movedSecond = { x: 14, y: 44 };
+    const shape = slotShape(first, pickedSecond, 3, 40)!;
+    const pointerShape = slotShape(first, movedSecond, 3)!;
+    expect(shape).toEqual(pointerShape);
+    expect(shape.slot).toEqual({ first, second: movedSecond, radius: 3 });
+    expect(slotPreviewPoints(shape)).toEqual(slotPreviewPoints(pointerShape));
+    expect(radius).toBeCloseTo(5, 12);
+    expect(slotRadiusAt(first, movedSecond, { x: -14, y: 15 })).toBeCloseTo(
+      radius,
+      12
+    );
+    expect(slotShape(first, pickedSecond, 0.25, 0.5)).not.toBeNull();
+    expect(slotShape(first, pickedSecond, 0.249, 40)).toBeNull();
+    expect(slotShape(first, pickedSecond, 3, 0.499)).toBeNull();
+    expect(slotShape(first, first, 3, 40)).toBeNull();
+  });
+
   it('is two lines and two half circles, resolved as one slot', () => {
     const fixture = sketchFixture();
     const commit = addSlot(fixture);

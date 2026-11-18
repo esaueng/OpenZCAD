@@ -1102,6 +1102,7 @@ import type {
   FaceResizeCommit,
   OffsetCommitOutcome,
   NormalToFaceRequest,
+  SketchSlotEntry,
   ViewportContextMenuOptions
 } from './components/ModelViewer';
 import type { OrientationLink } from './components/viewer/orientationCube';
@@ -4624,6 +4625,14 @@ export function App() {
   toolRef.current = tool;
   /** Open exact-value entry (anchored keypad) for the armed handle. */
   const [keypad, setKeypad] = useState<KeypadRequest | null>(null);
+  const [sketchSlotEntry, setSketchSlotEntry] =
+    useState<SketchSlotEntry | null>(null);
+  const [sketchSlotStage, setSketchSlotStage] = useState<
+    'radius' | 'exact' | null
+  >(null);
+  const [sketchSlotEntryError, setSketchSlotEntryError] = useState<string | null>(
+    null
+  );
   // A typed in-place value outside its command's range keeps the keypad
   // open with this sentence under the field, until the entry changes.
   const [keypadRangeError, setKeypadRangeError] = useState<{
@@ -5950,6 +5959,7 @@ export function App() {
   const reusableRegionExtrudePreview = useRef<ResolvedExtrudePreview | null>(
     null
   );
+  const [regionExtrudeChecking, setRegionExtrudeChecking] = useState(false);
   const regionExtrudePreview = useRef(
     new LivePreview<
       RegionExtrudePreviewCandidate,
@@ -5959,20 +5969,17 @@ export function App() {
         const distance = regionExtentIsDerived()
           ? requestedDistance
           : Math.round(requestedDistance * 1000) / 1000;
-        if (distance === 0) return null;
         const base = managerRef.current?.document;
         const current = interactionRef.current;
-        if (!base || current.mode !== 'region') {
-          return null;
-        }
-        const sketchNode = listNodesByKind(base, 'sketch').find(
-          (candidate) => candidate.sketchId === current.target.sketchId
-        );
         // To face with no face picked yet has nothing to preview.
         if (
-          regionExtrudeSettings.current?.endCondition === 'to-face' &&
-          !regionExtrudeSettings.current.toFace
+          distance === 0 ||
+          !base ||
+          current.mode !== 'region' ||
+          (regionExtrudeSettings.current?.endCondition === 'to-face' &&
+            !regionExtrudeSettings.current.toFace)
         ) {
+          setRegionExtrudeChecking(false);
           return null;
         }
         const command = commandFactories.extrudeSketch(
@@ -5980,6 +5987,7 @@ export function App() {
         );
         const resultBodyId = command.payload.ids?.bodyId;
         if (!resultBodyId) {
+          setRegionExtrudeChecking(false);
           return null;
         }
         command.validate(base);
@@ -5989,15 +5997,11 @@ export function App() {
           input: command.payload,
           choice: regionExtrudeSettings.current?.choice ??
             current.extrudeChoice ?? { operation: 'automatic' },
-          ...(sketchNode?.planeRef.type === 'face'
-            ? {
-                faceAttachment: {
-                  bodyId: sketchNode.planeRef.bodyId,
-                  direction:
-                    distance < 0 ? ('into' as const) : ('away' as const)
-                }
-              }
-            : {}),
+          faceAttachment: regionExtrudeFaceAttachment(
+            base,
+            current.target,
+            distance
+          ),
           distance,
           resultBodyId,
           label: command.label,
@@ -6032,6 +6036,7 @@ export function App() {
         return { derived, rejection, resolved };
       },
       publish: (preview) => {
+        setRegionExtrudeChecking(false);
         if (!preview) {
           reusableRegionExtrudePreview.current = null;
           setPreviewDoc(null);
@@ -6066,6 +6071,7 @@ export function App() {
         );
       },
       onFailure: ({ error, value }) => {
+        setRegionExtrudeChecking(false);
         reusableRegionExtrudePreview.current = null;
         reportPreviewFailure(
           errorMessage(error, 'Exact extrude preview failed.'),
@@ -6084,7 +6090,11 @@ export function App() {
               input: regionExtrudeInputFor(current.target, candidate.distance),
               choice: regionExtrudeSettings.current?.choice ??
                 current.extrudeChoice ?? { operation: 'automatic' },
-              faceAttachment: candidate.faceAttachment
+              faceAttachment: regionExtrudeFaceAttachment(
+                base,
+                current.target,
+                candidate.distance
+              )
             })
         );
       },
@@ -6097,6 +6107,15 @@ export function App() {
       onDegrade: () => setPreviewDeferred(true)
     })
   ).current;
+  const replaceRegionExtrudePreview = useCallback(
+    (distance: number) => {
+      setRegionExtrudeChecking(
+        Number.isFinite(distance) && Math.abs(distance) > 1e-9
+      );
+      regionExtrudePreview.replace(distance);
+    },
+    [regionExtrudePreview]
+  );
 
   const directEditCommit = useDirectEditCommit({
     manager: () => managerRef.current,
@@ -22171,8 +22190,8 @@ export function App() {
     // A new choice or region set replaces the preview on screen when it
     // lands, rather than blanking it for the rebuild.
     if (resolved === null) regionExtrudePreview.clear();
-    else regionExtrudePreview.replace(resolved);
-  }, [regionInteractionKey, regionExtrudePreview]);
+    else replaceRegionExtrudePreview(resolved);
+  }, [regionInteractionKey, regionExtrudePreview, replaceRegionExtrudePreview]);
 
   /**
    * The sketch plane basis is memoized on the session's plane reference
@@ -28183,6 +28202,17 @@ export function App() {
     };
   }
 
+  function regionExtrudeFaceAttachment(
+    base: ProjectDocument,
+    target: RegionTarget,
+    distance: number
+  ): ResolveExtrudeOptions['faceAttachment'] {
+    const plane = findSketch(base, target.sketchId as SketchId)?.planeRef;
+    return plane?.type === 'face'
+      ? { bodyId: plane.bodyId, direction: distance < 0 ? 'into' : 'away' }
+      : undefined;
+  }
+
   function cancelPendingRegionExtrusion(): boolean {
     const current = interactionRef.current;
     if (current.mode !== 'region' || current.phase !== 'validating')
@@ -28228,6 +28258,7 @@ export function App() {
     // or the refusal takes it down. Clearing it here showed the bare sketch
     // for the whole validation.
     regionExtrudePreview.stop();
+    setRegionExtrudeChecking(false);
     setPreviewDeferred(false);
     const input = regionExtrudeInputFor(target, exact ?? rounded);
     const choice = regionExtrudeSettings.current?.choice ??
@@ -28255,16 +28286,7 @@ export function App() {
           selected,
           selectedProfilesRef.current
         );
-      const sketchNode = listNodesByKind(base, 'sketch').find(
-        (candidate) => candidate.sketchId === target.sketchId
-      );
-      const faceAttachment =
-        sketchNode?.planeRef.type === 'face'
-          ? {
-              bodyId: sketchNode.planeRef.bodyId,
-              direction: rounded < 0 ? ('into' as const) : ('away' as const)
-            }
-          : undefined;
+      const faceAttachment = regionExtrudeFaceAttachment(base, target, rounded);
       setBusy(true);
       dispatchInteraction({ type: 'validation-start', value: rounded });
       setStatus(
@@ -30016,8 +30038,11 @@ export function App() {
         recoverPreviewInteraction();
         return;
       }
-      if (!regionExtrudePreview.request(offset))
+      setRegionExtrudeChecking(true);
+      if (!regionExtrudePreview.request(offset)) {
+        setRegionExtrudeChecking(false);
         setPreviewVerdict({ value: offset, status: 'unchecked' });
+      }
       return;
     }
     if (
@@ -35414,6 +35439,24 @@ export function App() {
     (!modelingLocked || drawingMode);
   const assistantHidden = directMode;
   const commandSession = commandSessionFor(interaction);
+  const regionExtrudeResolution =
+    interaction.mode === 'region' &&
+    interaction.phase !== 'validating' &&
+    !regionExtrudeChecking &&
+    previewDoc &&
+    lastValidPreview !== null
+      ? reuseResolvedExtrudePreview(reusableRegionExtrudePreview.current, {
+          base: doc,
+          input: regionExtrudeInputFor(interaction.target, lastValidPreview),
+          choice: regionExtrudeSettings.current?.choice ??
+            interaction.extrudeChoice ?? { operation: 'automatic' },
+          faceAttachment: regionExtrudeFaceAttachment(
+            doc,
+            interaction.target,
+            lastValidPreview
+          )
+        })
+      : null;
   const baseToolCard = toolCardFor(interaction, cylinderDimensionMode);
   const editingSketchName =
     interaction.mode === 'sketch' && interaction.session.sketchId
@@ -35521,7 +35564,14 @@ export function App() {
             ? panelModeHint
             : (commandPromptText(interaction, cylinderDimensionMode, {
                 refusalShown: Boolean(calloutWithOperation?.operation?.error),
-                ...(keypad && keypadUi ? { editor: keypadUi } : {}),
+                ...((keypad || sketchSlotEntry) && keypadUi
+                  ? { editor: keypadUi }
+                  : {}),
+                ...(sketchSlotEntry
+                  ? { slotStage: 'keypad' }
+                  : sketchSlotStage
+                    ? { slotStage: sketchSlotStage }
+                    : {}),
                 ...(edgeSelectionNaming && interaction.mode === 'edges'
                   ? { edgeNoun: edgeSelectionNaming.noun }
                   : {})
@@ -36794,6 +36844,11 @@ export function App() {
             sketchTextAnchorRef={sketchTextAnchorRef}
             onSketchCommit={handleSketchCommit}
             onSketchCommitComposite={handleSketchCommitComposite}
+            onSketchSlotStage={setSketchSlotStage}
+            onSketchSlotEntry={(entry) => {
+              setSketchSlotEntryError(null);
+              setSketchSlotEntry(entry);
+            }}
             onEditSketchDimension={handleEditSketchDimension}
             onMoveSketchDimension={handleMoveSketchDimension}
             onSelectSketchConstraint={handleSelectSketchConstraint}
@@ -37290,6 +37345,33 @@ export function App() {
                     onCancel={cancelOpenKeypad}
                   />
                 ) : null
+              ) : sketchSlotEntry &&
+                interaction.mode === 'sketch' &&
+                interaction.session.tool === 'slot' &&
+                interaction.session.drawing ? (
+                <NumericKeypad
+                  key={sketchSlotEntry.field}
+                  request={{
+                    kind: 'sketch-edit',
+                    label: sketchSlotEntry.label,
+                    initial: '',
+                    fixedClientAnchor: sketchSlotEntry.anchor,
+                    unitKind: 'length'
+                  }}
+                  units={doc.units}
+                  scope={parameterScope.scope}
+                  anchorRef={keypadAnchorRef}
+                  commitRefused={Boolean(sketchSlotEntryError)}
+                  commitDisabledReason={sketchSlotEntryError}
+                  onUiStateChange={setKeypadUi}
+                  onPreview={(value) =>
+                    setSketchSlotEntryError(sketchSlotEntry.preview(value))
+                  }
+                  onCommit={(value) =>
+                    setSketchSlotEntryError(sketchSlotEntry.apply(value))
+                  }
+                  onCancel={sketchSlotEntry.cancel}
+                />
               ) : contextualToolCard ? (
                 <>
                   {/* The tool card itself rides the right lane (`command` below);
@@ -38446,11 +38528,8 @@ export function App() {
                 />
               ) : interaction.mode === 'region' && !modelingLocked ? (
                 <ExtrudeCommand
-                  resolvedChoice={
-                    previewDoc
-                      ? reusableRegionExtrudePreview.current?.resolved.inference
-                      : null
-                  }
+                  previewPending={regionExtrudeChecking}
+                  resolvedChoice={regionExtrudeResolution?.inference}
                   key={`extrude-${interaction.target.sketchId}`}
                   initial={{
                     name: 'Extrude',
@@ -38522,7 +38601,7 @@ export function App() {
                     // The last preview stays up until this one lands:
                     // clearing first showed the bare sketch for a whole
                     // rebuild on every keystroke.
-                    regionExtrudePreview.replace(distance);
+                    replaceRegionExtrudePreview(distance);
                   }}
                   onSubmit={(value) => {
                     regionExtrudeSettings.current = value;

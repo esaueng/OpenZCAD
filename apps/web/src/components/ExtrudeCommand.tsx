@@ -88,7 +88,9 @@ interface ExtrudeCommandProps {
   editing?: boolean;
   /** Why the last preview or Done was refused, said where the hint is. */
   note?: string | null;
-  /** The accepted exact preview's operation, while Automatic is selected. */
+  /** The current draft is replacing the preview still on screen. */
+  previewPending?: boolean;
+  /** The current draft's accepted exact operation, while Auto is selected. */
   resolvedChoice?: ResolvedExtrude['inference'] | null;
   /** The edited feature's name as it is now (a rename since it opened). */
   name?: string;
@@ -144,6 +146,7 @@ export function ExtrudeCommand({
   disabled,
   editing = false,
   note = null,
+  previewPending = false,
   resolvedChoice = null,
   name,
   entryRefusal = null,
@@ -214,8 +217,6 @@ export function ExtrudeCommand({
     onPreview(extrudeDraftValue(next, ctx));
   }
 
-  // The arrow and its keypad set a distance: on a to-face or through-all
-  // extrude that is a choice of Distance over the derived extent.
   // An edit opens on a stored extrude whose handles stand on what it stores.
   const opened = useRef(false);
   useEffect(() => {
@@ -225,21 +226,6 @@ export function ExtrudeCommand({
     // Once, as it opens; later drafts are published as they change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing]);
-  const changeRef = useRef(change);
-  changeRef.current = change;
-  useEffect(() => {
-    distanceSetterRef.current = (value) =>
-      changeRef.current({
-        distance: paramValueText(value),
-        ...(draftRef.current.endCondition !== 'blind'
-          ? { endCondition: 'blind' as const }
-          : {})
-      });
-    return () => {
-      distanceSetterRef.current = null;
-    };
-  }, [distanceSetterRef]);
-
   // A picked face becomes the target, and the depth it gives becomes the
   // dormant distance, so switching back to Distance keeps the same reach.
   const pendingFace = useRef<ExtrudeToFaceTarget | null>(null);
@@ -290,8 +276,9 @@ export function ExtrudeCommand({
   }
 
   function setValue(valueId: ExtrudeValueId, text: string) {
-    // A keypad left open across a Done must not change what it commits.
+    // A late handle or keypad event must not change the draft Done took.
     if (disabled) return;
+    // Setting the distance overrides a to-face or through-all extent.
     if (valueId === 'distance') {
       change({
         distance: text,
@@ -316,6 +303,13 @@ export function ExtrudeCommand({
       JSON.stringify(draftRef.current) !== JSON.stringify(openedDraft.current)
   };
   useEffect(() => {
+    distanceSetterRef.current = (value) =>
+      handle.current?.setValue('distance', paramValueText(value));
+    return () => {
+      distanceSetterRef.current = null;
+    };
+  }, [distanceSetterRef]);
+  useEffect(() => {
     commandRef.current = {
       submit: () => handle.current?.submit() ?? false,
       setValue: (valueId, text) => handle.current?.setValue(valueId, text),
@@ -327,12 +321,9 @@ export function ExtrudeCommand({
     };
   }, [commandRef]);
 
-  const refusal =
-    entryRefusal ??
-    (extrudeDraftRefusal(draft, ctx, distanceEdited) || null) ??
-    note;
-  const canFinish =
-    !disabled && !entryRefusal && extrudeDraftValue(draft, ctx) !== null;
+  const draftRefusal = extrudeDraftRefusal(draft, ctx, distanceEdited);
+  const refusal = entryRefusal ?? (draftRefusal || null) ?? note;
+  const canFinish = !disabled && !entryRefusal && draftRefusal === null;
   const toFaceInfo =
     toFace && draft.toFace ? toFacePicking!.describe(draft.toFace) : null;
   const regions = profileCount > 1 ? ` · ${profileCount} profiles` : '';
@@ -345,21 +336,29 @@ export function ExtrudeCommand({
       : throughAll
         ? `Through all${regions}`
         : `Drag the arrows, or tap a value${regions}`;
-  const choice =
-    draft.choice.operation === 'automatic'
-      ? (resolvedChoice ?? draft.choice)
-      : draft.choice;
+  const checking =
+    previewPending &&
+    !toFacePicking?.armed &&
+    draftRefusal === null &&
+    !refusal;
+  const inferred =
+    draft.choice.operation === 'automatic' &&
+    draftRefusal === null &&
+    !previewPending
+      ? resolvedChoice
+      : null;
+  const choice = inferred ?? draft.choice;
   const target =
     'targetBodyId' in choice
       ? bodies.find((body) => body.bodyId === choice.targetBodyId)?.name
       : null;
   const operation =
     choice.operation === 'automatic'
-      ? 'Auto · checking'
+      ? 'Auto'
       : choice.operation === 'new-body'
         ? 'New body'
         : `${OPERATIONS.find((item) => item.value === choice.operation)!.label}${target ? ` · ${target}` : ''}`;
-  const hint = `${draft.choice.operation === 'automatic' && resolvedChoice ? 'Preview: ' : ''}${operation} · ${guidance}`;
+  const hint = `${inferred ? 'Preview: ' : ''}${operation} · ${checking ? 'Checking preview…' : guidance}`;
 
   const options: InPlaceOption[] = [
     {

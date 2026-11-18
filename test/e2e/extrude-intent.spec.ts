@@ -117,6 +117,29 @@ test('cuts two native profiles with explicit intent and retains it through undo 
       }
     });
   });
+
+  await page.locator('.feature-row-main', { hasText: 'Bore layout' }).click();
+  await page.keyboard.press('e');
+  const auto = extrudeBar(page);
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: '5' });
+  await expect(auto).toContainText('Preview: New body', { timeout: 30_000 });
+  await page.evaluate(() => {
+    (Reflect.get(window, '__extrudeValidationGate') as ExtrudeValidationGate)
+      .hold = true;
+  });
+  await setInPlaceOptionValues(page, 'Extrude', { Distance: '-6' });
+  // The outgoing positive preview can remain on the stage while the new
+  // cut checks, but its operation is no longer the one the bar promises.
+  await expect(auto).toContainText('Checking preview');
+  await expect(auto).not.toContainText('Preview: New body');
+  await page.evaluate(() =>
+    (Reflect.get(window, '__extrudeValidationGate') as ExtrudeValidationGate)
+      .release()
+  );
+  await expect(auto).toContainText('Preview: Cut', { timeout: 30_000 });
+  await auto.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(auto).toHaveCount(0);
+
   for (const cancel of ['Escape', 'Dismiss'] as const) {
     await page.locator('.feature-row-main', { hasText: 'Bore layout' }).click();
     await page.keyboard.press('e');

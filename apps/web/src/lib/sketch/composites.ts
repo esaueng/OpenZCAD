@@ -45,6 +45,14 @@ export const POLYGON_SIDE_LIMITS = {
 
 /** The smallest side a drawn shape may have; the circle tool uses the same. */
 export const MIN_COMPOSITE_SIZE = 0.5;
+const MIN_SLOT_RADIUS = MIN_COMPOSITE_SIZE / 2;
+
+export const SLOT_DIMENSIONS = {
+  centerSpacing: { label: 'Center spacing', minimum: MIN_COMPOSITE_SIZE },
+  radius: { label: 'Radius', minimum: MIN_SLOT_RADIUS }
+} as const;
+
+export type SlotDimension = keyof typeof SLOT_DIMENSIONS;
 
 /** A placed composite's geometry, before it has any document identity. */
 export interface CompositeShape {
@@ -63,25 +71,34 @@ export interface CompositeShape {
  * right-hand tangent point and the loop runs counter-clockwise: side 0 to
  * the second end, the half circle round it, side 2 back and the half circle
  * round the first. Null while the centres or the radius are too small to
- * draw.
+ * draw. An exact center spacing moves only the second center along the
+ * picked axis.
  */
 export function slotShape(
   first: CompositePoint,
-  second: CompositePoint,
-  radius: number
+  pickedSecond: CompositePoint,
+  radius: number,
+  centerSpacing?: number
 ): CompositeShape | null {
-  const spacing = Math.hypot(second.x - first.x, second.y - first.y);
+  const dx = pickedSecond.x - first.x;
+  const dy = pickedSecond.y - first.y;
+  const pickedSpacing = Math.hypot(dx, dy);
+  const spacing = centerSpacing ?? pickedSpacing;
   if (
+    !Number.isFinite(pickedSpacing) ||
+    pickedSpacing < MIN_COMPOSITE_SIZE ||
+    !Number.isFinite(spacing) ||
     !Number.isFinite(radius) ||
     spacing < MIN_COMPOSITE_SIZE ||
-    radius < MIN_COMPOSITE_SIZE / 2
+    radius < MIN_SLOT_RADIUS
   ) {
     return null;
   }
-  const u = {
-    x: (second.x - first.x) / spacing,
-    y: (second.y - first.y) / spacing
-  };
+  const u = { x: dx / pickedSpacing, y: dy / pickedSpacing };
+  const second =
+    centerSpacing === undefined
+      ? pickedSecond
+      : { x: first.x + u.x * spacing, y: first.y + u.y * spacing };
   const n = { x: -u.y, y: u.x };
   const at = (c: CompositePoint, side: number) => ({
     x: c.x + n.x * radius * side,
